@@ -111,6 +111,15 @@ def calc_gp_report(
             by_store[store] = []
         by_store[store].append(r)
 
+    # ── Include ALL mapped stores even with no sales ─────────────
+    for s in store_mapping:
+        if not s.get('is_active', True): continue
+        addr = str(s.get('store_address') or '').strip()
+        if not addr: continue
+        num = street_num(addr)
+        if num and not any(street_num(k) == num for k in by_store.keys()):
+            by_store[addr] = []
+
     # ── Build store rows ──────────────────────────────────────────
     store_rows = []
     for store, rows in by_store.items():
