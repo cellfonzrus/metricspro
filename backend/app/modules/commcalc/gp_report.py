@@ -44,10 +44,10 @@ def calc_gp_report(
     for m in mi_rows:
         sfid = str(m.get('salesforce_id') or '').strip()
         if sfid:
-            mi_by_sfid[sfid] = {
-                'mi': safe_float(m.get('actual_mi_payout')),
-                'atu': safe_float(m.get('actual_atu_payout')),
-            }
+            if sfid not in mi_by_sfid:
+                mi_by_sfid[sfid] = {'mi': 0.0, 'atu': 0.0}
+            mi_by_sfid[sfid]['mi']  += safe_float(m.get('actual_mi_payout'))
+            mi_by_sfid[sfid]['atu'] += safe_float(m.get('actual_atu_payout'))
 
     # ── Store mapping: street_num → {sfid, market, code} ─────────
     store_by_num: dict[str, dict] = {}
