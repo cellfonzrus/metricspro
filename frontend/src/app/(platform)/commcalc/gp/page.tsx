@@ -39,15 +39,15 @@ const COLS: ColDef[] = [
 export default function GPReportPage() {
   const [period] = useState('April 2026')
   const [view, setView] = useState<'store'|'rep'>('store')
-  const [market, setMarket] = useState('')
+  const [selMarkets, setSelMarkets] = useState<string[]>([])
+  const [selStores, setSelStores] = useState<string[]>([])
   const [data, setData] = useState<any>({})
   const [loading, setLoading] = useState(true)
   const [markets, setMarkets] = useState<string[]>([])
 
   useEffect(() => {
     setLoading(true)
-    const q = market ? `&market=${market}` : ''
-    api(`/api/v1/commcalc/gp/${encodeURIComponent(period)}?view=${view}${q}&org_id=${ORG_ID}`)
+    api(`/api/v1/commcalc/gp/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
       .then(d => {
         setData(d || {})
         if (d?.store_rows) {
@@ -57,10 +57,17 @@ export default function GPReportPage() {
       })
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [period, market])
+  }, [period])
 
-  const rows: StoreRow[] = data.store_rows || []
-  const totals = data.totals || {}
+  const allRows: StoreRow[] = data.store_rows || []
+  const rows: StoreRow[] = allRows.filter(r => {
+    if (selMarkets.length && !selMarkets.includes(r.market)) return false
+    if (selStores.length && !selStores.includes(r.store)) return false
+    return true
+  })
+  const repRows: any[] = (data.rep_rows || [])
+  const totals: any = {}
+  COLS.forEach(c2 => { totals[c2.key] = rows.reduce((s, r) => s + ((r as any)[c2.key] || 0), 0) })
 
   function Cell({ val, col }: { val: number; col: ColDef }) {
     const color = col.highlight
@@ -95,9 +102,28 @@ export default function GPReportPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <select className="select" value={market} onChange={e => setMarket(e.target.value)}>
-            <option value="">All markets</option>
-            {markets.map(m => <option key={m} value={m}>{m}</option>)}
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+            {markets.map(m => (
+              <button key={m} onClick={() => setSelMarkets(s => s.includes(m) ? s.filter(x => x !== m) : [...s, m])}
+                className="btn" style={{
+                  fontSize: 12, padding: '4px 10px',
+                  background: selMarkets.includes(m) ? 'var(--accent)' : 'var(--surface2)',
+                  color: selMarkets.includes(m) ? 'white' : 'var(--text2)',
+                }}>
+                {m}
+              </button>
+            ))}
+            {(selMarkets.length > 0 || selStores.length > 0) && (
+              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px' }}
+                onClick={() => { setSelMarkets([]); setSelStores([]) }}>✕ Clear</button>
+            )}
+          </div>
+          <select className="select" value="" onChange={e => {
+            const v = e.target.value
+            if (v && !selStores.includes(v)) setSelStores(s => [...s, v])
+          }}>
+            <option value="">+ Add store filter</option>
+            {allRows.map(r => <option key={r.store} value={r.store}>{r.store.substring(0, 40)}</option>)}
           </select>
           <div style={{ display: 'flex', background: 'var(--surface2)', padding: 3, borderRadius: 8, gap: 3 }}>
             {(['store', 'rep'] as const).map(v => (
@@ -133,10 +159,43 @@ export default function GPReportPage() {
         ))}
       </div>
 
+      {/* Rep view */}
+      {!loading && view === 'rep' && (
+        <div className="table-wrapper" style={{ marginBottom: 20 }}>
+          <table>
+            <thead>
+              <tr>
+                <th>Rep</th><th>Store</th>
+                <th style={{ textAlign: 'right' }}>Acc GP</th>
+                <th style={{ textAlign: 'right' }}>Setup GP</th>
+                <th style={{ textAlign: 'right' }}>Phone Sales</th>
+                <th style={{ textAlign: 'right' }}>Plan GP</th>
+                <th style={{ textAlign: 'right' }}>Comm Earned</th>
+              </tr>
+            </thead>
+            <tbody>
+              {repRows
+                .filter((r: any) => !selStores.length || selStores.some(s => r.store?.includes(s.split(' ')[0])))
+                .map((r: any, i: number) => (
+                <tr key={i}>
+                  <td style={{ fontWeight: 500 }}>{r.storeops_name || r.rep}</td>
+                  <td style={{ fontSize: 12, color: 'var(--text3)' }}>{r.store?.substring(0, 30)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(r.acc_gp)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(r.setup_gp)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(r.phone_sales)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(r.plan_gp)}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--accent)' }}>{fmt(r.comm_earned)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* Full GP table */}
-      {loading ? (
+      {view === 'store' && loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
-      ) : (
+      ) : view === 'store' && (
         <div style={{ overflowX: 'auto', background: 'white', border: '1px solid var(--border)', borderRadius: 12 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1600 }}>
             <thead>
