@@ -329,6 +329,15 @@ async def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
     r = client.schema('commcalc').table('store_mapping').select('*').order('store_address').execute()
     return r.data or []
 
+@router.put("/stores/{store_id}")
+async def update_store(store_id: str, body: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
+    client = sb()
+    allowed = {k: v for k, v in body.items() if k in ['market', 'store_code', 'store_address', 'is_active', 'salesforce_id']}
+    if not allowed:
+        raise HTTPException(400, "No valid fields to update")
+    r = client.schema('commcalc').table('store_mapping').update(allowed).eq('id', store_id).execute()
+    return r.data[0] if r.data else {}
+
 @router.get("/gp/{period}")
 async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
