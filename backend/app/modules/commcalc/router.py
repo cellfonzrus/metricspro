@@ -29,7 +29,7 @@ async def upload_file(
     """Upload a data file (sales, payment_detail, mi, dlar_rep, dlar_store, catalog)"""
     require_org(org_id)
     
-    SUPPORTED = ["sales","payment_detail","mi_report","dlar_rep","dlar_store","catalog","master_cats"]
+    SUPPORTED = ["sales","payment_detail","mi_report","dlar_rep","dlar_store","catalog","master_cats","comp_report"]
     if file_type not in SUPPORTED:
         raise HTTPException(400, f"Unknown file type: {file_type}. Supported: {SUPPORTED}")
     
@@ -56,6 +56,7 @@ async def upload_file(
         "dlar_store": "raw_dlar_store",
         "catalog": "raw_catalog",
         "master_cats": "raw_categories",
+        "comp_report": "raw_comp_report",
     }
     # Try schema-qualified first, fall back to public prefix
     table = TABLE_MAP[file_type]
@@ -132,6 +133,17 @@ async def upload_file(
                 'store_code': r.get('Store Code',''),
                 'psa_projected': safe_float(r.get('PSA Projected',0)),
                 'port_pct': safe_float(r.get('Port Out%',r.get('Port%',0))),
+            }
+        elif file_type == "comp_report":
+            row = {**base,
+                'business_address': r.get('Business Address',''),
+                'compensation_type': r.get('Compensation Type',''),
+                'quantity': int(safe_float(r.get('Quantity')) or 0),
+                'payment_amount': safe_float(r.get('Payment Amount')),
+                'salesforce_id': r.get('SalesForce ID',''),
+                'brand': r.get('Brand',''),
+                'begin_date': str(r.get('Begin Date',''))[:10] or None,
+                'end_date': str(r.get('End Date',''))[:10] or None,
             }
         elif file_type == "catalog":
             row = {**base,
@@ -316,7 +328,6 @@ async def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
 @router.get("/gp/{period}")
 async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    enc = encodeURIComponent(period)
     sales      = client.schema('commcalc').table('raw_sales').select('*').eq('period', period).limit(50000).execute().data or []
     pay_detail = client.schema('commcalc').table('raw_payment_detail').select('*').eq('period', period).limit(50000).execute().data or []
     mi_rows    = client.schema('commcalc').table('raw_mi').select('*').eq('period', period).execute().data or []
