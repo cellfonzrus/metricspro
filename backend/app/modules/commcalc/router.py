@@ -340,11 +340,12 @@ async def get_gp_report(period: str, view: str = "store", market: str = "", org_
     catalog    = client.schema('commcalc').table('raw_catalog').select('*').execute().data or []
     store_map  = client.schema('commcalc').table('store_mapping').select('*').execute().data or []
     pay_cats   = client.schema('commcalc').table('payment_categories').select('*').execute().data or []
+    comp_rows  = client.schema('commcalc').table('raw_comp_report').select('*').eq('period', period).limit(50000).execute().data or []
     cat_map    = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
     for r in pay_detail:
         pt = str(r.get('payment_type', '') or '').strip()
         r['category'] = cat_map.get(pt, 'Unknown')
-    result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period)
+    result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period, comp_rows=comp_rows)
     if market:
         result['store_rows'] = [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]
     return result

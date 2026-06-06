@@ -27,6 +27,7 @@ def calc_gp_report(
     catalog: list[dict],
     store_mapping: list[dict],
     period: str,
+    comp_rows: list[dict] = None,
 ) -> dict:
     """
     Returns store_rows (by store) and rep_rows (by rep).
@@ -69,6 +70,22 @@ def calc_gp_report(
         elif cat == 'MDF':            pay_by_num[num]['mdf']     += amt
         elif cat == 'Chargeback':     pay_by_num[num]['chb']     += amt
         else:                         pay_by_num[num]['unmapped'] += amt
+
+    # ── Comp report bucketed by store street_num ──────────────────
+    comp_by_num: dict[str, dict] = {}
+    for r in (comp_rows or []):
+        num = street_num(r.get('business_address', ''))
+        if not num: continue
+        if num not in comp_by_num:
+            comp_by_num[num] = {'comm': 0, 'reimb': 0, 'mdf': 0}
+        ct = str(r.get('compensation_type') or '').lower()
+        amt = safe_float(r.get('payment_amount'))
+        if 'reimbursement' in ct or 'rebate' in ct:
+            comp_by_num[num]['reimb'] += amt
+        elif 'mdf' in ct:
+            comp_by_num[num]['mdf'] += amt
+        else:
+            comp_by_num[num]['comm'] += amt
 
     # ── Rep pay by store ──────────────────────────────────────────
     rep_pay_by_store: dict[str, float] = {}
@@ -122,6 +139,11 @@ def calc_gp_report(
         chargeback = pay.get('chb', 0)
         unmapped   = pay.get('unmapped', 0)
 
+        comp = comp_by_num.get(num, {})
+        comp_comm  = comp.get('comm', 0)
+        comp_reimb = comp.get('reimb', 0)
+        comp_mdf   = comp.get('mdf', 0)
+
         mi_data    = mi_by_sfid.get(sfid, {'mi': 0, 'atu': 0}) if sfid else {'mi': 0, 'atu': 0}
         mi_amt     = mi_data['mi']
         atu_amt    = mi_data['atu']
@@ -139,6 +161,7 @@ def calc_gp_report(
             'acc_gp': acc_gp, 'setup_gp': setup_gp, 'phone_sales': phone_sales,
             'plan_gp': plan_gp, 'other_gp': other_gp,
             'comm': comm_recv, 'reimb': reimb, 'mdf': mdf,
+            'comp_comm': comp_comm, 'comp_reimb': comp_reimb, 'comp_mdf': comp_mdf,
             'chargeback': chargeback, 'unmapped': unmapped,
             'mi': mi_amt, 'atu': atu_amt,
             'total_rev': total_rev, 'rep_pay': rep_pay,
@@ -184,6 +207,9 @@ def calc_gp_report(
         'comm': sum(r['comm'] for r in store_rows),
         'reimb': sum(r['reimb'] for r in store_rows),
         'mdf': sum(r['mdf'] for r in store_rows),
+        'comp_comm': sum(r['comp_comm'] for r in store_rows),
+        'comp_reimb': sum(r['comp_reimb'] for r in store_rows),
+        'comp_mdf': sum(r['comp_mdf'] for r in store_rows),
         'chargeback': sum(r['chargeback'] for r in store_rows),
         'mi': sum(r['mi'] for r in store_rows),
         'atu': sum(r['atu'] for r in store_rows),
