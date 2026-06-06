@@ -249,6 +249,8 @@ async def _run_calculation(period: str, org_id: str):
         try:
             client.schema('commcalc').table('rep_commissions').delete().eq('period', period).execute()
             comms = result['commissions']
+            for row in comms:
+                row['org_id'] = org_id
             for i in range(0, len(comms), 500):
                 client.schema('commcalc').table('rep_commissions').insert(comms[i:i+500]).execute()
         except Exception as e:
@@ -269,6 +271,8 @@ async def _run_calculation(period: str, org_id: str):
             )
             client.schema('commcalc').table('flags').delete().eq('period', period).execute()
             if flag_list:
+                for row in flag_list:
+                    row['org_id'] = org_id
                 for i in range(0, len(flag_list), 500):
                     client.schema('commcalc').table('flags').insert(flag_list[i:i+500]).execute()
         except Exception as e:
