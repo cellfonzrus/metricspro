@@ -189,6 +189,21 @@ def calc_rep_commissions(
         if dept == 'Ondigo': entry['acc_gp'] += gp
         if 'Device Setup Charge' in product: entry['setup_fee_gp'] += gp
         
+    # ── Include DLAR reps with no sales yet (other markets) ──────
+    for d in dlar_rep:
+        dname = str(d.get('rep_name','')).strip()
+        if not dname: continue
+        key = dname.upper()
+        if key not in rep_map:
+            rep_map[key] = {
+                'name': dname, 'login': '',
+                'store': str(d.get('store','') or ''),
+                'storeops_name': '',
+                'prem_set': set(), 'byod_set': set(), 'upg_set': set(),
+                'acc_gp': 0, 'setup_fee_gp': 0, 'trade_ins': 0,
+                'sales': []
+            }
+
     # ── Payment lookups ───────────────────────────────────────
     pay_by_login = {}  # login → {comm, reimb, mdf, chb}
     for p in pay_detail:
