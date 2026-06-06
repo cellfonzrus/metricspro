@@ -173,7 +173,7 @@ async def calculate(
     
     # Mark as pending
     try:
-        client.table('commcalc_calc_status').upsert({
+        client.schema('commcalc').table('calc_status').upsert({
             'org_id': org_id, 'period': period, 'calc_status': 'running'
         }, on_conflict='org_id,period').execute()
     except: pass
@@ -235,10 +235,10 @@ async def _run_calculation(period: str, org_id: str):
         
         # Save commissions
         try:
-            client.table('commcalc_rep_commissions').delete().eq('period', period).execute()
+            client.schema('commcalc').table('rep_commissions').delete().eq('period', period).execute()
             comms = result['commissions']
             for i in range(0, len(comms), 500):
-                client.table('commcalc_rep_commissions').insert(comms[i:i+500]).execute()
+                client.schema('commcalc').table('rep_commissions').insert(comms[i:i+500]).execute()
         except Exception as e:
             save_errors.append(f"commissions: {e}")
         
@@ -255,15 +255,15 @@ async def _run_calculation(period: str, org_id: str):
                 period_month=pm['month'],
                 period_year=pm['year'],
             )
-            client.table('commcalc_flags').delete().eq('period', period).execute()
+            client.schema('commcalc').table('flags').delete().eq('period', period).execute()
             if flag_list:
                 for i in range(0, len(flag_list), 500):
-                    client.table('commcalc_flags').insert(flag_list[i:i+500]).execute()
+                    client.schema('commcalc').table('flags').insert(flag_list[i:i+500]).execute()
         except Exception as e:
             save_errors.append(f'flags: {e}')
 
         # Update calc status
-        client.table('commcalc_calc_status').upsert({
+        client.schema('commcalc').table('calc_status').upsert({
             'org_id': org_id, 'period': period,
             'calc_status': 'done',
             'calc_finished_at': 'now()',
@@ -272,7 +272,7 @@ async def _run_calculation(period: str, org_id: str):
         
     except Exception as e:
         try:
-            client.table('commcalc_calc_status').upsert({
+            client.schema('commcalc').table('calc_status').upsert({
                 'org_id': org_id, 'period': period,
                 'calc_status': 'error',
                 'save_errors': [str(e)],
@@ -284,19 +284,19 @@ async def _run_calculation(period: str, org_id: str):
 @router.get("/commissions/{period}")
 async def get_commissions(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.table('commcalc_rep_commissions').select('*').eq('period', period).order('total_payout', desc=True).execute()
+    r = client.schema('commcalc').table('rep_commissions').select('*').eq('period', period).order('total_payout', desc=True).execute()
     return r.data or []
 
 @router.get("/flags/{period}")
 async def get_flags(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.table('commcalc_flags').select('*').eq('period', period).order('severity').execute()
+    r = client.schema('commcalc').table('flags').select('*').eq('period', period).order('severity').execute()
     return r.data or []
 
 @router.get("/config/{period}")
 async def get_config(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.table('commcalc_payout_config').select('*').eq('period', period).limit(1).execute()
+    r = client.schema('commcalc').table('payout_config').select('*').eq('period', period).limit(1).execute()
     if r.data: return r.data[0]
     return {}
 
@@ -304,27 +304,27 @@ async def get_config(period: str, org_id: str = "00000000-0000-0000-0000-0000000
 async def save_config(period: str, config: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     config.update({'period': period, 'org_id': org_id})
-    r = client.table('commcalc_payout_config').upsert(config, on_conflict='org_id,period').execute()
+    r = client.schema('commcalc').table('payout_config').upsert(config, on_conflict='org_id,period').execute()
     return r.data[0] if r.data else config
 
 @router.get("/stores")
 async def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.table('commcalc_store_mapping').select('*').order('store_address').execute()
+    r = client.schema('commcalc').table('store_mapping').select('*').order('store_address').execute()
     return r.data or []
 
 @router.get("/gp/{period}")
 async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     enc = encodeURIComponent(period)
-    sales      = client.table('commcalc_raw_sales').select('*').eq('period', period).limit(50000).execute().data or []
-    pay_detail = client.table('commcalc_raw_payment_detail').select('*').eq('period', period).limit(50000).execute().data or []
-    mi_rows    = client.table('commcalc_raw_mi').select('*').eq('period', period).execute().data or []
-    rep_comms  = client.table('commcalc_rep_commissions').select('*').eq('period', period).execute().data or []
-    expenses   = client.table('commcalc_store_expenses').select('*').eq('period', period).execute().data or []
-    catalog    = client.table('commcalc_raw_catalog').select('*').execute().data or []
-    store_map  = client.table('commcalc_store_mapping').select('*').execute().data or []
-    pay_cats   = client.table('commcalc_payment_categories').select('*').execute().data or []
+    sales      = client.schema('commcalc').table('raw_sales').select('*').eq('period', period).limit(50000).execute().data or []
+    pay_detail = client.schema('commcalc').table('raw_payment_detail').select('*').eq('period', period).limit(50000).execute().data or []
+    mi_rows    = client.schema('commcalc').table('raw_mi').select('*').eq('period', period).execute().data or []
+    rep_comms  = client.schema('commcalc').table('rep_commissions').select('*').eq('period', period).execute().data or []
+    expenses   = client.schema('commcalc').table('store_expenses').select('*').eq('period', period).execute().data or []
+    catalog    = client.schema('commcalc').table('raw_catalog').select('*').execute().data or []
+    store_map  = client.schema('commcalc').table('store_mapping').select('*').execute().data or []
+    pay_cats   = client.schema('commcalc').table('payment_categories').select('*').execute().data or []
     cat_map    = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
     for r in pay_detail:
         pt = str(r.get('payment_type', '') or '').strip()
@@ -337,5 +337,5 @@ async def get_gp_report(period: str, view: str = "store", market: str = "", org_
 @router.get("/calc-status/{period}")
 async def get_calc_status(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.table('commcalc_calc_status').select('*').eq('period', period).limit(1).execute()
+    r = client.schema('commcalc').table('calc_status').select('*').eq('period', period).limit(1).execute()
     return r.data[0] if r.data else {'calc_status': 'not_run'}
