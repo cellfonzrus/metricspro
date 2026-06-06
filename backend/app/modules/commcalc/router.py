@@ -49,13 +49,13 @@ async def upload_file(
     
     # Determine target table
     TABLE_MAP = {
-        "sales": "commcalc_raw_sales",
-        "payment_detail": "commcalc_raw_payment_detail", 
-        "mi_report": "commcalc_raw_mi",
-        "dlar_rep": "commcalc_raw_dlar_rep",
-        "dlar_store": "commcalc_raw_dlar_store",
-        "catalog": "commcalc_raw_catalog",
-        "master_cats": "commcalc_raw_categories",
+        "sales": "raw_sales",
+        "payment_detail": "raw_payment_detail", 
+        "mi_report": "raw_mi",
+        "dlar_rep": "raw_dlar_rep",
+        "dlar_store": "raw_dlar_store",
+        "catalog": "raw_catalog",
+        "master_cats": "raw_categories",
     }
     # Try schema-qualified first, fall back to public prefix
     table = TABLE_MAP[file_type]
@@ -63,12 +63,12 @@ async def upload_file(
     # Delete existing for this period
     if has_period and period:
         try:
-            client.table(table).delete().eq('period', period).execute()
+            client.schema('commcalc').table(table).delete().eq('period', period).execute()
         except Exception as e:
             raise HTTPException(500, f"Failed to clear existing data: {e}. Run commcalc_master_fix.sql")
     elif not has_period:
         try:
-            client.table(table).delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
+            client.schema('commcalc').table(table).delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
         except: pass
     
     # Map and insert rows
@@ -151,7 +151,7 @@ async def upload_file(
     for i in range(0, len(mapped), 500):
         batch = mapped[i:i+500]
         try:
-            client.table(table).insert(batch).execute()
+            client.schema('commcalc').table(table).insert(batch).execute()
             saved += len(batch)
         except Exception as e:
             raise HTTPException(500, f"Insert failed at row {i}: {e}")
@@ -190,7 +190,7 @@ async def _run_calculation(period: str, org_id: str):
     try:
         # Load all data
         def fetch(table, filters={}):
-            q = client.table(table).select('*')
+            q = client.schema('commcalc').table(table).select('*')
             for k, v in filters.items():
                 q = q.eq(k, v)
             try:
@@ -198,16 +198,16 @@ async def _run_calculation(period: str, org_id: str):
                 return r.data or []
             except: return []
         
-        sales      = fetch('commcalc_raw_sales', {'period': period})
-        pay_detail = fetch('commcalc_raw_payment_detail', {'period': period})
-        mi_rows    = fetch('commcalc_raw_mi', {'period': period})
-        dlar_rep   = fetch('commcalc_raw_dlar_rep', {'period': period})
-        dlar_store = fetch('commcalc_raw_dlar_store', {'period': period})
-        catalog    = fetch('commcalc_raw_catalog')
-        pay_cats   = fetch('commcalc_payment_categories')
-        cfg_rows   = fetch('commcalc_payout_config', {'period': period})
-        store_map  = fetch('commcalc_store_mapping')
-        name_map   = fetch('commcalc_name_map')
+        sales      = fetch('raw_sales', {'period': period})
+        pay_detail = fetch('raw_payment_detail', {'period': period})
+        mi_rows    = fetch('raw_mi', {'period': period})
+        dlar_rep   = fetch('raw_dlar_rep', {'period': period})
+        dlar_store = fetch('raw_dlar_store', {'period': period})
+        catalog    = fetch('raw_catalog')
+        pay_cats   = fetch('payment_categories')
+        cfg_rows   = fetch('payout_config', {'period': period})
+        store_map  = fetch('store_mapping')
+        name_map   = fetch('name_map')
         shifts     = fetch('storeops_shifts') if False else []  # use storeops schema when migrated
         employees  = fetch('employees')
         stores     = fetch('stores')
