@@ -6,6 +6,7 @@ interface StoreRow {
   store: string; store_code: string; market: string
   acc_gp: number; setup_gp: number; phone_sales: number; plan_gp: number; other_gp: number
   comm: number; reimb: number; mdf: number; chargeback: number; unmapped: number
+  comp_comm: number; comp_reimb: number; comp_mdf: number
   mi: number; atu: number; total_rev: number
   rep_pay: number; exp_total: number; net_phone_cost: number
   net_profit: number; net_excl_mdf: number
@@ -21,6 +22,9 @@ const COLS: ColDef[] = [
   { key: 'comm',         label: 'Commission',  group: 'Payments' },
   { key: 'reimb',        label: 'Re-imb',      group: 'Payments' },
   { key: 'mdf',          label: 'MDF',         group: 'Payments' },
+  { key: 'comp_comm',    label: 'Comp Comm',   group: 'Payments' },
+  { key: 'comp_reimb',   label: 'Comp Rebate', group: 'Payments' },
+  { key: 'comp_mdf',     label: 'Comp MDF',    group: 'Payments' },
   { key: 'chargeback',   label: 'Chargebacks', group: 'Payments' },
   { key: 'mi',           label: 'MI',          group: 'Payments' },
   { key: 'atu',          label: 'ATU',         group: 'Payments' },
