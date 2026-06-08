@@ -267,15 +267,26 @@ def calc_rep_commissions(
             store_num = str(rep['store']).split(' ')[0]
             sr = dlar_store_by_num.get(store_num)
             
-            if dr:
+            # Rep-level KPIs from Advocate report (already whole-number %)
+            rep_atu      = safe_float(dr.get('atu_pct')) if dr else 0
+            rep_protect  = safe_float(dr.get('device_insurance_pct') or dr.get('protect_pct')) if dr else 0
+            rep_boostapp = safe_float(dr.get('boost_app_pct')) if dr else 0
+            rep_byod     = safe_float(dr.get('byod_pct')) if dr else 0
+
+            # Store-level KPIs from Elevate Go Store DLAR (rolled down to rep)
+            st_familyplan = safe_float(sr.get('family_plan_pct')) if sr else 0
+            st_tmr3       = safe_float(sr.get('tmr3')) if sr else 0
+            st_aal        = safe_float(sr.get('aal_conversion')) if sr else 0
+
+            if dr or sr:
                 kpi_vals = {
-                    'atu':         (safe_float(dr.get('atu_pct')) or 0) * 100,
-                    'protect':     (safe_float(dr.get('protect_pct')) or 0) * 100,
-                    'boostapp':    (safe_float(dr.get('ga_prepaid')) or 0) * 100,
-                    'familyplan':  (safe_float(dr.get('family_plan_pct')) or 0) * 100,
-                    'byod':        (safe_float(dr.get('byod_pct')) or 0) * 100,
-                    'tmr3':        (safe_float(dr.get('tmr3')) or 0) * 100,
-                    'aal':         (safe_float(dr.get('aal_conversion')) or 0) * 100,
+                    'atu':         rep_atu,
+                    'protect':     rep_protect,
+                    'boostapp':    rep_boostapp,
+                    'byod':        rep_byod,
+                    'familyplan':  st_familyplan,
+                    'tmr3':        st_tmr3,
+                    'aal':         st_aal,
                 }
                 kpis_met = sum(1 for k,v in kpi_vals.items() if v >= KPI[k])
             
