@@ -7,6 +7,7 @@ from app.core.database import get_supabase
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float
 from app.modules.commcalc.gp_report import calc_gp_report
 from app.modules.commcalc.flags import calc_flags
+from app.modules.commcalc.portout_flags import calc_portout_flags
 
 router = APIRouter(prefix="/commcalc", tags=["CommCalc"])
 
@@ -330,6 +331,13 @@ async def _run_calculation(period: str, org_id: str):
                 period_month=pm['month'],
                 period_year=pm['year'],
             )
+            # Add port-out / transfer-out / suspended flags from MI report
+            try:
+                po_flags = calc_portout_flags(mi_rows, valid, store_map, period, pm['month'], pm['year'])
+                flag_list = (flag_list or []) + po_flags
+            except Exception as pe:
+                save_errors.append(f'portout: {pe}')
+
             client.schema('commcalc').table('flags').delete().eq('period', period).execute()
             if flag_list:
                 for row in flag_list:
