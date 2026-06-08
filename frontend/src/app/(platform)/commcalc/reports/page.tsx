@@ -38,10 +38,13 @@ export default function ReportsPage() {
   const [selectedRep, setSelectedRep] = useState('')
   const [filterRep, setFilterRep] = useState('')
   const [filterStore, setFilterStore] = useState('')
+  const [cfg, setCfg] = useState<any>({})
 
   useEffect(() => {
     api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
       .then(setReps).catch(console.error).finally(() => setLoading(false))
+    api(`/api/v1/commcalc/config/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+      .then(setCfg).catch(console.error)
   }, [period])
 
   const repList  = useMemo(() => [...new Set(reps.map(r => r.epay_salesperson))].sort(), [reps])
@@ -231,19 +234,19 @@ export default function ReportsPage() {
                     <tr>
                       <td>Premium Activations</td>
                       <td style={{ textAlign: 'right' }}>{currentRep.premium_acts}</td>
-                      <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>per act</td>
+                      <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>{fmt(cfg.premium_flat || 0)}/act</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.premium_comm)}</td>
                     </tr>
                     <tr>
                       <td>BYOD Activations</td>
                       <td style={{ textAlign: 'right' }}>{currentRep.byod_acts}</td>
-                      <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>per act</td>
+                      <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>{fmt((cfg.byod_flat || 0) + (cfg.byod_extra_spiff || 0))}/act</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.byod_comm)}</td>
                     </tr>
                     <tr>
                       <td>Device Upgrades</td>
                       <td style={{ textAlign: 'right' }}>{currentRep.upgrade_acts}</td>
-                      <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>per act</td>
+                      <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>{fmt(cfg.upgrade_flat || 0)}/act</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.upgrade_comm)}</td>
                     </tr>
                     <tr>
@@ -261,7 +264,7 @@ export default function ReportsPage() {
                     <tr>
                       <td>Trade-In SPIFF</td>
                       <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>—</td>
-                      <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>per trade</td>
+                      <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>{fmt(cfg.trade_in_spiff || 0)}/trade</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.trade_in_comm)}</td>
                     </tr>
                     {(currentRep.acima_comm || 0) > 0 && (
