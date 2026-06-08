@@ -45,7 +45,7 @@ async def upload_file(
     SIGNATURES = {
         'sales':          ['Salesperson', 'Trans ID'],
         'payment_detail': ['Payment Type', 'Amount'],
-        'mi_report':      ['SalesForceID'],
+        'mi_report':      ['SalesForceID', 'Subscriber Status'],
         'dlar_rep':       ['Advocate Name', 'ATU %'],
         'dlar_store':     ['Salesforce ID', 'Family Plan %'],
         'catalog':        ['Product ID', 'Cost'],
@@ -129,12 +129,27 @@ async def upload_file(
                 'rep_username': r.get('Rep Username',''),
             }
         elif file_type == "mi_report":
+            def _date(v):
+                s = str(v or '').strip()
+                return s[:10] if s and s.lower() not in ('nat','nan','none','') else None
             row = {**base,
                 'salesforce_id': r.get('SalesForceID',''),
+                'subscriber_id': r.get('SubscriberID',''),
+                'subscriber_status': r.get('Subscriber Status',''),
+                'phone_number': str(r.get('Phone Number','')).replace('.0','').strip(),
+                'device_serial': str(r.get('Device Serial','')).replace('.0','').strip(),
+                'mi_activation_date': _date(r.get('MI Activation Date')),
+                'mi_deactivation_date': _date(r.get('MI Deactivation Date')),
+                'residual_transfer_in_date': _date(r.get('Residual Transfer In Date')),
+                'residual_transfer_out_date': _date(r.get('Residual Transfer Out Date')),
+                'customer_plan': r.get('Customer Plan',''),
+                'base_mrc': safe_float(r.get('Base MRC Amount')),
+                'commissionable_mrc': safe_float(r.get('Commissionable MRC Amount')),
                 'actual_mi_payout': safe_float(r.get('Actual MI Payout Amount')),
                 'actual_atu_payout': safe_float(r.get('Actual ATU Payout Amount')),
-                'phone_number': r.get('Phone Number',''),
-                'subscriber_status': r.get('Subscriber Status',''),
+                'rep_username': r.get('Rep Username',''),
+                'door_type': r.get('Door Type',''),
+                'report_month': r.get('Report Month',''),
             }
         elif file_type == "dlar_rep":
             ga_prepaid = safe_float(r.get('GA Prepaid'))
