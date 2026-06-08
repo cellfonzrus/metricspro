@@ -324,6 +324,64 @@ async def _run_calculation(period: str, org_id: str):
         except Exception as e:
             save_errors.append(f'flags: {e}')
 
+        # ── Detect potential chargebacks per rep ─────────────────
+        try:
+            existing = client.schema('commcalc').table('chargeback_items').select('source,source_ref,deduct').eq('period', period).execute().data or []
+            decided = {(e['source'], e['source_ref']): e['deduct'] for e in existing}
+            cb_items = []
+            prem_rate = float(cfg.get('premium_flat') or 5)
+
+            for s in sales:
+                ct = str(s.get('contract_type') or '').lower()
+                if 'ineligible' in ct:
+                    ref = str(s.get('trans_id') or '').strip()
+                    if not ref: continue
+                    cb_items.append({
+                        'org_id': org_id, 'period': period,
+                        'epay_salesperson': str(s.get('salesperson') or '').strip(),
+                        'store': str(s.get('store') or ''),
+                        'source': 'ineligible', 'source_ref': ref,
+                        'description': f"Ineligible activation: {s.get('contract_type','')}",
+                        'amount': prem_rate,
+                        'mdn': str(s.get('mdn') or ''), 'imei': str(s.get('serial_1') or ''),
+                        'deduct': decided.get(('ineligible', ref), False),
+                    })
+
+            for p in pay_detail:
+                if str(p.get('category') or '').strip() == 'Chargeback':
+                    ref = f"{p.get('mdn','')}-{p.get('payment_type','')}-{p.get('amount','')}"
+                    cb_items.append({
+                        'org_id': org_id, 'period': period,
+                        'epay_salesperson': str(p.get('rep_username') or '').strip(),
+                        'store': str(p.get('business_address') or ''),
+                        'source': 'epay_chargeback', 'source_ref': ref,
+                        'description': f"EPay chargeback: {p.get('payment_type','')}",
+                        'amount': abs(safe_float(p.get('amount'))),
+                        'mdn': str(p.get('mdn') or ''), 'imei': str(p.get('imei') or ''),
+                        'deduct': decided.get(('epay_chargeback', ref), False),
+                    })
+
+            for fl in (flag_list or []):
+                rep = str(fl.get('epay_salesperson') or '').strip()
+                if not rep: continue
+                ref = f"{fl.get('flag_type','')}-{fl.get('imei','') or fl.get('mdn','')}"
+                cb_items.append({
+                    'org_id': org_id, 'period': period,
+                    'epay_salesperson': rep, 'store': str(fl.get('store_address') or ''),
+                    'source': 'flag', 'source_ref': ref,
+                    'description': f"Flag: {fl.get('flag_type','')} - {str(fl.get('description',''))[:120]}",
+                    'amount': abs(safe_float(fl.get('amount'))),
+                    'mdn': str(fl.get('mdn') or ''), 'imei': str(fl.get('imei') or ''),
+                    'deduct': decided.get(('flag', ref), False),
+                })
+
+            client.schema('commcalc').table('chargeback_items').delete().eq('period', period).execute()
+            if cb_items:
+                for i in range(0, len(cb_items), 500):
+                    client.schema('commcalc').table('chargeback_items').upsert(cb_items[i:i+500], on_conflict='org_id,period,source,source_ref').execute()
+        except Exception as e:
+            save_errors.append(f'chargebacks: {e}')
+
         # Update calc status
         client.schema('commcalc').table('calc_status').upsert({
             'org_id': org_id, 'period': period,
@@ -404,6 +462,21 @@ async def get_gp_report(period: str, view: str = "store", market: str = "", org_
     if market:
         result['store_rows'] = [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]
     return result
+
+@router.get("/chargebacks/{period}")
+async def get_chargebacks(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
+    client = sb()
+    r = client.schema('commcalc').table('chargeback_items').select('*').eq('period', period).order('epay_salesperson').execute()
+    return r.data or []
+
+@router.put("/chargebacks/{item_id}")
+async def update_chargeback(item_id: str, body: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
+    client = sb()
+    update = {'deduct': bool(body.get('deduct', False)), 'decided_at': 'now()'}
+    if body.get('decided_by'):
+        update['decided_by'] = body['decided_by']
+    r = client.schema('commcalc').table('chargeback_items').update(update).eq('id', item_id).execute()
+    return r.data[0] if r.data else {}
 
 @router.get("/calc-status/{period}")
 async def get_calc_status(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):

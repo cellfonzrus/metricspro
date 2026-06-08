@@ -6,15 +6,19 @@ from typing import Any
 import re
 
 DEVICE_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
-ALL_ACT = {
-    'Activation','Port-In','Add A Line','Port-In Add A Line',
-    'BYOD','BYOD Port-In','BYOD Add A Line','BYOD Port-In Add A Line'
-}
+# BYOD: any contract type containing 'BYOD'
 BYOD_ACT = {
-    'BYOD','BYOD Port-In','BYOD Add A Line','BYOD Port-In Add A Line'
+    'BYOD','BYOD Port-In','BYOD Add A Line','BYOD Port-In Add A Line',
+    'BYOD Swap','BYOD Eligible Port-In'
 }
-UPGRADE_ACT = {'Upgrade','Upgrade Port-In'}
-PREMIUM_ACT = {'Activation','Port-In','Add A Line','Port-In Add A Line'}
+# Upgrade: any containing 'Upgrade'
+UPGRADE_ACT = {'Upgrade','Upgrade Port-In','Device Upgrade'}
+# Premium: standard activations (non-BYOD, non-upgrade)
+PREMIUM_ACT = {
+    'Activation','Port-In','Add A Line','Port-In Add A Line',
+    'Eligible Port-In Activation','Activation Add A Line',
+    'Eligible Port-In Add A Line'
+}
 
 def parse_period(period: str) -> dict:
     months = {
