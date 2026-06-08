@@ -13,6 +13,9 @@ interface Rep {
   premium_acts: number
   byod_acts: number
   upgrade_acts: number
+  premium_comm: number
+  byod_comm: number
+  upgrade_comm: number
   acc_comm: number
   setup_fee_comm: number
   trade_in_comm: number
@@ -229,19 +232,19 @@ export default function ReportsPage() {
                       <td>Premium Activations</td>
                       <td style={{ textAlign: 'right' }}>{currentRep.premium_acts}</td>
                       <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>per act</td>
-                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.premium_acts * 5)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.premium_comm)}</td>
                     </tr>
                     <tr>
                       <td>BYOD Activations</td>
                       <td style={{ textAlign: 'right' }}>{currentRep.byod_acts}</td>
                       <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>per act</td>
-                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.byod_acts * 6)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.byod_comm)}</td>
                     </tr>
                     <tr>
                       <td>Device Upgrades</td>
                       <td style={{ textAlign: 'right' }}>{currentRep.upgrade_acts}</td>
                       <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>per act</td>
-                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.upgrade_acts * 5)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.upgrade_comm)}</td>
                     </tr>
                     <tr>
                       <td>Accessories (10% GP)</td>
@@ -313,9 +316,9 @@ export default function ReportsPage() {
               {reps.map((r, i) => (
                 <tr key={i}>
                   <td style={{ fontWeight: 500 }}>{r.storeops_name || r.epay_salesperson}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.premium_acts * 5)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.byod_acts * 6)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.upgrade_acts * 5)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(r.premium_comm)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(r.byod_comm)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(r.upgrade_comm)}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(r.acc_comm)}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(r.setup_fee_comm)}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(r.trade_in_comm)}</td>

@@ -37,8 +37,12 @@ export default function SettingsPage() {
       await api(`/api/v1/commcalc/config/${encodeURIComponent(period)}?org_id=${ORG_ID}`, {
         method: 'PUT', body: JSON.stringify(cfg),
       })
+      // Auto-trigger recalculation so new rates apply immediately
+      await api(`/api/v1/commcalc/calculate/${encodeURIComponent(period)}?org_id=${ORG_ID}`, {
+        method: 'POST',
+      })
       setSaved(true)
-      setTimeout(() => setSaved(false), 3000)
+      setTimeout(() => setSaved(false), 5000)
     } catch (e: any) { alert(e.message) }
     setSaving(false)
   }
@@ -86,7 +90,7 @@ export default function SettingsPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {saved && <span style={{ color: 'var(--green)', fontSize: 13 }}>✅ Saved</span>}
+          {saved && <span style={{ color: 'var(--green)', fontSize: 13 }}>✅ Saved & recalculating…</span>}
           <button className="btn btn-primary" onClick={save} disabled={saving}>
             {saving ? '...' : '💾 Save Settings'}
           </button>
