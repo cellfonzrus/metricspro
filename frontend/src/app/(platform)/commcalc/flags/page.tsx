@@ -124,8 +124,54 @@ export default function FlagsPage() {
         <button className="btn btn-secondary" onClick={exportCSV}>📥 CSV</button>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-        {summary.map(([type, s]) => (
+      {/* Store summary matrix */}
+      {(() => {
+        const storeRows: Record<string, Record<string, number>> = {}
+        flags.forEach(f => {
+          const st = f.store_address || 'Unknown'
+          if (!storeRows[st]) storeRows[st] = {}
+          storeRows[st][f.flag_type] = (storeRows[st][f.flag_type] || 0) + 1
+        })
+        const allTypes = [...new Set(flags.map(f => f.flag_type).filter(Boolean))].sort()
+        const rows = Object.entries(storeRows)
+          .map(([st, counts]) => ({ st, counts, total: Object.values(counts).reduce((a, b) => a + b, 0) }))
+          .sort((a, b) => b.total - a.total)
+        if (!rows.length) return null
+        return (
+          <div style={{ marginBottom: 20, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 12, background: 'white' }}>
+            <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+              Store Summary — click a store to filter details below
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+              <thead>
+                <tr>
+                  <th style={{ padding: '8px 10px', fontSize: 10, fontWeight: 700, textAlign: 'left', position: 'sticky', left: 0, background: '#1e3a5f', color: 'white' }}>Store</th>
+                  {allTypes.map(t => (
+                    <th key={t} style={{ padding: '8px 6px', fontSize: 9, fontWeight: 700, textAlign: 'center', background: '#1e3a5f', color: 'white', whiteSpace: 'nowrap' }}>
+                      {t.replace(/_/g, ' ')}
+                    </th>
+                  ))}
+                  <th style={{ padding: '8px 10px', fontSize: 10, fontWeight: 700, textAlign: 'center', background: '#0f2540', color: 'white' }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(({ st, counts, total }, i) => (
+                  <tr key={st} onClick={() => setFStore(fStore === st ? '' : st)}
+                    style={{ cursor: 'pointer', background: fStore === st ? '#eff6ff' : i % 2 ? '#fafbfc' : 'white', borderBottom: '1px solid var(--border)' }}>
+                    <td style={{ padding: '7px 10px', fontSize: 11, fontWeight: 600, position: 'sticky', left: 0, background: 'inherit' }}>{st.substring(0, 30)}</td>
+                    {allTypes.map(t => (
+                      <td key={t} style={{ padding: '7px 6px', fontSize: 12, textAlign: 'center', color: counts[t] ? 'var(--text)' : 'var(--text3)', fontWeight: counts[t] ? 700 : 400 }}>
+                        {counts[t] || '·'}
+                      </td>
+                    ))}
+                    <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'center', fontWeight: 700, background: '#f1f5f9' }}>{total}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      })()}
           <button key={type} onClick={() => setFType(fType === type ? '' : type)} className="card" style={{
             padding: '8px 14px', cursor: 'pointer', border: fType === type ? '2px solid var(--accent)' : '1px solid var(--border)',
             display: 'flex', flexDirection: 'column', gap: 2, minWidth: 120,
