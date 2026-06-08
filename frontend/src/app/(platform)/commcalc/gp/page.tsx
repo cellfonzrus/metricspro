@@ -196,16 +196,17 @@ export default function GPReportPage() {
       {view === 'store' && loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : view === 'store' && (
-        <div style={{ overflowX: 'auto', background: 'white', border: '1px solid var(--border)', borderRadius: 12 }}>
+        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 320px)', background: 'white', border: '1px solid var(--border)', borderRadius: 12 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1600 }}>
             <thead>
-              <tr style={{ background: 'var(--accent)' }}>
-                <th style={{ padding: '10px 14px', color: 'white', fontSize: 11, fontWeight: 600, textAlign: 'left', position: 'sticky', left: 0, background: 'var(--accent)', width: 200 }}>
-                  Store
+              <tr>
+                <th style={{ padding: '12px 14px', color: 'white', fontSize: 12, fontWeight: 700, letterSpacing: '0.03em', textAlign: 'left', position: 'sticky', left: 0, top: 0, zIndex: 3, background: '#1e3a5f', width: 200 }}>
+                  STORE
                 </th>
                 {COLS.map(c => (
-                  <th key={c.key} style={{ padding: '10px 10px', color: 'white', fontSize: 11, fontWeight: 600, textAlign: 'right',
-                    borderLeft: ['comm', 'total_rev', 'rep_pay', 'net_profit'].includes(c.key) ? '2px solid rgba(255,255,255,0.2)' : undefined }}>
+                  <th key={c.key} style={{ padding: '12px 10px', color: 'white', fontSize: 12, fontWeight: 700, letterSpacing: '0.03em', textAlign: 'right',
+                    position: 'sticky', top: 0, zIndex: 2, background: '#1e3a5f', whiteSpace: 'nowrap',
+                    borderLeft: ['comm', 'total_rev', 'rep_pay', 'net_profit'].includes(c.key) ? '2px solid rgba(255,255,255,0.25)' : undefined }}>
                     {c.label}
                   </th>
                 ))}
