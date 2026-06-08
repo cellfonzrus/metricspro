@@ -58,7 +58,9 @@ export default function FlagsPage() {
         if (fWindow === '60' && !(d <= 60)) return false
         if (fWindow === '90' && !(d <= 90)) return false
         if (fWindow === '90+' && !(d > 90)) return false
-      }
+       }
+      return true
+    })
     rows.sort((a, b) => {
       let av = a[sortKey], bv = b[sortKey]
       if (av == null) av = sortDir === 'asc' ? Infinity : -Infinity
