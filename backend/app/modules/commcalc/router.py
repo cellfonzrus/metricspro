@@ -405,7 +405,20 @@ async def _run_calculation(period: str, org_id: str):
 async def get_commissions(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     r = client.schema('commcalc').table('rep_commissions').select('*').eq('period', period).order('total_payout', desc=True).execute()
-    return r.data or []
+    comms = r.data or []
+    # Apply chargeback deductions (deduct=true) per rep
+    cb = client.schema('commcalc').table('chargeback_items').select('epay_salesperson,amount,deduct').eq('period', period).execute().data or []
+    ded_by_rep = {}
+    for item in cb:
+        if item.get('deduct'):
+            rep = item.get('epay_salesperson') or ''
+            ded_by_rep[rep] = ded_by_rep.get(rep, 0) + (item.get('amount') or 0)
+    for cr in comms:
+        rep = cr.get('epay_salesperson') or ''
+        d = ded_by_rep.get(rep, 0)
+        cr['chargeback_deduction'] = d
+        cr['final_payout'] = (cr.get('total_payout') or 0) - d
+    return comms
 
 @router.get("/flags/{period}")
 async def get_flags(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
