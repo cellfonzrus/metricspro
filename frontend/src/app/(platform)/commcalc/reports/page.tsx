@@ -39,13 +39,28 @@ export default function ReportsPage() {
   const [filterRep, setFilterRep] = useState('')
   const [filterStore, setFilterStore] = useState('')
   const [cfg, setCfg] = useState<any>({})
+  const [chargebacks, setChargebacks] = useState<any[]>([])
 
   useEffect(() => {
     api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
       .then(setReps).catch(console.error).finally(() => setLoading(false))
     api(`/api/v1/commcalc/config/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
       .then(setCfg).catch(console.error)
+    api(`/api/v1/commcalc/chargebacks/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+      .then(setChargebacks).catch(console.error)
   }, [period])
+
+  async function toggleChargeback(itemId: string, deduct: boolean) {
+    setChargebacks(cbs => cbs.map(c => c.id === itemId ? { ...c, deduct } : c))
+    try {
+      await api(`/api/v1/commcalc/chargebacks/${itemId}?org_id=${ORG_ID}`, {
+        method: 'PUT', body: JSON.stringify({ deduct }),
+      })
+      // Refresh commissions so payout reflects the change
+      const updated = await api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+      setReps(updated)
+    } catch (e) { console.error(e) }
+  }
 
   const repList  = useMemo(() => [...new Set(reps.map(r => r.epay_salesperson))].sort(), [reps])
   const storeList = useMemo(() => [...new Set(reps.map(r => r.store).filter(Boolean))].sort(), [reps])
@@ -288,6 +303,56 @@ export default function ReportsPage() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Chargeback review */}
+              {(() => {
+                const repCbs = chargebacks.filter(cb => cb.epay_salesperson === currentRep.epay_salesperson)
+                if (!repCbs.length) return null
+                const deducted = repCbs.filter(c => c.deduct).reduce((s, c) => s + (c.amount || 0), 0)
+                return (
+                  <div className="card" style={{ padding: 0, marginTop: 20, border: '1px solid #fca5a5' }}>
+                    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600, background: '#fef2f2', color: '#991b1b' }}>
+                      ⚠️ Potential Chargebacks — {repCbs.length} items · Toggle to deduct from payout
+                    </div>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: 'left' }}>Source</th>
+                          <th style={{ textAlign: 'left' }}>Description</th>
+                          <th style={{ textAlign: 'left' }}>MDN/IMEI</th>
+                          <th style={{ textAlign: 'right' }}>Amount</th>
+                          <th style={{ textAlign: 'center' }}>Deduct?</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {repCbs.map(cb => (
+                          <tr key={cb.id} style={{ background: cb.deduct ? '#fef2f2' : undefined }}>
+                            <td style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text3)' }}>{cb.source}</td>
+                            <td style={{ fontSize: 12 }}>{cb.description}</td>
+                            <td style={{ fontSize: 11, color: 'var(--text3)' }}>{cb.mdn || cb.imei || '—'}</td>
+                            <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(cb.amount)}</td>
+                            <td style={{ textAlign: 'center' }}>
+                              <input type="checkbox" checked={!!cb.deduct}
+                                onChange={e => toggleChargeback(cb.id, e.target.checked)}
+                                style={{ width: 18, height: 18, cursor: 'pointer' }} />
+                            </td>
+                          </tr>
+                        ))}
+                        <tr style={{ fontWeight: 700, background: 'var(--surface2)' }}>
+                          <td colSpan={3}>Total Deducted</td>
+                          <td style={{ textAlign: 'right', color: 'var(--red)' }}>−{fmt(deducted)}</td>
+                          <td></td>
+                        </tr>
+                        <tr style={{ fontWeight: 700 }}>
+                          <td colSpan={3}>Final Payout (after chargebacks)</td>
+                          <td style={{ textAlign: 'right', color: 'var(--accent)' }}>{fmt((currentRep.total_payout || 0) - deducted)}</td>
+                          <td></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              })()}
             </div>
           ) : (
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
