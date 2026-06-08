@@ -84,14 +84,21 @@ def calc_flags(
 
     for imei, mdns in imei_mdns.items():
         if len(mdns) > 1:
-            reps = imei_reps.get(imei, set())
-            flags.append({**base,
-                'flag_type': 'IMEI_FRAUD', 'source': 'sales',
-                'severity': 'CRITICAL',
-                'imei': imei,
-                'description': f"IMEI {imei} activated on {len(mdns)} MDNs: {', '.join(list(mdns)[:3])}",
-                'coaching_note': f"Possible SIM fraud or device re-use. Reps involved: {', '.join(reps)}. Investigate immediately.",
-            })
+            reps = [rp for rp in imei_reps.get(imei, set()) if rp]
+            for rep in (reps or ['']):
+                rep_sale = next((s for s in valid_sales
+                                 if str(s.get('serial_1','') or '').replace('.0','').strip() == imei
+                                 and str(s.get('salesperson','') or '').strip() == rep), {})
+                flags.append({**base,
+                    'flag_type': 'DUPLICATE_IMEI', 'source': 'sales',
+                    'severity': 'HIGH',
+                    'imei': imei,
+                    'mdn': str(rep_sale.get('mdn','') or '').replace('.0','').strip(),
+                    'store_address': str(rep_sale.get('store','') or ''),
+                    'epay_salesperson': rep,
+                    'description': f"IMEI {imei} used on {len(mdns)} MDNs: {', '.join(list(mdns)[:3])}",
+                    'coaching_note': 'Duplicate IMEI across multiple lines. Review which rep(s) are responsible before charging back.',
+                })
 
     # ── 4. SETUP FEE MISSING ──────────────────────────────────────
     act_trans_ids: set[str] = set()
