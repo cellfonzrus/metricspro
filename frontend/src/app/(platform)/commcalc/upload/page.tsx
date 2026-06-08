@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { ORG_ID } from '@/lib/client'
+import { usePeriod } from '@/lib/period-context'
 
 const FILE_TYPES = [
   { id: 'sales',          label: 'Sales Transactions',    icon: '🛍️', required: true,  desc: 'EPay Sales Transaction Details' },
@@ -14,7 +15,7 @@ const FILE_TYPES = [
 ]
 
 export default function UploadPage() {
-  const [period, setPeriod] = useState('April 2026')
+  const { period, setPeriod } = usePeriod()
   const [uploading, setUploading] = useState<string | null>(null)
   const [statuses, setStatuses] = useState<Record<string, 'idle'|'uploading'|'done'|'error'>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})

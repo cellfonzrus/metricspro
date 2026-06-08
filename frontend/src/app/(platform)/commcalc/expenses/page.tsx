@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { supabase, fmt, ORG_ID } from '@/lib/client'
+import { usePeriod } from '@/lib/period-context'
 
 const EXPENSE_CATS = [
   { name: 'Rent / Lease',          type: 'Variable' },
@@ -22,7 +23,7 @@ const EXPENSE_CATS = [
 ]
 
 export default function ExpensesPage() {
-  const [period] = useState('April 2026')
+  const { period } = usePeriod()
   const [stores, setStores] = useState<any[]>([])
   const [expenses, setExpenses] = useState<Record<string, Record<string, number>>>({})
   const [saving, setSaving] = useState(false)

@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { supabase } from '@/lib/client'
+import { usePeriod } from '@/lib/period-context'
 
 interface Txn {
   store: string; storeNum: string; rep: string; date: string
@@ -27,7 +28,7 @@ function parsePromo(desc: string): { promoType: string; expectedAmt: number } | 
 }
 
 export default function DiscrepancyPage() {
-  const [period] = useState('April 2026')
+  const { period } = usePeriod()
   const [summaryRows, setSummaryRows] = useState<SummaryRow[]>([])
   const [loading, setLoading] = useState(true)
   const [drillRow, setDrillRow] = useState<SummaryRow | null>(null)

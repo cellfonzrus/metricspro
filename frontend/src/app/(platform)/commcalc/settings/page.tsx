@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, ORG_ID } from '@/lib/client'
+import { usePeriod } from '@/lib/period-context'
 
 const DEFAULTS = {
   upgrade_flat: 20, premium_flat: 5, byod_flat: 3, byod_extra_spiff: 0,
@@ -12,7 +13,7 @@ const DEFAULTS = {
 }
 
 export default function SettingsPage() {
-  const [period] = useState('April 2026')
+  const { period } = usePeriod()
   const [cfg, setCfg] = useState<any>(DEFAULTS)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)

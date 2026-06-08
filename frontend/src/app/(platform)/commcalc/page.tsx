@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { usePeriod } from '@/lib/period-context'
 
 interface RepRow {
   epay_salesperson: string
@@ -16,7 +17,7 @@ interface RepRow {
 }
 
 export default function CommCalcDashboard() {
-  const [period] = useState('April 2026')
+  const { period } = usePeriod()
   const [reps, setReps] = useState<RepRow[]>([])
   const [loading, setLoading] = useState(true)
   const [calcStatus, setCalcStatus] = useState<string>('')

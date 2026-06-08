@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { usePeriod } from '@/lib/period-context'
 
 interface Rep {
   epay_salesperson: string
@@ -27,7 +28,7 @@ const TABS = [
 ]
 
 export default function ReportsPage() {
-  const [period] = useState('April 2026')
+  const { period } = usePeriod()
   const [reps, setReps] = useState<Rep[]>([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('breakdown')

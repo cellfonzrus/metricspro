@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, fmtN, ORG_ID } from '@/lib/client'
+import { usePeriod } from '@/lib/period-context'
 
 const KPI_COLS = [
   { key: 'atu_pct',        label: 'ATU %',        target_key: 'kpi_atu_target',        default: 55 },
@@ -11,7 +12,7 @@ const KPI_COLS = [
 ]
 
 export default function KPIPage() {
-  const [period] = useState('April 2026')
+  const { period } = usePeriod()
   const [repData, setRepData] = useState<any[]>([])
   const [cfg, setCfg] = useState<any>({})
   const [loading, setLoading] = useState(true)

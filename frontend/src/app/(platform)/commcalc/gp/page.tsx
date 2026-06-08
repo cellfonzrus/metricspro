@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { usePeriod } from '@/lib/period-context'
 
 interface StoreRow {
   store: string; store_code: string; market: string
@@ -37,7 +38,7 @@ const COLS: ColDef[] = [
 ]
 
 export default function GPReportPage() {
-  const [period] = useState('April 2026')
+  const { period } = usePeriod()
   const [view, setView] = useState<'store'|'rep'>('store')
   const [selMarkets, setSelMarkets] = useState<string[]>([])
   const [selStores, setSelStores] = useState<string[]>([])

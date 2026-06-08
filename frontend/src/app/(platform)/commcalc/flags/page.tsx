@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { usePeriod } from '@/lib/period-context'
 
 const GROUPS = [
   { id: 'all',          label: 'All Flags',          icon: '🚩' },
@@ -18,7 +19,7 @@ const SEVERITY_COLORS: Record<string, string> = {
 }
 
 export default function FlagsPage() {
-  const [period] = useState('April 2026')
+  const { period } = usePeriod()
   const [flags, setFlags] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [activeGroup, setActiveGroup] = useState('all')

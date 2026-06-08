@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { PeriodProvider, usePeriod } from '@/lib/period-context'
 
 const NAV = [
   { group: 'CommCalc', items: [
@@ -24,8 +25,8 @@ const NAV = [
   ]},
 ]
 
-export default function PlatformLayout({ children }: { children: React.ReactNode }) {
-  const [period, setPeriod] = useState('April 2026')
+function PlatformLayoutInner({ children }: { children: React.ReactNode }) {
+  const { period, setPeriod, periods } = usePeriod()
   const [collapsed, setCollapsed] = useState(false)
   const pathname = usePathname()
 
@@ -62,14 +63,16 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
         {!collapsed && (
           <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
             <label style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Period</label>
-            <input
+            <select
               value={period}
               onChange={e => setPeriod(e.target.value)}
               style={{
                 width: '100%', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
                 borderRadius: 6, color: 'white', padding: '5px 8px', fontSize: 13, marginTop: 4,
               }}
-            />
+            >
+              {periods.map(p => <option key={p} value={p} style={{ color: 'black' }}>{p}</option>)}
+            </select>
           </div>
         )}
 
@@ -142,5 +145,13 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
         </div>
       </main>
     </div>
+  )
+}
+
+export default function PlatformLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <PeriodProvider>
+      <PlatformLayoutInner>{children}</PlatformLayoutInner>
+    </PeriodProvider>
   )
 }
