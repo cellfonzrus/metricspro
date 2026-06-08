@@ -40,6 +40,29 @@ async def upload_file(
         raise HTTPException(400, f"Could not read Excel file: {e}")
     
     df = df.fillna('')
+
+    # ── Validate file matches the expected slot ──────────────────
+    SIGNATURES = {
+        'sales':          ['Salesperson', 'Trans ID'],
+        'payment_detail': ['Payment Type', 'Amount'],
+        'mi_report':      ['SalesForceID'],
+        'dlar_rep':       ['Rep Name'],
+        'dlar_store':     ['Business Address', 'PSA Projected'],
+        'catalog':        ['Product ID', 'Cost'],
+        'master_cats':    ['description'],
+        'comp_report':    ['Compensation Type', 'Payment Amount'],
+    }
+    cols = set(str(col).strip() for col in df.columns)
+    expected = SIGNATURES.get(file_type, [])
+    missing = [col for col in expected if col not in cols]
+    if missing:
+        raise HTTPException(
+            400,
+            f"This doesn't look like the right file for '{file_type}'. "
+            f"Missing expected column(s): {', '.join(missing)}. "
+            f"Found columns: {', '.join(sorted(cols))[:200]}"
+        )
+
     rows = df.to_dict('records')
     
     pm = parse_period(period) if period else {'month': 0, 'year': 0}
