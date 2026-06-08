@@ -172,6 +172,8 @@ export default function FlagsPage() {
           </div>
         )
       })()}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+        {summary.map(([type, s]) => (
           <button key={type} onClick={() => setFType(fType === type ? '' : type)} className="card" style={{
             padding: '8px 14px', cursor: 'pointer', border: fType === type ? '2px solid var(--accent)' : '1px solid var(--border)',
             display: 'flex', flexDirection: 'column', gap: 2, minWidth: 120,
