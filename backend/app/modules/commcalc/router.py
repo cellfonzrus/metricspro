@@ -375,6 +375,15 @@ async def _run_calculation(period: str, org_id: str):
                     'deduct': decided.get(('flag', ref), False),
                 })
 
+            seen = set()
+            unique_items = []
+            for it in cb_items:
+                k = (it['source'], it['source_ref'])
+                if k in seen:
+                    continue
+                seen.add(k)
+                unique_items.append(it)
+            cb_items = unique_items
             client.schema('commcalc').table('chargeback_items').delete().eq('period', period).execute()
             if cb_items:
                 for i in range(0, len(cb_items), 500):
