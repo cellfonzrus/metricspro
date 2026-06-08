@@ -261,6 +261,5 @@ export default function FlagsPage() {
         </div>
       )}
     </div>
-    </>
-  )
+    )
 }
