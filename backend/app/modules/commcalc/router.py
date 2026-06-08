@@ -387,7 +387,7 @@ async def _run_calculation(period: str, org_id: str):
             client.schema('commcalc').table('chargeback_items').delete().eq('period', period).execute()
             if cb_items:
                 for i in range(0, len(cb_items), 500):
-                    client.schema('commcalc').table('chargeback_items').upsert(cb_items[i:i+500], on_conflict='org_id,period,source,source_ref').execute()
+                    client.schema('commcalc').table('chargeback_items').insert(cb_items[i:i+500]).execute()
         except Exception as e:
             save_errors.append(f'chargebacks: {e}')
 
