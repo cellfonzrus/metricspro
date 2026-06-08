@@ -26,10 +26,15 @@ def calc_portout_flags(mi_rows, sales, store_mapping, period, period_month, peri
 
     # Build phone -> sale (true selling rep/store) from sales
     sale_by_phone = {}
+    model_by_imei = {}
     for s in sales:
         mdn = str(s.get('mdn','') or '').replace('.0','').strip()
         if mdn and mdn not in sale_by_phone:
             sale_by_phone[mdn] = s
+        sn = str(s.get('serial_1','') or '').replace('.0','').strip()
+        pd_desc = str(s.get('product_desc','') or '').strip()
+        if sn and pd_desc and sn not in model_by_imei:
+            model_by_imei[sn] = pd_desc
 
     for m in mi_rows:
         status = str(m.get('subscriber_status','') or '').strip().upper()
@@ -61,6 +66,7 @@ def calc_portout_flags(mi_rows, sales, store_mapping, period, period_month, peri
                 'flag_type': ft, 'source': 'mi_report', 'severity': sev,
                 'store_address': store, 'epay_salesperson': rep,
                 'mdn': phone, 'imei': imei, 'amount': mrc,
+                'days_active': d, 'phone_model': model_by_imei.get(imei,''), 'customer_plan': plan,
                 'description': f"Ported out{f' after {d} days' if d is not None else ''} — plan {plan}, MRC ${mrc:.2f}",
                 'coaching_note': 'Port-out within 60 days is a loss. Review at user discretion for chargeback.' if (d is not None and d <= 60) else 'Port-out 3rd month onward — reporting only.',
             })
@@ -72,16 +78,19 @@ def calc_portout_flags(mi_rows, sales, store_mapping, period, period_month, peri
                 'flag_type': 'RESIDUAL_TRANSFER_OUT', 'source': 'mi_report', 'severity': 'MEDIUM',
                 'store_address': store, 'epay_salesperson': rep,
                 'mdn': phone, 'imei': imei, 'amount': mrc,
+                'days_active': d, 'phone_model': model_by_imei.get(imei,''), 'customer_plan': plan,
                 'description': f"Active customer's residual transferred out{f' after {d} days' if d is not None else ''} — upgraded at another store",
                 'coaching_note': 'Customer stayed with Boost but upgraded elsewhere. Retention/CS follow-up.',
             })
 
         # ── INVOLUNTARY-SUSPENDED (non-payment, 3MR tracking) ────
         elif status == 'INVOLUNTARY-SUSPENDED':
+            ds = days_between(act, deact)
             flags.append({**base,
                 'flag_type': 'INVOLUNTARY_SUSPENDED', 'source': 'mi_report', 'severity': 'MEDIUM',
                 'store_address': store, 'epay_salesperson': rep,
                 'mdn': phone, 'imei': imei, 'amount': mrc,
+                'days_active': ds, 'phone_model': model_by_imei.get(imei,''), 'customer_plan': plan,
                 'description': f"Involuntary suspended (non-payment) — plan {plan}, MRC ${mrc:.2f}",
                 'coaching_note': 'Non-payment affects 3MR. Reporting only — rep may follow up with customer.',
             })
