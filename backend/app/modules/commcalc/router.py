@@ -116,6 +116,22 @@ async def upload_file(
             trans_date_raw = str(r.get('Trans Date Time', r.get('Trans Date', ''))).strip()
             if trans_date_raw.startswith('Store:') or not trans_date_raw:
                 continue
+            # For daily_sales, derive period from the row's date
+            if file_type == 'daily_sales':
+                try:
+                    # Handle Excel serial numbers AND regular date strings
+                    try:
+                        serial = float(trans_date_raw)
+                        td = pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)
+                    except (ValueError, TypeError):
+                        td = pd.to_datetime(trans_date_raw, errors='coerce')
+                    if pd.isna(td):
+                        continue
+                    row_period = td.strftime('%B %Y')
+                    row_pm = {'month': td.month, 'year': td.year}
+                except:
+                    continue
+                base = {'org_id': org_id, 'period': row_period, 'period_month': row_pm['month'], 'period_year': row_pm['year']}
             row = {**base,
                 'store': r.get('Store',''), 'salesperson': r.get('Salesperson',''),
                 'user_login': r.get('User Login',''), 'contract_type': r.get('Contract Type',''),
@@ -123,7 +139,12 @@ async def upload_file(
                 'product_desc': r.get('Product Desc',''), 'product_id': safe_float(r.get('Product ID')) or None,
                 'gp': safe_float(r.get('GP')), 'ext_price': safe_float(r.get('Ext Price')),
                 'trans_id': str(r.get('Trans ID','')).replace('.0','').strip(),
-                'trans_date': str(r.get('Trans Date Time',r.get('Trans Date','')))[:10] or None,
+                'trans_date': (
+                    (lambda v: (
+                        (pd.Timestamp('1899-12-30') + pd.Timedelta(days=float(v))).strftime('%Y-%m-%d')
+                        if v.replace('.','',1).isdigit() else str(v)[:10]
+                    ) if v else None)(str(r.get('Trans Date Time', r.get('Trans Date', ''))).strip())
+                ),
                 'mdn': str(r.get('Activated Mobile Number','')).replace('.0','').strip(),
                 'serial_1': str(r.get('Serial 1','')).replace('.0','').strip()[:30],
                 'register': str(r.get('Register','')).strip(),
