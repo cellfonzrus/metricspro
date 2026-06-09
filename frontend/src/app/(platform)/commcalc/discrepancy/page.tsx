@@ -101,9 +101,14 @@ export default function DiscrepancyPage() {
     return true
   }), [allRows, statusTab, storeFilter, compFilter, search])
 
+  const phantomStores = useMemo(() =>
+    phantom ? phantom.by_store.map(s => s.business_address).sort() : [],
+  [phantom])
+
   const phantomRows = useMemo(() => {
     if (!phantom) return []
     let rows = phantom.by_store.flatMap(s => s.rows)
+    if (storeFilter) rows = rows.filter(r => r.business_address === storeFilter)
     if (search) {
       const s = search.toLowerCase()
       rows = rows.filter(r => r.imei?.toLowerCase().includes(s) || r.mdn?.toLowerCase().includes(s) ||
@@ -111,7 +116,7 @@ export default function DiscrepancyPage() {
     }
     if (compFilter) rows = rows.filter(r => r.payment_type === compFilter)
     return rows.sort((a, b) => b.amount - a.amount)
-  }, [phantom, search, compFilter])
+  }, [phantom, search, compFilter, storeFilter])
 
   const phantomTypes = useMemo(() => {
     if (!phantom) return []
@@ -119,13 +124,16 @@ export default function DiscrepancyPage() {
   }, [phantom])
 
   const storeSummary = useMemo(() => {
+    if (isPhantom) {
+      return phantom ? phantom.by_store.map(s => ({ store: s.business_address, gap: s.total, count: s.count })) : []
+    }
     const map: Record<string, { store: string; gap: number; count: number }> = {}
     allRows.filter(r => r.status === statusTab).forEach(r => {
       if (!map[r.store]) map[r.store] = { store: r.store, gap: 0, count: 0 }
       map[r.store].gap += r.gap; map[r.store].count += 1
     })
     return Object.values(map).sort((a, b) => b.gap - a.gap)
-  }, [allRows, statusTab])
+  }, [allRows, statusTab, isPhantom, phantom])
 
   const tabTotal = useMemo(() =>
     allRows.filter(r => r.status === statusTab).reduce((s, r) => s + r.gap, 0),
@@ -137,6 +145,8 @@ export default function DiscrepancyPage() {
   }
 
   const headlineColor = STATUS_TABS.find(t => t.key === statusTab)?.color
+  const filterStores = isPhantom ? phantomStores : stores
+  const filterTypes = isPhantom ? phantomTypes : compTypes
 
   return (
     <div style={{ padding: 24, maxWidth: 1400, margin: '0 auto' }}>
@@ -218,41 +228,37 @@ export default function DiscrepancyPage() {
 
       {!loading && data && (
         <>
-          {!isPhantom && (
-            <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, marginBottom: 20, overflow: 'hidden' }}>
-              <div style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 14 }}>By Store (click to filter)</div>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-                <thead><tr style={{ background: '#f9fafb', textAlign: 'left' }}>
-                  <th style={{ padding: '8px 16px' }}>Store</th>
-                  <th style={{ padding: '8px 16px', textAlign: 'right' }}>Line Items</th>
-                  <th style={{ padding: '8px 16px', textAlign: 'right' }}>{statusTab === 'open' ? 'Gap' : 'Amount'}</th>
-                </tr></thead>
-                <tbody>
-                  {storeSummary.map(s => (
-                    <tr key={s.store} onClick={() => setStoreFilter(storeFilter === s.store ? '' : s.store)}
-                      style={{ borderTop: '1px solid #f3f4f6', cursor: 'pointer', background: storeFilter === s.store ? '#eff6ff' : 'white' }}>
-                      <td style={{ padding: '8px 16px', fontWeight: 500 }}>{s.store}</td>
-                      <td style={{ padding: '8px 16px', textAlign: 'right' }}>{s.count}</td>
-                      <td style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 600 }}>{fmt(s.gap)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, marginBottom: 20, overflow: 'hidden' }}>
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 14 }}>By Store (click to filter)</div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+              <thead><tr style={{ background: '#f9fafb', textAlign: 'left' }}>
+                <th style={{ padding: '8px 16px' }}>Store</th>
+                <th style={{ padding: '8px 16px', textAlign: 'right' }}>Line Items</th>
+                <th style={{ padding: '8px 16px', textAlign: 'right' }}>{statusTab === 'open' ? 'Gap' : 'Amount'}</th>
+              </tr></thead>
+              <tbody>
+                {storeSummary.map(s => (
+                  <tr key={s.store} onClick={() => setStoreFilter(storeFilter === s.store ? '' : s.store)}
+                    style={{ borderTop: '1px solid #f3f4f6', cursor: 'pointer', background: storeFilter === s.store ? '#eff6ff' : 'white' }}>
+                    <td style={{ padding: '8px 16px', fontWeight: 500 }}>{s.store}</td>
+                    <td style={{ padding: '8px 16px', textAlign: 'right' }}>{s.count}</td>
+                    <td style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 600 }}>{fmt(s.gap)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-            {!isPhantom && (
-              <select value={storeFilter} onChange={e => setStoreFilter(e.target.value)}
-                style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14 }}>
-                <option value="">All stores</option>
-                {stores.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            )}
+            <select value={storeFilter} onChange={e => setStoreFilter(e.target.value)}
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14, maxWidth: 260 }}>
+              <option value="">All stores</option>
+              {filterStores.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
             <select value={compFilter} onChange={e => setCompFilter(e.target.value)}
               style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14 }}>
               <option value="">All types</option>
-              {(isPhantom ? phantomTypes : compTypes).map(c => <option key={c} value={c}>{c}</option>)}
+              {filterTypes.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
             <input placeholder="Search IMEI / MDN / device / rep" value={search} onChange={e => setSearch(e.target.value)}
               style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14, flex: 1, minWidth: 200 }} />
