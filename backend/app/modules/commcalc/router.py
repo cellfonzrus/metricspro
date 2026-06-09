@@ -732,3 +732,36 @@ async def get_phantom_payments(period: str, org_id: str = ORG_ID):
         "matched_total": round(matched_total, 2),
         "by_store": sorted(by_store.values(), key=lambda x: x["total"], reverse=True),
     }
+
+
+@router.get("/top-sellers/{period}")
+async def get_top_sellers(period: str, limit: int = 10, org_id: str = ORG_ID):
+    """Top-selling device models for the period (by activation volume) to prioritize hotsheet updates."""
+    from datetime import date as _date
+    client = sb()
+    year, month = int(period[:4]), int(period[5:7])
+    plabel = _date(year, month, 1).strftime("%B %Y")
+
+    sales = (client.schema("commcalc").table("raw_sales")
+             .select("product_desc,contract_type,ext_price")
+             .eq("org_id", org_id).eq("period", plabel)
+             .neq("contract_type", "").execute().data) or []
+
+    # Aggregate by device model (strip promo suffix after " - " for cleaner grouping)
+    models = {}
+    for s in sales:
+        desc = (s.get("product_desc") or "").strip()
+        if not desc:
+            continue
+        # Only count rows that look like a device (has a category-ish device name, not a plan)
+        # Heuristic: device rows usually contain a model + " - " promo, or brand keywords
+        base = desc.split(" - ")[0].strip()
+        low = base.lower()
+        if not any(k in low for k in ["iphone","samsung","galaxy","moto","pixel","celero","tcl","summit","apple","motorola","ipad","watch","tab"]):
+            continue
+        if base not in models:
+            models[base] = {"model": base, "units": 0, "sample_desc": desc}
+        models[base]["units"] += 1
+
+    ranked = sorted(models.values(), key=lambda x: x["units"], reverse=True)[:limit]
+    return {"period": period, "top_sellers": ranked}
