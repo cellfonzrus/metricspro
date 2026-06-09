@@ -129,7 +129,8 @@ async def upload_file(
                         continue
                     row_period = td.strftime('%B %Y')
                     row_pm = {'month': td.month, 'year': td.year}
-                except:
+                except Exception as _e:
+                    print(f'DEBUG daily_sales date parse error: {_e!r} raw={trans_date_raw!r}')
                     continue
                 base = {'org_id': org_id, 'period': row_period, 'period_month': row_pm['month'], 'period_year': row_pm['year']}
             row = {**base,
