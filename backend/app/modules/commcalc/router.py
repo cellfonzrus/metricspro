@@ -1,5 +1,5 @@
 """CommCalc API Router — all /api/v1/commcalc/* endpoints"""
-from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import JSONResponse
 import pandas as pd
 import io
@@ -8,10 +8,16 @@ from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, 
 from app.modules.commcalc.gp_report import calc_gp_report
 from app.modules.commcalc.flags import calc_flags
 from app.modules.commcalc.portout_flags import calc_portout_flags
+from app.modules.commcalc.hotsheet_parser import parse_hotsheet
+from app.modules.commcalc.discrepancy_engine import run_discrepancy
+
 
 router = APIRouter(prefix="/commcalc", tags=["CommCalc"])
 
 # ── Helper ───────────────────────────────────────────────────
+ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+
 def sb():
     return get_supabase()
 
@@ -528,3 +534,134 @@ async def get_calc_status(period: str, org_id: str = "00000000-0000-0000-0000-00
     client = sb()
     r = client.schema('commcalc').table('calc_status').select('*').eq('period', period).limit(1).execute()
     return r.data[0] if r.data else {'calc_status': 'not_run'}
+
+
+# ─────────────────────────────────────────────
+# HOTSHEET ENDPOINTS
+# ─────────────────────────────────────────────
+
+@router.post("/hotsheet/upload")
+async def upload_hotsheet(
+    file: UploadFile = File(...),
+    effective_date: str = Form(...),
+    org_id: str = Form(default=ORG_ID),
+):
+    """Upload a pricing hotsheet CSV/Excel. effective_date = YYYY-MM-DD"""
+    from datetime import date as date_type
+    try:
+        eff = date_type.fromisoformat(effective_date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="effective_date must be YYYY-MM-DD")
+
+    file_bytes = await file.read()
+    try:
+        rows = parse_hotsheet(file_bytes, eff, org_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="No valid rows found in hotsheet file")
+
+    client = sb()
+    # Upsert — on conflict (org_id, effective_date, device_model) update
+    client.schema("commcalc").table("hotsheet").upsert(
+        rows, on_conflict="org_id,effective_date,device_model"
+    ).execute()
+
+    return {"status": "ok", "rows_uploaded": len(rows), "effective_date": effective_date}
+
+
+@router.get("/hotsheet")
+async def get_hotsheet(org_id: str = ORG_ID):
+    """List all hotsheet uploads grouped by effective_date."""
+    client = sb()
+    resp = client.schema("commcalc").table("hotsheet")        .select("effective_date,device_model,srp,promo_port_in,promo_non_port,promo_upgrade,promo_aal,boost_protect_fee,notes")        .eq("org_id", org_id)        .order("effective_date", desc=True)        .execute()
+    return resp.data or []
+
+
+@router.delete("/hotsheet/{effective_date}")
+async def delete_hotsheet(effective_date: str, org_id: str = ORG_ID):
+    """Delete all hotsheet rows for a given effective_date."""
+    client = sb()
+    client.schema("commcalc").table("hotsheet")        .delete()        .eq("org_id", org_id)        .eq("effective_date", effective_date)        .execute()
+    return {"status": "ok", "deleted_date": effective_date}
+
+
+# ─────────────────────────────────────────────
+# COMP RATES ENDPOINTS
+# ─────────────────────────────────────────────
+
+@router.get("/comp-rates")
+async def get_comp_rates(org_id: str = ORG_ID):
+    client = sb()
+    resp = client.schema("commcalc").table("comp_rates")        .select("*")        .eq("org_id", org_id)        .order("comp_type")        .order("effective_date", desc=True)        .execute()
+    return resp.data or []
+
+
+@router.post("/comp-rates")
+async def upsert_comp_rate(payload: dict, org_id: str = ORG_ID):
+    """Add or update a comp rate. Send: comp_type, rate_type, value, effective_date, plan_category, duration_months, notes"""
+    client = sb()
+    payload["org_id"] = org_id
+    client.schema("commcalc").table("comp_rates").upsert(
+        payload, on_conflict="org_id,comp_type,plan_category,effective_date"
+    ).execute()
+    return {"status": "ok"}
+
+
+@router.delete("/comp-rates/{comp_rate_id}")
+async def delete_comp_rate(comp_rate_id: int, org_id: str = ORG_ID):
+    client = sb()
+    client.schema("commcalc").table("comp_rates")        .delete().eq("org_id", org_id).eq("id", comp_rate_id).execute()
+    return {"status": "ok"}
+
+
+# ─────────────────────────────────────────────
+# DISCREPANCY ENDPOINTS
+# ─────────────────────────────────────────────
+
+@router.post("/discrepancy/run")
+async def run_discrepancy_check(payload: dict):
+    """Trigger discrepancy detection. Send: { "period": "2026-04" }"""
+    period = payload.get("period")
+    if not period or len(period) != 7:
+        raise HTTPException(status_code=400, detail="period must be YYYY-MM")
+    try:
+        result = run_discrepancy(period)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return result
+
+
+@router.get("/discrepancy/{period}")
+async def get_discrepancy_results(period: str, org_id: str = ORG_ID):
+    """Get all discrepancy results for a period, grouped by store."""
+    client = sb()
+    resp = client.schema("commcalc").table("discrepancy_results")        .select("*")        .eq("org_id", org_id)        .eq("period", period)        .order("store")        .order("gap", desc=True)        .execute()
+    rows = resp.data or []
+
+    # Group by store
+    stores = {}
+    for r in rows:
+        store = r["store"] or "Unknown"
+        if store not in stores:
+            stores[store] = {"store": store, "total_gap": 0.0, "flagged_count": 0, "rows": []}
+        stores[store]["rows"].append(r)
+        if r["gap"] > 0.50:
+            stores[store]["total_gap"] = round(stores[store]["total_gap"] + r["gap"], 2)
+            stores[store]["flagged_count"] += 1
+
+    return {
+        "period": period,
+        "summary": sorted(stores.values(), key=lambda x: x["total_gap"], reverse=True),
+        "total_gap_usd": round(sum(s["total_gap"] for s in stores.values()), 2),
+        "total_flagged": sum(s["flagged_count"] for s in stores.values()),
+    }
+
+
+@router.patch("/discrepancy/{discrepancy_id}")
+async def update_discrepancy_status(discrepancy_id: int, payload: dict, org_id: str = ORG_ID):
+    """Update status of a discrepancy row: open, resolved, disputed"""
+    client = sb()
+    client.schema("commcalc").table("discrepancy_results")        .update({"status": payload.get("status"), "notes": payload.get("notes")})        .eq("org_id", org_id)        .eq("id", discrepancy_id)        .execute()
+    return {"status": "ok"}
