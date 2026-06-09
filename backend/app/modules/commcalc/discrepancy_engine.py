@@ -62,6 +62,9 @@ LAG_MONTHS = {"MI": 2, "ATUMI": 2}
 # Comp types we track but never flag as underpaid (informational)
 INFORMATIONAL = {"SIMCR"}
 
+# Comp types on a payment lag - shown but not counted in gap until prior data loaded
+LAGGED = {"MI", "ATUMI"}
+
 
 def _period_to_label(period: str) -> str:
     """'2026-04' -> 'April 2026'"""
@@ -204,6 +207,8 @@ def run_discrepancy(period: str) -> dict:
                 status = status_override
             elif comp_type in INFORMATIONAL:
                 status = "info"
+            elif comp_type in LAGGED:
+                status = "lagged"
             elif gap > 0.50:
                 status = "open"
             else:
