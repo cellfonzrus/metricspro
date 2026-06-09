@@ -269,6 +269,7 @@ async def upload_file(
         except Exception as e:
             raise HTTPException(500, f"Insert failed at row {i}: {e}")
     
+    print(f'DEBUG upload complete: file_type={file_type} saved={saved} mapped={len(mapped)} period={period!r}')
     return {"saved": saved, "file_type": file_type, "period": period}
 
 
