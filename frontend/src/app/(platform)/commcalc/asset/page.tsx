@@ -14,6 +14,29 @@ type Summary = {
   by_category: Record<string, { count: number; owed: number; fees: number }>
 }
 
+type CatStatus = { count: number; owed: number; reimbursed: number; fees: number }
+type CatRow = {
+  id: number
+  esn_imei: string | null
+  phone_number: string | null
+  contract_type: string | null
+  status: string | null
+  date_sold: string | null
+  sfid: string | null
+  owed_to_vip: number | null
+  reimbursement: number | null
+  commissions: number | null
+  notes: string | null
+}
+type CatDetail = {
+  category: string
+  total_in_category: number
+  by_status: Record<string, CatStatus>
+  rows: CatRow[]
+  offset: number
+  limit: number
+}
+
 function StatCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
   return (
     <div className="card" style={{ padding: '20px 24px' }}>
@@ -24,12 +47,36 @@ function StatCard({ label, value, sub, color }: { label: string; value: string; 
   )
 }
 
+const STATUS_COLORS: Record<string, string> = {
+  'Paid In Full': '#059669',
+  'Open': '#dc2626',
+  'Partial': '#d97706',
+}
+
+function statusPill(status: string) {
+  return (
+    <span style={{
+      background: STATUS_COLORS[status] ? STATUS_COLORS[status] + '20' : '#f3f4f6',
+      color: STATUS_COLORS[status] || 'var(--text2)',
+      borderRadius: 6, padding: '2px 8px', fontSize: 12, fontWeight: 600
+    }}>{status}</span>
+  )
+}
+
+const PAGE_SIZE = 100
+
 export default function AssetPage() {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [uploadMsg, setUploadMsg] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // Drill-down state
+  const [openCat, setOpenCat] = useState<string | null>(null)
+  const [detail, setDetail] = useState<CatDetail | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
 
   useEffect(() => { loadSummary() }, [])
 
@@ -40,6 +87,38 @@ export default function AssetPage() {
       setSummary(d)
     } catch(e) { console.error(e) }
     setLoading(false)
+  }
+
+  async function toggleCategory(cat: string) {
+    // Clicking the open category closes it
+    if (openCat === cat) {
+      setOpenCat(null)
+      setDetail(null)
+      return
+    }
+    setOpenCat(cat)
+    setDetail(null)
+    setDetailLoading(true)
+    try {
+      const d = await api(`/api/v1/asset/category-detail?org_id=${ORG_ID}&category=${encodeURIComponent(cat)}&limit=${PAGE_SIZE}&offset=0`)
+      setDetail(d)
+    } catch(e) {
+      console.error(e)
+    }
+    setDetailLoading(false)
+  }
+
+  async function loadMore() {
+    if (!detail || !openCat) return
+    setLoadingMore(true)
+    try {
+      const nextOffset = detail.rows.length
+      const d: CatDetail = await api(`/api/v1/asset/category-detail?org_id=${ORG_ID}&category=${encodeURIComponent(openCat)}&limit=${PAGE_SIZE}&offset=${nextOffset}`)
+      setDetail({ ...d, rows: [...detail.rows, ...d.rows] })
+    } catch(e) {
+      console.error(e)
+    }
+    setLoadingMore(false)
   }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -56,18 +135,14 @@ export default function AssetPage() {
       const d = await res.json()
       if (!res.ok) throw new Error(d.detail || 'Upload failed')
       setUploadMsg(`✅ Imported ${d.rows_imported.toLocaleString()} rows`)
+      setOpenCat(null)
+      setDetail(null)
       await loadSummary()
     } catch(e: any) {
       setUploadMsg(`❌ ${e.message}`)
     }
     setUploading(false)
     if (fileRef.current) fileRef.current.value = ''
-  }
-
-  const STATUS_COLORS: Record<string, string> = {
-    'Paid In Full': '#059669',
-    'Open': '#dc2626',
-    'Partial': '#d97706',
   }
 
   return (
@@ -132,13 +207,7 @@ export default function AssetPage() {
                     .sort((a,b) => b[1].owed - a[1].owed)
                     .map(([status, d], i) => (
                     <tr key={status} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
-                      <td style={{ padding: '10px 14px' }}>
-                        <span style={{
-                          background: STATUS_COLORS[status] ? STATUS_COLORS[status] + '20' : '#f3f4f6',
-                          color: STATUS_COLORS[status] || 'var(--text2)',
-                          borderRadius: 6, padding: '2px 8px', fontSize: 12, fontWeight: 600
-                        }}>{status}</span>
-                      </td>
+                      <td style={{ padding: '10px 14px' }}>{statusPill(status)}</td>
                       <td style={{ padding: '10px 14px', fontSize: 13 }}>{d.count.toLocaleString()}</td>
                       <td style={{ padding: '10px 14px', fontSize: 13, fontWeight: 600, color: d.owed > 0 ? '#dc2626' : 'var(--text2)' }}>{fmt(d.owed)}</td>
                       <td style={{ padding: '10px 14px', fontSize: 13 }}>{fmt(d.fees)}</td>
@@ -148,10 +217,10 @@ export default function AssetPage() {
               </table>
             </div>
 
-            {/* By Category */}
+            {/* By Category — click a row to drill down */}
             <div className="card" style={{ padding: 0 }}>
               <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 14 }}>
-                📱 By Category
+                📱 By Category <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— click a category to drill down</span>
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
@@ -164,18 +233,111 @@ export default function AssetPage() {
                 <tbody>
                   {Object.entries(summary.by_category)
                     .sort((a,b) => b[1].owed - a[1].owed)
-                    .map(([cat, d], i) => (
-                    <tr key={cat} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
-                      <td style={{ padding: '10px 14px', fontSize: 13, fontWeight: 500 }}>{cat || '—'}</td>
-                      <td style={{ padding: '10px 14px', fontSize: 13 }}>{d.count.toLocaleString()}</td>
-                      <td style={{ padding: '10px 14px', fontSize: 13, fontWeight: 600, color: d.owed > 0 ? '#dc2626' : 'var(--text2)' }}>{fmt(d.owed)}</td>
-                      <td style={{ padding: '10px 14px', fontSize: 13 }}>{fmt(d.fees)}</td>
-                    </tr>
-                  ))}
+                    .map(([cat, d], i) => {
+                      const isOpen = openCat === cat
+                      return (
+                        <tr key={cat}
+                          onClick={() => toggleCategory(cat)}
+                          style={{
+                            borderTop: '1px solid var(--border)',
+                            background: isOpen ? 'var(--accent)' + '12' : (i % 2 === 0 ? 'transparent' : 'var(--surface2)'),
+                            cursor: 'pointer',
+                          }}>
+                          <td style={{ padding: '10px 14px', fontSize: 13, fontWeight: 500 }}>
+                            <span style={{ display: 'inline-block', width: 14, color: 'var(--text3)' }}>{isOpen ? '▾' : '▸'}</span>
+                            {cat || '—'}
+                          </td>
+                          <td style={{ padding: '10px 14px', fontSize: 13 }}>{d.count.toLocaleString()}</td>
+                          <td style={{ padding: '10px 14px', fontSize: 13, fontWeight: 600, color: d.owed > 0 ? '#dc2626' : 'var(--text2)' }}>{fmt(d.owed)}</td>
+                          <td style={{ padding: '10px 14px', fontSize: 13 }}>{fmt(d.fees)}</td>
+                        </tr>
+                      )
+                    })}
                 </tbody>
               </table>
             </div>
           </div>
+
+          {/* Drill-down panel */}
+          {openCat && (
+            <div className="card" style={{ padding: 0, marginBottom: 24 }}>
+              <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>🔎 {openCat || '—'} {detail && <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>· {detail.total_in_category.toLocaleString()} devices</span>}</span>
+                <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => { setOpenCat(null); setDetail(null) }}>✕ Close</button>
+              </div>
+
+              {detailLoading ? (
+                <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>Loading category…</div>
+              ) : !detail ? (
+                <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>No data.</div>
+              ) : (
+                <div style={{ padding: 18 }}>
+                  {/* Status breakdown within this category */}
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>Status breakdown</div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 24 }}>
+                    <thead>
+                      <tr style={{ background: 'var(--surface2)' }}>
+                        {['Status','Devices','Open Balance','Reimbursed','Fees'].map(h => (
+                          <th key={h} style={{ textAlign: 'left', padding: '8px 14px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(detail.by_status)
+                        .sort((a,b) => b[1].owed - a[1].owed)
+                        .map(([status, s], i) => (
+                        <tr key={status} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                          <td style={{ padding: '8px 14px' }}>{statusPill(status)}</td>
+                          <td style={{ padding: '8px 14px', fontSize: 13 }}>{s.count.toLocaleString()}</td>
+                          <td style={{ padding: '8px 14px', fontSize: 13, fontWeight: 600, color: s.owed > 0 ? '#dc2626' : 'var(--text2)' }}>{fmt(s.owed)}</td>
+                          <td style={{ padding: '8px 14px', fontSize: 13, color: '#059669' }}>{fmt(s.reimbursed)}</td>
+                          <td style={{ padding: '8px 14px', fontSize: 13 }}>{fmt(s.fees)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Device rows */}
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
+                    Devices <span style={{ fontWeight: 400, color: 'var(--text3)' }}>({detail.rows.length.toLocaleString()} of {detail.total_in_category.toLocaleString()} shown)</span>
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+                      <thead>
+                        <tr style={{ background: 'var(--surface2)' }}>
+                          {['ESN / IMEI','Phone','Contract','Status','Date Sold','Owed','Reimbursed','Fees'].map(h => (
+                            <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detail.rows.map((r, i) => (
+                          <tr key={r.id} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                            <td style={{ padding: '8px 12px', fontSize: 12, fontFamily: 'monospace' }}>{r.esn_imei || '—'}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.phone_number || '—'}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.contract_type || '—'}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.status ? statusPill(r.status) : '—'}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.date_sold ? String(r.date_sold).slice(0,10) : '—'}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12, fontWeight: 600, color: (r.owed_to_vip || 0) > 0 ? '#dc2626' : 'var(--text2)' }}>{fmt(r.owed_to_vip || 0)}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12, color: '#059669' }}>{fmt(r.reimbursement || 0)}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12 }}>{fmt(r.commissions || 0)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {detail.rows.length < detail.total_in_category && (
+                    <div style={{ textAlign: 'center', marginTop: 16 }}>
+                      <button className="btn" onClick={loadMore} disabled={loadingMore}>
+                        {loadingMore ? 'Loading…' : `Load more (${(detail.total_in_category - detail.rows.length).toLocaleString()} remaining)`}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Recon callout */}
           <div style={{ background: '#fefce8', border: '1px solid #fde047', borderRadius: 10, padding: '14px 18px', fontSize: 13, color: '#92400e' }}>
