@@ -15,7 +15,8 @@ async def upload_asset_ledger(file: UploadFile = File(...), org_id: str = ORG_ID
     try:
         rows = parse_asset_ledger(file_bytes, org_id)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Parse error: {e}")
+        import traceback
+        raise HTTPException(status_code=400, detail=f"Parse error: {e}\n{traceback.format_exc()}")
 
     if not rows:
         raise HTTPException(status_code=400, detail="No rows parsed from file")
