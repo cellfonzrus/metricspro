@@ -90,6 +90,65 @@ async def get_asset_summary(org_id: str = ORG_ID):
     }
 
 
+@router.get("/category-detail")
+async def get_category_detail(
+    category: str,
+    org_id: str = ORG_ID,
+    limit: int = 500,
+    offset: int = 0,
+):
+    """Drill-down for one category: status breakdown (all rows) + paginated device rows."""
+    client = sb()
+
+    # Pull every row in this category for an accurate status tally.
+    # Select only the light columns needed for the breakdown.
+    tally_rows = []
+    page = 0
+    PAGE = 1000
+    while True:
+        start = page * PAGE
+        resp = client.schema("commcalc").table("asset_ledger") \
+            .select("status,owed_to_vip,reimbursement,commissions") \
+            .eq("org_id", org_id).eq("category", category) \
+            .range(start, start + PAGE - 1).execute()
+        chunk = resp.data or []
+        tally_rows.extend(chunk)
+        if len(chunk) < PAGE:
+            break
+        page += 1
+        if page > 100:  # hard safety stop (100k rows)
+            break
+
+    by_status: dict = {}
+    for r in tally_rows:
+        s = r.get("status") or "Unknown"
+        if s not in by_status:
+            by_status[s] = {"count": 0, "owed": 0, "reimbursed": 0, "fees": 0}
+        by_status[s]["count"] += 1
+        by_status[s]["owed"] += float(r.get("owed_to_vip") or 0)
+        by_status[s]["reimbursed"] += float(r.get("reimbursement") or 0)
+        by_status[s]["fees"] += float(r.get("commissions") or 0)
+    for s in by_status:
+        by_status[s]["owed"] = round(by_status[s]["owed"], 2)
+        by_status[s]["reimbursed"] = round(by_status[s]["reimbursed"], 2)
+        by_status[s]["fees"] = round(by_status[s]["fees"], 2)
+
+    # Paginated device rows for the table.
+    rows_resp = client.schema("commcalc").table("asset_ledger") \
+        .select("id,esn_imei,phone_number,contract_type,status,date_sold,sfid,owed_to_vip,reimbursement,commissions,notes") \
+        .eq("org_id", org_id).eq("category", category) \
+        .order("date_sold", desc=True).range(offset, offset + limit - 1).execute()
+
+    return {
+        "category": category,
+        "total_in_category": len(tally_rows),
+        "by_status": by_status,
+        "rows": rows_resp.data or [],
+        "offset": offset,
+        "limit": limit,
+    }
+
+
 @router.get("/ledger")
 async def get_asset_ledger(
     org_id: str = ORG_ID,
