@@ -129,8 +129,7 @@ def run_discrepancy(period: str) -> dict:
     hotsheet = hotsheet_resp.data or []
 
     # ── Load active IMEIs from MI report ─────────────────────────────────
-    mi_resp = client.schema("commcalc").table("raw_mi")        .select("device_serial,mdn,subscriber_id,customer_plan,commissionable_mrc,"
-                "mi_activation_date,rep_username,door_type,report_month")        .eq("org_id", ORG_ID)        .eq("mi_status", "ACTIVE")        .execute()
+    mi_resp = client.schema("commcalc").table("raw_mi").select("device_serial,phone_number,subscriber_id,customer_plan,commissionable_mrc,mi_activation_date,rep_username,door_type,report_month,subscriber_status").eq("org_id", ORG_ID).eq("subscriber_status", "ACTIVE").execute()
     mi_rows = mi_resp.data or []
 
     # ── Load sales for store + activation type context ────────────────────
@@ -185,7 +184,7 @@ def run_discrepancy(period: str) -> dict:
         mrc = float(mi.get("commissionable_mrc") or 0)
         plan = mi.get("customer_plan") or ""
         plan_cat = _get_plan_category(plan)
-        mdn = mi.get("mdn") or ""
+        mdn = mi.get("phone_number") or ""
 
         sale = sales_by_imei.get(imei, {})
         store = sale.get("store") or mi.get("door_type") or "Unknown"
