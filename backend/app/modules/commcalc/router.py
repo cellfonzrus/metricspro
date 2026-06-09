@@ -112,6 +112,10 @@ async def upload_file(
             base.update({'period': period, 'period_month': pm['month'], 'period_year': pm['year']})
         
         if file_type in ("sales", "daily_sales"):
+            # Skip store header rows
+            trans_date_raw = str(r.get('Trans Date Time', r.get('Trans Date', ''))).strip()
+            if trans_date_raw.startswith('Store:') or not trans_date_raw:
+                continue
             row = {**base,
                 'store': r.get('Store',''), 'salesperson': r.get('Salesperson',''),
                 'user_login': r.get('User Login',''), 'contract_type': r.get('Contract Type',''),
