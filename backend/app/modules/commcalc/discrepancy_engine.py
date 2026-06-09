@@ -294,7 +294,15 @@ def run_discrepancy(period: str) -> dict:
                 total_gap += add_result(spiff_type, rate)
 
     # Filter to only rows worth saving (gap > $0.50 or received > 0)
-    rows_to_save = [r for r in results if r["gap"] > 0.50 or r["received_amount"] > 0]
+    # Dedupe by (imei, comp_type) - keep the row with the largest gap
+    seen = {}
+    for r in results:
+        if r["gap"] <= 0.50 and r["received_amount"] <= 0:
+            continue
+        key = (r["imei"], r["comp_type"])
+        if key not in seen or r["gap"] > seen[key]["gap"]:
+            seen[key] = r
+    rows_to_save = list(seen.values())
     flagged_count = len([r for r in rows_to_save if r["gap"] > 0.50])
 
     # Batch insert
