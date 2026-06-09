@@ -134,13 +134,21 @@ async def upload_file(
                 base = {'org_id': org_id, 'period': row_period, 'period_month': row_pm['month'], 'period_year': row_pm['year']}
             row = {**base,
                 'store': r.get('Store',''), 'salesperson': r.get('Salesperson',''),
-                'user_login': r.get('User Login',''), 'contract_type': r.get('Contract Type',''),
+                'user_login': r.get('User Login',''),
+                'contract_type': (r.get('Contract Type','') or (
+                    # Infer from product_desc for Legacy format
+                    'Upgrade' if 'Upgrade' in str(r.get('Product Desc','')) else
+                    'Port-In' if 'Port-In' in str(r.get('Product Desc','')) else
+                    'Add A Line' if 'Add A Line' in str(r.get('Product Desc','')) else
+                    'Activation' if any(x in str(r.get('Product Desc','')) for x in ['New Act','Activation','New Line']) else
+                    ''
+                )),
                 'department': r.get('Department',''), 'category': r.get('Category',''),
                 'product_desc': r.get('Product Desc',''), 'product_id': safe_float(r.get('Product ID')) or None,
                 'gp': safe_float(r.get('GP')), 'ext_price': safe_float(r.get('Ext Price')),
                 'trans_id': str(r.get('Trans ID','')).replace('.0','').strip(),
                 'trans_date': str(r.get('Trans Date Time',r.get('Trans Date','')))[:10] or None,
-                'mdn': str(r.get('Activated Mobile Number','')).replace('.0','').strip(),
+                'mdn': str(r.get('Activated Mobile Number','') or r.get('Primary Account Number','')).replace('.0','').strip(),
                 'serial_1': str(r.get('Serial 1','')).replace('.0','').strip()[:30],
                 'register': str(r.get('Register','')).strip(),
                 'tender_type': str(r.get('Tender Type','')).strip(),
