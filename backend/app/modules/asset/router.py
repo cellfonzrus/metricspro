@@ -64,7 +64,7 @@ async def get_asset_summary(org_id: str = ORG_ID):
             by_status[s] = {"count": 0, "owed": 0, "reimbursed": 0, "fees": 0}
         by_status[s]["count"] += 1
         by_status[s]["owed"] += float(r.get("owed_to_vip") or 0)
-        by_status[s]["reimbursed"] += float(r.get("total_reimbursed") or 0)
+        by_status[s]["reimbursed"] += float(r.get("reimbursement") or 0)
         by_status[s]["fees"] += float(r.get("commissions") or 0)
 
     # By category
