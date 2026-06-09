@@ -50,7 +50,7 @@ export default function AssetPage() {
     try {
       const form = new FormData()
       form.append('file', file)
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/asset/upload?org_id=${ORG_ID}`, {
+      const res = await fetch(`https://metricspro-production.up.railway.app/api/v1/asset/upload?org_id=${ORG_ID}`, {
         method: 'POST', body: form,
       })
       const d = await res.json()
