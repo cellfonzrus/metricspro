@@ -51,7 +51,7 @@ async def upload_file(
     # ── Validate file matches the expected slot ──────────────────
     SIGNATURES = {
         'sales':          ['Salesperson', 'Trans ID'],
-        'daily_sales':    ['Salesperson', 'Trans Date Time'],
+        'daily_sales':    ['Salesperson', 'Trans ID'],
         'payment_detail': ['Payment Type', 'Amount'],
         'mi_report':      ['SalesForceID', 'Subscriber Status'],
         'dlar_rep':       ['Advocate Name', 'ATU %'],
@@ -129,8 +129,7 @@ async def upload_file(
                         continue
                     row_period = td.strftime('%B %Y')
                     row_pm = {'month': td.month, 'year': td.year}
-                except Exception as _e:
-                    print(f'DEBUG daily_sales date parse error: {_e!r} raw={trans_date_raw!r}')
+                except Exception:
                     continue
                 base = {'org_id': org_id, 'period': row_period, 'period_month': row_pm['month'], 'period_year': row_pm['year']}
             row = {**base,
@@ -140,12 +139,7 @@ async def upload_file(
                 'product_desc': r.get('Product Desc',''), 'product_id': safe_float(r.get('Product ID')) or None,
                 'gp': safe_float(r.get('GP')), 'ext_price': safe_float(r.get('Ext Price')),
                 'trans_id': str(r.get('Trans ID','')).replace('.0','').strip(),
-                'trans_date': (
-                    (lambda v: (
-                        (pd.Timestamp('1899-12-30') + pd.Timedelta(days=float(v))).strftime('%Y-%m-%d')
-                        if v.replace('.','',1).isdigit() else str(v)[:10]
-                    ) if v else None)(str(r.get('Trans Date Time', r.get('Trans Date', ''))).strip())
-                ),
+                'trans_date': str(r.get('Trans Date Time',r.get('Trans Date','')))[:10] or None,
                 'mdn': str(r.get('Activated Mobile Number','')).replace('.0','').strip(),
                 'serial_1': str(r.get('Serial 1','')).replace('.0','').strip()[:30],
                 'register': str(r.get('Register','')).strip(),
