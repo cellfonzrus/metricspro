@@ -1,6 +1,6 @@
 from datetime import date
 from dateutil.relativedelta import relativedelta
-from app.core.database import sb
+from app.core.database import get_supabase
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -115,7 +115,7 @@ def run_discrepancy(period: str) -> dict:
     Main discrepancy engine. period = 'YYYY-MM'
     Returns summary dict with counts and total gap.
     """
-    client = sb()
+    client = get_supabase()
     year, month = int(period[:4]), int(period[5:7])
     period_start = date(year, month, 1)
     # period end = last day of month
