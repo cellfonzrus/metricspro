@@ -258,7 +258,13 @@ async def upload_file(
                     batch, on_conflict='org_id,period,trans_id', ignore_duplicates=True
                 ).execute()
             else:
-                client.schema('commcalc').table(table).insert(batch).execute()
+                try:
+                    client.schema('commcalc').table(table).insert(batch).execute()
+                except Exception:
+                    # Fall back to upsert if duplicates exist (e.g. daily data already loaded)
+                    client.schema('commcalc').table(table).upsert(
+                        batch, on_conflict='org_id,period,trans_id', ignore_duplicates=True
+                    ).execute()
             saved += len(batch)
         except Exception as e:
             raise HTTPException(500, f"Insert failed at row {i}: {e}")
