@@ -647,7 +647,7 @@ async def get_discrepancy_results(period: str, org_id: str = ORG_ID):
         if store not in stores:
             stores[store] = {"store": store, "total_gap": 0.0, "flagged_count": 0, "rows": []}
         stores[store]["rows"].append(r)
-        if r["gap"] > 0.50:
+        if r.get("status") == "open" and r["gap"] > 0.50:
             stores[store]["total_gap"] = round(stores[store]["total_gap"] + r["gap"], 2)
             stores[store]["flagged_count"] += 1
 
