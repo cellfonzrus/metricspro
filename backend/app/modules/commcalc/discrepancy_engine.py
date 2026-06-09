@@ -180,7 +180,7 @@ def run_discrepancy(period: str) -> dict:
             continue
 
         bmonth = _months_between(act_date, period_start)
-        mrc = float(mi.get("commissionable_mrc") or 0)
+        mrc = float(mi.get("base_mrc") or mi.get("commissionable_mrc") or 0)
         plan = mi.get("customer_plan") or ""
         plan_cat = _plan_category(plan)
         mdn = mi.get("phone_number") or ""
