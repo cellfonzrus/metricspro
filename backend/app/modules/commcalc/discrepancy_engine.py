@@ -107,6 +107,7 @@ def run_discrepancy(period):
     client = get_supabase()
     year, month = int(period[:4]), int(period[5:7])
     period_start = date(year, month, 1)
+    today = date.today()
     plabel = _period_label(period)
 
     # ── Reference rates ──────────────────────────────────────────────
@@ -217,6 +218,8 @@ def run_discrepancy(period):
                 status = "info"
             elif comp_type in LAGGED:
                 status = "lagged"
+            elif (match_month or bmonth) == 1 and (today - act_date).days <= 10 and comp_type != "SOLD_NOT_IN_MI":
+                status = "pending" if gap > 0.50 else "ok"
             elif gap > 0.50:
                 status = "open"
             else:
