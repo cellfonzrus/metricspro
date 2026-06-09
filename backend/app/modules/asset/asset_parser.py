@@ -4,7 +4,6 @@ from io import BytesIO
 
 MONEY_COLS = [
     "Owed to VIP", "On Inventory", "Reimbursement", "Commissions",
-    "Total Owed", "Total Reimbursed",
 ]
 
 COL_MAP = {
@@ -19,8 +18,6 @@ COL_MAP = {
     "On Inventory": "on_inventory",
     "Reimbursement": "reimbursement",
     "Commissions": "commissions",
-    "Total Owed": "total_owed",
-    "Total Reimbursed": "total_reimbursed",
     "Notes": "notes",
 }
 

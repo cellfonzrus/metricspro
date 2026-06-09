@@ -47,10 +47,14 @@ async def get_asset_summary(org_id: str = ORG_ID):
 
     total_rows = len(rows)
     total_fees = sum(float(r.get("commissions") or 0) for r in rows)
-    total_open = sum(float(r.get("owed_to_vip") or 0) for r in rows)
-    total_reimbursed = sum(float(r.get("total_reimbursed") or 0) for r in rows)
-    total_owed = sum(float(r.get("total_owed") or 0) for r in rows)
-    on_inventory = sum(float(r.get("on_inventory") or 0) for r in rows)
+    # open balance = owed_to_vip for Open status only
+    total_open = sum(float(r.get("owed_to_vip") or 0) for r in rows if (r.get("status") or "") == "Open")
+    # reimbursed = sum of reimbursement col (actual Boost payments received)
+    total_reimbursed = sum(float(r.get("reimbursement") or 0) for r in rows)
+    # all-time owed = all owed_to_vip
+    total_owed = sum(float(r.get("owed_to_vip") or 0) for r in rows)
+    # on inventory = owed_to_vip for On Inventory category
+    on_inventory = sum(float(r.get("owed_to_vip") or 0) for r in rows if "On Inventory" in (r.get("category") or ""))
 
     # By status
     by_status: dict = {}
