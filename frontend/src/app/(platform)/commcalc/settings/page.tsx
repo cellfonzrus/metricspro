@@ -97,9 +97,10 @@ export default function SettingsPage() {
     setSavingRate(rate.id)
     try {
       const newVal = parseFloat(editingRate[rate.id] ?? String(rate.value))
+      const { id: _id, org_id: _org, ...rateClean } = rate
       await api(`/api/v1/commcalc/comp-rates?org_id=${ORG_ID}`, {
         method: 'POST',
-        body: JSON.stringify({ ...rate, value: newVal })
+        body: JSON.stringify({ ...rateClean, value: newVal })
       })
       setCompRates(prev => prev.map(r => r.id === rate.id ? { ...r, value: newVal } : r))
       setEditingRate(prev => { const n = {...prev}; delete n[rate.id]; return n })
