@@ -15,6 +15,7 @@ const NAV = [
     { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️' },
     { href: '/commcalc/settings', label: 'Commission Rates', icon: '⚙️' },
     { href: '/commcalc/expenses', label: 'Store Expenses', icon: '🏪' },
+    { href: '/commcalc/asset', label: 'Asset Ledger', icon: '📦' },
   ]},
   { group: 'StoreOps', items: [
     { href: '/storeops', label: 'Dashboard', icon: '🏠' },
