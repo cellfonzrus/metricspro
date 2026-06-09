@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.modules.commcalc.router import router as commcalc_router
 from app.modules.storeops.router import router as storeops_router
+from app.modules.asset.router import router as asset_router
 
 app = FastAPI(
     title="MetricsPro Platform API",
@@ -22,6 +23,7 @@ app.add_middleware(
 
 app.include_router(commcalc_router, prefix="/api/v1")
 app.include_router(storeops_router, prefix="/api/v1")
+app.include_router(asset_router, prefix="/api/v1/asset")
 
 @app.get("/health")
 def health():
