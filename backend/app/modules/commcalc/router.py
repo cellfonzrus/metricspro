@@ -665,3 +665,64 @@ async def update_discrepancy_status(discrepancy_id: int, payload: dict, org_id: 
     client = sb()
     client.schema("commcalc").table("discrepancy_results")        .update({"status": payload.get("status"), "notes": payload.get("notes")})        .eq("org_id", org_id)        .eq("id", discrepancy_id)        .execute()
     return {"status": "ok"}
+
+
+@router.get("/discrepancy/{period}/phantom")
+async def get_phantom_payments(period: str, org_id: str = ORG_ID):
+    """Payments received in the period with no matching commissionable sale (by MDN or IMEI)."""
+    from datetime import date as _date
+    client = sb()
+    year, month = int(period[:4]), int(period[5:7])
+    plabel = _date(year, month, 1).strftime("%B %Y")
+
+    # Build sets of MDNs and IMEIs from commissionable sales this period
+    sales = (client.schema("commcalc").table("raw_sales")
+             .select("serial_1,mdn")
+             .eq("org_id", org_id).eq("period", plabel)
+             .neq("contract_type", "").execute().data) or []
+    sale_mdns = {(s.get("mdn") or "").strip() for s in sales if s.get("mdn")}
+    sale_imeis = {(s.get("serial_1") or "").strip() for s in sales if s.get("serial_1")}
+
+    # All payments in the period
+    pays = (client.schema("commcalc").table("raw_payment_detail")
+            .select("imei,mdn,payment_type,amount,business_address,payment_date")
+            .eq("org_id", org_id).eq("period_month", month)
+            .eq("period_year", year).execute().data) or []
+
+    phantom = []
+    matched_total = 0.0
+    phantom_total = 0.0
+    for p in pays:
+        mdn = (p.get("mdn") or "").strip()
+        imei = (p.get("imei") or "").strip()
+        amt = float(p.get("amount") or 0)
+        is_matched = (mdn and mdn in sale_mdns) or (imei and imei in sale_imeis)
+        if is_matched:
+            matched_total += amt
+        else:
+            phantom_total += amt
+            phantom.append({
+                "mdn": mdn, "imei": imei,
+                "payment_type": p.get("payment_type"),
+                "amount": round(amt, 2),
+                "business_address": p.get("business_address"),
+                "payment_date": str(p.get("payment_date"))[:10] if p.get("payment_date") else None,
+            })
+
+    # Group phantom by business_address
+    by_store = {}
+    for ph in phantom:
+        addr = ph["business_address"] or "Unknown"
+        if addr not in by_store:
+            by_store[addr] = {"business_address": addr, "total": 0.0, "count": 0, "rows": []}
+        by_store[addr]["total"] = round(by_store[addr]["total"] + ph["amount"], 2)
+        by_store[addr]["count"] += 1
+        by_store[addr]["rows"].append(ph)
+
+    return {
+        "period": period,
+        "phantom_total": round(phantom_total, 2),
+        "phantom_count": len(phantom),
+        "matched_total": round(matched_total, 2),
+        "by_store": sorted(by_store.values(), key=lambda x: x["total"], reverse=True),
+    }
