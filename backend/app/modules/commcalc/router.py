@@ -261,18 +261,11 @@ async def upload_file(
     for i in range(0, len(mapped), 500):
         batch = mapped[i:i+500]
         try:
-            if file_type == 'daily_sales':
-                client.schema('commcalc').table(table).upsert(
-                    batch, on_conflict='org_id,period,trans_id', ignore_duplicates=True
-                ).execute()
-            else:
-                try:
-                    client.schema('commcalc').table(table).insert(batch).execute()
-                except Exception:
-                    # Fall back to upsert if duplicates exist (e.g. daily data already loaded)
-                    client.schema('commcalc').table(table).upsert(
-                        batch, on_conflict='org_id,period,trans_id', ignore_duplicates=True
-                    ).execute()
+            # Plain insert for all upload types. Monthly wipes the period
+            # first, so there are no conflicts. The old unique dedup index
+            # was dropped because one transaction has many line items that
+            # share a single Trans ID.
+            client.schema('commcalc').table(table).insert(batch).execute()
             saved += len(batch)
         except Exception as e:
             raise HTTPException(500, f"Insert failed at row {i}: {e}")
