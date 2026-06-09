@@ -97,7 +97,7 @@ export default function SettingsPage() {
     setSavingRate(rate.id)
     try {
       const newVal = parseFloat(editingRate[rate.id] ?? String(rate.value))
-      await api(`/api/v1/commcalc/comp-rates`, {
+      await api(`/api/v1/commcalc/comp-rates?org_id=${ORG_ID}`, {
         method: 'POST',
         body: JSON.stringify({ ...rate, value: newVal })
       })
@@ -117,7 +117,7 @@ export default function SettingsPage() {
 
   async function addRate() {
     try {
-      await api(`/api/v1/commcalc/comp-rates`, {
+      await api(`/api/v1/commcalc/comp-rates?org_id=${ORG_ID}`, {
         method: 'POST',
         body: JSON.stringify({
           ...newRate,
