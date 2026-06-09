@@ -675,13 +675,19 @@ async def get_phantom_payments(period: str, org_id: str = ORG_ID):
     year, month = int(period[:4]), int(period[5:7])
     plabel = _date(year, month, 1).strftime("%B %Y")
 
-    # Build sets of MDNs and IMEIs from commissionable sales this period
+    # Build sets of MDNs and IMEIs from ALL sales (any period) AND all MI lines.
+    # True phantom = payment matches NO sale anywhere AND no subscriber record.
     sales = (client.schema("commcalc").table("raw_sales")
-             .select("serial_1,mdn")
-             .eq("org_id", org_id).eq("period", plabel)
-             .neq("contract_type", "").execute().data) or []
+             .select("serial_1,mdn").eq("org_id", org_id).execute().data) or []
     sale_mdns = {(s.get("mdn") or "").strip() for s in sales if s.get("mdn")}
     sale_imeis = {(s.get("serial_1") or "").strip() for s in sales if s.get("serial_1")}
+
+    mi = (client.schema("commcalc").table("raw_mi")
+          .select("device_serial,phone_number").eq("org_id", org_id).execute().data) or []
+    mi_mdns = {(m.get("phone_number") or "").strip() for m in mi if m.get("phone_number")}
+    mi_imeis = {(m.get("device_serial") or "").strip() for m in mi if m.get("device_serial")}
+    known_mdns = sale_mdns | mi_mdns
+    known_imeis = sale_imeis | mi_imeis
 
     # All payments in the period
     pays = (client.schema("commcalc").table("raw_payment_detail")
@@ -696,7 +702,7 @@ async def get_phantom_payments(period: str, org_id: str = ORG_ID):
         mdn = (p.get("mdn") or "").strip()
         imei = (p.get("imei") or "").strip()
         amt = float(p.get("amount") or 0)
-        is_matched = (mdn and mdn in sale_mdns) or (imei and imei in sale_imeis)
+        is_matched = (mdn and mdn in known_mdns) or (imei and imei in known_imeis)
         if is_matched:
             matched_total += amt
         else:
