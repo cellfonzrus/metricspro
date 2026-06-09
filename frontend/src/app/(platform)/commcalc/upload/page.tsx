@@ -22,7 +22,7 @@ export default function UploadPage() {
   const [messages, setMessages] = useState<Record<string, string>>({})
 
   async function handleUpload(fileType: string, file: File) {
-    if (!period.trim()) { alert('Enter a period first'); return }
+    if (!period.trim() && fileType !== 'daily_sales') { alert('Enter a period first'); return }
     setUploading(fileType)
     setStatuses(s => ({ ...s, [fileType]: 'uploading' }))
 
@@ -32,7 +32,7 @@ export default function UploadPage() {
     const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
     try {
       const res = await fetch(
-        `${API}/api/v1/commcalc/upload/${fileType}?period=${encodeURIComponent(period)}&org_id=${ORG_ID}`,
+        `${API}/api/v1/commcalc/upload/${fileType}?${fileType !== 'daily_sales' ? 'period=' + encodeURIComponent(period) + '&' : ''}org_id=${ORG_ID}`,
         { method: 'POST', body: form }
       )
       const data = await res.json()
