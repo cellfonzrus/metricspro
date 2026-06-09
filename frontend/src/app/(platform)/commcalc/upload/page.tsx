@@ -5,6 +5,7 @@ import { usePeriod } from '@/lib/period-context'
 
 const FILE_TYPES = [
   { id: 'sales',          label: 'Sales Transactions',    icon: '🛍️', required: true,  desc: 'EPay Sales Transaction Details' },
+  { id: 'daily_sales',    label: 'Daily Sales Upload',      icon: '📅', required: false, desc: 'Append daily transactions — no period wipe, deduped by Trans ID' },
   { id: 'payment_detail', label: 'Payment Detail',        icon: '💳', required: true,  desc: 'EPay Commission Payment Detail' },
   { id: 'dlar_rep',       label: 'DLAR Rep Report',       icon: '📊', required: true,  desc: 'Elevate Go Rep KPI Report' },
   { id: 'dlar_store',     label: 'DLAR Store Report',     icon: '🏪', required: false, desc: 'Elevate Go Store Level Data' },

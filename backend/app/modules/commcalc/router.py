@@ -36,7 +36,7 @@ async def upload_file(
     """Upload a data file (sales, payment_detail, mi, dlar_rep, dlar_store, catalog)"""
     require_org(org_id)
     
-    SUPPORTED = ["sales","payment_detail","mi_report","dlar_rep","dlar_store","catalog","master_cats","comp_report"]
+    SUPPORTED = ["sales","daily_sales","payment_detail","mi_report","dlar_rep","dlar_store","catalog","master_cats","comp_report"]
     if file_type not in SUPPORTED:
         raise HTTPException(400, f"Unknown file type: {file_type}. Supported: {SUPPORTED}")
     
@@ -51,6 +51,7 @@ async def upload_file(
     # ── Validate file matches the expected slot ──────────────────
     SIGNATURES = {
         'sales':          ['Salesperson', 'Trans ID'],
+        'daily_sales':    ['Salesperson', 'Trans Date Time'],
         'payment_detail': ['Payment Type', 'Amount'],
         'mi_report':      ['SalesForceID', 'Subscriber Status'],
         'dlar_rep':       ['Advocate Name', 'ATU %'],
@@ -87,12 +88,13 @@ async def upload_file(
         "catalog": "raw_catalog",
         "master_cats": "raw_categories",
         "comp_report": "raw_comp_report",
+        "daily_sales": "raw_sales",
     }
     # Try schema-qualified first, fall back to public prefix
     table = TABLE_MAP[file_type]
     
-    # Delete existing for this period
-    if has_period and period:
+    # Delete existing for this period (skip for daily_sales — append mode)
+    if has_period and period and file_type != 'daily_sales':
         try:
             client.schema('commcalc').table(table).delete().eq('period', period).execute()
         except Exception as e:
@@ -109,7 +111,7 @@ async def upload_file(
         if has_period:
             base.update({'period': period, 'period_month': pm['month'], 'period_year': pm['year']})
         
-        if file_type == "sales":
+        if file_type in ("sales", "daily_sales"):
             row = {**base,
                 'store': r.get('Store',''), 'salesperson': r.get('Salesperson',''),
                 'user_login': r.get('User Login',''), 'contract_type': r.get('Contract Type',''),
@@ -231,7 +233,12 @@ async def upload_file(
     for i in range(0, len(mapped), 500):
         batch = mapped[i:i+500]
         try:
-            client.schema('commcalc').table(table).insert(batch).execute()
+            if file_type == 'daily_sales':
+                client.schema('commcalc').table(table).upsert(
+                    batch, on_conflict='org_id,period,trans_id', ignore_duplicates=True
+                ).execute()
+            else:
+                client.schema('commcalc').table(table).insert(batch).execute()
             saved += len(batch)
         except Exception as e:
             raise HTTPException(500, f"Insert failed at row {i}: {e}")
