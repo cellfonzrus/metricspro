@@ -125,7 +125,7 @@ def run_discrepancy(period: str) -> dict:
 
     # ── Active MI rows for THIS period only ──────────────────────────
     mi_rows = (client.schema("commcalc").table("raw_mi")
-               .select("device_serial,phone_number,customer_plan,commissionable_mrc,"
+               .select("device_serial,phone_number,customer_plan,commissionable_mrc,base_mrc,"
                        "mi_activation_date,rep_username,door_type,subscriber_status,period")
                .eq("org_id", ORG_ID)
                .eq("subscriber_status", "ACTIVE")
