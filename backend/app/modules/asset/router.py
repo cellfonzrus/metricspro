@@ -30,7 +30,64 @@ async def upload_asset_ledger(file: UploadFile = File(...), org_id: str = ORG_ID
         chunk = rows[i:i+500]
         client.schema("commcalc").table("asset_ledger").insert(chunk).execute()
 
+    # Backfill market from store_mapping + manual corrections (file has no market)
+    _backfill_market(client, org_id)
+
     return {"status": "ok", "rows_imported": len(rows)}
+
+
+# Stores whose asset address differs from store_mapping, plus the two not in it.
+MARKET_OVERRIDES = {
+    "1 S 60th St": "PA",
+    "116-36 Springfield Blvd": "LI",
+    "1598 Mt Ephraim Ave": "PA",
+    "1710 W 4Th Street": "PA",
+    "2778 Mount Ephraim Ave": "PA",
+    "2778 Mt Ephraim Ave": "PA",
+    "4712 White Plains Road": "NYC",
+    "5135 Bergenline Ave": "NJ",
+    "5619 N Broad St": "PA",
+    "5619 N Broad Street": "PA",
+    "586 Main Ave": "NJ",
+    "6507 Castor Ave": "PA",
+    "652 Communipaw Ave": "NJ",
+}
+
+
+def _backfill_market(client, org_id: str):
+    """Populate asset_ledger.market: exact match to store_mapping, then overrides."""
+    # Build address(lower) -> market map from store_mapping
+    sm = client.schema("commcalc").table("store_mapping") \
+        .select("store_address,market").execute().data or []
+    addr_to_market = {}
+    for m in sm:
+        a = (m.get("store_address") or "").strip().lower()
+        if a and m.get("market"):
+            addr_to_market[a] = m["market"]
+
+    # Distinct asset stores
+    stores = set()
+    page = 0; PAGE = 1000
+    while True:
+        start = page * PAGE
+        chunk = client.schema("commcalc").table("asset_ledger") \
+            .select("store").eq("org_id", org_id) \
+            .range(start, start + PAGE - 1).execute().data or []
+        for r in chunk:
+            if r.get("store"):
+                stores.add(r["store"])
+        if len(chunk) < PAGE:
+            break
+        page += 1
+        if page > 100:
+            break
+
+    # Resolve each store's market (exact match first, then overrides) and update
+    for store in stores:
+        market = addr_to_market.get(store.strip().lower()) or MARKET_OVERRIDES.get(store)
+        if market:
+            client.schema("commcalc").table("asset_ledger") \
+                .update({"market": market}).eq("org_id", org_id).eq("store", store).execute()
 
 
 @router.get("/summary")
