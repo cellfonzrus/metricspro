@@ -158,6 +158,7 @@ export default function AssetPage() {
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           {uploadMsg && <span style={{ fontSize: 13 }}>{uploadMsg}</span>}
           <a className="btn" href="/commcalc/asset/owed-weekly" style={{ textDecoration: 'none' }}>📅 Weekly Owed to VIP</a>
+          <a className="btn" href="/commcalc/asset/aging" style={{ textDecoration: 'none' }}>⏳ Inventory Aging</a>
           <button className="btn btn-primary" onClick={() => fileRef.current?.click()} disabled={uploading}>
             {uploading ? '⏳ Uploading…' : '📤 Upload Asset_Lending.xlsx'}
           </button>
