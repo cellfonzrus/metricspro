@@ -87,7 +87,8 @@ AS $$
     s.trans_date,
     COUNT(DISTINCT s.trans_id) FILTER (WHERE s.contract_type = ANY(ARRAY[
         'Activation','Port-In','Add A Line','Port-In Add A Line',
-        'Eligible Port-In Activation','Activation Add A Line','Eligible Port-In Add A Line']))   AS prem_count,
+        'Eligible Port-In Activation','Activation Add A Line','Eligible Port-In Add A Line',
+        'PML Ineligible Port In Activation']))   AS prem_count,
     COUNT(DISTINCT s.trans_id) FILTER (WHERE s.contract_type = ANY(ARRAY[
         'BYOD','BYOD Port-In','BYOD Add A Line','BYOD Port-In Add A Line',
         'BYOD Swap','BYOD Eligible Port-In']))   AS byod_count,
