@@ -507,14 +507,41 @@ def _fetch_asset_rows(client, org_id, store="", market="", select="*"):
     return rows
 
 
+def _row_period_date(r):
+    """Date that places a charge in a period: PAYG > date_sold > acquired."""
+    return r.get("payg_date") or r.get("date_sold") or r.get("acquired_date")
+
+
+def _in_period(r, month=None, year=None, week_friday=None):
+    if week_friday:
+        bf = r.get("billing_friday")
+        return str(bf)[:10] == week_friday if bf else False
+    if year is None and month is None:
+        return True
+    d = _row_period_date(r)
+    if not d:
+        return False
+    try:
+        py, pm, _ = [int(x) for x in str(d)[:10].split("-")]
+    except Exception:
+        return False
+    if year is not None and int(year) != py:
+        return False
+    if month is not None and int(month) != pm:
+        return False
+    return True
+
+
 @router.get("/charges-summary")
-async def get_charges_summary(org_id: str = ORG_ID, store: str = "", market: str = ""):
+async def get_charges_summary(org_id: str = ORG_ID, store: str = "", market: str = "", month: int = None, year: int = None, week_friday: str = ""):
     """All four charge groups in one call: totals, by-category, by-store, and line items."""
     client = sb()
     rows = _fetch_asset_rows(
         client, org_id, store, market,
-        select="id,store,market,esn_imei,phone_number,device_model,category,status,date_sold,due_date,payg_date,owed_to_vip,notes",
+        select="id,store,market,esn_imei,phone_number,device_model,category,status,date_sold,due_date,payg_date,acquired_date,billing_friday,reimbursement,reimbursement_date,owed_to_vip,notes",
     )
+    wf = week_friday or None
+    rows = [r for r in rows if _in_period(r, month=month, year=year, week_friday=wf)]
 
     groups = {}
     for gk in CHARGE_GROUPS:
@@ -547,7 +574,22 @@ async def get_charges_summary(org_id: str = ORG_ID, store: str = "", market: str
         G["rows"].sort(key=lambda x: float(x.get("owed_to_vip") or 0), reverse=True)
         G["rows"] = G["rows"][:1000]
 
-    return {"groups": groups, "filters": {"store": store or None, "market": market or None}}
+    appeals_loss = round(sum(float(r.get("owed_to_vip") or 0)
+                             for r in rows if _cat_to_group(r.get("category") or "") == "appeals"), 2)
+    rma_loss = 0.0
+    for r in rows:
+        if (r.get("category") or "") == "RMA":
+            b, owed, reimb = _classify_rma(r)
+            if b == "none":
+                rma_loss += owed
+            elif b == "short":
+                rma_loss += (owed - reimb)
+    rma_loss = round(rma_loss, 2)
+    return {
+        "groups": groups,
+        "total_loss": {"total": round(appeals_loss + rma_loss, 2), "appeals": appeals_loss, "rma": rma_loss},
+        "filters": {"store": store or None, "market": market or None, "month": month, "year": year, "week_friday": wf},
+    }
 
 
 def _sync_appeal_flags(client, org_id):
