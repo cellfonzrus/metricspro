@@ -218,7 +218,7 @@ async def get_owed_weekly(
     # Devices billing on the selected Thursday
     due_rows = fetch_all(
         "store,market,bill_path,owed_to_vip",
-        lambda q: q.eq("billing_thursday", thursday),
+        lambda q: q.eq("billing_friday", thursday),
     )
 
     sold_c = sold_o = aging_c = aging_o = 0.0
@@ -258,12 +258,12 @@ async def get_owed_weekly(
     th = datetime.strptime(thursday, "%Y-%m-%d").date()
     end = (th + timedelta(weeks=weeks_ahead)).isoformat()
     up_rows = fetch_all(
-        "bill_path,owed_to_vip,billing_thursday",
-        lambda q: q.gt("billing_thursday", thursday).lte("billing_thursday", end),
+        "bill_path,owed_to_vip,billing_friday",
+        lambda q: q.gt("billing_friday", thursday).lte("billing_friday", end),
     )
     up_map = {}
     for r in up_rows:
-        t = r.get("billing_thursday")
+        t = r.get("billing_friday")
         if not t:
             continue
         if t not in up_map:
@@ -284,7 +284,7 @@ async def get_owed_weekly(
 
     # Device rows for the selected Thursday (paginated)
     rows_resp = base("id,store,market,esn_imei,phone_number,device_model,contract_type,status,date_sold,due_date,bill_path,owed_to_vip") \
-        .eq("billing_thursday", thursday).order("owed_to_vip", desc=True) \
+        .eq("billing_friday", thursday).order("owed_to_vip", desc=True) \
         .range(offset, offset + limit - 1).execute()
 
     return {

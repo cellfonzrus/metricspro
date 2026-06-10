@@ -7,7 +7,7 @@ function ymd(d: Date) {
   return `${y}-${m}-${day}`
 }
 function upcomingThursday(from = new Date()) {
-  const d = new Date(from); const diff = (4 - d.getDay() + 7) % 7
+  const d = new Date(from); const diff = (5 - d.getDay() + 7) % 7
   d.setDate(d.getDate() + diff); return d
 }
 function shiftThursday(iso: string, weeks: number) {
