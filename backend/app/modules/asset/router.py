@@ -534,61 +534,65 @@ def _in_period(r, month=None, year=None, week_friday=None):
 
 @router.get("/charges-summary")
 async def get_charges_summary(org_id: str = ORG_ID, store: str = "", market: str = "", month: int = None, year: int = None, week_friday: str = ""):
-    """All four charge groups in one call: totals, by-category, by-store, and line items."""
+    """Charge groups + Total Loss via Postgres aggregation (fast). Totals only — no row lists."""
     client = sb()
-    rows = _fetch_asset_rows(
-        client, org_id, store, market,
-        select="id,store,market,esn_imei,phone_number,device_model,category,status,date_sold,due_date,payg_date,acquired_date,billing_friday,reimbursement,reimbursement_date,owed_to_vip,notes",
-    )
-    wf = week_friday or None
-    rows = [r for r in rows if _in_period(r, month=month, year=year, week_friday=wf)]
+    params = {
+        "p_org_id": org_id,
+        "p_store": store or None,
+        "p_market": market or None,
+        "p_month": month,
+        "p_year": year,
+        "p_week_friday": week_friday or None,
+    }
+    agg = client.schema("commcalc").rpc("asset_charges_summary", params).execute().data or []
 
     groups = {}
     for gk in CHARGE_GROUPS:
         groups[gk] = {"key": gk, "label": GROUP_LABELS[gk],
-                      "count": 0, "owed": 0.0, "by_category": {}, "by_store": {}, "rows": []}
+                      "count": 0, "owed": 0.0, "by_category": {}, "by_store": {}}
 
-    for r in rows:
-        gk = _cat_to_group(r.get("category") or "")
+    for row in agg:
+        gk = _cat_to_group(row.get("category") or "")
         if not gk:
             continue
-        o = float(r.get("owed_to_vip") or 0)
+        cnt = int(row.get("cnt") or 0)
+        owed = float(row.get("owed") or 0)
         G = groups[gk]
-        G["count"] += 1; G["owed"] += o
-        c = r.get("category") or "Unknown"
+        G["count"] += cnt
+        G["owed"] += owed
+        c = row.get("category") or "Unknown"
         G["by_category"].setdefault(c, {"category": c, "count": 0, "owed": 0.0})
-        G["by_category"][c]["count"] += 1; G["by_category"][c]["owed"] += o
-        s = r.get("store") or "—"
-        G["by_store"].setdefault(s, {"store": s, "market": r.get("market"), "count": 0, "owed": 0.0})
-        G["by_store"][s]["count"] += 1; G["by_store"][s]["owed"] += o
-        G["rows"].append(r)
+        G["by_category"][c]["count"] += cnt
+        G["by_category"][c]["owed"] += owed
+        s = row.get("store") or "—"
+        G["by_store"].setdefault(s, {"store": s, "market": row.get("market"), "count": 0, "owed": 0.0})
+        G["by_store"][s]["count"] += cnt
+        G["by_store"][s]["owed"] += owed
 
     for G in groups.values():
         G["owed"] = round(G["owed"], 2)
-        G["by_category"] = sorted(
-            ({**v, "owed": round(v["owed"], 2)} for v in G["by_category"].values()),
-            key=lambda x: x["owed"], reverse=True)
-        G["by_store"] = sorted(
-            ({**v, "owed": round(v["owed"], 2)} for v in G["by_store"].values()),
-            key=lambda x: x["owed"], reverse=True)
-        G["rows"].sort(key=lambda x: float(x.get("owed_to_vip") or 0), reverse=True)
-        G["rows"] = G["rows"][:1000]
+        G["by_category"] = sorted(({**v, "owed": round(v["owed"], 2)} for v in G["by_category"].values()),
+                                  key=lambda x: x["owed"], reverse=True)
+        G["by_store"] = sorted(({**v, "owed": round(v["owed"], 2)} for v in G["by_store"].values()),
+                               key=lambda x: x["owed"], reverse=True)
 
-    appeals_loss = round(sum(float(r.get("owed_to_vip") or 0)
-                             for r in rows if _cat_to_group(r.get("category") or "") == "appeals"), 2)
+    # Total Loss = denied appeals owed + RMA net loss (unreimbursed full + shortfall)
+    appeals_loss = round(sum(v["owed"] for v in groups["appeals"]["by_category"]), 2)
     rma_loss = 0.0
-    for r in rows:
-        if (r.get("category") or "") == "RMA":
-            b, owed, reimb = _classify_rma(r)
-            if b == "none":
+    for row in agg:
+        if (row.get("category") or "") == "RMA":
+            owed = float(row.get("owed") or 0)
+            reimb = float(row.get("reimb") or 0)
+            if reimb <= 0:
                 rma_loss += owed
-            elif b == "short":
+            elif reimb < owed - 0.01:
                 rma_loss += (owed - reimb)
     rma_loss = round(rma_loss, 2)
+
     return {
         "groups": groups,
         "total_loss": {"total": round(appeals_loss + rma_loss, 2), "appeals": appeals_loss, "rma": rma_loss},
-        "filters": {"store": store or None, "market": market or None, "month": month, "year": year, "week_friday": wf},
+        "filters": {"store": store or None, "market": market or None, "month": month, "year": year, "week_friday": week_friday or None},
     }
 
 
