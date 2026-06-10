@@ -357,6 +357,102 @@ async def get_owed_weekly(
     }
 
 
+@router.get("/aging")
+async def get_aging(
+    org_id: str = ORG_ID,
+    store: str = "",
+    market: str = "",
+):
+    """Unsold On-Inventory aging report. Buckets by days since acquired_date (as of today)."""
+    from datetime import date
+    client = sb()
+
+    def fetch(extra):
+        out = []
+        page = 0; PAGE = 1000
+        while True:
+            start = page * PAGE
+            q = client.schema("commcalc").table("asset_ledger") \
+                .select("id,store,market,esn_imei,phone_number,device_model,category,status,acquired_date,due_date,date_sold,owed_to_vip") \
+                .eq("org_id", org_id).is_("date_sold", "null").ilike("category", "%On Inventory%")
+            if store:
+                q = q.eq("store", store)
+            if market:
+                q = q.eq("market", market)
+            q = extra(q).range(start, start + PAGE - 1)
+            chunk = q.execute().data or []
+            out.extend(chunk)
+            if len(chunk) < PAGE:
+                break
+            page += 1
+            if page > 50:
+                break
+        return out
+
+    rows = fetch(lambda q: q)
+    today = date.today()
+
+    def days_aged(r):
+        a = r.get("acquired_date")
+        if not a:
+            return None
+        try:
+            y, m, d = map(int, str(a)[:10].split("-"))
+            return (today - date(y, m, d)).days
+        except Exception:
+            return None
+
+    buckets = {
+        "under45": {"count": 0, "owed": 0.0, "rows": []},
+        "warn":    {"count": 0, "owed": 0.0, "rows": []},   # 45-60
+        "missed":  {"count": 0, "owed": 0.0, "rows": []},   # >60
+    }
+    zero_rows = []  # plain On Inventory, $0 owed
+
+    for r in rows:
+        owed = float(r.get("owed_to_vip") or 0)
+        if owed <= 0:
+            zero_rows.append(r)
+            continue
+        d = days_aged(r)
+        r["days_aged"] = d
+        if d is None:
+            continue
+        if d < 45:
+            b = "under45"
+        elif d <= 60:
+            b = "warn"
+        else:
+            b = "missed"
+        buckets[b]["count"] += 1
+        buckets[b]["owed"] += owed
+        buckets[b]["rows"].append(r)
+
+    for b in buckets.values():
+        b["owed"] = round(b["owed"], 2)
+        b["rows"].sort(key=lambda x: (x.get("days_aged") or 0), reverse=True)
+
+    # data freshness: max FileDate from raw_row
+    fd = None
+    sample = client.schema("commcalc").table("asset_ledger") \
+        .select("raw_row").eq("org_id", org_id).limit(1).execute().data or []
+    if sample and sample[0].get("raw_row"):
+        fd = sample[0]["raw_row"].get("FileDate")
+        if fd:
+            fd = str(fd)[:10]
+
+    return {
+        "today": today.isoformat(),
+        "data_as_of": fd,
+        "buckets": buckets,
+        "zero_inventory": {"count": len(zero_rows), "rows": zero_rows[:500]},
+        "totals": {
+            "flagged_count": sum(b["count"] for b in buckets.values()),
+            "flagged_owed": round(sum(b["owed"] for b in buckets.values()), 2),
+        },
+    }
+
+
 @router.get("/ledger")
 async def get_asset_ledger(
     org_id: str = ORG_ID,
