@@ -38,6 +38,10 @@ async def upload_asset_ledger(file: UploadFile = File(...), org_id: str = ORG_ID
         _sync_appeal_flags(client, org_id)
     except Exception as _e:
         print(f"appeal flag sync failed: {_e}")
+    try:
+        _sync_rma_flags(client, org_id)
+    except Exception as _e:
+        print(f"rma flag sync failed: {_e}")
 
     return {"status": "ok", "rows_imported": len(rows)}
 
@@ -588,6 +592,106 @@ async def sync_appeal_flags(org_id: str = ORG_ID):
     client = sb()
     n = _sync_appeal_flags(client, org_id)
     return {"status": "ok", "appeal_flags_written": n}
+
+
+def _classify_rma(r):
+    """Return (bucket, owed, reimb) for an RMA row. bucket in full/short/none."""
+    try: owed = float(r.get("owed_to_vip") or 0)
+    except Exception: owed = 0.0
+    try: reimb = float(r.get("reimbursement") or 0)
+    except Exception: reimb = 0.0
+    rd = r.get("reimbursement_date")
+    has_date = rd not in (None, "", "nan", "NaT", "None")
+    got = reimb > 0 or has_date
+    if not got:
+        return "none", owed, reimb
+    if reimb < owed - 0.01:
+        return "short", owed, reimb
+    return "full", owed, reimb
+
+
+@router.get("/rma")
+async def get_rma(org_id: str = ORG_ID, store: str = "", market: str = ""):
+    """RMA reconciliation: reimbursed full / short / not reimbursed, plus net loss."""
+    client = sb()
+    rows = _fetch_asset_rows(
+        client, org_id, store, market,
+        select="id,store,market,esn_imei,phone_number,device_model,category,status,date_sold,owed_to_vip,reimbursement,reimbursement_date",
+    )
+    rma = [r for r in rows if (r.get("category") or "") == "RMA"]
+
+    buckets = {k: {"count": 0, "owed": 0.0, "reimb": 0.0, "rows": []} for k in ("full", "short", "none")}
+    for r in rma:
+        b, owed, reimb = _classify_rma(r)
+        r["_bucket"] = b
+        r["_shortfall"] = round(owed - reimb, 2) if b in ("short", "none") else 0.0
+        buckets[b]["count"] += 1
+        buckets[b]["owed"] += owed
+        buckets[b]["reimb"] += reimb
+        buckets[b]["rows"].append(r)
+
+    for b in buckets.values():
+        b["owed"] = round(b["owed"], 2)
+        b["reimb"] = round(b["reimb"], 2)
+        b["rows"].sort(key=lambda x: float(x.get("owed_to_vip") or 0), reverse=True)
+
+    net_loss = round(buckets["none"]["owed"] + (buckets["short"]["owed"] - buckets["short"]["reimb"]), 2)
+
+    return {
+        "buckets": buckets,
+        "net_loss": net_loss,
+        "total_rma": len(rma),
+        "filters": {"store": store or None, "market": market or None},
+    }
+
+
+def _sync_rma_flags(client, org_id):
+    """Write RMA flags: not-reimbursed=critical, short=warning. Delete-first + insert."""
+    rows = _fetch_asset_rows(
+        client, org_id,
+        select="store,esn_imei,phone_number,device_model,category,status,date_sold,owed_to_vip,reimbursement,reimbursement_date,payg_date,acquired_date",
+    )
+    flags = []
+    for r in rows:
+        if (r.get("category") or "") != "RMA":
+            continue
+        b, owed, reimb = _classify_rma(r)
+        if b == "full":
+            continue
+        sev = "critical" if b == "none" else "warning"
+        d = r.get("date_sold") or r.get("payg_date") or r.get("acquired_date")
+        period = "Unknown"; pm = None; py = None
+        if d:
+            try:
+                py, pm, _ = [int(x) for x in str(d)[:10].split("-")]
+                period = __import__("datetime").date(py, pm, 1).strftime("%B %Y")
+            except Exception:
+                pass
+        shortfall = round(owed - reimb, 2)
+        desc = ("RMA not reimbursed — full amount uncredited" if b == "none"
+                else f"RMA short-paid — owed {owed}, reimbursed {reimb} (short {shortfall})")
+        flags.append({
+            "org_id": org_id, "period": period, "period_month": pm, "period_year": py,
+            "flag_type": "RMA Reimbursement Gap", "source": "asset_rma",
+            "severity": sev, "store_address": r.get("store"),
+            "imei": r.get("esn_imei"), "mdn": r.get("phone_number"),
+            "amount": shortfall, "phone_model": r.get("device_model"),
+            "description": desc,
+        })
+
+    client.schema("commcalc").table("flags").delete() \
+        .eq("org_id", org_id).eq("source", "asset_rma").execute()
+    for i in range(0, len(flags), 500):
+        client.schema("commcalc").table("flags").insert(flags[i:i+500]).execute()
+    return len(flags)
+
+
+@router.post("/sync-rma-flags")
+async def sync_rma_flags(org_id: str = ORG_ID):
+    """Manual refresh of RMA flags."""
+    client = sb()
+    n = _sync_rma_flags(client, org_id)
+    return {"status": "ok", "rma_flags_written": n}
 
 
 @router.get("/ledger")
