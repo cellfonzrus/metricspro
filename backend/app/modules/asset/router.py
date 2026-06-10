@@ -658,16 +658,30 @@ def _classify_rma(r):
 
 @router.get("/rma")
 async def get_rma(org_id: str = ORG_ID, store: str = "", market: str = ""):
-    """RMA reconciliation: reimbursed full / short / not reimbursed, plus net loss."""
+    """RMA reconciliation via Postgres aggregation. Buckets from per-device rows for accuracy."""
     client = sb()
-    rows = _fetch_asset_rows(
-        client, org_id, store, market,
-        select="id,store,market,esn_imei,phone_number,device_model,category,status,date_sold,owed_to_vip,reimbursement,reimbursement_date",
-    )
-    rma = [r for r in rows if (r.get("category") or "") == "RMA"]
+    # We still need per-device classification (short vs none vs full), so fetch only RMA rows.
+    rows = []
+    page = 0; PAGE = 1000
+    while True:
+        start = page * PAGE
+        q = client.schema("commcalc").table("asset_ledger") \
+            .select("id,store,market,esn_imei,phone_number,device_model,category,status,date_sold,owed_to_vip,reimbursement,reimbursement_date") \
+            .eq("org_id", org_id).eq("category", "RMA")
+        if store:
+            q = q.eq("store", store)
+        if market:
+            q = q.eq("market", market)
+        chunk = q.range(start, start + PAGE - 1).execute().data or []
+        rows.extend(chunk)
+        if len(chunk) < PAGE:
+            break
+        page += 1
+        if page > 10:
+            break
 
     buckets = {k: {"count": 0, "owed": 0.0, "reimb": 0.0, "rows": []} for k in ("full", "short", "none")}
-    for r in rma:
+    for r in rows:
         b, owed, reimb = _classify_rma(r)
         r["_bucket"] = b
         r["_shortfall"] = round(owed - reimb, 2) if b in ("short", "none") else 0.0
@@ -686,7 +700,7 @@ async def get_rma(org_id: str = ORG_ID, store: str = "", market: str = ""):
     return {
         "buckets": buckets,
         "net_loss": net_loss,
-        "total_rma": len(rma),
+        "total_rma": len(rows),
         "filters": {"store": store or None, "market": market or None},
     }
 
