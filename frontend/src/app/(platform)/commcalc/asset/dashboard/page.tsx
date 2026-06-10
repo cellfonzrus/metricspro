@@ -61,14 +61,8 @@ export default function AssetDashboard() {
       const qs = buildQS()
       const d = await api(`/api/v1/asset/charges-summary?${qs.toString()}`)
       setData(d)
-      // RMA tile value from the /rma endpoint (net-loss aware); reuse same store/market
-      const rqs = new URLSearchParams({ org_id: ORG_ID })
-      if (market) rqs.set('market', market); if (store) rqs.set('store', store)
-      try {
-        const r = await api(`/api/v1/asset/rma?${rqs.toString()}`)
-        const cnt = (r.buckets?.none?.count||0) + (r.buckets?.short?.count||0) + (r.buckets?.full?.count||0)
-        setRmaData({ count: cnt, owed: r.net_loss || 0 })
-      } catch { setRmaData({count:0,owed:0}) }
+      // RMA tile uses the net loss already computed in charges-summary — no extra call
+      setRmaData({ count: 0, owed: d.total_loss?.rma || 0 })
     } catch(e) { console.error(e) }
     setLoading(false)
   }
