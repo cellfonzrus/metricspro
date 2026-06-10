@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { api, ORG_ID, fmt, fmtN } from '@/lib/client'
+import { api, ORG_ID, fmt, fmtN, localToday } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 
 const CATS = [
@@ -45,7 +45,7 @@ export default function MyTargetsPage() {
   async function loadRep() {
     setLoading(true)
     try {
-      const d = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/calendar?scope=rep&store_code=${encodeURIComponent(storeCode)}&rep=${encodeURIComponent(rep)}&org_id=${ORG_ID}`)
+      const d = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/calendar?scope=rep&store_code=${encodeURIComponent(storeCode)}&rep=${encodeURIComponent(rep)}&org_id=${ORG_ID}&today=${localToday()}`)
       setDetail(d)
     } catch (e) { console.error(e) }
     setLoading(false)

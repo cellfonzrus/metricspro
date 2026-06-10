@@ -26,3 +26,11 @@ export const fmtN = (n: number, dec = 1) =>
   Number(n || 0).toFixed(dec)
 
 export const ORG_ID = '00000000-0000-0000-0000-000000000001'
+
+// Browser-local date (YYYY-MM-DD) so "today" on the targets pages tracks the
+// store's wall clock, not the server's UTC date.
+export const localToday = () => {
+  const d = new Date()
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}

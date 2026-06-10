@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { api, ORG_ID, fmt, fmtN } from '@/lib/client'
+import { api, ORG_ID, fmt, fmtN, localToday } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 
 const CATS = [
@@ -27,6 +27,7 @@ interface CalDay {
 interface CalResp {
   period: string; scope: string; store_code: string; rep: string | null
   scheduled_hours_total: number; open_days_total: number; today: string
+  has_schedule: boolean
   categories: Record<string, CatMetrics>; calendar: CalDay[]; reps: string[]
 }
 
@@ -47,7 +48,7 @@ export default function DailyTargetsPage() {
   async function loadSummary() {
     setLoadingSum(true)
     try {
-      const d = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/summary?org_id=${ORG_ID}`)
+      const d = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/summary?org_id=${ORG_ID}&today=${localToday()}`)
       setSummary(d.stores || [])
       if (!storeCode && d.stores?.length) setStoreCode(d.stores[0].store_code)
     } catch (e) { console.error(e) }
@@ -57,7 +58,7 @@ export default function DailyTargetsPage() {
   async function loadDetail() {
     setLoadingDetail(true)
     try {
-      const q = `scope=${scope}&store_code=${encodeURIComponent(storeCode)}${scope === 'rep' && rep ? `&rep=${encodeURIComponent(rep)}` : ''}&org_id=${ORG_ID}`
+      const q = `scope=${scope}&store_code=${encodeURIComponent(storeCode)}${scope === 'rep' && rep ? `&rep=${encodeURIComponent(rep)}` : ''}&org_id=${ORG_ID}&today=${localToday()}`
       const d: CalResp = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/calendar?${q}`)
       setDetail(d)
       if (scope === 'rep' && !rep && d.reps?.length) setRep(d.reps[0])
@@ -148,6 +149,12 @@ export default function DailyTargetsPage() {
           {fmtN(detail.scheduled_hours_total, 0)}h scheduled · {detail.open_days_total} open days · today {detail.today}
         </span>}
       </div>
+
+      {detail && !detail.has_schedule && (
+        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '8px 14px', marginBottom: 16, fontSize: 13, color: '#92400e' }}>
+          ⚠️ No StoreOps schedule loaded for this {scope === 'rep' ? 'rep' : 'store'} this period — targets can't be schedule-weighted, so the full remaining balance is shown under <strong>Pace</strong> and today's target is 0.
+        </div>
+      )}
 
       {loadingDetail ? (
         <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>Loading…</div>

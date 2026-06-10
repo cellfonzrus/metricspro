@@ -806,14 +806,34 @@ async def get_top_sellers(period: str, limit: int = 10, org_id: str = ORG_ID):
 
 
 # ── Daily Sales Targets ──────────────────────────────────────
-def _period_bounds(period: str):
-    """Return (month_start, next_month_start, resolved_today) for a period label."""
+_MONTH_TOKENS = {
+    'january', 'february', 'march', 'april', 'may', 'june', 'july',
+    'august', 'september', 'october', 'november', 'december',
+}
+
+
+def _period_bounds(period: str, today_override: str = ""):
+    """Return (month_start, next_month_start, resolved_today) for a period label.
+
+    `today_override` (YYYY-MM-DD) lets the client pass its *local* date so "today"
+    isn't computed in the server's UTC clock — critical for an evening sales floor
+    where UTC has already rolled to tomorrow. Falls back to the server date.
+    """
+    # parse_period silently falls back to January on an unknown month; guard here
+    # so a malformed period fails loudly instead of returning wrong bounds.
+    if not period or period.lower().split()[0] not in _MONTH_TOKENS:
+        raise HTTPException(400, f"Unrecognized period '{period}' (expected 'Month YYYY')")
     pm = parse_period(period)
     year, month = pm['year'], pm['month']
     start = _date(year, month, 1)
     last_day = _calendar.monthrange(year, month)[1]
     end = _date(year, month, last_day) + _timedelta(days=1)
     real = _date.today()
+    if today_override:
+        try:
+            real = _date.fromisoformat(today_override[:10])
+        except ValueError:
+            pass  # ignore a malformed override, keep server date
     if real < start:
         today = start                       # future period — nothing is "past" yet
     elif real >= end:
@@ -906,7 +926,10 @@ async def save_target(period: str, body: dict, org_id: str = ORG_ID):
         'activations_monthly': safe_float(body.get('activations_monthly')),
         'upgrades_monthly': safe_float(body.get('upgrades_monthly')),
         'accessories_monthly': safe_float(body.get('accessories_monthly')),
-        'byod_pct': safe_float(body.get('byod_pct')) if body.get('byod_pct') is not None else None,
+        # Blank field → NULL (fall back to KPI default), not 0% which would zero the BYOD target.
+        'byod_pct': (safe_float(body.get('byod_pct'))
+                     if str(body.get('byod_pct') if body.get('byod_pct') is not None else '').strip() != ''
+                     else None),
         'notes': body.get('notes'),
         'updated_by': body.get('updated_by') or 'web',
     }
@@ -918,12 +941,12 @@ async def save_target(period: str, body: dict, org_id: str = ORG_ID):
 @router.get("/targets/{period}/calendar")
 async def get_target_calendar(
     period: str, store_code: str, scope: str = "store",
-    rep: str = "", org_id: str = ORG_ID,
+    rep: str = "", today: str = "", org_id: str = ORG_ID,
 ):
     """Schedule-weighted daily targets + catch-up + pace + day-by-day calendar
     for a single store (scope=store) or a single rep within it (scope=rep)."""
     client = sb()
-    start, end, today = _period_bounds(period)
+    start, end, today = _period_bounds(period, today)
     byod_def = _byod_pct_default(client, period)
 
     trow = (client.schema('commcalc').table('targets')
@@ -954,10 +977,10 @@ async def get_target_calendar(
 
 
 @router.get("/targets/{period}/summary")
-async def get_targets_summary(period: str, org_id: str = ORG_ID):
+async def get_targets_summary(period: str, today: str = "", org_id: str = ORG_ID):
     """All-stores overview: store-level today/pace/need/monthly/achieved per category."""
     client = sb()
-    start, end, today = _period_bounds(period)
+    start, end, today = _period_bounds(period, today)
     byod_def = _byod_pct_default(client, period)
 
     trows = (client.schema('commcalc').table('targets')

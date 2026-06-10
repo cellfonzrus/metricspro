@@ -125,16 +125,19 @@ def compute_scope(
         cum_ach_yday = sum(achieved_on(cat, d) for d in open_days if d < today)
         shortfall = max(0.0, cum_base_yday - cum_ach_yday)
 
-        base_today = base_for(cat, today) if today in hours_by_day else 0.0
-        today_target = base_today + shortfall
+        scheduled_today = today in hours_by_day
+        base_today = base_for(cat, today) if scheduled_today else 0.0
+        # Only give a target on a day this scope is actually scheduled. A rep on
+        # their day off gets 0 today; the unmet shortfall is carried by `pace`
+        # onto the days they do work, not dumped onto a day they aren't here.
+        today_target = (base_today + shortfall) if scheduled_today else 0.0
 
-        achieved_mtd = sum(achieved_on(cat, d) for d in open_days if d <= today)
-        # include any actuals that may exist on non-scheduled days too
-        achieved_all = 0.0
+        # MTD achieved counts every day with actuals up to today, including sales
+        # on non-scheduled days (walk-ins / coverage shifts not in the schedule).
+        achieved_mtd = 0.0
         for d in actuals_by_day:
             if d <= today:
-                achieved_all += achieved_on(cat, d)
-        achieved_mtd = max(achieved_mtd, achieved_all)
+                achieved_mtd += achieved_on(cat, d)
 
         need = max(0.0, monthly - achieved_mtd)
         days_left = sum(1 for d in open_days if d >= today)
@@ -173,6 +176,7 @@ def compute_scope(
     return {
         'scheduled_hours_total': round(total_hours, 2),
         'open_days_total': len(open_days),
+        'has_schedule': total_hours > 0,  # False → no StoreOps schedule loaded for this scope
         'today': today.isoformat(),
         'categories': categories,
         'calendar': calendar,
