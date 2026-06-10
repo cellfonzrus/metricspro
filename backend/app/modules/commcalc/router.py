@@ -10,6 +10,9 @@ from app.modules.commcalc.flags import calc_flags
 from app.modules.commcalc.portout_flags import calc_portout_flags
 from app.modules.commcalc.hotsheet_parser import parse_hotsheet
 from app.modules.commcalc.discrepancy_engine import run_discrepancy
+from app.modules.commcalc import targets_engine
+from datetime import date as _date, timedelta as _timedelta
+import calendar as _calendar
 
 
 router = APIRouter(prefix="/commcalc", tags=["CommCalc"])
@@ -800,3 +803,212 @@ async def get_top_sellers(period: str, limit: int = 10, org_id: str = ORG_ID):
 
     ranked = sorted(models.values(), key=lambda x: x["units"], reverse=True)[:limit]
     return {"period": period, "top_sellers": ranked}
+
+
+# ── Daily Sales Targets ──────────────────────────────────────
+_MONTH_TOKENS = {
+    'january', 'february', 'march', 'april', 'may', 'june', 'july',
+    'august', 'september', 'october', 'november', 'december',
+}
+
+
+def _period_bounds(period: str, today_override: str = ""):
+    """Return (month_start, next_month_start, resolved_today) for a period label.
+
+    `today_override` (YYYY-MM-DD) lets the client pass its *local* date so "today"
+    isn't computed in the server's UTC clock — critical for an evening sales floor
+    where UTC has already rolled to tomorrow. Falls back to the server date.
+    """
+    # parse_period silently falls back to January on an unknown month; guard here
+    # so a malformed period fails loudly instead of returning wrong bounds.
+    if not period or period.lower().split()[0] not in _MONTH_TOKENS:
+        raise HTTPException(400, f"Unrecognized period '{period}' (expected 'Month YYYY')")
+    pm = parse_period(period)
+    year, month = pm['year'], pm['month']
+    start = _date(year, month, 1)
+    last_day = _calendar.monthrange(year, month)[1]
+    end = _date(year, month, last_day) + _timedelta(days=1)
+    real = _date.today()
+    if today_override:
+        try:
+            real = _date.fromisoformat(today_override[:10])
+        except ValueError:
+            pass  # ignore a malformed override, keep server date
+    if real < start:
+        today = start                       # future period — nothing is "past" yet
+    elif real >= end:
+        today = _date(year, month, last_day)  # past period — whole month is realized
+    else:
+        today = real
+    return start, end, today
+
+
+def _fetch_shifts(client, start, end):
+    return (client.schema('storeops').table('shifts')
+            .select('employee_name,store_code,shift_date,scheduled_hours,is_deleted')
+            .gte('shift_date', start.isoformat())
+            .lt('shift_date', end.isoformat())
+            .limit(50000).execute().data) or []
+
+
+def _fetch_actuals(client, org_id, period):
+    try:
+        return (client.schema('commcalc')
+                .rpc('daily_sales_actuals', {'p_org_id': org_id, 'p_period': period})
+                .execute().data) or []
+    except Exception as e:
+        print('daily_sales_actuals RPC failed:', e)
+        return []
+
+
+def _byod_pct_default(client, period):
+    try:
+        r = (client.schema('commcalc').table('payout_config')
+             .select('kpi_byod_target').eq('period', period).limit(1).execute().data) or []
+        if r and r[0].get('kpi_byod_target') is not None:
+            return safe_float(r[0]['kpi_byod_target'])
+    except Exception:
+        pass
+    return 35.0
+
+
+@router.get("/targets/{period}")
+async def get_targets(period: str, org_id: str = ORG_ID):
+    """List per-store monthly target config, seeding defaults for stores without a row.
+    Accessories seed from storeops.stores.monthly_target; byod_pct from KPI config."""
+    client = sb()
+    pm = parse_period(period)
+    rows = (client.schema('commcalc').table('targets')
+            .select('*').eq('org_id', org_id).eq('period', period).execute().data) or []
+    by_code = {str(r.get('store_code', '')).upper(): r for r in rows}
+    byod_def = _byod_pct_default(client, period)
+
+    stores = (client.schema('storeops').table('stores')
+              .select('store_code,address,market,monthly_target,is_active')
+              .execute().data) or []
+    out = []
+    for s in stores:
+        code = str(s.get('store_code', '') or '').strip()
+        if not code:
+            continue
+        existing = by_code.get(code.upper())
+        if existing:
+            row = dict(existing)
+            row['address'] = s.get('address')
+            row['market'] = s.get('market')
+            row['_seeded'] = False
+        else:
+            row = {
+                'org_id': org_id, 'store_code': code, 'period': period,
+                'period_month': pm['month'], 'period_year': pm['year'],
+                'activations_monthly': 0, 'upgrades_monthly': 0,
+                'accessories_monthly': safe_float(s.get('monthly_target')),
+                'byod_pct': byod_def, 'notes': None,
+                'address': s.get('address'), 'market': s.get('market'),
+                '_seeded': True,
+            }
+        out.append(row)
+    out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
+    return {'period': period, 'byod_pct_default': byod_def, 'targets': out}
+
+
+@router.put("/targets/{period}")
+async def save_target(period: str, body: dict, org_id: str = ORG_ID):
+    """Upsert one store's monthly target config (Settings page save)."""
+    client = sb()
+    code = str(body.get('store_code', '') or '').strip()
+    if not code:
+        raise HTTPException(400, "store_code required")
+    pm = parse_period(period)
+    row = {
+        'org_id': org_id, 'store_code': code, 'period': period,
+        'period_month': pm['month'], 'period_year': pm['year'],
+        'activations_monthly': safe_float(body.get('activations_monthly')),
+        'upgrades_monthly': safe_float(body.get('upgrades_monthly')),
+        'accessories_monthly': safe_float(body.get('accessories_monthly')),
+        # Blank field → NULL (fall back to KPI default), not 0% which would zero the BYOD target.
+        'byod_pct': (safe_float(body.get('byod_pct'))
+                     if str(body.get('byod_pct') if body.get('byod_pct') is not None else '').strip() != ''
+                     else None),
+        'notes': body.get('notes'),
+        'updated_by': body.get('updated_by') or 'web',
+    }
+    r = (client.schema('commcalc').table('targets')
+         .upsert(row, on_conflict='org_id,store_code,period').execute())
+    return r.data[0] if r.data else row
+
+
+@router.get("/targets/{period}/calendar")
+async def get_target_calendar(
+    period: str, store_code: str, scope: str = "store",
+    rep: str = "", today: str = "", org_id: str = ORG_ID,
+):
+    """Schedule-weighted daily targets + catch-up + pace + day-by-day calendar
+    for a single store (scope=store) or a single rep within it (scope=rep)."""
+    client = sb()
+    start, end, today = _period_bounds(period, today)
+    byod_def = _byod_pct_default(client, period)
+
+    trow = (client.schema('commcalc').table('targets')
+            .select('*').eq('org_id', org_id).eq('period', period)
+            .eq('store_code', store_code).limit(1).execute().data) or []
+    target_row = trow[0] if trow else {}
+    # Seed accessories from store monthly_target when no explicit row yet.
+    if not trow:
+        srow = (client.schema('storeops').table('stores')
+                .select('monthly_target').eq('store_code', store_code).limit(1).execute().data) or []
+        if srow:
+            target_row = {'accessories_monthly': safe_float(srow[0].get('monthly_target'))}
+    monthly = targets_engine.derive_monthly_by_cat(target_row, byod_def)
+
+    shifts = _fetch_shifts(client, start, end)
+    actuals = _fetch_actuals(client, org_id, period)
+    rep_arg = rep if scope == 'rep' and rep else None
+
+    hours_by_day = targets_engine.scope_hours_by_day(shifts, store_code, rep_arg)
+    actuals_by_day = targets_engine.scope_actuals_by_day(actuals, store_code, rep_arg)
+    result = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today, round_counts=True)
+    result.update({
+        'period': period, 'scope': scope, 'store_code': store_code,
+        'rep': rep_arg, 'monthly_targets': monthly,
+        'reps': targets_engine.reps_in_scope(shifts, actuals, store_code),
+    })
+    return result
+
+
+@router.get("/targets/{period}/summary")
+async def get_targets_summary(period: str, today: str = "", org_id: str = ORG_ID):
+    """All-stores overview: store-level today/pace/need/monthly/achieved per category."""
+    client = sb()
+    start, end, today = _period_bounds(period, today)
+    byod_def = _byod_pct_default(client, period)
+
+    trows = (client.schema('commcalc').table('targets')
+             .select('*').eq('org_id', org_id).eq('period', period).execute().data) or []
+    by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
+    stores = (client.schema('storeops').table('stores')
+              .select('store_code,address,market,monthly_target').execute().data) or []
+    shifts = _fetch_shifts(client, start, end)
+    actuals = _fetch_actuals(client, org_id, period)
+
+    out = []
+    for s in stores:
+        code = str(s.get('store_code', '') or '').strip()
+        if not code:
+            continue
+        trow = by_code.get(code.upper())
+        if not trow:
+            trow = {'accessories_monthly': safe_float(s.get('monthly_target'))}
+        monthly = targets_engine.derive_monthly_by_cat(trow, byod_def)
+        if sum(monthly.values()) <= 0:
+            continue
+        hours_by_day = targets_engine.scope_hours_by_day(shifts, code, None)
+        actuals_by_day = targets_engine.scope_actuals_by_day(actuals, code, None)
+        res = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today, round_counts=True)
+        out.append({
+            'store_code': code, 'address': s.get('address'), 'market': s.get('market'),
+            'scheduled_hours_total': res['scheduled_hours_total'],
+            'categories': res['categories'],
+        })
+    out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
+    return {'period': period, 'today': today.isoformat(), 'stores': out}
