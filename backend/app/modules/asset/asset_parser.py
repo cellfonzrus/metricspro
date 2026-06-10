@@ -28,6 +28,7 @@ DATE_SRC = {
     "Date": "acquired_date",
     "Due Date": "due_date",
     "ESN Added Pay as You Go": "payg_date",
+    "Reimbursement Date": "reimbursement_date",
 }
 
 def parse_asset_ledger(file_bytes: bytes, org_id: str) -> list[dict]:
