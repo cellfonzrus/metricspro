@@ -33,6 +33,12 @@ async def upload_asset_ledger(file: UploadFile = File(...), org_id: str = ORG_ID
     # Backfill market from store_mapping + manual corrections (file has no market)
     _backfill_market(client, org_id)
 
+    # Auto-sync appeal rows into the Flags page (critical Boost non-payment)
+    try:
+        _sync_appeal_flags(client, org_id)
+    except Exception as _e:
+        print(f"appeal flag sync failed: {_e}")
+
     return {"status": "ok", "rows_imported": len(rows)}
 
 
@@ -451,6 +457,137 @@ async def get_aging(
             "flagged_owed": round(sum(b["owed"] for b in buckets.values()), 2),
         },
     }
+
+
+# ---- Asset charge classification (single source of truth) ----
+CHARGE_GROUPS = {
+    "vip_fees":      ["PROCESSING FEE", "SHIPPING", "SIM KIT"],
+    "stock_balance": ["Stock Balancing"],
+    "appeals":       ["Appeal Denied. Details in Boost Appeals Status",
+                      "Re-Escalation",
+                      "Over 10 Days Missing Reimbursement (CheckElevate/Submit Appeal)",
+                      "Missing 1st MRC",
+                      "Failed Activation. Check Boost Payment Status"],
+    "recon_oddity":  ["Phone Number Paid to Different ESN", "No Elevate Data. Received Commissions",
+                      "Non-Promo Elevate Coupon", "Exchange/Return"],
+}
+GROUP_LABELS = {
+    "vip_fees": "VIP Fees", "stock_balance": "Stock Balancing / Returns",
+    "appeals": "Appeals & Denied Payments", "recon_oddity": "Reconciliation Oddities",
+}
+
+def _cat_to_group(cat: str):
+    for g, cats in CHARGE_GROUPS.items():
+        if cat in cats:
+            return g
+    return None
+
+
+def _fetch_asset_rows(client, org_id, store="", market="", select="*"):
+    rows = []
+    page = 0; PAGE = 1000
+    while True:
+        start = page * PAGE
+        q = client.schema("commcalc").table("asset_ledger").select(select).eq("org_id", org_id)
+        if store:
+            q = q.eq("store", store)
+        if market:
+            q = q.eq("market", market)
+        chunk = q.range(start, start + PAGE - 1).execute().data or []
+        rows.extend(chunk)
+        if len(chunk) < PAGE:
+            break
+        page += 1
+        if page > 60:
+            break
+    return rows
+
+
+@router.get("/charges-summary")
+async def get_charges_summary(org_id: str = ORG_ID, store: str = "", market: str = ""):
+    """All four charge groups in one call: totals, by-category, by-store, and line items."""
+    client = sb()
+    rows = _fetch_asset_rows(
+        client, org_id, store, market,
+        select="id,store,market,esn_imei,phone_number,device_model,category,status,date_sold,due_date,payg_date,owed_to_vip,notes",
+    )
+
+    groups = {}
+    for gk in CHARGE_GROUPS:
+        groups[gk] = {"key": gk, "label": GROUP_LABELS[gk],
+                      "count": 0, "owed": 0.0, "by_category": {}, "by_store": {}, "rows": []}
+
+    for r in rows:
+        gk = _cat_to_group(r.get("category") or "")
+        if not gk:
+            continue
+        o = float(r.get("owed_to_vip") or 0)
+        G = groups[gk]
+        G["count"] += 1; G["owed"] += o
+        c = r.get("category") or "Unknown"
+        G["by_category"].setdefault(c, {"category": c, "count": 0, "owed": 0.0})
+        G["by_category"][c]["count"] += 1; G["by_category"][c]["owed"] += o
+        s = r.get("store") or "—"
+        G["by_store"].setdefault(s, {"store": s, "market": r.get("market"), "count": 0, "owed": 0.0})
+        G["by_store"][s]["count"] += 1; G["by_store"][s]["owed"] += o
+        G["rows"].append(r)
+
+    for G in groups.values():
+        G["owed"] = round(G["owed"], 2)
+        G["by_category"] = sorted(
+            ({**v, "owed": round(v["owed"], 2)} for v in G["by_category"].values()),
+            key=lambda x: x["owed"], reverse=True)
+        G["by_store"] = sorted(
+            ({**v, "owed": round(v["owed"], 2)} for v in G["by_store"].values()),
+            key=lambda x: x["owed"], reverse=True)
+        G["rows"].sort(key=lambda x: float(x.get("owed_to_vip") or 0), reverse=True)
+        G["rows"] = G["rows"][:1000]
+
+    return {"groups": groups, "filters": {"store": store or None, "market": market or None}}
+
+
+def _sync_appeal_flags(client, org_id):
+    """Write appeal-group asset rows into commcalc.flags (delete-first + insert, keyed on source)."""
+    rows = _fetch_asset_rows(
+        client, org_id, select="store,esn_imei,phone_number,device_model,category,owed_to_vip,payg_date,date_sold,acquired_date",
+    )
+    appeal_cats = set(CHARGE_GROUPS["appeals"])
+    flags = []
+    for r in rows:
+        if (r.get("category") or "") not in appeal_cats:
+            continue
+        d = r.get("payg_date") or r.get("date_sold") or r.get("acquired_date")
+        period = "Unknown"; pm = None; py = None
+        if d:
+            try:
+                py, pm, _ = [int(x) for x in str(d)[:10].split("-")]
+                period = __import__("datetime").date(py, pm, 1).strftime("%B %Y")
+            except Exception:
+                pass
+        flags.append({
+            "org_id": org_id, "period": period, "period_month": pm, "period_year": py,
+            "flag_type": "Asset Appeal / Denied Payment", "source": "asset_appeal",
+            "severity": "critical", "store_address": r.get("store"),
+            "imei": r.get("esn_imei"), "mdn": r.get("phone_number"),
+            "amount": float(r.get("owed_to_vip") or 0),
+            "phone_model": r.get("device_model"),
+            "description": f"Boost {r.get('category')} — potential unpaid/denied amount",
+        })
+
+    # delete-first then plain insert (dedup pattern)
+    client.schema("commcalc").table("flags").delete() \
+        .eq("org_id", org_id).eq("source", "asset_appeal").execute()
+    for i in range(0, len(flags), 500):
+        client.schema("commcalc").table("flags").insert(flags[i:i+500]).execute()
+    return len(flags)
+
+
+@router.post("/sync-appeal-flags")
+async def sync_appeal_flags(org_id: str = ORG_ID):
+    """Manual refresh: rewrite appeal flags from current asset data."""
+    client = sb()
+    n = _sync_appeal_flags(client, org_id)
+    return {"status": "ok", "appeal_flags_written": n}
 
 
 @router.get("/ledger")
