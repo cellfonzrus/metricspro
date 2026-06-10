@@ -149,6 +149,157 @@ async def get_category_detail(
     }
 
 
+@router.get("/filter-options")
+async def get_filter_options(org_id: str = ORG_ID):
+    """Distinct stores + markets for the report dropdowns."""
+    client = sb()
+    rows = []
+    page = 0; PAGE = 1000
+    while True:
+        start = page * PAGE
+        chunk = client.schema("commcalc").table("asset_ledger") \
+            .select("store,market").eq("org_id", org_id) \
+            .range(start, start + PAGE - 1).execute().data or []
+        rows.extend(chunk)
+        if len(chunk) < PAGE:
+            break
+        page += 1
+        if page > 100:
+            break
+    markets = set()
+    store_to_market = {}
+    for r in rows:
+        if r.get("market"):
+            markets.add(r["market"])
+        if r.get("store"):
+            store_to_market[r["store"]] = r.get("market")
+    stores = [{"store": k, "market": v} for k, v in store_to_market.items()]
+    stores.sort(key=lambda x: x["store"])
+    return {"markets": sorted(markets), "stores": stores}
+
+
+@router.get("/owed-weekly")
+async def get_owed_weekly(
+    thursday: str,
+    org_id: str = ORG_ID,
+    store: str = "",
+    market: str = "",
+    weeks_ahead: int = 8,
+    limit: int = 200,
+    offset: int = 0,
+):
+    """VIP weekly collection report for a chosen Thursday, plus upcoming forecast."""
+    from datetime import datetime, timedelta
+    client = sb()
+
+    def base(select_cols):
+        q = client.schema("commcalc").table("asset_ledger").select(select_cols).eq("org_id", org_id)
+        if store:
+            q = q.eq("store", store)
+        if market:
+            q = q.eq("market", market)
+        return q
+
+    def fetch_all(select_cols, apply_filter):
+        out = []
+        page = 0; PAGE = 1000
+        while True:
+            start = page * PAGE
+            q = apply_filter(base(select_cols)).range(start, start + PAGE - 1)
+            chunk = q.execute().data or []
+            out.extend(chunk)
+            if len(chunk) < PAGE:
+                break
+            page += 1
+            if page > 50:
+                break
+        return out
+
+    # Devices billing on the selected Thursday
+    due_rows = fetch_all(
+        "store,market,bill_path,owed_to_vip",
+        lambda q: q.eq("billing_thursday", thursday),
+    )
+
+    sold_c = sold_o = aging_c = aging_o = 0.0
+    store_map = {}
+    for r in due_rows:
+        o = float(r.get("owed_to_vip") or 0)
+        is_aging = r.get("bill_path") == "aging"
+        if is_aging:
+            aging_c += 1; aging_o += o
+        else:
+            sold_c += 1; sold_o += o
+        s = r.get("store") or "\u2014"
+        if s not in store_map:
+            store_map[s] = {"store": s, "market": r.get("market"),
+                            "sold_count": 0, "sold_owed": 0.0,
+                            "aging_count": 0, "aging_owed": 0.0}
+        if is_aging:
+            store_map[s]["aging_count"] += 1; store_map[s]["aging_owed"] += o
+        else:
+            store_map[s]["sold_count"] += 1; store_map[s]["sold_owed"] += o
+
+    by_store = []
+    for s in store_map.values():
+        s["sold_owed"] = round(s["sold_owed"], 2)
+        s["aging_owed"] = round(s["aging_owed"], 2)
+        s["total_owed"] = round(s["sold_owed"] + s["aging_owed"], 2)
+        by_store.append(s)
+    by_store.sort(key=lambda x: x["total_owed"], reverse=True)
+
+    due_this_week = {
+        "sold":  {"count": int(sold_c),  "owed": round(sold_o, 2)},
+        "aging": {"count": int(aging_c), "owed": round(aging_o, 2)},
+        "total": {"count": int(sold_c + aging_c), "owed": round(sold_o + aging_o, 2)},
+    }
+
+    # Upcoming Thursdays forecast
+    th = datetime.strptime(thursday, "%Y-%m-%d").date()
+    end = (th + timedelta(weeks=weeks_ahead)).isoformat()
+    up_rows = fetch_all(
+        "bill_path,owed_to_vip,billing_thursday",
+        lambda q: q.gt("billing_thursday", thursday).lte("billing_thursday", end),
+    )
+    up_map = {}
+    for r in up_rows:
+        t = r.get("billing_thursday")
+        if not t:
+            continue
+        if t not in up_map:
+            up_map[t] = {"thursday": t, "sold_owed": 0.0, "aging_owed": 0.0, "count": 0}
+        o = float(r.get("owed_to_vip") or 0)
+        up_map[t]["count"] += 1
+        if r.get("bill_path") == "aging":
+            up_map[t]["aging_owed"] += o
+        else:
+            up_map[t]["sold_owed"] += o
+    upcoming = []
+    for t in sorted(up_map.keys()):
+        e = up_map[t]
+        e["sold_owed"] = round(e["sold_owed"], 2)
+        e["aging_owed"] = round(e["aging_owed"], 2)
+        e["total_owed"] = round(e["sold_owed"] + e["aging_owed"], 2)
+        upcoming.append(e)
+
+    # Device rows for the selected Thursday (paginated)
+    rows_resp = base("id,store,market,esn_imei,phone_number,device_model,contract_type,status,date_sold,due_date,bill_path,owed_to_vip") \
+        .eq("billing_thursday", thursday).order("owed_to_vip", desc=True) \
+        .range(offset, offset + limit - 1).execute()
+
+    return {
+        "thursday": thursday,
+        "filters": {"store": store or None, "market": market or None},
+        "due_this_week": due_this_week,
+        "by_store": by_store,
+        "upcoming": upcoming,
+        "rows": rows_resp.data or [],
+        "total_due_rows": len(due_rows),
+        "offset": offset,
+        "limit": limit,
+    }
+
+
 @router.get("/ledger")
 async def get_asset_ledger(
     org_id: str = ORG_ID,
