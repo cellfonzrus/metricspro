@@ -75,7 +75,7 @@ export default function OwedWeeklyPage() {
         <a href="/commcalc/asset" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Asset Ledger</a>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>Weekly Owed to VIP</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          What VIP collects each Thursday — phones sold (billed the following Thursday) and aged inventory past 60 days.
+          What VIP collects each Friday — phones sold (billed the following Friday) and aged inventory past 60 days.
         </p>
       </div>
 
@@ -104,7 +104,7 @@ export default function OwedWeeklyPage() {
         <>
           {/* KPI cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-            <Kpi label="Total Due This Thursday" value={fmt(report.due_this_week.total.owed)} sub={`${report.due_this_week.total.count.toLocaleString()} devices`} color="var(--accent)" />
+            <Kpi label="Total Due This Friday" value={fmt(report.due_this_week.total.owed)} sub={`${report.due_this_week.total.count.toLocaleString()} devices`} color="var(--accent)" />
             <Kpi label="Sold Phones" value={fmt(report.due_this_week.sold.owed)} sub={`${report.due_this_week.sold.count.toLocaleString()} sold — billed this week`} color="#059669" />
             <Kpi label="Aged > 60 Days (Never Sold)" value={fmt(report.due_this_week.aging.owed)} sub={`${report.due_this_week.aging.count.toLocaleString()} devices past due date`} color="#d97706" />
           </div>
@@ -125,7 +125,7 @@ export default function OwedWeeklyPage() {
                 </thead>
                 <tbody>
                   {report.by_store.length === 0 ? (
-                    <tr><td colSpan={7} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>Nothing bills on this Thursday for the current filter.</td></tr>
+                    <tr><td colSpan={7} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>Nothing bills on this Friday for the current filter.</td></tr>
                   ) : report.by_store.map((s, i) => (
                     <tr key={s.store} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
                       <td style={{ padding: '9px 14px', fontSize: 13, fontWeight: 500 }}>{s.store}</td>
@@ -142,15 +142,15 @@ export default function OwedWeeklyPage() {
             </div>
           </div>
 
-          {/* Upcoming Thursdays */}
+          {/* Upcoming Fridays */}
           <div className="card" style={{ padding: 0, marginBottom: 24 }}>
             <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 14 }}>
-              📅 Upcoming Thursdays
+              📅 Upcoming Fridays
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: 'var(--surface2)' }}>
-                  {['Thursday','Devices','Sold Owed','Aged Owed','Total'].map(h => (
+                  {['Friday','Devices','Sold Owed','Aged Owed','Total'].map(h => (
                     <th key={h} style={{ textAlign: 'left', padding: '8px 14px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>
                   ))}
                 </tr>
@@ -176,7 +176,7 @@ export default function OwedWeeklyPage() {
           {/* Device rows */}
           <div className="card" style={{ padding: 0 }}>
             <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 14 }}>
-              📱 Devices billing this Thursday <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>({report.rows.length.toLocaleString()} of {report.total_due_rows.toLocaleString()})</span>
+              📱 Devices billing this Friday <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>({report.rows.length.toLocaleString()} of {report.total_due_rows.toLocaleString()})</span>
             </div>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
