@@ -274,7 +274,48 @@ async def upload_file(
             raise HTTPException(500, f"Insert failed at row {i}: {e}")
     
     print(f'DEBUG upload complete: file_type={file_type} saved={saved} mapped={len(mapped)} period={period!r}')
+
+    # Record this upload so the UI can show what's already been uploaded (and
+    # when), surviving page reloads. daily_sales derives its period per-row, so
+    # log the distinct period(s) actually touched. Best-effort: a logging
+    # failure (e.g. 007_upload_log.sql not run yet) must never break an upload.
+    if file_type == 'daily_sales':
+        _log_periods = sorted({m.get('period') for m in mapped if m.get('period')})
+        log_period = ', '.join(_log_periods) if _log_periods else (period or None)
+    else:
+        log_period = period or None
+    try:
+        client.schema('commcalc').table('upload_log').insert({
+            'org_id': org_id,
+            'file_type': file_type,
+            'period': log_period,
+            'filename': getattr(file, 'filename', None),
+            'rows_saved': saved,
+        }).execute()
+    except Exception as e:
+        print(f'WARN upload_log insert failed (run 007_upload_log.sql?): {e}')
+
     return {"saved": saved, "file_type": file_type, "period": period}
+
+
+@router.get("/upload/history")
+async def upload_history(org_id: str = ORG_ID, period: str = "", limit: int = 100):
+    """Recent uploads, newest first. Powers the Upload page's 'already
+    uploaded' badges and the collapsible history menu. Optionally filter to a
+    single period. Degrades to [] if 007_upload_log.sql hasn't been run yet."""
+    require_org(org_id)
+    client = sb()
+    try:
+        q = (client.schema('commcalc').table('upload_log')
+             .select('id,file_type,period,filename,rows_saved,uploaded_at')
+             .eq('org_id', org_id))
+        if period:
+            q = q.eq('period', period)
+        resp = q.order('uploaded_at', desc=True).limit(min(max(limit, 1), 500)).execute()
+        return resp.data or []
+    except Exception as e:
+        print(f'WARN upload_history query failed (run 007_upload_log.sql?): {e}')
+        return []
 
 
 # ── Calculate endpoint ────────────────────────────────────────
