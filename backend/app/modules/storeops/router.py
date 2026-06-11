@@ -5,7 +5,9 @@ from app.core.database import get_supabase
 router = APIRouter(prefix="/storeops", tags=["StoreOps"])
 
 def sb():
-    return get_supabase()
+    # StoreOps tables live in the storeops.* schema (see migration 003).
+    return get_supabase().schema("storeops")
+
 
 @router.get("/stores")
 def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
