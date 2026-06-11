@@ -731,7 +731,7 @@ async def get_phantom_payments(period: str, org_id: str = ORG_ID):
     """Payments received in the period with no matching commissionable sale (by MDN or IMEI)."""
     from datetime import date as _date
     client = sb()
-        year, month = _period_ym(period)
+    year, month = _period_ym(period)
     plabel = _date(year, month, 1).strftime("%B %Y")
 
     # Build sets of MDNs and IMEIs from ALL sales (any period) AND all MI lines.
@@ -798,7 +798,7 @@ async def get_top_sellers(period: str, limit: int = 10, org_id: str = ORG_ID):
     """Top-selling device models for the period (by activation volume) to prioritize hotsheet updates."""
     from datetime import date as _date
     client = sb()
-        year, month = _period_ym(period)
+    year, month = _period_ym(period)
     plabel = _date(year, month, 1).strftime("%B %Y")
 
     sales = (client.schema("commcalc").table("raw_sales")
