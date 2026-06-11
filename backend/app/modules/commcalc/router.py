@@ -705,12 +705,33 @@ async def update_discrepancy_status(discrepancy_id: int, payload: dict, org_id: 
     return {"status": "ok"}
 
 
+def _period_ym(period: str) -> tuple[int, int]:
+    """(year, month) from a period label, accepting both 'June 2026' and '2026-06'.
+
+    Both forms are used across the app; these endpoints originally parsed only the
+    numeric form and 500'd (ValueError) on the month-name form that every sibling
+    endpoint accepts. Raises 400 with a clear message on anything unrecognized
+    instead of leaking a ValueError as a 500. (_MONTH_TOKENS is a module global
+    defined below; resolved at call time.)
+    """
+    p = (period or "").strip()
+    if len(p) >= 7 and p[:4].isdigit() and p[4] == "-" and p[5:7].isdigit():
+        year, month = int(p[:4]), int(p[5:7])
+    elif p and p.lower().split()[0] in _MONTH_TOKENS:
+        pm = parse_period(p)
+        year, month = pm["year"], pm["month"]
+    else:
+        raise HTTPException(400, f"Unrecognized period '{period}' (expected 'Month YYYY' or 'YYYY-MM')")
+    if not 1 <= month <= 12:
+        raise HTTPException(400, f"Invalid month in period '{period}'")
+    return year, month
+
 @router.get("/discrepancy/{period}/phantom")
 async def get_phantom_payments(period: str, org_id: str = ORG_ID):
     """Payments received in the period with no matching commissionable sale (by MDN or IMEI)."""
     from datetime import date as _date
     client = sb()
-    year, month = int(period[:4]), int(period[5:7])
+        year, month = _period_ym(period)
     plabel = _date(year, month, 1).strftime("%B %Y")
 
     # Build sets of MDNs and IMEIs from ALL sales (any period) AND all MI lines.
@@ -777,7 +798,7 @@ async def get_top_sellers(period: str, limit: int = 10, org_id: str = ORG_ID):
     """Top-selling device models for the period (by activation volume) to prioritize hotsheet updates."""
     from datetime import date as _date
     client = sb()
-    year, month = int(period[:4]), int(period[5:7])
+        year, month = _period_ym(period)
     plabel = _date(year, month, 1).strftime("%B %Y")
 
     sales = (client.schema("commcalc").table("raw_sales")
