@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { ExportButtons, ExportPayload } from '@/lib/export'
 
 function ymd(d: Date) {
   const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0')
@@ -69,14 +70,48 @@ export default function OwedWeeklyPage() {
   const visibleStores = market ? stores.filter(s => s.market === market) : stores
   const selStyle = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
+  function buildPayload(): ExportPayload {
+    const filterLabel = [market||null, store||null].filter(Boolean).join(' · ') || 'All markets'
+    return {
+      title: 'Weekly Owed to VIP',
+      subtitle: `Billing ${pretty(thursday)} · ${filterLabel}`,
+      filename: `owed-weekly-${thursday}${store?'-'+store.replace(/[^a-z0-9]+/gi,'-').toLowerCase():''}`,
+      sheets: [
+        { name:'By Store', rows:report?.by_store||[], columns:[
+          { header:'Store', get:r=>r.store },
+          { header:'Market', get:r=>r.market },
+          { header:'Sold #', get:r=>r.sold_count, align:'right' },
+          { header:'Sold Owed', get:r=>r.sold_owed, money:true },
+          { header:'Aged #', get:r=>r.aging_count, align:'right' },
+          { header:'Aged Owed', get:r=>r.aging_owed, money:true },
+          { header:'Total Owed', get:r=>r.total_owed, money:true },
+        ]},
+        { name:'Devices', rows:report?.rows||[], columns:[
+          { header:'Store', get:r=>r.store },
+          { header:'Device', get:r=>r.device_model },
+          { header:'IMEI/ESN', get:r=>r.esn_imei },
+          { header:'Phone', get:r=>r.phone_number },
+          { header:'Contract', get:r=>r.contract_type },
+          { header:'Path', get:r=>r.bill_path },
+          { header:'Sold', get:r=> r.date_sold ? String(r.date_sold).slice(0,10) : '' },
+          { header:'Due', get:r=> r.due_date ? String(r.due_date).slice(0,10) : '' },
+          { header:'Owed', get:r=>r.owed_to_vip, money:true },
+        ]},
+      ],
+    }
+  }
+
   return (
     <div>
-      <div style={{ marginBottom: 20 }}>
-        <a href="/commcalc/asset" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Asset Ledger</a>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>Weekly Owed to VIP</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          What VIP collects each Friday — phones sold (billed the following Friday) and aged inventory past 60 days.
-        </p>
+      <div style={{ marginBottom: 20, display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, flexWrap:'wrap' }}>
+        <div>
+          <a href="/commcalc/asset" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Asset Ledger</a>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>Weekly Owed to VIP</h1>
+          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+            What VIP collects each Friday — phones sold (billed the following Friday) and aged inventory past 60 days.
+          </p>
+        </div>
+        {report && <ExportButtons payload={buildPayload} />}
       </div>
 
       {/* Controls */}

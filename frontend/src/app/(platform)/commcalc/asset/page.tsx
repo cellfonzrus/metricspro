@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { ExportButtons, ExportPayload } from '@/lib/export'
 
 type Summary = {
   loaded: boolean
@@ -17,8 +18,10 @@ type Summary = {
 type CatStatus = { count: number; owed: number; reimbursed: number; fees: number }
 type CatRow = {
   id: number
+  store: string | null
   esn_imei: string | null
   phone_number: string | null
+  device_model: string | null
   contract_type: string | null
   status: string | null
   date_sold: string | null
@@ -145,18 +148,54 @@ export default function AssetPage() {
     if (fileRef.current) fileRef.current.value = ''
   }
 
+  function buildPayload(): ExportPayload {
+    const sheets: ExportPayload['sheets'] = []
+    if (summary?.loaded) {
+      sheets.push({ name: 'By Status', rows: Object.entries(summary.by_status).map(([status, d]) => ({ status, ...d })), columns: [
+        { header:'Status', get:r=>r.status },
+        { header:'Devices', get:r=>r.count, align:'right' },
+        { header:'Open Balance', get:r=>r.owed, money:true },
+        { header:'Reimbursed', get:r=>r.reimbursed, money:true },
+        { header:'Fees', get:r=>r.fees, money:true },
+      ]})
+      sheets.push({ name: 'By Category', rows: Object.entries(summary.by_category).map(([category, d]) => ({ category, ...d })), columns: [
+        { header:'Category', get:r=>r.category },
+        { header:'Devices', get:r=>r.count, align:'right' },
+        { header:'Open Balance', get:r=>r.owed, money:true },
+        { header:'Fees', get:r=>r.fees, money:true },
+      ]})
+    }
+    if (detail && openCat) {
+      sheets.push({ name: (openCat || 'Devices').slice(0, 28), rows: detail.rows, columns: [
+        { header:'Store', get:r=>r.store },
+        { header:'IMEI/ESN', get:r=>r.esn_imei },
+        { header:'Device', get:r=>r.device_model },
+        { header:'Phone', get:r=>r.phone_number },
+        { header:'Contract', get:r=>r.contract_type },
+        { header:'Status', get:r=>r.status },
+        { header:'Date Sold', get:r=> r.date_sold ? String(r.date_sold).slice(0,10) : '' },
+        { header:'Owed', get:r=>r.owed_to_vip, money:true },
+        { header:'Reimbursed', get:r=>r.reimbursement, money:true },
+        { header:'Fees', get:r=>r.commissions, money:true },
+      ]})
+    }
+    return { title: 'Asset Ledger', subtitle: openCat ? `Category: ${openCat}` : 'VIP/DDP device financing summary',
+      filename: openCat ? `asset-${openCat.replace(/[^a-z0-9]+/gi,'-').toLowerCase()}` : 'asset-ledger', sheets }
+  }
+
   return (
     <div>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Asset Ledger</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             VIP/DDP device financing — rebate reconciliation & balance tracking
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {uploadMsg && <span style={{ fontSize: 13 }}>{uploadMsg}</span>}
+          {summary?.loaded && <ExportButtons payload={buildPayload} />}
           <a className="btn" href="/commcalc/asset/owed-weekly" style={{ textDecoration: 'none' }}>📅 Weekly Owed to VIP</a>
           <a className="btn" href="/commcalc/asset/aging" style={{ textDecoration: 'none' }}>⏳ Inventory Aging</a>
           <button className="btn btn-primary" onClick={() => fileRef.current?.click()} disabled={uploading}>
@@ -307,7 +346,7 @@ export default function AssetPage() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
                       <thead>
                         <tr style={{ background: 'var(--surface2)' }}>
-                          {['ESN / IMEI','Phone','Contract','Status','Date Sold','Owed','Reimbursed','Fees'].map(h => (
+                          {['Store','ESN / IMEI','Device','Phone','Contract','Status','Date Sold','Owed','Reimbursed','Fees'].map(h => (
                             <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                           ))}
                         </tr>
@@ -315,7 +354,9 @@ export default function AssetPage() {
                       <tbody>
                         {detail.rows.map((r, i) => (
                           <tr key={r.id} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
+                            <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.store || '—'}</td>
                             <td style={{ padding: '8px 12px', fontSize: 12, fontFamily: 'monospace' }}>{r.esn_imei || '—'}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.device_model || '—'}</td>
                             <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.phone_number || '—'}</td>
                             <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.contract_type || '—'}</td>
                             <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.status ? statusPill(r.status) : '—'}</td>

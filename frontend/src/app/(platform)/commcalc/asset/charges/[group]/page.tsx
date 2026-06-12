@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'next/navigation'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { ExportButtons, ExportPayload } from '@/lib/export'
 
 // URL slug -> backend group key + display config
 const GROUP_MAP: Record<string, { key: string; title: string; color: string; critical?: boolean; blurb: string }> = {
@@ -15,11 +16,22 @@ const GROUP_MAP: Record<string, { key: string; title: string; color: string; cri
                      blurb:'Payment/data mismatches — wrong ESN paid, missing Elevate data, coupon issues, exchanges.' },
 }
 
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
+function upcomingFriday(from = new Date()) {
+  const d = new Date(from); const diff = (5 - d.getDay() + 7) % 7
+  d.setDate(d.getDate() + diff); return d
+}
+function ymd(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
 type Row = { id:number; store:string; market:string; esn_imei:string|null; phone_number:string|null
-  device_model:string|null; category:string|null; status:string|null; owed_to_vip:number|null; notes:string|null }
+  device_model:string|null; category:string|null; status:string|null; owed_to_vip:number|null
+  period_date:string|null; notes:string|null }
 type Group = { key:string; label:string; count:number; owed:number
   by_category:{category:string;count:number;owed:number}[]
-  by_store:{store:string;market:string;count:number;owed:number}[]; rows:Row[] }
+  by_store:{store:string;market:string;count:number;owed:number}[] }
+type ChargeRows = { rows:Row[]; total:number; total_owed:number }
 
 export default function ChargeGroupPage() {
   const params = useParams()
@@ -31,22 +43,40 @@ export default function ChargeGroupPage() {
   const [markets, setMarkets] = useState<string[]>([])
   const [stores, setStores] = useState<{store:string;market:string}[]>([])
   const [group, setGroup] = useState<Group | null>(null)
+  const [lineItems, setLineItems] = useState<ChargeRows | null>(null)
   const [loading, setLoading] = useState(true)
+
+  // period filter (mirrors the dashboard)
+  const [mode, setMode] = useState<'all'|'month'|'week'>('all')
+  const [month, setMonth] = useState(new Date().getMonth()+1)
+  const [year, setYear] = useState(new Date().getFullYear())
+  const [weekFriday, setWeekFriday] = useState(ymd(upcomingFriday()))
 
   useEffect(() => {
     api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
       .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) }).catch(console.error)
   }, [])
-  useEffect(() => { if (cfg) load() }, [market, store, slug])
+  useEffect(() => { if (cfg) load() }, [market, store, slug, mode, month, year, weekFriday])
+
+  function periodParams(qs: URLSearchParams) {
+    if (market) qs.set('market', market)
+    if (store) qs.set('store', store)
+    if (mode === 'month') { qs.set('month', String(month)); qs.set('year', String(year)) }
+    if (mode === 'week') qs.set('week_friday', weekFriday)
+    return qs
+  }
 
   async function load() {
     setLoading(true)
     try {
-      const qs = new URLSearchParams({ org_id: ORG_ID })
-      if (market) qs.set('market', market)
-      if (store) qs.set('store', store)
-      const d = await api(`/api/v1/asset/charges-summary?${qs.toString()}`)
-      setGroup(d.groups[cfg.key] || null)
+      const q1 = periodParams(new URLSearchParams({ org_id: ORG_ID }))
+      const q2 = periodParams(new URLSearchParams({ org_id: ORG_ID, group: cfg.key, limit: '2000' }))
+      const [summary, rows] = await Promise.all([
+        api(`/api/v1/asset/charges-summary?${q1.toString()}`),
+        api(`/api/v1/asset/charge-rows?${q2.toString()}`),
+      ])
+      setGroup(summary.groups[cfg.key] || null)
+      setLineItems(rows)
     } catch(e) { console.error(e) }
     setLoading(false)
   }
@@ -55,13 +85,52 @@ export default function ChargeGroupPage() {
 
   const visibleStores = market ? stores.filter(s => s.market === market) : stores
   const selStyle = { padding:'6px 10px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, background:'var(--surface)' }
+  const tabBtn = (active:boolean) => ({ padding:'6px 14px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, cursor:'pointer', fontWeight:600,
+    background: active ? 'var(--accent)' : 'var(--surface)', color: active ? '#fff' : 'var(--text2)' })
+  const periodLabel = mode==='all' ? 'All time' : mode==='month' ? `${MONTHS[month-1]} ${year}` : `Week of ${weekFriday}`
+  const filterLabel = [periodLabel, market||null, store||null].filter(Boolean).join(' · ')
+
+  function buildPayload(): ExportPayload {
+    const items = lineItems?.rows || []
+    return {
+      title: `${cfg.title} — Asset Charges`,
+      subtitle: filterLabel,
+      filename: `${slug}-${mode==='month'?`${year}-${String(month).padStart(2,'0')}`:mode}`,
+      sheets: [
+        { name: 'Line Items', rows: items, columns: [
+          { header:'Store', get:r=>r.store },
+          { header:'Market', get:r=>r.market },
+          { header:'Category', get:r=>r.category },
+          { header:'Device', get:r=>r.device_model },
+          { header:'IMEI/ESN', get:r=>r.esn_imei },
+          { header:'Phone', get:r=>r.phone_number },
+          { header:'Date', get:r=> r.period_date ? String(r.period_date).slice(0,10) : '' },
+          { header:'Owed', get:r=>r.owed_to_vip, money:true },
+        ]},
+        { name: 'By Store', rows: group?.by_store || [], columns: [
+          { header:'Store', get:r=>r.store },
+          { header:'Market', get:r=>r.market },
+          { header:'Items', get:r=>r.count, align:'right' },
+          { header:'Owed', get:r=>r.owed, money:true },
+        ]},
+        { name: 'By Category', rows: group?.by_category || [], columns: [
+          { header:'Category', get:r=>r.category },
+          { header:'Items', get:r=>r.count, align:'right' },
+          { header:'Owed', get:r=>r.owed, money:true },
+        ]},
+      ],
+    }
+  }
 
   return (
     <div>
-      <div style={{ marginBottom:20 }}>
-        <a href="/commcalc/asset/dashboard" style={{ fontSize:13, color:'var(--text3)', textDecoration:'none' }}>← Charges Dashboard</a>
-        <h1 style={{ fontSize:22, fontWeight:700, margin:'6px 0 0' }}>{cfg.title}</h1>
-        <p style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>{cfg.blurb}</p>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:20, gap:12, flexWrap:'wrap' }}>
+        <div>
+          <a href="/commcalc/asset/dashboard" style={{ fontSize:13, color:'var(--text3)', textDecoration:'none' }}>← Charges Dashboard</a>
+          <h1 style={{ fontSize:22, fontWeight:700, margin:'6px 0 0' }}>{cfg.title}</h1>
+          <p style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>{cfg.blurb}</p>
+        </div>
+        <ExportButtons payload={buildPayload} />
       </div>
 
       {cfg.critical && (
@@ -70,8 +139,26 @@ export default function ChargeGroupPage() {
         </div>
       )}
 
-      <div className="card" style={{ padding:14, marginBottom:20, display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>
-        <span style={{ fontSize:13, fontWeight:600, color:'var(--text2)' }}>Filters:</span>
+      <div className="card" style={{ padding:14, marginBottom:20, display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+        <div style={{ display:'flex', gap:6 }}>
+          <button style={tabBtn(mode==='all')}   onClick={() => setMode('all')}>All time</button>
+          <button style={tabBtn(mode==='month')} onClick={() => setMode('month')}>Month</button>
+          <button style={tabBtn(mode==='week')}  onClick={() => setMode('week')}>Week</button>
+        </div>
+        {mode==='month' && (
+          <>
+            <select style={selStyle} value={month} onChange={e=>setMonth(+e.target.value)}>
+              {MONTHS.map((m,i)=><option key={m} value={i+1}>{m}</option>)}
+            </select>
+            <select style={selStyle} value={year} onChange={e=>setYear(+e.target.value)}>
+              {[2024,2025,2026].map(y=><option key={y} value={y}>{y}</option>)}
+            </select>
+          </>
+        )}
+        {mode==='week' && (
+          <input type="date" style={selStyle} value={weekFriday} onChange={e=>setWeekFriday(e.target.value)} />
+        )}
+        <div style={{ width:1, height:24, background:'var(--border)' }} />
         <select style={selStyle} value={market} onChange={e => { setMarket(e.target.value); setStore('') }}>
           <option value="">All markets</option>
           {markets.map(m => <option key={m} value={m}>{m}</option>)}
@@ -130,17 +217,21 @@ export default function ChargeGroupPage() {
 
           <div className="card" style={{ padding:0 }}>
             <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14 }}>
-              Line Items <span style={{ fontWeight:400, color:'var(--text3)', fontSize:12 }}>({group.rows.length.toLocaleString()})</span>
+              Line Items <span style={{ fontWeight:400, color:'var(--text3)', fontSize:12 }}>
+                ({(lineItems?.total || 0).toLocaleString()}{lineItems && lineItems.total > (lineItems.rows.length) ? ` · showing ${lineItems.rows.length.toLocaleString()}` : ''})
+              </span>
             </div>
             <div style={{ overflowX:'auto' }}>
-              <table style={{ width:'100%', borderCollapse:'collapse', minWidth:760 }}>
+              <table style={{ width:'100%', borderCollapse:'collapse', minWidth:820 }}>
                 <thead><tr style={{ background:'var(--surface2)' }}>
-                  {['Store','Market','Category','Device','IMEI/ESN','Phone','Owed'].map(h => (
+                  {['Store','Market','Category','Device','IMEI/ESN','Phone','Date','Owed'].map(h => (
                     <th key={h} style={{ textAlign:'left', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
                   ))}
                 </tr></thead>
                 <tbody>
-                  {group.rows.map((r,i) => (
+                  {(lineItems?.rows || []).length === 0 ? (
+                    <tr><td colSpan={8} style={{ padding:24, textAlign:'center', color:'var(--text3)', fontSize:13 }}>No line items for this filter.</td></tr>
+                  ) : (lineItems?.rows || []).map((r,i) => (
                     <tr key={r.id} style={{ borderTop:'1px solid var(--border)', background:i%2?'var(--surface2)':'transparent' }}>
                       <td style={{ padding:'8px 12px', fontSize:12 }}>{r.store||'—'}</td>
                       <td style={{ padding:'8px 12px', fontSize:12, color:'var(--text2)' }}>{r.market||'—'}</td>
@@ -148,6 +239,7 @@ export default function ChargeGroupPage() {
                       <td style={{ padding:'8px 12px', fontSize:12 }}>{r.device_model||'—'}</td>
                       <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'monospace' }}>{r.esn_imei||'—'}</td>
                       <td style={{ padding:'8px 12px', fontSize:12 }}>{r.phone_number||'—'}</td>
+                      <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.period_date ? String(r.period_date).slice(0,10) : '—'}</td>
                       <td style={{ padding:'8px 12px', fontSize:12, fontWeight:600 }}>{fmt(r.owed_to_vip||0)}</td>
                     </tr>
                   ))}

@@ -202,7 +202,7 @@ async def get_category_detail(
 
     # Paginated device rows for the table.
     rows_resp = client.schema("commcalc").table("asset_ledger") \
-        .select("id,esn_imei,phone_number,contract_type,status,date_sold,sfid,owed_to_vip,reimbursement,commissions,notes") \
+        .select("id,store,esn_imei,phone_number,device_model,contract_type,status,date_sold,sfid,owed_to_vip,reimbursement,commissions,notes") \
         .eq("org_id", org_id).eq("category", category) \
         .order("date_sold", desc=True).range(offset, offset + limit - 1).execute()
 
@@ -593,6 +593,78 @@ async def get_charges_summary(org_id: str = ORG_ID, store: str = "", market: str
         "groups": groups,
         "total_loss": {"total": round(appeals_loss + rma_loss, 2), "appeals": appeals_loss, "rma": rma_loss},
         "filters": {"store": store or None, "market": market or None, "month": month, "year": year, "week_friday": week_friday or None},
+    }
+
+
+@router.get("/charge-rows")
+async def get_charge_rows(
+    group: str,
+    org_id: str = ORG_ID,
+    store: str = "",
+    market: str = "",
+    month: int = None,
+    year: int = None,
+    week_friday: str = "",
+    limit: int = 500,
+    offset: int = 0,
+):
+    """Per-device line items for one charge group (appeals / vip_fees / stock_balance / recon_oddity).
+
+    Returns IMEI/ESN, store, market, device and the period date so the charge-group
+    report pages can show real line items (the /charges-summary endpoint is totals-only).
+    Filtered by store / market / period; period filter mirrors _in_period().
+    """
+    cats = CHARGE_GROUPS.get(group)
+    if not cats:
+        raise HTTPException(status_code=400, detail=f"Unknown charge group '{group}'")
+    client = sb()
+
+    # Pull every row in this group's categories (bounded subset, not the whole ledger),
+    # honoring store/market filters in the query; period is filtered in Python below.
+    rows = []
+    page = 0; PAGE = 1000
+    while True:
+        start = page * PAGE
+        q = client.schema("commcalc").table("asset_ledger") \
+            .select("id,store,market,esn_imei,phone_number,device_model,category,status,"
+                    "date_sold,payg_date,acquired_date,billing_friday,owed_to_vip,reimbursement,commissions,notes") \
+            .eq("org_id", org_id).in_("category", cats)
+        if store:
+            q = q.eq("store", store)
+        if market:
+            q = q.eq("market", market)
+        chunk = q.range(start, start + PAGE - 1).execute().data or []
+        rows.extend(chunk)
+        if len(chunk) < PAGE:
+            break
+        page += 1
+        if page > 60:
+            break
+
+    # Period filter (same rules as the summary): PAYG > date_sold > acquired, or billing_friday for week.
+    if week_friday or month is not None or year is not None:
+        rows = [r for r in rows if _in_period(r, month=month, year=year, week_friday=week_friday or None)]
+
+    # Attach the period date used for placement so the report can show it.
+    for r in rows:
+        r["period_date"] = _row_period_date(r)
+
+    rows.sort(key=lambda x: float(x.get("owed_to_vip") or 0), reverse=True)
+
+    total = len(rows)
+    total_owed = round(sum(float(r.get("owed_to_vip") or 0) for r in rows), 2)
+    page_rows = rows[offset:offset + limit]
+
+    return {
+        "group": group,
+        "label": GROUP_LABELS.get(group, group),
+        "rows": page_rows,
+        "total": total,
+        "total_owed": total_owed,
+        "offset": offset,
+        "limit": limit,
+        "filters": {"store": store or None, "market": market or None,
+                    "month": month, "year": year, "week_friday": week_friday or None},
     }
 
 

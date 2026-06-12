@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 
 type Row = { id:number; store:string; market:string; esn_imei:string|null; phone_number:string|null
   device_model:string|null; status:string|null; date_sold:string|null; owed_to_vip:number|null
@@ -72,14 +73,42 @@ export default function RmaPage() {
   const visibleStores = market ? stores.filter(s => s.market === market) : stores
   const sel = { padding:'6px 10px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, background:'var(--surface)' }
 
+  function buildPayload(): ExportPayload {
+    const cols: ExportColumn[] = [
+      { header:'Store', get:r=>r.store },
+      { header:'Market', get:r=>r.market },
+      { header:'Device', get:r=>r.device_model },
+      { header:'IMEI/ESN', get:r=>r.esn_imei },
+      { header:'Sold', get:r=> r.date_sold ? String(r.date_sold).slice(0,10) : '' },
+      { header:'Owed', get:r=>r.owed_to_vip, money:true },
+      { header:'Reimbursed', get:r=>r.reimbursement, money:true },
+      { header:'Reimb Date', get:r=> r.reimbursement_date ? String(r.reimbursement_date).slice(0,10) : '' },
+      { header:'Shortfall', get:r=>r._shortfall, money:true },
+    ]
+    const filterLabel = [market||null, store||null].filter(Boolean).join(' · ') || 'All markets'
+    return {
+      title: 'RMA Reconciliation',
+      subtitle: `${filterLabel} · Net loss ${fmt(data?.net_loss || 0)}`,
+      filename: `rma-reconciliation${store?'-'+store.replace(/[^a-z0-9]+/gi,'-').toLowerCase():''}`,
+      sheets: [
+        { name:'Not Reimbursed', rows:data?.buckets.none.rows||[], columns:cols },
+        { name:'Reimbursed Short', rows:data?.buckets.short.rows||[], columns:cols },
+        { name:'Reimbursed Full', rows:data?.buckets.full.rows||[], columns:cols },
+      ],
+    }
+  }
+
   return (
     <div>
-      <div style={{ marginBottom:20 }}>
-        <a href="/commcalc/asset/dashboard" style={{ fontSize:13, color:'var(--text3)', textDecoration:'none' }}>← Charges Dashboard</a>
-        <h1 style={{ fontSize:22, fontWeight:700, margin:'6px 0 0' }}>RMA Reconciliation</h1>
-        <p style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>
-          Returned devices — which were reimbursed in full, short-paid, or never credited by VIP.
-        </p>
+      <div style={{ marginBottom:20, display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, flexWrap:'wrap' }}>
+        <div>
+          <a href="/commcalc/asset/dashboard" style={{ fontSize:13, color:'var(--text3)', textDecoration:'none' }}>← Charges Dashboard</a>
+          <h1 style={{ fontSize:22, fontWeight:700, margin:'6px 0 0' }}>RMA Reconciliation</h1>
+          <p style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>
+            Returned devices — which were reimbursed in full, short-paid, or never credited by VIP.
+          </p>
+        </div>
+        {data && <ExportButtons payload={buildPayload} />}
       </div>
 
       <div className="card" style={{ padding:14, marginBottom:20, display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>

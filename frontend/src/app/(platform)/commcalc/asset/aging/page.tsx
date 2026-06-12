@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 
 type Row = {
   id: number; store: string; market: string; esn_imei: string|null; phone_number: string|null
@@ -84,14 +85,41 @@ export default function AgingPage() {
   const staleDays = data?.data_as_of ? daysSince(data.data_as_of) : null
   const isStale = staleDays !== null && staleDays > 3
 
+  function buildPayload(): ExportPayload {
+    const cols: ExportColumn[] = [
+      { header:'Store', get:r=>r.store },
+      { header:'Market', get:r=>r.market },
+      { header:'Device', get:r=>r.device_model },
+      { header:'IMEI/ESN', get:r=>r.esn_imei },
+      { header:'Acquired', get:r=> r.acquired_date ? String(r.acquired_date).slice(0,10) : '' },
+      { header:'Days Aged', get:r=>r.days_aged, align:'right' },
+      { header:'Due Date', get:r=> r.due_date ? String(r.due_date).slice(0,10) : '' },
+      { header:'Owed', get:r=>r.owed_to_vip, money:true },
+    ]
+    const filterLabel = [market||null, store||null].filter(Boolean).join(' · ') || 'All markets'
+    return {
+      title: 'Inventory Aging — Sell Before 60 Days',
+      subtitle: `${filterLabel}${data?.data_as_of ? ` · data as of ${data.data_as_of}, aged to ${data.today}` : ''}`,
+      filename: `inventory-aging${store?'-'+store.replace(/[^a-z0-9]+/gi,'-').toLowerCase():''}`,
+      sheets: [
+        { name:'45-60 Day Warning', rows:data?.buckets.warn.rows||[], columns:cols },
+        { name:'Over 60 (Missed)', rows:data?.buckets.missed.rows||[], columns:cols },
+        { name:'Under 45 Days', rows:data?.buckets.under45.rows||[], columns:cols },
+      ],
+    }
+  }
+
   return (
     <div>
-      <div style={{ marginBottom: 20 }}>
-        <a href="/commcalc/asset" style={{ fontSize:13, color:'var(--text3)', textDecoration:'none' }}>← Asset Ledger</a>
-        <h1 style={{ fontSize:22, fontWeight:700, margin:'6px 0 0' }}>Inventory Aging — Sell Before 60 Days</h1>
-        <p style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>
-          Unsold NET60 inventory. Devices in the 45–60 day window must sell before day 60 or VIP bills them unsold.
-        </p>
+      <div style={{ marginBottom: 20, display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, flexWrap:'wrap' }}>
+        <div>
+          <a href="/commcalc/asset" style={{ fontSize:13, color:'var(--text3)', textDecoration:'none' }}>← Asset Ledger</a>
+          <h1 style={{ fontSize:22, fontWeight:700, margin:'6px 0 0' }}>Inventory Aging — Sell Before 60 Days</h1>
+          <p style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>
+            Unsold NET60 inventory. Devices in the 45–60 day window must sell before day 60 or VIP bills them unsold.
+          </p>
+        </div>
+        {data && <ExportButtons payload={buildPayload} />}
       </div>
 
       {/* Stale data banner */}
