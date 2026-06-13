@@ -318,6 +318,272 @@ async def upload_history(org_id: str = ORG_ID, period: str = "", limit: int = 10
         return []
 
 
+# ── VIP Wireless invoice import (scraped via tools/vip_scraper) ───────────────
+def _vip_money(v):
+    """'$1,234.50' / '(12.47)' / '199.5' / '' -> float or None."""
+    import re as _re
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s or s.lower() in ('nan', 'nat', 'none'):
+        return None
+    neg = '(' in s and ')' in s
+    s = _re.sub(r'[^0-9.\-]', '', s.replace(',', ''))
+    if s in ('', '-', '.'):
+        return None
+    try:
+        f = float(s)
+    except ValueError:
+        return None
+    return -f if neg else f
+
+
+def _vip_int(v):
+    s = str(v or '').strip()
+    if not s or s.lower() in ('nan', 'none'):
+        return None
+    try:
+        return int(float(s))
+    except ValueError:
+        return None
+
+
+def _vip_ts(v):
+    """Pass an ISO timestamp string through; '' -> None."""
+    s = str(v or '').strip()
+    if not s or s.lower() in ('nan', 'nat', 'none'):
+        return None
+    return s[:19] if 'T' in s else (s[:10] or None)
+
+
+def _vip_period(created_on):
+    """'2026-06-12T02:25:37' -> ('June 2026', 6, 2026)."""
+    s = str(created_on or '').strip()
+    if len(s) < 7:
+        return None, None, None
+    try:
+        y, m = int(s[0:4]), int(s[5:7])
+        return f"{_calendar.month_name[m]} {y}", m, y
+    except Exception:
+        return None, None, None
+
+
+@router.post("/vip/upload")
+async def upload_vip_invoices(file: UploadFile = File(...), org_id: str = ORG_ID):
+    """Import the VIP scraper workbook (Invoices / Lines / Devices sheets) from
+    tools/vip_scraper. Full replace: the portal has no per-period upload, so we
+    wipe all VIP rows for the org and re-insert the full history each time."""
+    require_org(org_id)
+    contents = await file.read()
+    try:
+        xls = pd.ExcelFile(io.BytesIO(contents))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read Excel file: {e}")
+    sheets = set(xls.sheet_names)
+    if 'Invoices' not in sheets:
+        raise HTTPException(400, f"Missing 'Invoices' sheet. Found: {sorted(sheets)}")
+
+    def sheet(name):
+        if name not in sheets:
+            return []
+        return pd.read_excel(xls, sheet_name=name, dtype=str).fillna('').to_dict('records')
+
+    def numc(r, *names):
+        for n in names:
+            if str(r.get(n, '')).strip() not in ('', 'nan', 'None'):
+                return _vip_money(r.get(n))
+        return None
+
+    invoices = []
+    for r in sheet('Invoices'):
+        period, pm, py = _vip_period(r.get('CreatedOn', ''))
+        invoices.append({
+            'org_id': org_id,
+            'vip_id': _vip_int(r.get('Id')),
+            'invoice_number': str(r.get('InvoiceNumber', '')).strip() or None,
+            'order_number': str(r.get('OrderNumber', '')).strip() or None,
+            'location': r.get('Location', '') or None,
+            'company_id': _vip_int(r.get('CompanyId')),
+            'email': r.get('Email', '') or None,
+            'status': r.get('Status', '') or None,
+            'sub_total': numc(r, 'SubTotalNum', 'SubTotal'),
+            'shipping': numc(r, 'ShippingNum', 'Shipping'),
+            'discount': numc(r, 'DiscountNum', 'Discount'),
+            'other_cost': numc(r, 'OtherCostNum', 'OtherCost'),
+            'other_deductions': numc(r, 'OtherDeductionsNum', 'OtherDeductions'),
+            'tax': numc(r, 'TaxNum', 'Tax'),
+            'grand_total': numc(r, 'GrandTotalNum', 'GrandTotal'),
+            'note': r.get('Note', '') or None,
+            'created_on': _vip_ts(r.get('CreatedOn')),
+            'transaction_date': _vip_ts(r.get('TransactionDate')),
+            'due_date': _vip_ts(r.get('DueDate')),
+            'period': period, 'period_month': pm, 'period_year': py,
+        })
+
+    lines = []
+    for r in sheet('Lines'):
+        period, pm, py = _vip_period(r.get('CreatedOn', ''))
+        lines.append({
+            'org_id': org_id,
+            'vip_invoice_id': _vip_int(r.get('InvoiceId')),
+            'invoice_number': str(r.get('InvoiceNumber', '')).strip() or None,
+            'location': r.get('Location', '') or None,
+            'status': r.get('Status', '') or None,
+            'created_on': _vip_ts(r.get('CreatedOn')),
+            'name': r.get('Name', '') or None,
+            'note': r.get('Note', '') or None,
+            'sku': r.get('SKU', '') or None,
+            'price': numc(r, 'PriceNum', 'Price'),
+            'quantity': _vip_money(r.get('Quantity')),
+            'total': numc(r, 'TotalNum', 'Total'),
+            'period': period, 'period_month': pm, 'period_year': py,
+        })
+
+    devices = []
+    for r in sheet('Devices'):
+        period, pm, py = _vip_period(r.get('CreatedOn', ''))
+        devices.append({
+            'org_id': org_id,
+            'vip_invoice_id': _vip_int(r.get('InvoiceId')),
+            'invoice_number': str(r.get('InvoiceNumber', '')).strip() or None,
+            'location': r.get('Location', '') or None,
+            'created_on': _vip_ts(r.get('CreatedOn')),
+            'serial': str(r.get('Serial', '')).strip() or None,
+            'product_name': r.get('ProductName', '') or None,
+            'imei': str(r.get('IMEI', '')).strip() or None,
+            'sim': str(r.get('SIM', '')).strip() or None,
+            'period': period, 'period_month': pm, 'period_year': py,
+        })
+
+    client = sb()
+    SENTINEL = '00000000-0000-0000-0000-000000000000'
+    for tbl in ('vip_invoices', 'vip_invoice_lines', 'vip_invoice_devices'):
+        try:
+            client.schema('commcalc').table(tbl).delete().neq('id', SENTINEL).execute()
+        except Exception as e:
+            raise HTTPException(500, f"Failed clearing {tbl}: {e}. Did you run 008_vip_invoices.sql?")
+
+    def insert_all(tbl, rows):
+        saved = 0
+        for i in range(0, len(rows), 500):
+            batch = rows[i:i + 500]
+            try:
+                client.schema('commcalc').table(tbl).insert(batch).execute()
+            except Exception as e:
+                raise HTTPException(500, f"Insert into {tbl} failed at row {i}: {e}")
+            saved += len(batch)
+        return saved
+
+    n_inv = insert_all('vip_invoices', invoices)
+    n_line = insert_all('vip_invoice_lines', lines)
+    n_dev = insert_all('vip_invoice_devices', devices)
+
+    try:
+        client.schema('commcalc').table('upload_log').insert({
+            'org_id': org_id, 'file_type': 'vip_invoices', 'period': None,
+            'filename': getattr(file, 'filename', None),
+            'rows_saved': n_inv + n_line + n_dev,
+        }).execute()
+    except Exception as e:
+        print(f'WARN upload_log insert failed: {e}')
+
+    return {"invoices": n_inv, "lines": n_line, "devices": n_dev}
+
+
+# ── VIP invoice reports ──────────────────────────────────────────────────────
+VIP_FEE_COLS = ['shipping', 'discount', 'other_cost', 'other_deductions', 'tax']
+
+
+def _vip_fetch(client, org_id, period=None, location=None, status=None, cols="*"):
+    """Paginated fetch of vip_invoices (Supabase caps at 1000 rows/request)."""
+    PAGE, out, frm = 1000, [], 0
+    while True:
+        q = client.schema('commcalc').table('vip_invoices').select(cols).eq('org_id', org_id)
+        if period:
+            q = q.eq('period', period)
+        if location:
+            q = q.eq('location', location)
+        if status:
+            q = q.eq('status', status)
+        batch = (q.range(frm, frm + PAGE - 1).execute().data) or []
+        out.extend(batch)
+        if len(batch) < PAGE:
+            break
+        frm += PAGE
+    return out
+
+
+@router.get("/vip/filter-options")
+async def vip_filter_options(org_id: str = ORG_ID):
+    """Distinct stores / periods / statuses for the VIP page filter bar."""
+    require_org(org_id)
+    rows = _vip_fetch(sb(), org_id, cols="location,period,period_year,period_month,status")
+    locations = sorted({r['location'] for r in rows if r.get('location')})
+    statuses = sorted({r['status'] for r in rows if r.get('status')})
+    pmap = {}
+    for r in rows:
+        if r.get('period'):
+            pmap[r['period']] = (r.get('period_year') or 0, r.get('period_month') or 0)
+    periods = sorted(pmap, key=lambda p: pmap[p], reverse=True)
+    return {"locations": locations, "periods": periods, "statuses": statuses}
+
+
+@router.get("/vip/summary")
+async def vip_summary(org_id: str = ORG_ID, period: str = "", location: str = "", status: str = ""):
+    """Totals, fees-by-type (invoice money buckets), and per-store breakdown."""
+    require_org(org_id)
+    cols = "location,sub_total,shipping,discount,other_cost,other_deductions,tax,grand_total"
+    rows = _vip_fetch(sb(), org_id, period or None, location or None, status or None, cols=cols)
+
+    def f(v):
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    totals = {"invoices": len(rows), "sub_total": 0.0, "grand_total": 0.0}
+    for c in VIP_FEE_COLS:
+        totals[c] = 0.0
+    by_store: dict = {}
+    for r in rows:
+        loc = r.get('location') or '—'
+        s = by_store.setdefault(loc, {"location": loc, "invoices": 0, "sub_total": 0.0,
+                                      "grand_total": 0.0, **{c: 0.0 for c in VIP_FEE_COLS}})
+        s["invoices"] += 1
+        s["sub_total"] += f(r.get('sub_total'))
+        s["grand_total"] += f(r.get('grand_total'))
+        totals["sub_total"] += f(r.get('sub_total'))
+        totals["grand_total"] += f(r.get('grand_total'))
+        for c in VIP_FEE_COLS:
+            v = f(r.get(c))
+            s[c] += v
+            totals[c] += v
+    totals["fees_total"] = sum(totals[c] for c in VIP_FEE_COLS)
+    by_store_list = sorted(by_store.values(), key=lambda x: x["grand_total"], reverse=True)
+    return {"totals": totals,
+            "fees_by_type": {c: totals[c] for c in VIP_FEE_COLS},
+            "by_store": by_store_list}
+
+
+@router.get("/vip/invoices")
+async def vip_invoices_list(org_id: str = ORG_ID, period: str = "", location: str = "",
+                            status: str = "", limit: int = 2000, offset: int = 0):
+    """Invoice list for the table + Excel/PDF export (newest first)."""
+    require_org(org_id)
+    q = sb().schema('commcalc').table('vip_invoices').select(
+        "vip_id,invoice_number,order_number,location,status,created_on,due_date,"
+        "sub_total,shipping,discount,other_cost,other_deductions,tax,grand_total,period"
+    ).eq('org_id', org_id)
+    if period:
+        q = q.eq('period', period)
+    if location:
+        q = q.eq('location', location)
+    if status:
+        q = q.eq('status', status)
+    lim = min(max(limit, 1), 5000)
+    return (q.order('created_on', desc=True).range(offset, offset + lim - 1).execute().data) or []
+
+
 # ── Calculate endpoint ────────────────────────────────────────
 @router.post("/calculate/{period}")
 async def calculate(

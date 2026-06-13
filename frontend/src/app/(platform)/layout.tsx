@@ -19,6 +19,7 @@ const NAV = [
     { href: '/commcalc/targets/my', label: 'My Targets', icon: '🙋' },
     { href: '/commcalc/expenses', label: 'Store Expenses', icon: '🏪' },
     { href: '/commcalc/asset', label: 'Asset Ledger', icon: '📦' },
+    { href: '/commcalc/vip', label: 'VIP Invoices', icon: '🧾' },
   ]},
   { group: 'StoreOps', items: [
     { href: '/storeops', label: 'Dashboard', icon: '🏠' },
