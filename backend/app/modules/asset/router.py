@@ -33,6 +33,12 @@ async def upload_asset_ledger(file: UploadFile = File(...), org_id: str = ORG_ID
     # Backfill market from store_mapping + manual corrections (file has no market)
     _backfill_market(client, org_id)
 
+    # Backfill customer selling price from sales transactions (matched by IMEI)
+    try:
+        _backfill_selling_price(client, org_id)
+    except Exception as _e:
+        print(f"selling-price backfill failed (run 009_asset_selling_price.sql?): {_e}")
+
     # Auto-sync appeal rows into the Flags page (critical Boost non-payment)
     try:
         _sync_appeal_flags(client, org_id)
@@ -42,6 +48,11 @@ async def upload_asset_ledger(file: UploadFile = File(...), org_id: str = ORG_ID
         _sync_rma_flags(client, org_id)
     except Exception as _e:
         print(f"rma flag sync failed: {_e}")
+    # Undercharge flags: cost (owed_to_vip) > reimbursement + selling_price
+    try:
+        _sync_undercharge_flags(client, org_id)
+    except Exception as _e:
+        print(f"undercharge flag sync failed: {_e}")
 
     return {"status": "ok", "rows_imported": len(rows)}
 
@@ -202,7 +213,7 @@ async def get_category_detail(
 
     # Paginated device rows for the table.
     rows_resp = client.schema("commcalc").table("asset_ledger") \
-        .select("id,store,esn_imei,phone_number,device_model,contract_type,status,date_sold,sfid,owed_to_vip,reimbursement,commissions,notes") \
+        .select("id,store,esn_imei,phone_number,device_model,contract_type,status,date_sold,sfid,owed_to_vip,reimbursement,commissions,selling_price,notes") \
         .eq("org_id", org_id).eq("category", category) \
         .order("date_sold", desc=True).range(offset, offset + limit - 1).execute()
 
@@ -372,10 +383,29 @@ async def get_aging(
     org_id: str = ORG_ID,
     store: str = "",
     market: str = "",
+    month: int = None,
+    year: int = None,
 ):
-    """Unsold On-Inventory aging report. Buckets by days since acquired_date (as of today)."""
+    """Unsold On-Inventory aging report. Buckets by days since acquired_date (as of today).
+    Optional month/year narrows to devices ACQUIRED in that period."""
     from datetime import date
     client = sb()
+
+    def _acq_in_period(r):
+        if month is None and year is None:
+            return True
+        a = r.get("acquired_date")
+        if not a:
+            return False
+        try:
+            py, pm, _ = [int(x) for x in str(a)[:10].split("-")]
+        except Exception:
+            return False
+        if year is not None and int(year) != py:
+            return False
+        if month is not None and int(month) != pm:
+            return False
+        return True
 
     def fetch(extra):
         out = []
@@ -383,7 +413,7 @@ async def get_aging(
         while True:
             start = page * PAGE
             q = client.schema("commcalc").table("asset_ledger") \
-                .select("id,store,market,esn_imei,phone_number,device_model,category,status,acquired_date,due_date,date_sold,owed_to_vip") \
+                .select("id,store,market,esn_imei,phone_number,device_model,category,status,acquired_date,due_date,date_sold,owed_to_vip,reimbursement,selling_price") \
                 .eq("org_id", org_id).is_("date_sold", "null").ilike("category", "%On Inventory%")
             if store:
                 q = q.eq("store", store)
@@ -399,7 +429,7 @@ async def get_aging(
                 break
         return out
 
-    rows = fetch(lambda q: q)
+    rows = [r for r in fetch(lambda q: q) if _acq_in_period(r)]
     today = date.today()
 
     def days_aged(r):
@@ -627,7 +657,7 @@ async def get_charge_rows(
         start = page * PAGE
         q = client.schema("commcalc").table("asset_ledger") \
             .select("id,store,market,esn_imei,phone_number,device_model,category,status,"
-                    "date_sold,payg_date,acquired_date,billing_friday,owed_to_vip,reimbursement,commissions,notes") \
+                    "date_sold,payg_date,acquired_date,billing_friday,owed_to_vip,reimbursement,commissions,selling_price,notes") \
             .eq("org_id", org_id).in_("category", cats)
         if store:
             q = q.eq("store", store)
@@ -729,16 +759,33 @@ def _classify_rma(r):
 
 
 @router.get("/rma")
-async def get_rma(org_id: str = ORG_ID, store: str = "", market: str = ""):
-    """RMA reconciliation via Postgres aggregation. Buckets from per-device rows for accuracy."""
+async def get_rma(org_id: str = ORG_ID, store: str = "", market: str = "", month: int = None, year: int = None):
+    """RMA reconciliation via Postgres aggregation. Buckets from per-device rows for accuracy.
+    Optional month/year narrows to devices SOLD in that period (date_sold)."""
     client = sb()
+
+    def _sold_in_period(r):
+        if month is None and year is None:
+            return True
+        ds = r.get("date_sold")
+        if not ds:
+            return False
+        try:
+            py, pm, _ = [int(x) for x in str(ds)[:10].split("-")]
+        except Exception:
+            return False
+        if year is not None and int(year) != py:
+            return False
+        if month is not None and int(month) != pm:
+            return False
+        return True
     # We still need per-device classification (short vs none vs full), so fetch only RMA rows.
     rows = []
     page = 0; PAGE = 1000
     while True:
         start = page * PAGE
         q = client.schema("commcalc").table("asset_ledger") \
-            .select("id,store,market,esn_imei,phone_number,device_model,category,status,date_sold,owed_to_vip,reimbursement,reimbursement_date") \
+            .select("id,store,market,esn_imei,phone_number,device_model,category,status,date_sold,owed_to_vip,reimbursement,reimbursement_date,selling_price") \
             .eq("org_id", org_id).eq("category", "RMA")
         if store:
             q = q.eq("store", store)
@@ -751,6 +798,8 @@ async def get_rma(org_id: str = ORG_ID, store: str = "", market: str = ""):
         page += 1
         if page > 10:
             break
+
+    rows = [r for r in rows if _sold_in_period(r)]
 
     buckets = {k: {"count": 0, "owed": 0.0, "reimb": 0.0, "rows": []} for k in ("full", "short", "none")}
     for r in rows:
@@ -826,6 +875,142 @@ async def sync_rma_flags(org_id: str = ORG_ID):
     return {"status": "ok", "rma_flags_written": n}
 
 
+# ── Selling price (from sales) + undercharge flag ────────────────────────────
+def _norm_imei(v):
+    s = str(v or "").strip().upper()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s
+
+
+def _backfill_selling_price(client, org_id):
+    """Set asset_ledger.selling_price from raw_sales (device-line Ext Price by IMEI),
+    via the Postgres RPC (one UPDATE...FROM join — fast). Returns rows updated."""
+    res = client.schema("commcalc").rpc(
+        "backfill_asset_selling_price", {"p_org_id": org_id}).execute()
+    return res.data if isinstance(res.data, int) else (res.data or 0)
+
+
+def _imei_salesperson_map(client, org_id, imeis):
+    """For the (few) flagged IMEIs, the rep on the priciest matching sales line."""
+    want = {_norm_imei(i) for i in imeis if i}
+    if not want:
+        return {}
+    out = {}  # imei_key -> (price, salesperson)
+    page = 0
+    PAGE = 1000
+    while True:
+        start = page * PAGE
+        chunk = client.schema("commcalc").table("raw_sales") \
+            .select("serial_1,ext_price,salesperson,voided,trans_type") \
+            .eq("org_id", org_id).range(start, start + PAGE - 1).execute().data or []
+        for r in chunk:
+            if str(r.get("voided") or "").upper() == "YES" or str(r.get("trans_type") or "") == "Return":
+                continue
+            k = _norm_imei(r.get("serial_1"))
+            if k not in want:
+                continue
+            try:
+                p = float(r.get("ext_price") or 0)
+            except Exception:
+                p = 0.0
+            if k not in out or p > out[k][0]:
+                out[k] = (p, r.get("salesperson"))
+        if len(chunk) < PAGE:
+            break
+        page += 1
+        if page > 200:
+            break
+    return {k: v[1] for k, v in out.items()}
+
+
+def _sync_undercharge_flags(client, org_id):
+    """Flag sold devices where cost (owed_to_vip) > reimbursement + selling_price.
+    Only devices that were actually sold (have a selling_price match). Delete-first + insert."""
+    rows = _fetch_asset_rows(
+        client, org_id,
+        select="store,esn_imei,phone_number,device_model,category,status,date_sold,"
+               "owed_to_vip,reimbursement,selling_price,payg_date,acquired_date",
+    )
+    candidates = []
+    for r in rows:
+        if not r.get("esn_imei"):
+            continue
+        sp = r.get("selling_price")
+        if sp is None:  # no matching sale → can't judge the charge
+            continue
+        try:
+            cost = float(r.get("owed_to_vip") or 0)
+            reimb = float(r.get("reimbursement") or 0)
+            sell = float(sp or 0)
+        except Exception:
+            continue
+        if cost <= 0:
+            continue
+        gap = round(cost - reimb - sell, 2)
+        if gap > 0.01:  # undercharge / uncovered cost
+            r["_gap"] = gap
+            r["_cost"] = cost
+            r["_reimb"] = reimb
+            r["_sell"] = sell
+            candidates.append(r)
+
+    sp_map = _imei_salesperson_map(client, org_id, [r["esn_imei"] for r in candidates])
+
+    flags = []
+    for r in candidates:
+        gap = r["_gap"]
+        d = r.get("date_sold") or r.get("payg_date") or r.get("acquired_date")
+        period = "Unknown"; pm = None; py = None
+        if d:
+            try:
+                py, pm, _ = [int(x) for x in str(d)[:10].split("-")]
+                period = __import__("datetime").date(py, pm, 1).strftime("%B %Y")
+            except Exception:
+                pass
+        sev = "critical" if gap >= 100 else "warning"
+        rep = sp_map.get(_norm_imei(r.get("esn_imei")))
+        flags.append({
+            "org_id": org_id, "period": period, "period_month": pm, "period_year": py,
+            "flag_type": "Device Undercharge", "source": "asset_undercharge",
+            "severity": sev, "store_address": r.get("store"),
+            "epay_salesperson": rep,
+            "imei": r.get("esn_imei"), "mdn": r.get("phone_number"),
+            "amount": gap, "phone_model": r.get("device_model"),
+            "description": (f"Cost {r['_cost']:.2f} > reimbursement {r['_reimb']:.2f} + "
+                            f"selling price {r['_sell']:.2f} — uncovered {gap:.2f}"),
+            "coaching_note": (f"This device cost {r['_cost']:.2f}. After reimbursement "
+                              f"({r['_reimb']:.2f}) and the customer price ({r['_sell']:.2f}), "
+                              f"{gap:.2f} of the cost was not recovered. Coach "
+                              f"{rep or 'the rep'} to charge enough to cover device cost less "
+                              f"reimbursement."),
+        })
+
+    client.schema("commcalc").table("flags").delete() \
+        .eq("org_id", org_id).eq("source", "asset_undercharge").execute()
+    for i in range(0, len(flags), 500):
+        client.schema("commcalc").table("flags").insert(flags[i:i+500]).execute()
+    return len(flags)
+
+
+@router.post("/backfill-selling-price")
+async def backfill_selling_price(org_id: str = ORG_ID):
+    """Manual refresh: re-pull selling prices from sales, then re-sync undercharge flags.
+    Run after uploading new sales data without re-uploading the asset file."""
+    client = sb()
+    updated = _backfill_selling_price(client, org_id)
+    flags = _sync_undercharge_flags(client, org_id)
+    return {"status": "ok", "rows_priced": updated, "undercharge_flags_written": flags}
+
+
+@router.post("/sync-undercharge-flags")
+async def sync_undercharge_flags(org_id: str = ORG_ID):
+    """Manual refresh of undercharge flags from current selling_price values."""
+    client = sb()
+    n = _sync_undercharge_flags(client, org_id)
+    return {"status": "ok", "undercharge_flags_written": n}
+
+
 @router.get("/ledger")
 async def get_asset_ledger(
     org_id: str = ORG_ID,
@@ -838,7 +1023,7 @@ async def get_asset_ledger(
     """Paginated ledger with optional filters."""
     client = sb()
     q = client.schema("commcalc").table("asset_ledger") \
-        .select("id,esn_imei,phone_number,contract_type,category,status,date_sold,sfid,owed_to_vip,on_inventory,reimbursement,commissions,total_owed,total_reimbursed,notes") \
+        .select("id,esn_imei,phone_number,contract_type,category,status,date_sold,sfid,owed_to_vip,on_inventory,reimbursement,commissions,total_owed,total_reimbursed,selling_price,store,market,notes") \
         .eq("org_id", org_id)
 
     if status:

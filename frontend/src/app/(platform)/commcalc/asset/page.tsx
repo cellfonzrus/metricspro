@@ -29,6 +29,7 @@ type CatRow = {
   owed_to_vip: number | null
   reimbursement: number | null
   commissions: number | null
+  selling_price: number | null
   notes: string | null
 }
 type CatDetail = {
@@ -148,6 +149,21 @@ export default function AssetPage() {
     if (fileRef.current) fileRef.current.value = ''
   }
 
+  async function handleRefreshPrices() {
+    setUploading(true); setUploadMsg('')
+    try {
+      const res = await fetch(`https://metricspro-production.up.railway.app/api/v1/asset/backfill-selling-price?org_id=${ORG_ID}`, { method: 'POST' })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.detail || 'Refresh failed')
+      setUploadMsg(`✅ Priced ${(/*rows_priced*/d.rows_priced ?? 0).toLocaleString()} devices · ${(/*flags*/d.undercharge_flags_written ?? 0).toLocaleString()} undercharge flags`)
+      setOpenCat(null); setDetail(null)
+      await loadSummary()
+    } catch (e: any) {
+      setUploadMsg(`❌ ${e.message}`)
+    }
+    setUploading(false)
+  }
+
   function buildPayload(): ExportPayload {
     const sheets: ExportPayload['sheets'] = []
     if (summary?.loaded) {
@@ -176,6 +192,8 @@ export default function AssetPage() {
         { header:'Date Sold', get:r=> r.date_sold ? String(r.date_sold).slice(0,10) : '' },
         { header:'Owed', get:r=>r.owed_to_vip, money:true },
         { header:'Reimbursed', get:r=>r.reimbursement, money:true },
+        { header:'Selling Price', get:r=>r.selling_price, money:true },
+        { header:'Uncovered', get:r=> (r.selling_price==null ? '' : Math.max(0, (r.owed_to_vip||0)-(r.reimbursement||0)-(r.selling_price||0))), money:true },
         { header:'Fees', get:r=>r.commissions, money:true },
       ]})
     }
@@ -198,6 +216,11 @@ export default function AssetPage() {
           {summary?.loaded && <ExportButtons payload={buildPayload} />}
           <a className="btn" href="/commcalc/asset/owed-weekly" style={{ textDecoration: 'none' }}>📅 Weekly Owed to VIP</a>
           <a className="btn" href="/commcalc/asset/aging" style={{ textDecoration: 'none' }}>⏳ Inventory Aging</a>
+          <a className="btn" href="/commcalc/asset/dashboard" style={{ textDecoration: 'none' }}>🧾 Charges</a>
+          <a className="btn" href="/commcalc/asset/charges/rma" style={{ textDecoration: 'none' }}>🔁 RMA</a>
+          <button className="btn" onClick={handleRefreshPrices} disabled={uploading} title="Re-pull selling prices from sales and re-sync undercharge flags">
+            🔄 Refresh prices &amp; flags
+          </button>
           <button className="btn btn-primary" onClick={() => fileRef.current?.click()} disabled={uploading}>
             {uploading ? '⏳ Uploading…' : '📤 Upload Asset_Lending.xlsx'}
           </button>
@@ -346,7 +369,7 @@ export default function AssetPage() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
                       <thead>
                         <tr style={{ background: 'var(--surface2)' }}>
-                          {['Store','ESN / IMEI','Device','Phone','Contract','Status','Date Sold','Owed','Reimbursed','Fees'].map(h => (
+                          {['Store','ESN / IMEI','Device','Phone','Contract','Status','Date Sold','Owed','Reimbursed','Selling','Fees'].map(h => (
                             <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                           ))}
                         </tr>
@@ -363,6 +386,15 @@ export default function AssetPage() {
                             <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.date_sold ? String(r.date_sold).slice(0,10) : '—'}</td>
                             <td style={{ padding: '8px 12px', fontSize: 12, fontWeight: 600, color: (r.owed_to_vip || 0) > 0 ? '#dc2626' : 'var(--text2)' }}>{fmt(r.owed_to_vip || 0)}</td>
                             <td style={{ padding: '8px 12px', fontSize: 12, color: '#059669' }}>{fmt(r.reimbursement || 0)}</td>
+                            {(() => {
+                              const under = r.selling_price != null && (r.owed_to_vip || 0) - (r.reimbursement || 0) - (r.selling_price || 0) > 0.01
+                              return (
+                                <td title={under ? `Undercharge: cost ${fmt(r.owed_to_vip||0)} > reimbursed ${fmt(r.reimbursement||0)} + selling ${fmt(r.selling_price||0)}` : ''}
+                                    style={{ padding: '8px 12px', fontSize: 12, fontWeight: under ? 700 : 400, color: under ? '#dc2626' : 'var(--text1)' }}>
+                                  {r.selling_price == null ? '—' : fmt(r.selling_price)}{under ? ' ⚠️' : ''}
+                                </td>
+                              )
+                            })()}
                             <td style={{ padding: '8px 12px', fontSize: 12 }}>{fmt(r.commissions || 0)}</td>
                           </tr>
                         ))}

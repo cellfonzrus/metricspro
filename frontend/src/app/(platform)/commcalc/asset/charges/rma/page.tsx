@@ -5,9 +5,12 @@ import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 
 type Row = { id:number; store:string; market:string; esn_imei:string|null; phone_number:string|null
   device_model:string|null; status:string|null; date_sold:string|null; owed_to_vip:number|null
-  reimbursement:number|null; reimbursement_date:string|null; _bucket?:string; _shortfall?:number }
+  reimbursement:number|null; reimbursement_date:string|null; selling_price:number|null
+  _bucket?:string; _shortfall?:number }
 type Bucket = { count:number; owed:number; reimb:number; rows:Row[] }
 type RmaData = { buckets:{ full:Bucket; short:Bucket; none:Bucket }; net_loss:number; total_rma:number }
+
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
 const BUCKET_META: Record<string,{label:string;color:string;note:string}> = {
   none:  { label:'Not Reimbursed', color:'#dc2626', note:'No credit received — full amount lost' },
@@ -21,7 +24,7 @@ function RmaTable({ rows, showShort }: { rows: Row[]; showShort?: boolean }) {
     <div style={{ overflowX:'auto' }}>
       <table style={{ width:'100%', borderCollapse:'collapse', minWidth:780 }}>
         <thead><tr style={{ background:'var(--surface2)' }}>
-          {['Store','Market','Device','IMEI/ESN','Sold','Owed','Reimbursed','Reimb Date', showShort?'Short':'Gap'].map(h => (
+          {['Store','Market','Device','IMEI/ESN','Sold','Owed','Reimbursed','Selling','Reimb Date', showShort?'Short':'Gap'].map(h => (
             <th key={h} style={{ textAlign:'left', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
           ))}
         </tr></thead>
@@ -35,6 +38,7 @@ function RmaTable({ rows, showShort }: { rows: Row[]; showShort?: boolean }) {
               <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.date_sold ? String(r.date_sold).slice(0,10) : '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, fontWeight:600 }}>{fmt(r.owed_to_vip||0)}</td>
               <td style={{ padding:'8px 12px', fontSize:12, color:'#059669' }}>{fmt(r.reimbursement||0)}</td>
+              <td style={{ padding:'8px 12px', fontSize:12 }}>{r.selling_price==null ? '—' : fmt(r.selling_price)}</td>
               <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.reimbursement_date ? String(r.reimbursement_date).slice(0,10) : '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, fontWeight:700, color:'#dc2626' }}>{fmt(r._shortfall||0)}</td>
             </tr>
@@ -52,12 +56,14 @@ export default function RmaPage() {
   const [stores, setStores] = useState<{store:string;market:string}[]>([])
   const [data, setData] = useState<RmaData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [month, setMonth] = useState(0)  // 0 = all time
+  const [year, setYear] = useState(new Date().getFullYear())
 
   useEffect(() => {
     api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
       .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) }).catch(console.error)
   }, [])
-  useEffect(() => { load() }, [market, store])
+  useEffect(() => { load() }, [market, store, month, year])
 
   async function load() {
     setLoading(true)
@@ -65,6 +71,7 @@ export default function RmaPage() {
       const qs = new URLSearchParams({ org_id: ORG_ID })
       if (market) qs.set('market', market)
       if (store) qs.set('store', store)
+      if (month) { qs.set('month', String(month)); qs.set('year', String(year)) }
       setData(await api(`/api/v1/asset/rma?${qs.toString()}`))
     } catch(e) { console.error(e) }
     setLoading(false)
@@ -82,6 +89,7 @@ export default function RmaPage() {
       { header:'Sold', get:r=> r.date_sold ? String(r.date_sold).slice(0,10) : '' },
       { header:'Owed', get:r=>r.owed_to_vip, money:true },
       { header:'Reimbursed', get:r=>r.reimbursement, money:true },
+      { header:'Selling Price', get:r=>r.selling_price, money:true },
       { header:'Reimb Date', get:r=> r.reimbursement_date ? String(r.reimbursement_date).slice(0,10) : '' },
       { header:'Shortfall', get:r=>r._shortfall, money:true },
     ]
@@ -119,6 +127,14 @@ export default function RmaPage() {
         <select style={sel} value={store} onChange={e=>setStore(e.target.value)}>
           <option value="">All stores</option>{visibleStores.map(s=><option key={s.store} value={s.store}>{s.store}</option>)}
         </select>
+        <select style={sel} value={month} onChange={e=>setMonth(+e.target.value)} title="Sold in">
+          <option value={0}>All time</option>{MONTHS.map((m,i)=><option key={m} value={i+1}>{m}</option>)}
+        </select>
+        {month > 0 && (
+          <select style={sel} value={year} onChange={e=>setYear(+e.target.value)}>
+            {[2024,2025,2026].map(y=><option key={y} value={y}>{y}</option>)}
+          </select>
+        )}
       </div>
 
       {loading ? (

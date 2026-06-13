@@ -6,7 +6,8 @@ import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 type Row = {
   id: number; store: string; market: string; esn_imei: string|null; phone_number: string|null
   device_model: string|null; category: string|null; status: string|null
-  acquired_date: string|null; due_date: string|null; owed_to_vip: number|null; days_aged?: number
+  acquired_date: string|null; due_date: string|null; owed_to_vip: number|null
+  selling_price: number|null; days_aged?: number
 }
 type Bucket = { count: number; owed: number; rows: Row[] }
 type Aging = {
@@ -15,6 +16,8 @@ type Aging = {
   zero_inventory: { count: number; rows: Row[] }
   totals: { flagged_count: number; flagged_owed: number }
 }
+
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
 function daysSince(iso: string|null) {
   if (!iso) return null
@@ -29,7 +32,7 @@ function RowTable({ rows, accent }: { rows: Row[]; accent: string }) {
       <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
         <thead>
           <tr style={{ background: 'var(--surface2)' }}>
-            {['Store','Market','Device','IMEI/ESN','Acquired','Days','Due Date','Owed'].map(h => (
+            {['Store','Market','Device','IMEI/ESN','Acquired','Days','Due Date','Owed','Selling'].map(h => (
               <th key={h} style={{ textAlign:'left', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
             ))}
           </tr>
@@ -45,6 +48,7 @@ function RowTable({ rows, accent }: { rows: Row[]; accent: string }) {
               <td style={{ padding:'8px 12px', fontSize:12, fontWeight:700, color: accent }}>{r.days_aged ?? '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.due_date || '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, fontWeight:600 }}>{fmt(r.owed_to_vip || 0)}</td>
+              <td style={{ padding:'8px 12px', fontSize:12 }}>{r.selling_price==null ? '—' : fmt(r.selling_price)}</td>
             </tr>
           ))}
         </tbody>
@@ -61,13 +65,15 @@ export default function AgingPage() {
   const [data, setData] = useState<Aging | null>(null)
   const [loading, setLoading] = useState(true)
   const [showZero, setShowZero] = useState(false)
+  const [month, setMonth] = useState(0)  // 0 = all time
+  const [year, setYear] = useState(new Date().getFullYear())
 
   useEffect(() => {
     api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
       .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) })
       .catch(console.error)
   }, [])
-  useEffect(() => { load() }, [market, store])
+  useEffect(() => { load() }, [market, store, month, year])
 
   async function load() {
     setLoading(true)
@@ -75,6 +81,7 @@ export default function AgingPage() {
       const qs = new URLSearchParams({ org_id: ORG_ID })
       if (market) qs.set('market', market)
       if (store) qs.set('store', store)
+      if (month) { qs.set('month', String(month)); qs.set('year', String(year)) }
       setData(await api(`/api/v1/asset/aging?${qs.toString()}`))
     } catch(e) { console.error(e) }
     setLoading(false)
@@ -95,6 +102,7 @@ export default function AgingPage() {
       { header:'Days Aged', get:r=>r.days_aged, align:'right' },
       { header:'Due Date', get:r=> r.due_date ? String(r.due_date).slice(0,10) : '' },
       { header:'Owed', get:r=>r.owed_to_vip, money:true },
+      { header:'Selling Price', get:r=>r.selling_price, money:true },
     ]
     const filterLabel = [market||null, store||null].filter(Boolean).join(' · ') || 'All markets'
     return {
@@ -140,6 +148,15 @@ export default function AgingPage() {
           <option value="">All stores</option>
           {visibleStores.map(s => <option key={s.store} value={s.store}>{s.store}</option>)}
         </select>
+        <select style={selStyle} value={month} onChange={e => setMonth(+e.target.value)} title="Acquired in">
+          <option value={0}>All time</option>
+          {MONTHS.map((m,i) => <option key={m} value={i+1}>{m}</option>)}
+        </select>
+        {month > 0 && (
+          <select style={selStyle} value={year} onChange={e => setYear(+e.target.value)}>
+            {[2024,2025,2026].map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        )}
         {data?.data_as_of && <span style={{ marginLeft:'auto', fontSize:12, color:'var(--text3)' }}>Data as of {data.data_as_of} · aged to {data.today}</span>}
       </div>
 

@@ -27,7 +27,7 @@ function ymd(d: Date) {
 
 type Row = { id:number; store:string; market:string; esn_imei:string|null; phone_number:string|null
   device_model:string|null; category:string|null; status:string|null; owed_to_vip:number|null
-  period_date:string|null; notes:string|null }
+  selling_price:number|null; period_date:string|null; notes:string|null }
 type Group = { key:string; label:string; count:number; owed:number
   by_category:{category:string;count:number;owed:number}[]
   by_store:{store:string;market:string;count:number;owed:number}[] }
@@ -106,6 +106,7 @@ export default function ChargeGroupPage() {
           { header:'Phone', get:r=>r.phone_number },
           { header:'Date', get:r=> r.period_date ? String(r.period_date).slice(0,10) : '' },
           { header:'Owed', get:r=>r.owed_to_vip, money:true },
+          { header:'Selling Price', get:r=>r.selling_price, money:true },
         ]},
         { name: 'By Store', rows: group?.by_store || [], columns: [
           { header:'Store', get:r=>r.store },
@@ -224,13 +225,13 @@ export default function ChargeGroupPage() {
             <div style={{ overflowX:'auto' }}>
               <table style={{ width:'100%', borderCollapse:'collapse', minWidth:820 }}>
                 <thead><tr style={{ background:'var(--surface2)' }}>
-                  {['Store','Market','Category','Device','IMEI/ESN','Phone','Date','Owed'].map(h => (
+                  {['Store','Market','Category','Device','IMEI/ESN','Phone','Date','Owed','Selling'].map(h => (
                     <th key={h} style={{ textAlign:'left', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
                   ))}
                 </tr></thead>
                 <tbody>
                   {(lineItems?.rows || []).length === 0 ? (
-                    <tr><td colSpan={8} style={{ padding:24, textAlign:'center', color:'var(--text3)', fontSize:13 }}>No line items for this filter.</td></tr>
+                    <tr><td colSpan={9} style={{ padding:24, textAlign:'center', color:'var(--text3)', fontSize:13 }}>No line items for this filter.</td></tr>
                   ) : (lineItems?.rows || []).map((r,i) => (
                     <tr key={r.id} style={{ borderTop:'1px solid var(--border)', background:i%2?'var(--surface2)':'transparent' }}>
                       <td style={{ padding:'8px 12px', fontSize:12 }}>{r.store||'—'}</td>
@@ -241,6 +242,7 @@ export default function ChargeGroupPage() {
                       <td style={{ padding:'8px 12px', fontSize:12 }}>{r.phone_number||'—'}</td>
                       <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.period_date ? String(r.period_date).slice(0,10) : '—'}</td>
                       <td style={{ padding:'8px 12px', fontSize:12, fontWeight:600 }}>{fmt(r.owed_to_vip||0)}</td>
+                      <td style={{ padding:'8px 12px', fontSize:12 }}>{r.selling_price==null ? '—' : fmt(r.selling_price)}</td>
                     </tr>
                   ))}
                 </tbody>
