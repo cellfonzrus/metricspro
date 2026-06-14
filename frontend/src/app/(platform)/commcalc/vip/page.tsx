@@ -329,6 +329,7 @@ export default function VipInvoicesPage() {
         </div>
         {summary && <ExportButtons payload={buildPayload} />}
         {summary && <SendReportButton reportKey="vip_invoices" filters={{ ...(period?{period}:{}), ...(location?{location}:{}), ...(status?{status}:{}) }} />}
+        <a className="btn" href="/commcalc/vip/sweep" style={{ textDecoration: 'none' }}>⚙️ Auto-sweep</a>
       </div>
 
       {/* Import workbook */}
