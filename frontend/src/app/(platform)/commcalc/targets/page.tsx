@@ -52,6 +52,7 @@ export default function DailyTargetsPage() {
   const [detail, setDetail] = useState<CalResp | null>(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [calCat, setCalCat] = useState<CatKey>('activations')
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
 
   useEffect(() => { loadSummary() }, [period])
   useEffect(() => { if (storeCode) loadDetail() }, [storeCode, scope, rep, period])
@@ -153,8 +154,19 @@ export default function DailyTargetsPage() {
                 const storeRow = (
                   <tr key={s.store_code} style={{ borderBottom: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
                     <td style={td}>
-                      <div style={{ fontWeight: 600 }}>{s.address || s.store_code}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text3)' }}>{s.store_code}{s.market ? ` · ${s.market}` : ''}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {(s.reps?.length > 0) && (
+                          <button onClick={() => setExpanded(e => ({ ...e, [s.store_code]: !e[s.store_code] }))}
+                            style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 11, color: 'var(--text3)', padding: 0, width: 14, lineHeight: 1 }}
+                            title={expanded[s.store_code] ? 'Hide reps' : 'Show reps'}>
+                            {expanded[s.store_code] ? '▼' : '▶'}
+                          </button>
+                        )}
+                        <div>
+                          <div style={{ fontWeight: 600 }}>{s.address || s.store_code}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text3)' }}>{s.store_code}{s.market ? ` · ${s.market}` : ''}{s.reps?.length ? ` · ${s.reps.length} reps` : ''}</div>
+                        </div>
+                      </div>
                     </td>
                     <td style={td}>{fmtN(a?.monthly, 0)}</td>
                     <td style={td}>{fmtN(a?.achieved_mtd, 0)}</td>
@@ -179,7 +191,7 @@ export default function DailyTargetsPage() {
                 )
                 // Reps who worked/sold at this store, just below its row — their MTD
                 // performance + conversion, so the store breaks down by person.
-                const repRows = (s.reps || []).map((rp: any) => (
+                const repRows = (expanded[s.store_code] ? (s.reps || []) : []).map((rp: any) => (
                   <tr key={s.store_code + ':' + rp.rep} style={{ borderBottom: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
                     <td style={{ ...td, paddingLeft: 28 }}>
                       <div style={{ fontSize: 12, color: 'var(--text2)' }}>↳ {rp.rep}{rp.below_store && rp.conversion?.billpays > 0 ? ' ⚠️ below store' : ''}</div>
@@ -339,6 +351,46 @@ export default function DailyTargetsPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Reps at this store — full breakdown at the bottom of the store deep-dive */}
+          {scope === 'store' && (() => {
+            const storeReps = (summary.find(s => s.store_code === storeCode)?.reps || []) as any[]
+            if (!storeReps.length) return null
+            return (
+              <div className="card" style={{ padding: 0, marginTop: 24, overflowX: 'auto' }}>
+                <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600 }}>
+                  Reps at this store <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>· MTD performance ({storeReps.length})</span>
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+                      {['Rep', 'Activations', 'Upgrades', 'Accessories', 'Conversion', ''].map(h => <th key={h} style={th}>{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {storeReps.map((rp, i) => (
+                      <tr key={rp.rep} style={{ borderBottom: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
+                        <td style={td}>
+                          <span style={{ fontWeight: 600 }}>{rp.rep}</span>
+                          {rp.below_store && rp.conversion?.billpays > 0 && <span style={{ color: '#dc2626', fontSize: 11 }}> · ⚠️ below store</span>}
+                        </td>
+                        <td style={td}>{fmtN(rp.activations, 0)}</td>
+                        <td style={td}>{fmtN(rp.upgrades, 0)}</td>
+                        <td style={td}>{fmt(rp.accessories)}</td>
+                        <td style={{ ...td, fontWeight: 600, color: convColor(rp.conversion) }}>
+                          {rp.conversion?.billpays > 0 ? `${rp.conversion.rate}%` : '—'}
+                        </td>
+                        <td style={td}>
+                          <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }}
+                            onClick={() => { setScope('rep'); setRep(rp.rep) }}>View →</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          })()}
         </>
       )}
     </div>
