@@ -1636,11 +1636,22 @@ async def get_targets_summary(period: str, today: str = "", org_id: str = ORG_ID
         actuals_by_day = targets_engine.scope_actuals_by_day(actuals, code, None)
         res = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today,
                                            round_counts=True, month_end=end - _timedelta(days=1))
+        store_conv = targets_engine.scope_conversion(actuals, code, None, today)
+        # Reps who worked/sold at this store + their MTD performance, so the store
+        # row breaks down into the people driving it (for corrective action).
+        reps = []
+        for rep_name in targets_engine.reps_in_scope(shifts, actuals, code):
+            ach = targets_engine.scope_achieved_mtd(actuals, code, rep_name, today)
+            rconv = targets_engine.scope_conversion(actuals, code, rep_name, today)
+            reps.append({'rep': rep_name, **ach, 'conversion': rconv,
+                         'below_store': rconv['rate'] < store_conv['rate']})
+        reps.sort(key=lambda r: -r['activations'])
         out.append({
             'store_code': code, 'address': s.get('address'), 'market': s.get('market'),
             'scheduled_hours_total': res['scheduled_hours_total'],
             'categories': res['categories'],
-            'conversion': targets_engine.scope_conversion(actuals, code, None, today),
+            'conversion': store_conv,
+            'reps': reps,
         })
     out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
     return {'period': period, 'today': today.isoformat(), 'stores': out}

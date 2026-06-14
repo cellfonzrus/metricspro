@@ -128,6 +128,20 @@ def scope_conversion(actuals: list[dict], store_code: str, rep_name: str | None 
     }
 
 
+def scope_achieved_mtd(actuals: list[dict], store_code: str, rep_name: str | None,
+                       today=None) -> dict:
+    """Sum a scope's MTD achieved (activations / upgrades / byod / accessory $)
+    across every day up to `today`. Used for the per-rep store breakdown."""
+    by_day = scope_actuals_by_day(actuals, store_code, rep_name)
+    prem = byod = upg = acc = 0.0
+    for d, a in by_day.items():
+        if today is not None and d > today:
+            continue
+        prem += a['prem']; byod += a['byod']; upg += a['upg']; acc += a['acc']
+    return {'activations': round(prem + byod, 1), 'byod': round(byod, 1),
+            'upgrades': round(upg, 1), 'accessories': round(acc, 2)}
+
+
 def project_future_hours(hours_by_day: dict, today: date, month_end: date) -> dict:
     """Fill not-yet-scheduled future days from the scope's weekly open pattern.
 

@@ -148,9 +148,9 @@ export default function DailyTargetsPage() {
               </tr>
             </thead>
             <tbody>
-              {summary.map((s, i) => {
+              {summary.flatMap((s, i) => {
                 const a: CatMetrics = s.categories?.activations
-                return (
+                const storeRow = (
                   <tr key={s.store_code} style={{ borderBottom: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
                     <td style={td}>
                       <div style={{ fontWeight: 600 }}>{s.address || s.store_code}</div>
@@ -177,6 +177,31 @@ export default function DailyTargetsPage() {
                     </td>
                   </tr>
                 )
+                // Reps who worked/sold at this store, just below its row — their MTD
+                // performance + conversion, so the store breaks down by person.
+                const repRows = (s.reps || []).map((rp: any) => (
+                  <tr key={s.store_code + ':' + rp.rep} style={{ borderBottom: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
+                    <td style={{ ...td, paddingLeft: 28 }}>
+                      <div style={{ fontSize: 12, color: 'var(--text2)' }}>↳ {rp.rep}{rp.below_store && rp.conversion?.billpays > 0 ? ' ⚠️ below store' : ''}</div>
+                      <div style={{ fontSize: 10, color: 'var(--text3)' }}>{fmtN(rp.upgrades, 0)} upg · {fmt(rp.accessories)} acc</div>
+                    </td>
+                    <td style={td}></td>
+                    <td style={{ ...td, fontSize: 12 }}>{fmtN(rp.activations, 0)}</td>
+                    <td style={td}></td>
+                    <td style={td}></td>
+                    <td style={td}></td>
+                    <td style={{ ...td, fontSize: 12, fontWeight: 600, color: convColor(rp.conversion) }}>
+                      {rp.conversion?.billpays > 0 ? `${rp.conversion.rate}%` : '—'}
+                    </td>
+                    <td style={td}>
+                      <button className="btn" style={{ fontSize: 11, padding: '3px 8px' }}
+                        onClick={() => { setScope('rep'); setRep(rp.rep); setStoreCode(s.store_code) }}>
+                        View →
+                      </button>
+                    </td>
+                  </tr>
+                ))
+                return [storeRow, ...repRows]
               })}
             </tbody>
           </table>
