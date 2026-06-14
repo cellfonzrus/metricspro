@@ -754,11 +754,27 @@ async def get_charges_summary(org_id: str = ORG_ID, store: str = "", market: str
     }
 
 
-def _appeal_reason(r):
+def _epay_evidence(epay):
+    """Compact one-line summary of a device's ePay Payment Detail lines, grouped by
+    payment type. e.g. 'ePay paid $123.45 (MI $80.00; ATU $43.45)'. Empty list → ''."""
+    if not epay:
+        return ""
+    sums = {}
+    for p in epay:
+        t = p.get("type") or "—"
+        sums[t] = sums.get(t, 0.0) + float(p.get("amount") or 0)
+    total = round(sum(sums.values()), 2)
+    parts = [f"{t} ${a:,.2f}" for t, a in sorted(sums.items(), key=lambda x: -x[1])]
+    tail = "; ".join(parts[:4]) + (f"; +{len(parts) - 4} more" if len(parts) > 4 else "")
+    return f"ePay paid ${total:,.2f} ({tail})"
+
+
+def _appeal_reason(r, epay=None, epay_loaded=False):
     """Human-readable reason an appeal row is a loss. There is no single denial-reason
-    column — the detail lives in Boost's Payment Detail Report (ePay) — so we build it from
-    the category plus the concrete raw_row signals when present (notably 'PN paid to ESN',
-    i.e. the phone number's credit was paid against a DIFFERENT device)."""
+    column, so we build it from the category plus the concrete raw_row signals when present
+    (notably 'PN paid to ESN', i.e. the phone number's credit was paid against a DIFFERENT
+    device), and — when the ePay Payment Detail Report is loaded — the actual payments Boost
+    made for this device (joined by IMEI), which is the true per-appeal evidence."""
     cat = (r.get("category") or "").strip()
     raw = r.get("raw_row") or {}
     pn_esn = (raw.get("PN paid to ESN") or "").strip() if raw.get("PN paid to ESN") else ""
@@ -775,12 +791,29 @@ def _appeal_reason(r):
         "Over 10 Days Missing Reimbursement (CheckElevate/Submit Appeal)":
             "Over 10 days missing reimbursement — check Elevate / submit appeal",
     }.get(cat)
+    # Concrete ePay evidence (when the Payment Detail Report is loaded): what Boost actually
+    # paid for this device, or that nothing was paid — the true per-appeal denial signal.
+    ev = _epay_evidence(epay)
+    if ev:
+        epay_note = ev
+    elif epay_loaded:
+        epay_note = "ePay: no payment found for this device"
+    else:
+        epay_note = ""
+
     if cat.startswith("Appeal Denied"):
-        return (f"Appeal denied — {pn_note}. See Boost Payment Detail Report (ePay)." if pn_note
-                else "Appeal denied — details in Boost Payment Detail Report (ePay).")
+        reason = (f"Appeal denied — {pn_note}." if pn_note else "Appeal denied.")
+        reason += f" {epay_note}." if epay_note else " See Boost Payment Detail Report (ePay)."
+        return reason
     if base:
-        return f"{base} · {pn_note}" if pn_note else base
-    return f"{cat} · {pn_note}" if pn_note else (cat or "—")
+        parts = [base]
+    else:
+        parts = [cat or "—"]
+    if pn_note:
+        parts.append(pn_note)
+    if epay_note:
+        parts.append(epay_note)
+    return " · ".join(parts)
 
 
 @router.get("/charge-rows")
@@ -846,10 +879,16 @@ async def get_charge_rows(
     total_owed = round(sum(float(r.get("owed_to_vip") or 0) for r in rows), 2)
     page_rows = _attach_vip_invoices(client, org_id, rows[offset:offset + limit])
 
-    # Appeals: derive the denial reason, then drop the bulky raw_row from the payload.
+    # Appeals: derive the denial reason — joining the ePay Payment Detail Report (by IMEI)
+    # for the true per-appeal evidence (what Boost actually paid) — then drop bulky raw_row.
+    epay_loaded = False
     if group == "appeals":
+        epay_loaded = _epay_has_data(client, org_id)
+        epay_map = _epay_payments_map(client, org_id, [r.get("esn_imei") for r in page_rows])
         for r in page_rows:
-            r["denial_reason"] = _appeal_reason(r)
+            pays = epay_map.get(_norm_imei(r.get("esn_imei")), [])
+            r["epay_payments"] = pays
+            r["denial_reason"] = _appeal_reason(r, pays, epay_loaded)
             r.pop("raw_row", None)
 
     return {
@@ -860,6 +899,7 @@ async def get_charge_rows(
         "total_owed": total_owed,
         "offset": offset,
         "limit": limit,
+        "epay_loaded": epay_loaded,
         "filters": {"store": store or None, "market": market or None,
                     "month": month, "year": year, "week_friday": week_friday or None},
     }
@@ -1052,6 +1092,56 @@ def _norm_imei(v):
     if s.endswith(".0"):
         s = s[:-2]
     return s
+
+
+def _epay_has_data(client, org_id):
+    """True iff the ePay Payment Detail Report has any rows for this org. Lets callers say
+    'no payment found' (meaningful) vs stay silent (table simply not loaded)."""
+    try:
+        d = client.schema("commcalc").table("raw_payment_detail") \
+            .select("id").eq("org_id", org_id).limit(1).execute().data or []
+        return bool(d)
+    except Exception:
+        return False
+
+
+def _epay_payments_map(client, org_id, imeis):
+    """For a bounded page of asset IMEIs (asset_ledger.esn_imei), the ePay payments Boost
+    made for that device, from commcalc.raw_payment_detail joined on `imei` (across ALL
+    periods so the device's full payment history is captured). Returns {norm_imei: [
+    {type, amount, date, period}, ...]} sorted by date. Mirrors _vip_invoice_map: queries
+    raw + normalized + '.0' variants via chunked .in_() so the page stays bounded and fast."""
+    keys = {_norm_imei(i) for i in imeis if i}
+    if not keys:
+        return {}
+    candidates = set()
+    for i in imeis:
+        if not i:
+            continue
+        candidates.add(str(i).strip())   # raw
+        n = _norm_imei(i)
+        candidates.add(n)                # normalized
+        candidates.add(n + ".0")         # in case ePay stored a trailing .0
+    candidates.discard("")
+    cand = list(candidates)
+    out = {}
+    for j in range(0, len(cand), 200):
+        chunk = client.schema("commcalc").table("raw_payment_detail") \
+            .select("imei,payment_type,amount,payment_date,period") \
+            .eq("org_id", org_id).in_("imei", cand[j:j + 200]).execute().data or []
+        for r in chunk:
+            k = _norm_imei(r.get("imei"))
+            if k not in keys:
+                continue
+            out.setdefault(k, []).append({
+                "type": (r.get("payment_type") or "").strip() or "—",
+                "amount": round(float(r.get("amount") or 0), 2),
+                "date": (str(r.get("payment_date"))[:10] if r.get("payment_date") else None),
+                "period": r.get("period"),
+            })
+    for k in out:
+        out[k].sort(key=lambda p: (p["date"] or ""))
+    return out
 
 
 def _vip_invoice_map(client, org_id, imeis):
