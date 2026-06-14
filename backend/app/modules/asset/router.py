@@ -260,7 +260,9 @@ async def get_filter_options(org_id: str = ORG_ID):
 
 @router.get("/owed-weekly")
 async def get_owed_weekly(
-    thursday: str,
+    thursday: str,   # NOTE: this is the billing FRIDAY date (YYYY-MM-DD), matched against
+                     # asset_ledger.billing_friday. The param/field is historically named
+                     # `thursday`; kept for backward-compat with stored notify subscriptions.
     org_id: str = ORG_ID,
     store: str = "",
     market: str = "",
@@ -268,7 +270,8 @@ async def get_owed_weekly(
     limit: int = 200,
     offset: int = 0,
 ):
-    """VIP weekly collection report for a chosen Thursday, plus upcoming forecast."""
+    """VIP weekly collection report for a chosen billing Friday, plus upcoming forecast.
+    VIP bills on Friday; `thursday` carries the Friday date (legacy name)."""
     from datetime import datetime, timedelta
     client = sb()
 

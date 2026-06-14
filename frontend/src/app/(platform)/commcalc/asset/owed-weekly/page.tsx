@@ -8,11 +8,13 @@ function ymd(d: Date) {
   const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0')
   return `${y}-${m}-${day}`
 }
-function upcomingThursday(from = new Date()) {
+// VIP bills on FRIDAY. getDay()===5 is Friday, so this returns the upcoming billing Friday.
+// (The API filter key is historically named `thursday`; it carries this Friday date.)
+function upcomingFriday(from = new Date()) {
   const d = new Date(from); const diff = (5 - d.getDay() + 7) % 7
   d.setDate(d.getDate() + diff); return d
 }
-function shiftThursday(iso: string, weeks: number) {
+function shiftWeek(iso: string, weeks: number) {
   const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + weeks*7); return ymd(d)
 }
 function pretty(iso: string) {
@@ -40,7 +42,8 @@ function Kpi({ label, value, sub, color }: { label: string; value: string; sub?:
 }
 
 export default function OwedWeeklyPage() {
-  const [thursday, setThursday] = useState(ymd(upcomingThursday()))
+  // Selected billing Friday (YYYY-MM-DD). Sent to the API under the legacy `thursday` key.
+  const [friday, setFriday] = useState(ymd(upcomingFriday()))
   const [market, setMarket] = useState('')
   const [store, setStore] = useState('')
   const [markets, setMarkets] = useState<string[]>([])
@@ -54,12 +57,12 @@ export default function OwedWeeklyPage() {
       .catch(console.error)
   }, [])
 
-  useEffect(() => { load() }, [thursday, market, store])
+  useEffect(() => { load() }, [friday, market, store])
 
   async function load() {
     setLoading(true)
     try {
-      const qs = new URLSearchParams({ org_id: ORG_ID, thursday })
+      const qs = new URLSearchParams({ org_id: ORG_ID, thursday: friday })
       if (market) qs.set('market', market)
       if (store) qs.set('store', store)
       const d = await api(`/api/v1/asset/owed-weekly?${qs.toString()}`)
@@ -75,8 +78,8 @@ export default function OwedWeeklyPage() {
     const filterLabel = [market||null, store||null].filter(Boolean).join(' · ') || 'All markets'
     return {
       title: 'Weekly Owed to VIP',
-      subtitle: `Billing ${pretty(thursday)} · ${filterLabel}`,
-      filename: `owed-weekly-${thursday}${store?'-'+store.replace(/[^a-z0-9]+/gi,'-').toLowerCase():''}`,
+      subtitle: `Billing ${pretty(friday)} · ${filterLabel}`,
+      filename: `owed-weekly-${friday}${store?'-'+store.replace(/[^a-z0-9]+/gi,'-').toLowerCase():''}`,
       sheets: [
         { name:'By Store', rows:report?.by_store||[], columns:[
           { header:'Store', get:r=>r.store },
@@ -115,15 +118,15 @@ export default function OwedWeeklyPage() {
           </p>
         </div>
         {report && <ExportButtons payload={buildPayload} />}
-        {report && <SendReportButton reportKey="owed_weekly" filters={{ thursday, ...(store?{store}:{}), ...(market?{market}:{}) }} />}
+        {report && <SendReportButton reportKey="owed_weekly" filters={{ thursday: friday, ...(store?{store}:{}), ...(market?{market}:{}) }} />}
       </div>
 
       {/* Controls */}
       <div className="card" style={{ padding: 14, marginBottom: 20, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button className="btn" onClick={() => setThursday(shiftThursday(thursday, -1))}>◀ Prev</button>
-        <div style={{ fontWeight: 700, fontSize: 15, minWidth: 200, textAlign: 'center' }}>{pretty(thursday)}</div>
-        <button className="btn" onClick={() => setThursday(shiftThursday(thursday, 1))}>Next ▶</button>
-        <button className="btn" onClick={() => setThursday(ymd(upcomingThursday()))}>This week</button>
+        <button className="btn" onClick={() => setFriday(shiftWeek(friday, -1))}>◀ Prev</button>
+        <div style={{ fontWeight: 700, fontSize: 15, minWidth: 200, textAlign: 'center' }}>{pretty(friday)}</div>
+        <button className="btn" onClick={() => setFriday(shiftWeek(friday, 1))}>Next ▶</button>
+        <button className="btn" onClick={() => setFriday(ymd(upcomingFriday()))}>This week</button>
         <div style={{ flex: 1 }} />
         <select style={selStyle} value={market} onChange={e => { setMarket(e.target.value); setStore('') }}>
           <option value="">All markets</option>
@@ -199,7 +202,7 @@ export default function OwedWeeklyPage() {
                   <tr><td colSpan={5} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>No upcoming billings in range.</td></tr>
                 ) : report.upcoming.map((u, i) => (
                   <tr key={u.thursday}
-                      onClick={() => setThursday(u.thursday)}
+                      onClick={() => setFriday(u.thursday)}
                       style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)', cursor: 'pointer' }}>
                     <td style={{ padding: '9px 14px', fontSize: 13, fontWeight: 500 }}>{pretty(u.thursday)}</td>
                     <td style={{ padding: '9px 14px', fontSize: 13 }}>{u.count.toLocaleString()}</td>
