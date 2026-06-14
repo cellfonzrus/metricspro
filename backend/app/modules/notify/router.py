@@ -70,6 +70,17 @@ async def health():
 
 
 # ── dispatch core (shared by on-demand send + scheduled run-due) ──────────────
+def _normalize_phone(raw) -> str:
+    """WhatsApp Cloud API needs digits-only with a country code. Strip +/space/
+    dashes/parens; prepend US country code 1 to bare 10-digit numbers (the common
+    way reps are stored). Already-prefixed or international numbers pass through.
+    Without this, an unprefixed 5162330422 hits (#131030) 'not in allowed list'."""
+    digits = "".join(ch for ch in str(raw or "") if ch.isdigit())
+    if len(digits) == 10:
+        digits = "1" + digits
+    return digits
+
+
 def _resolve_targets(client_notify, org_id, body) -> tuple[list, list]:
     """Return (emails, phones) from explicit lists + saved recipient_ids."""
     emails = list(body.get("emails") or [])
@@ -83,7 +94,8 @@ def _resolve_targets(client_notify, org_id, body) -> tuple[list, list]:
                 emails.append(r["email"])
             if r.get("phone"):
                 phones.append(r["phone"])
-    # dedup, preserve order
+    # normalize phones (country code) then dedup, preserve order
+    phones = [_normalize_phone(p) for p in phones]
     return list(dict.fromkeys([e for e in emails if e])), list(dict.fromkeys([p for p in phones if p]))
 
 

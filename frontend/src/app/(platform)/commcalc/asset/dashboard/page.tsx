@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { ExportButtons, ExportPayload } from '@/lib/export'
 
 type Group = { key: string; label: string; count: number; owed: number }
 type Summary = { groups: Record<string, Group>; total_loss: { total: number; appeals: number; rma: number } }
@@ -89,6 +90,39 @@ export default function AssetDashboard() {
     const g = data?.groups[key]; return { count: g?.count||0, owed: g?.owed||0 }
   }
 
+  // Export reflects the current filter bar (period + market/store) and mirrors the
+  // Total Loss headline + the 5 tiles exactly as shown.
+  function buildPayload(): ExportPayload {
+    const periodLabel = mode === 'all' ? 'All time'
+      : mode === 'month' ? `${MONTHS[month-1]} ${year}`
+      : `Week of ${weekFriday}`
+    const scope = [market && `Market: ${market}`, store && `Store: ${store}`].filter(Boolean).join(' · ')
+    const rows = [
+      { group: 'Total Loss (Denied Appeals + RMA Net Loss)', count: null as any, owed: data?.total_loss.total || 0 },
+      ...TILES.map(t => {
+        const v = tileVal(t.key)
+        const label = t.key === 'rma' ? 'RMA Reconciliation' : (data?.groups[t.key]?.label || t.key)
+        return { group: label, count: v.count, owed: v.owed }
+      }),
+    ]
+    const fileTag = mode === 'month' ? `${year}-${String(month).padStart(2,'0')}`
+      : mode === 'week' ? weekFriday : 'all-time'
+    return {
+      title: 'Asset Charges Dashboard',
+      subtitle: [periodLabel, scope].filter(Boolean).join(' · '),
+      filename: `asset-charges-${fileTag}`,
+      sheets: [{
+        name: 'Charges Summary',
+        columns: [
+          { header: 'Charge Group', get: (r:any) => r.group },
+          { header: 'Items', get: (r:any) => r.count, align: 'right' },
+          { header: 'Owed / Loss', get: (r:any) => r.owed, money: true, align: 'right' },
+        ],
+        rows,
+      }],
+    }
+  }
+
   return (
     <div>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:20 }}>
@@ -98,6 +132,7 @@ export default function AssetDashboard() {
         </div>
         <div style={{ display:'flex', gap:10, alignItems:'center' }}>
           {syncMsg && <span style={{ fontSize:13 }}>{syncMsg}</span>}
+          {data && <ExportButtons payload={buildPayload} />}
           <button className="btn" onClick={pushFlags} disabled={syncing}>{syncing ? '⏳ Pushing…' : '🚨 Push Flags (Appeals + RMA)'}</button>
         </div>
       </div>
