@@ -135,7 +135,9 @@ def normalize_store(rec):
         "pay_now_acts": _num(rec.get("prepaid_activations")),
         "pay_later_acts": _num(rec.get("postpaid_activations")),
         "total_upgrades": _num(rec.get("upgrades")),
-        "total_acts": _num(rec.get("gross_activation_quantity")) + _num(rec.get("upgrades")),
+        # raw_dlar_store.total_acts is INT (migration 002); _num() returns float, and
+        # Postgres rejects "0.0" for an integer column (22P02). Coerce to a whole number.
+        "total_acts": int(round(_num(rec.get("gross_activation_quantity")) + _num(rec.get("upgrades")))),
         "psa_projected": _num(rec.get("projected_percent_to_target") or rec.get("projected_pct_to_sales_quota")),
         "family_plan_pct": _num(rec.get("family_plan_percent")),
         "tmr3": _num(rec.get("three_mr")),
