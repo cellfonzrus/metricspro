@@ -366,7 +366,9 @@ async def _top_sellers(org_id, f):
 
 async def _action_plan(org_id, f):
     period = _resolve_period(f)
-    data = await C.get_action_plan(period=period, org_id=org_id)
+    data = await C.get_action_plan(period=period, org_id=org_id,
+                                   store_code=f.get("store_code", "") or "",
+                                   rep=f.get("rep", "") or "")
     rows, metric_rows = [], []
     for s in (data.get("stores") or []):
         label = s.get("address") or s.get("store_code")
@@ -466,8 +468,9 @@ REPORTS = {
         "label": "Top Sellers", "filters": ["period", "limit"],
         "live_path": lambda f: "/commcalc/kpi", "build": _top_sellers},
     "action_plan": {
-        "label": "Daily Action Plan", "filters": ["period"],
-        "live_path": lambda f: "/commcalc/targets/action-plan", "build": _action_plan},
+        "label": "Daily Action Plan", "filters": ["period", "store_code", "rep"],
+        "live_path": lambda f: "/commcalc/targets/action-plan" + _qs(f, ["store_code", "rep"]),
+        "build": _action_plan},
 }
 
 

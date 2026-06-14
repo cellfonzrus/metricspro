@@ -1673,7 +1673,8 @@ _AP_CAT_LABEL = {'activations': 'Activations', 'upgrades': 'Upgrades',
 
 
 @router.get("/targets/{period}/action-plan")
-async def get_action_plan(period: str, today: str = "", org_id: str = ORG_ID):
+async def get_action_plan(period: str, today: str = "", store_code: str = "", rep: str = "",
+                          org_id: str = ORG_ID):
     """Daily Action Plan — prioritized focus areas per store (per-category catch-up
     + conversion) and per rep (conversion + commission-at-risk). Reuses the SAME
     targets engine + conversion the Daily Targets pages use, plus the computed
@@ -1752,6 +1753,8 @@ async def get_action_plan(period: str, today: str = "", org_id: str = ORG_ID):
         code = str(s.get('store_code', '') or '').strip()
         if not code:
             continue
+        if store_code and code.upper() != store_code.strip().upper():
+            continue
         trow = by_code.get(code.upper())
         if not trow:
             trow = {'accessories_monthly': safe_float(s.get('monthly_target'))}
@@ -1793,6 +1796,9 @@ async def get_action_plan(period: str, today: str = "", org_id: str = ORG_ID):
             rep_plans.append({'rep': rep_name, 'conversion': rep_conv, 'below_store': below,
                               'items': rep_items, 'commission': comm})
 
+        if rep:
+            rep_plans = [rp for rp in rep_plans
+                         if rp['rep'].strip().upper() == rep.strip().upper()]
         store_at_risk = round(sum((rp['commission'] or {}).get('at_risk', 0)
                                   for rp in rep_plans if rp.get('commission')), 2)
         if store_at_risk > 0:

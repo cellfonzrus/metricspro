@@ -64,6 +64,8 @@ export default function ActionPlanPage() {
   const [data, setData] = useState<Resp | null>(null)
   const [loading, setLoading] = useState(true)
   const [hideOnTrack, setHideOnTrack] = useState(true)
+  const [storeFilter, setStoreFilter] = useState('')
+  const [repFilter, setRepFilter] = useState('')
 
   useEffect(() => { load() }, [period])
 
@@ -77,13 +79,20 @@ export default function ActionPlanPage() {
   }
 
   const keep = (it: Item) => !hideOnTrack || it.severity !== 'good'
+  const storeReps = storeFilter
+    ? ((data?.stores.find(s => s.store_code === storeFilter)?.reps) || []).map(r => r.rep)
+    : []
   const stores = (data?.stores || [])
+    .filter(s => !storeFilter || s.store_code === storeFilter)
     .map(s => ({
       ...s,
       items: s.items.filter(keep),
-      reps: s.reps.map(r => ({ ...r, items: r.items.filter(keep) })).filter(r => r.items.length),
+      reps: s.reps
+        .filter(r => !repFilter || r.rep === repFilter)
+        .map(r => ({ ...r, items: r.items.filter(keep) }))
+        .filter(r => (repFilter && r.rep === repFilter) || r.items.length),
     }))
-    .filter(s => s.items.length || s.reps.length)
+    .filter(s => storeFilter ? true : (s.items.length || s.reps.length))
 
   function buildPayload(): ExportPayload {
     const rows: any[] = []
@@ -126,12 +135,22 @@ export default function ActionPlanPage() {
           </p>
         </div>
         {data && (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select value={storeFilter} onChange={e => { setStoreFilter(e.target.value); setRepFilter('') }}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }}>
+              <option value="">All stores</option>
+              {(data.stores || []).map(s => <option key={s.store_code} value={s.store_code}>{s.address || s.store_code}</option>)}
+            </select>
+            <select value={repFilter} onChange={e => setRepFilter(e.target.value)} disabled={!storeFilter}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', opacity: storeFilter ? 1 : 0.5 }}>
+              <option value="">All reps</option>
+              {storeReps.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
             <label style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', gap: 5, alignItems: 'center' }}>
               <input type="checkbox" checked={hideOnTrack} onChange={e => setHideOnTrack(e.target.checked)} /> Hide on-track
             </label>
             <ExportButtons payload={buildPayload} compact />
-            <SendReportButton reportKey="action_plan" filters={{ period }} compact />
+            <SendReportButton reportKey="action_plan" filters={{ period, ...(storeFilter ? { store_code: storeFilter } : {}), ...(repFilter ? { rep: repFilter } : {}) }} compact />
           </div>
         )}
       </div>
