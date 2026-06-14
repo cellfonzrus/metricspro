@@ -297,6 +297,101 @@ async def bulk_provision(body: dict, org_id: str = ORG_ID):
     return {"created": created, "skipped": skipped, "results": results}
 
 
+@router.post("/users/delete")
+async def delete_user(body: dict, org_id: str = ORG_ID):
+    """Hard-delete an app user: remove the storeops.app_users row AND its Supabase Auth account."""
+    email = (body.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "email required")
+    client = sb()
+    rows = client.schema("storeops").table("app_users").select("auth_id") \
+        .eq("org_id", org_id).eq("email", email).limit(1).execute().data or []
+    auth_id = rows[0].get("auth_id") if rows else None
+    client.schema("storeops").table("app_users").delete() \
+        .eq("org_id", org_id).eq("email", email).execute()
+    auth_deleted = False
+    if auth_id:
+        try:
+            get_supabase_admin().auth.admin.delete_user(auth_id)
+            auth_deleted = True
+        except Exception:
+            pass
+    return {"deleted": bool(rows), "auth_deleted": auth_deleted}
+
+
+@router.post("/selftest")
+async def selftest(org_id: str = ORG_ID):
+    """One-shot end-to-end RBAC verification (TEMPORARY — removed after the pre-rollout check).
+    Creates a throwaway admin + rep, signs them in via Supabase Auth, validates the /me token
+    path + permission resolution + role gating, then deletes them. Touches only its own temp
+    users. Guarded: refuses once login enforcement is ON, so it can't be abused during ops."""
+    import secrets as _s
+    client = sb()
+    cfg = client.schema("storeops").table("app_config").select("rbac_enabled") \
+        .eq("id", 1).limit(1).execute().data or []
+    if cfg and cfg[0].get("rbac_enabled"):
+        raise HTTPException(403, "refusing: login enforcement is ON")
+    admin = get_supabase_admin()
+    steps = []
+    made = []  # (email, auth_id)
+
+    def mk(role):
+        email = f"zzz-rbac-selftest-{role}-{_s.token_hex(4)}@cellfonzrus.com"
+        pw = "Tt1!" + _s.token_urlsafe(8)
+        r = client.schema("storeops").table("app_users").insert({
+            "org_id": org_id, "email": email, "full_name": f"Selftest {role}",
+            "role": role, "is_active": True, "must_reset_password": True}).execute()
+        resp = admin.auth.admin.create_user({"email": email, "password": pw, "email_confirm": True})
+        uid = getattr(getattr(resp, "user", None), "id", None)
+        client.schema("storeops").table("app_users").update({"auth_id": uid}) \
+            .eq("org_id", org_id).eq("email", email).execute()
+        made.append((email, uid))
+        return email, pw, uid
+
+    try:
+        for role, want_admin, want_scope in (("admin", True, "all"), ("sales_rep", False, "self")):
+            email, pw, uid = mk(role)
+            # sign in (GoTrue password grant) → access token
+            si = get_supabase().auth.sign_in_with_password({"email": email, "password": pw})
+            token = getattr(getattr(si, "session", None), "access_token", None)
+            # validate token like /me does
+            who = admin.auth.get_user(token)
+            tok_uid = getattr(getattr(who, "user", None), "id", None)
+            # resolve permissions
+            urow = client.schema("storeops").table("app_users").select("*") \
+                .eq("auth_id", tok_uid).limit(1).execute().data or []
+            perms = {}
+            if urow:
+                rr = client.schema("storeops").table("roles").select("permissions") \
+                    .eq("name", urow[0]["role"]).limit(1).execute().data or []
+                perms = (rr[0]["permissions"] if rr else {}) or {}
+            mods = perms.get("modules", {})
+            steps.append({
+                "role": role,
+                "signed_in": bool(token),
+                "token_validates": tok_uid == uid and tok_uid is not None,
+                "profile_found": bool(urow),
+                "scope_ok": perms.get("scope") == want_scope,
+                "admin_module_ok": bool(mods.get("admin")) == want_admin,
+                "targets_module": bool(mods.get("targets")),
+            })
+        ok = all(s["signed_in"] and s["token_validates"] and s["profile_found"]
+                 and s["scope_ok"] and s["admin_module_ok"] for s in steps)
+        return {"ok": ok, "steps": steps}
+    finally:
+        for email, uid in made:
+            try:
+                client.schema("storeops").table("app_users").delete() \
+                    .eq("org_id", org_id).eq("email", email).execute()
+            except Exception:
+                pass
+            if uid:
+                try:
+                    admin.auth.admin.delete_user(uid)
+                except Exception:
+                    pass
+
+
 @router.post("/users/deactivate")
 async def deactivate_user(body: dict, org_id: str = ORG_ID):
     """Soft-disable an app user (keeps the auth account; flip is_active)."""
