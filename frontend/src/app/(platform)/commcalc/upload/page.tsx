@@ -111,6 +111,16 @@ export default function UploadPage() {
         </span>
       </div>
 
+      {/* DLAR auto-import banner */}
+      <div style={{
+        background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10,
+        padding: '12px 16px', marginBottom: 12, fontSize: 13, color: '#047857',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+      }}>
+        <span>🤖 <strong>DLAR Rep + Store now import automatically</strong> from boostelevatego.com — no manual upload needed.</span>
+        <a href="/commcalc/dlar/sweep" className="btn" style={{ fontSize: 12, padding: '4px 12px', whiteSpace: 'nowrap' }}>⚙️ DLAR Auto-Import →</a>
+      </div>
+
       {/* Info banner */}
       <div style={{
         background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10,

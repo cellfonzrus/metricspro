@@ -12,6 +12,7 @@ from app.modules.commcalc.hotsheet_parser import parse_hotsheet
 from app.modules.commcalc.discrepancy_engine import run_discrepancy
 from app.modules.commcalc import targets_engine
 from app.modules.commcalc import vip_sweep
+from app.modules.commcalc import dlar_sweep
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 import calendar as _calendar
@@ -756,6 +757,122 @@ async def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: 
         client.schema('commcalc').table('vip_sweep_config').update(
             {'next_run_at': nxt}).eq('org_id', oid).execute()
         background_tasks.add_task(_do_vip_sweep, oid)
+    return {"triggered": len(due)}
+
+
+# ── DLAR portal auto-sweep (boostelevatego.com — replaces the manual monthly upload) ──
+# Same pattern as the VIP sweep: backend logs into the Boost Elevate GO portal on a
+# schedule (pg_cron → /dlar/sweep/run-due), pulls the store (DLAR) + rep (Advocate)
+# reports, and wipes+inserts raw_dlar_store / raw_dlar_rep for the period. Creds live in
+# the backend-only table commcalc.dlar_sweep_config; the password is never returned.
+def _dlar_cfg(client, org_id):
+    rows = client.schema('commcalc').table('dlar_sweep_config').select('*') \
+        .eq('org_id', org_id).limit(1).execute().data
+    return rows[0] if rows else None
+
+
+_DLAR_CFG_DEFAULTS = {'enabled': False, 'frequency': 'daily', 'day_of_week': 0,
+                      'day_of_month': 1, 'hour': 7, 'timezone': 'America/New_York'}
+
+
+def _dlar_public_cfg(cfg):
+    """Config WITHOUT the password — only whether credentials are set."""
+    if not cfg:
+        return {**_DLAR_CFG_DEFAULTS, 'configured': False, 'has_credentials': False,
+                'portal_user': None, 'next_run_at': None, 'last_run_at': None,
+                'last_status': None, 'last_detail': None}
+    out = {k: cfg.get(k) for k in (
+        'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
+        'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail')}
+    out['configured'] = True
+    out['has_credentials'] = bool(cfg.get('portal_user') and cfg.get('portal_pass'))
+    return out
+
+
+def _dlar_set_status(client, org_id, status, detail, mark_run=False):
+    upd = {'last_status': status, 'last_detail': (detail or '')[:600]}
+    if mark_run:
+        upd['last_run_at'] = _datetime.now(_timezone.utc).isoformat()
+    client.schema('commcalc').table('dlar_sweep_config').update(upd).eq('org_id', org_id).execute()
+
+
+def _do_dlar_sweep(org_id):
+    """Background worker: read creds from the config table, run the DLAR sweep, record status."""
+    client = sb()
+    cfg = _dlar_cfg(client, org_id)
+    if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
+        _dlar_set_status(client, org_id, 'error', 'No Boost portal credentials set in the admin area', mark_run=True)
+        return
+    _dlar_set_status(client, org_id, 'running', 'Sweep in progress…')
+    try:
+        res = dlar_sweep.run_dlar_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'])
+        detail = (f"OK — {res['stores']} stores, {res['reps']} reps for {res['period']} "
+                  f"(import_date {res['import_date']})")
+        _dlar_set_status(client, org_id, 'ok', detail, mark_run=True)
+    except dlar_sweep.DlarLoginError as e:
+        _dlar_set_status(client, org_id, 'error', str(e), mark_run=True)
+    except Exception as e:
+        _dlar_set_status(client, org_id, 'error', f"Sweep failed: {e}", mark_run=True)
+
+
+@router.get("/dlar/sweep/config")
+async def dlar_sweep_get_config(org_id: str = ORG_ID):
+    require_org(org_id)
+    return _dlar_public_cfg(_dlar_cfg(sb(), org_id))
+
+
+@router.put("/dlar/sweep/config")
+async def dlar_sweep_put_config(body: dict, org_id: str = ORG_ID):
+    """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
+    omit/blank to keep the existing one. Never returns the password."""
+    require_org(org_id)
+    client = sb()
+    cur = _dlar_cfg(client, org_id) or {}
+    row = {'org_id': org_id}
+    for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
+              'enabled', 'portal_user'):
+        if k in body and body[k] is not None:
+            row[k] = body[k]
+    pw = (body.get('portal_pass') or '').strip()
+    if pw:
+        row['portal_pass'] = pw
+    row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
+    merged = {**_DLAR_CFG_DEFAULTS, **cur, **row}
+    row['next_run_at'] = _vip_next_run(
+        merged.get('frequency') or 'daily', merged.get('day_of_week'),
+        merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
+    client.schema('commcalc').table('dlar_sweep_config').upsert(row, on_conflict='org_id').execute()
+    return _dlar_public_cfg(_dlar_cfg(client, org_id))
+
+
+@router.post("/dlar/sweep/run-now")
+async def dlar_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+    """Manual 'Run now' / 'Import DLAR now' (background task)."""
+    require_org(org_id)
+    cfg = _dlar_cfg(sb(), org_id)
+    if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
+        raise HTTPException(400, "Set the Boost portal credentials first.")
+    background_tasks.add_task(_do_dlar_sweep, org_id)
+    return {"status": "started"}
+
+
+@router.post("/dlar/sweep/run-due")
+async def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
+    Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    client = sb()
+    now_iso = _datetime.now(_timezone.utc).isoformat()
+    due = client.schema('commcalc').table('dlar_sweep_config').select('*') \
+        .eq('enabled', True).lte('next_run_at', now_iso).execute().data or []
+    for cfg in due:
+        oid = cfg.get('org_id') or ORG_ID
+        nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
+                            cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
+        client.schema('commcalc').table('dlar_sweep_config').update(
+            {'next_run_at': nxt}).eq('org_id', oid).execute()
+        background_tasks.add_task(_do_dlar_sweep, oid)
     return {"triggered": len(due)}
 
 
