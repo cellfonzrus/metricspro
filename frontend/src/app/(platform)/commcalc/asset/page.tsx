@@ -32,6 +32,8 @@ type CatRow = {
   commissions: number | null
   selling_price: number | null
   notes: string | null
+  vip_invoice_number: string | null
+  vip_invoice_date: string | null
 }
 type CatDetail = {
   category: string
@@ -196,6 +198,8 @@ export default function AssetPage() {
         { header:'Selling Price', get:r=>r.selling_price, money:true },
         { header:'Uncovered', get:r=> (r.selling_price==null ? '' : Math.max(0, (r.owed_to_vip||0)-(r.reimbursement||0)-(r.selling_price||0))), money:true },
         { header:'Fees', get:r=>r.commissions, money:true },
+        { header:'VIP Invoice #', get:r=>r.vip_invoice_number },
+        { header:'VIP Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
       ]})
     }
     return { title: 'Asset Ledger', subtitle: openCat ? `Category: ${openCat}` : 'VIP/DDP device financing summary',
@@ -371,7 +375,7 @@ export default function AssetPage() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
                       <thead>
                         <tr style={{ background: 'var(--surface2)' }}>
-                          {['Store','ESN / IMEI','Device','Phone','Contract','Status','Date Sold','Owed','Reimbursed','Selling','Fees'].map(h => (
+                          {['Store','ESN / IMEI','Device','Phone','Contract','Status','Date Sold','Owed','Reimbursed','Selling','Fees','VIP Invoice #','Invoice Date'].map(h => (
                             <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                           ))}
                         </tr>
@@ -398,6 +402,8 @@ export default function AssetPage() {
                               )
                             })()}
                             <td style={{ padding: '8px 12px', fontSize: 12 }}>{fmt(r.commissions || 0)}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12, fontFamily: 'monospace' }}>{r.vip_invoice_number || '—'}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '—'}</td>
                           </tr>
                         ))}
                       </tbody>

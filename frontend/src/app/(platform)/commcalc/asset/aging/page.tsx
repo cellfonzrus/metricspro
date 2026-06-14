@@ -9,6 +9,7 @@ type Row = {
   device_model: string|null; category: string|null; status: string|null
   acquired_date: string|null; due_date: string|null; owed_to_vip: number|null
   selling_price: number|null; days_aged?: number
+  vip_invoice_number: string|null; vip_invoice_date: string|null
 }
 type Bucket = { count: number; owed: number; rows: Row[] }
 type Aging = {
@@ -33,7 +34,7 @@ function RowTable({ rows, accent }: { rows: Row[]; accent: string }) {
       <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
         <thead>
           <tr style={{ background: 'var(--surface2)' }}>
-            {['Store','Market','Device','IMEI/ESN','Acquired','Days','Due Date','Owed','Selling'].map(h => (
+            {['Store','Market','Device','IMEI/ESN','Acquired','Days','Due Date','Owed','Selling','VIP Invoice #','Invoice Date'].map(h => (
               <th key={h} style={{ textAlign:'left', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
             ))}
           </tr>
@@ -50,6 +51,8 @@ function RowTable({ rows, accent }: { rows: Row[]; accent: string }) {
               <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.due_date || '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, fontWeight:600 }}>{fmt(r.owed_to_vip || 0)}</td>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{r.selling_price==null ? '—' : fmt(r.selling_price)}</td>
+              <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'monospace' }}>{r.vip_invoice_number || '—'}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '—'}</td>
             </tr>
           ))}
         </tbody>
@@ -104,6 +107,8 @@ export default function AgingPage() {
       { header:'Due Date', get:r=> r.due_date ? String(r.due_date).slice(0,10) : '' },
       { header:'Owed', get:r=>r.owed_to_vip, money:true },
       { header:'Selling Price', get:r=>r.selling_price, money:true },
+      { header:'VIP Invoice #', get:r=>r.vip_invoice_number },
+      { header:'VIP Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
     ]
     const filterLabel = [market||null, store||null].filter(Boolean).join(' · ') || 'All markets'
     return {

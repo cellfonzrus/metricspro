@@ -97,6 +97,8 @@ export default function OwedWeeklyPage() {
           { header:'Sold', get:r=> r.date_sold ? String(r.date_sold).slice(0,10) : '' },
           { header:'Due', get:r=> r.due_date ? String(r.due_date).slice(0,10) : '' },
           { header:'Owed', get:r=>r.owed_to_vip, money:true },
+          { header:'VIP Invoice #', get:r=>r.vip_invoice_number },
+          { header:'VIP Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
         ]},
       ],
     }
@@ -219,7 +221,7 @@ export default function OwedWeeklyPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
                 <thead>
                   <tr style={{ background: 'var(--surface2)' }}>
-                    {['Store','Device','IMEI/ESN','Phone','Contract','Path','Sold','Due','Owed'].map(h => (
+                    {['Store','Device','IMEI/ESN','Phone','Contract','Path','Sold','Due','Owed','VIP Invoice #','Invoice Date'].map(h => (
                       <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
@@ -238,6 +240,8 @@ export default function OwedWeeklyPage() {
                       <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.date_sold || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.due_date || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, fontWeight: 600 }}>{fmt(r.owed_to_vip || 0)}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 11, fontFamily: 'monospace' }}>{r.vip_invoice_number || '—'}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '—'}</td>
                     </tr>
                   ))}
                 </tbody>

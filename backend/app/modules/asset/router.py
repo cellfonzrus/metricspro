@@ -217,11 +217,13 @@ async def get_category_detail(
         .eq("org_id", org_id).eq("category", category) \
         .order("date_sold", desc=True).range(offset, offset + limit - 1).execute()
 
+    rows = _attach_vip_invoices(client, org_id, rows_resp.data or [])
+
     return {
         "category": category,
         "total_in_category": len(tally_rows),
         "by_status": by_status,
-        "rows": rows_resp.data or [],
+        "rows": rows,
         "offset": offset,
         "limit": limit,
     }
@@ -364,6 +366,7 @@ async def get_owed_weekly(
     rows_resp = base("id,store,market,esn_imei,phone_number,device_model,contract_type,status,date_sold,due_date,bill_path,owed_to_vip") \
         .eq("billing_friday", thursday).order("owed_to_vip", desc=True) \
         .range(offset, offset + limit - 1).execute()
+    week_rows = _attach_vip_invoices(client, org_id, rows_resp.data or [])
 
     return {
         "thursday": thursday,
@@ -371,7 +374,7 @@ async def get_owed_weekly(
         "due_this_week": due_this_week,
         "by_store": by_store,
         "upcoming": upcoming,
-        "rows": rows_resp.data or [],
+        "rows": week_rows,
         "total_due_rows": len(due_rows),
         "offset": offset,
         "limit": limit,
@@ -472,6 +475,12 @@ async def get_aging(
         b["owed"] = round(b["owed"], 2)
         b["rows"].sort(key=lambda x: (x.get("days_aged") or 0), reverse=True)
 
+    # Attach VIP invoice # + date to every device row we return (in place).
+    zero_returned = zero_rows[:500]
+    _attach_vip_invoices(client, org_id,
+                         buckets["under45"]["rows"] + buckets["warn"]["rows"]
+                         + buckets["missed"]["rows"] + zero_returned)
+
     # data freshness: max FileDate from raw_row
     fd = None
     sample = client.schema("commcalc").table("asset_ledger") \
@@ -485,7 +494,7 @@ async def get_aging(
         "today": today.isoformat(),
         "data_as_of": fd,
         "buckets": buckets,
-        "zero_inventory": {"count": len(zero_rows), "rows": zero_rows[:500]},
+        "zero_inventory": {"count": len(zero_rows), "rows": zero_returned},
         "totals": {
             "flagged_count": sum(b["count"] for b in buckets.values()),
             "flagged_owed": round(sum(b["owed"] for b in buckets.values()), 2),
@@ -683,7 +692,7 @@ async def get_charge_rows(
 
     total = len(rows)
     total_owed = round(sum(float(r.get("owed_to_vip") or 0) for r in rows), 2)
-    page_rows = rows[offset:offset + limit]
+    page_rows = _attach_vip_invoices(client, org_id, rows[offset:offset + limit])
 
     return {
         "group": group,
@@ -818,6 +827,10 @@ async def get_rma(org_id: str = ORG_ID, store: str = "", market: str = "", month
 
     net_loss = round(buckets["none"]["owed"] + (buckets["short"]["owed"] - buckets["short"]["reimb"]), 2)
 
+    # Attach VIP invoice # + date to every device row we return (in place).
+    _attach_vip_invoices(client, org_id,
+                         buckets["full"]["rows"] + buckets["short"]["rows"] + buckets["none"]["rows"])
+
     return {
         "buckets": buckets,
         "net_loss": net_loss,
@@ -881,6 +894,62 @@ def _norm_imei(v):
     if s.endswith(".0"):
         s = s[:-2]
     return s
+
+
+def _vip_invoice_map(client, org_id, imeis):
+    """For a bounded page of asset IMEIs (asset_ledger.esn_imei), the VIP invoice (# + date)
+    the device appears on, from commcalc.vip_invoice_devices. The asset "ESN/IMEI" column
+    is what VIP stores as the device SERIAL (verified: ~99.6% of asset IMEIs match
+    vip_invoice_devices.serial; the VIP `imei` column is a different identifier and matches
+    almost nothing), so we join on `serial`. Keyed by normalized value. When a device is on
+    more than one invoice, keeps the earliest (the original device-purchase invoice).
+
+    Queries by raw + normalized variants via .in_() (the page is small, so this is bounded
+    and fast — no full 46k-row device scan). Mirrors _imei_salesperson_map."""
+    keys = {_norm_imei(i) for i in imeis if i}
+    if not keys:
+        return {}
+    candidates = set()
+    for i in imeis:
+        if not i:
+            continue
+        candidates.add(str(i).strip())   # raw
+        n = _norm_imei(i)
+        candidates.add(n)                # normalized (trimmed, upper, .0 stripped)
+        candidates.add(n + ".0")         # in case VIP stored the value with a trailing .0
+    candidates.discard("")
+    cand = list(candidates)
+    out = {}  # norm_imei -> (created_on_str, invoice_number)
+    for j in range(0, len(cand), 200):  # chunk .in_() to keep request URLs sane
+        chunk = client.schema("commcalc").table("vip_invoice_devices") \
+            .select("serial,invoice_number,created_on") \
+            .eq("org_id", org_id).in_("serial", cand[j:j + 200]).execute().data or []
+        for r in chunk:
+            k = _norm_imei(r.get("serial"))
+            if k not in keys:
+                continue
+            d = str(r.get("created_on") or "")
+            prev = out.get(k)
+            # keep the earliest invoice with a date; fall back to filling a missing date
+            if prev is None or (d and (not prev[0] or d < prev[0])):
+                out[k] = (d, r.get("invoice_number"))
+    return {
+        k: {"vip_invoice_number": v[1], "vip_invoice_date": (v[0][:10] if v[0] else None)}
+        for k, v in out.items()
+    }
+
+
+def _attach_vip_invoices(client, org_id, rows):
+    """Decorate asset rows in place with vip_invoice_number / vip_invoice_date (None if no
+    matching VIP invoice). `rows` must carry esn_imei. Safe on empty / no-overlap."""
+    if not rows:
+        return rows
+    vip_map = _vip_invoice_map(client, org_id, [r.get("esn_imei") for r in rows])
+    for r in rows:
+        v = vip_map.get(_norm_imei(r.get("esn_imei")))
+        r["vip_invoice_number"] = v["vip_invoice_number"] if v else None
+        r["vip_invoice_date"] = v["vip_invoice_date"] if v else None
+    return rows
 
 
 def _backfill_selling_price(client, org_id):

@@ -7,6 +7,7 @@ import { SendReportButton } from '@/lib/send-report'
 type Row = { id:number; store:string; market:string; esn_imei:string|null; phone_number:string|null
   device_model:string|null; status:string|null; date_sold:string|null; owed_to_vip:number|null
   reimbursement:number|null; reimbursement_date:string|null; selling_price:number|null
+  vip_invoice_number:string|null; vip_invoice_date:string|null
   _bucket?:string; _shortfall?:number }
 type Bucket = { count:number; owed:number; reimb:number; rows:Row[] }
 type RmaData = { buckets:{ full:Bucket; short:Bucket; none:Bucket }; net_loss:number; total_rma:number }
@@ -25,7 +26,7 @@ function RmaTable({ rows, showShort }: { rows: Row[]; showShort?: boolean }) {
     <div style={{ overflowX:'auto' }}>
       <table style={{ width:'100%', borderCollapse:'collapse', minWidth:780 }}>
         <thead><tr style={{ background:'var(--surface2)' }}>
-          {['Store','Market','Device','IMEI/ESN','Sold','Owed','Reimbursed','Selling','Reimb Date', showShort?'Short':'Gap'].map(h => (
+          {['Store','Market','Device','IMEI/ESN','Sold','Owed','Reimbursed','Selling','Reimb Date','VIP Invoice #','Invoice Date', showShort?'Short':'Gap'].map(h => (
             <th key={h} style={{ textAlign:'left', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
           ))}
         </tr></thead>
@@ -41,6 +42,8 @@ function RmaTable({ rows, showShort }: { rows: Row[]; showShort?: boolean }) {
               <td style={{ padding:'8px 12px', fontSize:12, color:'#059669' }}>{fmt(r.reimbursement||0)}</td>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{r.selling_price==null ? '—' : fmt(r.selling_price)}</td>
               <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.reimbursement_date ? String(r.reimbursement_date).slice(0,10) : '—'}</td>
+              <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'monospace' }}>{r.vip_invoice_number||'—'}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, fontWeight:700, color:'#dc2626' }}>{fmt(r._shortfall||0)}</td>
             </tr>
           ))}
@@ -92,6 +95,8 @@ export default function RmaPage() {
       { header:'Reimbursed', get:r=>r.reimbursement, money:true },
       { header:'Selling Price', get:r=>r.selling_price, money:true },
       { header:'Reimb Date', get:r=> r.reimbursement_date ? String(r.reimbursement_date).slice(0,10) : '' },
+      { header:'VIP Invoice #', get:r=>r.vip_invoice_number },
+      { header:'VIP Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
       { header:'Shortfall', get:r=>r._shortfall, money:true },
     ]
     const filterLabel = [market||null, store||null].filter(Boolean).join(' · ') || 'All markets'
