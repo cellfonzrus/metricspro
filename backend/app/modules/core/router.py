@@ -1,10 +1,13 @@
 """Core / RBAC router — role management + employee account provisioning.
 
 Powers the Role Assignment module (migration 015). Roles live in storeops.roles with an
-editable permissions JSONB; the logged-in identity lives in core.users (linked to a Supabase
-Auth account). Employees authenticate with email+password; this router creates the auth
-accounts (service key) and assigns roles. The frontend reads its OWN core.users row via the
-session to gate the UI; these admin endpoints use the service role and so bypass RLS.
+editable permissions JSONB; the logged-in identity lives in storeops.app_users (linked to a
+Supabase Auth account). Everything is in the `storeops` schema because that schema is already
+exposed to PostgREST (the supabase-py client talks to PostgREST, which only serves exposed
+schemas — `core` is not exposed). Employees authenticate with email+password; this router
+creates the auth accounts (service key) and assigns roles. The frontend never reads these
+tables directly — it calls the token-verified /core/me — so the tables stay backend-only (RLS
+with no anon policy; the service role bypasses RLS).
 """
 import secrets
 from datetime import datetime, timezone
@@ -27,7 +30,7 @@ async def get_auth_config():
     deploy never locks anyone out; the admin flips it on once everyone is provisioned.
     Returns false if migration 015 hasn't run yet (table missing)."""
     try:
-        rows = sb().schema("core").table("app_config").select("rbac_enabled") \
+        rows = sb().schema("storeops").table("app_config").select("rbac_enabled") \
             .eq("id", 1).limit(1).execute().data or []
         return {"rbac_enabled": bool(rows[0]["rbac_enabled"]) if rows else False}
     except Exception:
@@ -38,7 +41,7 @@ async def get_auth_config():
 async def set_auth_config(body: dict, org_id: str = ORG_ID):
     """Flip login enforcement on/off (from the Roles admin). Once ON, every user must sign in."""
     enabled = bool(body.get("rbac_enabled"))
-    sb().schema("core").table("app_config").upsert(
+    sb().schema("storeops").table("app_config").upsert(
         {"id": 1, "org_id": org_id, "rbac_enabled": enabled,
          "updated_at": datetime.now(timezone.utc).isoformat()}, on_conflict="id").execute()
     return {"rbac_enabled": enabled}
@@ -68,7 +71,7 @@ async def whoami(authorization: str = Header(default="")):
     if not uid:
         raise HTTPException(401, "not authenticated")
     client = sb()
-    rows = client.schema("core").table("users").select("*").eq("auth_id", uid).limit(1).execute().data or []
+    rows = client.schema("storeops").table("app_users").select("*").eq("auth_id", uid).limit(1).execute().data or []
     if not rows:
         return {"provisioned": False, "user": None, "permissions": {}}
     u = rows[0]
@@ -81,7 +84,7 @@ async def whoami(authorization: str = Header(default="")):
             u["role_display"] = rr[0].get("display_name")
     # best-effort last_login stamp
     try:
-        client.schema("core").table("users").update(
+        client.schema("storeops").table("app_users").update(
             {"last_login": datetime.now(timezone.utc).isoformat()}).eq("id", u["id"]).execute()
     except Exception:
         pass
@@ -95,7 +98,7 @@ async def password_changed(authorization: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
-    sb().schema("core").table("users").update({"must_reset_password": False}) \
+    sb().schema("storeops").table("app_users").update({"must_reset_password": False}) \
         .eq("auth_id", uid).execute()
     return {"ok": True}
 
@@ -138,14 +141,16 @@ async def update_role(role_id: int, body: dict):
 # ── Users (app accounts) + provisioning ────────────────────────────────────────────────
 @router.get("/users")
 async def list_users(org_id: str = ORG_ID):
-    """All app users (core.users) with their role + login state."""
-    rows = sb().schema("core").table("users").select(
-        "id,auth_id,email,full_name,role,market,store_code,store_codes,employee_id,"
-        "is_active,must_reset_password,last_login") \
-        .eq("org_id", org_id).order("full_name").execute().data or []
+    """All app users (core.users) with their role + login state. Degrades to [] if migration
+    015 hasn't run (so the admin page doesn't hard-error out of order)."""
+    try:
+        rows = sb().schema("storeops").table("app_users").select("*") \
+            .eq("org_id", org_id).order("full_name").execute().data or []
+    except Exception:
+        return {"users": [], "ready": False}
     for r in rows:
         r["has_login"] = bool(r.get("auth_id"))
-    return {"users": rows}
+    return {"users": rows, "ready": True}
 
 
 @router.get("/employees")
@@ -155,9 +160,11 @@ async def list_employees(org_id: str = ORG_ID):
     emps = sb().schema("storeops").table("employees").select(
         "id,employee_id,name,home_store,role,email,phone,is_active") \
         .eq("org_id", org_id).order("name").execute().data or []
-    users = sb().schema("core").table("users").select(
-        "email,employee_id,role,auth_id,market,store_code,is_active").eq("org_id", org_id) \
-        .execute().data or []
+    try:
+        users = sb().schema("storeops").table("app_users").select("*").eq("org_id", org_id) \
+            .execute().data or []
+    except Exception:
+        users = []   # migration 015 not run yet → no assignments to merge
     by_email = {(u.get("email") or "").lower(): u for u in users if u.get("email")}
     by_emp = {u.get("employee_id"): u for u in users if u.get("employee_id")}
     out = []
@@ -181,7 +188,7 @@ async def assign_role(body: dict, org_id: str = ORG_ID):
     if not email:
         raise HTTPException(400, "email required")
     role = (body.get("role") or "").strip()
-    cur = sb().schema("core").table("users").select("*").eq("org_id", org_id) \
+    cur = sb().schema("storeops").table("app_users").select("*").eq("org_id", org_id) \
         .eq("email", email).limit(1).execute().data or []
     row = {
         "org_id": org_id, "email": email,
@@ -194,9 +201,9 @@ async def assign_role(body: dict, org_id: str = ORG_ID):
         "is_active": body.get("is_active", True if not cur else cur[0].get("is_active")),
     }
     if cur:
-        res = sb().schema("core").table("users").update(row).eq("id", cur[0]["id"]).execute()
+        res = sb().schema("storeops").table("app_users").update(row).eq("id", cur[0]["id"]).execute()
     else:
-        res = sb().schema("core").table("users").insert(row).execute()
+        res = sb().schema("storeops").table("app_users").insert(row).execute()
     return (res.data or [{}])[0]
 
 
@@ -246,7 +253,7 @@ async def create_login(body: dict, org_id: str = ORG_ID):
     if not email:
         raise HTTPException(400, "email required")
     client = sb()
-    cur = client.schema("core").table("users").select("*").eq("org_id", org_id) \
+    cur = client.schema("storeops").table("app_users").select("*").eq("org_id", org_id) \
         .eq("email", email).limit(1).execute().data or []
     if not cur:
         raise HTTPException(400, "assign a role to this email first (/users/assign)")
@@ -255,7 +262,7 @@ async def create_login(body: dict, org_id: str = ORG_ID):
     auth_id, created, err = _create_or_link_auth(admin, email, temp_pw)
     if not auth_id:
         raise HTTPException(500, f"could not create login: {err}")
-    client.schema("core").table("users").update(
+    client.schema("storeops").table("app_users").update(
         {"auth_id": auth_id, "must_reset_password": True}).eq("id", cur[0]["id"]).execute()
     return {"email": email, "created": created, "temp_password": temp_pw, "auth_id": auth_id}
 
@@ -265,7 +272,7 @@ async def bulk_provision(body: dict, org_id: str = ORG_ID):
     """Create logins for every assigned core.users row that has an email and no auth_id yet
     (optionally limited to body['emails']). Returns the per-user temp passwords to distribute."""
     client = sb()
-    rows = client.schema("core").table("users").select("*").eq("org_id", org_id) \
+    rows = client.schema("storeops").table("app_users").select("*").eq("org_id", org_id) \
         .execute().data or []
     want = set((e or "").lower() for e in (body.get("emails") or []))
     admin = get_supabase_admin()
@@ -282,7 +289,7 @@ async def bulk_provision(body: dict, org_id: str = ORG_ID):
         if not auth_id:
             results.append({"email": email, "ok": False, "error": err})
             continue
-        client.schema("core").table("users").update(
+        client.schema("storeops").table("app_users").update(
             {"auth_id": auth_id, "must_reset_password": True}).eq("id", u["id"]).execute()
         created += 1
         results.append({"email": email, "ok": True, "temp_password": temp_pw,
@@ -296,7 +303,7 @@ async def deactivate_user(body: dict, org_id: str = ORG_ID):
     email = (body.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
-    res = sb().schema("core").table("users").update(
+    res = sb().schema("storeops").table("app_users").update(
         {"is_active": bool(body.get("is_active", False))}) \
         .eq("org_id", org_id).eq("email", email).execute()
     return {"updated": len(res.data or [])}

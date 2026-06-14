@@ -7,7 +7,7 @@ import { homeFor } from '@/lib/rbac'
 
 export default function LoginPage() {
   const router = useRouter()
-  const { session, permissions, loading, provisioned, user } = useAuth()
+  const { session, permissions, loading, provisioned, active, user, signOut } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -15,10 +15,31 @@ export default function LoginPage() {
 
   // Already signed in → bounce to the role's home (or password reset if required).
   useEffect(() => {
-    if (loading || !session || !provisioned) return
+    if (loading || !session || !provisioned || !active) return
     if (user?.must_reset_password) router.replace('/account/password')
     else router.replace(homeFor(permissions))
-  }, [loading, session, provisioned, permissions, user, router])
+  }, [loading, session, provisioned, active, permissions, user, router])
+
+  // Signed in but no app account / disabled → explain instead of a blank stuck page.
+  const stuck = !loading && session && (!provisioned || !active)
+  if (stuck) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%)', padding: 20 }}>
+        <div style={{ width: '100%', maxWidth: 380, background: 'white', borderRadius: 14, padding: '30px',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.3)', textAlign: 'center' }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: '#1e3a5f' }}>
+            {provisioned ? 'Access disabled' : 'No access yet'}
+          </div>
+          <div style={{ fontSize: 13, color: '#64748b', margin: '8px 0 18px' }}>
+            You're signed in, but {provisioned ? 'your access has been turned off' : 'no role has been assigned to this account'}.
+            Please contact your administrator.
+          </div>
+          <button onClick={() => signOut()} className="btn">Sign out</button>
+        </div>
+      </div>
+    )
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
