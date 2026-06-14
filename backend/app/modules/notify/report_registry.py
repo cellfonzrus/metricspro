@@ -367,12 +367,15 @@ async def _top_sellers(org_id, f):
 async def _action_plan(org_id, f):
     period = _resolve_period(f)
     data = await C.get_action_plan(period=period, org_id=org_id)
-    rows = []
+    rows, metric_rows = [], []
     for s in (data.get("stores") or []):
         label = s.get("address") or s.get("store_code")
         for it in (s.get("items") or []):
             rows.append({"scope": "Store", "store": label, "rep": "",
                          "severity": it["severity"], "focus": it["title"], "detail": it["detail"]})
+        for m in (s.get("metrics") or []):
+            metric_rows.append({"store": label, "metric": m["label"], "target": m["target"],
+                                "achieved": m["achieved"], "need": m["need"], "pace": m["pace"]})
         for rp in (s.get("reps") or []):
             for it in (rp.get("items") or []):
                 rows.append({"scope": "Rep", "store": label, "rep": rp.get("rep"),
@@ -380,16 +383,27 @@ async def _action_plan(org_id, f):
     summ = data.get("summary") or {}
     return {"title": "Daily Action Plan",
             "subtitle": f"{period} · as of {data.get('today', '')} · "
-                        f"{summ.get('critical', 0)} critical / {summ.get('warning', 0)} warning",
+                        f"{summ.get('critical', 0)} critical / {summ.get('warning', 0)} warning · "
+                        f"${summ.get('commission_at_risk', 0):,.0f} commission at risk",
             "filename": f"action-plan-{period.replace(' ', '-')}",
-            "sheets": [{"name": "Action Items", "rows": rows, "columns": [
-                {"header": "Scope", "key": "scope"},
-                {"header": "Store", "key": "store"},
-                {"header": "Rep", "key": "rep"},
-                {"header": "Severity", "key": "severity"},
-                {"header": "Focus", "key": "focus"},
-                {"header": "Detail", "key": "detail"},
-            ]}]}
+            "sheets": [
+                {"name": "Action Items", "rows": rows, "columns": [
+                    {"header": "Scope", "key": "scope"},
+                    {"header": "Store", "key": "store"},
+                    {"header": "Rep", "key": "rep"},
+                    {"header": "Severity", "key": "severity"},
+                    {"header": "Focus", "key": "focus"},
+                    {"header": "Detail", "key": "detail"},
+                ]},
+                {"name": "Store Metrics", "rows": metric_rows, "columns": [
+                    {"header": "Store", "key": "store"},
+                    {"header": "Metric", "key": "metric"},
+                    {"header": "Target", "key": "target", "align": "right"},
+                    {"header": "Achieved", "key": "achieved", "align": "right"},
+                    {"header": "Need", "key": "need", "align": "right"},
+                    {"header": "Pace/day", "key": "pace", "align": "right"},
+                ]},
+            ]}
 
 
 # ── registry ──────────────────────────────────────────────────────────────────

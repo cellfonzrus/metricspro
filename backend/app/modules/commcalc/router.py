@@ -1657,11 +1657,27 @@ async def get_targets_summary(period: str, today: str = "", org_id: str = ORG_ID
     return {'period': period, 'today': today.isoformat(), 'stores': out}
 
 
+# KPI → commission tier inputs (mirrors calculator.py KPI defaults).
+# Each is (key, label, payout_config column, default target %).
+ACTION_KPI_DEFS = [
+    ('atu', 'ATU', 'kpi_atu_target', 55),
+    ('protect', 'Protect', 'kpi_protect_target', 80),
+    ('boostapp', 'Boost App', 'kpi_boostapp_target', 65),
+    ('familyplan', 'Family Plan', 'kpi_familyplan_target', 45),
+    ('byod', 'BYOD', 'kpi_byod_target', 35),
+    ('tmr3', 'TMR3', 'kpi_tmr3_target', 70),
+    ('aal', 'AAL', 'kpi_aal_target', 5),
+]
+_AP_CAT_LABEL = {'activations': 'Activations', 'upgrades': 'Upgrades',
+                 'byod': 'BYOD', 'accessories': 'Accessories'}
+
+
 @router.get("/targets/{period}/action-plan")
 async def get_action_plan(period: str, today: str = "", org_id: str = ORG_ID):
     """Daily Action Plan — prioritized focus areas per store (per-category catch-up
-    + conversion) and per rep (conversion). Derived from the SAME targets engine +
-    conversion the Daily Targets pages use, so every number reconciles exactly."""
+    + conversion) and per rep (conversion + commission-at-risk). Reuses the SAME
+    targets engine + conversion the Daily Targets pages use, plus the computed
+    rep_commissions (tier/KPIs) so 'commission at risk' reconciles with the payroll."""
     client = sb()
     start, end, today = _period_bounds(period, today)
     byod_def = _byod_pct_default(client, period)
@@ -1676,8 +1692,62 @@ async def get_action_plan(period: str, today: str = "", org_id: str = ORG_ID):
     actuals = _fetch_actuals(client, org_id, period)
     rank = targets_engine.SEV_RANK
 
+    # ── Commission context: KPI targets + each rep's computed tier ($ at risk = the
+    #    payout forfeited below tier 1.0 = subtotal × (1 − tier)). Empty/graceful if
+    #    commissions haven't been run for the period yet.
+    cfg_rows = (client.schema('commcalc').table('payout_config')
+                .select('*').eq('period', period).limit(1).execute().data) or []
+    cfg = cfg_rows[0] if cfg_rows else {}
+    kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in ACTION_KPI_DEFS}
+    t100 = int(cfg.get('tier_100_min_kpis') or 7)
+    t75 = int(cfg.get('tier_75_min_kpis') or 5)
+    comm_rows = (client.schema('commcalc').table('rep_commissions')
+                 .select('storeops_name,epay_salesperson,tier,kpis_met,total_kpis,'
+                         'kpi_values,subtotal,total_payout')
+                 .eq('period', period).execute().data) or []
+    comm_by_rep = {}
+    for cr in comm_rows:
+        key = (cr.get('storeops_name') or cr.get('epay_salesperson') or '').strip().upper()
+        if key:
+            comm_by_rep[key] = cr
+
+    def rep_commission(rep_name):
+        cr = comm_by_rep.get((rep_name or '').strip().upper())
+        if not cr:
+            return None
+        tier = safe_float(cr.get('tier'))
+        subtotal = safe_float(cr.get('subtotal'))
+        kv = cr.get('kpi_values') or {}
+        kpis = []
+        for (k, lab, _col, _dv) in ACTION_KPI_DEFS:
+            actual = safe_float(kv.get(k))
+            kpis.append({'kpi': k, 'label': lab, 'target': kpi_targets[k],
+                         'actual': round(actual, 1), 'met': actual >= kpi_targets[k]})
+        kpis_met = cr.get('kpis_met')
+        if kpis_met is None:
+            kpis_met = sum(1 for x in kpis if x['met'])
+        return {'tier': tier, 'kpis_met': kpis_met, 'total_kpis': cr.get('total_kpis') or 7,
+                'subtotal': round(subtotal, 2),
+                'total_payout': round(safe_float(cr.get('total_payout')), 2),
+                'at_risk': round(subtotal * (1.0 - tier), 2) if tier < 1.0 else 0.0,
+                'short_kpis': [x['label'] for x in kpis if not x['met']],
+                'kpis': kpis, 't100': t100, 't75': t75}
+
+    def commission_item(comm):
+        if not comm or comm['tier'] >= 1.0:
+            return None
+        sev = 'critical' if comm['kpis_met'] < t75 else 'warning'
+        need_next = max(0, t100 - comm['kpis_met'])
+        short = ', '.join(comm['short_kpis']) or '—'
+        tail = f' — hit {need_next} more KPI(s) for full payout.' if need_next else '.'
+        return {'severity': sev, 'metric': 'commission',
+                'title': f'Commission at risk — {int(round(comm["tier"] * 100))}% tier',
+                'detail': f'{comm["kpis_met"]}/{comm["total_kpis"]} KPIs met; short on {short}. '
+                          f'${comm["at_risk"]:,.0f} of commission at risk this period{tail}'}
+
     out = []
     tot_crit = tot_warn = 0
+    tot_at_risk = 0.0
     for s in stores:
         code = str(s.get('store_code', '') or '').strip()
         if not code:
@@ -1695,6 +1765,17 @@ async def get_action_plan(period: str, today: str = "", org_id: str = ORG_ID):
         store_conv = targets_engine.scope_conversion(actuals, code, None, today)
         store_items = targets_engine.build_action_items(res, store_conv, include_categories=True)
 
+        # Target-vs-achieved metrics per category (what's expected vs what they're doing).
+        metrics = []
+        for cat in targets_engine.CATEGORIES:
+            m = res['categories'].get(cat) or {}
+            if (m.get('monthly') or 0) <= 0:
+                continue
+            metrics.append({'cat': cat, 'label': _AP_CAT_LABEL.get(cat, cat),
+                            'unit': m.get('unit', 'count'), 'target': m.get('monthly', 0),
+                            'achieved': m.get('achieved_mtd', 0), 'need': m.get('need', 0),
+                            'pace': m.get('pace', 0), 'today_target': m.get('today_target', 0)})
+
         rep_plans = []
         for rep_name in targets_engine.reps_in_scope(shifts, actuals, code):
             rep_conv = targets_engine.scope_conversion(actuals, code, rep_name, today)
@@ -1702,10 +1783,26 @@ async def get_action_plan(period: str, today: str = "", org_id: str = ORG_ID):
             rep_items = targets_engine.build_action_items(
                 {'categories': {}, 'open_days_total': 0}, rep_conv,
                 include_categories=False, rep_below_store=below)
+            comm = rep_commission(rep_name)
+            citem = commission_item(comm)
+            if citem:
+                rep_items.append(citem)
             if not rep_items:
-                continue  # no measurable conversion / nothing to flag for this rep
-            rep_plans.append({'rep': rep_name, 'conversion': rep_conv,
-                              'below_store': below, 'items': rep_items})
+                continue  # nothing to flag and no commission row
+            rep_items.sort(key=lambda it: rank.get(it['severity'], 9))
+            rep_plans.append({'rep': rep_name, 'conversion': rep_conv, 'below_store': below,
+                              'items': rep_items, 'commission': comm})
+
+        store_at_risk = round(sum((rp['commission'] or {}).get('at_risk', 0)
+                                  for rp in rep_plans if rp.get('commission')), 2)
+        if store_at_risk > 0:
+            n = sum(1 for rp in rep_plans if (rp.get('commission') or {}).get('at_risk', 0) > 0)
+            store_items.append({'severity': 'warning', 'metric': 'commission',
+                                'title': 'Commission at risk (store)',
+                                'detail': f'${store_at_risk:,.0f} across {n} rep(s) below full KPI '
+                                          f'tier — see the rep breakdown.'})
+        store_items.sort(key=lambda it: rank.get(it['severity'], 9))
+        tot_at_risk += store_at_risk
 
         all_items = store_items + [it for rp in rep_plans for it in rp['items']]
         c = sum(1 for it in all_items if it['severity'] == 'critical')
@@ -1716,7 +1813,8 @@ async def get_action_plan(period: str, today: str = "", org_id: str = ORG_ID):
                                           default=9))
         out.append({
             'store_code': code, 'address': s.get('address'), 'market': s.get('market'),
-            'conversion': store_conv, 'items': store_items, 'reps': rep_plans,
+            'conversion': store_conv, 'metrics': metrics, 'items': store_items,
+            'reps': rep_plans, 'commission_at_risk': store_at_risk,
             'counts': {'critical': c, 'warning': w},
         })
 
@@ -1724,5 +1822,6 @@ async def get_action_plan(period: str, today: str = "", org_id: str = ORG_ID):
     out.sort(key=lambda r: (-r['counts']['critical'], -r['counts']['warning'],
                             str(r.get('address') or r.get('store_code') or '')))
     return {'period': period, 'today': today.isoformat(),
-            'summary': {'critical': tot_crit, 'warning': tot_warn, 'stores': len(out)},
+            'summary': {'critical': tot_crit, 'warning': tot_warn, 'stores': len(out),
+                        'commission_at_risk': round(tot_at_risk, 2)},
             'stores': out}

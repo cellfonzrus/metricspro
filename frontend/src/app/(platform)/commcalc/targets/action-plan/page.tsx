@@ -11,16 +11,26 @@ import { SendReportButton } from '@/lib/send-report'
 type Sev = 'critical' | 'warning' | 'good'
 interface Item { severity: Sev; metric: string; title: string; detail: string }
 interface ConvT { boxes: number; billpays: number; rate: number; target: number; meets_target: boolean }
-interface RepPlan { rep: string; conversion: ConvT; below_store: boolean; items: Item[] }
+interface Metric { cat: string; label: string; unit: string; target: number; achieved: number; need: number; pace: number; today_target: number }
+interface Kpi { kpi: string; label: string; target: number; actual: number; met: boolean }
+interface Commission {
+  tier: number; kpis_met: number; total_kpis: number; subtotal: number; total_payout: number
+  at_risk: number; short_kpis: string[]; kpis: Kpi[]; t100: number; t75: number
+}
+interface RepPlan { rep: string; conversion: ConvT; below_store: boolean; items: Item[]; commission: Commission | null }
 interface StorePlan {
   store_code: string; address: string; market: string; conversion: ConvT
-  items: Item[]; reps: RepPlan[]; counts: { critical: number; warning: number }
+  metrics: Metric[]; items: Item[]; reps: RepPlan[]; commission_at_risk: number
+  counts: { critical: number; warning: number }
 }
 interface Resp {
   period: string; today: string
-  summary: { critical: number; warning: number; stores: number }
+  summary: { critical: number; warning: number; stores: number; commission_at_risk: number }
   stores: StorePlan[]
 }
+
+const mval = (unit: string, n: number) =>
+  unit === 'dollars' ? '$' + Math.round(n || 0).toLocaleString() : String(Math.round((n || 0) * 10) / 10)
 
 const SEV = {
   critical: { bg: '#fef2f2', border: '#fecaca', fg: '#b91c1c', icon: '🔴', label: 'Critical' },
@@ -140,6 +150,10 @@ export default function ActionPlanPage() {
             <div style={{ fontSize: 26, fontWeight: 800 }}>{data.summary.stores}</div>
             <div style={{ fontSize: 12, color: 'var(--text2)' }}>stores with targets</div>
           </div>
+          <div className="card" style={{ padding: '12px 18px', borderLeft: `4px solid ${data.summary.commission_at_risk > 0 ? '#b45309' : 'var(--green)'}` }}>
+            <div style={{ fontSize: 26, fontWeight: 800, color: data.summary.commission_at_risk > 0 ? '#b45309' : 'var(--green)' }}>${Math.round(data.summary.commission_at_risk || 0).toLocaleString()}</div>
+            <div style={{ fontSize: 12, color: 'var(--text2)' }}>commission at risk</div>
+          </div>
         </div>
       )}
 
@@ -164,6 +178,17 @@ export default function ActionPlanPage() {
               </div>
             </div>
             <div style={{ padding: '12px 16px' }}>
+              {s.metrics?.length > 0 && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+                  {s.metrics.map(m => (
+                    <div key={m.cat} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '6px 10px', minWidth: 118 }}>
+                      <div style={{ fontSize: 11, color: 'var(--text3)' }}>{m.label}</div>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>{mval(m.unit, m.achieved)} <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>/ {mval(m.unit, m.target)}</span></div>
+                      <div style={{ fontSize: 10, color: m.need > 0 ? '#b45309' : 'var(--green)' }}>{m.need > 0 ? `${mval(m.unit, m.need)} to go · ${mval(m.unit, m.pace)}/day` : 'target met'}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
               {s.items.length > 0 && (
                 <div style={{ marginBottom: s.reps.length ? 14 : 0 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Store</div>
@@ -176,6 +201,25 @@ export default function ActionPlanPage() {
                     {rp.rep}{rp.below_store ? ' · below store' : ''}
                   </div>
                   {rp.items.map((it, i) => <ItemRow key={i} it={it} />)}
+                  {rp.commission && (
+                    <div style={{ margin: '2px 0 4px' }}>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>
+                        Commission tier {Math.round(rp.commission.tier * 100)}% · {rp.commission.kpis_met}/{rp.commission.total_kpis} KPIs{rp.commission.at_risk > 0 ? ` · $${Math.round(rp.commission.at_risk).toLocaleString()} at risk` : ''}
+                      </div>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {rp.commission.kpis.map(k => (
+                          <span key={k.kpi} title={`${k.label}: ${k.actual}% vs ${k.target}% target`}
+                            style={{
+                              fontSize: 10, padding: '2px 7px', borderRadius: 12, fontWeight: 600,
+                              background: k.met ? '#f0fdf4' : '#fef2f2', color: k.met ? '#15803d' : '#b91c1c',
+                              border: `1px solid ${k.met ? '#bbf7d0' : '#fecaca'}`,
+                            }}>
+                            {k.met ? '✓' : '✗'} {k.label} {k.actual}%
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
