@@ -15,7 +15,7 @@ rep, then applies the daily catch-up rule:
 Categories: activations (premium+BYOD acts), upgrades, byod (KPI-derived),
 accessories ($ GP). Counts for the first three, dollars for accessories.
 """
-from datetime import date
+from datetime import date, timedelta
 
 from app.modules.commcalc.calculator import safe_float
 
@@ -91,21 +91,60 @@ def scope_actuals_by_day(actuals: list[dict], store_code: str, rep_name: str | N
     return out
 
 
+def project_future_hours(hours_by_day: dict, today: date, month_end: date) -> dict:
+    """Fill not-yet-scheduled future days from the scope's weekly open pattern.
+
+    StoreOps schedules are entered week-by-week, so `hours_by_day` typically only
+    reaches ~today. Left alone, the remaining-days denominator collapses to 1 and every
+    store is told to hit its whole monthly balance today. This looks at which weekdays
+    the scope has concrete hours on this period, takes the average hours on each such
+    weekday, and assigns that to every matching weekday from `today` through `month_end`
+    that has no concrete shift yet. Future-only; never overwrites a concrete day; a scope
+    with no shifts at all observes no pattern and projects nothing → {}."""
+    if not hours_by_day or not month_end:
+        return {}
+    by_wd: dict[int, list] = {}
+    for d, h in hours_by_day.items():
+        if h > 0:
+            by_wd.setdefault(d.weekday(), []).append(h)
+    if not by_wd:
+        return {}
+    avg_by_wd = {wd: sum(v) / len(v) for wd, v in by_wd.items()}
+    out: dict[date, float] = {}
+    d = today
+    while d <= month_end:
+        if d not in hours_by_day and d.weekday() in avg_by_wd:
+            out[d] = avg_by_wd[d.weekday()]
+        d += timedelta(days=1)
+    return out
+
+
 def compute_scope(
     monthly_by_cat: dict,
     hours_by_day: dict,
     actuals_by_day: dict,
     today: date,
     round_counts: bool = False,
+    month_end: date | None = None,
 ):
-    """Compute per-category target numbers + a day-by-day calendar for one scope."""
-    total_hours = sum(hours_by_day.values())
-    open_days = sorted(hours_by_day.keys())
+    """Compute per-category target numbers + a day-by-day calendar for one scope.
+
+    When `month_end` is given and the concrete StoreOps schedule (`hours_by_day`) doesn't
+    reach it, future open days are PROJECTED from the scope's weekly pattern (see
+    project_future_hours) so the per-day base and the remaining-days denominator reflect
+    the whole month, not just the days entered so far. Projection is additive only;
+    concrete days win, and a scope with no shifts at all projects nothing."""
+    projected = project_future_hours(hours_by_day, today, month_end) if month_end else {}
+    eff_hours = dict(hours_by_day)
+    eff_hours.update(projected)
+
+    total_hours = sum(eff_hours.values())
+    open_days = sorted(eff_hours.keys())
 
     def base_for(cat: str, d: date) -> float:
         if total_hours <= 0:
             return 0.0
-        return float(monthly_by_cat.get(cat, 0) or 0) * (hours_by_day.get(d, 0.0) / total_hours)
+        return float(monthly_by_cat.get(cat, 0) or 0) * (eff_hours.get(d, 0.0) / total_hours)
 
     def achieved_on(cat: str, d: date) -> float:
         a = actuals_by_day.get(d)
@@ -125,7 +164,7 @@ def compute_scope(
         cum_ach_yday = sum(achieved_on(cat, d) for d in open_days if d < today)
         shortfall = max(0.0, cum_base_yday - cum_ach_yday)
 
-        scheduled_today = today in hours_by_day
+        scheduled_today = today in eff_hours
         base_today = base_for(cat, today) if scheduled_today else 0.0
         # Only give a target on a day this scope is actually scheduled. A rep on
         # their day off gets 0 today; the unmet shortfall is carried by `pace`
@@ -161,9 +200,10 @@ def compute_scope(
         has_actual = a is not None and d <= today
         row = {
             'date': d.isoformat(),
-            'hours': round(hours_by_day.get(d, 0.0), 2),
+            'hours': round(eff_hours.get(d, 0.0), 2),
             'is_today': d == today,
             'is_past': d < today,
+            'projected': d in projected,  # estimated from the weekly pattern, not yet scheduled
             'cats': {},
         }
         for cat in CATEGORIES:
@@ -173,10 +213,17 @@ def compute_scope(
             }
         calendar.append(row)
 
+    concrete_hours_total = sum(hours_by_day.values())
     return {
-        'scheduled_hours_total': round(total_hours, 2),
+        # Real StoreOps hours actually on the schedule for this scope.
+        'scheduled_hours_total': round(concrete_hours_total, 2),
+        # Concrete + projected — the denominator the per-day base and pace spread over.
+        'effective_hours_total': round(total_hours, 2),
+        'projected_hours': round(sum(projected.values()), 2),
+        'projected_open_days': len(projected),
+        'concrete_open_days': len(hours_by_day),
         'open_days_total': len(open_days),
-        'has_schedule': total_hours > 0,  # False → no StoreOps schedule loaded for this scope
+        'has_schedule': concrete_hours_total > 0,  # False → no schedule to weight or project from
         'today': today.isoformat(),
         'categories': categories,
         'calendar': calendar,

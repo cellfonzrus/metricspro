@@ -1470,7 +1470,8 @@ async def get_target_calendar(
 
     hours_by_day = targets_engine.scope_hours_by_day(shifts, store_code, rep_arg)
     actuals_by_day = targets_engine.scope_actuals_by_day(actuals, store_code, rep_arg)
-    result = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today, round_counts=True)
+    result = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today,
+                                          round_counts=True, month_end=end - _timedelta(days=1))
     result.update({
         'period': period, 'scope': scope, 'store_code': store_code,
         'rep': rep_arg, 'monthly_targets': monthly,
@@ -1507,7 +1508,8 @@ async def get_targets_summary(period: str, today: str = "", org_id: str = ORG_ID
             continue
         hours_by_day = targets_engine.scope_hours_by_day(shifts, code, None)
         actuals_by_day = targets_engine.scope_actuals_by_day(actuals, code, None)
-        res = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today, round_counts=True)
+        res = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today,
+                                           round_counts=True, month_end=end - _timedelta(days=1))
         out.append({
             'store_code': code, 'address': s.get('address'), 'market': s.get('market'),
             'scheduled_hours_total': res['scheduled_hours_total'],
