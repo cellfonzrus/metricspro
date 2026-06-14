@@ -245,3 +245,140 @@ def run_invoice_sweep(client, org_id, user, pw, lookback_days, helpers):
 
     return {"invoices": len(inv_rows), "lines": len(line_rows),
             "devices": len(dev_rows), "window": f"{sdate} → {edate}"}
+
+
+# ── PayGo / asset-lending (weekly lent-device billing) ──────────────────────────────
+# The portal bills "asset-lending" (Pay-As-You-Go) devices on a weekly cycle. Each weekly
+# batch is one payment with N invoices + a grand total:
+#   POST /PaygoPayment/PendingPaymentList   -> current week owed (1 batch)
+#   POST /PaygoPayment/ApprovedPaymentList  -> weekly history
+#   GET  /account/paygo/payments/details/{Id} -> invoice numbers in that batch (HTML table)
+# Discovered + parser validated 2026-06-14 (see tools/vip_scraper/discover_asset.py).
+
+def _paygo_date(s):
+    """'06/12/2026' or '6/11/2026' -> ('2026-06-12', 'June 2026', 6, 2026). '' -> (None,...)."""
+    import calendar as _cal
+    s = str(s or "").strip()
+    if not s:
+        return None, None, None, None
+    try:
+        m, d, y = [int(x) for x in s.split("/")[:3]]
+        return f"{y:04d}-{m:02d}-{d:02d}", f"{_cal.month_name[m]} {y}", m, y
+    except Exception:
+        return None, None, None, None
+
+
+def list_paygo_payments(session, endpoint, page_size=100):
+    """Page through a PaygoPayment list endpoint (Kendo grid JSON). Returns the rows."""
+    rows, skip, page, total = [], 0, 1, None
+    while True:
+        r = session.post(f"{BASE}{endpoint}",
+                         data={"take": page_size, "skip": skip, "page": page, "pageSize": page_size},
+                         headers={"X-Requested-With": "XMLHttpRequest",
+                                  "Referer": f"{BASE}/account/paygo/payments/dashboard"}, timeout=40)
+        r.raise_for_status()
+        j = r.json()
+        if isinstance(j, dict) and j.get("Errors"):
+            raise RuntimeError(f"{endpoint} returned errors: {j['Errors']}")
+        batch = (j.get("Data") if isinstance(j, dict) else j) or []
+        total = j.get("Total") if isinstance(j, dict) else None
+        rows.extend(batch)
+        if not batch or (total is not None and len(rows) >= total):
+            break
+        page += 1
+        skip += page_size
+    return rows
+
+
+def parse_payment_invoices(session, payment_id):
+    """Invoice numbers inside one weekly PayGo batch, from its details page.
+    table[0] headers: 'Dealer Name/Address', 'Invoice Number'. Returns [{dealer, invoice_number}]."""
+    html = _fetch(session, f"/account/paygo/payments/details/{payment_id}")
+    s = _soup(html)
+    out = []
+    tables = s.find_all("table")
+    if not tables:
+        return out
+    for tr in tables[0].find_all("tr")[1:]:
+        cells = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+        if len(cells) >= 2 and cells[1].isdigit():
+            out.append({"dealer": cells[0] or None, "invoice_number": cells[1]})
+    return out
+
+
+def run_paygo_sweep(client, org_id, user, pw, lookback_days, session=None):
+    """Login (or reuse `session`), pull the PayGo pending + approved weekly batches, upsert
+    them, and refresh the invoice-number links for the pending batch + approved batches whose
+    created_on falls within `lookback_days`. Full history of batches is upserted (cheap: 2 list
+    calls); only recent batches' invoice details are (re)fetched so the run stays bounded.
+    Returns a summary dict. Raises VipLoginError / network errors to the caller."""
+    if session is None:
+        session = requests.Session()
+        session.headers.update({"User-Agent": UA})
+        login(session, user, pw)
+
+    pending = list_paygo_payments(session, "/PaygoPayment/PendingPaymentList")
+    approved = list_paygo_payments(session, "/PaygoPayment/ApprovedPaymentList")
+
+    pay_rows, detail_targets = [], []
+    cutoff = datetime.now(timezone.utc).date() - timedelta(days=max(1, lookback_days))
+    for batch_type, recs in (("pending", pending), ("approved", approved)):
+        for rec in recs:
+            pid = rec.get("Id")
+            if pid is None:
+                continue
+            try:
+                pid = int(pid)
+            except (TypeError, ValueError):
+                continue
+            iso, period, pm, py = _paygo_date(rec.get("CreatedOn"))
+            pay_rows.append({
+                "org_id": org_id, "vip_payment_id": pid, "batch_type": batch_type,
+                "dealer": rec.get("Dealer") or None,
+                "created_on": iso,
+                "invoice_count": _to_int(rec.get("InvoiceCount")),
+                "amount": _money(rec.get("Amount")),
+                "amount_overdue": _money(rec.get("AmountOverdue")),
+                "status": rec.get("Status") or None,
+                "period": period, "period_month": pm, "period_year": py,
+            })
+            # refresh invoice links for the pending batch + recent approved batches
+            recent = batch_type == "pending" or (iso and iso >= cutoff.isoformat())
+            if recent:
+                detail_targets.append((pid, iso))
+
+    for i in range(0, len(pay_rows), 500):
+        client.schema("commcalc").table("vip_paygo_payments").upsert(
+            pay_rows[i:i + 500], on_conflict="org_id,vip_payment_id").execute()
+
+    # Replace invoice links for the targeted batches only (delete-by-payment then insert).
+    inv_link_rows, links = [], 0
+    for pid, iso in detail_targets:
+        try:
+            invs = parse_payment_invoices(session, pid)
+        except Exception:
+            invs = []
+        client.schema("commcalc").table("vip_paygo_payment_invoices").delete() \
+            .eq("org_id", org_id).eq("vip_payment_id", pid).execute()
+        for v in invs:
+            inv_link_rows.append({
+                "org_id": org_id, "vip_payment_id": pid,
+                "invoice_number": v.get("invoice_number"),
+                "dealer": v.get("dealer"), "created_on": iso,
+            })
+        links += len(invs)
+    for i in range(0, len(inv_link_rows), 500):
+        client.schema("commcalc").table("vip_paygo_payment_invoices").insert(
+            inv_link_rows[i:i + 500]).execute()
+
+    owed = next((p["amount"] for p in pay_rows if p["batch_type"] == "pending"), None)
+    return {"payments": len(pay_rows), "pending": len(pending), "approved": len(approved),
+            "invoice_links": links, "batches_detailed": len(detail_targets),
+            "current_owed": owed}
+
+
+def _to_int(v):
+    try:
+        return int(float(str(v).strip()))
+    except (TypeError, ValueError):
+        return None

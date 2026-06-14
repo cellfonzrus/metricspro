@@ -172,8 +172,8 @@ export default function VipSweepAdmin() {
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
             <input type="checkbox" checked={cfg.sweep_invoices} onChange={e => set('sweep_invoices', e.target.checked)} /> Invoices
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text3)' }} title="Coming soon — asset lending portal pull (Phase 2)">
-            <input type="checkbox" checked={cfg.sweep_asset} disabled /> Asset lending <em>(soon)</em>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Pull the PayGo / asset-lending weekly billing ledger (needs migration 014)">
+            <input type="checkbox" checked={cfg.sweep_asset} onChange={e => set('sweep_asset', e.target.checked)} /> Asset lending (PayGo)
           </label>
         </div>
       </div>

@@ -685,14 +685,28 @@ def _do_vip_sweep(org_id):
         _vip_set_status(client, org_id, 'error', 'No VIP credentials set in the admin area', mark_run=True)
         return
     _vip_set_status(client, org_id, 'running', 'Sweep in progress…')
+    # Default to the invoice sweep (back-compat: cfg may predate the toggles). sweep_asset
+    # additionally pulls the PayGo / asset-lending weekly billing ledger (migration 014).
+    do_invoices = cfg.get('sweep_invoices') is not False
+    do_asset = bool(cfg.get('sweep_asset'))
+    lookback = int(cfg.get('lookback_days') or 14)
+    parts = []
     try:
-        res = vip_sweep.run_invoice_sweep(
-            client, org_id, cfg['portal_user'], cfg['portal_pass'],
-            int(cfg.get('lookback_days') or 14),
-            (_vip_money, _vip_int, _vip_ts, _vip_period))
-        detail = (f"OK — {res['invoices']} invoices, {res['lines']} lines, "
-                  f"{res['devices']} devices ({res['window']})")
-        _vip_set_status(client, org_id, 'ok', detail, mark_run=True)
+        if do_invoices:
+            res = vip_sweep.run_invoice_sweep(
+                client, org_id, cfg['portal_user'], cfg['portal_pass'], lookback,
+                (_vip_money, _vip_int, _vip_ts, _vip_period))
+            parts.append(f"{res['invoices']} invoices, {res['lines']} lines, "
+                         f"{res['devices']} devices ({res['window']})")
+        if do_asset:
+            ar = vip_sweep.run_paygo_sweep(
+                client, org_id, cfg['portal_user'], cfg['portal_pass'], lookback)
+            owed = f"${ar['current_owed']:,.2f}" if ar.get('current_owed') is not None else "n/a"
+            parts.append(f"PayGo: {ar['payments']} batches (current owed {owed}), "
+                         f"{ar['invoice_links']} invoice links from {ar['batches_detailed']} recent batches")
+        if not parts:
+            parts.append("nothing enabled (tick Invoices and/or Asset-lending)")
+        _vip_set_status(client, org_id, 'ok', "OK — " + " · ".join(parts), mark_run=True)
     except vip_sweep.VipLoginError as e:
         _vip_set_status(client, org_id, 'error', str(e), mark_run=True)
     except Exception as e:
@@ -758,6 +772,49 @@ async def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: 
             {'next_run_at': nxt}).eq('org_id', oid).execute()
         background_tasks.add_task(_do_vip_sweep, oid)
     return {"triggered": len(due)}
+
+
+# ── VIP PayGo / asset-lending ledger (read endpoints; data from the sweep, migration 014) ──
+@router.get("/vip/paygo/summary")
+async def vip_paygo_summary(org_id: str = ORG_ID):
+    """Current week owed + weekly history of the VIP asset-lending (PayGo) billing.
+    Degrades to empty if migration 014 hasn't been run yet."""
+    require_org(org_id)
+    client = sb()
+    try:
+        rows = client.schema('commcalc').table('vip_paygo_payments') \
+            .select('vip_payment_id,batch_type,dealer,created_on,invoice_count,amount,amount_overdue,status,period') \
+            .eq('org_id', org_id).order('created_on', desc=True).limit(500).execute().data or []
+    except Exception as e:
+        return {"configured": False, "detail": str(e)[:200], "current": None,
+                "history": [], "totals": {}}
+    pending = [r for r in rows if r.get('batch_type') == 'pending']
+    approved = [r for r in rows if r.get('batch_type') != 'pending']
+    current = max(pending, key=lambda r: r.get('created_on') or '', default=None)
+    return {
+        "configured": True,
+        "current": current,
+        "history": approved,
+        "totals": {
+            "current_owed": round(float(current['amount']), 2) if current and current.get('amount') is not None else 0.0,
+            "current_overdue": round(float(current['amount_overdue']), 2) if current and current.get('amount_overdue') is not None else 0.0,
+            "weeks": len(approved),
+            "lifetime_paid": round(sum(float(r.get('amount') or 0) for r in approved), 2),
+        },
+    }
+
+
+@router.get("/vip/paygo/payment/{vip_payment_id}")
+async def vip_paygo_payment_detail(vip_payment_id: int, org_id: str = ORG_ID):
+    """One PayGo batch + its invoice numbers (which join vip_invoices.invoice_number)."""
+    require_org(org_id)
+    client = sb()
+    pay = client.schema('commcalc').table('vip_paygo_payments').select('*') \
+        .eq('org_id', org_id).eq('vip_payment_id', vip_payment_id).limit(1).execute().data or []
+    invs = client.schema('commcalc').table('vip_paygo_payment_invoices') \
+        .select('invoice_number,dealer,created_on') \
+        .eq('org_id', org_id).eq('vip_payment_id', vip_payment_id).limit(5000).execute().data or []
+    return {"payment": pay[0] if pay else None, "invoices": invs, "invoice_count": len(invs)}
 
 
 # ── DLAR portal auto-sweep (boostelevatego.com — replaces the manual monthly upload) ──
