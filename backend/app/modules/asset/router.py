@@ -502,6 +502,125 @@ async def get_aging(
     }
 
 
+@router.get("/on-inventory-by-store")
+async def get_on_inventory_by_store(
+    org_id: str = ORG_ID,
+    store: str = "",
+    market: str = "",
+    month: int = None,
+    year: int = None,
+):
+    """On-Inventory exposure rolled up per store: how many unsold devices each store holds
+    and the $ owed to VIP, with the same aging buckets as the Inventory Aging report
+    (<45 / 45-60 WARN / >60 MISSED, measured from acquired_date as of today). Optional
+    month/year narrows to devices ACQUIRED in that period. Numbers reconcile with /aging."""
+    from datetime import date
+    client = sb()
+
+    def _acq_in_period(r):
+        if month is None and year is None:
+            return True
+        a = r.get("acquired_date")
+        if not a:
+            return False
+        try:
+            py, pm, _ = [int(x) for x in str(a)[:10].split("-")]
+        except Exception:
+            return False
+        if year is not None and int(year) != py:
+            return False
+        if month is not None and int(month) != pm:
+            return False
+        return True
+
+    rows = []
+    page = 0; PAGE = 1000
+    while True:
+        start = page * PAGE
+        q = client.schema("commcalc").table("asset_ledger") \
+            .select("store,market,acquired_date,owed_to_vip") \
+            .eq("org_id", org_id).is_("date_sold", "null").ilike("category", "%On Inventory%")
+        if store:
+            q = q.eq("store", store)
+        if market:
+            q = q.eq("market", market)
+        chunk = q.range(start, start + PAGE - 1).execute().data or []
+        rows.extend(chunk)
+        if len(chunk) < PAGE:
+            break
+        page += 1
+        if page > 50:
+            break
+    rows = [r for r in rows if _acq_in_period(r)]
+    today = date.today()
+
+    def days_aged(a):
+        if not a:
+            return None
+        try:
+            y, m, d = map(int, str(a)[:10].split("-"))
+            return (today - date(y, m, d)).days
+        except Exception:
+            return None
+
+    def blank(s, mkt):
+        return {"store": s, "market": mkt, "count": 0, "owed": 0.0,
+                "under45_count": 0, "under45_owed": 0.0,
+                "warn_count": 0, "warn_owed": 0.0,
+                "missed_count": 0, "missed_owed": 0.0,
+                "zero_count": 0}
+
+    by_store: dict = {}
+    for r in rows:
+        s = r.get("store") or "(unknown)"
+        row = by_store.setdefault(s, blank(s, r.get("market")))
+        if not row["market"] and r.get("market"):
+            row["market"] = r.get("market")
+        owed = float(r.get("owed_to_vip") or 0)
+        row["count"] += 1
+        if owed <= 0:
+            row["zero_count"] += 1
+            continue
+        row["owed"] += owed
+        d = days_aged(r.get("acquired_date"))
+        if d is None:
+            continue
+        if d < 45:
+            bk = "under45"
+        elif d <= 60:
+            bk = "warn"
+        else:
+            bk = "missed"
+        row[f"{bk}_count"] += 1
+        row[f"{bk}_owed"] += owed
+
+    stores = []
+    for v in by_store.values():
+        for k in ("owed", "under45_owed", "warn_owed", "missed_owed"):
+            v[k] = round(v[k], 2)
+        stores.append(v)
+    stores.sort(key=lambda x: x["owed"], reverse=True)
+
+    # data freshness: max FileDate from raw_row (same signal the Aging report uses)
+    fd = None
+    sample = client.schema("commcalc").table("asset_ledger") \
+        .select("raw_row").eq("org_id", org_id).limit(1).execute().data or []
+    if sample and sample[0].get("raw_row"):
+        fd = sample[0]["raw_row"].get("FileDate")
+        if fd:
+            fd = str(fd)[:10]
+
+    totals = {
+        "store_count": len(stores),
+        "device_count": sum(s["count"] for s in stores),
+        "owed": round(sum(s["owed"] for s in stores), 2),
+        "missed_owed": round(sum(s["missed_owed"] for s in stores), 2),
+        "warn_owed": round(sum(s["warn_owed"] for s in stores), 2),
+        "zero_count": sum(s["zero_count"] for s in stores),
+    }
+    return {"today": today.isoformat(), "data_as_of": fd, "stores": stores, "totals": totals}
+
+
 # ---- Asset charge classification (single source of truth) ----
 CHARGE_GROUPS = {
     "vip_fees":      ["PROCESSING FEE", "SHIPPING", "SIM KIT"],

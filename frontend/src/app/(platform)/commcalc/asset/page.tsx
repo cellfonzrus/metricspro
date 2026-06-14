@@ -222,6 +222,7 @@ export default function AssetPage() {
           {summary?.loaded && <SendReportButton reportKey="asset_ledger" filters={{}} />}
           <a className="btn" href="/commcalc/asset/owed-weekly" style={{ textDecoration: 'none' }}>📅 Weekly Owed to VIP</a>
           <a className="btn" href="/commcalc/asset/aging" style={{ textDecoration: 'none' }}>⏳ Inventory Aging</a>
+          <a className="btn" href="/commcalc/asset/on-inventory" style={{ textDecoration: 'none' }}>🏪 On-Inventory by Store</a>
           <a className="btn" href="/commcalc/asset/dashboard" style={{ textDecoration: 'none' }}>🧾 Charges</a>
           <a className="btn" href="/commcalc/asset/charges/rma" style={{ textDecoration: 'none' }}>🔁 RMA</a>
           <button className="btn" onClick={handleRefreshPrices} disabled={uploading} title="Re-pull selling prices from sales and re-sync undercharge flags">
