@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, ORG_ID, fmt, fmtN, localToday } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { ExportButtons, ExportPayload } from '@/lib/export'
 
 const CATS = [
   { key: 'activations', label: 'Activations', unit: 'count' },
@@ -31,7 +32,7 @@ interface ConvT {
 interface CalResp {
   period: string; scope: string; store_code: string; rep: string | null
   scheduled_hours_total: number; open_days_total: number; today: string
-  has_schedule: boolean
+  has_schedule: boolean; projected_open_days?: number
   categories: Record<string, CatMetrics>; calendar: CalDay[]; reps: string[]
   conversion?: { store: ConvT; rep?: ConvT }
 }
@@ -78,6 +79,41 @@ export default function DailyTargetsPage() {
 
   const th: React.CSSProperties = { textAlign: 'left', padding: '10px 14px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em' }
   const td: React.CSSProperties = { padding: '8px 14px', fontSize: 13 }
+
+  // Condensed export (Excel / PDF / Print) of the selected store/rep's daily targets + conversion.
+  function buildPayload(): ExportPayload {
+    if (!detail) return { title: 'Daily Targets', filename: 'daily-targets', sheets: [] }
+    const who = scope === 'rep' && detail.rep ? detail.rep : (summary.find(s => s.store_code === storeCode)?.address || storeCode)
+    const rows: any[] = CATS.map(c => {
+      const m = detail.categories[c.key]
+      return { category: c.label, today: val(m.unit, m.today_target), pace: val(m.unit, m.pace),
+        need: val(m.unit, m.need), monthly: val(m.unit, m.monthly), achieved: val(m.unit, m.achieved_mtd) }
+    })
+    const conv = scope === 'rep' ? detail.conversion?.rep : detail.conversion?.store
+    if (conv && detail.conversion) {
+      rows.push({
+        category: 'Conversion (boxes ÷ bill-pay)', today: `${conv.rate}%`,
+        pace: `tgt ${detail.conversion.store.target}%`,
+        need: scope === 'rep' && detail.conversion.rep?.below_store ? 'below store' : '',
+        monthly: `store ${detail.conversion.store.rate}%`,
+        achieved: `${conv.boxes} box / ${conv.billpays} bp`,
+      })
+    }
+    const cols = [
+      { header: 'Target', get: (r: any) => r.category },
+      { header: 'Today', get: (r: any) => r.today, align: 'right' as const },
+      { header: 'Pace/day', get: (r: any) => r.pace, align: 'right' as const },
+      { header: 'Need', get: (r: any) => r.need, align: 'right' as const },
+      { header: 'Monthly', get: (r: any) => r.monthly, align: 'right' as const },
+      { header: 'Achieved', get: (r: any) => r.achieved, align: 'right' as const },
+    ]
+    return {
+      title: `Daily Targets — ${who}`,
+      subtitle: `${scope === 'rep' ? 'Rep · ' : ''}${period} · as of ${detail.today}`,
+      filename: `Daily-Targets-${String(who).replace(/[^a-z0-9]+/gi, '-')}-${period.replace(/\s+/g, '-')}`,
+      sheets: [{ name: 'Daily Targets', columns: cols, rows }],
+    }
+  }
 
   return (
     <div>
@@ -164,8 +200,9 @@ export default function DailyTargetsPage() {
           </select>
         )}
         {detail && <span style={{ fontSize: 12, color: 'var(--text3)' }}>
-          {fmtN(detail.scheduled_hours_total, 0)}h scheduled · {detail.open_days_total} open days · today {detail.today}
+          {fmtN(detail.scheduled_hours_total, 0)}h scheduled · {detail.open_days_total} open days{detail.projected_open_days ? ` (${detail.projected_open_days} projected)` : ''} · today {detail.today}
         </span>}
+        {detail && <span style={{ marginLeft: 'auto' }}><ExportButtons payload={buildPayload} compact /></span>}
       </div>
 
       {detail && !detail.has_schedule && (

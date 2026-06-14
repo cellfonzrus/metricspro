@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, ORG_ID, fmt, fmtN, localToday } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { ExportButtons, ExportPayload } from '@/lib/export'
 
 const CATS = [
   { key: 'activations', label: 'Activations', unit: 'count', hint: 'premium + BYOD' },
@@ -51,6 +52,40 @@ export default function MyTargetsPage() {
     setLoading(false)
   }
 
+  // Condensed per-rep export (Excel / PDF / Print) — all of a rep's daily targets on one sheet.
+  function buildPayload(): ExportPayload {
+    const rows: any[] = CATS.map(c => {
+      const m = detail.categories?.[c.key] || {}
+      return {
+        category: c.label, today: val(m.unit, m.today_target), pace: val(m.unit, m.pace),
+        need: val(m.unit, m.need), monthly: val(m.unit, m.monthly), achieved: val(m.unit, m.achieved_mtd),
+      }
+    })
+    if (detail.conversion?.rep) {
+      rows.push({
+        category: 'Conversion (boxes ÷ bill-pay)',
+        today: `${detail.conversion.rep.rate}%`, pace: `tgt ${detail.conversion.store.target}%`,
+        need: detail.conversion.rep.below_store ? 'below store' : 'OK',
+        monthly: `store ${detail.conversion.store.rate}%`,
+        achieved: `${detail.conversion.rep.boxes} box / ${detail.conversion.rep.billpays} bp`,
+      })
+    }
+    const cols = [
+      { header: 'Target', get: (r: any) => r.category },
+      { header: 'Today', get: (r: any) => r.today, align: 'right' as const },
+      { header: 'Pace/day', get: (r: any) => r.pace, align: 'right' as const },
+      { header: 'Need', get: (r: any) => r.need, align: 'right' as const },
+      { header: 'Monthly', get: (r: any) => r.monthly, align: 'right' as const },
+      { header: 'Achieved', get: (r: any) => r.achieved, align: 'right' as const },
+    ]
+    return {
+      title: `Daily Targets — ${rep}`,
+      subtitle: `${storeCode} · ${period} · as of ${detail.today}`,
+      filename: `Daily-Targets-${rep.replace(/[^a-z0-9]+/gi, '-')}-${period.replace(/\s+/g, '-')}`,
+      sheets: [{ name: 'Daily Targets', columns: cols, rows }],
+    }
+  }
+
   return (
     <div>
       <div style={{ marginBottom: 20 }}>
@@ -82,8 +117,11 @@ export default function MyTargetsPage() {
         <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>Loading…</div>
       ) : !detail ? null : (
         <>
-          <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 14 }}>
-            <strong>{rep}</strong> · {fmtN(detail.scheduled_hours_total, 0)}h scheduled this month · today {detail.today}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+            <div style={{ fontSize: 13, color: 'var(--text2)' }}>
+              <strong>{rep}</strong> · {fmtN(detail.scheduled_hours_total, 0)}h scheduled this month · today {detail.today}
+            </div>
+            <ExportButtons payload={buildPayload} compact />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
             {CATS.map(c => {
