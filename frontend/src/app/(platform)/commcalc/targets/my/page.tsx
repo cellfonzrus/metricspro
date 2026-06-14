@@ -113,6 +113,28 @@ export default function MyTargetsPage() {
               )
             })}
           </div>
+
+          {detail.conversion?.rep && (
+            <div className="card" style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>
+                Conversion <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>· boxes ÷ bill-payments · target {detail.conversion.store.target}%</span>
+              </div>
+              <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
+                {[['You', detail.conversion.rep], ['Store', detail.conversion.store]].map(([label, c]: any) => (
+                  <div key={label}>
+                    <div style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+                    <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1.1, color: c.rate >= c.target ? 'var(--green)' : '#dc2626' }}>{c.rate}%</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>{c.boxes} boxes / {c.billpays} bill-pays</div>
+                  </div>
+                ))}
+              </div>
+              {detail.conversion.rep.below_store && (
+                <div style={{ marginTop: 12, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#b91c1c' }}>
+                  ⚠️ Your conversion ({detail.conversion.rep.rate}%) is below the store ({detail.conversion.store.rate}%). Convert more bill-pay/walk-in customers into box sales to pull it up.
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

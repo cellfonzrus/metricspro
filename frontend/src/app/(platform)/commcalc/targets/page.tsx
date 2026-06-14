@@ -24,11 +24,21 @@ interface CalDay {
   date: string; hours: number; is_today: boolean; is_past: boolean
   cats: Record<string, { base: number; achieved: number | null }>
 }
+interface ConvT {
+  boxes: number; billpays: number; rate: number; target: number
+  meets_target: boolean; below_store?: boolean
+}
 interface CalResp {
   period: string; scope: string; store_code: string; rep: string | null
   scheduled_hours_total: number; open_days_total: number; today: string
   has_schedule: boolean
   categories: Record<string, CatMetrics>; calendar: CalDay[]; reps: string[]
+  conversion?: { store: ConvT; rep?: ConvT }
+}
+
+function convColor(c?: ConvT) {
+  if (!c) return 'var(--text3)'
+  return c.rate >= c.target ? 'var(--green)' : '#dc2626'
 }
 
 export default function DailyTargetsPage() {
@@ -94,7 +104,7 @@ export default function DailyTargetsPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-                {['Store', 'Monthly', 'Achieved', 'Need', "Today's Target", 'Pace/day', ''].map(h => <th key={h} style={th}>{h}</th>)}
+                {['Store', 'Monthly', 'Achieved', 'Need', "Today's Target", 'Pace/day', 'Conversion', ''].map(h => <th key={h} style={th}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -111,6 +121,14 @@ export default function DailyTargetsPage() {
                     <td style={{ ...td, color: a?.need > 0 ? '#b45309' : 'var(--green)' }}>{fmtN(a?.need, 0)}</td>
                     <td style={{ ...td, fontWeight: 700, color: 'var(--accent)' }}>{fmtN(a?.today_target, 1)}</td>
                     <td style={td}>{fmtN(a?.pace, 1)}</td>
+                    <td style={{ ...td, fontWeight: 600, color: convColor(s.conversion) }}>
+                      {s.conversion ? `${s.conversion.rate}%` : '—'}
+                      {s.conversion && (
+                        <span style={{ display: 'block', fontSize: 10, fontWeight: 400, color: 'var(--text3)' }}>
+                          {s.conversion.boxes}/{s.conversion.billpays} · tgt {s.conversion.target}%
+                        </span>
+                      )}
+                    </td>
                     <td style={td}>
                       <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }}
                         onClick={() => { setScope('store'); setRep(''); setStoreCode(s.store_code) }}>
@@ -184,6 +202,34 @@ export default function DailyTargetsPage() {
               )
             })}
           </div>
+
+          {/* Conversion (boxes ÷ bill-payments) */}
+          {detail.conversion && (
+            <div className="card" style={{ marginBottom: 24 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>Conversion <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>· boxes ÷ bill-payments · target {detail.conversion.store.target}%</span></div>
+              </div>
+              <div style={{ display: 'flex', gap: 28, marginTop: 12, flexWrap: 'wrap' }}>
+                {detail.scope === 'rep' && detail.conversion.rep && (
+                  <div>
+                    <div style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{detail.rep}</div>
+                    <div style={{ fontSize: 28, fontWeight: 800, color: convColor(detail.conversion.rep), lineHeight: 1.1 }}>{detail.conversion.rep.rate}%</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>{detail.conversion.rep.boxes} boxes / {detail.conversion.rep.billpays} bill-pays</div>
+                  </div>
+                )}
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Store</div>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: convColor(detail.conversion.store), lineHeight: 1.1 }}>{detail.conversion.store.rate}%</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)' }}>{detail.conversion.store.boxes} boxes / {detail.conversion.store.billpays} bill-pays</div>
+                </div>
+              </div>
+              {detail.scope === 'rep' && detail.conversion.rep?.below_store && (
+                <div style={{ marginTop: 12, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#b91c1c' }}>
+                  ⚠️ <strong>{detail.rep}</strong>'s conversion ({detail.conversion.rep.rate}%) is below the store ({detail.conversion.store.rate}%) — this rep is pulling the store's productivity down.
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Calendar */}
           <div className="card" style={{ padding: 0 }}>

@@ -1594,6 +1594,15 @@ async def get_target_calendar(
         'rep': rep_arg, 'monthly_targets': monthly,
         'reps': targets_engine.reps_in_scope(shifts, actuals, store_code),
     })
+    # Conversion (boxes ÷ bill-payments). Always include the store rate; for a rep scope
+    # also include the rep's rate + whether it's dragging the store down.
+    store_conv = targets_engine.scope_conversion(actuals, store_code, None, today)
+    conv = {'store': store_conv}
+    if rep_arg:
+        rep_conv = targets_engine.scope_conversion(actuals, store_code, rep_arg, today)
+        rep_conv['below_store'] = rep_conv['rate'] < store_conv['rate']
+        conv['rep'] = rep_conv
+    result['conversion'] = conv
     return result
 
 
@@ -1631,6 +1640,7 @@ async def get_targets_summary(period: str, today: str = "", org_id: str = ORG_ID
             'store_code': code, 'address': s.get('address'), 'market': s.get('market'),
             'scheduled_hours_total': res['scheduled_hours_total'],
             'categories': res['categories'],
+            'conversion': targets_engine.scope_conversion(actuals, code, None, today),
         })
     out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
     return {'period': period, 'today': today.isoformat(), 'stores': out}

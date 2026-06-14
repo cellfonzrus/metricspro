@@ -23,6 +23,10 @@ from app.modules.commcalc.calculator import safe_float
 CATEGORIES = ['activations', 'upgrades', 'byod', 'accessories']
 UNITS = {'activations': 'count', 'upgrades': 'count', 'byod': 'count', 'accessories': 'dollars'}
 
+# Conversion = boxes sold ÷ bill-payments (walk-ins), as a %. A ratio measured against a
+# fixed threshold (not a catch-up category), computed separately per store and per rep.
+CONVERSION_TARGET = 30.0  # %
+
 
 def _as_date(v):
     """Coerce a value to a date. Accepts date objects or 'YYYY-MM-DD...' strings."""
@@ -83,12 +87,45 @@ def scope_actuals_by_day(actuals: list[dict], store_code: str, rep_name: str | N
         d = _as_date(a.get('trans_date'))
         if not d:
             continue
-        agg = out.setdefault(d, {'prem': 0.0, 'byod': 0.0, 'upg': 0.0, 'acc': 0.0})
+        agg = out.setdefault(d, {'prem': 0.0, 'byod': 0.0, 'upg': 0.0, 'acc': 0.0,
+                                 'box': 0.0, 'billpay': 0.0})
         agg['prem'] += safe_float(a.get('prem_count'))
         agg['byod'] += safe_float(a.get('byod_count'))
         agg['upg'] += safe_float(a.get('upg_count'))
         agg['acc'] += safe_float(a.get('acc_gp'))
+        agg['box'] += safe_float(a.get('box_count'))
+        agg['billpay'] += safe_float(a.get('billpay_count'))
     return out
+
+
+def scope_conversion(actuals: list[dict], store_code: str, rep_name: str | None = None,
+                     today=None) -> dict:
+    """MTD conversion for a store (rep_name=None) or a rep within it.
+
+    conversion = boxes sold (device-dept lines) ÷ bill-payments (walk-in recharges) × 100.
+    Target = CONVERSION_TARGET%. Rows after `today` are excluded so it stays month-to-date."""
+    sc = (store_code or '').strip().upper()
+    rn = (rep_name or '').strip().upper()
+    boxes = billpays = 0.0
+    for a in actuals:
+        if (a.get('store_code') or '').strip().upper() != sc:
+            continue
+        if rn and (a.get('rep_name') or '').strip().upper() != rn:
+            continue
+        if today is not None:
+            d = _as_date(a.get('trans_date'))
+            if d and d > today:
+                continue
+        boxes += safe_float(a.get('box_count'))
+        billpays += safe_float(a.get('billpay_count'))
+    rate = (boxes / billpays * 100.0) if billpays > 0 else 0.0
+    return {
+        'boxes': int(boxes),
+        'billpays': int(billpays),
+        'rate': round(rate, 1),
+        'target': CONVERSION_TARGET,
+        'meets_target': rate >= CONVERSION_TARGET,
+    }
 
 
 def project_future_hours(hours_by_day: dict, today: date, month_end: date) -> dict:
