@@ -28,6 +28,9 @@ const NAV = [
     { href: '/storeops/timeoff', label: 'Time Off', icon: '🌴' },
     { href: '/storeops/payroll', label: 'Payroll', icon: '💵' },
   ]},
+  { group: 'Notify', items: [
+    { href: '/notify', label: 'Notify', icon: '📤' },
+  ]},
 ]
 
 function PlatformLayoutInner({ children }: { children: React.ReactNode }) {

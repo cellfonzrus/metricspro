@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { SendReportButton } from '@/lib/send-report'
 
 function toApiPeriod(label: string): string {
   const months = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -164,6 +165,7 @@ export default function DiscrepancyPage() {
             style={{ background: running ? '#9ca3af' : '#111827', color: 'white', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, cursor: running ? 'default' : 'pointer', fontSize: 14 }}>
             {running ? 'Running…' : 'Run Detection'}
           </button>
+          <SendReportButton reportKey="discrepancy" filters={{ period }} />
         </div>
       </div>
 

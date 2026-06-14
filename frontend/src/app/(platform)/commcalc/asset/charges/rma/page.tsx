@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 type Row = { id:number; store:string; market:string; esn_imei:string|null; phone_number:string|null
   device_model:string|null; status:string|null; date_sold:string|null; owed_to_vip:number|null
@@ -117,6 +118,7 @@ export default function RmaPage() {
           </p>
         </div>
         {data && <ExportButtons payload={buildPayload} />}
+        {data && <SendReportButton reportKey="rma" filters={{ ...(store?{store}:{}), ...(market?{market}:{}), ...(month?{month, year}:{}) }} />}
       </div>
 
       <div className="card" style={{ padding:14, marginBottom:20, display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>

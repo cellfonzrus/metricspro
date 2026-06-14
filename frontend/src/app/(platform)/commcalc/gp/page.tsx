@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { SendReportButton } from '@/lib/send-report'
 
 interface StoreRow {
   store: string; store_code: string; market: string
@@ -138,6 +139,7 @@ export default function GPReportPage() {
             ))}
           </div>
           <button className="btn btn-secondary" onClick={exportCSV}>📥 CSV</button>
+          <SendReportButton reportKey="gp" filters={{ period }} />
         </div>
       </div>
 

@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -136,6 +137,7 @@ export default function VipInvoicesPage() {
           </p>
         </div>
         {summary && <ExportButtons payload={buildPayload} />}
+        {summary && <SendReportButton reportKey="vip_invoices" filters={{ ...(period?{period}:{}), ...(location?{location}:{}), ...(status?{status}:{}) }} />}
       </div>
 
       {/* Import workbook */}

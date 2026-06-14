@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { SendReportButton } from '@/lib/send-report'
 
 interface Rep {
   epay_salesperson: string
@@ -98,6 +99,7 @@ export default function ReportsPage() {
           }}>
             📥 CSV
           </button>
+          <SendReportButton reportKey="commissions" filters={{ period }} />
         </div>
       </div>
 

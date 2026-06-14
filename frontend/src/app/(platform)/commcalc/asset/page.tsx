@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 type Summary = {
   loaded: boolean
@@ -214,6 +215,7 @@ export default function AssetPage() {
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {uploadMsg && <span style={{ fontSize: 13 }}>{uploadMsg}</span>}
           {summary?.loaded && <ExportButtons payload={buildPayload} />}
+          {summary?.loaded && <SendReportButton reportKey="asset_ledger" filters={{}} />}
           <a className="btn" href="/commcalc/asset/owed-weekly" style={{ textDecoration: 'none' }}>📅 Weekly Owed to VIP</a>
           <a className="btn" href="/commcalc/asset/aging" style={{ textDecoration: 'none' }}>⏳ Inventory Aging</a>
           <a className="btn" href="/commcalc/asset/dashboard" style={{ textDecoration: 'none' }}>🧾 Charges</a>

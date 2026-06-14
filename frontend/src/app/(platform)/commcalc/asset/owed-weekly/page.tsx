@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 function ymd(d: Date) {
   const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0')
@@ -112,6 +113,7 @@ export default function OwedWeeklyPage() {
           </p>
         </div>
         {report && <ExportButtons payload={buildPayload} />}
+        {report && <SendReportButton reportKey="owed_weekly" filters={{ thursday, ...(store?{store}:{}), ...(market?{market}:{}) }} />}
       </div>
 
       {/* Controls */}

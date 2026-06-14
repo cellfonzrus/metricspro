@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 type Row = {
   id: number; store: string; market: string; esn_imei: string|null; phone_number: string|null
@@ -128,6 +129,7 @@ export default function AgingPage() {
           </p>
         </div>
         {data && <ExportButtons payload={buildPayload} />}
+        {data && <SendReportButton reportKey="inventory_aging" filters={{ ...(store?{store}:{}), ...(market?{market}:{}), ...(month?{month, year}:{}) }} />}
       </div>
 
       {/* Stale data banner */}

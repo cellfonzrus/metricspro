@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { SendReportButton } from '@/lib/send-report'
 
 const SEVERITY_COLORS: Record<string, string> = {
   CRITICAL: '#dc2626', HIGH: '#d97706', MEDIUM: '#2563eb', LOW: '#64748b',
@@ -121,7 +122,10 @@ export default function FlagsPage() {
             {period} · {filtered.length} of {flags.length} flags · At risk: <strong style={{ color: 'var(--red)' }}>{fmt(totalAtRisk)}</strong>
           </p>
         </div>
-        <button className="btn btn-secondary" onClick={exportCSV}>📥 CSV</button>
+        <div style={{ display: 'inline-flex', gap: 6 }}>
+          <button className="btn btn-secondary" onClick={exportCSV}>📥 CSV</button>
+          <SendReportButton reportKey="flags" filters={{ period }} />
+        </div>
       </div>
 
       {/* Store summary matrix */}

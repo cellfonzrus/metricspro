@@ -3,6 +3,13 @@ import { useState, useEffect } from 'react'
 import { useParams } from 'next/navigation'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
+
+// cfg.key (backend group) -> notify report key
+const SEND_KEY: Record<string, string> = {
+  appeals: 'charges_appeals', vip_fees: 'charges_vip_fees',
+  stock_balance: 'charges_stock_balance', recon_oddity: 'charges_recon',
+}
 
 // URL slug -> backend group key + display config
 const GROUP_MAP: Record<string, { key: string; title: string; color: string; critical?: boolean; blurb: string }> = {
@@ -131,7 +138,10 @@ export default function ChargeGroupPage() {
           <h1 style={{ fontSize:22, fontWeight:700, margin:'6px 0 0' }}>{cfg.title}</h1>
           <p style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>{cfg.blurb}</p>
         </div>
-        <ExportButtons payload={buildPayload} />
+        <div style={{ display: 'inline-flex', gap: 6 }}>
+          <ExportButtons payload={buildPayload} />
+          {cfg && <SendReportButton reportKey={SEND_KEY[cfg.key]} filters={{ ...(store?{store}:{}), ...(market?{market}:{}), ...(mode==='month'?{month, year}: mode==='week'?{week_friday: weekFriday}:{}) }} />}
+        </div>
       </div>
 
       {cfg.critical && (
