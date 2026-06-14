@@ -584,6 +584,26 @@ async def vip_invoices_list(org_id: str = ORG_ID, period: str = "", location: st
     return (q.order('created_on', desc=True).range(offset, offset + lim - 1).execute().data) or []
 
 
+@router.get("/vip/invoice/{vip_id}")
+async def vip_invoice_detail(vip_id: int, org_id: str = ORG_ID):
+    """One invoice's full contents for the click-through preview: header + line items + devices."""
+    require_org(org_id)
+    client = sb()
+    hdr = client.schema('commcalc').table('vip_invoices').select(
+        "vip_id,invoice_number,order_number,location,status,created_on,transaction_date,due_date,"
+        "sub_total,shipping,discount,other_cost,other_deductions,tax,grand_total,note,period"
+    ).eq('org_id', org_id).eq('vip_id', vip_id).limit(1).execute().data
+    if not hdr:
+        raise HTTPException(404, f"Invoice {vip_id} not found")
+    lines = client.schema('commcalc').table('vip_invoice_lines').select(
+        "name,note,sku,price,quantity,total"
+    ).eq('org_id', org_id).eq('vip_invoice_id', vip_id).execute().data or []
+    devices = client.schema('commcalc').table('vip_invoice_devices').select(
+        "serial,product_name,imei,sim"
+    ).eq('org_id', org_id).eq('vip_invoice_id', vip_id).execute().data or []
+    return {"invoice": hdr[0], "lines": lines, "devices": devices}
+
+
 # ── Calculate endpoint ────────────────────────────────────────
 @router.post("/calculate/{period}")
 async def calculate(

@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'next/navigation'
 import { api, fmt, ORG_ID } from '@/lib/client'
-import { ExportButtons, ExportPayload } from '@/lib/export'
+import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 
 // cfg.key (backend group) -> notify report key
@@ -35,7 +35,7 @@ function ymd(d: Date) {
 type Row = { id:number; store:string; market:string; esn_imei:string|null; phone_number:string|null
   device_model:string|null; category:string|null; status:string|null; owed_to_vip:number|null
   selling_price:number|null; period_date:string|null; notes:string|null
-  vip_invoice_number:string|null; vip_invoice_date:string|null }
+  vip_invoice_number:string|null; vip_invoice_date:string|null; denial_reason?:string|null }
 type Group = { key:string; label:string; count:number; owed:number
   by_category:{category:string;count:number;owed:number}[]
   by_store:{store:string;market:string;count:number;owed:number}[] }
@@ -53,6 +53,7 @@ export default function ChargeGroupPage() {
   const [group, setGroup] = useState<Group | null>(null)
   const [lineItems, setLineItems] = useState<ChargeRows | null>(null)
   const [loading, setLoading] = useState(true)
+  const [catFilter, setCatFilter] = useState('')  // click-through drill into one category
 
   // period filter (mirrors the dashboard)
   const [mode, setMode] = useState<'all'|'month'|'week'>('all')
@@ -76,6 +77,7 @@ export default function ChargeGroupPage() {
 
   async function load() {
     setLoading(true)
+    setCatFilter('')  // a new filter set clears any category drill
     try {
       const q1 = periodParams(new URLSearchParams({ org_id: ORG_ID }))
       const q2 = periodParams(new URLSearchParams({ org_id: ORG_ID, group: cfg.key, limit: '2000' }))
@@ -96,19 +98,22 @@ export default function ChargeGroupPage() {
   const tabBtn = (active:boolean) => ({ padding:'6px 14px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, cursor:'pointer', fontWeight:600,
     background: active ? 'var(--accent)' : 'var(--surface)', color: active ? '#fff' : 'var(--text2)' })
   const periodLabel = mode==='all' ? 'All time' : mode==='month' ? `${MONTHS[month-1]} ${year}` : `Week of ${weekFriday}`
-  const filterLabel = [periodLabel, market||null, store||null].filter(Boolean).join(' · ')
+  const filterLabel = [periodLabel, market||null, store||null, catFilter||null].filter(Boolean).join(' · ')
+  const isAppeals = cfg.key === 'appeals'
+  const shownRows = (lineItems?.rows || []).filter(r => !catFilter || r.category === catFilter)
 
   function buildPayload(): ExportPayload {
-    const items = lineItems?.rows || []
+    const items = shownRows
     return {
       title: `${cfg.title} — Asset Charges`,
       subtitle: filterLabel,
-      filename: `${slug}-${mode==='month'?`${year}-${String(month).padStart(2,'0')}`:mode}`,
+      filename: `${slug}${catFilter?'-'+catFilter.replace(/[^a-z0-9]+/gi,'-').toLowerCase().slice(0,30):''}-${mode==='month'?`${year}-${String(month).padStart(2,'0')}`:mode}`,
       sheets: [
         { name: 'Line Items', rows: items, columns: [
           { header:'Store', get:r=>r.store },
           { header:'Market', get:r=>r.market },
           { header:'Category', get:r=>r.category },
+          ...(isAppeals ? [{ header:'Reason', get:(r:Row)=>r.denial_reason } as ExportColumn] : []),
           { header:'Device', get:r=>r.device_model },
           { header:'IMEI/ESN', get:r=>r.esn_imei },
           { header:'Phone', get:r=>r.phone_number },
@@ -202,15 +207,24 @@ export default function ChargeGroupPage() {
 
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginBottom:24 }}>
             <div className="card" style={{ padding:0 }}>
-              <div style={{ padding:'12px 16px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14 }}>By Category</div>
+              <div style={{ padding:'12px 16px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14 }}>
+                By Category <span style={{ fontWeight:400, color:'var(--text3)', fontSize:12 }}>— click to drill into line items</span>
+              </div>
               <table style={{ width:'100%', borderCollapse:'collapse' }}><tbody>
-                {group.by_category.map((c,i) => (
-                  <tr key={c.category} style={{ borderTop:'1px solid var(--border)', background:i%2?'var(--surface2)':'transparent' }}>
-                    <td style={{ padding:'8px 16px', fontSize:13 }}>{c.category}</td>
+                {group.by_category.map((c,i) => {
+                  const active = catFilter === c.category
+                  return (
+                  <tr key={c.category} onClick={() => setCatFilter(active ? '' : c.category)}
+                      style={{ borderTop:'1px solid var(--border)', cursor:'pointer',
+                               background: active ? cfg.color+'18' : (i%2?'var(--surface2)':'transparent') }}>
+                    <td style={{ padding:'8px 16px', fontSize:13, fontWeight: active?700:400 }}>
+                      <span style={{ display:'inline-block', width:14, color:'var(--text3)' }}>{active?'▾':'▸'}</span>{c.category}
+                    </td>
                     <td style={{ padding:'8px 16px', fontSize:13, textAlign:'right' }}>{c.count}</td>
                     <td style={{ padding:'8px 16px', fontSize:13, fontWeight:600, textAlign:'right' }}>{fmt(c.owed)}</td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody></table>
             </div>
             <div className="card" style={{ padding:0 }}>
@@ -230,26 +244,36 @@ export default function ChargeGroupPage() {
           </div>
 
           <div className="card" style={{ padding:0 }}>
-            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14 }}>
-              Line Items <span style={{ fontWeight:400, color:'var(--text3)', fontSize:12 }}>
-                ({(lineItems?.total || 0).toLocaleString()}{lineItems && lineItems.total > (lineItems.rows.length) ? ` · showing ${lineItems.rows.length.toLocaleString()}` : ''})
-              </span>
+            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+              <span>Line Items <span style={{ fontWeight:400, color:'var(--text3)', fontSize:12 }}>
+                ({shownRows.length.toLocaleString()}{lineItems && lineItems.total > lineItems.rows.length ? ` · ${lineItems.total.toLocaleString()} total` : ''})
+              </span></span>
+              {catFilter && (
+                <span style={{ display:'inline-flex', alignItems:'center', gap:6, background:cfg.color+'18', color:cfg.color, borderRadius:14, padding:'3px 10px', fontSize:12, fontWeight:600 }}>
+                  {catFilter}
+                  <span onClick={() => setCatFilter('')} style={{ cursor:'pointer', fontWeight:700 }} title="Clear category">✕</span>
+                </span>
+              )}
             </div>
             <div style={{ overflowX:'auto' }}>
               <table style={{ width:'100%', borderCollapse:'collapse', minWidth:820 }}>
                 <thead><tr style={{ background:'var(--surface2)' }}>
-                  {['Store','Market','Category','Device','IMEI/ESN','Phone','Date','Owed','Selling','VIP Invoice #','Invoice Date'].map(h => (
+                  {(isAppeals
+                    ? ['Store','Market','Category','Reason','Device','IMEI/ESN','Phone','Date','Owed','Selling','VIP Invoice #','Invoice Date']
+                    : ['Store','Market','Category','Device','IMEI/ESN','Phone','Date','Owed','Selling','VIP Invoice #','Invoice Date']
+                  ).map(h => (
                     <th key={h} style={{ textAlign:'left', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
                   ))}
                 </tr></thead>
                 <tbody>
-                  {(lineItems?.rows || []).length === 0 ? (
-                    <tr><td colSpan={11} style={{ padding:24, textAlign:'center', color:'var(--text3)', fontSize:13 }}>No line items for this filter.</td></tr>
-                  ) : (lineItems?.rows || []).map((r,i) => (
+                  {shownRows.length === 0 ? (
+                    <tr><td colSpan={isAppeals?12:11} style={{ padding:24, textAlign:'center', color:'var(--text3)', fontSize:13 }}>No line items for this filter.</td></tr>
+                  ) : shownRows.map((r,i) => (
                     <tr key={r.id} style={{ borderTop:'1px solid var(--border)', background:i%2?'var(--surface2)':'transparent' }}>
                       <td style={{ padding:'8px 12px', fontSize:12 }}>{r.store||'—'}</td>
                       <td style={{ padding:'8px 12px', fontSize:12, color:'var(--text2)' }}>{r.market||'—'}</td>
                       <td style={{ padding:'8px 12px', fontSize:12 }}>{r.category||'—'}</td>
+                      {isAppeals && <td style={{ padding:'8px 12px', fontSize:12, color:'var(--text2)', maxWidth:320, whiteSpace:'normal' }}>{r.denial_reason||'—'}</td>}
                       <td style={{ padding:'8px 12px', fontSize:12 }}>{r.device_model||'—'}</td>
                       <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'monospace' }}>{r.esn_imei||'—'}</td>
                       <td style={{ padding:'8px 12px', fontSize:12 }}>{r.phone_number||'—'}</td>

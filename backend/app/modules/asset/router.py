@@ -635,6 +635,35 @@ async def get_charges_summary(org_id: str = ORG_ID, store: str = "", market: str
     }
 
 
+def _appeal_reason(r):
+    """Human-readable reason an appeal row is a loss. There is no single denial-reason
+    column — the detail lives in Boost's Payment Detail Report (ePay) — so we build it from
+    the category plus the concrete raw_row signals when present (notably 'PN paid to ESN',
+    i.e. the phone number's credit was paid against a DIFFERENT device)."""
+    cat = (r.get("category") or "").strip()
+    raw = r.get("raw_row") or {}
+    pn_esn = (raw.get("PN paid to ESN") or "").strip() if raw.get("PN paid to ESN") else ""
+    reimb_pn = (raw.get("Reimbursement on PN") or "").strip() if raw.get("Reimbursement on PN") else ""
+    pn_note = ""
+    if pn_esn:
+        pn_note = f"phone number's credit paid to a different ESN ({pn_esn})"
+        if reimb_pn:
+            pn_note += f", ${reimb_pn} reimbursed there"
+    base = {
+        "Re-Escalation": "Re-escalation submitted to Boost — awaiting decision",
+        "Missing 1st MRC": "Missing 1st month recurring charge (1st MRC) — no Boost payment received",
+        "Failed Activation. Check Boost Payment Status": "Failed activation — check Boost payment status",
+        "Over 10 Days Missing Reimbursement (CheckElevate/Submit Appeal)":
+            "Over 10 days missing reimbursement — check Elevate / submit appeal",
+    }.get(cat)
+    if cat.startswith("Appeal Denied"):
+        return (f"Appeal denied — {pn_note}. See Boost Payment Detail Report (ePay)." if pn_note
+                else "Appeal denied — details in Boost Payment Detail Report (ePay).")
+    if base:
+        return f"{base} · {pn_note}" if pn_note else base
+    return f"{cat} · {pn_note}" if pn_note else (cat or "—")
+
+
 @router.get("/charge-rows")
 async def get_charge_rows(
     group: str,
@@ -660,13 +689,17 @@ async def get_charge_rows(
 
     # Pull every row in this group's categories (bounded subset, not the whole ledger),
     # honoring store/market filters in the query; period is filtered in Python below.
+    # For appeals we also need raw_row to derive the denial reason.
+    sel = ("id,store,market,esn_imei,phone_number,device_model,category,status,"
+           "date_sold,payg_date,acquired_date,billing_friday,owed_to_vip,reimbursement,commissions,selling_price,notes")
+    if group == "appeals":
+        sel += ",raw_row"
     rows = []
     page = 0; PAGE = 1000
     while True:
         start = page * PAGE
         q = client.schema("commcalc").table("asset_ledger") \
-            .select("id,store,market,esn_imei,phone_number,device_model,category,status,"
-                    "date_sold,payg_date,acquired_date,billing_friday,owed_to_vip,reimbursement,commissions,selling_price,notes") \
+            .select(sel) \
             .eq("org_id", org_id).in_("category", cats)
         if store:
             q = q.eq("store", store)
@@ -693,6 +726,12 @@ async def get_charge_rows(
     total = len(rows)
     total_owed = round(sum(float(r.get("owed_to_vip") or 0) for r in rows), 2)
     page_rows = _attach_vip_invoices(client, org_id, rows[offset:offset + limit])
+
+    # Appeals: derive the denial reason, then drop the bulky raw_row from the payload.
+    if group == "appeals":
+        for r in page_rows:
+            r["denial_reason"] = _appeal_reason(r)
+            r.pop("raw_row", None)
 
     return {
         "group": group,
