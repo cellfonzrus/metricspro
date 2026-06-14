@@ -364,6 +364,34 @@ async def _top_sellers(org_id, f):
             ]}]}
 
 
+async def _action_plan(org_id, f):
+    period = _resolve_period(f)
+    data = await C.get_action_plan(period=period, org_id=org_id)
+    rows = []
+    for s in (data.get("stores") or []):
+        label = s.get("address") or s.get("store_code")
+        for it in (s.get("items") or []):
+            rows.append({"scope": "Store", "store": label, "rep": "",
+                         "severity": it["severity"], "focus": it["title"], "detail": it["detail"]})
+        for rp in (s.get("reps") or []):
+            for it in (rp.get("items") or []):
+                rows.append({"scope": "Rep", "store": label, "rep": rp.get("rep"),
+                             "severity": it["severity"], "focus": it["title"], "detail": it["detail"]})
+    summ = data.get("summary") or {}
+    return {"title": "Daily Action Plan",
+            "subtitle": f"{period} · as of {data.get('today', '')} · "
+                        f"{summ.get('critical', 0)} critical / {summ.get('warning', 0)} warning",
+            "filename": f"action-plan-{period.replace(' ', '-')}",
+            "sheets": [{"name": "Action Items", "rows": rows, "columns": [
+                {"header": "Scope", "key": "scope"},
+                {"header": "Store", "key": "store"},
+                {"header": "Rep", "key": "rep"},
+                {"header": "Severity", "key": "severity"},
+                {"header": "Focus", "key": "focus"},
+                {"header": "Detail", "key": "detail"},
+            ]}]}
+
+
 # ── registry ──────────────────────────────────────────────────────────────────
 REPORTS = {
     "asset_ledger": {
@@ -423,6 +451,9 @@ REPORTS = {
     "top_sellers": {
         "label": "Top Sellers", "filters": ["period", "limit"],
         "live_path": lambda f: "/commcalc/kpi", "build": _top_sellers},
+    "action_plan": {
+        "label": "Daily Action Plan", "filters": ["period"],
+        "live_path": lambda f: "/commcalc/targets/action-plan", "build": _action_plan},
 }
 
 

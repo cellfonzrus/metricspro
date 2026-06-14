@@ -1644,3 +1644,74 @@ async def get_targets_summary(period: str, today: str = "", org_id: str = ORG_ID
         })
     out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
     return {'period': period, 'today': today.isoformat(), 'stores': out}
+
+
+@router.get("/targets/{period}/action-plan")
+async def get_action_plan(period: str, today: str = "", org_id: str = ORG_ID):
+    """Daily Action Plan — prioritized focus areas per store (per-category catch-up
+    + conversion) and per rep (conversion). Derived from the SAME targets engine +
+    conversion the Daily Targets pages use, so every number reconciles exactly."""
+    client = sb()
+    start, end, today = _period_bounds(period, today)
+    byod_def = _byod_pct_default(client, period)
+    month_end = end - _timedelta(days=1)
+
+    trows = (client.schema('commcalc').table('targets')
+             .select('*').eq('org_id', org_id).eq('period', period).execute().data) or []
+    by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
+    stores = (client.schema('storeops').table('stores')
+              .select('store_code,address,market,monthly_target').execute().data) or []
+    shifts = _fetch_shifts(client, start, end)
+    actuals = _fetch_actuals(client, org_id, period)
+    rank = targets_engine.SEV_RANK
+
+    out = []
+    tot_crit = tot_warn = 0
+    for s in stores:
+        code = str(s.get('store_code', '') or '').strip()
+        if not code:
+            continue
+        trow = by_code.get(code.upper())
+        if not trow:
+            trow = {'accessories_monthly': safe_float(s.get('monthly_target'))}
+        monthly = targets_engine.derive_monthly_by_cat(trow, byod_def)
+        if sum(monthly.values()) <= 0:
+            continue
+        hours_by_day = targets_engine.scope_hours_by_day(shifts, code, None)
+        actuals_by_day = targets_engine.scope_actuals_by_day(actuals, code, None)
+        res = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today,
+                                           round_counts=True, month_end=month_end)
+        store_conv = targets_engine.scope_conversion(actuals, code, None, today)
+        store_items = targets_engine.build_action_items(res, store_conv, include_categories=True)
+
+        rep_plans = []
+        for rep_name in targets_engine.reps_in_scope(shifts, actuals, code):
+            rep_conv = targets_engine.scope_conversion(actuals, code, rep_name, today)
+            below = rep_conv['rate'] < store_conv['rate']
+            rep_items = targets_engine.build_action_items(
+                {'categories': {}, 'open_days_total': 0}, rep_conv,
+                include_categories=False, rep_below_store=below)
+            if not rep_items:
+                continue  # no measurable conversion / nothing to flag for this rep
+            rep_plans.append({'rep': rep_name, 'conversion': rep_conv,
+                              'below_store': below, 'items': rep_items})
+
+        all_items = store_items + [it for rp in rep_plans for it in rp['items']]
+        c = sum(1 for it in all_items if it['severity'] == 'critical')
+        w = sum(1 for it in all_items if it['severity'] == 'warning')
+        tot_crit += c
+        tot_warn += w
+        rep_plans.sort(key=lambda rp: min((rank.get(it['severity'], 9) for it in rp['items']),
+                                          default=9))
+        out.append({
+            'store_code': code, 'address': s.get('address'), 'market': s.get('market'),
+            'conversion': store_conv, 'items': store_items, 'reps': rep_plans,
+            'counts': {'critical': c, 'warning': w},
+        })
+
+    # Stores needing the most attention first.
+    out.sort(key=lambda r: (-r['counts']['critical'], -r['counts']['warning'],
+                            str(r.get('address') or r.get('store_code') or '')))
+    return {'period': period, 'today': today.isoformat(),
+            'summary': {'critical': tot_crit, 'warning': tot_warn, 'stores': len(out)},
+            'stores': out}

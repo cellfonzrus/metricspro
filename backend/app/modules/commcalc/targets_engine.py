@@ -302,3 +302,96 @@ def reps_in_scope(shifts: list[dict], actuals: list[dict], store_code: str) -> l
         if n:
             names.setdefault(n.upper(), n)
     return sorted(names.values(), key=lambda x: x.upper())
+
+
+# ── Action Plan: turn the computed numbers into prioritized focus areas ────────
+SEV_RANK = {'critical': 0, 'warning': 1, 'good': 2}
+_CAT_LABEL = {'activations': 'Activations', 'upgrades': 'Upgrades',
+              'byod': 'BYOD', 'accessories': 'Accessories'}
+
+
+def _fmt_metric(v: float, unit: str) -> str:
+    return f"${v:,.0f}" if unit == 'dollars' else f"{v:,.1f}"
+
+
+def build_action_items(scope_result: dict, conversion: dict | None,
+                       include_categories: bool = True,
+                       rep_below_store: bool | None = None) -> list[dict]:
+    """Translate a compute_scope result + conversion dict into prioritized,
+    human-readable focus areas. Pure (no I/O). Each item is
+    {severity: critical|warning|good, metric, title, detail}.
+
+    Store scope gets per-category catch-up items (behind-pace vs the even daily
+    rate) + conversion; rep scope gets conversion only — reps have no standalone
+    per-category monthly target, so a per-category catch-up would compare the rep
+    against the whole store number, which is misleading."""
+    items: list[dict] = []
+
+    if include_categories:
+        cats = scope_result.get('categories', {}) or {}
+        open_days_total = scope_result.get('open_days_total', 0) or 0
+        for cat in CATEGORIES:
+            m = cats.get(cat)
+            if not m:
+                continue
+            monthly = m.get('monthly', 0) or 0
+            if monthly <= 0:
+                continue  # no target set → nothing to be behind on
+            unit = m.get('unit', 'count')
+            need = m.get('need', 0) or 0
+            pace = m.get('pace', 0) or 0
+            achieved = m.get('achieved_mtd', 0) or 0
+            days_left = m.get('open_days_left', 0) or 0
+            label = _CAT_LABEL.get(cat, cat)
+            if need <= 0:
+                items.append({'severity': 'good', 'metric': cat,
+                              'title': f'{label} target met',
+                              'detail': f'{_fmt_metric(achieved, unit)} of '
+                                        f'{_fmt_metric(monthly, unit)} — done for the month.'})
+                continue
+            # "Behind" = the pace needed for the rest of the month exceeds the even
+            # daily rate (monthly spread over all open days). The bigger the ratio,
+            # the more urgent.
+            base_daily = (monthly / open_days_total) if open_days_total > 0 else 0
+            ratio = (pace / base_daily) if base_daily > 0 else 0
+            need_txt = f'{_fmt_metric(need, unit)} to go'
+            day_word = 'day' if days_left == 1 else 'days'
+            pace_txt = f'{_fmt_metric(pace, unit)}/day over {days_left} open {day_word} left'
+            if ratio >= 1.5:
+                items.append({'severity': 'critical', 'metric': cat,
+                              'title': f'Behind on {label}',
+                              'detail': f'{need_txt}; must do {pace_txt} — '
+                                        f'{ratio:.1f}× the normal daily pace.'})
+            elif ratio >= 1.15:
+                items.append({'severity': 'warning', 'metric': cat,
+                              'title': f'Behind on {label}',
+                              'detail': f'{need_txt}; {pace_txt} ({ratio:.1f}× normal).'})
+            else:
+                items.append({'severity': 'good', 'metric': cat,
+                              'title': f'{label} on track',
+                              'detail': f'{need_txt}; {pace_txt}.'})
+
+    # Conversion needs a denominator; skip when there are no bill-payments to measure against.
+    if conversion and (conversion.get('billpays', 0) or 0) > 0:
+        rate = conversion.get('rate', 0) or 0
+        target = conversion.get('target', CONVERSION_TARGET) or CONVERSION_TARGET
+        boxes = conversion.get('boxes', 0) or 0
+        bp = conversion.get('billpays', 0) or 0
+        if rate < target:
+            sev = 'critical' if rate < target * 0.7 else 'warning'
+            tail = ' and under the store average' if rep_below_store else ''
+            items.append({'severity': sev, 'metric': 'conversion',
+                          'title': f'Lift conversion{tail}',
+                          'detail': f'{rate}% vs {target:.0f}% target ({boxes} boxes / '
+                                    f'{bp} bill-pays) — convert more walk-ins into box sales.'})
+        elif rep_below_store:
+            items.append({'severity': 'warning', 'metric': 'conversion',
+                          'title': 'Conversion below store',
+                          'detail': f'{rate}% is under the store average — keep it above the store line.'})
+        else:
+            items.append({'severity': 'good', 'metric': 'conversion',
+                          'title': 'Conversion on target',
+                          'detail': f'{rate}% ≥ {target:.0f}% target ({boxes}/{bp}).'})
+
+    items.sort(key=lambda it: SEV_RANK.get(it['severity'], 9))
+    return items

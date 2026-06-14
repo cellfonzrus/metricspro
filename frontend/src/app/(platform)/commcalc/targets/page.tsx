@@ -117,6 +117,10 @@ export default function DailyTargetsPage() {
 
   return (
     <div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+        <a href="/commcalc/targets" style={{ padding: '7px 16px', borderRadius: 9, fontSize: 13, fontWeight: 600, textDecoration: 'none', background: 'var(--accent)', color: '#fff', border: '1px solid var(--border)' }}>Daily Targets</a>
+        <a href="/commcalc/targets/action-plan" style={{ padding: '7px 16px', borderRadius: 9, fontSize: 13, fontWeight: 600, textDecoration: 'none', background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>Action Plan</a>
+      </div>
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Daily Targets</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
