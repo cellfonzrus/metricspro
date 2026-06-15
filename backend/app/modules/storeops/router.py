@@ -177,3 +177,73 @@ def update_store(store_id: int, updates: dict):
     if not r.data:
         raise HTTPException(404, "store not found")
     return r.data[0]
+
+
+# ── Shift swaps (storeops.shift_swap_requests) ────────────────────────────────
+def _emp_name_map():
+    return {str(e["employee_id"]): e.get("name")
+            for e in (sb().table("employees").select("employee_id,name").execute().data or [])
+            if e.get("employee_id")}
+
+
+@router.get("/shift-swaps")
+def get_shift_swaps(status: str = None):
+    """List swap requests, enriched with employee names + shift details for display."""
+    q = sb().table("shift_swap_requests").select("*")
+    if status:
+        q = q.eq("status", status)
+    reqs = q.order("created_at", desc=True).execute().data or []
+    names = _emp_name_map()
+    ids = [r["shift_id"] for r in reqs if r.get("shift_id")] + \
+          [r["target_shift_id"] for r in reqs if r.get("target_shift_id")]
+    shifts = {}
+    if ids:
+        sh = sb().table("shifts").select(
+            "id,employee_name,store_code,shift_date,start_time,end_time").in_("id", ids).execute().data or []
+        shifts = {s["id"]: s for s in sh}
+    for r in reqs:
+        r["requester_name"] = names.get(str(r.get("requester_id")), r.get("requester_id"))
+        r["target_name"] = names.get(str(r.get("target_id"))) if r.get("target_id") else None
+        r["shift"] = shifts.get(r.get("shift_id"))
+        r["target_shift"] = shifts.get(r.get("target_shift_id"))
+    return reqs
+
+
+@router.post("/shift-swaps")
+def create_shift_swap(req: dict):
+    """Create a swap request. Body: requester_id, target_id?, shift_id?, target_shift_id?, notes?"""
+    if not req.get("requester_id"):
+        raise HTTPException(400, "requester_id required")
+    row = {k: req.get(k) for k in ("requester_id", "target_id", "shift_id", "target_shift_id", "notes")}
+    row["status"] = "pending"
+    row["org_id"] = ORG_ID
+    r = sb().table("shift_swap_requests").insert(row).execute()
+    return r.data[0] if r.data else row
+
+
+def _apply_swap(swap):
+    """On approval, reassign the shift(s). If both shifts present it's a true swap;
+    otherwise the single shift is handed to the target employee."""
+    names = _emp_name_map()
+    tgt, reqr = swap.get("target_id"), swap.get("requester_id")
+    if swap.get("shift_id") and tgt:
+        sb().table("shifts").update({"employee_id": tgt, "employee_name": names.get(str(tgt))}) \
+            .eq("id", swap["shift_id"]).execute()
+    if swap.get("target_shift_id") and reqr:
+        sb().table("shifts").update({"employee_id": reqr, "employee_name": names.get(str(reqr))}) \
+            .eq("id", swap["target_shift_id"]).execute()
+
+
+@router.patch("/shift-swaps/{swap_id}")
+def update_shift_swap(swap_id: int, updates: dict):
+    """Approve/deny/cancel a swap. Approving reassigns the shift(s)."""
+    status = updates.get("status")
+    if status not in ("approved", "denied", "pending", "cancelled"):
+        raise HTTPException(400, "invalid status")
+    cur = sb().table("shift_swap_requests").select("*").eq("id", swap_id).limit(1).execute().data or []
+    if not cur:
+        raise HTTPException(404, "swap not found")
+    if status == "approved":
+        _apply_swap(cur[0])
+    r = sb().table("shift_swap_requests").update({"status": status}).eq("id", swap_id).execute()
+    return r.data[0] if r.data else {"id": swap_id, "status": status}
