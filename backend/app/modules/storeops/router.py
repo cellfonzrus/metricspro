@@ -89,8 +89,12 @@ def get_payroll(month: str = None):
                 "actual_hours": 0,
                 "shifts": 0,
             }
-        summary[eid]["scheduled_hours"] += float(s.get("scheduled_hours") or 0)
-        summary[eid]["actual_hours"]    += float(s.get("actual_hours") or 0)
+        sched = float(s.get("scheduled_hours") or 0)
+        act = float(s.get("actual_hours") or 0)
+        if act == 0:
+            act = sched  # actual not recorded yet -> fall back to scheduled hours
+        summary[eid]["scheduled_hours"] += sched
+        summary[eid]["actual_hours"]    += act
         summary[eid]["shifts"] += 1
 
     rows = list(summary.values())
