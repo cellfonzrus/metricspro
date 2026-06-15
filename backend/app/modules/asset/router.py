@@ -469,6 +469,188 @@ async def borrowings_summary(org_id: str = ORG_ID, store: str = "", market: str 
             "total_outstanding": round(sum(p["outstanding"] for p in pairs), 2)}
 
 
+# ── On-inventory ↔ b2bsoft inventory reconciliation (#7) ──────────────────────
+INV_BUCKETS = ["iphone", "android", "tablet", "watch", "hotspot"]
+
+
+def _inv_bucket(s):
+    """Map a device model OR a b2bsoft category label to one of the 5 reconciled
+    buckets (or None to exclude: SIM kits, accessories, anything else)."""
+    t = (s or "").lower()
+    if not t:
+        return None
+    if "watch" in t:
+        return "watch"
+    if "ipad" in t or "tablet" in t or " tab" in t or t.endswith("tab") or "tab " in t:
+        return "tablet"
+    if any(w in t for w in ("hotspot", "mifi", "jetpack", "modem", "internet")):
+        return "hotspot"
+    if "iphone" in t:
+        return "iphone"
+    if any(w in t for w in ("samsung", "galaxy", "motorola", "moto ", "google", "pixel",
+                            "android", "celero", "oneplus", "tcl", "nokia", "blu ")):
+        return "android"
+    if "apple" in t:   # bare Apple inventory that isn't iPad/Watch -> iPhone
+        return "iphone"
+    return None
+
+
+def _asset_oninv_by_bucket(client, org_id, store="", market=""):
+    """Per-store counts of On-Inventory (unsold) devices in each of the 5 buckets,
+    classified from device_model."""
+    rows = []
+    page = 0; PAGE = 1000
+    while True:
+        q = client.schema("commcalc").table("asset_ledger") \
+            .select("store,market,device_model") \
+            .eq("org_id", org_id).is_("date_sold", "null").ilike("category", "%On Inventory%")
+        if store:
+            q = q.eq("store", store)
+        if market:
+            q = q.eq("market", market)
+        chunk = q.range(page * PAGE, page * PAGE + PAGE - 1).execute().data or []
+        rows.extend(chunk)
+        if len(chunk) < PAGE or page > 50:
+            break
+        page += 1
+    by_store = {}
+    for r in rows:
+        b = _inv_bucket(r.get("device_model"))
+        if not b:
+            continue
+        s = r.get("store") or "(unknown)"
+        d = by_store.setdefault(s, {"store": s, "market": r.get("market"),
+                                    **{k: 0 for k in INV_BUCKETS}})
+        if not d["market"] and r.get("market"):
+            d["market"] = r.get("market")
+        d[b] += 1
+    return by_store
+
+
+@router.get("/inventory-recon")
+async def inventory_recon(org_id: str = ORG_ID, store: str = "", market: str = "", as_of: str = ""):
+    """Reconcile asset On-Inventory (classified into iphone/android/tablet/watch/hotspot)
+    against the latest b2bsoft inventory snapshot, per store + category. Differences
+    (asset − b2b) surface per cell; b2b stores not seen in asset are surfaced separately."""
+    client = sb()
+    asset = _asset_oninv_by_bucket(client, org_id, store, market)
+
+    # b2b side: pick the snapshot date (latest unless as_of given)
+    q = client.schema("commcalc").table("b2b_inventory").select("*").eq("org_id", org_id)
+    b2b_rows = q.execute().data or []
+    dates = sorted({r.get("as_of_date") for r in b2b_rows if r.get("as_of_date")}, reverse=True)
+    snap = as_of or (dates[0] if dates else "")
+    b2b = {}
+    for r in b2b_rows:
+        if snap and r.get("as_of_date") != snap:
+            continue
+        s = r.get("store") or "(unknown)"
+        cat = (r.get("category") or "").lower()
+        if cat not in INV_BUCKETS:
+            cat = _inv_bucket(cat)
+        if not cat:
+            continue
+        d = b2b.setdefault(s, {k: 0 for k in INV_BUCKETS})
+        d[cat] += int(r.get("qty") or 0)
+    if store:
+        b2b = {k: v for k, v in b2b.items() if k == store}
+
+    out = []
+    all_stores = set(asset) | set(b2b)
+    for s in sorted(all_stores):
+        a = asset.get(s, {"store": s, "market": None, **{k: 0 for k in INV_BUCKETS}})
+        bb = b2b.get(s, {k: 0 for k in INV_BUCKETS})
+        cats = {}
+        total_abs = 0
+        for k in INV_BUCKETS:
+            av, bv = int(a.get(k, 0)), int(bb.get(k, 0))
+            cats[k] = {"asset": av, "b2b": bv, "diff": av - bv}
+            total_abs += abs(av - bv)
+        out.append({"store": s, "market": a.get("market"), "categories": cats,
+                    "total_abs_diff": total_abs, "in_asset": s in asset, "in_b2b": s in b2b})
+    out.sort(key=lambda r: -r["total_abs_diff"])
+    return {
+        "as_of": snap, "available_dates": dates, "b2b_loaded": bool(b2b_rows),
+        "buckets": INV_BUCKETS, "rows": out,
+        "mismatch_stores": sum(1 for r in out if r["total_abs_diff"] > 0),
+        "total_abs_diff": sum(r["total_abs_diff"] for r in out),
+        "b2b_only_stores": sorted([r["store"] for r in out if r["in_b2b"] and not r["in_asset"]]),
+    }
+
+
+@router.post("/b2b-inventory/upload")
+async def upload_b2b_inventory(body: dict, org_id: str = ORG_ID):
+    """Manual b2bsoft inventory load (until the portal sweep is wired). Body:
+    {as_of_date, rows:[{store, category, qty}]}. Category is normalized to a bucket;
+    unmappable categories are skipped + reported. Replaces that date's snapshot."""
+    as_of = (body.get("as_of_date") or "").strip()
+    if not as_of:
+        raise HTTPException(400, "as_of_date required")
+    rows = body.get("rows") or []
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(400, "rows[] required")
+    agg = {}
+    skipped = []
+    for i, r in enumerate(rows):
+        s = (str(r.get("store") or "")).strip()
+        bucket = _inv_bucket(r.get("category"))
+        try:
+            qty = int(float(r.get("qty")))
+        except (TypeError, ValueError):
+            qty = None
+        if not s or not bucket or qty is None:
+            skipped.append({"row": i + 1, "store": s, "category": r.get("category")})
+            continue
+        agg[(s, bucket)] = agg.get((s, bucket), 0) + qty
+    client = sb()
+    # Replace this date's snapshot, then insert the aggregated rows.
+    client.schema("commcalc").table("b2b_inventory").delete() \
+        .eq("org_id", org_id).eq("as_of_date", as_of).execute()
+    payload = [{"org_id": org_id, "store": s, "category": b, "qty": q,
+                "as_of_date": as_of, "source": "upload"} for (s, b), q in agg.items()]
+    if payload:
+        client.schema("commcalc").table("b2b_inventory").insert(payload).execute()
+    return {"loaded": len(payload), "skipped": len(skipped), "as_of_date": as_of,
+            "skipped_rows": skipped[:20]}
+
+
+@router.post("/sync-inventory-flags")
+async def sync_inventory_flags(org_id: str = ORG_ID):
+    """Flag stores whose asset On-Inventory disagrees with b2bsoft, per category."""
+    recon = await inventory_recon(org_id=org_id)
+    client = sb()
+    as_of = recon.get("as_of") or ""
+    period, pm, py = "Inventory", None, None
+    if as_of:
+        try:
+            py, pm, _ = [int(x) for x in str(as_of)[:10].split("-")]
+            period = datetime(py, pm, 1).strftime("%B %Y")
+        except Exception:
+            pass
+    client.schema("commcalc").table("flags").delete() \
+        .eq("org_id", org_id).eq("source", "inventory_recon").execute()
+    out = []
+    for r in recon["rows"]:
+        for k in INV_BUCKETS:
+            diff = r["categories"][k]["diff"]
+            if diff == 0:
+                continue
+            a, b = r["categories"][k]["asset"], r["categories"][k]["b2b"]
+            out.append({
+                "org_id": org_id, "period": period, "period_month": pm, "period_year": py,
+                "flag_type": f"Inventory mismatch — {k}", "source": "inventory_recon",
+                "severity": "warning", "store_address": r["store"],
+                "amount": abs(diff),
+                "description": f"{r['store']} {k}: asset on-inventory {a} vs b2bsoft {b} "
+                               f"({'+' if diff > 0 else ''}{diff}) as of {as_of}"
+                               + (f" [{r['market']}]" if r.get("market") else ""),
+            })
+    if out:
+        for i in range(0, len(out), 500):
+            client.schema("commcalc").table("flags").insert(out[i:i + 500]).execute()
+    return {"flagged": len(out), "as_of": as_of, "b2b_loaded": recon["b2b_loaded"]}
+
+
 @router.get("/owed-weekly")
 async def get_owed_weekly(
     thursday: str,   # NOTE: this is the billing FRIDAY date (YYYY-MM-DD), matched against
