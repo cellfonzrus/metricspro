@@ -91,9 +91,10 @@ export default function EpaySweepAdmin() {
 
       <div className="card" style={{ padding: '10px 14px', marginBottom: 18, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>
         ⚙️ The epay portal is a WAF-protected single-page app, so this sweep drives a <strong>headless browser</strong>
-        (not a simple form login). The login path is wired; the <strong>MI/ATU SSRS report download is still being
-        mapped</strong> — until it is, “Run now” logs in and reports that step as pending. Save your creds + schedule now;
-        it activates as soon as the report step ships and the backend image includes Chromium.
+        (not a simple form login). It logs in, runs the <strong>“Monthly Incentive &amp; ATU Subscriber Details”</strong> report
+        for the current month, downloads it, and loads it into MI/ATU data — replacing the manual upload. This needs the
+        backend image to include Chromium; if “Run now” reports that Chromium is missing, redeploy after the Dockerfile update.
+        The portal may also restrict access by IP, so a run could be rejected from the server even though it works from a desk.
       </div>
 
       {/* Status */}
