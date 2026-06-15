@@ -168,14 +168,37 @@ async def list_employees(org_id: str = ORG_ID):
     by_email = {(u.get("email") or "").lower(): u for u in users if u.get("email")}
     by_emp = {u.get("employee_id"): u for u in users if u.get("employee_id")}
     out = []
+    matched = set()
     for e in emps:
         u = by_emp.get(e.get("employee_id")) or by_email.get((e.get("email") or "").lower())
+        if u:
+            matched.add(u.get("id"))
         out.append({
             **e,
             "app_role": (u or {}).get("role"),
             "has_login": bool((u or {}).get("auth_id")),
             "app_market": (u or {}).get("market"),
             "app_store": (u or {}).get("store_code"),
+        })
+    # Surface app_users that have no matching employee (manually added via "Add a person")
+    # so they stay visible/manageable. Negative synthetic ids never collide with employee ids.
+    syn = 0
+    for u in users:
+        if u.get("id") in matched:
+            continue
+        syn += 1
+        out.append({
+            "id": -syn,
+            "employee_id": u.get("employee_id"),
+            "name": u.get("full_name") or u.get("email"),
+            "home_store": None, "role": None, "phone": None,
+            "email": u.get("email"),
+            "is_active": u.get("is_active", True),
+            "app_role": u.get("role"),
+            "has_login": bool(u.get("auth_id")),
+            "app_market": u.get("market"),
+            "app_store": u.get("store_code"),
+            "manual": True,
         })
     return {"employees": out, "with_email": sum(1 for e in emps if (e.get("email") or "").strip())}
 
@@ -205,6 +228,49 @@ async def assign_role(body: dict, org_id: str = ORG_ID):
     else:
         res = sb().schema("storeops").table("app_users").insert(row).execute()
     return (res.data or [{}])[0]
+
+
+@router.post("/users/bulk-assign")
+async def bulk_assign(body: dict, org_id: str = ORG_ID):
+    """Bulk upsert app_users (assign roles) from a list — powers the employee-sheet upload and
+    the multi-add form. Body: {users:[{email, full_name, role, market, store_code}]}. Does NOT
+    create logins (call /users/bulk-provision or per-row create-login after). Role names are
+    validated against storeops.roles; bad rows are reported, the rest still apply."""
+    users = body.get("users")
+    if not isinstance(users, list) or not users:
+        raise HTTPException(400, "users[] required")
+    client = sb()
+    valid = {r["name"] for r in (client.schema("storeops").table("roles")
+             .select("name").eq("org_id", org_id).execute().data or [])}
+    assigned, errors = 0, []
+    for i, u in enumerate(users):
+        email = (u.get("email") or "").strip().lower()
+        role = (u.get("role") or "").strip()
+        if not email or "@" not in email:
+            errors.append({"row": i + 1, "email": email, "error": "missing/invalid email"})
+            continue
+        if role and role not in valid:
+            errors.append({"row": i + 1, "email": email, "error": f"unknown role '{role}'"})
+            continue
+        row = {
+            "org_id": org_id, "email": email,
+            "full_name": (u.get("full_name") or None),
+            "role": role or "sales_rep",
+            "market": (u.get("market") or None),
+            "store_code": (u.get("store_code") or None),
+            "is_active": True,
+        }
+        try:
+            cur = client.schema("storeops").table("app_users").select("id") \
+                .eq("org_id", org_id).eq("email", email).limit(1).execute().data or []
+            if cur:
+                client.schema("storeops").table("app_users").update(row).eq("id", cur[0]["id"]).execute()
+            else:
+                client.schema("storeops").table("app_users").insert(row).execute()
+            assigned += 1
+        except Exception as e:
+            errors.append({"row": i + 1, "email": email, "error": str(e)})
+    return {"assigned": assigned, "errors": errors, "total": len(users)}
 
 
 def _find_auth_user_by_email(admin, email):

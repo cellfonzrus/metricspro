@@ -23,6 +23,7 @@ type Emp = {
   id: number; employee_id: string | null; name: string; home_store: string | null
   email: string | null; role: string | null; is_active: boolean
   app_role: string | null; has_login: boolean; app_market: string | null; app_store: string | null
+  manual?: boolean
 }
 
 export default function RolesAdminPage() {
@@ -35,6 +36,9 @@ export default function RolesAdminPage() {
   const [tempPw, setTempPw] = useState<Record<string, string>>({})
   const [search, setSearch] = useState('')
   const [enforce, setEnforce] = useState<boolean | null>(null)
+  const [np, setNp] = useState({ name: '', email: '', role: '', market: '', store: '' })
+  const [upBusy, setUpBusy] = useState(false)
+  const [upWithLogins, setUpWithLogins] = useState(false)
 
   async function loadAll() {
     setLoading(true)
@@ -116,6 +120,80 @@ export default function RolesAdminPage() {
       setMsg(`Provisioned ${res.created} logins (${res.skipped} skipped).`)
       await loadAll()
     } catch (e: any) { setMsg('Bulk provision failed: ' + (e?.message || e)) }
+  }
+
+  // ---- add people (single + bulk upload) ----
+  async function addPerson() {
+    const email = np.email.trim().toLowerCase()
+    if (!email || !email.includes('@')) { setMsg('Enter a valid email for the new person.'); return }
+    if (!np.role) { setMsg('Pick a role for the new person.'); return }
+    setMsg('')
+    try {
+      await api('/api/v1/core/users/assign', { method: 'POST', body: JSON.stringify({
+        email, full_name: np.name || null, role: np.role,
+        market: np.market || null, store_code: np.store || null,
+      }) })
+      setMsg(`Added ${np.name || email} → ${np.role}`)
+      setNp({ name: '', email: '', role: '', market: '', store: '' })
+      await loadAll()
+    } catch (err: any) { setMsg('Add failed: ' + (err?.message || err)) }
+  }
+
+  async function downloadTemplate() {
+    const XLSX = await import('xlsx')
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['full_name', 'email', 'role', 'market', 'store_code'],
+      ['Jane Doe', 'jane@example.com', 'sales_rep', '', ''],
+      ['John Smith', 'john@example.com', 'store_manager', '', ''],
+    ])
+    ws['!cols'] = [{ wch: 22 }, { wch: 28 }, { wch: 16 }, { wch: 12 }, { wch: 14 }]
+    const rs = XLSX.utils.aoa_to_sheet([['Valid values for the "role" column:'],
+      ...roles.map(r => [`${r.name}   (${r.display_name})`])])
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Employees')
+    XLSX.utils.book_append_sheet(wb, rs, 'Roles')
+    XLSX.writeFile(wb, 'employee-upload-template.xlsx')
+  }
+
+  async function handleUpload(file: File) {
+    setUpBusy(true); setMsg('Reading sheet…')
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer())
+      const raw: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+      const pick = (r: any, keys: string[]) => {
+        for (const k of Object.keys(r)) if (keys.includes(k.trim().toLowerCase())) return String(r[k]).trim()
+        return ''
+      }
+      const valid = new Set(roles.map(r => r.name))
+      const users: any[] = []
+      const localErr: string[] = []
+      raw.forEach((r, i) => {
+        const email = pick(r, ['email', 'e-mail']).toLowerCase()
+        if (!email) return // skip blank rows
+        let role = pick(r, ['role'])
+        if (role && !valid.has(role)) {
+          const norm = role.toLowerCase().replace(/\s+/g, '_')
+          const m = roles.find(rr => rr.name === norm || rr.display_name.toLowerCase() === role.toLowerCase())
+          if (m) role = m.name
+          else { localErr.push(`Row ${i + 2}: unknown role "${role}"`); return }
+        }
+        users.push({ email, full_name: pick(r, ['full_name', 'name', 'full name']), role,
+          market: pick(r, ['market']), store_code: pick(r, ['store_code', 'store']) })
+      })
+      if (!users.length) { setMsg('No valid rows found. ' + localErr.join('; ')); setUpBusy(false); return }
+      const res = await api('/api/v1/core/users/bulk-assign', { method: 'POST', body: JSON.stringify({ users }) })
+      const errs = [...localErr, ...((res.errors || []).map((e: any) => `Row ${e.row}: ${e.error}`))]
+      if (upWithLogins) {
+        const prov = await api('/api/v1/core/users/bulk-provision', { method: 'POST', body: JSON.stringify({}) })
+        const pw: Record<string, string> = {}
+        for (const r of prov.results || []) if (r.ok) pw[r.email] = r.temp_password
+        setTempPw(p => ({ ...p, ...pw }))
+      }
+      setMsg(`Uploaded: ${res.assigned} assigned${errs.length ? ` · ${errs.length} skipped` : ''}.${errs.length ? ' ' + errs.slice(0, 4).join('; ') : ''}`)
+      await loadAll()
+    } catch (err: any) { setMsg('Upload failed: ' + (err?.message || err)) }
+    setUpBusy(false)
   }
 
   const sel = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -212,6 +290,38 @@ export default function RolesAdminPage() {
             <button className="btn btn-primary" onClick={provisionAll}>⚡ Provision all assigned</button>
           </div>
 
+          {/* Add people: single + bulk sheet upload */}
+          <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>➕ Add people (not on the StoreOps roster)</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+              <input style={{ ...sel, width: 150 }} placeholder="Full name" value={np.name} onChange={e => setNp(v => ({ ...v, name: e.target.value }))} />
+              <input style={{ ...sel, width: 190 }} placeholder="Email *" value={np.email} onChange={e => setNp(v => ({ ...v, email: e.target.value }))} />
+              <select style={sel} value={np.role} onChange={e => setNp(v => ({ ...v, role: e.target.value }))}>
+                <option value="">— role * —</option>
+                {roles.map(r => <option key={r.id} value={r.name}>{r.display_name}</option>)}
+              </select>
+              <input style={{ ...sel, width: 90 }} placeholder="Market" value={np.market} onChange={e => setNp(v => ({ ...v, market: e.target.value }))} />
+              <input style={{ ...sel, width: 110 }} placeholder="Store" value={np.store} onChange={e => setNp(v => ({ ...v, store: e.target.value }))} />
+              <button className="btn btn-primary" onClick={addPerson}>➕ Add</button>
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>Bulk:</span>
+              <button className="btn" onClick={downloadTemplate}>⬇️ Download template</button>
+              <label className="btn" style={{ cursor: upBusy ? 'default' : 'pointer', margin: 0 }}>
+                {upBusy ? '⏳ Uploading…' : '⬆️ Upload employee sheet'}
+                <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={upBusy}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.currentTarget.value = '' }} />
+              </label>
+              <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 5 }}>
+                <input type="checkbox" checked={upWithLogins} onChange={e => setUpWithLogins(e.target.checked)} />
+                also create logins
+              </label>
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+                Columns: full_name, email, role, market, store_code · roles: {roles.map(r => r.name).join(', ')}
+              </span>
+            </div>
+          </div>
+
           {tempList.length > 0 && (
             <div className="card" style={{ padding: 14, marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>
@@ -237,7 +347,7 @@ export default function RolesAdminPage() {
                 <tbody>
                   {filtered.map((e, i) => (
                     <tr key={e.id} style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
-                      <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 500 }}>{e.name}<div style={{ fontSize: 11, color: 'var(--text3)' }}>{e.home_store || '—'}</div></td>
+                      <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 500 }}>{e.name}{e.manual && <span className="badge" style={{ fontSize: 10, marginLeft: 6 }}>added</span>}<div style={{ fontSize: 11, color: 'var(--text3)' }}>{e.manual ? '✋ manual user' : (e.home_store || '—')}</div></td>
                       <td style={{ padding: '8px 12px', fontSize: 12, color: e.email ? 'var(--text2)' : '#dc2626' }}>{e.email || 'no email'}</td>
                       <td style={{ padding: '8px 12px' }}>
                         <select style={sel} value={e.app_role || ''} onChange={ev => setEmp(e.id, { app_role: ev.target.value })}>
