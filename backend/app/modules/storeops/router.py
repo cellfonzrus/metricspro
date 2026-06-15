@@ -65,7 +65,12 @@ def get_payroll(month: str = None):
     """Returns scheduled vs actual hours per employee for payroll"""
     q = sb().table("shifts").select("*").eq("is_deleted", False)
     if month:
-        q = q.gte("shift_date", f"{month}-01").lt("shift_date", f"{month}-32")
+        # Exclusive upper bound = first day of the next month. (The old "{month}-32"
+        # hack 500s on a DATE column because 2026-06-32 isn't a valid date.)
+        parts = str(month).split("-")
+        y, m = int(parts[0]), int(parts[1])
+        nxt = f"{y + 1}-01-01" if m == 12 else f"{y}-{m + 1:02d}-01"
+        q = q.gte("shift_date", f"{month}-01").lt("shift_date", nxt)
     shifts = q.execute().data or []
     employees = sb().table("employees").select("id,name,employee_id,pay_rate,home_store").eq("is_active", True).execute().data or []
     
