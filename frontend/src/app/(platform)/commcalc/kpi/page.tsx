@@ -69,13 +69,14 @@ export default function KPIPage() {
     .filter(r => !storeFilter || r.store === storeFilter)
     .filter(r => !repFilter || (r.storeops_name || r.epay_salesperson) === repFilter)
 
-  // Store rows: apply the store filter.
-  const storeRows = storeData.filter(s => !storeFilter || s.location === storeFilter)
+  // Store rows: apply the store filter. address is the unique store key (location is a
+  // coarse dealer name shared across stores), so filter + label on address.
+  const storeRows = storeData.filter(s => !storeFilter || s.address === storeFilter)
 
   // Filter dropdown options (store list depends on the active view).
   const storeOptions = (view === 'rep'
     ? Array.from(new Set(repData.map(r => r.store).filter(Boolean)))
-    : Array.from(new Set(storeData.map(s => s.location).filter(Boolean)))
+    : Array.from(new Set(storeData.map(s => s.address).filter(Boolean)))
   ).sort()
   const repOptions = Array.from(new Set(repData.map(r => r.storeops_name || r.epay_salesperson).filter(Boolean))).sort()
 
@@ -185,7 +186,10 @@ export default function KPIPage() {
                 const met = metCount(vals)
                 return (
                   <tr key={i}>
-                    <td style={{ fontWeight: 500 }}>{s.location || s.address}</td>
+                    <td style={{ fontWeight: 500 }}>
+                      {s.address || s.location}
+                      {s.location && <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400 }}>{s.location}</div>}
+                    </td>
                     {KPIS.map((d, j) => <KPICell key={d.k} val={vals[j]} target={targets[d.k]} />)}
                     <td style={{ ...cellBase, fontSize: 13 }}>{s.conversion_rate != null ? Number(s.conversion_rate).toFixed(1) + '%' : '—'}</td>
                     <td style={{ ...cellBase, fontSize: 13 }}>{s.total_acts ?? '—'}</td>
