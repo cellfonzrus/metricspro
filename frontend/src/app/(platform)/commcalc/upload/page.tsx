@@ -121,6 +121,16 @@ export default function UploadPage() {
         <a href="/commcalc/dlar/sweep" className="btn" style={{ fontSize: 12, padding: '4px 12px', whiteSpace: 'nowrap' }}>⚙️ DLAR Auto-Import →</a>
       </div>
 
+      {/* epay MI/ATU auto-sweep banner */}
+      <div style={{
+        background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10,
+        padding: '12px 16px', marginBottom: 12, fontSize: 13, color: '#1d4ed8',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+      }}>
+        <span>⚙️ <strong>epay MI + ATU auto-sweep</strong> (headless) — set up the portal login + schedule to replace the manual MI/comp upload.</span>
+        <a href="/commcalc/epay/sweep" className="btn" style={{ fontSize: 12, padding: '4px 12px', whiteSpace: 'nowrap' }}>⚙️ epay Auto-Sweep →</a>
+      </div>
+
       {/* Info banner */}
       <div style={{
         background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10,

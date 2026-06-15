@@ -13,6 +13,7 @@ from app.modules.commcalc.discrepancy_engine import run_discrepancy
 from app.modules.commcalc import targets_engine
 from app.modules.commcalc import vip_sweep
 from app.modules.commcalc import dlar_sweep
+from app.modules.commcalc import epay_sweep
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 import calendar as _calendar
@@ -942,6 +943,123 @@ async def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret:
         client.schema('commcalc').table('dlar_sweep_config').update(
             {'next_run_at': nxt}).eq('org_id', oid).execute()
         background_tasks.add_task(_do_dlar_sweep, oid)
+    return {"triggered": len(due)}
+
+
+# ── epay Owner Portal MI+ATU auto-sweep (#5b — headless Playwright; WAF-protected SPA) ──
+# Same admin/schedule pattern as the DLAR sweep, but the connector drives headless Chromium
+# (see epay_sweep.py). Creds live in the backend-only table commcalc.epay_sweep_config.
+_EPAY_CFG_DEFAULTS = {'enabled': False, 'frequency': 'daily', 'day_of_week': 0,
+                      'day_of_month': 1, 'hour': 6, 'timezone': 'America/New_York',
+                      'portal_url': epay_sweep.DEFAULT_URL}
+
+
+def _epay_cfg(client, org_id):
+    rows = client.schema('commcalc').table('epay_sweep_config').select('*') \
+        .eq('org_id', org_id).limit(1).execute().data
+    return rows[0] if rows else None
+
+
+def _epay_public_cfg(cfg):
+    """Config WITHOUT the password — only whether credentials are set."""
+    if not cfg:
+        return {**_EPAY_CFG_DEFAULTS, 'configured': False, 'has_credentials': False,
+                'portal_user': None, 'next_run_at': None, 'last_run_at': None,
+                'last_status': None, 'last_detail': None}
+    out = {k: cfg.get(k) for k in (
+        'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
+        'portal_url', 'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail')}
+    out['configured'] = True
+    out['has_credentials'] = bool(cfg.get('portal_user') and cfg.get('portal_pass'))
+    return out
+
+
+def _epay_set_status(client, org_id, status, detail, mark_run=False):
+    upd = {'last_status': status, 'last_detail': (detail or '')[:600]}
+    if mark_run:
+        upd['last_run_at'] = _datetime.now(_timezone.utc).isoformat()
+    client.schema('commcalc').table('epay_sweep_config').update(upd).eq('org_id', org_id).execute()
+
+
+def _do_epay_sweep(org_id):
+    """Background worker: read creds, run the epay sweep, record status (no secrets)."""
+    client = sb()
+    cfg = _epay_cfg(client, org_id)
+    if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
+        _epay_set_status(client, org_id, 'error', 'No epay portal credentials set in the admin area', mark_run=True)
+        return
+    _epay_set_status(client, org_id, 'running', 'Sweep in progress…')
+    try:
+        res = epay_sweep.run_epay_sweep(client, org_id, cfg.get('portal_url'),
+                                        cfg['portal_user'], cfg['portal_pass'])
+        _epay_set_status(client, org_id, 'ok', f"OK — {res}", mark_run=True)
+    except epay_sweep.EpayLoginError as e:
+        _epay_set_status(client, org_id, 'error', str(e), mark_run=True)
+    except epay_sweep.EpayPortalError as e:
+        # Login worked; the report step isn't wired yet. Surface as a warning, not a hard error.
+        _epay_set_status(client, org_id, 'error', f"Login OK · {e}", mark_run=True)
+    except Exception as e:
+        _epay_set_status(client, org_id, 'error', f"Sweep failed: {e}", mark_run=True)
+
+
+@router.get("/epay/sweep/config")
+async def epay_sweep_get_config(org_id: str = ORG_ID):
+    require_org(org_id)
+    return _epay_public_cfg(_epay_cfg(sb(), org_id))
+
+
+@router.put("/epay/sweep/config")
+async def epay_sweep_put_config(body: dict, org_id: str = ORG_ID):
+    """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
+    omit/blank to keep the existing one. Never returns the password."""
+    require_org(org_id)
+    client = sb()
+    cur = _epay_cfg(client, org_id) or {}
+    row = {'org_id': org_id}
+    for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
+              'enabled', 'portal_user', 'portal_url'):
+        if k in body and body[k] is not None:
+            row[k] = body[k]
+    pw = (body.get('portal_pass') or '').strip()
+    if pw:
+        row['portal_pass'] = pw
+    row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
+    merged = {**_EPAY_CFG_DEFAULTS, **cur, **row}
+    row['next_run_at'] = _vip_next_run(
+        merged.get('frequency') or 'daily', merged.get('day_of_week'),
+        merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
+    client.schema('commcalc').table('epay_sweep_config').upsert(row, on_conflict='org_id').execute()
+    return _epay_public_cfg(_epay_cfg(client, org_id))
+
+
+@router.post("/epay/sweep/run-now")
+async def epay_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+    """Manual 'Run now' (background task)."""
+    require_org(org_id)
+    cfg = _epay_cfg(sb(), org_id)
+    if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
+        raise HTTPException(400, "Set the epay portal credentials first.")
+    background_tasks.add_task(_do_epay_sweep, org_id)
+    return {"status": "started"}
+
+
+@router.post("/epay/sweep/run-due")
+async def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
+    Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    client = sb()
+    now_iso = _datetime.now(_timezone.utc).isoformat()
+    due = client.schema('commcalc').table('epay_sweep_config').select('*') \
+        .eq('enabled', True).lte('next_run_at', now_iso).execute().data or []
+    for cfg in due:
+        oid = cfg.get('org_id') or ORG_ID
+        nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
+                            cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
+        client.schema('commcalc').table('epay_sweep_config').update(
+            {'next_run_at': nxt}).eq('org_id', oid).execute()
+        background_tasks.add_task(_do_epay_sweep, oid)
     return {"triggered": len(due)}
 
 
