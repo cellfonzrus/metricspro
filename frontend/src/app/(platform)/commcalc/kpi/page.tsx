@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 
 // KPI definitions. repKey = key inside rep_commissions.kpi_values; storeKey = raw_dlar_store column.
 // All values are whole-number percents (e.g. 70.6), compared directly to the target.
@@ -84,6 +85,49 @@ export default function KPIPage() {
 
   const count = view === 'rep' ? repRows.length : storeRows.length
 
+  // Export reflects the active view + filters (called at click time).
+  function buildPayload(): ExportPayload {
+    let cols: ExportColumn[]
+    let rows: any[]
+    let sheetName: string
+    if (view === 'rep') {
+      cols = [
+        { header: 'Rep', get: r => r.storeops_name || r.epay_salesperson },
+        { header: 'Store', get: r => r.store },
+        { header: 'Tier %', align: 'right', get: r => Math.round((r.tier || 0) * 100) },
+        ...KPIS.map(d => ({
+          header: d.label, align: 'right' as const,
+          get: (r: any) => { const v = (r.kpi_values || {})[d.repKey]; const n = Number(v); return v == null || isNaN(n) ? '' : Math.round(n * 10) / 10 },
+        })),
+        { header: 'KPIs Met', align: 'right', get: r => `${r.kpis_met}/${r.total_kpis}` },
+      ]
+      rows = repRows
+      sheetName = 'KPI by Rep'
+    } else {
+      cols = [
+        { header: 'Store', get: s => s.address || s.location },
+        { header: 'Dealer', get: s => s.location },
+        ...KPIS.map(d => ({
+          header: d.label, align: 'right' as const,
+          get: (s: any) => { const n = Number(s[d.storeKey]); return isNaN(n) ? '' : Math.round(n * 10) / 10 },
+        })),
+        { header: 'Conv %', align: 'right', get: s => { const n = Number(s.conversion_rate); return isNaN(n) ? '' : Math.round(n * 10) / 10 } },
+        { header: 'Total Acts', align: 'right', get: s => s.total_acts ?? '' },
+        { header: 'KPIs Met', align: 'right', get: s => `${metCount(KPIS.map(d => { const n = Number(s[d.storeKey]); return isNaN(n) ? undefined : n }))}/6` },
+      ]
+      rows = storeRows
+      sheetName = 'KPI by Store'
+    }
+    const filterParts = [storeFilter || null, view === 'rep' ? (repFilter || null) : null].filter(Boolean)
+    const filterLabel = filterParts.length ? filterParts.join(' · ') : (view === 'rep' ? 'All reps' : 'All stores')
+    return {
+      title: `KPI Metrics — ${view === 'rep' ? 'By Rep' : 'By Store'}`,
+      subtitle: `${period} · ${filterLabel} · From DLAR Elevate Go`,
+      filename: `kpi-metrics-${view}-${String(period).replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`,
+      sheets: [{ name: sheetName, rows, columns: cols }],
+    }
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
@@ -93,6 +137,7 @@ export default function KPIPage() {
             {period} · From DLAR Elevate Go report · {count} {view === 'rep' ? 'reps' : 'stores'} with KPI data
           </p>
         </div>
+        {!loading && count > 0 && <ExportButtons payload={buildPayload} />}
       </div>
 
       {/* Filter bar: view toggle + store filter + rep filter */}
