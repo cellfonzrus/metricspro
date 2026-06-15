@@ -1961,11 +1961,13 @@ async def get_rep_aliases(org_id: str = ORG_ID):
     """Existing alias->canonical merges + all distinct rep name-strings seen (shifts +
     DLAR), to drive the merge UI."""
     client = sb()
+    configured = True
+    aliases = []
     try:
         aliases = (client.schema('commcalc').table('rep_aliases').select('*')
                    .eq('org_id', org_id).order('canonical').execute().data) or []
     except Exception:
-        return {"configured": False, "aliases": [], "names": []}
+        configured = False  # migration 016 not run yet — still return names so the UI shows dupes
     names = set()
     try:
         for s in (client.schema('storeops').table('shifts').select('employee_name')
@@ -1983,7 +1985,7 @@ async def get_rep_aliases(org_id: str = ORG_ID):
                 names.add(n)
     except Exception:
         pass
-    return {"configured": True, "aliases": aliases, "names": sorted(names)}
+    return {"configured": configured, "aliases": aliases, "names": sorted(names)}
 
 
 @router.post("/rep-aliases")
