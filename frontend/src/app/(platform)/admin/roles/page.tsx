@@ -17,6 +17,14 @@ const SCOPES = [
   { v: 'store', l: 'Their store' },
   { v: 'self', l: 'Only their own data' },
 ]
+// Employee Dashboard widgets this role can see on their own dashboard (default on).
+const EMP_WIDGETS = [
+  { k: 'schedule', label: 'Schedule' }, { k: 'timeoff', label: 'Request time off' },
+  { k: 'hours', label: 'Hours worked' }, { k: 'commission', label: 'Commission earned' },
+  { k: 'targets', label: 'Targets' }, { k: 'report_card', label: 'Report card' },
+  { k: 'commission_tracking', label: 'Commission tracking' }, { k: 'flags', label: 'Flags' },
+  { k: 'chargebacks', label: 'Chargebacks' },
+]
 
 type Role = { id: number; name: string; display_name: string; permissions: any }
 type Emp = {
@@ -274,6 +282,21 @@ export default function RolesAdminPage() {
                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', margin: '12px 0 6px' }}>Landing page</div>
                     <input style={{ ...sel, width: 200 }} value={p.home || ''} placeholder="/commcalc"
                       onChange={ev => setPerm(r.id, pp => ({ ...pp, home: ev.target.value }))} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Employee dashboard widgets</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 18px' }}>
+                      {EMP_WIDGETS.map(wd => {
+                        const ew = p.employee_widgets || {}
+                        return (
+                          <label key={wd.k} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                            <input type="checkbox" checked={ew[wd.k] !== false}
+                              onChange={ev => setPerm(r.id, pp => ({ ...pp, employee_widgets: { ...(pp.employee_widgets || {}), [wd.k]: ev.target.checked } }))} />
+                            {wd.label}
+                          </label>
+                        )
+                      })}
+                    </div>
                   </div>
                 </div>
               </div>

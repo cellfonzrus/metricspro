@@ -28,6 +28,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/targets/action-plan', label: 'Action Plan', icon: '✅', module: 'targets', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/targets/settings', label: 'Target Settings', icon: '🎚️', module: 'targets', scopes: ['all'] },
     { href: '/commcalc/targets/my', label: 'My Targets', icon: '🙋', module: 'targets' },
+    { href: '/employee', label: 'Employee Dashboard', icon: '🧑‍💼', module: 'targets' },
   ]},
   { group: 'Asset', module: 'asset', items: [
     { href: '/commcalc/asset', label: 'Asset Ledger', icon: '📦', module: 'asset' },
@@ -55,6 +56,7 @@ export const NAV: NavGroup[] = [
 
 export function moduleForPath(path: string): string {
   if (path.startsWith('/admin')) return 'admin'
+  if (path.startsWith('/employee')) return 'targets'
   if (path.startsWith('/storeops')) return 'storeops'
   if (path.startsWith('/notify')) return 'notify'
   if (path.startsWith('/commcalc/targets')) return 'targets'

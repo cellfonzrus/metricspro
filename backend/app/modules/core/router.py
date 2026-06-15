@@ -395,3 +395,120 @@ async def deactivate_user(body: dict, org_id: str = ORG_ID):
         {"is_active": bool(body.get("is_active", False))}) \
         .eq("org_id", org_id).eq("email", email).execute()
     return {"updated": len(res.data or [])}
+
+
+# ── Employee Dashboard (role-gated widgets) ───────────────────────────────────
+EMP_WIDGETS = ["schedule", "timeoff", "hours", "commission", "targets",
+               "report_card", "commission_tracking", "flags", "chargebacks"]
+
+
+def _emp_period(period):
+    import calendar as _cal
+    if period:
+        return period
+    n = datetime.now(timezone.utc)
+    return f"{_cal.month_name[n.month]} {n.year}"
+
+
+@router.get("/employee-widgets")
+def employee_widgets_keys():
+    """The canonical widget list (for the roles manager toggles)."""
+    return {"widgets": EMP_WIDGETS}
+
+
+@router.get("/employee-dashboard")
+def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = ORG_ID):
+    """One bundle for an employee's self-service dashboard, plus the effective widget
+    visibility (role employee_widgets). Sections compute regardless; the frontend hides
+    disabled widgets. employee_id identifies the rep (admins pass it; a self-scoped rep is
+    pinned to their own by the frontend)."""
+    from datetime import date as _date, timedelta as _td
+    if not employee_id:
+        raise HTTPException(400, "employee_id required")
+    client = sb()
+    emp = (client.schema("storeops").table("employees").select("*")
+           .eq("employee_id", employee_id).limit(1).execute().data or [])
+    if not emp:
+        raise HTTPException(404, "employee not found")
+    emp = emp[0]
+    name = (emp.get("name") or "").strip()
+    eslp = (emp.get("epay_salesperson") or "").strip()
+    period = _emp_period(period)
+    keys_upper = {name.upper(), eslp.upper()} - {""}
+
+    def _is_me(rec, *fields):
+        for f in fields:
+            if (rec.get(f) or "").strip().upper() in keys_upper:
+                return True
+        return False
+
+    # Effective widgets from this employee's role (default all-on).
+    widgets = {k: True for k in EMP_WIDGETS}
+    au = (client.schema("storeops").table("app_users").select("role")
+          .eq("employee_id", employee_id).limit(1).execute().data or [])
+    role_name = au[0].get("role") if au else None
+    if role_name:
+        rr = (client.schema("storeops").table("roles").select("permissions")
+              .eq("org_id", org_id).eq("name", role_name).limit(1).execute().data or [])
+        ew = (rr[0].get("permissions") or {}).get("employee_widgets") if rr else None
+        if isinstance(ew, dict):
+            widgets = {k: bool(ew.get(k, True)) for k in EMP_WIDGETS}
+
+    out = {
+        "employee": {"employee_id": employee_id, "name": name, "store": emp.get("home_store"),
+                     "epay_salesperson": eslp, "role": role_name, "pay_rate": float(emp.get("pay_rate") or 0)},
+        "period": period, "widgets": widgets,
+    }
+
+    # Commission (current period) + tracking (all periods).
+    comm = client.schema("commcalc").table("rep_commissions").select("*").eq("period", period).execute().data or []
+    myc = next((c for c in comm if _is_me(c, "storeops_name", "epay_salesperson")), None)
+    out["commission"] = myc
+    allc = (client.schema("commcalc").table("rep_commissions")
+            .select("period,period_year,period_month,total_payout,tier,kpis_met,total_kpis,storeops_name,epay_salesperson")
+            .execute().data or [])
+    track = [c for c in allc if _is_me(c, "storeops_name", "epay_salesperson")]
+    track.sort(key=lambda r: (r.get("period_year") or 0, r.get("period_month") or 0))
+    out["commission_tracking"] = track
+
+    # Flags + chargebacks attributed to this rep.
+    fl = client.schema("commcalc").table("flags").select("*").eq("period", period).execute().data or []
+    myf = [f for f in fl if _is_me(f, "epay_salesperson")]
+    out["flags"] = myf
+    cbs = client.schema("commcalc").table("chargeback_items").select("*").eq("period", period).execute().data or []
+    mycb = [c for c in cbs if _is_me(c, "epay_salesperson")]
+    out["chargebacks"] = mycb
+
+    # Schedule (upcoming 7 days) + hours (current month) from storeops.shifts.
+    today = _date.today()
+    out["schedule"] = (client.schema("storeops").table("shifts").select("*")
+                       .eq("is_deleted", False).eq("employee_id", employee_id)
+                       .gte("shift_date", today.isoformat())
+                       .lte("shift_date", (today + _td(days=7)).isoformat())
+                       .order("shift_date").execute().data or [])
+    ym = f"{today.year}-{today.month:02d}"
+    nxt = f"{today.year + 1}-01-01" if today.month == 12 else f"{today.year}-{today.month + 1:02d}-01"
+    msh = (client.schema("storeops").table("shifts").select("scheduled_hours,actual_hours")
+           .eq("is_deleted", False).eq("employee_id", employee_id)
+           .gte("shift_date", f"{ym}-01").lt("shift_date", nxt).execute().data or [])
+    rate = float(emp.get("pay_rate") or 0)
+    sh = sum(float(s.get("scheduled_hours") or 0) for s in msh)
+    ah = sum((float(s.get("actual_hours") or 0) or float(s.get("scheduled_hours") or 0)) for s in msh)
+    out["hours"] = {"scheduled_hours": round(sh, 1), "actual_hours": round(ah, 1),
+                    "pay_rate": rate, "scheduled_pay": round(sh * rate, 2),
+                    "actual_pay": round(ah * rate, 2), "shifts": len(msh)}
+
+    # Report card = full performance summary.
+    out["report_card"] = {
+        "tier": (myc or {}).get("tier"),
+        "kpis_met": (myc or {}).get("kpis_met"),
+        "total_kpis": (myc or {}).get("total_kpis"),
+        "kpi_values": (myc or {}).get("kpi_values") or {},
+        "commission_earned": (myc or {}).get("final_payout") if myc and myc.get("final_payout") is not None else (myc or {}).get("total_payout"),
+        "flags_count": len(myf),
+        "chargebacks_count": len(mycb),
+        "chargebacks_total": round(sum(float(c.get("amount") or 0) for c in mycb), 2),
+    }
+    out["targets"] = {"acc_target": (myc or {}).get("acc_target"), "acc_comm": (myc or {}).get("acc_comm")}
+    return out
+
