@@ -865,6 +865,18 @@ def _do_dlar_sweep(org_id):
         res = dlar_sweep.run_dlar_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'])
         detail = (f"OK — {res['stores']} stores, {res['reps']} reps for {res['period']} "
                   f"(import_date {res['import_date']})")
+        # Auto-recompute commissions for the just-imported period so the KPI Metrics page
+        # and Targets employee KPIs — which read the rep_commissions snapshot, NOT live DLAR
+        # — stay current with the freshly-imported DLAR. This runs on every sweep (the daily
+        # cron AND manual 'Import DLAR now'). A recalc failure must NOT fail the sweep, so it
+        # is isolated and only noted in last_detail. (_do_dlar_sweep is a sync background
+        # worker running in a threadpool thread, so asyncio.run() has no running loop.)
+        try:
+            import asyncio
+            asyncio.run(_run_calculation(res['period'], org_id))
+            detail += f" · recalculated commissions for {res['period']}"
+        except Exception as _ce:
+            detail += f" · ⚠ auto-recalc failed: {_ce}"
         _dlar_set_status(client, org_id, 'ok', detail, mark_run=True)
     except dlar_sweep.DlarLoginError as e:
         _dlar_set_status(client, org_id, 'error', str(e), mark_run=True)
