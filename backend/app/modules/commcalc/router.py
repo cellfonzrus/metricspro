@@ -1544,22 +1544,62 @@ def _period_bounds(period: str, today_override: str = ""):
     return start, end, today
 
 
+def _rep_canon_map(client, org_id=ORG_ID):
+    """alias(UPPER) -> canonical rep name. From commcalc.name_map (epay_salesperson ->
+    storeops_name) + commcalc.rep_aliases (user merges, override). Degrades to {} if absent."""
+    m = {}
+    try:
+        for n in (client.schema('commcalc').table('name_map')
+                  .select('epay_salesperson,storeops_name').execute().data or []):
+            a = (n.get('epay_salesperson') or '').strip().upper()
+            c = (n.get('storeops_name') or '').strip()
+            if a and c:
+                m[a] = c
+    except Exception:
+        pass
+    try:
+        for r in (client.schema('commcalc').table('rep_aliases')
+                  .select('alias,canonical').eq('org_id', org_id).execute().data or []):
+            a = (r.get('alias') or '').strip().upper()
+            c = (r.get('canonical') or '').strip()
+            if a and c:
+                m[a] = c
+    except Exception:
+        pass
+    return m
+
+
+def _canon(name, cmap):
+    if not name:
+        return name
+    return cmap.get(name.strip().upper(), name)
+
+
 def _fetch_shifts(client, start, end):
-    return (client.schema('storeops').table('shifts')
+    rows = (client.schema('storeops').table('shifts')
             .select('employee_name,store_code,shift_date,scheduled_hours,is_deleted')
             .gte('shift_date', start.isoformat())
             .lt('shift_date', end.isoformat())
             .limit(50000).execute().data) or []
+    cmap = _rep_canon_map(client)
+    for r in rows:
+        r['employee_name'] = _canon(r.get('employee_name'), cmap)
+    return rows
 
 
 def _fetch_actuals(client, org_id, period):
     try:
-        return (client.schema('commcalc')
+        rows = (client.schema('commcalc')
                 .rpc('daily_sales_actuals', {'p_org_id': org_id, 'p_period': period})
                 .execute().data) or []
     except Exception as e:
         print('daily_sales_actuals RPC failed:', e)
         return []
+    cmap = _rep_canon_map(client, org_id)
+    for r in rows:
+        if r.get('rep_name'):
+            r['rep_name'] = _canon(r.get('rep_name'), cmap)
+    return rows
 
 
 def _byod_pct_default(client, period):
@@ -1912,3 +1952,69 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
             'summary': {'critical': tot_crit, 'warning': tot_warn, 'stores': len(out),
                         'commission_at_risk': round(tot_at_risk, 2)},
             'stores': out}
+
+
+
+# ── Rep name mapping / merge (#4 — dedupe same-person variants) ────────────────
+@router.get("/rep-aliases")
+async def get_rep_aliases(org_id: str = ORG_ID):
+    """Existing alias->canonical merges + all distinct rep name-strings seen (shifts +
+    DLAR), to drive the merge UI."""
+    client = sb()
+    try:
+        aliases = (client.schema('commcalc').table('rep_aliases').select('*')
+                   .eq('org_id', org_id).order('canonical').execute().data) or []
+    except Exception:
+        return {"configured": False, "aliases": [], "names": []}
+    names = set()
+    try:
+        for s in (client.schema('storeops').table('shifts').select('employee_name')
+                  .eq('is_deleted', False).limit(50000).execute().data or []):
+            n = (s.get('employee_name') or '').strip()
+            if n:
+                names.add(n)
+    except Exception:
+        pass
+    try:
+        for r in (client.schema('commcalc').table('raw_dlar_rep').select('rep_name')
+                  .limit(50000).execute().data or []):
+            n = (r.get('rep_name') or '').strip()
+            if n:
+                names.add(n)
+    except Exception:
+        pass
+    return {"configured": True, "aliases": aliases, "names": sorted(names)}
+
+
+@router.post("/rep-aliases")
+async def post_rep_aliases(body: dict, org_id: str = ORG_ID):
+    """Merge rep name-variants into one canonical. Body: {canonical, aliases:[...]}."""
+    canonical = (body.get('canonical') or '').strip()
+    aliases = body.get('aliases') or []
+    if not canonical or not isinstance(aliases, list) or not aliases:
+        raise HTTPException(400, "canonical + aliases[] required")
+    client = sb()
+    merged = 0
+    for a in aliases:
+        a = (a or '').strip()
+        if not a or a.upper() == canonical.upper():
+            continue
+        try:
+            client.schema('commcalc').table('rep_aliases').upsert(
+                {'org_id': org_id, 'alias': a, 'canonical': canonical},
+                on_conflict='org_id,alias').execute()
+            merged += 1
+        except Exception as e:
+            raise HTTPException(500, f"save failed - run migration 016_rep_aliases.sql first: {e}")
+    return {"merged": merged, "canonical": canonical}
+
+
+@router.delete("/rep-aliases/{alias}")
+async def delete_rep_alias(alias: str, org_id: str = ORG_ID):
+    client = sb()
+    try:
+        client.schema('commcalc').table('rep_aliases').delete() \
+            .eq('org_id', org_id).eq('alias', alias).execute()
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    return {"deleted": alias}

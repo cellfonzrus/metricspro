@@ -126,6 +126,7 @@ export default function MyTargetsPage() {
           <option value="">Select your name…</option>
           {reps.map(r => <option key={r} value={r}>{r}</option>)}
         </select>
+        <a href="/commcalc/targets/rep-map" className="btn btn-secondary" style={{ textDecoration: 'none', fontSize: 12 }}>🔗 Merge duplicate reps</a>
       </div>
 
       {!rep ? (
