@@ -22,6 +22,7 @@ export default function MyTargetsPage() {
   const [reps, setReps] = useState<string[]>([])
   const [rep, setRep] = useState('')
   const [detail, setDetail] = useState<any>(null)
+  const [actionItems, setActionItems] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
 
   // Load store list once per period (reused from the summary endpoint).
@@ -46,8 +47,14 @@ export default function MyTargetsPage() {
   async function loadRep() {
     setLoading(true)
     try {
-      const d = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/calendar?scope=rep&store_code=${encodeURIComponent(storeCode)}&rep=${encodeURIComponent(rep)}&org_id=${ORG_ID}&today=${localToday()}`)
+      const [d, ap] = await Promise.all([
+        api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/calendar?scope=rep&store_code=${encodeURIComponent(storeCode)}&rep=${encodeURIComponent(rep)}&org_id=${ORG_ID}&today=${localToday()}`),
+        api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/action-plan?store_code=${encodeURIComponent(storeCode)}&rep=${encodeURIComponent(rep)}&org_id=${ORG_ID}&today=${localToday()}`).catch(() => null),
+      ])
       setDetail(d)
+      const plans = (ap?.stores || []).flatMap((s: any) => s.rep_plans || [])
+      const mine = plans.find((p: any) => (p.rep || '').toUpperCase() === rep.toUpperCase())
+      setActionItems(mine?.items || [])
     } catch (e) { console.error(e) }
     setLoading(false)
   }
@@ -78,11 +85,23 @@ export default function MyTargetsPage() {
       { header: 'Monthly', get: (r: any) => r.monthly, align: 'right' as const },
       { header: 'Achieved', get: (r: any) => r.achieved, align: 'right' as const },
     ]
+    const sheets: any[] = [{ name: 'Daily Targets', columns: cols, rows }]
+    if (actionItems.length) {
+      sheets.push({
+        name: 'Action Plan',
+        columns: [
+          { header: 'Priority', get: (r: any) => r.severity },
+          { header: 'Focus', get: (r: any) => r.title },
+          { header: 'Detail', get: (r: any) => r.detail },
+        ],
+        rows: actionItems,
+      })
+    }
     return {
       title: `Daily Targets — ${rep}`,
       subtitle: `${storeCode} · ${period} · as of ${detail.today}`,
       filename: `Daily-Targets-${rep.replace(/[^a-z0-9]+/gi, '-')}-${period.replace(/\s+/g, '-')}`,
-      sheets: [{ name: 'Daily Targets', columns: cols, rows }],
+      sheets,
     }
   }
 
@@ -171,6 +190,22 @@ export default function MyTargetsPage() {
                   ⚠️ Your conversion ({detail.conversion.rep.rate}%) is below the store ({detail.conversion.store.rate}%). Convert more bill-pay/walk-in customers into box sales to pull it up.
                 </div>
               )}
+            </div>
+          )}
+          {actionItems.length > 0 && (
+            <div className="card" style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>📋 Action Plan</div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {actionItems.map((it, i) => {
+                  const color = it.severity === 'critical' ? '#dc2626' : it.severity === 'warning' ? '#d97706' : '#2563eb'
+                  return (
+                    <div key={i} style={{ borderLeft: `4px solid ${color}`, background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px' }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, color }}>{it.title}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>{it.detail}</div>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           )}
         </>
