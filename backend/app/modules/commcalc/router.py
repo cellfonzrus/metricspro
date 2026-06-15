@@ -2020,3 +2020,40 @@ async def delete_rep_alias(alias: str, org_id: str = ORG_ID):
     except Exception as e:
         raise HTTPException(500, str(e))
     return {"deleted": alias}
+
+
+
+# ── Store Expenses (#11 — schema-correct CRUD; old page used the dead public table) ──
+@router.get("/expenses/{period}")
+async def get_expenses(period: str, org_id: str = ORG_ID):
+    """All store expenses for a period (commcalc.store_expenses)."""
+    client = sb()
+    rows = (client.schema('commcalc').table('store_expenses').select('*')
+            .eq('org_id', org_id).eq('period', period).order('store_code').execute().data) or []
+    return {"period": period, "expenses": rows}
+
+
+@router.put("/expenses/{period}")
+async def put_expenses(period: str, body: dict, org_id: str = ORG_ID):
+    """Replace all expenses for the period (matrix save + bulk upload). Body:
+    {rows:[{store_code, expense_name, expense_type, amount}]}. Zero/blank rows are dropped."""
+    rows = body.get('rows') or []
+    client = sb()
+    client.schema('commcalc').table('store_expenses').delete() \
+        .eq('org_id', org_id).eq('period', period).execute()
+    ins = []
+    for r in rows:
+        try:
+            amt = float(r.get('amount') or 0)
+        except (TypeError, ValueError):
+            amt = 0
+        if amt == 0 or not (r.get('store_code') and r.get('expense_name')):
+            continue
+        ins.append({'org_id': org_id, 'period': period,
+                    'store_code': str(r['store_code']).strip(),
+                    'expense_name': str(r['expense_name']).strip(),
+                    'expense_type': (r.get('expense_type') or 'Fixed'),
+                    'amount': amt})
+    for i in range(0, len(ins), 500):
+        client.schema('commcalc').table('store_expenses').insert(ins[i:i + 500]).execute()
+    return {"saved": len(ins), "period": period}
