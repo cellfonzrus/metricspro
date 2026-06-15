@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from datetime import datetime, timezone
 from app.core.database import get_supabase
 
 router = APIRouter()
@@ -283,6 +284,189 @@ async def get_filter_options(org_id: str = ORG_ID):
     stores = [{"store": k, "market": v} for k, v in store_to_market.items()]
     stores.sort(key=lambda x: x["store"])
     return {"markets": sorted(markets), "stores": stores}
+
+
+# ── Inter-store borrowed-money tracking (#6 / roadmap 6a) ─────────────────────
+# A store can fund asset purchases with money borrowed from another store. Each
+# borrowing is a debt (borrower owes lender); paybacks reduce the outstanding.
+def _borrow_store_market(client, org_id):
+    """store(lower) -> market, from asset_ledger (so a new borrowing inherits the
+    borrower store's market for the reconciliation filters)."""
+    m = {}
+    page = 0; PAGE = 1000
+    while True:
+        chunk = client.schema("commcalc").table("asset_ledger").select("store,market") \
+            .eq("org_id", org_id).range(page * PAGE, page * PAGE + PAGE - 1).execute().data or []
+        for r in chunk:
+            if r.get("store") and r.get("market"):
+                m.setdefault((r["store"] or "").strip().lower(), r["market"])
+        if len(chunk) < PAGE or page > 100:
+            break
+        page += 1
+    return m
+
+
+def _borrowings_with_outstanding(client, org_id):
+    """All borrowings joined with their payments → repaid + outstanding per loan."""
+    loans = client.schema("commcalc").table("store_borrowings").select("*") \
+        .eq("org_id", org_id).order("borrowed_date", desc=True).execute().data or []
+    pays = client.schema("commcalc").table("store_borrowing_payments").select("*") \
+        .eq("org_id", org_id).execute().data or []
+    paid_by_loan = {}
+    pays_by_loan = {}
+    for p in pays:
+        lid = p.get("borrowing_id")
+        paid_by_loan[lid] = paid_by_loan.get(lid, 0.0) + float(p.get("amount") or 0)
+        pays_by_loan.setdefault(lid, []).append(p)
+    out = []
+    for l in loans:
+        amt = float(l.get("amount") or 0)
+        repaid = round(paid_by_loan.get(l["id"], 0.0), 2)
+        outstanding = round(amt - repaid, 2)
+        out.append({**l, "amount": round(amt, 2), "repaid": repaid,
+                    "outstanding": outstanding, "settled": outstanding <= 0.005,
+                    "payments": sorted(pays_by_loan.get(l["id"], []),
+                                       key=lambda p: p.get("paid_date") or "")})
+    return out
+
+
+@router.get("/borrowings")
+async def list_borrowings(org_id: str = ORG_ID, store: str = "", market: str = "", status: str = ""):
+    """Borrowing ledger. Filters: store (matches borrower OR lender), market (borrower),
+    status open|settled. Each row carries repaid + outstanding + its payments."""
+    rows = _borrowings_with_outstanding(sb(), org_id)
+    if store:
+        rows = [r for r in rows if store in (r.get("borrower_store"), r.get("lender_store"))]
+    if market:
+        rows = [r for r in rows if (r.get("market") or "") == market]
+    if status == "open":
+        rows = [r for r in rows if not r["settled"]]
+    elif status == "settled":
+        rows = [r for r in rows if r["settled"]]
+    tot_borrowed = round(sum(r["amount"] for r in rows), 2)
+    tot_repaid = round(sum(r["repaid"] for r in rows), 2)
+    return {"borrowings": rows, "count": len(rows),
+            "total_borrowed": tot_borrowed, "total_repaid": tot_repaid,
+            "total_outstanding": round(tot_borrowed - tot_repaid, 2)}
+
+
+@router.post("/borrowings")
+async def create_borrowing(body: dict, org_id: str = ORG_ID):
+    """Log a borrowing. Body: {borrower_store, lender_store, amount, borrowed_date?, note?,
+    market?}. Market defaults to the borrower store's market."""
+    borrower = (body.get("borrower_store") or "").strip()
+    lender = (body.get("lender_store") or "").strip()
+    if not borrower or not lender:
+        raise HTTPException(400, "borrower_store and lender_store required")
+    if borrower == lender:
+        raise HTTPException(400, "borrower and lender must be different stores")
+    try:
+        amount = float(body.get("amount"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "amount must be a number")
+    if amount <= 0:
+        raise HTTPException(400, "amount must be greater than 0")
+    market = (body.get("market") or "").strip() or \
+        _borrow_store_market(sb(), org_id).get(borrower.lower())
+    row = {
+        "org_id": org_id, "borrower_store": borrower, "lender_store": lender,
+        "market": market, "amount": amount,
+        "borrowed_date": body.get("borrowed_date") or datetime.now(timezone.utc).date().isoformat(),
+        "note": (body.get("note") or "").strip() or None,
+    }
+    r = sb().schema("commcalc").table("store_borrowings").insert(row).execute()
+    return (r.data or [row])[0]
+
+
+@router.patch("/borrowings/{borrowing_id}")
+async def update_borrowing(borrowing_id: str, body: dict, org_id: str = ORG_ID):
+    """Edit a borrowing (borrower/lender/amount/date/note/market)."""
+    fields = ("borrower_store", "lender_store", "market", "amount", "borrowed_date", "note")
+    row = {k: body[k] for k in fields if k in body}
+    if "amount" in row:
+        try:
+            row["amount"] = float(row["amount"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "amount must be a number")
+    if not row:
+        raise HTTPException(400, "no valid fields to update")
+    r = sb().schema("commcalc").table("store_borrowings").update(row) \
+        .eq("id", borrowing_id).eq("org_id", org_id).execute()
+    if not r.data:
+        raise HTTPException(404, "borrowing not found")
+    return r.data[0]
+
+
+@router.delete("/borrowings/{borrowing_id}")
+async def delete_borrowing(borrowing_id: str, org_id: str = ORG_ID):
+    """Delete a borrowing (its payments cascade)."""
+    sb().schema("commcalc").table("store_borrowings").delete() \
+        .eq("id", borrowing_id).eq("org_id", org_id).execute()
+    return {"deleted": borrowing_id}
+
+
+@router.post("/borrowings/{borrowing_id}/payment")
+async def add_borrowing_payment(borrowing_id: str, body: dict, org_id: str = ORG_ID):
+    """Record a payback against a borrowing. Body: {amount, paid_date?, note?}."""
+    try:
+        amount = float(body.get("amount"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "amount must be a number")
+    if amount <= 0:
+        raise HTTPException(400, "amount must be greater than 0")
+    loan = sb().schema("commcalc").table("store_borrowings").select("id") \
+        .eq("id", borrowing_id).eq("org_id", org_id).limit(1).execute().data or []
+    if not loan:
+        raise HTTPException(404, "borrowing not found")
+    row = {
+        "org_id": org_id, "borrowing_id": borrowing_id, "amount": amount,
+        "paid_date": body.get("paid_date") or datetime.now(timezone.utc).date().isoformat(),
+        "note": (body.get("note") or "").strip() or None,
+    }
+    r = sb().schema("commcalc").table("store_borrowing_payments").insert(row).execute()
+    return (r.data or [row])[0]
+
+
+@router.delete("/borrowing-payment/{payment_id}")
+async def delete_borrowing_payment(payment_id: str, org_id: str = ORG_ID):
+    """Undo a payback."""
+    sb().schema("commcalc").table("store_borrowing_payments").delete() \
+        .eq("id", payment_id).eq("org_id", org_id).execute()
+    return {"deleted": payment_id}
+
+
+@router.get("/borrowings/summary")
+async def borrowings_summary(org_id: str = ORG_ID, store: str = "", market: str = ""):
+    """Reconciliation: who owes whom, and net position per store. Filters store/market."""
+    rows = _borrowings_with_outstanding(sb(), org_id)
+    if market:
+        rows = [r for r in rows if (r.get("market") or "") == market]
+    if store:
+        rows = [r for r in rows if store in (r.get("borrower_store"), r.get("lender_store"))]
+    # who owes whom (borrower -> lender) with outstanding > 0
+    pair = {}
+    for r in rows:
+        k = (r["borrower_store"], r["lender_store"])
+        d = pair.setdefault(k, {"borrower_store": r["borrower_store"], "lender_store": r["lender_store"],
+                                "market": r.get("market"), "borrowed": 0.0, "repaid": 0.0,
+                                "outstanding": 0.0, "loans": 0})
+        d["borrowed"] += r["amount"]; d["repaid"] += r["repaid"]
+        d["outstanding"] += r["outstanding"]; d["loans"] += 1
+    pairs = [{**v, "borrowed": round(v["borrowed"], 2), "repaid": round(v["repaid"], 2),
+              "outstanding": round(v["outstanding"], 2)} for v in pair.values()]
+    pairs.sort(key=lambda x: -x["outstanding"])
+    # per-store net: owes (as borrower) vs owed (as lender)
+    by_store = {}
+    for r in rows:
+        b = by_store.setdefault(r["borrower_store"], {"store": r["borrower_store"], "owes": 0.0, "owed": 0.0})
+        b["owes"] += r["outstanding"]
+        l = by_store.setdefault(r["lender_store"], {"store": r["lender_store"], "owes": 0.0, "owed": 0.0})
+        l["owed"] += r["outstanding"]
+    net = [{"store": v["store"], "owes": round(v["owes"], 2), "owed": round(v["owed"], 2),
+            "net": round(v["owed"] - v["owes"], 2)} for v in by_store.values()]
+    net.sort(key=lambda x: -abs(x["net"]))
+    return {"pairs": pairs, "by_store": net,
+            "total_outstanding": round(sum(p["outstanding"] for p in pairs), 2)}
 
 
 @router.get("/owed-weekly")

@@ -251,6 +251,7 @@ export default function AssetPage() {
           <a className="btn" href="/commcalc/asset/on-inventory" style={{ textDecoration: 'none' }}>🏪 On-Inventory by Store</a>
           <a className="btn" href="/commcalc/asset/dashboard" style={{ textDecoration: 'none' }}>🧾 Charges</a>
           <a className="btn" href="/commcalc/asset/charges/rma" style={{ textDecoration: 'none' }}>🔁 RMA</a>
+          <a className="btn" href="/commcalc/asset/borrowed" style={{ textDecoration: 'none' }}>💸 Borrowed Money</a>
           <button className="btn" onClick={handleRefreshPrices} disabled={uploading} title="Re-pull selling prices from sales and re-sync undercharge flags">
             🔄 Refresh prices &amp; flags
           </button>
