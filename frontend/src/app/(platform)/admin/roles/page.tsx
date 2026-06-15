@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { api } from '@/lib/client'
 
 const MODULES: { key: string; label: string }[] = [
@@ -31,6 +31,7 @@ type Emp = {
   id: number; employee_id: string | null; name: string; home_store: string | null
   email: string | null; role: string | null; is_active: boolean
   app_role: string | null; has_login: boolean; app_market: string | null; app_store: string | null
+  widget_overrides?: Record<string, boolean> | null
   manual?: boolean
 }
 
@@ -47,6 +48,7 @@ export default function RolesAdminPage() {
   const [np, setNp] = useState({ name: '', email: '', role: '', market: '', store: '' })
   const [upBusy, setUpBusy] = useState(false)
   const [upWithLogins, setUpWithLogins] = useState(false)
+  const [widgetEmp, setWidgetEmp] = useState<number | null>(null)  // row with the widget editor open
 
   async function loadAll() {
     setLoading(true)
@@ -112,6 +114,37 @@ export default function RolesAdminPage() {
       setMsg(`Saved ${e.name} → ${e.app_role || 'sales_rep'}`)
     } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)) }
   }
+  // ---- per-employee widget overrides (#1b) ----
+  // The role's default visibility for a widget (default on if the role doesn't list it).
+  function roleWidgetDefault(roleName: string | null, k: string): boolean {
+    const r = roles.find(x => x.name === roleName)
+    const ew = (r?.permissions || {}).employee_widgets || {}
+    return ew[k] !== false
+  }
+  // Effective shown state for a widget on this employee = override if set, else role default.
+  function widgetEffective(e: Emp, k: string): boolean {
+    const ov = e.widget_overrides || {}
+    return k in ov ? !!ov[k] : roleWidgetDefault(e.app_role, k)
+  }
+  function toggleWidget(e: Emp, k: string, val: boolean) {
+    const ov = { ...(e.widget_overrides || {}) }
+    if (val === roleWidgetDefault(e.app_role, k)) delete ov[k]  // back to role default -> drop the override
+    else ov[k] = val
+    setEmp(e.id, { widget_overrides: Object.keys(ov).length ? ov : null })
+  }
+  async function saveWidgets(e: Emp) {
+    setMsg('')
+    try {
+      await api('/api/v1/core/employee-widgets', { method: 'PUT', body: JSON.stringify({
+        employee_id: e.employee_id, email: e.email, widget_overrides: e.widget_overrides || null,
+      }) })
+      const n = Object.keys(e.widget_overrides || {}).length
+      setMsg(`Saved widgets for ${e.name}${n ? ` (${n} override${n > 1 ? 's' : ''})` : ' (all inherit role)'}`)
+      setWidgetEmp(null)
+    } catch (err: any) { setMsg('Widget save failed: ' + (err?.message || err)) }
+  }
+  function resetWidgets(e: Emp) { setEmp(e.id, { widget_overrides: null }) }
+
   async function createLogin(e: Emp) {
     if (!e.email) return
     setMsg('')
@@ -374,8 +407,11 @@ export default function RolesAdminPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((e, i) => (
-                    <tr key={e.id} style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
+                  {filtered.map((e, i) => {
+                    const ovCount = Object.keys(e.widget_overrides || {}).length
+                    return (
+                    <Fragment key={e.id}>
+                    <tr style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
                       <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 500 }}>{e.name}{e.manual && <span className="badge" style={{ fontSize: 10, marginLeft: 6 }}>added</span>}<div style={{ fontSize: 11, color: 'var(--text3)' }}>{e.manual ? '✋ manual user' : (e.home_store || '—')}</div></td>
                       <td style={{ padding: '8px 12px' }}>
                         {e.id > 0
@@ -403,10 +439,41 @@ export default function RolesAdminPage() {
                       <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
                         <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => assign(e)}>Save</button>{' '}
                         {e.email && <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => createLogin(e)}>
-                          {e.has_login ? 'Reset pw' : 'Create login'}</button>}
+                          {e.has_login ? 'Reset pw' : 'Create login'}</button>}{' '}
+                        {e.app_role && <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} title="Per-person dashboard widgets"
+                          onClick={() => setWidgetEmp(widgetEmp === e.id ? null : e.id)}>
+                          🎛️ Widgets{ovCount ? ` (${ovCount})` : ''}</button>}
                       </td>
                     </tr>
-                  ))}
+                    {widgetEmp === e.id && (
+                      <tr style={{ background: '#f8fafc' }}>
+                        <td colSpan={7} style={{ padding: '10px 16px', borderTop: '1px dashed var(--border)' }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
+                            Dashboard widgets for {e.name} <span style={{ fontWeight: 400, color: 'var(--text3)' }}>
+                              — overrides the {roles.find(r => r.name === e.app_role)?.display_name || e.app_role} role default per person</span>
+                          </div>
+                          <div style={{ display: 'flex', gap: '6px 18px', flexWrap: 'wrap', marginBottom: 8 }}>
+                            {EMP_WIDGETS.map(wd => {
+                              const overridden = e.widget_overrides && wd.k in e.widget_overrides
+                              return (
+                                <label key={wd.k} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 13,
+                                  padding: '2px 7px', borderRadius: 6, border: '1px solid var(--border)',
+                                  background: overridden ? '#fef9c3' : 'var(--surface)' }}>
+                                  <input type="checkbox" checked={widgetEffective(e, wd.k)}
+                                    onChange={ev => toggleWidget(e, wd.k, ev.target.checked)} />
+                                  {wd.label}{overridden ? ' •' : ''}
+                                </label>
+                              )
+                            })}
+                          </div>
+                          <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => saveWidgets(e)}>💾 Save widgets</button>{' '}
+                          <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => resetWidgets(e)}>↺ Reset to role default</button>
+                          <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 10 }}>• = overridden for this person</span>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
+                  )})}
                 </tbody>
               </table>
             </div>

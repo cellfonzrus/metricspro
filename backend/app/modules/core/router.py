@@ -179,6 +179,7 @@ async def list_employees(org_id: str = ORG_ID):
             "has_login": bool((u or {}).get("auth_id")),
             "app_market": (u or {}).get("market"),
             "app_store": (u or {}).get("store_code"),
+            "widget_overrides": (u or {}).get("widget_overrides"),
         })
     # Surface app_users that have no matching employee (manually added via "Add a person")
     # so they stay visible/manageable. Negative synthetic ids never collide with employee ids.
@@ -198,6 +199,7 @@ async def list_employees(org_id: str = ORG_ID):
             "has_login": bool(u.get("auth_id")),
             "app_market": u.get("market"),
             "app_store": u.get("store_code"),
+            "widget_overrides": u.get("widget_overrides"),
             "manual": True,
         })
     return {"employees": out, "with_email": sum(1 for e in emps if (e.get("email") or "").strip())}
@@ -442,9 +444,10 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
                 return True
         return False
 
-    # Effective widgets from this employee's role (default all-on).
+    # Effective widgets = role default (all-on if no role), then this employee's
+    # per-person overrides applied on top (#1b).
     widgets = {k: True for k in EMP_WIDGETS}
-    au = (client.schema("storeops").table("app_users").select("role")
+    au = (client.schema("storeops").table("app_users").select("role,widget_overrides")
           .eq("employee_id", employee_id).limit(1).execute().data or [])
     role_name = au[0].get("role") if au else None
     if role_name:
@@ -453,6 +456,11 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
         ew = (rr[0].get("permissions") or {}).get("employee_widgets") if rr else None
         if isinstance(ew, dict):
             widgets = {k: bool(ew.get(k, True)) for k in EMP_WIDGETS}
+    ovr = au[0].get("widget_overrides") if au else None
+    if isinstance(ovr, dict):
+        for k, v in ovr.items():
+            if k in widgets:
+                widgets[k] = bool(v)
 
     out = {
         "employee": {"employee_id": employee_id, "name": name, "store": emp.get("home_store"),
@@ -511,4 +519,33 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
     }
     out["targets"] = {"acc_target": (myc or {}).get("acc_target"), "acc_comm": (myc or {}).get("acc_comm")}
     return out
+
+
+@router.put("/employee-widgets")
+async def set_employee_widget_overrides(body: dict, org_id: str = ORG_ID):
+    """Per-employee Employee-Dashboard widget overrides (#1b). Body:
+    {employee_id?, email?, widget_overrides: {widget_key: bool} | null}. Writes onto the
+    person's storeops.app_users row (so they must be assigned a role first). null/{} = clear
+    (inherit the role default). Unknown widget keys are dropped."""
+    eid = (body.get("employee_id") or "").strip()
+    email = (body.get("email") or "").strip().lower()
+    if not eid and not email:
+        raise HTTPException(400, "employee_id or email required")
+    raw = body.get("widget_overrides")
+    if raw in (None, {}):
+        ovr = None
+    elif isinstance(raw, dict):
+        ovr = {k: bool(v) for k, v in raw.items() if k in EMP_WIDGETS}
+        ovr = ovr or None
+    else:
+        raise HTTPException(400, "widget_overrides must be an object or null")
+    client = sb()
+    q = client.schema("storeops").table("app_users").select("id").eq("org_id", org_id)
+    q = q.eq("employee_id", eid) if eid else q.eq("email", email)
+    rows = q.limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(404, "no app login for this person — assign a role first")
+    client.schema("storeops").table("app_users").update({"widget_overrides": ovr}) \
+        .eq("id", rows[0]["id"]).execute()
+    return {"ok": True, "employee_id": eid or None, "email": email or None, "widget_overrides": ovr}
 
