@@ -112,12 +112,23 @@ def _backfill_market(client, org_id: str):
 
 
 @router.get("/summary")
-async def get_asset_summary(org_id: str = ORG_ID):
-    """High-level totals + breakdowns for the summary dashboard."""
+async def get_asset_summary(org_id: str = ORG_ID, store: str = "", market: str = "",
+                            date_from: str = "", date_to: str = ""):
+    """High-level totals + breakdowns for the summary dashboard.
+    Optional dashboard filters: store, market, acquired_date range (date_from/date_to)."""
     client = sb()
-    resp = client.schema("commcalc").table("asset_ledger") \
-        .select("status,category,owed_to_vip,on_inventory,reimbursement,commissions,total_owed,total_reimbursed") \
-        .eq("org_id", org_id).execute()
+    q = client.schema("commcalc").table("asset_ledger") \
+        .select("status,category,owed_to_vip,on_inventory,reimbursement,commissions,total_owed,total_reimbursed,store,market,acquired_date") \
+        .eq("org_id", org_id)
+    if store:
+        q = q.eq("store", store)
+    if market:
+        q = q.eq("market", market)
+    if date_from:
+        q = q.gte("acquired_date", date_from)
+    if date_to:
+        q = q.lte("acquired_date", date_to)
+    resp = q.execute()
 
     rows = resp.data or []
     if not rows:
@@ -174,9 +185,25 @@ async def get_category_detail(
     org_id: str = ORG_ID,
     limit: int = 500,
     offset: int = 0,
+    store: str = "",
+    market: str = "",
+    date_from: str = "",
+    date_to: str = "",
 ):
-    """Drill-down for one category: status breakdown (all rows) + paginated device rows."""
+    """Drill-down for one category: status breakdown (all rows) + paginated device rows.
+    Honors the dashboard filters: store, market, acquired_date range."""
     client = sb()
+
+    def _af(q):
+        if store:
+            q = q.eq("store", store)
+        if market:
+            q = q.eq("market", market)
+        if date_from:
+            q = q.gte("acquired_date", date_from)
+        if date_to:
+            q = q.lte("acquired_date", date_to)
+        return q
 
     # Pull every row in this category for an accurate status tally.
     # Select only the light columns needed for the breakdown.
@@ -185,9 +212,9 @@ async def get_category_detail(
     PAGE = 1000
     while True:
         start = page * PAGE
-        resp = client.schema("commcalc").table("asset_ledger") \
+        resp = _af(client.schema("commcalc").table("asset_ledger") \
             .select("status,owed_to_vip,reimbursement,commissions") \
-            .eq("org_id", org_id).eq("category", category) \
+            .eq("org_id", org_id).eq("category", category)) \
             .range(start, start + PAGE - 1).execute()
         chunk = resp.data or []
         tally_rows.extend(chunk)
@@ -212,9 +239,9 @@ async def get_category_detail(
         by_status[s]["fees"] = round(by_status[s]["fees"], 2)
 
     # Paginated device rows for the table.
-    rows_resp = client.schema("commcalc").table("asset_ledger") \
+    rows_resp = _af(client.schema("commcalc").table("asset_ledger") \
         .select("id,store,esn_imei,phone_number,device_model,contract_type,status,date_sold,sfid,owed_to_vip,reimbursement,commissions,selling_price,notes") \
-        .eq("org_id", org_id).eq("category", category) \
+        .eq("org_id", org_id).eq("category", category)) \
         .order("date_sold", desc=True).range(offset, offset + limit - 1).execute()
 
     rows = _attach_vip_invoices(client, org_id, rows_resp.data or [])

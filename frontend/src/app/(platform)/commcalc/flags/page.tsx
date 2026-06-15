@@ -28,6 +28,7 @@ export default function FlagsPage() {
   const [fWindow, setFWindow] = useState('')
   const [sortKey, setSortKey] = useState('days_active')
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc')
+  const [showMatrix, setShowMatrix] = useState(false)
 
   useEffect(() => {
     setLoading(true)
@@ -128,7 +129,33 @@ export default function FlagsPage() {
         </div>
       </div>
 
-      {/* Store summary matrix */}
+      {/* Filters — moved to top */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+        <select className="select" value={fType} onChange={e => setFType(e.target.value)}>
+          <option value="">All types</option>
+          {types.map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
+        </select>
+        <select className="select" value={fRep} onChange={e => setFRep(e.target.value)}>
+          <option value="">All reps</option>
+          {reps.map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
+        <select className="select" value={fStore} onChange={e => setFStore(e.target.value)}>
+          <option value="">All stores</option>
+          {stores.map(s => <option key={s} value={s}>{s.substring(0,35)}</option>)}
+        </select>
+        <select className="select" value={fWindow} onChange={e => setFWindow(e.target.value)}>
+          {WINDOWS.map(w => <option key={w.id} value={w.id}>{w.label}</option>)}
+        </select>
+        <input className="input" placeholder="Search MDN / IMEI…" value={fSearch}
+          onChange={e => setFSearch(e.target.value)} style={{ width: 160 }} />
+        <input className="input" placeholder="Phone model…" value={fModel}
+          onChange={e => setFModel(e.target.value)} style={{ width: 140 }} />
+        {(fType||fRep||fStore||fWindow||fSearch||fModel) && (
+          <button className="btn btn-secondary" onClick={() => { setFType('');setFRep('');setFStore('');setFWindow('');setFSearch('');setFModel('') }}>✕ Clear</button>
+        )}
+      </div>
+
+      {/* Store summary matrix — collapsible (▸/▾) */}
       {(() => {
         const storeRows: Record<string, Record<string, number>> = {}
         flags.forEach(f => {
@@ -143,9 +170,11 @@ export default function FlagsPage() {
         if (!rows.length) return null
         return (
           <div style={{ marginBottom: 20, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 12, background: 'white' }}>
-            <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>
-              Store Summary — click a store to filter details below
+            <div onClick={() => setShowMatrix(!showMatrix)} style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: showMatrix ? '1px solid var(--border)' : 'none', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>{showMatrix ? '▾' : '▸'} Store Summary — {rows.length} stores{fStore ? ` · filtered: ${fStore.substring(0,24)}` : ' · click a store to filter details'}</span>
+              <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>{showMatrix ? 'hide' : 'show'}</span>
             </div>
+            {showMatrix && (
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
               <thead>
                 <tr>
@@ -173,9 +202,11 @@ export default function FlagsPage() {
                 ))}
               </tbody>
             </table>
+            )}
           </div>
         )
       })()}
+
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
         {summary.map(([type, s]) => (
           <button key={type} onClick={() => setFType(fType === type ? '' : type)} className="card" style={{
@@ -187,31 +218,6 @@ export default function FlagsPage() {
             {s.amt > 0 && <span style={{ fontSize: 11, color: 'var(--red)' }}>{fmt(s.amt)}</span>}
           </button>
         ))}
-      </div>
-
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-        <select className="select" value={fType} onChange={e => setFType(e.target.value)}>
-          <option value="">All types</option>
-          {types.map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
-        </select>
-        <select className="select" value={fRep} onChange={e => setFRep(e.target.value)}>
-          <option value="">All reps</option>
-          {reps.map(r => <option key={r} value={r}>{r}</option>)}
-        </select>
-        <select className="select" value={fStore} onChange={e => setFStore(e.target.value)}>
-          <option value="">All stores</option>
-          {stores.map(s => <option key={s} value={s}>{s.substring(0,35)}</option>)}
-        </select>
-        <select className="select" value={fWindow} onChange={e => setFWindow(e.target.value)}>
-          {WINDOWS.map(w => <option key={w.id} value={w.id}>{w.label}</option>)}
-        </select>
-        <input className="input" placeholder="Search MDN / IMEI…" value={fSearch}
-          onChange={e => setFSearch(e.target.value)} style={{ width: 160 }} />
-        <input className="input" placeholder="Phone model…" value={fModel}
-          onChange={e => setFModel(e.target.value)} style={{ width: 140 }} />
-        {(fType||fRep||fStore||fWindow||fSearch||fModel) && (
-          <button className="btn btn-secondary" onClick={() => { setFType('');setFRep('');setFStore('');setFWindow('');setFSearch('');setFModel('') }}>✕ Clear</button>
-        )}
       </div>
 
       {loading ? (

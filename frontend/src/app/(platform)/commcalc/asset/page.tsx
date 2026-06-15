@@ -79,18 +79,41 @@ export default function AssetPage() {
   const [uploadMsg, setUploadMsg] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // Dashboard filters (top)
+  const [store, setStore] = useState('')
+  const [market, setMarket] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [markets, setMarkets] = useState<string[]>([])
+  const [stores, setStores] = useState<{store:string;market:string}[]>([])
+
   // Drill-down state
   const [openCat, setOpenCat] = useState<string | null>(null)
   const [detail, setDetail] = useState<CatDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
 
-  useEffect(() => { loadSummary() }, [])
+  const filterQS = () => {
+    const p = new URLSearchParams()
+    if (store) p.set('store', store)
+    if (market) p.set('market', market)
+    if (dateFrom) p.set('date_from', dateFrom)
+    if (dateTo) p.set('date_to', dateTo)
+    const s = p.toString()
+    return s ? '&' + s : ''
+  }
+
+  useEffect(() => {
+    api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
+      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) }).catch(console.error)
+  }, [])
+  // Reload summary (and reset any open drill-down) whenever a filter changes.
+  useEffect(() => { loadSummary(); setOpenCat(null); setDetail(null) }, [store, market, dateFrom, dateTo])
 
   async function loadSummary() {
     setLoading(true)
     try {
-      const d = await api(`/api/v1/asset/summary?org_id=${ORG_ID}`)
+      const d = await api(`/api/v1/asset/summary?org_id=${ORG_ID}${filterQS()}`)
       setSummary(d)
     } catch(e) { console.error(e) }
     setLoading(false)
@@ -107,7 +130,7 @@ export default function AssetPage() {
     setDetail(null)
     setDetailLoading(true)
     try {
-      const d = await api(`/api/v1/asset/category-detail?org_id=${ORG_ID}&category=${encodeURIComponent(cat)}&limit=${PAGE_SIZE}&offset=0`)
+      const d = await api(`/api/v1/asset/category-detail?org_id=${ORG_ID}&category=${encodeURIComponent(cat)}&limit=${PAGE_SIZE}&offset=0${filterQS()}`)
       setDetail(d)
     } catch(e) {
       console.error(e)
@@ -120,7 +143,7 @@ export default function AssetPage() {
     setLoadingMore(true)
     try {
       const nextOffset = detail.rows.length
-      const d: CatDetail = await api(`/api/v1/asset/category-detail?org_id=${ORG_ID}&category=${encodeURIComponent(openCat)}&limit=${PAGE_SIZE}&offset=${nextOffset}`)
+      const d: CatDetail = await api(`/api/v1/asset/category-detail?org_id=${ORG_ID}&category=${encodeURIComponent(openCat)}&limit=${PAGE_SIZE}&offset=${nextOffset}${filterQS()}`)
       setDetail({ ...d, rows: [...detail.rows, ...d.rows] })
     } catch(e) {
       console.error(e)
@@ -206,6 +229,9 @@ export default function AssetPage() {
       filename: openCat ? `asset-${openCat.replace(/[^a-z0-9]+/gi,'-').toLowerCase()}` : 'asset-ledger', sheets }
   }
 
+  const selStyle = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
+  const visibleStores = market ? stores.filter(s => s.market === market) : stores
+
   return (
     <div>
       {/* Header */}
@@ -234,6 +260,29 @@ export default function AssetPage() {
           <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleUpload} />
         </div>
       </div>
+
+      {/* Dashboard filters (top): market, store, acquired-date range */}
+      {summary?.loaded && (
+        <div className="card" style={{ padding: 12, marginBottom: 20, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)' }}>Filters:</span>
+          <select style={selStyle} value={market} onChange={e => { setMarket(e.target.value); setStore('') }}>
+            <option value="">All markets</option>
+            {markets.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+          <select style={selStyle} value={store} onChange={e => setStore(e.target.value)}>
+            <option value="">All stores</option>
+            {visibleStores.map(s => <option key={s.store} value={s.store}>{s.store}</option>)}
+          </select>
+          <label style={{ fontSize: 12, color: 'var(--text3)' }}>Acquired</label>
+          <input type="date" style={selStyle} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+          <span style={{ fontSize: 12, color: 'var(--text3)' }}>to</span>
+          <input type="date" style={selStyle} value={dateTo} onChange={e => setDateTo(e.target.value)} />
+          {(store || market || dateFrom || dateTo) && (
+            <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px' }}
+              onClick={() => { setStore(''); setMarket(''); setDateFrom(''); setDateTo('') }}>✕ Clear</button>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>Loading…</div>
