@@ -15,9 +15,11 @@ def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
     return r.data or []
 
 @router.get("/employees")
-def get_employees(org_id: str = "00000000-0000-0000-0000-000000000001"):
-    r = sb().table("employees").select("*").eq("is_active", True).order("name").execute()
-    return r.data or []
+def get_employees(include_inactive: bool = False, org_id: str = "00000000-0000-0000-0000-000000000001"):
+    q = sb().table("employees").select("*")
+    if not include_inactive:
+        q = q.eq("is_active", True)
+    return q.order("name").execute().data or []
 
 @router.get("/shifts")
 def get_shifts(store_code: str = None, week_start: str = None, week_end: str = None):
@@ -91,3 +93,87 @@ def get_payroll(month: str = None):
         r["scheduled_pay"] = round(r["scheduled_hours"] * r["pay_rate"], 2)
         r["actual_pay"]    = round(r["actual_hours"] * r["pay_rate"], 2)
     return sorted(rows, key=lambda x: x["name"])
+
+
+ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+EMP_FIELDS = ("name", "home_store", "role", "pay_rate", "is_active", "email",
+              "phone", "notes", "epay_login", "epay_salesperson", "employee_id")
+STORE_FIELDS = ("store_code", "address", "market", "monthly_target", "is_active", "phone", "notes")
+
+
+@router.post("/employees")
+def create_employee(emp: dict):
+    """Create an employee (StoreOps Admin)."""
+    row = {k: emp[k] for k in EMP_FIELDS if k in emp}
+    if not (row.get("name") or "").strip():
+        raise HTTPException(400, "name required")
+    row["org_id"] = ORG_ID
+    if row.get("is_active") is None:
+        row["is_active"] = True
+    r = sb().table("employees").insert(row).execute()
+    return r.data[0] if r.data else row
+
+
+@router.patch("/employees/{emp_id}")
+def update_employee(emp_id: int, updates: dict):
+    """Update an employee (name/role/home_store/pay_rate/active/contact). StoreOps Admin."""
+    row = {k: updates[k] for k in EMP_FIELDS if k in updates}
+    if not row:
+        raise HTTPException(400, "no valid fields to update")
+    r = sb().table("employees").update(row).eq("id", emp_id).execute()
+    if not r.data:
+        raise HTTPException(404, "employee not found")
+    return r.data[0]
+
+
+@router.post("/employees/bulk-payscale")
+def bulk_payscale(body: dict):
+    """Bulk set pay rates from a list. Body: {rows:[{employee_id|name, pay_rate}]}.
+    Matches by employee_id, else exact name (case-insensitive). Reports unmatched/bad rows."""
+    rows = body.get("rows") or body.get("employees") or []
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(400, "rows[] required")
+    emps = sb().table("employees").select("id,employee_id,name").execute().data or []
+    by_eid = {str(e.get("employee_id")): e for e in emps if e.get("employee_id")}
+    by_name = {(e.get("name") or "").strip().lower(): e for e in emps}
+    updated, errors = 0, []
+    for i, rw in enumerate(rows):
+        try:
+            rate = float(rw.get("pay_rate"))
+        except (TypeError, ValueError):
+            errors.append({"row": i + 1, "error": "invalid pay_rate"})
+            continue
+        eid = str(rw.get("employee_id") or "").strip()
+        match = (by_eid.get(eid) if eid else None) or by_name.get((rw.get("name") or "").strip().lower())
+        if not match:
+            errors.append({"row": i + 1, "error": "employee not found", "ref": eid or rw.get("name")})
+            continue
+        sb().table("employees").update({"pay_rate": rate}).eq("id", match["id"]).execute()
+        updated += 1
+    return {"updated": updated, "errors": errors, "total": len(rows)}
+
+
+@router.post("/stores")
+def create_store(store: dict):
+    """Create a store (StoreOps Admin)."""
+    row = {k: store[k] for k in STORE_FIELDS if k in store}
+    if not (row.get("store_code") or "").strip():
+        raise HTTPException(400, "store_code required")
+    row["org_id"] = ORG_ID
+    if row.get("is_active") is None:
+        row["is_active"] = True
+    r = sb().table("stores").insert(row).execute()
+    return r.data[0] if r.data else row
+
+
+@router.patch("/stores/{store_id}")
+def update_store(store_id: int, updates: dict):
+    """Update a store (StoreOps Admin)."""
+    row = {k: updates[k] for k in STORE_FIELDS if k in updates}
+    if not row:
+        raise HTTPException(400, "no valid fields to update")
+    r = sb().table("stores").update(row).eq("id", store_id).execute()
+    if not r.data:
+        raise HTTPException(404, "store not found")
+    return r.data[0]
