@@ -95,16 +95,22 @@ export default function RolesAdminPage() {
     setEmps(es => es.map(e => e.id === id ? { ...e, ...patch } : e))
   }
   async function assign(e: Emp) {
-    if (!e.email) { setMsg(`${e.name} has no email — add one in Employees first.`); return }
     setMsg('')
     try {
+      // Persist an inline email edit to the StoreOps roster. Real employees only
+      // (id < 0 = a manually-added app_user with no employee row to update).
+      if (e.id > 0) {
+        await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH',
+          body: JSON.stringify({ email: (e.email || '').trim() || null }) })
+      }
+      if (!e.email) { setMsg(`Saved ${e.name}. Add an email above to assign a role / create a login.`); return }
       await api('/api/v1/core/users/assign', { method: 'POST', body: JSON.stringify({
         email: e.email, full_name: e.name, role: e.app_role || 'sales_rep',
         market: e.app_market || null, store_code: e.app_store || e.home_store || null,
         employee_id: e.employee_id,
       }) })
-      setMsg(`Assigned ${e.name} → ${e.app_role || 'sales_rep'}`)
-    } catch (err: any) { setMsg('Assign failed: ' + (err?.message || err)) }
+      setMsg(`Saved ${e.name} → ${e.app_role || 'sales_rep'}`)
+    } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)) }
   }
   async function createLogin(e: Emp) {
     if (!e.email) return
@@ -371,7 +377,12 @@ export default function RolesAdminPage() {
                   {filtered.map((e, i) => (
                     <tr key={e.id} style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
                       <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 500 }}>{e.name}{e.manual && <span className="badge" style={{ fontSize: 10, marginLeft: 6 }}>added</span>}<div style={{ fontSize: 11, color: 'var(--text3)' }}>{e.manual ? '✋ manual user' : (e.home_store || '—')}</div></td>
-                      <td style={{ padding: '8px 12px', fontSize: 12, color: e.email ? 'var(--text2)' : '#dc2626' }}>{e.email || 'no email'}</td>
+                      <td style={{ padding: '8px 12px' }}>
+                        {e.id > 0
+                          ? <input style={{ ...sel, width: 200 }} type="email" value={e.email || ''} placeholder="add email…"
+                              onChange={ev => setEmp(e.id, { email: ev.target.value })} />
+                          : <span style={{ fontSize: 12, color: e.email ? 'var(--text2)' : '#dc2626' }}>{e.email || 'no email'}</span>}
+                      </td>
                       <td style={{ padding: '8px 12px' }}>
                         <select style={sel} value={e.app_role || ''} onChange={ev => setEmp(e.id, { app_role: ev.target.value })}>
                           <option value="">— none —</option>

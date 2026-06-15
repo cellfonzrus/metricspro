@@ -120,6 +120,10 @@ def create_employee(emp: dict):
     row["org_id"] = ORG_ID
     if row.get("is_active") is None:
         row["is_active"] = True
+    # employee_id is TEXT UNIQUE: a blank '' collides on the 2nd person with no ID.
+    # Drop it so the column is NULL (multiple NULLs are allowed).
+    if not (row.get("employee_id") or "").strip():
+        row.pop("employee_id", None)
     r = sb().table("employees").insert(row).execute()
     return r.data[0] if r.data else row
 
@@ -130,6 +134,9 @@ def update_employee(emp_id: int, updates: dict):
     row = {k: updates[k] for k in EMP_FIELDS if k in updates}
     if not row:
         raise HTTPException(400, "no valid fields to update")
+    # Clearing the Emp ID must store NULL, not '' (TEXT UNIQUE → '' collides across people).
+    if "employee_id" in row and not (row.get("employee_id") or "").strip():
+        row["employee_id"] = None
     r = sb().table("employees").update(row).eq("id", emp_id).execute()
     if not r.data:
         raise HTTPException(404, "employee not found")
