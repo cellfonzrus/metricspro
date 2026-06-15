@@ -1,130 +1,196 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { api, fmtN, ORG_ID } from '@/lib/client'
+import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 
-const KPI_COLS = [
-  { key: 'atu_pct',        label: 'ATU %',        target_key: 'kpi_atu_target',        default: 55 },
-  { key: 'protect_pct',    label: 'Protect %',    target_key: 'kpi_protect_target',    default: 80 },
-  { key: 'byod_pct',       label: 'BYOD %',       target_key: 'kpi_byod_target',       default: 35 },
-  { key: 'family_plan_pct',label: 'Family Plan %', target_key: 'kpi_familyplan_target', default: 45 },
-  { key: 'tmr3',           label: '3MR %',        target_key: 'kpi_tmr3_target',       default: 70 },
+// KPI definitions. repKey = key inside rep_commissions.kpi_values; storeKey = raw_dlar_store column.
+// All values are whole-number percents (e.g. 70.6), compared directly to the target.
+const KPIS = [
+  { k: 'atu',        label: 'ATU %',         repKey: 'atu',        storeKey: 'atu',             tcfg: 'kpi_atu_target',        def: 55 },
+  { k: 'protect',    label: 'Protect %',     repKey: 'protect',    storeKey: 'protect_pct',     tcfg: 'kpi_protect_target',    def: 80 },
+  { k: 'byod',       label: 'BYOD %',        repKey: 'byod',       storeKey: 'byod_pct',        tcfg: 'kpi_byod_target',       def: 35 },
+  { k: 'familyplan', label: 'Family Plan %', repKey: 'familyplan', storeKey: 'family_plan_pct', tcfg: 'kpi_familyplan_target', def: 45 },
+  { k: 'tmr3',       label: '3MR %',         repKey: 'tmr3',       storeKey: 'tmr3',            tcfg: 'kpi_tmr3_target',       def: 70 },
+  { k: 'aal',        label: 'AAL %',         repKey: 'aal',        storeKey: 'aal_conversion',  tcfg: 'kpi_aal_target',        def: 5 },
 ]
+
+const cellBase = { textAlign: 'right' as const, padding: '8px 10px', borderBottom: '1px solid var(--border)' }
 
 export default function KPIPage() {
   const { period } = usePeriod()
   const [repData, setRepData] = useState<any[]>([])
+  const [storeData, setStoreData] = useState<any[]>([])
   const [cfg, setCfg] = useState<any>({})
   const [loading, setLoading] = useState(true)
-  const [view, setView] = useState<'rep'|'store'>('rep')
-  const [marketFilter, setMarketFilter] = useState('')
-  const [markets, setMarkets] = useState<string[]>([])
+  const [view, setView] = useState<'rep' | 'store'>('rep')
+  const [storeFilter, setStoreFilter] = useState('')
+  const [repFilter, setRepFilter] = useState('')
 
   useEffect(() => {
+    setLoading(true)
     Promise.all([
-      api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`),
+      api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => []),
       api(`/api/v1/commcalc/config/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => ({})),
-    ]).then(([comms, config]) => {
+      api(`/api/v1/commcalc/dlar-store/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => []),
+    ]).then(([comms, config, stores]) => {
       setRepData(comms || [])
       setCfg(config || {})
+      setStoreData(stores || [])
     }).catch(console.error).finally(() => setLoading(false))
   }, [period])
 
-  function pct(v: number | undefined) {
-    return v != null ? (v * 100).toFixed(1) : '—'
-  }
+  const targets: Record<string, number> = Object.fromEntries(
+    KPIS.map(d => [d.k, Number(cfg[d.tcfg]) || d.def])
+  )
 
+  // KPI cell — value is a whole-number percent (e.g. 70.6) or undefined.
   function KPICell({ val, target }: { val: number | undefined; target: number }) {
-    if (val == null) return <td style={{ textAlign: 'right', color: 'var(--text3)', padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>—</td>
-    const pctVal = val * 100
-    const met = pctVal >= target
+    if (val == null || isNaN(val)) {
+      return <td style={{ ...cellBase, color: 'var(--text3)' }}>—</td>
+    }
+    const met = val >= target
     return (
-      <td style={{ textAlign: 'right', padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>
-        <span style={{
-          fontWeight: 600, fontSize: 13,
-          color: met ? 'var(--green)' : pctVal >= target * 0.8 ? 'var(--amber)' : 'var(--red)',
-        }}>
-          {pctVal.toFixed(1)}%
+      <td style={cellBase}>
+        <span style={{ fontWeight: 600, fontSize: 13, color: met ? 'var(--green)' : val >= target * 0.8 ? 'var(--amber)' : 'var(--red)' }}>
+          {val.toFixed(1)}%
         </span>
-        <div style={{ fontSize: 10, color: 'var(--text3)' }}>target: {target}%</div>
+        <div style={{ fontSize: 10, color: 'var(--text3)' }}>target {target}%</div>
       </td>
     )
   }
 
-  const rows = repData.filter(r => {
-    const kv = r.kpi_values || {}
-    return Object.keys(kv).length > 0
-  })
+  function metCount(vals: (number | undefined)[]) {
+    return vals.filter((v, i) => v != null && !isNaN(v as number) && (v as number) >= targets[KPIS[i].k]).length
+  }
+
+  // Rep rows: only reps that have KPI data, then apply the store + rep filters.
+  const repRows = repData
+    .filter(r => r.kpi_values && Object.keys(r.kpi_values).length > 0)
+    .filter(r => !storeFilter || r.store === storeFilter)
+    .filter(r => !repFilter || (r.storeops_name || r.epay_salesperson) === repFilter)
+
+  // Store rows: apply the store filter.
+  const storeRows = storeData.filter(s => !storeFilter || s.location === storeFilter)
+
+  // Filter dropdown options (store list depends on the active view).
+  const storeOptions = (view === 'rep'
+    ? Array.from(new Set(repData.map(r => r.store).filter(Boolean)))
+    : Array.from(new Set(storeData.map(s => s.location).filter(Boolean)))
+  ).sort()
+  const repOptions = Array.from(new Set(repData.map(r => r.storeops_name || r.epay_salesperson).filter(Boolean))).sort()
+
+  function switchView(v: 'rep' | 'store') { setView(v); setStoreFilter(''); setRepFilter('') }
+
+  const count = view === 'rep' ? repRows.length : storeRows.length
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>KPI Metrics</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            {period} · From DLAR Elevate Go report · {rows.length} reps with KPI data
+            {period} · From DLAR Elevate Go report · {count} {view === 'rep' ? 'reps' : 'stores'} with KPI data
           </p>
         </div>
       </div>
 
+      {/* Filter bar: view toggle + store filter + rep filter */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', background: 'var(--surface2)', padding: 3, borderRadius: 8, gap: 3 }}>
+          {(['rep', 'store'] as const).map(v => (
+            <button key={v} onClick={() => switchView(v)} className="btn" style={{
+              background: view === v ? 'white' : 'transparent',
+              color: view === v ? 'var(--accent)' : 'var(--text2)',
+              fontSize: 13, boxShadow: view === v ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+            }}>
+              {v === 'store' ? '🏪 By Store' : '👤 By Rep'}
+            </button>
+          ))}
+        </div>
+
+        <select className="select" value={storeFilter} onChange={e => setStoreFilter(e.target.value)}>
+          <option value="">All stores</option>
+          {storeOptions.map(s => <option key={s} value={s}>{String(s).substring(0, 45)}</option>)}
+        </select>
+
+        {view === 'rep' && (
+          <select className="select" value={repFilter} onChange={e => setRepFilter(e.target.value)}>
+            <option value="">All reps</option>
+            {repOptions.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        )}
+
+        {(storeFilter || repFilter) && (
+          <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px' }}
+            onClick={() => { setStoreFilter(''); setRepFilter('') }}>✕ Clear</button>
+        )}
+      </div>
+
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
-      ) : rows.length === 0 ? (
+      ) : count === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
-          No KPI data — upload DLAR Rep report and run calculation
+          {view === 'store'
+            ? 'No store KPI data — the Store DLAR (raw_dlar_store) is empty for this period.'
+            : 'No rep KPI data — import the DLAR report and run the calculation.'}
+        </div>
+      ) : view === 'rep' ? (
+        <div className="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Rep</th><th>Store</th><th>Tier</th>
+                {KPIS.map(d => <th key={d.k} style={{ textAlign: 'right' }}>{d.label}</th>)}
+                <th style={{ textAlign: 'right' }}>KPIs Met</th>
+              </tr>
+            </thead>
+            <tbody>
+              {repRows.map((r, i) => {
+                const kv = r.kpi_values || {}
+                const tierPct = Math.round((r.tier || 0) * 100)
+                return (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 500 }}>{r.storeops_name || r.epay_salesperson}</td>
+                    <td style={{ color: 'var(--text3)', fontSize: 12 }}>{String(r.store || '').substring(0, 25)}</td>
+                    <td>
+                      <span className={`badge ${tierPct >= 100 ? 'badge-green' : tierPct >= 75 ? 'badge-amber' : 'badge-red'}`}>{tierPct}%</span>
+                    </td>
+                    {KPIS.map(d => <KPICell key={d.k} val={kv[d.repKey]} target={targets[d.k]} />)}
+                    <td style={{ ...cellBase, fontWeight: 700 }}>
+                      <span style={{ color: r.kpis_met >= 7 ? 'var(--green)' : r.kpis_met >= 5 ? 'var(--amber)' : 'var(--red)' }}>
+                        {r.kpis_met}/{r.total_kpis}
+                      </span>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       ) : (
         <div className="table-wrapper">
           <table>
             <thead>
               <tr>
-                <th>Rep</th>
                 <th>Store</th>
-                <th>Tier</th>
-                <th style={{ textAlign: 'right' }}>ATU %</th>
-                <th style={{ textAlign: 'right' }}>Protect %</th>
-                <th style={{ textAlign: 'right' }}>BYOD %</th>
-                <th style={{ textAlign: 'right' }}>Family Plan</th>
-                <th style={{ textAlign: 'right' }}>3MR %</th>
-                <th style={{ textAlign: 'right' }}>AAL %</th>
+                {KPIS.map(d => <th key={d.k} style={{ textAlign: 'right' }}>{d.label}</th>)}
+                <th style={{ textAlign: 'right' }}>Conv %</th>
+                <th style={{ textAlign: 'right' }}>Total Acts</th>
                 <th style={{ textAlign: 'right' }}>KPIs Met</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => {
-                const kv = r.kpi_values || {}
-                const targets = {
-                  atu:        cfg.kpi_atu_target || 55,
-                  protect:    cfg.kpi_protect_target || 80,
-                  byod:       cfg.kpi_byod_target || 35,
-                  familyplan: cfg.kpi_familyplan_target || 45,
-                  tmr3:       cfg.kpi_tmr3_target || 70,
-                  aal:        cfg.kpi_aal_target || 5,
-                }
-                const tierPct = Math.round((r.tier || 0) * 100)
+              {storeRows.map((s, i) => {
+                const vals = KPIS.map(d => { const n = Number(s[d.storeKey]); return isNaN(n) ? undefined : n })
+                const met = metCount(vals)
                 return (
                   <tr key={i}>
-                    <td style={{ fontWeight: 500 }}>{r.storeops_name || r.epay_salesperson}</td>
-                    <td style={{ color: 'var(--text3)', fontSize: 12 }}>{r.store?.substring(0, 25)}</td>
-                    <td>
-                      <span className={`badge ${tierPct >= 100 ? 'badge-green' : tierPct >= 75 ? 'badge-amber' : 'badge-red'}`}>
-                        {tierPct}%
-                      </span>
-                    </td>
-                    {[
-                      { k: 'atu', t: targets.atu },
-                      { k: 'protect', t: targets.protect },
-                      { k: 'byod', t: targets.byod },
-                      { k: 'familyplan', t: targets.familyplan },
-                      { k: 'tmr3', t: targets.tmr3 },
-                      { k: 'aal', t: targets.aal },
-                    ].map(({ k, t }) => (
-                      <KPICell key={k} val={kv[k] != null ? kv[k] / 100 : undefined} target={t} />
-                    ))}
-                    <td style={{ textAlign: 'right', fontWeight: 700, padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>
-                      <span style={{ color: r.kpis_met >= 7 ? 'var(--green)' : r.kpis_met >= 5 ? 'var(--amber)' : 'var(--red)' }}>
-                        {r.kpis_met}/{r.total_kpis}
-                      </span>
+                    <td style={{ fontWeight: 500 }}>{s.location || s.address}</td>
+                    {KPIS.map((d, j) => <KPICell key={d.k} val={vals[j]} target={targets[d.k]} />)}
+                    <td style={{ ...cellBase, fontSize: 13 }}>{s.conversion_rate != null ? Number(s.conversion_rate).toFixed(1) + '%' : '—'}</td>
+                    <td style={{ ...cellBase, fontSize: 13 }}>{s.total_acts ?? '—'}</td>
+                    <td style={{ ...cellBase, fontWeight: 700 }}>
+                      <span style={{ color: met >= 6 ? 'var(--green)' : met >= 4 ? 'var(--amber)' : 'var(--red)' }}>{met}/6</span>
                     </td>
                   </tr>
                 )

@@ -1164,6 +1164,18 @@ async def get_commissions(period: str, org_id: str = "00000000-0000-0000-0000-00
         cr['final_payout'] = (cr.get('total_payout') or 0) - d
     return comms
 
+@router.get("/dlar-store/{period}")
+async def get_dlar_store_kpis(period: str, org_id: str = ORG_ID):
+    """Store-level KPIs straight from the Elevate Go Store DLAR (raw_dlar_store) for the
+    Store view of the KPI Metrics page. Values are whole-number percents (e.g. 55.0)."""
+    require_org(org_id)
+    rows = sb().schema('commcalc').table('raw_dlar_store').select(
+        'location,address,store_code,atu,protect_pct,byod_pct,family_plan_pct,tmr3,'
+        'aal_conversion,conversion_rate,total_acts,gross_adds,total_upgrades'
+    ).eq('org_id', org_id).eq('period', period).order('location').execute().data or []
+    return rows
+
+
 @router.get("/flags/{period}")
 async def get_flags(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
