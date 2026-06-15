@@ -153,18 +153,61 @@ async def list_users(org_id: str = ORG_ID):
     return {"users": rows, "ready": True}
 
 
+def _ensure_employee(client, org_id, email, full_name=None, store_code=None, emp_emails=None):
+    """Make sure a storeops.employees row exists for a person added via Roles, so they
+    propagate to the Employee list and become editable there. No-op if one already exists
+    (matched by email). Returns True if a new row was created."""
+    email = (email or "").strip().lower()
+    if not email:
+        return False
+    if emp_emails is None:
+        existing = client.schema("storeops").table("employees").select("email") \
+            .eq("org_id", org_id).execute().data or []
+        emp_emails = {(e.get("email") or "").lower() for e in existing if e.get("email")}
+    if email in emp_emails:
+        return False
+    try:
+        client.schema("storeops").table("employees").insert({
+            "org_id": org_id, "name": (full_name or email), "email": email,
+            "home_store": store_code or None, "is_active": True,
+        }).execute()
+        emp_emails.add(email)
+        return True
+    except Exception:
+        return False
+
+
 @router.get("/employees")
 async def list_employees(org_id: str = ORG_ID):
     """The storeops.employees roster + whether each already has an app login + assigned role.
     Drives the assignment grid (assign a role, then create logins)."""
-    emps = sb().schema("storeops").table("employees").select(
+    client = sb()
+    emps = client.schema("storeops").table("employees").select(
         "id,employee_id,name,home_store,role,email,phone,is_active") \
         .eq("org_id", org_id).order("name").execute().data or []
     try:
-        users = sb().schema("storeops").table("app_users").select("*").eq("org_id", org_id) \
+        users = client.schema("storeops").table("app_users").select("*").eq("org_id", org_id) \
             .execute().data or []
     except Exception:
         users = []   # migration 015 not run yet → no assignments to merge
+
+    # Backfill: any app_user with no matching employee gets a roster row, so manually-added
+    # Roles users show up in the Employee list and are editable (not stuck as synthetic rows).
+    emp_emails = {(e.get("email") or "").lower() for e in emps if e.get("email")}
+    emp_eids = {e.get("employee_id") for e in emps if e.get("employee_id")}
+    created = 0
+    for u in users:
+        ue = (u.get("email") or "").lower()
+        if not ue or ue in emp_emails:
+            continue
+        if u.get("employee_id") and u.get("employee_id") in emp_eids:
+            continue
+        if _ensure_employee(client, org_id, ue, u.get("full_name"), u.get("store_code"), emp_emails):
+            created += 1
+    if created:
+        emps = client.schema("storeops").table("employees").select(
+            "id,employee_id,name,home_store,role,email,phone,is_active") \
+            .eq("org_id", org_id).order("name").execute().data or []
     by_email = {(u.get("email") or "").lower(): u for u in users if u.get("email")}
     by_emp = {u.get("employee_id"): u for u in users if u.get("employee_id")}
     out = []
@@ -213,7 +256,8 @@ async def assign_role(body: dict, org_id: str = ORG_ID):
     if not email:
         raise HTTPException(400, "email required")
     role = (body.get("role") or "").strip()
-    cur = sb().schema("storeops").table("app_users").select("*").eq("org_id", org_id) \
+    client = sb()
+    cur = client.schema("storeops").table("app_users").select("*").eq("org_id", org_id) \
         .eq("email", email).limit(1).execute().data or []
     row = {
         "org_id": org_id, "email": email,
@@ -226,9 +270,11 @@ async def assign_role(body: dict, org_id: str = ORG_ID):
         "is_active": body.get("is_active", True if not cur else cur[0].get("is_active")),
     }
     if cur:
-        res = sb().schema("storeops").table("app_users").update(row).eq("id", cur[0]["id"]).execute()
+        res = client.schema("storeops").table("app_users").update(row).eq("id", cur[0]["id"]).execute()
     else:
-        res = sb().schema("storeops").table("app_users").insert(row).execute()
+        res = client.schema("storeops").table("app_users").insert(row).execute()
+    # Propagate to the Employee roster so the person is editable in the Employee list too.
+    _ensure_employee(client, org_id, email, row["full_name"], row["store_code"])
     return (res.data or [{}])[0]
 
 
@@ -244,6 +290,9 @@ async def bulk_assign(body: dict, org_id: str = ORG_ID):
     client = sb()
     valid = {r["name"] for r in (client.schema("storeops").table("roles")
              .select("name").eq("org_id", org_id).execute().data or [])}
+    _existing_emp = client.schema("storeops").table("employees").select("email") \
+        .eq("org_id", org_id).execute().data or []
+    emp_emails = {(e.get("email") or "").lower() for e in _existing_emp if e.get("email")}
     assigned, errors = 0, []
     for i, u in enumerate(users):
         email = (u.get("email") or "").strip().lower()
@@ -269,6 +318,7 @@ async def bulk_assign(body: dict, org_id: str = ORG_ID):
                 client.schema("storeops").table("app_users").update(row).eq("id", cur[0]["id"]).execute()
             else:
                 client.schema("storeops").table("app_users").insert(row).execute()
+            _ensure_employee(client, org_id, email, row["full_name"], row["store_code"], emp_emails)
             assigned += 1
         except Exception as e:
             errors.append({"row": i + 1, "email": email, "error": str(e)})
