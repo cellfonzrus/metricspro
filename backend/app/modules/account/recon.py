@@ -34,7 +34,42 @@ def _rep_to_store(client, org_id, period):
     return mp
 
 
-def reconcile(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEFAULT_DATE_COL):
+def _missed_days(flagged):
+    """ONE Claude call over all flagged stores: given each store's credit-memo date ranges +
+    amounts and its by-day MI/ATU accrual, identify which days (and whether MI or ATU) are short,
+    shifting the day window if that aligns the totals. Returns {store: one-line finding}.
+    Degrades to {} without ANTHROPIC_API_KEY or on any error."""
+    if not settings.ANTHROPIC_API_KEY or not flagged:
+        return {}
+    try:
+        import json
+        from anthropic import Anthropic
+        cli = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        payload = [{"store": r["store"], "diff": r["diff"], "memo_total": r["memo_total"],
+                    "mi_atu_total": r["mi_atu_total"], "memos": r.get("memos"),
+                    "mi_atu_by_day": r.get("by_day", {})} for r in flagged[:25]]
+        prompt = (
+            "You reconcile VIP 'Weekly Incentive Credit' memos against MI + ATU earned for a "
+            "cellular retailer. VIP pays MI + ATU COMBINED as one weekly memo per store. MI accrues "
+            "on the activation date (new activations) or residual-transfer-in date (upgrades); ATU is "
+            "the auto-pay-initiation amount, paid combined. Each memo carries a date range (start/end) "
+            "and amount. For each store below, compare the memo date ranges + amounts to the by-day "
+            "MI/ATU accrual and state which specific days (and whether MI, ATU, or both) appear short, "
+            "and whether shifting the day window by a few days would reconcile it. One concise sentence "
+            "per store. Return ONLY a JSON object mapping store -> finding, no preamble.\n\n"
+            + json.dumps(payload, indent=2))
+        msg = cli.messages.create(
+            model=settings.ACCOUNT_ENGINE_MODEL, max_tokens=2000,
+            thinking={"type": "adaptive"}, output_config={"effort": "medium"},
+            messages=[{"role": "user", "content": prompt}])
+        text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
+        a, b = text.find("{"), text.rfind("}")
+        return json.loads(text[a:b + 1]) if a >= 0 and b > a else {}
+    except Exception:
+        return {}
+
+
+def reconcile(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEFAULT_DATE_COL, analyze=False):
     tol = abs(safe_float(tolerance)) or DEFAULT_TOLERANCE
 
     # credit memos for the period (exclude Xfinity)
@@ -104,6 +139,12 @@ def reconcile(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEFA
             # by-day MI/ATU accrual (activation + residual transfer-in) for missed-days analysis
             row["by_day"] = dict(sorted(mi_by_store_day.get(st, {}).items()))
         rows.append(row)
+
+    if analyze:
+        md = _missed_days([r for r in rows if r["status"] != "ok"])
+        for r in rows:
+            if r["store"] in md:
+                r["missed_days_note"] = md[r["store"]]
 
     cw_diff = round(memo_total_all - mi_total_all, 2)
     company_wide = {

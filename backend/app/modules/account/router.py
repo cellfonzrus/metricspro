@@ -227,10 +227,10 @@ async def overview(period: str, org_id: str = ORG_ID):
 # ── #10 reconciliation (VIP credit-memo residual vs MI + ATU) ────────────────────────────────
 @router.get("/recon/{period}")
 async def get_recon(period: str, tolerance: float = 1.0, date_col: str = "mi_activation_date",
-                    org_id: str = ORG_ID):
+                    analyze: bool = False, org_id: str = ORG_ID):
     require_org(org_id)
     from app.modules.account import recon
-    return recon.reconcile(sb(), org_id, period, tolerance, date_col)
+    return recon.reconcile(sb(), org_id, period, tolerance, date_col, analyze=analyze)
 
 
 @router.post("/recon/{period}/sync-flags")

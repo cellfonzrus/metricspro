@@ -18,10 +18,11 @@ export default function ReconPage() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
+  const [open, setOpen] = useState<Record<string, boolean>>({})
 
-  function load() {
+  function load(analyze = false) {
     setLoading(true)
-    api(`/api/v1/account/recon/${encodeURIComponent(period)}?tolerance=${tolerance}&org_id=${ORG_ID}`)
+    api(`/api/v1/account/recon/${encodeURIComponent(period)}?tolerance=${tolerance}&analyze=${analyze}&org_id=${ORG_ID}`)
       .then(setData).catch(console.error).finally(() => setLoading(false))
   }
   useEffect(() => { load() }, [period])
@@ -75,7 +76,8 @@ export default function ReconPage() {
       <div className="card" style={{ padding: 12, marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 13 }}>Tolerance $</span>
         <input type="number" step="0.01" style={{ ...inp, width: 90 }} value={tolerance} onChange={e => setTolerance(parseFloat(e.target.value) || 0)} />
-        <button className="btn" onClick={load}>↻ Recompute</button>
+        <button className="btn" onClick={() => load(false)}>↻ Recompute</button>
+        <button className="btn" onClick={() => load(true)} title="Claude buckets MI/ATU by day vs the memo range for flagged stores">🧠 Analyze short days</button>
         <span style={{ width: 1, height: 22, background: 'var(--border)' }} />
         <button className="btn" onClick={scrape} disabled={!!busy}>{busy === 'scrape' ? '⏳…' : '🔄 Scrape credit memos'}</button>
         <button className="btn" onClick={syncFlags} disabled={!!busy}>{busy === 'flags' ? '⏳…' : '🚩 Write flags'}</button>
@@ -116,15 +118,38 @@ export default function ReconPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.stores.map((r: any) => (
-                    <tr key={r.store} style={{ borderTop: '1px solid var(--border)', fontSize: 13, background: r.status === 'under' ? '#fef2f2' : 'transparent' }}>
-                      <td style={{ padding: '8px 16px' }}>{r.store}</td>
-                      <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(r.memo_total)}</td>
-                      <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(r.mi_atu_total)}</td>
-                      <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: r.diff < 0 ? '#dc2626' : r.diff > 0 ? '#854d0e' : 'var(--text3)' }}>{fmt(r.diff)}</td>
-                      <td style={{ padding: '8px 12px', textAlign: 'center' }}><span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 600, background: badge(r.status).bg, color: badge(r.status).c }}>{badge(r.status).t}</span></td>
-                    </tr>
-                  ))}
+                  {data.stores.map((r: any) => {
+                    const flagged = r.status !== 'ok'
+                    const byDay = r.by_day && Object.keys(r.by_day).length > 0
+                    const expandable = flagged && (r.missed_days_note || byDay)
+                    return (
+                      <>
+                        <tr key={r.store} onClick={() => expandable && setOpen(o => ({ ...o, [r.store]: !o[r.store] }))}
+                          style={{ borderTop: '1px solid var(--border)', fontSize: 13, cursor: expandable ? 'pointer' : 'default', background: r.status === 'under' ? '#fef2f2' : 'transparent' }}>
+                          <td style={{ padding: '8px 16px' }}>{expandable && <span style={{ fontSize: 11, marginRight: 6 }}>{open[r.store] ? '▾' : '▸'}</span>}{r.store}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(r.memo_total)}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(r.mi_atu_total)}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: r.diff < 0 ? '#dc2626' : r.diff > 0 ? '#854d0e' : 'var(--text3)' }}>{fmt(r.diff)}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}><span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 600, background: badge(r.status).bg, color: badge(r.status).c }}>{badge(r.status).t}</span></td>
+                        </tr>
+                        {expandable && open[r.store] && (
+                          <tr style={{ background: '#fafbfc' }}>
+                            <td colSpan={5} style={{ padding: '10px 16px 14px 36px' }}>
+                              {r.missed_days_note && <div style={{ fontSize: 13, marginBottom: byDay ? 10 : 0 }}>🧠 {r.missed_days_note}</div>}
+                              {byDay && (
+                                <div style={{ fontSize: 12 }}>
+                                  <div style={{ color: 'var(--text3)', marginBottom: 4 }}>MI + ATU accrual by day (activation / residual transfer-in):</div>
+                                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                                    {Object.entries(r.by_day).map(([d, v]: any) => <span key={d}>{d}: <strong>{fmt(v)}</strong></span>)}
+                                  </div>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
