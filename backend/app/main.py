@@ -29,7 +29,7 @@ app.include_router(storeops_router, prefix="/api/v1")
 app.include_router(asset_router, prefix="/api/v1/asset")
 app.include_router(notify_router, prefix="/api/v1")
 app.include_router(core_router, prefix="/api/v1")
-app.include_router(account_router, prefix="/api/v1/account")
+app.include_router(account_router, prefix="/api/v1")  # router carries its own /account prefix
 
 @app.get("/health")
 def health():

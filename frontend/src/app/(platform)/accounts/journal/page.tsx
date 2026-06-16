@@ -12,7 +12,6 @@ const SUGGESTED = [
   { statement: 'balance_sheet', account_type: 'asset', account_line: 'Fixtures / equipment' },
   { statement: 'balance_sheet', account_type: 'equity', account_line: 'Owner capital / contributions' },
   { statement: 'balance_sheet', account_type: 'equity', account_line: 'Opening retained earnings' },
-  { statement: 'pl', account_type: 'opex', account_line: 'Wages / hourly payroll' },
   { statement: 'pl', account_type: 'other', account_line: 'Income taxes' },
   { statement: 'pl', account_type: 'other', account_line: 'Interest expense' },
 ]

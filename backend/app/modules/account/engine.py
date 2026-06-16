@@ -238,8 +238,9 @@ def _notes(scope_key, include_cw):
     if not include_cw:
         n.append("Company-wide income (MI/ATU residual, carrier incentives without a matching store) "
                  "is shown only in the Consolidated view.")
-    n.append("Wages/hourly payroll, cash, fixtures and owner capital are MANUAL — enter them in the "
-             "Journal. Rep commissions, sales, VIP, reimbursements and store expenses are automatic.")
+    n.append("Cash, fixtures and owner capital are MANUAL — enter them in the Journal. Wages = "
+             "StoreOps payroll (shifts × pay rate); rep commissions, sales, VIP, reimbursements, "
+             "store expenses and wages are automatic.")
     return n
 
 

@@ -47,7 +47,7 @@ PL_SPEC = [
     ("device_cost",   "Device cost",                                 "cogs",    "auto",  "store"),
     ("vip_fees",      "VIP fees paid (shipping / SIM kit / processing)", "cogs", "auto", "store"),
     ("rep_comm",      "Rep commissions paid",                        "opex",    "auto",  "store"),
-    ("wages",         "Wages / hourly payroll",                      "opex",    "manual","store"),
+    ("wages",         "Wages / hourly payroll",                      "opex",    "auto",  "store"),
     ("chargebacks",   "Chargebacks / clawbacks",                     "opex",    "auto",  "store"),
     ("store_opex",    "Store operating expenses (rent / utilities / supplies)", "opex", "auto", "store"),
 ]
@@ -130,6 +130,38 @@ def store_company_map(client, org_id):
         if sa:
             mp[sa.upper()] = r.get("company_id")
     return mp, default_id, companies
+
+
+def wages_by_store(client, org_id, period):
+    """StoreOps payroll for the period → {store_address: wages}. hours = actual (fallback
+    scheduled) × employee pay_rate; store = shift.store_code (fallback employee home_store),
+    mapped store_code → store_address. Returns {} if StoreOps has no shifts for the month."""
+    pm, py = parse_period(period)
+    if not pm or not py:
+        return {}
+    month = f"{py:04d}-{pm:02d}"
+    nxt = f"{py + 1:04d}-01-01" if pm == 12 else f"{py:04d}-{pm + 1:02d}-01"
+    so = client.schema("storeops")
+    code2addr = store_code_to_address(client, org_id)
+    emps = (so.table("employees").select("employee_id,pay_rate,home_store").execute().data) or []
+    rate = {e.get("employee_id"): safe_float(e.get("pay_rate")) for e in emps}
+    home = {e.get("employee_id"): e.get("home_store") for e in emps}
+    shifts = (so.table("shifts")
+              .select("employee_id,store_code,scheduled_hours,actual_hours,shift_date,is_deleted")
+              .eq("is_deleted", False).gte("shift_date", f"{month}-01").lt("shift_date", nxt)
+              .range(0, 9999).execute().data) or []
+    out = {}
+    for s in shifts:
+        eid = s.get("employee_id")
+        hrs = safe_float(s.get("actual_hours")) or safe_float(s.get("scheduled_hours"))
+        pay = round(hrs * rate.get(eid, 0.0), 2)
+        if not pay:
+            continue
+        code = _norm_store(s.get("store_code")) or _norm_store(home.get(eid))
+        addr = code2addr.get(code, code)
+        if addr:
+            out[addr] = round(out.get(addr, 0.0) + pay, 2)
+    return out
 
 
 def store_code_to_address(client, org_id):
@@ -277,6 +309,13 @@ def build_inputs(client, org_id, period):
             sa = code2addr.get(_norm_store(r.get("store_code")), _norm_store(r.get("store_code")))
             label = (r.get("expense_name") or "Expense").strip()
             add("store_opex", sa, r.get("amount"), detail_label=label)
+    except Exception:
+        pass
+
+    # StoreOps payroll — wages (opex). Degrades to 0 (→ manual journal) if no shifts.
+    try:
+        for st, amt in wages_by_store(client, org_id, period).items():
+            add("wages", st, amt)
     except Exception:
         pass
 
