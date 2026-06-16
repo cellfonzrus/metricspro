@@ -36,6 +36,14 @@ export const NAV: NavGroup[] = [
   { group: 'VIP', module: 'vip', items: [
     { href: '/commcalc/vip', label: 'VIP Invoices', icon: '🧾', module: 'vip' },
   ]},
+  { group: 'Accounts', module: 'accounts', items: [
+    { href: '/accounts', label: 'Dashboard', icon: '💼', module: 'accounts', scopes: ['all', 'market'] },
+    { href: '/accounts/pl', label: 'P&L Statement', icon: '📈', module: 'accounts', scopes: ['all', 'market'] },
+    { href: '/accounts/balance-sheet', label: 'Balance Sheet', icon: '⚖️', module: 'accounts', scopes: ['all', 'market'] },
+    { href: '/accounts/recon', label: 'Reconciliation', icon: '🔎', module: 'accounts', scopes: ['all', 'market'] },
+    { href: '/accounts/journal', label: 'Journal', icon: '📒', module: 'accounts', scopes: ['all'] },
+    { href: '/accounts/companies', label: 'Companies', icon: '🏢', module: 'accounts', scopes: ['all'] },
+  ]},
   { group: 'StoreOps', module: 'storeops', items: [
     { href: '/storeops', label: 'Dashboard', icon: '🏠', module: 'storeops' },
     { href: '/storeops/schedule', label: 'Schedule', icon: '📅', module: 'storeops' },
@@ -58,6 +66,7 @@ export function moduleForPath(path: string): string {
   if (path.startsWith('/admin')) return 'admin'
   if (path.startsWith('/employee')) return 'targets'
   if (path.startsWith('/storeops')) return 'storeops'
+  if (path.startsWith('/accounts')) return 'accounts'
   if (path.startsWith('/notify')) return 'notify'
   if (path.startsWith('/commcalc/targets')) return 'targets'
   if (path.startsWith('/commcalc/asset')) return 'asset'

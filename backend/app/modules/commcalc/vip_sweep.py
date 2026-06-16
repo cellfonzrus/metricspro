@@ -382,3 +382,119 @@ def _to_int(v):
         return int(float(str(v).strip()))
     except (TypeError, ValueError):
         return None
+
+
+# ── Credit memos (Weekly Incentive Credit) for the #10 MI/ATU reconciliation ────────
+# VIP pays the MI + ATU residual COMBINED as one "Weekly Incentive Credit" memo per store.
+#   POST /CreditMemo/CreditMemoListList -> Kendo grid JSON (same shape as InvoiceList)
+#     fields: Id, CreditMemoNumber, Memo, Status, CompanyName, GrandTotal, AmountLinked,
+#             Balance, CreatedOn, OrderStatus
+# Endpoint + field names per the discovery notes (memory: vip-creditmemo-recon-notify).
+# The list fields are enough for the GrandTotal-vs-MI+ATU recon — the line-item Details
+# page is not needed, so we don't scrape it here.
+_CM_MONTHS = {m.lower(): i for i, m in enumerate(
+    ["", "January", "February", "March", "April", "May", "June", "July",
+     "August", "September", "October", "November", "December"]) if m}
+_CM_MONTHS.update({m[:3].lower(): i for m, i in list(_CM_MONTHS.items())})
+
+
+def _cm_date_range(memo, created_on=None):
+    """Best-effort parse of the date range embedded in a credit-memo's Memo text, e.g.
+    'Weekly Incentive Credit - 01/01/2026 - 01/07/2026' or '... Jan 1 - Jan 7, 2026'.
+    Returns (start_iso, end_iso) or (None, None)."""
+    s = str(memo or "")
+    # 1) MM/DD/YYYY - MM/DD/YYYY (or M/D/YY)
+    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{2,4}).{0,5}?(\d{1,2})/(\d{1,2})/(\d{2,4})", s)
+    if m:
+        def iso(mo, d, y):
+            y = int(y); y = y + 2000 if y < 100 else y
+            return f"{y:04d}-{int(mo):02d}-{int(d):02d}"
+        return iso(m.group(1), m.group(2), m.group(3)), iso(m.group(4), m.group(5), m.group(6))
+    # 2) "Mon D - Mon D, YYYY" / "Mon D-D YYYY"
+    yr = None
+    ym = re.search(r"(20\d{2})", s)
+    if ym:
+        yr = int(ym.group(1))
+    m2 = re.search(r"([A-Za-z]{3,9})\.?\s+(\d{1,2})\s*[-–]\s*(?:([A-Za-z]{3,9})\.?\s+)?(\d{1,2})", s)
+    if m2 and yr:
+        mo1 = _CM_MONTHS.get(m2.group(1).lower())
+        mo2 = _CM_MONTHS.get((m2.group(3) or m2.group(1)).lower())
+        if mo1 and mo2:
+            return f"{yr:04d}-{mo1:02d}-{int(m2.group(2)):02d}", f"{yr:04d}-{mo2:02d}-{int(m2.group(4)):02d}"
+    return None, None
+
+
+def _cm_store_address(company_name):
+    """The portal CompanyName is multi-line; line 2 is the store address."""
+    parts = [p.strip() for p in str(company_name or "").replace("\r", "").split("\n") if p.strip()]
+    if len(parts) >= 2:
+        return parts[1]
+    return parts[0] if parts else None
+
+
+def list_credit_memos(session, page_size=200):
+    """Page through POST /CreditMemo/CreditMemoListList (Kendo grid JSON)."""
+    rows, skip, page, total = [], 0, 1, None
+    while True:
+        r = session.post(f"{BASE}/CreditMemo/CreditMemoListList",
+                         data={"take": page_size, "skip": skip, "page": page, "pageSize": page_size},
+                         headers={"X-Requested-With": "XMLHttpRequest",
+                                  "Referer": f"{BASE}/CreditMemo"}, timeout=40)
+        r.raise_for_status()
+        j = r.json()
+        if isinstance(j, dict) and j.get("Errors"):
+            raise RuntimeError(f"CreditMemoListList returned errors: {j['Errors']}")
+        batch = (j.get("Data") if isinstance(j, dict) else j) or []
+        total = j.get("Total") if isinstance(j, dict) else None
+        rows.extend(batch)
+        if not batch or (total is not None and len(rows) >= total):
+            break
+        page += 1
+        skip += page_size
+    return rows
+
+
+def run_creditmemo_sweep(client, org_id, user, pw, helpers, session=None):
+    """Login (or reuse `session`), pull ALL credit memos, map the documented list fields,
+    flag Xfinity memos (excluded from the recon), resolve the store from CompanyName line 2,
+    parse the memo date range, and UPSERT commcalc.vip_credit_memos on (org_id, credit_memo_id).
+    `helpers` = (_vip_money, _vip_int, _vip_ts, _vip_period). Returns a summary dict."""
+    _vip_money, _vip_int, _vip_ts, _vip_period = helpers
+    if session is None:
+        session = requests.Session()
+        session.headers.update({"User-Agent": UA})
+        login(session, user, pw)
+
+    raw = list_credit_memos(session)
+    rows, xfin = [], 0
+    for cm in raw:
+        cid = _vip_int(cm.get("Id"))
+        if cid is None:
+            continue
+        company_name = cm.get("CompanyName") or ""
+        memo = cm.get("Memo") or ""
+        is_xf = "xfinity" in (company_name + " " + memo).lower()
+        if is_xf:
+            xfin += 1
+        period, pm, py = _vip_period(cm.get("CreatedOn", ""))
+        start, end = _cm_date_range(memo, cm.get("CreatedOn"))
+        rows.append({
+            "org_id": org_id, "credit_memo_id": cid,
+            "credit_memo_number": str(cm.get("CreditMemoNumber", "")).strip() or None,
+            "memo": memo or None,
+            "company_name": company_name or None,
+            "store_address": _cm_store_address(company_name),
+            "grand_total": _vip_money(cm.get("GrandTotal")),
+            "amount_linked": _vip_money(cm.get("AmountLinked")),
+            "balance": _vip_money(cm.get("Balance")),
+            "status": cm.get("Status") or None,
+            "order_status": cm.get("OrderStatus") or None,
+            "is_xfinity": is_xf,
+            "created_on": _vip_ts(cm.get("CreatedOn")),
+            "memo_start": start, "memo_end": end,
+            "period": period, "period_month": pm, "period_year": py,
+        })
+    for i in range(0, len(rows), 500):
+        client.schema("commcalc").table("vip_credit_memos").upsert(
+            rows[i:i + 500], on_conflict="org_id,credit_memo_id").execute()
+    return {"credit_memos": len(rows), "xfinity_excluded": xfin}

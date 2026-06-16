@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     WHATSAPP_TEMPLATE_LANG: str = "en_US"
     WHATSAPP_GRAPH_VERSION: str = "v21.0"
 
+    # ── Account Module — Claude-powered accounting engine (#8/#9/#10) ─────────────
+    # Drives statement assembly + narrative + the #10 missed-days recon. The engine
+    # degrades to deterministic-only (no narrative) when this is unset.
+    ANTHROPIC_API_KEY: str = ""
+    ACCOUNT_ENGINE_MODEL: str = "claude-opus-4-8"
+
     class Config:
         env_file = ".env"
         extra = "ignore"

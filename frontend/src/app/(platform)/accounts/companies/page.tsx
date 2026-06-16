@@ -1,0 +1,131 @@
+'use client'
+import { useState, useEffect } from 'react'
+import { api, ORG_ID } from '@/lib/client'
+
+const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
+
+export default function CompaniesPage() {
+  const [companies, setCompanies] = useState<any[]>([])
+  const [stores, setStores] = useState<any[]>([])
+  const [assign, setAssign] = useState<Record<string, string>>({})  // store_address -> company_id
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [newCo, setNewCo] = useState({ name: '', legal_name: '', ein: '' })
+  const [search, setSearch] = useState('')
+  const [market, setMarket] = useState('')
+  const [bulkCo, setBulkCo] = useState('')
+
+  function load() {
+    setLoading(true)
+    api(`/api/v1/account/stores?org_id=${ORG_ID}`).then((d: any) => {
+      setCompanies(d.companies || [])
+      setStores(d.stores || [])
+      const a: Record<string, string> = {}
+      ;(d.stores || []).forEach((s: any) => { if (s.company_id) a[s.store_address] = s.company_id })
+      setAssign(a)
+    }).catch(console.error).finally(() => setLoading(false))
+  }
+  useEffect(() => { load() }, [])
+
+  async function addCompany() {
+    const name = newCo.name.trim()
+    if (!name) return
+    setMsg('')
+    try {
+      await api(`/api/v1/account/companies?org_id=${ORG_ID}`, { method: 'POST', body: JSON.stringify(newCo) })
+      setNewCo({ name: '', legal_name: '', ein: '' }); load()
+    } catch (e: any) { setMsg('Add failed: ' + (e?.message || e)) }
+  }
+
+  const markets = Array.from(new Set(stores.map(s => s.market).filter(Boolean))).sort()
+  const visible = stores.filter(s => (!market || s.market === market) &&
+    (!search || s.store_address.toLowerCase().includes(search.toLowerCase())))
+
+  function bulkApply() {
+    if (!bulkCo) return
+    setAssign(a => { const n = { ...a }; visible.forEach(s => { n[s.store_address] = bulkCo }); return n })
+  }
+
+  async function save() {
+    setSaving(true); setMsg('')
+    const assignments = stores.map(s => ({ store_address: s.store_address, company_id: assign[s.store_address] || null }))
+    try {
+      const r = await api(`/api/v1/account/companies/assign?org_id=${ORG_ID}`, { method: 'POST', body: JSON.stringify({ assignments }) })
+      setMsg(`Saved ${r.saved} store assignments. Re-compute statements to apply.`)
+    } catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) }
+    setSaving(false)
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🏢 Companies</h1>
+          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Legal entities + which store belongs to which company. P&amp;L and Balance Sheet roll up store → company → consolidated.</p>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {msg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{msg}</span>}
+          <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? '…' : '💾 Save assignments'}</button>
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Companies ({companies.length})</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+          {companies.map(c => <span key={c.id} style={{ fontSize: 13, padding: '4px 10px', background: 'var(--surface2, #f1f5f9)', borderRadius: 999 }}>{c.name}</span>)}
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input style={{ ...inp, width: 180 }} placeholder="New company name" value={newCo.name} onChange={e => setNewCo({ ...newCo, name: e.target.value })} />
+          <input style={{ ...inp, width: 180 }} placeholder="Legal name (optional)" value={newCo.legal_name} onChange={e => setNewCo({ ...newCo, legal_name: e.target.value })} />
+          <input style={{ ...inp, width: 120 }} placeholder="EIN (optional)" value={newCo.ein} onChange={e => setNewCo({ ...newCo, ein: e.target.value })} />
+          <button className="btn" onClick={addCompany}>＋ Add company</button>
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: 12, marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select style={inp} value={market} onChange={e => setMarket(e.target.value)}>
+          <option value="">All markets</option>{markets.map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <input style={{ ...inp, width: 200 }} placeholder="Find store…" value={search} onChange={e => setSearch(e.target.value)} />
+        <span style={{ width: 1, height: 22, background: 'var(--border)' }} />
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Set all {visible.length} shown to</span>
+        <select style={inp} value={bulkCo} onChange={e => setBulkCo(e.target.value)}>
+          <option value="">— company —</option>{companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <button className="btn" onClick={bulkApply}>Apply</button>
+      </div>
+
+      {loading ? (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
+      ) : (
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
+                <th style={{ textAlign: 'left', padding: '8px 16px' }}>Store address</th>
+                <th style={{ textAlign: 'left', padding: '8px 12px' }}>Market</th>
+                <th style={{ textAlign: 'left', padding: '8px 16px' }}>Company</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map(s => (
+                <tr key={s.store_address} style={{ borderTop: '1px solid var(--border)', fontSize: 13 }}>
+                  <td style={{ padding: '7px 16px' }}>{s.store_address}</td>
+                  <td style={{ padding: '7px 12px', color: 'var(--text2)' }}>{s.market || '—'}</td>
+                  <td style={{ padding: '7px 16px' }}>
+                    <select style={{ ...inp, minWidth: 180 }} value={assign[s.store_address] || ''} onChange={e => setAssign(a => ({ ...a, [s.store_address]: e.target.value }))}>
+                      <option value="">— Default Company —</option>
+                      {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+              {visible.length === 0 && <tr><td colSpan={3} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>No stores match. Stores come from the store mapping registry.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
