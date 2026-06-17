@@ -10,6 +10,7 @@ from datetime import date
 
 from app.modules.asset import router as A
 from app.modules.commcalc import router as C
+from app.modules.account import router as AC
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -408,6 +409,71 @@ async def _action_plan(org_id, f):
             ]}
 
 
+# ── account module: P&L + Balance Sheet (reads persisted snapshots) ────────────
+_PL_SEC = {"revenue": "Revenue", "cogs": "Cost of Goods Sold",
+           "opex": "Operating Expenses", "other": "Other"}
+_BS_SEC = {"asset": "Assets", "liability": "Liabilities", "equity": "Equity"}
+
+
+def _acct_slug(s: str) -> str:
+    out = "".join(c if c.isalnum() else "-" for c in str(s or "")).strip("-")
+    return out or "scope"
+
+
+def _stmt_rows(st: dict, sec_labels: dict, subtotal_prefix: str) -> list:
+    rows = []
+    for s in (st.get("sections") or []):
+        title = sec_labels.get(s.get("type"), s.get("type"))
+        for ln in (s.get("lines") or []):
+            rows.append({"section": title, "line": ln.get("label"), "amount": ln.get("amount")})
+        rows.append({"section": title, "line": f"{subtotal_prefix} {title}", "amount": s.get("subtotal")})
+    return rows
+
+
+_ACCT_COLS = [
+    {"header": "Section", "key": "section"},
+    {"header": "Line", "key": "line"},
+    {"header": "Amount", "key": "amount", "money": True},
+]
+
+
+async def _account_pl(org_id, f):
+    period = _resolve_period(f)
+    scope = f.get("scope", "") or "consolidated"
+    data = await AC.get_pl(period=period, scope=scope, org_id=org_id)
+    if not data.get("computed"):
+        raise ValueError(f"P&L not computed for {period} / {scope} — open /accounts and click "
+                         "'Compute statements' first.")
+    st = data.get("statement") or {}
+    rows = _stmt_rows(st, _PL_SEC, "Subtotal —")
+    rows.append({"section": "Totals", "line": "Gross Profit", "amount": st.get("gross_profit")})
+    rows.append({"section": "Totals", "line": "Net Operating Income", "amount": st.get("net_operating_income")})
+    rows.append({"section": "Totals", "line": "Net Income", "amount": st.get("net_income")})
+    return {"title": f"Profit & Loss — {st.get('scope_label') or scope}",
+            "subtitle": f"{period} · cash basis",
+            "filename": f"pl-{_acct_slug(scope)}-{period.replace(' ', '-')}",
+            "sheets": [{"name": "P&L", "rows": rows, "columns": _ACCT_COLS}]}
+
+
+async def _account_balance_sheet(org_id, f):
+    period = _resolve_period(f)
+    scope = f.get("scope", "") or "consolidated"
+    data = await AC.get_bs(period=period, scope=scope, org_id=org_id)
+    if not data.get("computed"):
+        raise ValueError(f"Balance Sheet not computed for {period} / {scope} — open /accounts and "
+                         "click 'Compute statements' first.")
+    st = data.get("statement") or {}
+    rows = _stmt_rows(st, _BS_SEC, "Total")
+    rows.append({"section": "Totals", "line": "Liabilities + Equity",
+                 "amount": round((st.get("liabilities_total") or 0) + (st.get("equity_total") or 0), 2)})
+    sub = f"{period} · point-in-time"
+    if not st.get("balanced"):
+        sub += f" · OUT OF BALANCE by ${abs(st.get('imbalance') or 0):,.2f}"
+    return {"title": f"Balance Sheet — {st.get('scope_label') or scope}", "subtitle": sub,
+            "filename": f"balance-sheet-{_acct_slug(scope)}-{period.replace(' ', '-')}",
+            "sheets": [{"name": "Balance Sheet", "rows": rows, "columns": _ACCT_COLS}]}
+
+
 # ── registry ──────────────────────────────────────────────────────────────────
 REPORTS = {
     "asset_ledger": {
@@ -471,6 +537,14 @@ REPORTS = {
         "label": "Daily Action Plan", "filters": ["period", "store_code", "rep"],
         "live_path": lambda f: "/commcalc/targets/action-plan" + _qs(f, ["store_code", "rep"]),
         "build": _action_plan},
+    "account_pl": {
+        "label": "Profit & Loss (Account Module)", "filters": ["period", "scope"],
+        "live_path": lambda f: "/accounts/pl" + _qs(f, ["scope"]),
+        "build": _account_pl},
+    "account_balance_sheet": {
+        "label": "Balance Sheet (Account Module)", "filters": ["period", "scope"],
+        "live_path": lambda f: "/accounts/balance-sheet" + _qs(f, ["scope"]),
+        "build": _account_balance_sheet},
 }
 
 

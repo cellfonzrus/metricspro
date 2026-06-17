@@ -100,7 +100,25 @@ export default function ReconPage() {
                 <Tile label="Difference" v={cw.diff} signed />
                 <span style={{ fontSize: 13, padding: '4px 12px', borderRadius: 999, fontWeight: 600, background: badge(cw.status).bg, color: badge(cw.status).c }}>{badge(cw.status).t}</span>
               </div>
-              {cw.mi_unattributed > 0 && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>Note: {fmt(cw.mi_unattributed)} of MI+ATU could not be attributed to a store by rep name (still counted company-wide).</div>}
+              {cw.attributed_pct != null && (
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>
+                  Per-store attribution: <strong style={{ color: cw.attributed_pct >= 90 ? '#166534' : cw.attributed_pct >= 70 ? '#854d0e' : '#991b1b' }}>{cw.attributed_pct}%</strong> of MI+ATU $ attributed to a store by rep name
+                  {cw.mi_unattributed > 0 && <> · {fmt(cw.mi_unattributed)} unattributed (still counted company-wide)</>}.
+                  {cw.top_unattributed_reps?.length > 0 && (
+                    <>
+                      {' '}<button onClick={() => setOpen(o => ({ ...o, __unattr: !o.__unattr }))} style={{ border: 'none', background: 'none', color: 'var(--accent, #2563eb)', cursor: 'pointer', fontSize: 12, padding: 0 }}>
+                        {open.__unattr ? 'hide' : 'show'} unmatched reps ▾
+                      </button>
+                      {open.__unattr && (
+                        <div style={{ marginTop: 6, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                          {cw.top_unattributed_reps.map((u: any) => <span key={u.rep}>{u.rep}: <strong>{fmt(u.amount)}</strong></span>)}
+                          <span style={{ color: 'var(--text3)' }}>— add these as aliases on <a href="/commcalc/targets/rep-map" style={{ color: 'var(--accent,#2563eb)' }}>Rep Map</a> to attribute them.</span>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

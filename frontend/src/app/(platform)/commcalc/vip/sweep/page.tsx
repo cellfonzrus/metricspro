@@ -8,7 +8,7 @@ type Cfg = {
   configured: boolean; has_credentials: boolean; portal_user: string | null
   enabled: boolean; frequency: string; day_of_week: number; day_of_month: number
   hour: number; timezone: string; lookback_days: number
-  sweep_invoices: boolean; sweep_asset: boolean
+  sweep_invoices: boolean; sweep_asset: boolean; sweep_creditmemo: boolean
   next_run_at: string | null; last_run_at: string | null
   last_status: string | null; last_detail: string | null
 }
@@ -44,6 +44,7 @@ export default function VipSweepAdmin() {
         day_of_week: cfg.day_of_week, day_of_month: cfg.day_of_month, hour: cfg.hour,
         timezone: cfg.timezone, lookback_days: cfg.lookback_days,
         sweep_invoices: cfg.sweep_invoices, sweep_asset: cfg.sweep_asset,
+        sweep_creditmemo: cfg.sweep_creditmemo,
       }
       if (pass.trim()) body.portal_pass = pass.trim()
       const res = await fetch(`${API}/api/v1/commcalc/vip/sweep/config?org_id=${ORG_ID}`, {
@@ -174,6 +175,9 @@ export default function VipSweepAdmin() {
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Pull the PayGo / asset-lending weekly billing ledger (needs migration 014)">
             <input type="checkbox" checked={cfg.sweep_asset} onChange={e => set('sweep_asset', e.target.checked)} /> Asset lending (PayGo)
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Pull VIP 'Weekly Incentive Credit' memos for the Account Module reconciliation (needs migration 022)">
+            <input type="checkbox" checked={cfg.sweep_creditmemo} onChange={e => set('sweep_creditmemo', e.target.checked)} /> Credit memos (recon)
           </label>
         </div>
       </div>

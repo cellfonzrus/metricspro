@@ -634,7 +634,8 @@ def _vip_next_run(frequency, day_of_week, day_of_month, hour, tzname):
 
 _VIP_CFG_DEFAULTS = {'enabled': False, 'frequency': 'weekly', 'day_of_week': 0,
                      'day_of_month': 1, 'hour': 6, 'timezone': 'America/New_York',
-                     'lookback_days': 14, 'sweep_invoices': True, 'sweep_asset': False}
+                     'lookback_days': 14, 'sweep_invoices': True, 'sweep_asset': False,
+                     'sweep_creditmemo': False}
 
 
 def _vip_public_cfg(cfg):
@@ -645,7 +646,7 @@ def _vip_public_cfg(cfg):
                 'last_status': None, 'last_detail': None}
     out = {k: cfg.get(k) for k in (
         'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
-        'lookback_days', 'sweep_invoices', 'sweep_asset', 'portal_user',
+        'lookback_days', 'sweep_invoices', 'sweep_asset', 'sweep_creditmemo', 'portal_user',
         'next_run_at', 'last_run_at', 'last_status', 'last_detail')}
     out['configured'] = True
     out['has_credentials'] = bool(cfg.get('portal_user') and cfg.get('portal_pass'))
@@ -671,6 +672,7 @@ def _do_vip_sweep(org_id):
     # additionally pulls the PayGo / asset-lending weekly billing ledger (migration 014).
     do_invoices = cfg.get('sweep_invoices') is not False
     do_asset = bool(cfg.get('sweep_asset'))
+    do_creditmemo = bool(cfg.get('sweep_creditmemo'))
     lookback = int(cfg.get('lookback_days') or 14)
     parts = []
     try:
@@ -686,8 +688,14 @@ def _do_vip_sweep(org_id):
             owed = f"${ar['current_owed']:,.2f}" if ar.get('current_owed') is not None else "n/a"
             parts.append(f"PayGo: {ar['payments']} batches (current owed {owed}), "
                          f"{ar['invoice_links']} invoice links from {ar['batches_detailed']} recent batches")
+        if do_creditmemo:
+            # #10 recon input: VIP 'Weekly Incentive Credit' memos (Xfinity flagged/excluded).
+            cr = vip_sweep.run_creditmemo_sweep(
+                client, org_id, cfg['portal_user'], cfg['portal_pass'],
+                (_vip_money, _vip_int, _vip_ts, _vip_period))
+            parts.append(f"Credit memos: {cr['credit_memos']} ({cr['xfinity_excluded']} Xfinity excluded)")
         if not parts:
-            parts.append("nothing enabled (tick Invoices and/or Asset-lending)")
+            parts.append("nothing enabled (tick Invoices, Asset-lending and/or Credit memos)")
         _vip_set_status(client, org_id, 'ok', "OK — " + " · ".join(parts), mark_run=True)
     except vip_sweep.VipLoginError as e:
         _vip_set_status(client, org_id, 'error', str(e), mark_run=True)
@@ -710,7 +718,8 @@ async def vip_sweep_put_config(body: dict, org_id: str = ORG_ID):
     cur = _vip_cfg(client, org_id) or {}
     row = {'org_id': org_id}
     for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
-              'lookback_days', 'sweep_invoices', 'sweep_asset', 'enabled', 'portal_user'):
+              'lookback_days', 'sweep_invoices', 'sweep_asset', 'sweep_creditmemo',
+              'enabled', 'portal_user'):
         if k in body and body[k] is not None:
             row[k] = body[k]
     pw = (body.get('portal_pass') or '').strip()

@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 const SEC: Record<string, string> = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity' }
 
@@ -60,6 +61,7 @@ function BSInner() {
             {!scopes.find((s: any) => s.scope_key === scope) && <option value={scope}>{scope}</option>}
           </select>
           {st && <ExportButtons payload={buildPayload} />}
+          {data?.computed && <SendReportButton reportKey="account_balance_sheet" filters={{ period, scope }} />}
         </div>
       </div>
 

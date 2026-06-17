@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 const SECTION_TITLE: Record<string, string> = { revenue: 'Revenue', cogs: 'Cost of Goods Sold', opex: 'Operating Expenses', other: 'Other' }
 
@@ -64,6 +65,7 @@ function PLInner() {
             {!scopes.find((s: any) => s.scope_key === scope) && <option value={scope}>{scope}</option>}
           </select>
           {st && <ExportButtons payload={buildPayload} />}
+          {data?.computed && <SendReportButton reportKey="account_pl" filters={{ period, scope }} />}
         </div>
       </div>
 
