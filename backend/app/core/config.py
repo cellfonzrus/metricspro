@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     WHATSAPP_ACCESS_TOKEN: str = ""
     WHATSAPP_PHONE_NUMBER_ID: str = ""
     WHATSAPP_TEMPLATE_NAME: str = ""
-    WHATSAPP_TEMPLATE_LANG: str = "en_US"
+    WHATSAPP_TEMPLATE_LANG: str = "en"  # approved metricspro_report template is 'en' (not en_US)
     WHATSAPP_GRAPH_VERSION: str = "v21.0"
 
     # ── Account Module — Claude-powered accounting engine (#8/#9/#10) ─────────────

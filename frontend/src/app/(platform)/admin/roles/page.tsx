@@ -7,6 +7,7 @@ const MODULES: { key: string; label: string }[] = [
   { key: 'targets', label: 'Targets' },
   { key: 'asset', label: 'Asset' },
   { key: 'vip', label: 'VIP' },
+  { key: 'accounts', label: 'Accounts' },
   { key: 'storeops', label: 'StoreOps' },
   { key: 'notify', label: 'Notify' },
   { key: 'admin', label: 'Admin (role mgmt)' },

@@ -75,8 +75,15 @@ export function moduleForPath(path: string): string {
   return 'commissions'
 }
 
+// A super-admin (role-management rights) implicitly has EVERY module. This keeps newly
+// added modules (e.g. Accounts, added after the roles were seeded) visible to admins
+// without re-seeding each role's permissions JSONB. Non-admin roles still need the flag.
+export function isSuperAdmin(perms: Permissions): boolean {
+  return !!perms?.modules?.admin
+}
+
 export function canSeeItem(perms: Permissions, item: NavItem): boolean {
-  if (!perms?.modules?.[item.module]) return false
+  if (!isSuperAdmin(perms) && !perms?.modules?.[item.module]) return false
   if (item.scopes && !item.scopes.includes(perms.scope || 'all')) return false
   return true
 }
@@ -97,6 +104,7 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
       if (path === it.href && it.scopes && !it.scopes.includes(scope)) return false
     }
   }
+  if (isSuperAdmin(perms)) return true
   return !!perms?.modules?.[moduleForPath(path)]
 }
 
