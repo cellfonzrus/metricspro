@@ -15,6 +15,7 @@ from app.modules.commcalc import vip_sweep
 from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
 from app.modules.commcalc import b2b_sweep
+from app.modules.commcalc import sales_analyzer
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 import calendar as _calendar
@@ -1816,6 +1817,20 @@ async def get_top_sellers(period: str, limit: int = 10, org_id: str = ORG_ID):
 
     ranked = sorted(models.values(), key=lambda x: x["units"], reverse=True)[:limit]
     return {"period": period, "top_sellers": ranked}
+
+
+@router.get("/sales-analyzer/{period}")
+async def get_sales_analyzer(period: str, window_days: int = 90, rep: str = "",
+                            org_id: str = ORG_ID):
+    """3-Month Retention (3MR) behavior per rep: each rep's activations from 3 months before
+    `period` and which churned (cancelled/ported/suspended/deactivated) before their 3rd bill
+    (within window_days). Returns per-rep summary + churned line items (model, MRC, sold-for,
+    dates, store)."""
+    require_org(org_id)
+    try:
+        return sales_analyzer.analyze(sb(), org_id, period, window_days=window_days, rep=rep)
+    except Exception as e:
+        raise HTTPException(500, f"sales-analyzer failed: {type(e).__name__}: {e}")
 
 
 # ── Daily Sales Targets ──────────────────────────────────────
