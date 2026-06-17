@@ -1027,7 +1027,17 @@ async def epay_sweep_put_config(body: dict, org_id: str = ORG_ID):
     row['next_run_at'] = _vip_next_run(
         merged.get('frequency') or 'daily', merged.get('day_of_week'),
         merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
-    client.schema('commcalc').table('epay_sweep_config').upsert(row, on_conflict='org_id').execute()
+    try:
+        client.schema('commcalc').table('epay_sweep_config').upsert(row, on_conflict='org_id').execute()
+    except Exception as e:
+        # Pre-025 fallback: the sweep_* toggle columns may not exist yet. Drop them and retry so
+        # the page keeps saving creds/schedule until migration 025 is run.
+        if any(k in str(e) for k in ('sweep_mi', 'sweep_comp', 'sweep_payment')):
+            for k in ('sweep_mi', 'sweep_comp', 'sweep_payment'):
+                row.pop(k, None)
+            client.schema('commcalc').table('epay_sweep_config').upsert(row, on_conflict='org_id').execute()
+        else:
+            raise
     return _epay_public_cfg(_epay_cfg(client, org_id))
 
 
