@@ -152,13 +152,12 @@ def _wait_report_done(page, timeout_s=REPORT_RUN_TIMEOUT_S):
     raise EpayPortalError(f"MI/ATU report did not finish running within {timeout_s}s.")
 
 
-def _download_mi_report(page, dest_path):
-    """Open the MI/ATU report, run it for the current month, and save the .xlsx to dest_path."""
-    # open the report via the Commissions Kendo menu
+def _open_and_download(page, report_id, dest_path):
+    """Open a Commissions report by its menu id, run it for the current month, save the .xlsx."""
     page.hover("span.k-link:has-text('Commissions')", timeout=20000)
     page.wait_for_timeout(1500)
-    page.wait_for_selector(f'[id="{MI_REPORT_ID}"]', state="visible", timeout=20000)
-    page.click(f'[id="{MI_REPORT_ID}"]')
+    page.wait_for_selector(f'[id="{report_id}"]', state="visible", timeout=20000)
+    page.click(f'[id="{report_id}"]')
     page.wait_for_timeout(5000)
     # run (Month defaults to the current month)
     page.click("text=Run Report", timeout=20000)
@@ -169,6 +168,49 @@ def _download_mi_report(page, dest_path):
         page.wait_for_timeout(1500)
         page.click("text=as Excel spreadsheet", timeout=20000)
     dl_info.value.save_as(dest_path)
+
+
+def _download_mi_report(page, dest_path):
+    """Open the MI/ATU report (#102817), run it, and save the .xlsx to dest_path."""
+    _open_and_download(page, MI_REPORT_ID, dest_path)
+
+
+def discover_reports(url, user, pw):
+    """Log in and enumerate the Commissions report menu → [{id, label}]. MUST run server-side
+    (the portal WAF only allows the Railway egress IP). Used to find the report ids of the
+    Commission Payment Detail + Comprehensive Compensation reports so they can be swept too."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        raise EpayLoginError(
+            "Playwright is not installed in the backend image (add it to backend/Dockerfile).")
+    base_url = (url or DEFAULT_URL).rstrip("/")
+    items = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        ctx = browser.new_context(user_agent=UA)
+        page = ctx.new_page()
+        try:
+            page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+            _login(page, user, pw)
+            page.hover("span.k-link:has-text('Commissions')", timeout=20000)
+            page.wait_for_timeout(2000)
+            items = page.evaluate(
+                "() => {"
+                "  const out = [];"
+                "  document.querySelectorAll('[id]').forEach(el => {"
+                "    const id = (el.getAttribute('id')||'').trim();"
+                "    const txt = (el.textContent||'').trim();"
+                "    if (/^[0-9]{4,}$/.test(id) && txt && txt.length < 120) out.push({id, label: txt});"
+                "  });"
+                "  return out;"
+                "}")
+        finally:
+            browser.close()
+    seen = {}
+    for it in (items or []):
+        seen.setdefault(it["id"], it["label"])
+    return [{"id": k, "label": v} for k, v in seen.items()]
 
 
 def run_epay_sweep(client, org_id, url, user, pw):

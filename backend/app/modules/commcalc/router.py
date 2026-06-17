@@ -1033,6 +1033,23 @@ async def epay_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = OR
     return {"status": "started"}
 
 
+@router.post("/epay/sweep/discover-reports")
+async def epay_discover_reports(org_id: str = ORG_ID):
+    """Enumerate the epay Commissions report menu (id → label) so the Commission Payment Detail
+    and Comprehensive Compensation report ids can be wired into the multi-report sweep. Runs the
+    headless browser server-side (the portal WAF only allows Railway's egress), synchronously."""
+    require_org(org_id)
+    cfg = _epay_cfg(sb(), org_id)
+    if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
+        raise HTTPException(400, "Set the epay portal credentials first.")
+    try:
+        reports = epay_sweep.discover_reports(
+            cfg.get('portal_url'), cfg['portal_user'], cfg['portal_pass'])
+        return {"reports": reports, "count": len(reports)}
+    except Exception as e:
+        raise HTTPException(500, f"discover failed: {type(e).__name__}: {e}")
+
+
 @router.post("/epay/sweep/run-due")
 async def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
