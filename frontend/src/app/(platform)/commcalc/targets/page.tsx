@@ -53,9 +53,23 @@ export default function DailyTargetsPage() {
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [calCat, setCalCat] = useState<CatKey>('activations')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [freshness, setFreshness] = useState<{ daily?: any; dlar?: any } | null>(null)
 
   useEffect(() => { loadSummary() }, [period])
   useEffect(() => { if (storeCode) loadDetail() }, [storeCode, scope, rep, period])
+  useEffect(() => { loadFreshness() }, [period])
+
+  async function loadFreshness() {
+    try {
+      const [hist, dlar] = await Promise.all([
+        api(`/api/v1/commcalc/upload/history?org_id=${ORG_ID}&period=${encodeURIComponent(period)}`).catch(() => []),
+        api(`/api/v1/commcalc/dlar/sweep/config?org_id=${ORG_ID}`).catch(() => null),
+      ])
+      const rows = Array.isArray(hist) ? hist : []
+      const daily = rows.find((r: any) => r.file_type === 'daily_sales') || rows.find((r: any) => r.file_type === 'sales')
+      setFreshness({ daily, dlar })
+    } catch { setFreshness(null) }
+  }
 
   async function loadSummary() {
     setLoadingSum(true)
@@ -129,6 +143,8 @@ export default function DailyTargetsPage() {
           pace spreads the remaining balance over the open days left.
         </p>
       </div>
+
+      <FreshnessBanner daily={freshness?.daily} dlar={freshness?.dlar} period={period} />
 
       {/* ── All-stores summary ── */}
       <div className="card" style={{ padding: 0, marginBottom: 24, overflowX: 'auto' }}>
@@ -393,6 +409,42 @@ export default function DailyTargetsPage() {
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+// ── data-freshness banner: when was the data behind Daily Targets last refreshed ──
+function FreshnessBanner({ daily, dlar, period }: { daily?: any; dlar?: any; period: string }) {
+  const daysAgo = (iso?: string) => {
+    if (!iso) return null
+    return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)
+  }
+  const fmtDate = (iso?: string) => iso
+    ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : '—'
+  const dAge = daysAgo(daily?.uploaded_at)
+  const dlarAge = daysAgo(dlar?.last_run_at)
+  // amber if a day+ stale, red if missing entirely
+  const tone = daily ? (dAge != null && dAge >= 2 ? '#b45309' : 'var(--text2)') : '#dc2626'
+  const bg = daily ? (dAge != null && dAge >= 2 ? '#fffbeb' : 'var(--surface2)') : '#fef2f2'
+  const border = daily ? (dAge != null && dAge >= 2 ? '#fde68a' : 'var(--border)') : '#fecaca'
+  return (
+    <div className="card" style={{ padding: '10px 14px', marginBottom: 20, background: bg, border: `1px solid ${border}`, fontSize: 13, display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
+      <span style={{ fontWeight: 600, color: 'var(--text2)' }}>📥 Data freshness</span>
+      <span style={{ color: tone }}>
+        <strong>Daily Sales</strong> (drives Achieved):{' '}
+        {daily
+          ? <>uploaded {fmtDate(daily.uploaded_at)}{dAge != null ? ` · ${dAge === 0 ? 'today' : dAge === 1 ? '1 day ago' : `${dAge} days ago`}` : ''}
+              {' '}· {Number(daily.rows_saved || 0).toLocaleString()} rows{daily.period && daily.period !== period ? ` · ${daily.period} file` : ''}</>
+          : <>no upload for {period} — Achieved reads 0 until you upload the daily sales file</>}
+      </span>
+      {dlar?.last_run_at && (
+        <span style={{ color: 'var(--text3)' }}>
+          <strong>DLAR</strong> (conversion/KPIs): synced {fmtDate(dlar.last_run_at)}{dlarAge != null ? ` · ${dlarAge === 0 ? 'today' : `${dlarAge}d ago`}` : ''}
+          {dlar.last_status && dlar.last_status !== 'ok' ? ` (${dlar.last_status})` : ''}
+        </span>
+      )}
+      <a href="/commcalc/upload" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>Upload →</a>
     </div>
   )
 }

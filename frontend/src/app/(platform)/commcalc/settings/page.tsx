@@ -45,6 +45,9 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<'rates'|'kpi'|'tier'|'stores'|'comprates'|'topphones'>('comprates')
   const [storeList, setStoreList] = useState<any[]>([])
   const [storeSaving, setStoreSaving] = useState<string | null>(null)
+  const [aliases, setAliases] = useState<any[]>([])
+  const [newAlias, setNewAlias] = useState({ alias: '', store_code: '' })
+  const [aliasSaving, setAliasSaving] = useState(false)
 
   // Boost comp rates state
   const [compRates, setCompRates] = useState<any[]>([])
@@ -73,7 +76,33 @@ export default function SettingsPage() {
   useEffect(() => {
     if (activeTab === 'comprates') loadCompRates()
     if (activeTab === 'topphones') loadTopSellers()
+    if (activeTab === 'stores') loadAliases()
   }, [activeTab, period])
+
+  async function loadAliases() {
+    try {
+      const d = await api(`/api/v1/commcalc/store-aliases?org_id=${ORG_ID}`)
+      setAliases(d.aliases || [])
+    } catch (e) { console.error(e) }
+  }
+  async function addAlias() {
+    const alias = newAlias.alias.trim(), store_code = newAlias.store_code.trim()
+    if (!alias || !store_code) return
+    setAliasSaving(true)
+    try {
+      await api(`/api/v1/commcalc/store-aliases?org_id=${ORG_ID}`, {
+        method: 'POST', body: JSON.stringify({ alias, store_code }),
+      })
+      setNewAlias({ alias: '', store_code: '' })
+      await loadAliases()
+    } catch (e) { console.error(e) } finally { setAliasSaving(false) }
+  }
+  async function deleteAlias(id: string) {
+    try {
+      await api(`/api/v1/commcalc/store-aliases/${id}?org_id=${ORG_ID}`, { method: 'DELETE' })
+      setAliases(list => list.filter(a => a.id !== id))
+    } catch (e) { console.error(e) }
+  }
 
   async function loadCompRates() {
     setCompLoading(true)
@@ -528,6 +557,58 @@ export default function SettingsPage() {
                   </td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {activeTab === 'stores' && (
+        <div className="card" style={{ padding: 0, marginTop: 20 }}>
+          <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', fontWeight: 600 }}>
+            Alternate store names ({aliases.length}) — sales-file aliases
+          </div>
+          <div style={{ padding: '10px 18px', fontSize: 12, color: 'var(--text3)' }}>
+            When the B2B daily-sales file spells a store differently than its mapping above
+            (e.g. <em>“3 Palisade Ave Yonkers”</em> vs <em>“3 Palisade Ave”</em>), its Daily-Targets sales
+            won’t attach and the store reads 0 achieved. Map that exact sales-file spelling to the store’s
+            code here. <strong>Needs migration 023_store_aliases.sql.</strong>
+          </div>
+          <table style={{ width: '100%' }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left', padding: '8px 18px' }}>Sales-file name</th>
+                <th style={{ textAlign: 'left', padding: '8px 18px' }}>→ Store code</th>
+                <th style={{ padding: '8px 18px' }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {aliases.map(a => (
+                <tr key={a.id}>
+                  <td style={{ padding: '8px 18px', fontSize: 13 }}>{a.alias}</td>
+                  <td style={{ padding: '8px 18px', fontSize: 12, color: 'var(--text3)' }}>{a.store_code}</td>
+                  <td style={{ padding: '8px 18px', textAlign: 'right' }}>
+                    <button className="btn btn-secondary" style={{ padding: '3px 10px', fontSize: 12 }} onClick={() => deleteAlias(a.id)}>Remove</button>
+                  </td>
+                </tr>
+              ))}
+              <tr>
+                <td style={{ padding: '8px 18px' }}>
+                  <input className="input" style={{ width: '100%', maxWidth: 320 }} placeholder="exact name as in the sales file"
+                    value={newAlias.alias} onChange={e => setNewAlias(n => ({ ...n, alias: e.target.value }))} />
+                </td>
+                <td style={{ padding: '8px 18px' }}>
+                  <select className="input" value={newAlias.store_code} onChange={e => setNewAlias(n => ({ ...n, store_code: e.target.value }))}>
+                    <option value="">— pick store —</option>
+                    {storeList.map(s => <option key={s.id} value={s.store_code}>{s.store_code} · {s.store_address}</option>)}
+                  </select>
+                </td>
+                <td style={{ padding: '8px 18px', textAlign: 'right' }}>
+                  <button className="btn btn-primary" style={{ padding: '4px 12px', fontSize: 12 }}
+                    disabled={aliasSaving || !newAlias.alias.trim() || !newAlias.store_code} onClick={addAlias}>
+                    {aliasSaving ? 'Adding…' : 'Add alias'}
+                  </button>
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>

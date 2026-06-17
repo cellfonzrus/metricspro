@@ -1319,6 +1319,54 @@ async def update_store(store_id: str, body: dict, org_id: str = "00000000-0000-0
     r = client.schema('commcalc').table('store_mapping').update(allowed).eq('id', store_id).execute()
     return r.data[0] if r.data else {}
 
+
+# ── store-name aliases (migration 023): map alternate spellings of a store in the B2B sales
+# file to a canonical store_code, so Daily Targets actuals attach correctly. Additive — does
+# NOT touch store_mapping (which the asset market join depends on). Mirrors rep name aliases.
+@router.get("/store-aliases")
+async def list_store_aliases(org_id: str = ORG_ID):
+    require_org(org_id)
+    client = sb()
+    try:
+        aliases = (client.schema('commcalc').table('store_aliases').select('*')
+                   .eq('org_id', org_id).order('store_code').execute().data) or []
+    except Exception as e:
+        print(f'WARN store_aliases query failed (run 023_store_aliases.sql?): {e}')
+        aliases = []
+    stores = (client.schema('commcalc').table('store_mapping')
+              .select('store_code,store_address').eq('org_id', org_id)
+              .order('store_address').execute().data) or []
+    return {"aliases": aliases, "stores": stores}
+
+
+@router.post("/store-aliases")
+async def add_store_alias(body: dict, org_id: str = ORG_ID):
+    require_org(org_id)
+    alias = (body.get('alias') or '').strip()
+    code = (body.get('store_code') or '').strip()
+    if not alias or not code:
+        raise HTTPException(400, "alias and store_code required")
+    client = sb()
+    # replace any existing alias with the same text (case-insensitive) to keep it unique
+    existing = (client.schema('commcalc').table('store_aliases').select('id,alias')
+                .eq('org_id', org_id).execute().data) or []
+    for r in existing:
+        if (r.get('alias') or '').strip().lower() == alias.lower():
+            client.schema('commcalc').table('store_aliases').delete().eq('id', r['id']).execute()
+    row = {'org_id': org_id, 'alias': alias, 'store_code': code,
+           'note': (body.get('note') or '').strip() or None}
+    res = client.schema('commcalc').table('store_aliases').insert(row).execute()
+    return {"alias": (res.data or [row])[0]}
+
+
+@router.delete("/store-aliases/{alias_id}")
+async def delete_store_alias(alias_id: str, org_id: str = ORG_ID):
+    require_org(org_id)
+    sb().schema('commcalc').table('store_aliases').delete() \
+        .eq('org_id', org_id).eq('id', alias_id).execute()
+    return {"ok": True}
+
+
 @router.get("/gp/{period}")
 async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
