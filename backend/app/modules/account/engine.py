@@ -183,6 +183,13 @@ def compute_and_store(client, org_id, period):
     for s in sorted(all_stores):
         scopes.append((f"store:{s}", s, {s}, False))
 
+    # Purge ALL prior snapshots for this period BEFORE writing the fresh set. Otherwise scopes
+    # that no longer exist (e.g. a store spelling the resolver now merges into another) linger as
+    # orphan rows and keep re-appearing as duplicates in the /overview scope dropdown. _persist
+    # below then inserts the current scopes cleanly.
+    client.schema("commcalc").table("account_statements").delete() \
+        .eq("org_id", org_id).eq("period", period).execute()
+
     written = 0
     for scope_key, scope_label, stores_in_scope, include_cw in scopes:
         jscope = _journal_for_scope(journal, scope_key, stores_in_scope)
@@ -248,7 +255,5 @@ def _persist(client, org_id, period, st_type, scope_key, scope_label, payload, n
     row = {"org_id": org_id, "period": period, "statement_type": st_type, "scope_key": scope_key,
            "scope_label": scope_label, "payload": payload, "narrative": narrative, "model": model,
            "crosscheck_ok": bool(ok), "computed_at": datetime.now(timezone.utc).isoformat()}
-    client.schema("commcalc").table("account_statements").delete() \
-        .eq("org_id", org_id).eq("period", period).eq("statement_type", st_type) \
-        .eq("scope_key", scope_key).execute()
+    # compute_and_store has already purged this period's snapshots, so a plain insert is clean.
     client.schema("commcalc").table("account_statements").insert(row).execute()

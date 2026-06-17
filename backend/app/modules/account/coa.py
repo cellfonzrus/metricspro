@@ -188,15 +188,23 @@ def store_resolver(client, org_id):
       5. unmappable (genuinely unknown store) → the cleaned raw string, kept as-is.
     Only steps that land on an address already in store_mapping merge variants, so this can never
     invent a merge between two distinct stores — it just collapses spellings of a known one."""
+    def _num_key(token):
+        """Leading street number, digits only — collapses hyphenated/punctuated forms so
+        '116-36' and '11636' share a key. None for non-numeric leads ('B-1800') so those only
+        ever match exactly, never by number."""
+        if not token or not token[:1].isdigit():
+            return None
+        return "".join(ch for ch in token if ch.isdigit()) or None
+
     addr_by_addr, addr_by_code, num_addrs = {}, {}, {}
     for r in _fetch_all(client, "store_mapping", "store_code,store_address", {"org_id": org_id}):
         addr = _norm_store(r.get("store_address"))
         code = _norm_store(r.get("store_code"))
         if addr:
             addr_by_addr[addr.lower()] = addr
-            tok = addr.split(" ")[0]
-            if tok[:1].isdigit():
-                num_addrs.setdefault(tok, set()).add(addr)
+            nk = _num_key(addr.split(" ")[0])
+            if nk:
+                num_addrs.setdefault(nk, set()).add(addr)
         if addr and code:
             addr_by_code[code.upper()] = addr
     # only resolve by leading number when it is UNAMBIGUOUS (street numbers aren't unique —
@@ -222,9 +230,9 @@ def store_resolver(client, org_id):
             return alias_addr[low]
         if s.upper() in addr_by_code:
             return addr_by_code[s.upper()]
-        tok = s.split(" ")[0]
-        if tok[:1].isdigit() and tok in addr_by_num:
-            return addr_by_num[tok]
+        nk = _num_key(s.split(" ")[0])
+        if nk and nk in addr_by_num:
+            return addr_by_num[nk]
         return s
 
     return resolve
