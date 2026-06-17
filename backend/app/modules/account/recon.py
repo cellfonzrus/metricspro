@@ -27,19 +27,22 @@ def _norm(s):
     return re.sub(r"\s+", " ", str(s or "").strip()).lower()
 
 
-def _rep_to_store(client, org_id, period):
-    """Build a {normalized rep name -> store} map for the period plus the alias->canonical map.
+def _rep_to_store(client, org_id, period, resolve_store):
+    """Build a {normalized rep name -> canonical store_address} map for the period plus the
+    alias->canonical map.
 
     raw_mi has no native store column, so MI/ATU is attributed to a store via the rep name. We key
     the map by BOTH the raw and the canonicalized form of each rep_commissions name (epay alias and
     StoreOps name), so a raw_mi rep_username that is an ePay alias still resolves via the shared
-    name_map / rep_aliases canonicalization (same merges the rest of the app uses)."""
+    name_map / rep_aliases canonicalization (same merges the rest of the app uses). The store value
+    is canonicalized through `resolve_store` so it lands in the SAME store_address space as the
+    credit-memo side — otherwise one store splits into two recon rows."""
     from app.modules.commcalc.router import _rep_canon_map, _canon
     cmap = _rep_canon_map(client, org_id)
     mp = {}
     for r in coa._fetch_all(client, "rep_commissions", "epay_salesperson,storeops_name,store",
                             {"org_id": org_id, "period": period}):
-        st = (r.get("store") or "").strip()
+        st = resolve_store(r.get("store"))
         if not st:
             continue
         for nm in (r.get("epay_salesperson"), r.get("storeops_name")):
@@ -86,6 +89,9 @@ def _missed_days(flagged):
 
 def reconcile(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEFAULT_DATE_COL, analyze=False):
     tol = abs(safe_float(tolerance)) or DEFAULT_TOLERANCE
+    # canonicalize every store key (memo side + rep_commissions side) to one address space so a
+    # store never splits across spellings — same resolver the P&L/Balance-Sheet use.
+    resolve_store = coa.store_resolver(client, org_id)
 
     # credit memos for the period (exclude Xfinity)
     memos = coa._fetch_all(client, "vip_credit_memos",
@@ -96,7 +102,7 @@ def reconcile(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEFA
         if m.get("is_xfinity"):
             excluded += 1
             continue
-        store = (m.get("store_address") or "").strip() or "(unattributed)"
+        store = resolve_store(m.get("store_address")) or "(unattributed)"
         amt = safe_float(m.get("grand_total"))
         s = memo_by_store.setdefault(store, {"memo_total": 0.0, "memos": []})
         s["memo_total"] = round(s["memo_total"] + amt, 2)
@@ -109,7 +115,7 @@ def reconcile(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEFA
     # residual_transfer_in_date (upgrades) — both drive total MI received. ATU is the
     # auto-pay initiation and is paid combined with MI in the credit memo.
     from app.modules.commcalc.router import _canon
-    rep2store, cmap = _rep_to_store(client, org_id, period)
+    rep2store, cmap = _rep_to_store(client, org_id, period, resolve_store)
     sel = "actual_mi_payout,actual_atu_payout,rep_username,mi_activation_date,residual_transfer_in_date"
     try:
         mi_rows = coa._fetch_all(client, "raw_mi", sel, {"org_id": org_id, "period": period})

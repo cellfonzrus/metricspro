@@ -174,6 +174,62 @@ def store_code_to_address(client, org_id):
     return out
 
 
+def store_resolver(client, org_id):
+    """Return resolve(raw) -> canonical store_address, mirroring the app's existing store
+    canonicalization so one physical store never appears under two spellings.
+
+    Every source table carries the store in its own form (raw_sales.store, asset_ledger.store,
+    vip_invoices.location, vip_paygo.dealer, raw_comp_report.business_address, a store_code, …).
+    Resolution chain (same precedence the rest of the app uses):
+      1. exact store_mapping.store_address (case-insensitive)        — daily_sales_actuals
+      2. store_aliases.alias → store_code → store_address            — migration 023
+      3. raw string IS a store_code                                  — store_expenses path
+      4. leading store-number matches a known store_mapping address  — the DLAR join (calculator)
+      5. unmappable (genuinely unknown store) → the cleaned raw string, kept as-is.
+    Only steps that land on an address already in store_mapping merge variants, so this can never
+    invent a merge between two distinct stores — it just collapses spellings of a known one."""
+    addr_by_addr, addr_by_code, num_addrs = {}, {}, {}
+    for r in _fetch_all(client, "store_mapping", "store_code,store_address", {"org_id": org_id}):
+        addr = _norm_store(r.get("store_address"))
+        code = _norm_store(r.get("store_code"))
+        if addr:
+            addr_by_addr[addr.lower()] = addr
+            tok = addr.split(" ")[0]
+            if tok[:1].isdigit():
+                num_addrs.setdefault(tok, set()).add(addr)
+        if addr and code:
+            addr_by_code[code.upper()] = addr
+    # only resolve by leading number when it is UNAMBIGUOUS (street numbers aren't unique —
+    # "3 Palisade Ave" and "3 Broadway" would both be number "3"). Ambiguous numbers fall through.
+    addr_by_num = {n: next(iter(a)) for n, a in num_addrs.items() if len(a) == 1}
+    alias_addr = {}
+    try:
+        for r in _fetch_all(client, "store_aliases", "alias,store_code", {"org_id": org_id}):
+            al, code = _norm_store(r.get("alias")), _norm_store(r.get("store_code"))
+            if al and code and code.upper() in addr_by_code:
+                alias_addr[al.lower()] = addr_by_code[code.upper()]
+    except Exception:
+        pass  # store_aliases (migration 023) not yet run → chain still works without it
+
+    def resolve(raw):
+        s = _norm_store(raw)
+        if not s:
+            return None
+        low = s.lower()
+        if low in addr_by_addr:
+            return addr_by_addr[low]
+        if low in alias_addr:
+            return alias_addr[low]
+        if s.upper() in addr_by_code:
+            return addr_by_code[s.upper()]
+        tok = s.split(" ")[0]
+        if tok[:1].isdigit() and tok in addr_by_num:
+            return addr_by_num[tok]
+        return s
+
+    return resolve
+
+
 # ── per-line aggregation: each store-keyed line → {store_address: amount}; company-wide → scalar
 def build_inputs(client, org_id, period):
     """Aggregate every chart-of-accounts line for `period`. Returns a dict:
@@ -181,6 +237,7 @@ def build_inputs(client, org_id, period):
        'detail' carries drill-down sub-lines (e.g. each expense name)."""
     pm, py = parse_period(period)
     code2addr = store_code_to_address(client, org_id)
+    resolve_store = store_resolver(client, org_id)
 
     L = {k: {"by_store": {}, "company_wide": 0.0, "detail": {}} for k, *_ in PL_SPEC + BS_SPEC}
 
@@ -188,8 +245,9 @@ def build_inputs(client, org_id, period):
         amt = round(safe_float(amt), 2)
         if not amt:
             return
-        if store:
-            s = _norm_store(store)
+        # canonicalize the store key so one physical store never splits across spellings
+        s = resolve_store(store) if store else None
+        if s:
             L[key]["by_store"][s] = round(L[key]["by_store"].get(s, 0.0) + amt, 2)
         else:
             L[key]["company_wide"] = round(L[key]["company_wide"] + amt, 2)
