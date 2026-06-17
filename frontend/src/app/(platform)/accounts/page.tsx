@@ -82,9 +82,11 @@ export default function AccountsDashboard() {
                   </span>
                 </div>
               </div>
-              <div style={{ marginTop: 12, display: 'flex', gap: 10 }}>
+              <div style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                 <Link className="btn" href={`/accounts/pl?scope=consolidated`}>📈 View P&amp;L</Link>
                 <Link className="btn" href={`/accounts/balance-sheet?scope=consolidated`}>⚖️ View Balance Sheet</Link>
+                <Link className="btn" href={`/accounts/inventory`}>📦 Inventory Values</Link>
+                <Link className="btn" href={`/accounts/journal`}>📒 Journal</Link>
               </div>
             </div>
           )}

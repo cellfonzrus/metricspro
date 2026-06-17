@@ -60,6 +60,7 @@ function BSInner() {
             {scopes.map((s: any) => <option key={s.scope_key} value={s.scope_key}>{(s.scope_label || s.scope_key).substring(0, 50)}</option>)}
             {!scopes.find((s: any) => s.scope_key === scope) && <option value={scope}>{scope}</option>}
           </select>
+          <Link className="btn" href="/accounts/inventory" style={{ fontSize: 13 }}>📦 Edit inventory</Link>
           {st && <ExportButtons payload={buildPayload} />}
           {data?.computed && <SendReportButton reportKey="account_balance_sheet" filters={{ period, scope }} />}
         </div>

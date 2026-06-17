@@ -14,6 +14,7 @@ from app.modules.commcalc import targets_engine
 from app.modules.commcalc import vip_sweep
 from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
+from app.modules.commcalc import b2b_sweep
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 import calendar as _calendar
@@ -929,6 +930,123 @@ async def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret:
         client.schema('commcalc').table('dlar_sweep_config').update(
             {'next_run_at': nxt}).eq('org_id', oid).execute()
         background_tasks.add_task(_do_dlar_sweep, oid)
+    return {"triggered": len(due)}
+
+
+# ── b2bsoft Inventory Aging auto-sweep (wsreports.b2bsoft.com → commcalc.inventory_value) ──
+# Real-time on-hand inventory VALUE per store, feeding the Account Module Balance Sheet
+# (editable: a manual override always wins over the swept value). Same scheduling pattern as
+# the DLAR/VIP sweeps. Creds live in the backend-only commcalc.b2b_sweep_config; the portal
+# client itself is stubbed until wsreports.b2bsoft.com is reverse-engineered (see b2b_sweep.py).
+_B2B_CFG_DEFAULTS = {'enabled': False, 'frequency': 'daily', 'day_of_week': 0,
+                     'day_of_month': 1, 'hour': 6, 'timezone': 'America/New_York'}
+
+
+def _b2b_cfg(client, org_id):
+    rows = client.schema('commcalc').table('b2b_sweep_config').select('*') \
+        .eq('org_id', org_id).limit(1).execute().data
+    return rows[0] if rows else None
+
+
+def _b2b_public_cfg(cfg):
+    if not cfg:
+        return {**_B2B_CFG_DEFAULTS, 'configured': False, 'has_credentials': False,
+                'portal_user': None, 'next_run_at': None, 'last_run_at': None,
+                'last_status': None, 'last_detail': None}
+    out = {k: cfg.get(k) for k in (
+        'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
+        'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail')}
+    out['configured'] = True
+    out['has_credentials'] = bool(cfg.get('portal_user') and cfg.get('portal_pass'))
+    return out
+
+
+def _b2b_set_status(client, org_id, status, detail, mark_run=False):
+    upd = {'last_status': status, 'last_detail': (detail or '')[:600]}
+    if mark_run:
+        upd['last_run_at'] = _datetime.now(_timezone.utc).isoformat()
+    client.schema('commcalc').table('b2b_sweep_config').update(upd).eq('org_id', org_id).execute()
+
+
+def _do_b2b_sweep(org_id):
+    """Background worker: read creds, run the b2bsoft Inventory Aging sweep, record status."""
+    client = sb()
+    cfg = _b2b_cfg(client, org_id)
+    if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
+        _b2b_set_status(client, org_id, 'error', 'No b2bsoft credentials set in the admin area', mark_run=True)
+        return
+    _b2b_set_status(client, org_id, 'running', 'Sweep in progress…')
+    try:
+        res = b2b_sweep.run_inventory_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'])
+        _b2b_set_status(client, org_id, 'ok',
+                        f"OK — {res['stores']} stores, ${res['total_value']:,.2f} on-hand "
+                        f"(as of {res['as_of_date']}). Re-compute statements to apply.", mark_run=True)
+    except b2b_sweep.B2BLoginError as e:
+        _b2b_set_status(client, org_id, 'error', str(e), mark_run=True)
+    except b2b_sweep.B2BNotConfigured as e:
+        _b2b_set_status(client, org_id, 'error', str(e), mark_run=True)
+    except Exception as e:
+        _b2b_set_status(client, org_id, 'error', f"Sweep failed: {e}", mark_run=True)
+
+
+@router.get("/b2b/sweep/config")
+async def b2b_sweep_get_config(org_id: str = ORG_ID):
+    require_org(org_id)
+    return _b2b_public_cfg(_b2b_cfg(sb(), org_id))
+
+
+@router.put("/b2b/sweep/config")
+async def b2b_sweep_put_config(body: dict, org_id: str = ORG_ID):
+    """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
+    omit/blank to keep the existing one. Never returns the password."""
+    require_org(org_id)
+    client = sb()
+    cur = _b2b_cfg(client, org_id) or {}
+    row = {'org_id': org_id}
+    for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
+              'enabled', 'portal_user'):
+        if k in body and body[k] is not None:
+            row[k] = body[k]
+    pw = (body.get('portal_pass') or '').strip()
+    if pw:
+        row['portal_pass'] = pw
+    row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
+    merged = {**_B2B_CFG_DEFAULTS, **cur, **row}
+    row['next_run_at'] = _vip_next_run(
+        merged.get('frequency') or 'daily', merged.get('day_of_week'),
+        merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
+    client.schema('commcalc').table('b2b_sweep_config').upsert(row, on_conflict='org_id').execute()
+    return _b2b_public_cfg(_b2b_cfg(client, org_id))
+
+
+@router.post("/b2b/sweep/run-now")
+async def b2b_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+    """Manual 'Fetch inventory now' (background task)."""
+    require_org(org_id)
+    cfg = _b2b_cfg(sb(), org_id)
+    if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
+        raise HTTPException(400, "Set the b2bsoft credentials first.")
+    background_tasks.add_task(_do_b2b_sweep, org_id)
+    return {"status": "started"}
+
+
+@router.post("/b2b/sweep/run-due")
+async def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
+    Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    client = sb()
+    now_iso = _datetime.now(_timezone.utc).isoformat()
+    due = client.schema('commcalc').table('b2b_sweep_config').select('*') \
+        .eq('enabled', True).lte('next_run_at', now_iso).execute().data or []
+    for cfg in due:
+        oid = cfg.get('org_id') or ORG_ID
+        nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
+                            cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
+        client.schema('commcalc').table('b2b_sweep_config').update(
+            {'next_run_at': nxt}).eq('org_id', oid).execute()
+        background_tasks.add_task(_do_b2b_sweep, oid)
     return {"triggered": len(due)}
 
 

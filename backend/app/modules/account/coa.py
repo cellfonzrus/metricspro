@@ -398,4 +398,23 @@ def build_inputs(client, org_id, period):
     except Exception:
         pass
 
+    # Inventory value — real-time on-hand $ value from the b2bsoft Inventory Aging sweep,
+    # EDITABLE. Overrides the asset_ledger-derived inventory line above on a per-store basis:
+    # manual_value (a hand-entered correction) wins over swept_value. Stores with no
+    # inventory_value row keep the asset_ledger fallback so coverage never regresses.
+    # Degrades silently (keeps the asset_ledger value) if migration 026 hasn't been run.
+    try:
+        for r in _fetch_all(client, "inventory_value", "store,swept_value,manual_value",
+                            {"org_id": org_id}):
+            st = resolve_store(_norm_store(r.get("store")))
+            if not st:
+                continue
+            mv, sv = r.get("manual_value"), r.get("swept_value")
+            eff = mv if mv is not None else sv
+            if eff is None:
+                continue
+            L["inventory"]["by_store"][st] = round(safe_float(eff), 2)
+    except Exception:
+        pass
+
     return L
