@@ -15,6 +15,8 @@ export default function CompaniesPage() {
   const [search, setSearch] = useState('')
   const [market, setMarket] = useState('')
   const [bulkCo, setBulkCo] = useState('')
+  const [coEdit, setCoEdit] = useState<Record<string, { name: string; legal_name: string; ein: string }>>({})
+  const [coSaving, setCoSaving] = useState('')
 
   function load() {
     setLoading(true)
@@ -25,6 +27,13 @@ export default function CompaniesPage() {
       ;(d.stores || []).forEach((s: any) => { if (s.company_id) a[s.store_address] = s.company_id })
       setAssign(a)
     }).catch(console.error).finally(() => setLoading(false))
+    // load the full company records (with legal_name/ein) for the editor
+    api(`/api/v1/account/companies?org_id=${ORG_ID}`).then((d: any) => {
+      const cs = d.companies || []
+      setCompanies(cs)
+      setCoEdit(Object.fromEntries(cs.map((c: any) => [c.id,
+        { name: c.name || '', legal_name: c.legal_name || '', ein: c.ein || '' }])))
+    }).catch(() => {})
   }
   useEffect(() => { load() }, [])
 
@@ -36,6 +45,20 @@ export default function CompaniesPage() {
       await api(`/api/v1/account/companies?org_id=${ORG_ID}`, { method: 'POST', body: JSON.stringify(newCo) })
       setNewCo({ name: '', legal_name: '', ein: '' }); load()
     } catch (e: any) { setMsg('Add failed: ' + (e?.message || e)) }
+  }
+
+  async function updateCompany(id: string) {
+    const e = coEdit[id]
+    if (!e || !e.name.trim()) { setMsg('Company name cannot be blank.'); return }
+    setCoSaving(id); setMsg('')
+    try {
+      await api(`/api/v1/account/companies/${id}?org_id=${ORG_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: e.name.trim(), legal_name: e.legal_name.trim(), ein: e.ein.trim() }),
+      })
+      setMsg('Company updated.'); load()
+    } catch (err: any) { setMsg('Update failed: ' + (err?.message || err)) }
+    finally { setCoSaving('') }
   }
 
   const markets = Array.from(new Set(stores.map(s => s.market).filter(Boolean))).sort()
@@ -71,11 +94,22 @@ export default function CompaniesPage() {
       </div>
 
       <div className="card" style={{ padding: 14, marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Companies ({companies.length})</div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-          {companies.map(c => <span key={c.id} style={{ fontSize: 13, padding: '4px 10px', background: 'var(--surface2, #f1f5f9)', borderRadius: 999 }}>{c.name}</span>)}
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Companies ({companies.length}) — edit name / legal name / EIN inline</div>
+        <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+          {companies.map(c => (
+            <div key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input style={{ ...inp, width: 180 }} value={coEdit[c.id]?.name ?? ''} placeholder="Company name"
+                onChange={e => setCoEdit(m => ({ ...m, [c.id]: { ...m[c.id], name: e.target.value } }))} />
+              <input style={{ ...inp, width: 180 }} value={coEdit[c.id]?.legal_name ?? ''} placeholder="Legal name"
+                onChange={e => setCoEdit(m => ({ ...m, [c.id]: { ...m[c.id], legal_name: e.target.value } }))} />
+              <input style={{ ...inp, width: 120 }} value={coEdit[c.id]?.ein ?? ''} placeholder="EIN"
+                onChange={e => setCoEdit(m => ({ ...m, [c.id]: { ...m[c.id], ein: e.target.value } }))} />
+              <button className="btn" disabled={coSaving === c.id} onClick={() => updateCompany(c.id)}>{coSaving === c.id ? '…' : 'Save'}</button>
+            </div>
+          ))}
+          {companies.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>No companies yet — add one below.</span>}
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--border)', paddingTop: 10 }}>
           <input style={{ ...inp, width: 180 }} placeholder="New company name" value={newCo.name} onChange={e => setNewCo({ ...newCo, name: e.target.value })} />
           <input style={{ ...inp, width: 180 }} placeholder="Legal name (optional)" value={newCo.legal_name} onChange={e => setNewCo({ ...newCo, legal_name: e.target.value })} />
           <input style={{ ...inp, width: 120 }} placeholder="EIN (optional)" value={newCo.ein} onChange={e => setNewCo({ ...newCo, ein: e.target.value })} />
