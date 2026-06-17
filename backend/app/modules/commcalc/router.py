@@ -1042,9 +1042,11 @@ async def epay_discover_reports(org_id: str = ORG_ID):
     cfg = _epay_cfg(sb(), org_id)
     if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
         raise HTTPException(400, "Set the epay portal credentials first.")
+    import asyncio
     try:
-        reports = epay_sweep.discover_reports(
-            cfg.get('portal_url'), cfg['portal_user'], cfg['portal_pass'])
+        # sync Playwright can't run inside the asyncio loop — run it in a worker thread.
+        reports = await asyncio.to_thread(
+            epay_sweep.discover_reports, cfg.get('portal_url'), cfg['portal_user'], cfg['portal_pass'])
         return {"reports": reports, "count": len(reports)}
     except Exception as e:
         raise HTTPException(500, f"discover failed: {type(e).__name__}: {e}")
