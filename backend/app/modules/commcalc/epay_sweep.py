@@ -87,13 +87,63 @@ def map_mi_row(r, base):
 
 def map_mi_records(records, base):
     """Map + filter a list of MI/ATU report rows into raw_mi rows (drops empty rows)."""
+    return _map_filtered(records, base, map_mi_row)
+
+
+def _map_filtered(records, base, row_fn):
     org_id = base.get("org_id")
     out = []
     for r in records:
-        row = map_mi_row(r, base)
+        row = row_fn(r, base)
         if any(v for v in row.values() if v and v != org_id):
             out.append(row)
     return out
+
+
+# ── Commission Payment Detail (#50273) → raw_payment_detail (shared by upload + sweep) ───────
+def map_payment_detail_row(r, base):
+    from app.modules.commcalc.calculator import safe_float
+    return {
+        **base,
+        "business_address": r.get("Business Address", ""),
+        "payment_type": r.get("Payment Type", ""),
+        "amount": safe_float(r.get("Amount")),
+        "mdn": str(r.get("Phone Number", r.get("MDN", ""))).replace(".0", "").strip(),
+        "imei": str(r.get("IMEI", "")).replace(".0", "").strip(),
+        "payment_date": str(r.get("Payment Date", ""))[:10] or None,
+        "rep_username": r.get("Rep Username", ""),
+    }
+
+
+# ── Comprehensive Compensation Report (#100614) → raw_comp_report ────────────────────────────
+# The manual upload previously had NO comp parser (it stored empty rows via the else-branch);
+# this is the real mapping, now shared by the upload + the sweep.
+def map_comp_report_row(r, base):
+    from app.modules.commcalc.calculator import safe_float
+    return {
+        **base,
+        "business_address": r.get("Business Address", ""),
+        "compensation_type": r.get("Compensation Type", ""),
+        "payment_amount": safe_float(r.get("Payment Amount")),
+    }
+
+
+# Commission report ids discovered from the portal's Commissions menu (via discover_reports).
+PAYMENT_DETAIL_REPORT_ID = "50273"
+COMP_REPORT_ID = "100614"
+
+# Report registry: key → how to download + map + store. MI derives its period from the report's
+# "Report Month" column; the others use the current month (the portal's default Month filter).
+REPORTS = {
+    "mi": {"report_id": MI_REPORT_ID, "table": "raw_mi", "file_type": "mi_report",
+           "period": "report_month", "map": map_mi_records, "label": "MI/ATU"},
+    "payment_detail": {"report_id": PAYMENT_DETAIL_REPORT_ID, "table": "raw_payment_detail",
+                       "file_type": "payment_detail", "period": "current", "label": "Commission Payment Detail",
+                       "map": lambda recs, base: _map_filtered(recs, base, map_payment_detail_row)},
+    "comp_report": {"report_id": COMP_REPORT_ID, "table": "raw_comp_report",
+                    "file_type": "comp_report", "period": "current", "label": "Comprehensive Comp",
+                    "map": lambda recs, base: _map_filtered(recs, base, map_comp_report_row)},
+}
 
 
 # ── headless-browser login + report download ──────────────────────────────────────────────
@@ -213,13 +263,52 @@ def discover_reports(url, user, pw):
     return [{"id": k, "label": v} for k, v in seen.items()]
 
 
-def run_epay_sweep(client, org_id, url, user, pw):
-    """Launch headless Chromium, log into the epay Owner Portal, download the Monthly
-    Incentive & ATU Subscriber Details report for the current month, and wipe+insert the
-    period into commcalc.raw_mi (replacing the manual MI upload).
+def _process_report(client, org_id, page, key, xlsx_path):
+    """Download one report by key, parse, derive its period, and wipe+insert its table."""
+    import pandas as pd
+    spec = REPORTS[key]
+    _open_and_download(page, spec["report_id"], xlsx_path)
+    df = pd.read_excel(xlsx_path, dtype=str).fillna("")
+    records = df.to_dict("records")
+    if not records:
+        raise EpayPortalError(f"{spec['label']} report downloaded but contained no rows.")
+    if spec["period"] == "report_month":
+        report_month = ""
+        for r in records:
+            if str(r.get("Report Month", "")).strip():
+                report_month = str(r.get("Report Month")).strip()
+                break
+        period, pm, py = _period_from_report_month(report_month)
+    else:
+        period, pm, py = _period_now()
+    base = {"org_id": org_id, "period": period, "period_month": pm, "period_year": py}
+    rows = spec["map"](records, base)
 
-    Returns a summary dict. Raises EpayLoginError if Chromium/Playwright isn't installed or
-    login fails; EpayPortalError if a later step (run/download/parse) fails."""
+    client.schema("commcalc").table(spec["table"]).delete() \
+        .eq("org_id", org_id).eq("period", period).execute()
+    saved = 0
+    for i in range(0, len(rows), 500):
+        batch = rows[i:i + 500]
+        client.schema("commcalc").table(spec["table"]).insert(batch).execute()
+        saved += len(batch)
+
+    # best-effort: record it on the Upload page's history (never fail the sweep on this)
+    try:
+        client.schema("commcalc").table("upload_log").insert({
+            "org_id": org_id, "file_type": spec["file_type"], "period": period,
+            "filename": "epay auto-sweep", "rows_saved": saved}).execute()
+    except Exception:
+        pass
+    return {"report": key, "label": spec["label"], "period": period, "rows": saved}
+
+
+def run_epay_sweep(client, org_id, url, user, pw, reports=None):
+    """Launch headless Chromium, log into the epay Owner Portal ONCE, and download + ingest each
+    requested report for the current month. `reports` = list of REPORTS keys; defaults to
+    ['mi'] for back-compat (MI/ATU only). Each report wipes+inserts its own period/table.
+
+    Returns a summary dict. Raises EpayLoginError if Chromium/Playwright isn't installed or login
+    fails; EpayPortalError only if EVERY requested report failed (partial failures are reported)."""
     try:
         from playwright.sync_api import sync_playwright
     except Exception:
@@ -227,64 +316,44 @@ def run_epay_sweep(client, org_id, url, user, pw):
             "Playwright is not installed in the backend image. Add "
             "`RUN pip install playwright && playwright install --with-deps chromium` "
             "to backend/Dockerfile to enable the epay headless sweep.")
-    import pandas as pd
     import tempfile
     import os
 
+    keys = [k for k in (reports or ["mi"]) if k in REPORTS] or ["mi"]
     base_url = (url or DEFAULT_URL).rstrip("/")
-    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
-    tmp.close()
-    xlsx_path = tmp.name
+    results, errors = [], []
 
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-            ctx = browser.new_context(user_agent=UA, accept_downloads=True)
-            page = ctx.new_page()
-            try:
-                page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
-                _login(page, user, pw)
-                _download_mi_report(page, xlsx_path)
-            finally:
-                browser.close()
-
-        # parse + map (same mapper as the manual upload) + wipe/insert the period
-        df = pd.read_excel(xlsx_path, dtype=str).fillna("")
-        records = df.to_dict("records")
-        if not records:
-            raise EpayPortalError("MI/ATU report downloaded but contained no rows.")
-        report_month = ""
-        for r in records:
-            if str(r.get("Report Month", "")).strip():
-                report_month = str(r.get("Report Month")).strip()
-                break
-        period, pm, py = _period_from_report_month(report_month)
-        base = {"org_id": org_id, "period": period, "period_month": pm, "period_year": py}
-        rows = map_mi_records(records, base)
-
-        client.schema("commcalc").table("raw_mi").delete() \
-            .eq("org_id", org_id).eq("period", period).execute()
-        saved = 0
-        for i in range(0, len(rows), 500):
-            batch = rows[i:i + 500]
-            client.schema("commcalc").table("raw_mi").insert(batch).execute()
-            saved += len(batch)
-
-        # best-effort: record it on the Upload page's history (never fail the sweep on this)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        ctx = browser.new_context(user_agent=UA, accept_downloads=True)
+        page = ctx.new_page()
         try:
-            client.schema("commcalc").table("upload_log").insert({
-                "org_id": org_id, "file_type": "mi_report", "period": period,
-                "filename": "epay auto-sweep", "rows_saved": saved}).execute()
-        except Exception:
-            pass
+            page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+            _login(page, user, pw)
+            for key in keys:
+                tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+                tmp.close()
+                try:
+                    results.append(_process_report(client, org_id, page, key, tmp.name))
+                except Exception as e:
+                    errors.append(f"{REPORTS[key]['label']}: {type(e).__name__}: {e}")
+                finally:
+                    try:
+                        os.unlink(tmp.name)
+                    except Exception:
+                        pass
+        finally:
+            browser.close()
 
-        return {"period": period, "rows": saved, "report_month": report_month}
-    finally:
-        try:
-            os.unlink(xlsx_path)
-        except Exception:
-            pass
+    if not results and errors:
+        raise EpayPortalError("; ".join(errors))
+    summary = {"reports": results}
+    if errors:
+        summary["errors"] = errors
+    mi = next((r for r in results if r["report"] == "mi"), None)
+    if mi:  # keep back-compat top-level fields for the admin status line
+        summary.update({"period": mi["period"], "rows": mi["rows"]})
+    return summary
 
 
 def _period_from_report_month(rm):

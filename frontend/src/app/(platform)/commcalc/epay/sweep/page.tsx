@@ -8,6 +8,7 @@ type Cfg = {
   configured: boolean; has_credentials: boolean; portal_url: string | null; portal_user: string | null
   enabled: boolean; frequency: string; day_of_week: number; day_of_month: number
   hour: number; timezone: string
+  sweep_mi: boolean; sweep_comp: boolean; sweep_payment: boolean
   next_run_at: string | null; last_run_at: string | null
   last_status: string | null; last_detail: string | null
 }
@@ -42,6 +43,7 @@ export default function EpaySweepAdmin() {
         portal_url: cfg.portal_url, portal_user: cfg.portal_user, enabled: cfg.enabled,
         frequency: cfg.frequency, day_of_week: cfg.day_of_week, day_of_month: cfg.day_of_month,
         hour: cfg.hour, timezone: cfg.timezone,
+        sweep_mi: cfg.sweep_mi, sweep_comp: cfg.sweep_comp, sweep_payment: cfg.sweep_payment,
       }
       if (pass.trim()) body.portal_pass = pass.trim()
       const res = await fetch(`${API}/api/v1/commcalc/epay/sweep/config?org_id=${ORG_ID}`, {
@@ -146,6 +148,20 @@ export default function EpaySweepAdmin() {
             <input type="checkbox" checked={cfg.enabled} onChange={e => set('enabled', e.target.checked)} />
             Run automatically on the schedule below
           </label>
+        </div>
+        <div style={row}>
+          <span style={lab}>Reports to pull</span>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Monthly Incentive & ATU Subscriber Details (#102817) → raw_mi">
+              <input type="checkbox" checked={cfg.sweep_mi !== false} onChange={e => set('sweep_mi', e.target.checked)} /> MI / ATU
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Comprehensive Compensation Report (#100614) → raw_comp_report (needs migration 025)">
+              <input type="checkbox" checked={!!cfg.sweep_comp} onChange={e => set('sweep_comp', e.target.checked)} /> Comprehensive Comp
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Commission Payment Detail (#50273) → raw_payment_detail (needs migration 025)">
+              <input type="checkbox" checked={!!cfg.sweep_payment} onChange={e => set('sweep_payment', e.target.checked)} /> Payment Detail
+            </label>
+          </div>
         </div>
         <div style={row}>
           <span style={lab}>Frequency</span>

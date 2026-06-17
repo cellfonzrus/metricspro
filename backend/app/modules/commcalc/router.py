@@ -163,15 +163,11 @@ async def upload_file(
                 'trans_type': str(r.get('Trans Type','')).strip(),
             }
         elif file_type == "payment_detail":
-            row = {**base,
-                'business_address': r.get('Business Address',''),
-                'payment_type': r.get('Payment Type',''),
-                'amount': safe_float(r.get('Amount')),
-                'mdn': str(r.get('Phone Number',r.get('MDN',''))).replace('.0','').strip(),
-                'imei': str(r.get('IMEI','')).replace('.0','').strip(),
-                'payment_date': str(r.get('Payment Date',''))[:10] or None,
-                'rep_username': r.get('Rep Username',''),
-            }
+            # Single source of truth shared with the epay sweep (epay_sweep.map_payment_detail_row).
+            row = epay_sweep.map_payment_detail_row(r, base)
+        elif file_type == "comp_report":
+            # Real mapper (previously comp_report fell to the empty else-branch). Shared w/ sweep.
+            row = epay_sweep.map_comp_report_row(r, base)
         elif file_type == "mi_report":
             # Single source of truth for the MI/ATU column->raw_mi mapping, shared with the
             # epay auto-sweep (epay_sweep.map_mi_row) so manual + swept files are identical.
@@ -941,7 +937,8 @@ async def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret:
 # (see epay_sweep.py). Creds live in the backend-only table commcalc.epay_sweep_config.
 _EPAY_CFG_DEFAULTS = {'enabled': False, 'frequency': 'daily', 'day_of_week': 0,
                       'day_of_month': 1, 'hour': 6, 'timezone': 'America/New_York',
-                      'portal_url': epay_sweep.DEFAULT_URL}
+                      'portal_url': epay_sweep.DEFAULT_URL,
+                      'sweep_mi': True, 'sweep_comp': False, 'sweep_payment': False}
 
 
 def _epay_cfg(client, org_id):
@@ -958,9 +955,13 @@ def _epay_public_cfg(cfg):
                 'last_status': None, 'last_detail': None}
     out = {k: cfg.get(k) for k in (
         'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
-        'portal_url', 'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail')}
+        'portal_url', 'portal_user', 'sweep_mi', 'sweep_comp', 'sweep_payment',
+        'next_run_at', 'last_run_at', 'last_status', 'last_detail')}
     out['configured'] = True
     out['has_credentials'] = bool(cfg.get('portal_user') and cfg.get('portal_pass'))
+    # sweep_mi defaults on (back-compat: pre-toggle configs only ever pulled MI)
+    if out.get('sweep_mi') is None:
+        out['sweep_mi'] = True
     return out
 
 
@@ -979,9 +980,17 @@ def _do_epay_sweep(org_id):
         _epay_set_status(client, org_id, 'error', 'No epay portal credentials set in the admin area', mark_run=True)
         return
     _epay_set_status(client, org_id, 'running', 'Sweep in progress…')
+    # which reports to pull — sweep_mi defaults on (back-compat); comp/payment opt-in
+    reports = []
+    if cfg.get('sweep_mi') is not False:
+        reports.append('mi')
+    if cfg.get('sweep_comp'):
+        reports.append('comp_report')
+    if cfg.get('sweep_payment'):
+        reports.append('payment_detail')
     try:
         res = epay_sweep.run_epay_sweep(client, org_id, cfg.get('portal_url'),
-                                        cfg['portal_user'], cfg['portal_pass'])
+                                        cfg['portal_user'], cfg['portal_pass'], reports=reports)
         _epay_set_status(client, org_id, 'ok', f"OK — {res}", mark_run=True)
     except epay_sweep.EpayLoginError as e:
         _epay_set_status(client, org_id, 'error', str(e), mark_run=True)
@@ -1007,7 +1016,7 @@ async def epay_sweep_put_config(body: dict, org_id: str = ORG_ID):
     cur = _epay_cfg(client, org_id) or {}
     row = {'org_id': org_id}
     for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
-              'enabled', 'portal_user', 'portal_url'):
+              'enabled', 'portal_user', 'portal_url', 'sweep_mi', 'sweep_comp', 'sweep_payment'):
         if k in body and body[k] is not None:
             row[k] = body[k]
     pw = (body.get('portal_pass') or '').strip()
