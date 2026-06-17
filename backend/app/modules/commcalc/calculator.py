@@ -174,13 +174,14 @@ def calc_rep_commissions(
                 'store': str(r.get('store','')).strip(),
                 'storeops_name': name_lookup.get(login,''),
                 'prem_set': set(), 'byod_set': set(), 'upg_set': set(),
-                'acc_gp': 0, 'setup_fee_gp': 0, 'trade_ins': 0,
+                'acc_gp': 0, 'setup_fee_gp': 0, 'acc_sales': 0, 'setup_fee_sales': 0, 'trade_ins': 0,
                 'sales': []
             }
         entry = rep_map[key]
         entry['sales'].append(r)
         tid = str(r.get('trans_id','')).replace('.0','').strip()
         gp = safe_float(r.get('gp'))
+        ext = safe_float(r.get('ext_price'))
         ct = str(r.get('contract_type','')).strip()
         dept = str(r.get('department','')).strip()
         cat = str(r.get('category','')).strip()
@@ -190,8 +191,12 @@ def calc_rep_commissions(
         elif ct in UPGRADE_ACT: entry['upg_set'].add(tid)
         elif ct in PREMIUM_ACT: entry['prem_set'].add(tid)
         
-        if dept == 'Ondigo': entry['acc_gp'] += gp
-        if 'Device Setup Charge' in product: entry['setup_fee_gp'] += gp
+        if dept == 'Ondigo':
+            entry['acc_gp'] += gp
+            entry['acc_sales'] += ext
+        if 'Device Setup Charge' in product:
+            entry['setup_fee_gp'] += gp
+            entry['setup_fee_sales'] += ext
         
     # ── Include DLAR reps with no sales yet (other markets) ──────
     for d in dlar_rep:
@@ -204,7 +209,7 @@ def calc_rep_commissions(
                 'store': str(d.get('store','') or ''),
                 'storeops_name': '',
                 'prem_set': set(), 'byod_set': set(), 'upg_set': set(),
-                'acc_gp': 0, 'setup_fee_gp': 0, 'trade_ins': 0,
+                'acc_gp': 0, 'setup_fee_gp': 0, 'acc_sales': 0, 'setup_fee_sales': 0, 'trade_ins': 0,
                 'sales': []
             }
 
@@ -237,8 +242,12 @@ def calc_rep_commissions(
         prem_comm    = pa * G['premium_flat']
         byod_comm    = ba * (G['byod_flat'] + G['byod_extra'])
         upg_comm     = ua * G['upgrade_flat']
-        acc_comm     = rep['acc_gp'] * G['acc_rate']
-        setup_comm   = rep['setup_fee_gp'] * G['setup_rate']
+        # Accessory + setup-fee commission paid on SALES (ext price), not GP — the B2B export's
+        # accessory/setup lines often carry no cost so GP-based pay was near-zero (user decision
+        # 2026-06-17). Rate unchanged (acc_rate / setup_fee_rate, default 10%). acc_gp is kept
+        # for the accessory-target check above.
+        acc_comm     = rep['acc_sales'] * G['acc_rate']
+        setup_comm   = rep['setup_fee_sales'] * G['setup_rate']
         trade_comm   = rep['trade_ins'] * G['trade_in_spiff']
         
         # ACIMA financing spiff
