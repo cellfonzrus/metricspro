@@ -92,9 +92,11 @@ def _sales_index(client, org_id):
                 "rep": (r.get("salesperson") or "").strip()}
         mdn = (r.get("mdn") or "").strip()
         ser = (r.get("serial_1") or "").strip()
-        if mdn and (mdn not in by_phone or (info["sold"] and not by_phone[mdn]["sold"])):
+        # keep the highest-value line per phone/serial — that's the device sale (model + price),
+        # not the $0 plan/accessory lines on the same transaction.
+        if mdn and (mdn not in by_phone or info["sold"] > by_phone[mdn]["sold"]):
             by_phone[mdn] = info
-        if ser and (ser not in by_serial or (info["sold"] and not by_serial[ser]["sold"])):
+        if ser and (ser not in by_serial or info["sold"] > by_serial[ser]["sold"]):
             by_serial[ser] = info
     return by_phone, by_serial
 
