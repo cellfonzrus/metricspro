@@ -7,6 +7,7 @@ from app.modules.asset.router import router as asset_router
 from app.modules.notify.router import router as notify_router
 from app.modules.core.router import router as core_router
 from app.modules.account.router import router as account_router
+from app.modules.storevisit.router import router as storevisit_router
 
 app = FastAPI(
     title="MetricsPro Platform API",
@@ -30,7 +31,8 @@ app.include_router(asset_router, prefix="/api/v1/asset")
 app.include_router(notify_router, prefix="/api/v1")
 app.include_router(core_router, prefix="/api/v1")
 app.include_router(account_router, prefix="/api/v1")  # router carries its own /account prefix
+app.include_router(storevisit_router, prefix="/api/v1")  # router carries its own /storevisit prefix
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "1.0.0", "modules": ["commcalc", "storeops", "notify", "core", "account"]}
+    return {"status": "ok", "version": "1.0.0", "modules": ["commcalc", "storeops", "notify", "core", "account", "storevisit"]}

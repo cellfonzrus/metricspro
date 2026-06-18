@@ -19,6 +19,17 @@ export async function api(path: string, opts: RequestInit = {}) {
   return res.json()
 }
 
+// Multipart upload (FormData) — the JSON `api()` helper above forces a JSON content-type,
+// which breaks file uploads. Let the browser set the multipart boundary itself.
+export async function apiUpload(path: string, form: FormData) {
+  const res = await fetch(`${API_URL}${path}`, { method: 'POST', body: form })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || `API error ${res.status}`)
+  }
+  return res.json()
+}
+
 export const fmt = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n || 0)
 
