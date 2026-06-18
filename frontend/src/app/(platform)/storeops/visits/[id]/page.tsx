@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import VisitActions from './VisitActions'
 
 const row: React.CSSProperties = { padding: '8px 0', borderBottom: '1px solid var(--border)', display: 'flex', gap: 10, alignItems: 'flex-start' }
 
@@ -35,6 +36,8 @@ export default function VisitDetailPage() {
   const responses: any[] = data.responses || []
   const accessories: any[] = data.accessories || []
   const mismatch = v.actual_rep && v.scheduled_rep && v.actual_rep !== v.scheduled_rep
+  // Action-item rollup is keyed by the visit's calendar month.
+  const period = (v.check_in_at || '').slice(0, 7) || new Date().toISOString().slice(0, 7)
 
   function payload(): ExportPayload {
     return {
@@ -86,6 +89,8 @@ export default function VisitDetailPage() {
         {mismatch && <Info label="Discrepancy reason">{v.rep_discrepancy_reason || '—'}</Info>}
         <Info label="GPS">{v.check_in_lat != null ? <a href={`https://maps.google.com/?q=${v.check_in_lat},${v.check_in_lng}`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{Number(v.check_in_lat).toFixed(5)}, {Number(v.check_in_lng).toFixed(5)}</a> : '—'}</Info>
       </div>
+
+      {v.store_code && <VisitActions visitId={v.id} storeCode={v.store_code} period={period} dmName={v.dm_name} />}
 
       <div className="card" style={{ padding: 18, marginBottom: 16 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 10px' }}>Inspection checklist</h2>

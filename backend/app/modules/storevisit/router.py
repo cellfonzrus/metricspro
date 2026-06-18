@@ -161,6 +161,7 @@ def get_visit(visit_id: str):
     for resp in responses:
         resp["photo_url"] = _signed_url(resp.get("photo_path"))
     visit["clean_store_photo_url"] = _signed_url(visit.get("clean_store_photo_path"))
+    visit["signed_checklist_url"] = _signed_url(visit.get("signed_checklist_path"))
     return {"visit": visit, "responses": responses, "accessories": accessories,
             "vaccessorize_url": VACCESSORIZE_URL}
 
@@ -234,12 +235,94 @@ async def upload_photo(visit_id: str, kind: str = Form("clean_store"),
     except Exception as e:
         raise HTTPException(400, f"photo upload failed: {e}")
 
-    # The clean-store photo lives on the visit header; per-item photos (kind='item:<key>')
-    # are linked when the frontend PATCHes the responses with this path.
+    # clean_store + signed_checklist live on the visit header; per-item / proof photos
+    # (kind='item:<key>' / 'proof:<key>') are linked when the frontend saves their rows.
     if kind == "clean_store":
         sb().table("store_visits").update(
             {"clean_store_photo_path": path, "updated_at": _now()}).eq("id", visit_id).execute()
+    elif kind == "signed_checklist":
+        sb().table("store_visits").update(
+            {"signed_checklist_path": path, "updated_at": _now()}).eq("id", visit_id).execute()
     return {"path": path, "url": _signed_url(path), "kind": kind}
+
+
+# ── Phase 2: action-item rollup overlay + rep action plan + sign-off ──────────────────────
+@router.get("/visits/{visit_id}/action")
+def get_visit_action(visit_id: str):
+    """The DM's saved overlay (which rolled-up action items were discussed + comments + proof),
+    the agreed rep action plan, and the sign-off state. The live rolled-up action items come from
+    the commcalc action-plan engine — the frontend fetches those and merges this overlay onto them."""
+    v = sb().table("store_visits").select("*").eq("id", visit_id).limit(1).execute().data
+    if not v:
+        raise HTTPException(404, "visit not found")
+    visit = v[0]
+    items = sb().table("visit_action_items").select("*").eq("visit_id", visit_id).execute().data or []
+    for it in items:
+        it["proof_photo_url"] = _signed_url(it.get("proof_photo_path"))
+    plan = (sb().table("visit_action_plan").select("*")
+            .eq("visit_id", visit_id).order("created_at").execute().data or [])
+    signoff = {k: visit.get(k) for k in (
+        "plan_rep_signed", "plan_rep_signed_by", "plan_rep_signed_at",
+        "plan_dm_signed", "plan_dm_signed_by", "plan_dm_signed_at")}
+    return {"items": items, "plan": plan, "signoff": signoff,
+            "signed_checklist_url": _signed_url(visit.get("signed_checklist_path"))}
+
+
+@router.put("/visits/{visit_id}/action-items")
+def save_action_items(visit_id: str, payload: dict, org_id: str = ORG_ID):
+    """Full replace of the DM's discussion overlay for this visit (delete-then-insert)."""
+    sb().table("visit_action_items").delete().eq("visit_id", visit_id).execute()
+    rows = []
+    for it in (payload.get("items") or []):
+        key = (it.get("item_key") or "").strip()
+        if not key:
+            continue
+        rows.append({
+            "org_id": org_id, "visit_id": visit_id, "item_key": key,
+            "rep": it.get("rep"), "severity": it.get("severity"), "metric": it.get("metric"),
+            "title": it.get("title"), "detail": it.get("detail"),
+            "discussed": bool(it.get("discussed")), "comment": it.get("comment"),
+            "proof_photo_path": it.get("proof_photo_path"),
+        })
+    if rows:
+        sb().table("visit_action_items").insert(rows).execute()
+    return get_visit_action(visit_id)
+
+
+@router.put("/visits/{visit_id}/action-plan")
+def save_action_plan(visit_id: str, payload: dict, org_id: str = ORG_ID):
+    """Full replace of the agreed rep action plan for this visit (delete-then-insert)."""
+    sb().table("visit_action_plan").delete().eq("visit_id", visit_id).execute()
+    rows = []
+    for p in (payload.get("plan") or []):
+        desc = (p.get("description") or "").strip()
+        if not desc:
+            continue
+        rows.append({
+            "org_id": org_id, "visit_id": visit_id,
+            "store_code": p.get("store_code"), "rep": p.get("rep"),
+            "description": desc, "due_date": p.get("due_date") or None,
+            "status": p.get("status") or "open",
+        })
+    if rows:
+        sb().table("visit_action_plan").insert(rows).execute()
+    return get_visit_action(visit_id)
+
+
+@router.post("/visits/{visit_id}/signoff")
+def signoff(visit_id: str, payload: dict):
+    """Record a rep or DM sign-off on the agreed action plan."""
+    who = (payload.get("who") or "").lower()
+    name = payload.get("name") or ""
+    if who not in ("rep", "dm"):
+        raise HTTPException(400, "who must be 'rep' or 'dm'")
+    pre = "plan_rep" if who == "rep" else "plan_dm"
+    signed = payload.get("signed", True)
+    upd = {f"{pre}_signed": bool(signed), "updated_at": _now()}
+    upd[f"{pre}_signed_by"] = name if signed else None
+    upd[f"{pre}_signed_at"] = _now() if signed else None
+    sb().table("store_visits").update(upd).eq("id", visit_id).execute()
+    return get_visit_action(visit_id)
 
 
 @router.get("/health")
