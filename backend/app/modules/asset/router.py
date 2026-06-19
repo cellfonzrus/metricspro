@@ -1086,6 +1086,275 @@ def _in_period(r, month=None, year=None, week_friday=None):
     return True
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# HOTSHEET EXPECTED-vs-PAID RECONCILIATION
+# For each ACTIVATED device, compare the ACTUAL Boost reimbursement
+# (asset_ledger.reimbursement) against the EXPECTED promo from the pricing hotsheet
+# (commcalc.hotsheet) for that device_model, effective as of the device's
+# acquired_date, on the promo column selected by the activation type (contract_type).
+# Read-only report; the flag-sync is a separate manual POST (no auto-write).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# contract_type -> which hotsheet promo column is "expected".
+# Precedence Upgrade > AAL > Port-In > Non-Port, derived from the commission engine's
+# contract-type taxonomy (commcalc/calculator.py). The combined-type precedence
+# (e.g. "Port-In Add A Line" -> AAL) is the ONE business assumption here — flip the
+# order below if Boost's hotsheet treats those as Port-In instead.
+def _promo_type(contract_type):
+    ct = (contract_type or "").strip().lower()
+    if not ct:
+        return None
+    if "upgrade" in ct:
+        return "promo_upgrade"
+    if "add a line" in ct or ct == "aal" or ct.endswith(" aal"):
+        return "promo_aal"
+    if "port" in ct:                 # port-in: new line, number ported
+        return "promo_port_in"
+    return "promo_non_port"          # plain Activation / non-ported new line / BYOD
+
+_PROMO_LABEL = {
+    "promo_port_in": "Port-In", "promo_non_port": "Non-Port",
+    "promo_upgrade": "Upgrade", "promo_aal": "AAL",
+}
+
+
+def _norm_model(s):
+    return " ".join((s or "").strip().lower().split())
+
+
+def _hotsheet_lookup(client, org_id):
+    """norm_model -> list of (effective_date 'YYYY-MM-DD', {promo_*: raw}) sorted ascending."""
+    rows = (client.schema("commcalc").table("hotsheet")
+            .select("device_model,effective_date,promo_port_in,promo_non_port,promo_upgrade,promo_aal")
+            .eq("org_id", org_id).execute().data) or []
+    by_model = {}
+    for r in rows:
+        m = _norm_model(r.get("device_model"))
+        if not m:
+            continue
+        by_model.setdefault(m, []).append((
+            str(r.get("effective_date") or "")[:10],
+            {k: r.get(k) for k in ("promo_port_in", "promo_non_port", "promo_upgrade", "promo_aal")},
+        ))
+    for m in by_model:
+        by_model[m].sort(key=lambda t: t[0])
+    return by_model
+
+
+def _effective_promos(entries, acquired_date):
+    """Pick the hotsheet row effective as-of acquired_date (latest effective_date <= acquired_date;
+    fall back to the earliest hotsheet if the device predates every one)."""
+    if not entries:
+        return None, None
+    a = str(acquired_date or "")[:10]
+    chosen = None
+    for eff, promos in entries:                      # ascending
+        if a and eff and eff <= a:
+            chosen = (eff, promos)
+        elif not a:
+            chosen = (eff, promos)
+    if chosen is None:
+        chosen = entries[0]                          # older than any hotsheet -> earliest
+    return chosen[1], chosen[0]
+
+
+def _compute_hotsheet_recon(client, org_id, store="", market="", month=None, year=None, tolerance=1.0):
+    hs = _hotsheet_lookup(client, org_id)
+    hotsheet_loaded = bool(hs)
+    rows = _fetch_asset_rows(
+        client, org_id, store=store, market=market,
+        select=("store,market,esn_imei,phone_number,device_model,contract_type,"
+                "category,status,date_sold,acquired_date,reimbursement,owed_to_vip"),
+    )
+
+    def _in_period(r):
+        if month is None and year is None:
+            return True
+        a = r.get("acquired_date")
+        if not a:
+            return False
+        try:
+            py, pm, _ = [int(x) for x in str(a)[:10].split("-")]
+        except Exception:
+            return False
+        if year is not None and int(year) != py:
+            return False
+        if month is not None and int(month) != pm:
+            return False
+        return True
+
+    tol = float(tolerance or 0)
+    buckets = ["matched", "underpaid", "overpaid", "no_expected", "no_hotsheet", "unmapped_type"]
+    summary = {b: {"count": 0, "expected": 0.0, "actual": 0.0, "variance": 0.0} for b in buckets}
+    by_type = {}
+    items = []
+    unmatched_models = {}
+    model_display = {}
+    unmapped_types = {}
+    skipped_unactivated = 0
+
+    def _accum(bucket, expected, actual, ptype, is_under):
+        s = summary[bucket]
+        s["count"] += 1
+        s["expected"] += expected
+        s["actual"] += actual
+        s["variance"] += (actual - expected)
+        if ptype:
+            lbl = _PROMO_LABEL[ptype]
+            t = by_type.setdefault(lbl, {"count": 0, "expected": 0.0, "actual": 0.0,
+                                         "variance": 0.0, "underpaid_count": 0})
+            t["count"] += 1
+            t["expected"] += expected
+            t["actual"] += actual
+            t["variance"] += (actual - expected)
+            if is_under:
+                t["underpaid_count"] += 1
+
+    for r in rows:
+        if not _in_period(r):
+            continue
+        # Exclude pure unsold On-Inventory (never activated -> no reimbursement expected).
+        # Same definition as the On-Inventory report: date_sold null AND category ~ On Inventory.
+        if (not r.get("date_sold")) and ("on inventory" in (r.get("category") or "").lower()):
+            skipped_unactivated += 1
+            continue
+
+        ct = (r.get("contract_type") or "").strip()
+        ptype = _promo_type(ct)
+        actual = float(r.get("reimbursement") or 0)
+        model = r.get("device_model") or ""
+        nm = _norm_model(model)
+        model_display.setdefault(nm, model)
+
+        item = {
+            "store": r.get("store"), "market": r.get("market"),
+            "imei": r.get("esn_imei"), "mdn": r.get("phone_number"),
+            "device_model": model, "contract_type": ct,
+            "promo_type": _PROMO_LABEL.get(ptype) if ptype else None,
+            "acquired_date": (str(r.get("acquired_date"))[:10] if r.get("acquired_date") else None),
+            "actual": round(actual, 2), "expected": None, "variance": None,
+            "effective_date": None, "bucket": None,
+        }
+
+        if ptype is None:
+            item["bucket"] = "unmapped_type"
+            if ct:
+                unmapped_types[ct] = unmapped_types.get(ct, 0) + 1
+            _accum("unmapped_type", 0.0, actual, None, False)
+            items.append(item)
+            continue
+
+        entries = hs.get(nm)
+        if not entries:
+            item["bucket"] = "no_hotsheet"
+            unmatched_models[nm] = unmatched_models.get(nm, 0) + 1
+            _accum("no_hotsheet", 0.0, actual, ptype, False)
+            items.append(item)
+            continue
+
+        promos, eff = _effective_promos(entries, r.get("acquired_date"))
+        item["effective_date"] = eff
+        exp_raw = promos.get(ptype) if promos else None
+        if exp_raw is None or str(exp_raw).strip() == "":
+            item["bucket"] = "no_expected"
+            _accum("no_expected", 0.0, actual, ptype, False)
+            items.append(item)
+            continue
+
+        expected = float(exp_raw or 0)
+        variance = round(actual - expected, 2)
+        item["expected"] = round(expected, 2)
+        item["variance"] = variance
+        if abs(variance) <= tol:
+            bucket = "matched"
+        elif actual < expected:
+            bucket = "underpaid"
+        else:
+            bucket = "overpaid"
+        item["bucket"] = bucket
+        _accum(bucket, expected, actual, ptype, bucket == "underpaid")
+        items.append(item)
+
+    for b in summary:
+        for k in ("expected", "actual", "variance"):
+            summary[b][k] = round(summary[b][k], 2)
+    for lbl in by_type:
+        for k in ("expected", "actual", "variance"):
+            by_type[lbl][k] = round(by_type[lbl][k], 2)
+
+    return {
+        "hotsheet_loaded": hotsheet_loaded,
+        "tolerance": tol,
+        "device_count": len(items),
+        "skipped_unactivated": skipped_unactivated,
+        "summary": summary,
+        "underpaid_total": round(-summary["underpaid"]["variance"], 2),   # positive $ shortfall
+        "overpaid_total": round(summary["overpaid"]["variance"], 2),
+        "by_type": [{"promo_type": k, **v} for k, v in sorted(by_type.items())],
+        "items": items,
+        "unmatched_models": sorted(
+            [{"device_model": model_display.get(m, m), "count": c} for m, c in unmatched_models.items()],
+            key=lambda x: -x["count"])[:200],
+        "unmapped_contract_types": sorted(
+            [{"contract_type": t, "count": c} for t, c in unmapped_types.items()],
+            key=lambda x: -x["count"]),
+    }
+
+
+@router.get("/hotsheet-recon")
+async def hotsheet_recon(org_id: str = ORG_ID, store: str = "", market: str = "",
+                         month: int = None, year: int = None, tolerance: float = 1.0):
+    """Expected (pricing hotsheet promo) vs actual (Boost reimbursement) per activated device.
+    Buckets: matched / underpaid / overpaid / no_expected (model on hotsheet but blank for that
+    promo type) / no_hotsheet (model not on any hotsheet) / unmapped_type. The promo column is
+    chosen from contract_type (Upgrade>AAL>Port-In>Non-Port). Unsold On-Inventory is excluded."""
+    return _compute_hotsheet_recon(sb(), org_id, store=store, market=market,
+                                   month=month, year=year, tolerance=tolerance)
+
+
+def _sync_hotsheet_flags(client, org_id, tolerance=1.0):
+    """Underpaid devices -> commcalc.flags (delete-first by source then insert).
+    actual==0 & expected>0 -> critical (Boost paid nothing); partial short -> warning."""
+    import datetime as _dt
+    recon = _compute_hotsheet_recon(client, org_id, tolerance=tolerance)
+    flags = []
+    for it in recon["items"]:
+        if it.get("bucket") != "underpaid":
+            continue
+        expected = float(it.get("expected") or 0)
+        actual = float(it.get("actual") or 0)
+        shortfall = round(expected - actual, 2)
+        sev = "critical" if actual <= 0 < expected else "warning"
+        d = it.get("acquired_date")
+        period, pm, py = "Unknown", None, None
+        if d:
+            try:
+                py, pm, _ = [int(x) for x in str(d)[:10].split("-")]
+                period = _dt.date(py, pm, 1).strftime("%B %Y")
+            except Exception:
+                pass
+        flags.append({
+            "org_id": org_id, "period": period, "period_month": pm, "period_year": py,
+            "flag_type": "Hotsheet Underpayment", "source": "asset_hotsheet",
+            "severity": sev, "store_address": it.get("store"),
+            "imei": it.get("imei"), "mdn": it.get("mdn"),
+            "amount": shortfall, "phone_model": it.get("device_model"),
+            "description": (f"{it.get('promo_type') or '?'} promo: hotsheet expected {expected:.2f}, "
+                            f"Boost reimbursed {actual:.2f} (short {shortfall:.2f})"),
+        })
+    client.schema("commcalc").table("flags").delete() \
+        .eq("org_id", org_id).eq("source", "asset_hotsheet").execute()
+    for i in range(0, len(flags), 500):
+        client.schema("commcalc").table("flags").insert(flags[i:i + 500]).execute()
+    return len(flags)
+
+
+@router.post("/sync-hotsheet-flags")
+async def sync_hotsheet_flags(org_id: str = ORG_ID, tolerance: float = 1.0):
+    """Manually write hotsheet-underpayment flags (opt-in; not auto-run on upload)."""
+    return {"flags_written": _sync_hotsheet_flags(sb(), org_id, tolerance)}
+
+
 @router.get("/charges-summary")
 async def get_charges_summary(org_id: str = ORG_ID, store: str = "", market: str = "", month: int = None, year: int = None, week_friday: str = ""):
     """Charge groups + Total Loss via Postgres aggregation (fast). Totals only — no row lists."""
