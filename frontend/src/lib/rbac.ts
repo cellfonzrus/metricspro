@@ -51,6 +51,7 @@ export const NAV: NavGroup[] = [
     { href: '/storeops/schedule', label: 'Schedule', icon: '📅', module: 'storeops' },
     { href: '/storeops/visits', label: 'Store Visits', icon: '📝', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/visits/settings', label: 'Visit Checklist', icon: '🧾', module: 'storeops', scopes: ['all'] },
+    { href: '/storeops/closing', label: 'Daily Closing', icon: '🧾', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/employees', label: 'Employees', icon: '👥', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/timeoff', label: 'Time Off', icon: '🌴', module: 'storeops' },
     { href: '/storeops/swaps', label: 'Shift Swaps', icon: '🔄', module: 'storeops' },
