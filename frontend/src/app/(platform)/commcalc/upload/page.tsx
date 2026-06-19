@@ -33,6 +33,24 @@ const AUTO_SOURCES = [
     scopes: [{ v: 'recent', l: 'Recent (lookback)' }, { v: 'full', l: 'Full history' }] },
 ]
 
+// Module uploads — files that load into other modules (their own endpoints, not the generic
+// /commcalc/upload/{file_type}). Each posts a multipart file to its own endpoint.
+const MODULE_UPLOADS = [
+  { id: 'hotsheet',      label: 'Pricing Hotsheet',     icon: '🏷️', endpoint: 'commcalc/hotsheet/upload', needsDate: true,
+    desc: 'Carrier promo pricing by device — powers the Hotsheet expected-vs-paid recon. Pick the effective date.' },
+  { id: 'vip_workbook',  label: 'VIP Wireless Workbook', icon: '🧾', endpoint: 'commcalc/vip/upload', needsDate: false,
+    desc: 'VIP scraper workbook (Invoices / Lines / Devices sheets). Full-replace of VIP history.' },
+  { id: 'asset_ledger',  label: 'Asset Ledger',         icon: '📒', endpoint: 'asset/upload', needsDate: false,
+    desc: 'Asset_Lending.xlsx — wipes & re-inserts all asset rows, then backfills market + flags.' },
+  { id: 'daily_closing', label: 'Daily Closing Sheet',  icon: '🧮', endpoint: 'closing/upload', needsDate: false,
+    desc: 'Google "Envelopes Data" export — one row per rep per day; idempotent per day.' },
+]
+// Structured (non-file) uploads that live on their own page — linked, not inlined here.
+const MODULE_LINKS = [
+  { id: 'b2b_inventory', label: 'b2bsoft Inventory', icon: '📦', href: '/commcalc/asset/inventory-recon',
+    desc: 'On-hand inventory by store & category — structured entry/recon, not a single file. Opens its page.' },
+]
+
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 type UploadRecord = { id: string; file_type: string; period: string | null; filename: string | null; rows_saved: number; uploaded_at: string }
@@ -57,6 +75,7 @@ export default function UploadPage() {
   const [adate, setAdate] = useState<Record<string, string>>({})
   const [running, setRunning] = useState<Record<string, boolean>>({})
   const [autoMsg, setAutoMsg] = useState<Record<string, string>>({})
+  const [modDate, setModDate] = useState<Record<string, string>>({})
 
   const loadHistory = useCallback(async () => {
     try {
@@ -116,6 +135,26 @@ export default function UploadPage() {
     } catch (e: any) {
       setStatuses(s => ({ ...s, [fileType]: 'error' }))
       setMessages(m => ({ ...m, [fileType]: `❌ ${e.message}` }))
+    }
+    setUploading(null)
+  }
+
+  async function handleModuleUpload(entry: typeof MODULE_UPLOADS[number], file: File) {
+    if (entry.needsDate && !(modDate[entry.id] || '').trim()) { alert('Pick an effective date for the hotsheet first'); return }
+    setUploading(entry.id); setStatuses(s => ({ ...s, [entry.id]: 'uploading' }))
+    const form = new FormData(); form.append('file', file)
+    if (entry.needsDate) form.append('effective_date', modDate[entry.id])
+    try {
+      const res = await fetch(`${API}/api/v1/${entry.endpoint}?org_id=${ORG_ID}`, { method: 'POST', body: form })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.detail || 'Upload failed')
+      const n = data.rows_uploaded ?? data.saved ?? data.rows_saved ?? data.inserted ?? data.count ?? data.rows
+      setStatuses(s => ({ ...s, [entry.id]: 'done' }))
+      setMessages(m => ({ ...m, [entry.id]: `✅ ${n != null ? Number(n).toLocaleString() + ' rows' : 'Uploaded'}` }))
+      loadHistory()
+    } catch (e: any) {
+      setStatuses(s => ({ ...s, [entry.id]: 'error' }))
+      setMessages(m => ({ ...m, [entry.id]: `❌ ${e.message}` }))
     }
     setUploading(null)
   }
@@ -235,6 +274,53 @@ export default function UploadPage() {
             </div>
           )
         })}
+      </div>
+
+      {/* ── Module uploads (files that load into other modules) ──────────── */}
+      <div style={{ fontWeight: 700, fontSize: 14, margin: '24px 0 10px' }}>
+        📦 Module uploads <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— files that feed the asset, VIP, hotsheet &amp; daily-closing modules</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+        {MODULE_UPLOADS.map(entry => {
+          const status = statuses[entry.id] || 'idle'; const msg = messages[entry.id] || ''
+          return (
+            <div key={entry.id} className="card" style={{ border: status === 'done' ? '1px solid #86efac' : status === 'error' ? '1px solid #fca5a5' : undefined, background: status === 'done' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : undefined }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                <span style={{ fontSize: 28 }}>{entry.icon}</span>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>{entry.label}</span>
+                  <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 10px' }}>{entry.desc}</div>
+                  {entry.needsDate && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <label style={{ fontSize: 12, color: 'var(--text2)' }}>Effective date:</label>
+                      <input type="date" className="input" style={{ fontSize: 12, width: 160 }} value={modDate[entry.id] || ''} onChange={e => setModDate(p => ({ ...p, [entry.id]: e.target.value }))} />
+                    </div>
+                  )}
+                  {status === 'uploading' ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text2)', fontSize: 13 }}><div className="spinner" />Uploading...</div>
+                  ) : (
+                    <label style={{ cursor: 'pointer' }}>
+                      <div className="btn btn-secondary" style={{ display: 'inline-flex' }}>📂 Choose File</div>
+                      <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) handleModuleUpload(entry, f) }} />
+                    </label>
+                  )}
+                  {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? '#16a34a' : '#dc2626' }}>{msg}</div>}
+                </div>
+              </div>
+            </div>
+          )
+        })}
+        {MODULE_LINKS.map(link => (
+          <a key={link.id} href={link.href} className="card" style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+              <span style={{ fontSize: 28 }}>{link.icon}</span>
+              <div style={{ flex: 1 }}>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{link.label} <span style={{ fontSize: 11, color: 'var(--text3)' }}>↗</span></span>
+                <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 0' }}>{link.desc}</div>
+              </div>
+            </div>
+          </a>
+        ))}
       </div>
     </div>
   )
