@@ -3,6 +3,10 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, apiUpload, fmt, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 
+// Interim: direct link to the live Google "Envelopes Data (Responses)" sheet, until the in-app
+// closing form fully replaces it. (Responses sheet owner: reports@prepaidrecon.com.)
+const GOOGLE_CLOSING_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1e41A9Ug5jaM_ZQGkQbsGncX7WpIwqe7Tf6BpKUoojqI/edit'
+
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const tin: React.CSSProperties = { ...sel, width: 110 }
 const cell: React.CSSProperties = { padding: '6px 9px', borderBottom: '1px solid var(--border)', fontSize: 13 }
@@ -101,7 +105,8 @@ export default function DailyClosingPage() {
           {upBusy ? '⏳ Uploading…' : '📤 Upload closing sheet'}
           <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) upload(f) }} />
         </label>
-        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Export the Google "Envelopes Data" sheet as .xlsx/.csv and upload it here.</span>
+        <a href={GOOGLE_CLOSING_SHEET_URL} target="_blank" rel="noreferrer" className="btn btn-secondary" style={{ fontSize: 13 }}>🔗 Open Google sheet ↗</a>
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Export the Google "Envelopes Data" sheet as .xlsx/.csv and upload it here — or open it directly.</span>
         {upMsg && <span style={{ fontSize: 13 }}>{upMsg}</span>}
       </div>
 
