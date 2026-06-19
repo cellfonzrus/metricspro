@@ -55,6 +55,14 @@ export default function VisitActions({ visitId, storeCode, period, dmName }:
       setPlan((saved?.plan || []).map((p: any) => ({ rep: p.rep || '', description: p.description || '', due_date: p.due_date || '', status: p.status || 'open' })))
       setSignoff(saved?.signoff || {})
       setSignedUrl(saved?.signed_checklist_url || null)
+
+      // Auto-attach the rolled-up action plan to the visit the first time it's opened (no overlay
+      // saved yet) so the items are persisted on the store's visit and the DM can focus on them
+      // without having to save first. Fire-and-forget; once saved, later opens won't re-seed.
+      if ((saved?.items?.length || 0) === 0 && flat.length > 0) {
+        const seed = { items: flat.map(it => ({ ...it, discussed: false, comment: '' })) }
+        api(`/api/v1/storevisit/visits/${visitId}/action-items`, { method: 'PUT', body: JSON.stringify(seed) }).catch(() => {})
+      }
     } finally { setLoading(false) }
   }, [period, storeCode, visitId])
 
