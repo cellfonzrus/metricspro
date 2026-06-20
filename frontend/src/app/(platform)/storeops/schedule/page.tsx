@@ -74,6 +74,30 @@ export default function SchedulePage() {
     setWeekStart(d.toISOString().split('T')[0])
   }
 
+  // Copy every shift in the current week to next week (dedup by employee + date + start_time).
+  async function copyToNextWeek() {
+    if (!shifts.length) { alert('No shifts this week to copy.'); return }
+    const destStart = (() => { const d = new Date(weekStart); d.setDate(d.getDate() + 7); return d.toISOString().split('T')[0] })()
+    const destEnd = (() => { const d = new Date(destStart); d.setDate(d.getDate() + 6); return d.toISOString().split('T')[0] })()
+    const existing = await api(`/api/v1/storeops/shifts?week_start=${destStart}&week_end=${destEnd}`)
+    const seen = new Set((existing || []).map((s: any) => `${s.employee_name}|${s.shift_date}|${s.start_time}`))
+    if (!confirm(`Copy ${shifts.length} shifts to next week? Existing shifts are kept (duplicates skipped).`)) return
+    let added = 0
+    for (const sh of shifts) {
+      const d = new Date(sh.shift_date); d.setDate(d.getDate() + 7)
+      const nd = d.toISOString().split('T')[0]
+      if (seen.has(`${sh.employee_name}|${nd}|${sh.start_time}`)) continue
+      await api('/api/v1/storeops/shifts', { method: 'POST', body: JSON.stringify({
+        employee_id: sh.employee_id, employee_name: sh.employee_name, store_code: sh.store_code,
+        shift_date: nd, start_time: sh.start_time, end_time: sh.end_time,
+        scheduled_hours: sh.scheduled_hours, status: 'scheduled',
+      }) })
+      added++
+    }
+    alert(`Copied ${added} shift${added === 1 ? '' : 's'} to next week.`)
+    nextWeek()
+  }
+
   async function deleteShift(id: number) {
     if (!confirm('Remove this shift?')) return
     await api(`/api/v1/storeops/shifts/${id}`, { method: 'DELETE' })
@@ -118,6 +142,7 @@ export default function SchedulePage() {
           <button className="btn btn-secondary" onClick={prevWeek}>← Prev</button>
           <button className="btn btn-secondary" onClick={() => setWeekStart(new Date().toISOString().split('T')[0])}>Today</button>
           <button className="btn btn-secondary" onClick={nextWeek}>Next →</button>
+          <button className="btn btn-primary" onClick={copyToNextWeek} title="Duplicate this week's shifts into next week">📋 Copy to next week</button>
         </div>
       </div>
 
