@@ -56,6 +56,16 @@ export default function StoreOpsAdminPage() {
     } catch (err: any) { setMsg('Add failed: ' + (err?.message || err)) }
   }
 
+  async function delEmp(e: any) {
+    if (!confirm(`Delete ${e.name}? This cannot be undone. (If they have shifts, deactivate instead.)`)) return
+    setMsg('')
+    try {
+      await api(`/api/v1/storeops/employees/${e.id}`, { method: 'DELETE' })
+      setMsg(`Deleted ${e.name}`)
+      await loadAll()
+    } catch (err: any) { setMsg('Delete failed: ' + (err?.message || err)) }
+  }
+
   async function saveStore(s: any) {
     setMsg('')
     try {
@@ -179,7 +189,10 @@ export default function StoreOpsAdminPage() {
                     <td style={cell}><input style={{ ...sel, width: 160 }} value={e.email || ''} onChange={ev => setEmp(e.id, { email: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 110 }} value={e.phone || ''} onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></td>
                     <td style={cell}><input type="checkbox" checked={!!e.is_active} onChange={ev => setEmp(e.id, { is_active: ev.target.checked })} /></td>
-                    <td style={cell}><button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => saveEmp(e)}>💾</button></td>
+                    <td style={cell}>
+                      <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => saveEmp(e)}>💾</button>
+                      <button className="btn" style={{ fontSize: 12, padding: '4px 10px', marginLeft: 6, color: '#b91c1c' }} onClick={() => delEmp(e)}>🗑️</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
