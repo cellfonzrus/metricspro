@@ -129,8 +129,10 @@ def create_employee(emp: dict):
 
 
 @router.patch("/employees/{emp_id}")
-def update_employee(emp_id: int, updates: dict):
-    """Update an employee (name/role/home_store/pay_rate/active/contact). StoreOps Admin."""
+def update_employee(emp_id: str, updates: dict):
+    """Update an employee (name/role/home_store/pay_rate/active/contact). StoreOps Admin.
+    emp_id is str (not int) so a UUID or numeric id both work — a typed int rejected UUID ids
+    with a 422, which read as 'cannot edit' in the UI."""
     row = {k: updates[k] for k in EMP_FIELDS if k in updates}
     if not row:
         raise HTTPException(400, "no valid fields to update")
@@ -141,6 +143,20 @@ def update_employee(emp_id: int, updates: dict):
     if not r.data:
         raise HTTPException(404, "employee not found")
     return r.data[0]
+
+
+@router.delete("/employees/{emp_id}")
+def delete_employee(emp_id: str):
+    """Delete an employee (StoreOps Admin). 404 if missing; 409 if blocked by linked rows
+    (shifts / app_users) — the UI can then deactivate (is_active=false) instead."""
+    existing = sb().table("employees").select("id,name").eq("id", emp_id).execute().data
+    if not existing:
+        raise HTTPException(404, "employee not found")
+    try:
+        sb().table("employees").delete().eq("id", emp_id).execute()
+    except Exception as e:
+        raise HTTPException(409, f"cannot delete (linked records exist — try deactivating): {e}")
+    return {"ok": True, "deleted": emp_id, "name": existing[0].get("name")}
 
 
 @router.post("/employees/bulk-payscale")
