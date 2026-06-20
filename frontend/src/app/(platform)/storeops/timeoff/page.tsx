@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { api } from '@/lib/client'
+import { api, parseLocalDate } from '@/lib/client'
+import { useAuth } from '@/lib/auth-context'
 
 interface Request {
   id: number; employee_id: string; employee_name?: string
@@ -13,11 +14,16 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 export default function TimeOffPage() {
+  const { user } = useAuth()
   const [requests, setRequests] = useState<Request[]>([])
   const [employees, setEmployees] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ employee_id: '', start_date: '', end_date: '', type: 'PTO', notes: '' })
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+  // approveNow: when a manager enters a request, approve it on submit (vs an employee
+  // request that a manager approves later).
+  const [form, setForm] = useState({ employee_id: '', start_date: '', end_date: '', type: 'PTO', notes: '', approveNow: true })
 
   useEffect(() => {
     Promise.all([
@@ -34,15 +40,34 @@ export default function TimeOffPage() {
   }
 
   async function submit() {
-    const req = await api('/api/v1/storeops/time-off', { method: 'POST', body: JSON.stringify(form) })
-    setRequests(r => [req, ...r])
-    setShowForm(false)
-    setForm({ employee_id: '', start_date: '', end_date: '', type: 'PTO', notes: '' })
+    setErr('')
+    if (!form.employee_id) { setErr('Pick an employee.'); return }
+    if (!form.start_date || !form.end_date) { setErr('Start and end dates are required.'); return }
+    if (form.end_date < form.start_date) { setErr('End date cannot be before the start date.'); return }
+    const approver = user?.full_name || user?.email || 'manager'
+    const payload: any = {
+      employee_id: form.employee_id, start_date: form.start_date, end_date: form.end_date,
+      type: form.type, notes: form.notes,
+      status: form.approveNow ? 'approved' : 'pending',
+    }
+    if (form.approveNow) payload.approved_by = approver
+    setSaving(true)
+    try {
+      const req = await api('/api/v1/storeops/time-off', { method: 'POST', body: JSON.stringify(payload) })
+      setRequests(r => [req, ...r])
+      setShowForm(false)
+      setForm({ employee_id: '', start_date: '', end_date: '', type: 'PTO', notes: '', approveNow: true })
+    } catch (e: any) {
+      setErr(e?.message || 'Could not save the request.')
+    } finally { setSaving(false) }
   }
 
   async function updateStatus(id: number, status: string) {
-    await api(`/api/v1/storeops/time-off/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) })
-    setRequests(r => r.map(req => req.id === id ? { ...req, status } : req))
+    const approver = user?.full_name || user?.email || 'manager'
+    const body: any = { status }
+    if (status === 'approved') { body.approved_by = approver; body.approved_at = new Date().toISOString() }
+    await api(`/api/v1/storeops/time-off/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
+    setRequests(r => r.map(req => req.id === id ? { ...req, status, approved_by: status === 'approved' ? approver : req.approved_by } : req))
   }
 
   return (
@@ -51,10 +76,10 @@ export default function TimeOffPage() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Time Off Requests</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            {requests.filter(r => r.status === 'pending').length} pending · {requests.length} total
+            {requests.filter(r => r.status === 'pending').length} pending · {requests.length} total · approved time off blocks scheduling
           </p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowForm(true)}>+ New Request</button>
+        <button className="btn btn-primary" onClick={() => { setErr(''); setShowForm(true) }}>+ New Request</button>
       </div>
 
       {showForm && (
@@ -95,8 +120,13 @@ export default function TimeOffPage() {
                 onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
             </div>
           </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, fontSize: 13, fontWeight: 500 }}>
+            <input type="checkbox" checked={form.approveNow} onChange={e => setForm(f => ({ ...f, approveNow: e.target.checked }))} />
+            Approve immediately (manager entry) — uncheck to submit as a pending request
+          </label>
+          {err && <div style={{ color: 'var(--red)', fontSize: 13, marginTop: 10 }}>{err}</div>}
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-            <button className="btn btn-primary" onClick={submit}>Submit Request</button>
+            <button className="btn btn-primary" disabled={saving} onClick={submit}>{saving ? 'Saving…' : (form.approveNow ? 'Submit & Approve' : 'Submit Request')}</button>
             <button className="btn btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
           </div>
         </div>
@@ -120,12 +150,12 @@ export default function TimeOffPage() {
             </thead>
             <tbody>
               {requests.map((r, i) => {
-                const start = new Date(r.start_date)
-                const end = new Date(r.end_date)
+                const start = parseLocalDate(r.start_date)
+                const end = parseLocalDate(r.end_date)
                 const days = Math.round((end.getTime() - start.getTime()) / 86400000) + 1
                 return (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 500 }}>{empName(r.employee_id)}</td>
+                  <tr key={r.id ?? i}>
+                    <td style={{ fontWeight: 500 }}>{r.employee_name || empName(r.employee_id)}</td>
                     <td><span className="badge badge-blue" style={{ fontSize: 11 }}>{r.type}</span></td>
                     <td style={{ fontSize: 12 }}>
                       {start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
@@ -139,14 +169,17 @@ export default function TimeOffPage() {
                       </span>
                     </td>
                     <td>
-                      {r.status === 'pending' && (
+                      {r.status === 'pending' ? (
                         <div style={{ display: 'flex', gap: 6 }}>
                           <button className="btn btn-primary" style={{ fontSize: 11, padding: '4px 10px' }}
                             onClick={() => updateStatus(r.id, 'approved')}>Approve</button>
                           <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px', color: 'var(--red)' }}
                             onClick={() => updateStatus(r.id, 'denied')}>Deny</button>
                         </div>
-                      )}
+                      ) : r.status === 'approved' ? (
+                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px', color: 'var(--red)' }}
+                          onClick={() => updateStatus(r.id, 'denied')}>Revoke</button>
+                      ) : null}
                     </td>
                   </tr>
                 )

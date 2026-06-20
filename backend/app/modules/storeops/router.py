@@ -1,4 +1,5 @@
 """StoreOps API Router — /api/v1/storeops/*"""
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from app.core.database import get_supabase
 
@@ -31,6 +32,17 @@ def get_shifts(store_code: str = None, week_start: str = None, week_end: str = N
 
 @router.post("/shifts")
 def create_shift(shift: dict):
+    # Block scheduling an employee on a day they have APPROVED time off.
+    eid = shift.get("employee_id")
+    sdate = shift.get("shift_date")
+    if eid and sdate:
+        conflict = (sb().table("time_off_requests").select("id")
+                    .eq("employee_id", str(eid)).eq("status", "approved")
+                    .lte("start_date", sdate).gte("end_date", sdate)
+                    .limit(1).execute().data)
+        if conflict:
+            who = shift.get("employee_name") or "This employee"
+            raise HTTPException(409, f"{who} has approved time off on {sdate} — cannot schedule.")
     r = sb().table("shifts").insert(shift).execute()
     return r.data[0] if r.data else shift
 
@@ -52,8 +64,21 @@ def get_time_off(employee_id: str = None):
 
 @router.post("/time-off")
 def create_time_off(request: dict):
-    r = sb().table("time_off_requests").insert({**request, "status": "pending"}).execute()
-    return r.data[0] if r.data else request
+    if not (request.get("employee_id") and request.get("start_date") and request.get("end_date")):
+        raise HTTPException(400, "employee_id, start_date and end_date are required")
+    status = str(request.get("status") or "pending").lower()
+    if status not in ("pending", "approved", "denied"):
+        status = "pending"
+    row = {**request, "status": status}
+    # Manager approve-at-submission: stamp approved_at if approved and not already set.
+    if status == "approved" and not row.get("approved_at"):
+        row["approved_at"] = datetime.now(timezone.utc).isoformat()
+    r = sb().table("time_off_requests").insert(row).execute()
+    if not r.data:
+        # Previously this silently returned the un-inserted request, so a failed save
+        # still showed in the UI but never persisted ("time off not being saved").
+        raise HTTPException(500, "Failed to save the time-off request.")
+    return r.data[0]
 
 @router.patch("/time-off/{request_id}")
 def update_time_off(request_id: int, updates: dict):

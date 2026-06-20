@@ -45,3 +45,29 @@ export const localToday = () => {
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
+
+// Parse a 'YYYY-MM-DD' string as a LOCAL date. Avoids the `new Date("2026-06-22")`
+// UTC pitfall, which renders the previous day / wrong weekday for users west of UTC
+// (the cause of "06/22 shows as Tuesday" and "time-off 6/22 displays as 6/21").
+export const parseLocalDate = (iso: string) => {
+  const [y, m, d] = String(iso || '').split('-').map(Number)
+  return new Date(y || 1970, (m || 1) - 1, d || 1)
+}
+
+const _ymd = (d: Date) => {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+// Add `n` days to a 'YYYY-MM-DD' string, returning a 'YYYY-MM-DD' string (local-safe).
+export const addDays = (iso: string, n: number) => {
+  const d = parseLocalDate(iso); d.setDate(d.getDate() + n); return _ymd(d)
+}
+
+// Monday of the week containing `iso` (or today), as 'YYYY-MM-DD' (local-safe).
+export const mondayOf = (iso?: string) => {
+  const d = iso ? parseLocalDate(iso) : new Date()
+  const day = d.getDay() // 0=Sun .. 6=Sat
+  d.setDate(d.getDate() - (day === 0 ? 6 : day - 1))
+  return _ymd(d)
+}
