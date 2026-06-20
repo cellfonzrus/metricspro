@@ -117,15 +117,59 @@ def map_payment_detail_row(r, base):
 
 # ── Comprehensive Compensation Report (#100614) → raw_comp_report ────────────────────────────
 # The manual upload previously had NO comp parser (it stored empty rows via the else-branch);
-# this is the real mapping, now shared by the upload + the sweep.
+# this is the real mapping, now shared by the upload + the sweep. The full per-payment grain is
+# captured so the DAILY sweep can MERGE (upsert on external_reference_id) — appending new payments
+# and overwriting changed ones — instead of wipe+replace, per the 2026-06-20 directive.
+COMP_MERGE_KEY = "org_id,period,external_reference_id"
+
+
+def _comp_get(r, *names):
+    """First non-empty value among candidate column spellings. The export uses no-space
+    'OwnerID' / 'ExternalReferenceID' headers; spaced variants are tolerated too."""
+    for n in names:
+        v = r.get(n)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    return ""
+
+
+def _comp_ref(row):
+    """Stable conflict key for a comp payment. Uses the per-payment ExternalReferenceID when the
+    export provides one; otherwise a deterministic content hash so a re-pull overwrites the same
+    logical row rather than appending a duplicate."""
+    import hashlib
+    ref = row.get("external_reference_id") or ""
+    if ref:
+        return ref
+    parts = [str(row.get(k, "")) for k in (
+        "begin_date", "end_date", "account_id", "terminal_id", "owner_id",
+        "compensation_type", "brand", "business_address", "payment_amount", "quantity")]
+    return "h:" + hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()
+
+
 def map_comp_report_row(r, base):
     from app.modules.commcalc.calculator import safe_float
-    return {
+    row = {
         **base,
-        "business_address": r.get("Business Address", ""),
-        "compensation_type": r.get("Compensation Type", ""),
-        "payment_amount": safe_float(r.get("Payment Amount")),
+        "begin_date": str(_comp_get(r, "Begin Date", "BeginDate"))[:10] or None,
+        "end_date": str(_comp_get(r, "End Date", "EndDate"))[:10] or None,
+        "retailer_account": _comp_get(r, "Retailer Account", "RetailerAccount"),
+        "owner_id": _comp_get(r, "OwnerID", "Owner ID"),
+        "terminal_id": _comp_get(r, "TerminalID", "Terminal ID"),
+        "account_id": _comp_get(r, "AccountID", "Account ID"),
+        "business_name": _comp_get(r, "Business Name", "BusinessName"),
+        "business_address": _comp_get(r, "Business Address", "BusinessAddress"),
+        "compensation_type": _comp_get(r, "Compensation Type", "CompensationType"),
+        "brand": _comp_get(r, "Brand"),
+        "salesforce_id": _comp_get(r, "SalesForce ID", "Salesforce ID", "SalesForceID"),
+        "quantity": safe_float(_comp_get(r, "Quantity")),
+        "payment_amount": safe_float(_comp_get(r, "Payment Amount", "PaymentAmount")),
+        "external_reference_id": _comp_get(r, "ExternalReferenceID", "External Reference ID"),
+        "has_payment_detail": _comp_get(r, "HasPaymentDetail", "Has Payment Detail"),
+        "internal_brand": _comp_get(r, "InternalBrand", "Internal Brand"),
     }
+    row["external_reference_id"] = _comp_ref(row)
+    return row
 
 
 # Commission report ids discovered from the portal's Commissions menu (via discover_reports).
@@ -142,6 +186,7 @@ REPORTS = {
                        "map": lambda recs, base: _map_filtered(recs, base, map_payment_detail_row)},
     "comp_report": {"report_id": COMP_REPORT_ID, "table": "raw_comp_report",
                     "file_type": "comp_report", "period": "current", "label": "Comprehensive Comp",
+                    "merge": COMP_MERGE_KEY,  # upsert on external_reference_id, don't wipe+replace
                     "map": lambda recs, base: _map_filtered(recs, base, map_comp_report_row)},
 }
 
@@ -301,7 +346,11 @@ def discover_reports(url, user, pw):
 
 
 def _process_report(client, org_id, page, key, xlsx_path):
-    """Download one report by key, parse, derive its period, and wipe+insert its table."""
+    """Download one report by key, parse, derive its period, and store it. Most reports wipe+insert
+    their period; a report with a `merge` key (comp) UPSERTS instead, so a daily pull appends new
+    payments and overwrites changed ones without destroying prior data. An empty download raises
+    BEFORE touching the table — so an empty current-month pull (carrier comp posts in arrears) can
+    never wipe a populated period."""
     import pandas as pd
     spec = REPORTS[key]
     _open_and_download(page, spec["report_id"], xlsx_path)
@@ -321,13 +370,28 @@ def _process_report(client, org_id, page, key, xlsx_path):
     base = {"org_id": org_id, "period": period, "period_month": pm, "period_year": py}
     rows = spec["map"](records, base)
 
-    client.schema("commcalc").table(spec["table"]).delete() \
-        .eq("org_id", org_id).eq("period", period).execute()
+    merge_on = spec.get("merge")
     saved = 0
-    for i in range(0, len(rows), 500):
-        batch = rows[i:i + 500]
-        client.schema("commcalc").table(spec["table"]).insert(batch).execute()
-        saved += len(batch)
+    if merge_on:
+        # MERGE: collapse within-file duplicate conflict keys (last wins) so one upsert request
+        # can't "affect a row a second time", then append new + overwrite changed rows. No delete,
+        # so prior payments survive (handles the in-arrears comp posting cadence).
+        cols = [c.strip() for c in merge_on.split(",")]
+        deduped = {}
+        for row in rows:
+            deduped[tuple(row.get(c) for c in cols)] = row
+        rows = list(deduped.values())
+        for i in range(0, len(rows), 500):
+            batch = rows[i:i + 500]
+            client.schema("commcalc").table(spec["table"]).upsert(batch, on_conflict=merge_on).execute()
+            saved += len(batch)
+    else:
+        client.schema("commcalc").table(spec["table"]).delete() \
+            .eq("org_id", org_id).eq("period", period).execute()
+        for i in range(0, len(rows), 500):
+            batch = rows[i:i + 500]
+            client.schema("commcalc").table(spec["table"]).insert(batch).execute()
+            saved += len(batch)
 
     # best-effort: record it on the Upload page's history (never fail the sweep on this)
     try:
@@ -336,7 +400,8 @@ def _process_report(client, org_id, page, key, xlsx_path):
             "filename": "epay auto-sweep", "rows_saved": saved}).execute()
     except Exception:
         pass
-    return {"report": key, "label": spec["label"], "period": period, "rows": saved}
+    return {"report": key, "label": spec["label"], "period": period, "rows": saved,
+            "mode": "merge" if merge_on else "replace"}
 
 
 def run_epay_sweep(client, org_id, url, user, pw, reports=None):

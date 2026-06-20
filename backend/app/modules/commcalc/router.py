@@ -254,7 +254,16 @@ async def upload_file(
         
         if any(v for v in row.values() if v and v != org_id):
             mapped.append(row)
-    
+
+    # comp_report has a UNIQUE (org_id, period, external_reference_id) index so the daily epay
+    # sweep can merge. The manual upload still wipes the period above, but collapse any within-file
+    # duplicate refs (last wins) so this plain insert can't trip that constraint.
+    if file_type == "comp_report":
+        _dedup = {}
+        for m in mapped:
+            _dedup[(m.get('org_id'), m.get('period'), m.get('external_reference_id'))] = m
+        mapped = list(_dedup.values())
+
     # Insert in batches
     saved = 0
     for i in range(0, len(mapped), 500):
