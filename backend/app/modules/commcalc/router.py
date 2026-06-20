@@ -34,6 +34,19 @@ def require_org(org_id: str):
     if not org_id:
         raise HTTPException(400, "org_id required")
 
+def _month_year(period: str):
+    """Parse either 'June 2026' or '2026-06' → (month, year). (0,0) if unrecognized.
+    calculator.parse_period only handles the month-name form and silently returns January
+    for '2026-06', so endpoints that may receive either spelling use this instead."""
+    s = (period or "").strip()
+    if len(s) >= 7 and s[:4].isdigit() and s[4] == "-":
+        try:
+            return int(s[5:7]), int(s[:4])
+        except Exception:
+            return 0, 0
+    pm = parse_period(s)
+    return pm.get("month", 0), pm.get("year", 0)
+
 # ── Upload endpoints ─────────────────────────────────────────
 @router.post("/upload/{file_type}")
 async def upload_file(
@@ -1432,13 +1445,19 @@ async def get_commissions(period: str, org_id: str = "00000000-0000-0000-0000-00
 @router.get("/dlar-store/{period}")
 async def get_dlar_store_kpis(period: str, org_id: str = ORG_ID):
     """Store-level KPIs straight from the Elevate Go Store DLAR (raw_dlar_store) for the
-    Store view of the KPI Metrics page. Values are whole-number percents (e.g. 55.0)."""
+    Store view of the KPI Metrics page. Values are whole-number percents (e.g. 55.0).
+
+    The sweep/upload store the period as 'June 2026', but the page may pass '2026-06' — so we
+    match on period_month/period_year (parsed from either spelling) rather than the raw string,
+    which previously returned [] on a format mismatch."""
     require_org(org_id)
-    rows = sb().schema('commcalc').table('raw_dlar_store').select(
+    mo, yr = _month_year(period)
+    q = sb().schema('commcalc').table('raw_dlar_store').select(
         'location,address,store_code,atu,protect_pct,byod_pct,family_plan_pct,tmr3,'
         'aal_conversion,conversion_rate,total_acts,gross_adds,total_upgrades'
-    ).eq('org_id', org_id).eq('period', period).order('location').execute().data or []
-    return rows
+    ).eq('org_id', org_id)
+    q = q.eq('period_month', mo).eq('period_year', yr) if mo and yr else q.eq('period', period)
+    return q.order('location').execute().data or []
 
 
 @router.get("/flags/{period}")
