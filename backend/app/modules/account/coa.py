@@ -108,12 +108,13 @@ def _in_period(date_str, pm, py):
 
 
 def _fetch_all(client, table, select, eqs=None, page=1000, cap=200000):
-    """Paginated select of an entire (org-scoped) table — supabase caps a query at 1000 rows."""
+    """Paginated select of an entire (org-scoped) table — supabase caps a query at 1000 rows.
+    A list/tuple/set filter value becomes an IN (...) clause (used for multi-spelling period)."""
     out, start = [], 0
     while start < cap:
         q = client.schema("commcalc").table(table).select(select)
         for k, v in (eqs or {}).items():
-            q = q.eq(k, v)
+            q = q.in_(k, list(v)) if isinstance(v, (list, tuple, set)) else q.eq(k, v)
         rows = (q.range(start, start + page - 1).execute().data) or []
         out.extend(rows)
         if len(rows) < page:
@@ -248,6 +249,12 @@ def build_inputs(client, org_id, period):
        { line_key: {"by_store": {store: amt}, "company_wide": amt, "detail": {label: amt}} }
        'detail' carries drill-down sub-lines (e.g. each expense name)."""
     pm, py = parse_period(period)
+    # Upload paths store the period inconsistently — the daily-sales upload writes the month-name
+    # form ("June 2026") while compute is invoked with "2026-06". Query BOTH spellings so the
+    # period-string sources (raw_sales/raw_mi/comp/rep_commissions/...) aren't silently empty.
+    _MONTHS = ["", "January", "February", "March", "April", "May", "June", "July",
+               "August", "September", "October", "November", "December"]
+    period_keys = list({period} | ({f"{_MONTHS[pm]} {py}"} if 1 <= pm <= 12 and py else set()))
     code2addr = store_code_to_address(client, org_id)
     resolve_store = store_resolver(client, org_id)
 
@@ -269,7 +276,7 @@ def build_inputs(client, org_id, period):
     # raw_mi — MI + ATU residual (company-wide)
     try:
         for r in _fetch_all(client, "raw_mi", "actual_mi_payout,actual_atu_payout",
-                            {"org_id": org_id, "period": period}):
+                            {"org_id": org_id, "period": period_keys}):
             add("mi_income", None, r.get("actual_mi_payout"))
             add("atu_income", None, r.get("actual_atu_payout"))
     except Exception:
@@ -278,7 +285,7 @@ def build_inputs(client, org_id, period):
     # raw_comp_report — carrier commissions/incentives (store via business_address if it matches)
     try:
         for r in _fetch_all(client, "raw_comp_report",
-                            "business_address,payment_amount,period", {"org_id": org_id, "period": period}):
+                            "business_address,payment_amount,period", {"org_id": org_id, "period": period_keys}):
             add("carrier_comm", _norm_store(r.get("business_address")), r.get("payment_amount"))
     except Exception:
         pass
@@ -286,7 +293,7 @@ def build_inputs(client, org_id, period):
     # raw_sales — accessory/device revenue + cost (store)
     try:
         for r in _fetch_all(client, "raw_sales", "department,ext_price,gp,voided,store",
-                            {"org_id": org_id, "period": period}):
+                            {"org_id": org_id, "period": period_keys}):
             if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
                 continue
             dept = (r.get("department") or "").strip()
@@ -328,7 +335,7 @@ def build_inputs(client, org_id, period):
     # vip_invoices — VIP fees paid (shipping + other_cost) + unpaid AP (BS)
     try:
         for r in _fetch_all(client, "vip_invoices", "location,shipping,other_cost,grand_total,status,period",
-                            {"org_id": org_id, "period": period}):
+                            {"org_id": org_id, "period": period_keys}):
             st = _norm_store(r.get("location"))
             add("vip_fees", st, safe_float(r.get("shipping")) + safe_float(r.get("other_cost")),
                 detail_label="Invoice shipping/other")
@@ -342,7 +349,7 @@ def build_inputs(client, org_id, period):
     # vip_paygo_payments — cash paid to VIP this period (approved batches) + current owed (pending, BS)
     try:
         for r in _fetch_all(client, "vip_paygo_payments", "dealer,amount,amount_overdue,batch_type,period",
-                            {"org_id": org_id, "period": period}):
+                            {"org_id": org_id, "period": period_keys}):
             if (r.get("batch_type") or "").lower() == "approved":
                 add("vip_device_pay", _norm_store(r.get("dealer")), r.get("amount"))
         for r in _fetch_all(client, "vip_paygo_payments", "dealer,amount,batch_type"):
@@ -354,7 +361,7 @@ def build_inputs(client, org_id, period):
     # rep_commissions — rep commissions paid (opex)
     try:
         for r in _fetch_all(client, "rep_commissions", "store,total_payout,period",
-                            {"org_id": org_id, "period": period}):
+                            {"org_id": org_id, "period": period_keys}):
             add("rep_comm", _norm_store(r.get("store")), r.get("total_payout"))
     except Exception:
         pass
@@ -362,7 +369,7 @@ def build_inputs(client, org_id, period):
     # chargeback_items — clawbacks (opex) + reserve (BS, expected/undeducted)
     try:
         for r in _fetch_all(client, "chargeback_items", "store,amount,deduct,decided_at,period",
-                            {"org_id": org_id, "period": period}):
+                            {"org_id": org_id, "period": period_keys}):
             st = _norm_store(r.get("store"))
             amt = safe_float(r.get("amount"))
             if r.get("deduct"):
@@ -375,7 +382,7 @@ def build_inputs(client, org_id, period):
     # store_expenses — operating expenses (opex), drill by expense_name; key by store_code→address
     try:
         for r in _fetch_all(client, "store_expenses", "store_code,expense_name,expense_type,amount,period",
-                            {"org_id": org_id, "period": period}):
+                            {"org_id": org_id, "period": period_keys}):
             sa = code2addr.get(_norm_store(r.get("store_code")), _norm_store(r.get("store_code")))
             label = (r.get("expense_name") or "Expense").strip()
             add("store_opex", sa, r.get("amount"), detail_label=label)
