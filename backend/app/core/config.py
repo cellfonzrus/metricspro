@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     WHATSAPP_TEMPLATE_NAME: str = ""
     WHATSAPP_TEMPLATE_LANG: str = "en"  # approved metricspro_report template is 'en' (not en_US)
     WHATSAPP_GRAPH_VERSION: str = "v21.0"
+    # Set true ONLY when the approved template has a DOCUMENT header (to attach the file).
+    # The current approved metricspro_report template has NO document header → keep false
+    # so we send the report link in the body (Meta rejects header params otherwise: #132018).
+    WHATSAPP_TEMPLATE_DOC_HEADER: bool = False
 
     # ── Account Module — Claude-powered accounting engine (#8/#9/#10) ─────────────
     # Drives statement assembly + narrative + the #10 missed-days recon. The engine
