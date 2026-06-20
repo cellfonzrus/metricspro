@@ -118,9 +118,14 @@ def map_payment_detail_row(r, base):
 # ── Comprehensive Compensation Report (#100614) → raw_comp_report ────────────────────────────
 # The manual upload previously had NO comp parser (it stored empty rows via the else-branch);
 # this is the real mapping, now shared by the upload + the sweep. The full per-payment grain is
-# captured so the DAILY sweep can MERGE (upsert on external_reference_id) — appending new payments
-# and overwriting changed ones — instead of wipe+replace, per the 2026-06-20 directive.
-COMP_MERGE_KEY = "org_id,period,external_reference_id"
+# captured (incl. external_reference_id) so the comp is stored VERBATIM and the Residual Trend
+# report can track each payment across months.
+# COMP CADENCE (user 2026-06-20): each daily pull is the carrier's cumulative month-to-date snapshot,
+# so the sweep REPLACES the open month (delete current period + insert). A canceled account that drops
+# out of the report correctly disappears — a merge/upsert would keep it stale and mask the residual
+# dip. Closed months are a different `period`, so they're never re-pulled and stay frozen. An empty
+# in-arrears pull raises before touching the table (guard in _process_report), so a not-yet-posted
+# month is never wiped.
 
 
 def _comp_get(r, *names):
@@ -186,7 +191,7 @@ REPORTS = {
                        "map": lambda recs, base: _map_filtered(recs, base, map_payment_detail_row)},
     "comp_report": {"report_id": COMP_REPORT_ID, "table": "raw_comp_report",
                     "file_type": "comp_report", "period": "current", "label": "Comprehensive Comp",
-                    "merge": COMP_MERGE_KEY,  # upsert on external_reference_id, don't wipe+replace
+                    # REPLACE the open month each pull (cumulative MTD snapshot); empty pull is guarded.
                     "map": lambda recs, base: _map_filtered(recs, base, map_comp_report_row)},
 }
 
@@ -346,11 +351,11 @@ def discover_reports(url, user, pw):
 
 
 def _process_report(client, org_id, page, key, xlsx_path):
-    """Download one report by key, parse, derive its period, and store it. Most reports wipe+insert
-    their period; a report with a `merge` key (comp) UPSERTS instead, so a daily pull appends new
-    payments and overwrites changed ones without destroying prior data. An empty download raises
-    BEFORE touching the table — so an empty current-month pull (carrier comp posts in arrears) can
-    never wipe a populated period."""
+    """Download one report by key, parse, derive its period, and store it. Every report REPLACES its
+    period (delete current period + insert) — for the daily comp pull that means the open month is
+    overwritten with the carrier's latest cumulative MTD snapshot, while closed months (a different
+    `period`) stay frozen. An empty download raises BEFORE touching the table — so an empty
+    current-month pull (carrier comp posts in arrears) can never wipe a populated period."""
     import pandas as pd
     spec = REPORTS[key]
     _open_and_download(page, spec["report_id"], xlsx_path)
@@ -370,28 +375,18 @@ def _process_report(client, org_id, page, key, xlsx_path):
     base = {"org_id": org_id, "period": period, "period_month": pm, "period_year": py}
     rows = spec["map"](records, base)
 
-    merge_on = spec.get("merge")
+    # REPLACE the report's period: delete the current period, then insert the fresh pull. For comp
+    # this overwrites the open month with the carrier's latest cumulative MTD snapshot; a canceled
+    # account that has dropped out of the report correctly disappears. Closed months are a different
+    # `period`, so they're untouched and stay frozen. The empty-download guard above means an
+    # in-arrears month that hasn't posted is never wiped.
     saved = 0
-    if merge_on:
-        # MERGE: collapse within-file duplicate conflict keys (last wins) so one upsert request
-        # can't "affect a row a second time", then append new + overwrite changed rows. No delete,
-        # so prior payments survive (handles the in-arrears comp posting cadence).
-        cols = [c.strip() for c in merge_on.split(",")]
-        deduped = {}
-        for row in rows:
-            deduped[tuple(row.get(c) for c in cols)] = row
-        rows = list(deduped.values())
-        for i in range(0, len(rows), 500):
-            batch = rows[i:i + 500]
-            client.schema("commcalc").table(spec["table"]).upsert(batch, on_conflict=merge_on).execute()
-            saved += len(batch)
-    else:
-        client.schema("commcalc").table(spec["table"]).delete() \
-            .eq("org_id", org_id).eq("period", period).execute()
-        for i in range(0, len(rows), 500):
-            batch = rows[i:i + 500]
-            client.schema("commcalc").table(spec["table"]).insert(batch).execute()
-            saved += len(batch)
+    client.schema("commcalc").table(spec["table"]).delete() \
+        .eq("org_id", org_id).eq("period", period).execute()
+    for i in range(0, len(rows), 500):
+        batch = rows[i:i + 500]
+        client.schema("commcalc").table(spec["table"]).insert(batch).execute()
+        saved += len(batch)
 
     # best-effort: record it on the Upload page's history (never fail the sweep on this)
     try:
@@ -401,7 +396,7 @@ def _process_report(client, org_id, page, key, xlsx_path):
     except Exception:
         pass
     return {"report": key, "label": spec["label"], "period": period, "rows": saved,
-            "mode": "merge" if merge_on else "replace"}
+            "mode": "replace"}
 
 
 def run_epay_sweep(client, org_id, url, user, pw, reports=None):

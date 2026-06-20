@@ -16,6 +16,7 @@ from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
 from app.modules.commcalc import b2b_sweep
 from app.modules.commcalc import sales_analyzer
+from app.modules.commcalc import comp_trend
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 import calendar as _calendar
@@ -254,15 +255,6 @@ async def upload_file(
         
         if any(v for v in row.values() if v and v != org_id):
             mapped.append(row)
-
-    # comp_report has a UNIQUE (org_id, period, external_reference_id) index so the daily epay
-    # sweep can merge. The manual upload still wipes the period above, but collapse any within-file
-    # duplicate refs (last wins) so this plain insert can't trip that constraint.
-    if file_type == "comp_report":
-        _dedup = {}
-        for m in mapped:
-            _dedup[(m.get('org_id'), m.get('period'), m.get('external_reference_id'))] = m
-        mapped = list(_dedup.values())
 
     # Insert in batches
     saved = 0
@@ -1859,6 +1851,23 @@ async def get_sales_analyzer(period: str, window_days: int = 90, rep: str = "",
         return sales_analyzer.analyze(sb(), org_id, period, window_days=window_days, rep=rep)
     except Exception as e:
         raise HTTPException(500, f"sales-analyzer failed: {type(e).__name__}: {e}")
+
+
+@router.get("/comp/residual-trend")
+async def get_comp_residual_trend(months: int = 6, store: str = "", market: str = "",
+                                  min_drop_pct: float = 20.0, min_drop_amt: float = 1.0,
+                                  org_id: str = ORG_ID):
+    """Month-over-month carrier residual (Comprehensive Comp) trend. Returns total residual per
+    month with deltas, plus per-account DIPS (residual fell or the account vanished from the
+    report = likely cancellation) labeled by the month each dip occurred — so you can see which
+    month a residual dropped and why."""
+    require_org(org_id)
+    try:
+        return comp_trend.compute_residual_trend(
+            sb(), org_id, months=months, store=store, market=market,
+            min_drop_pct=min_drop_pct, min_drop_amt=min_drop_amt)
+    except Exception as e:
+        raise HTTPException(500, f"comp-residual-trend failed: {type(e).__name__}: {e}")
 
 
 # ── Daily Sales Targets ──────────────────────────────────────

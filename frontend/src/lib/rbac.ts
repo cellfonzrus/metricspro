@@ -19,6 +19,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/gp', label: 'Gross Profit', icon: '💰', module: 'commissions' },
     { href: '/commcalc/kpi', label: 'KPI Metrics', icon: '🎯', module: 'commissions' },
     { href: '/commcalc/sales-analyzer', label: 'Sales Analyzer', icon: '📉', module: 'commissions', scopes: ['all', 'market', 'store'] },
+    { href: '/commcalc/comp-trend', label: 'Residual Trend', icon: '📡', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/flags', label: 'Flags', icon: '🚩', module: 'commissions' },
     { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️', module: 'commissions' },
     { href: '/commcalc/settings', label: 'Commission Rates', icon: '⚙️', module: 'commissions', scopes: ['all'] },
