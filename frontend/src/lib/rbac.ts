@@ -15,6 +15,7 @@ export const NAV: NavGroup[] = [
   { group: 'Commissions', module: 'commissions', items: [
     { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions' },
     { href: '/commcalc/upload', label: 'Upload Files', icon: '📁', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/upload/wizard', label: 'Upload Wizard', icon: '🧭', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/reports', label: 'All Reports', icon: '📋', module: 'commissions' },
     { href: '/commcalc/gp', label: 'Gross Profit', icon: '💰', module: 'commissions' },
     { href: '/commcalc/kpi', label: 'KPI Metrics', icon: '🎯', module: 'commissions' },
@@ -22,6 +23,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/comp-trend', label: 'Residual Trend', icon: '📡', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/flags', label: 'Flags', icon: '🚩', module: 'commissions' },
     { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️', module: 'commissions' },
+    { href: '/commcalc/store-match', label: 'Store Matching', icon: '🏬', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/settings', label: 'Commission Rates', icon: '⚙️', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/expenses', label: 'Store Expenses', icon: '🏪', module: 'commissions', scopes: ['all', 'market'] },
   ]},

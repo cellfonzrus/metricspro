@@ -1,0 +1,145 @@
+'use client'
+import { useState, useEffect } from 'react'
+import { apiUpload, ORG_ID } from '@/lib/client'
+import { usePeriod } from '@/lib/period-context'
+
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const enc = encodeURIComponent
+
+// Each report: where it comes from, its EXACT name on the portal, whether it auto-sweeps, and how
+// to upload it manually. `ft` = the upload_log file_type used to show an "already uploaded" badge.
+type Step = {
+  id: string; label: string; icon: string; source: string; report: string; url?: string
+  auto: boolean; kind: 'period' | 'module'; endpoint: string; needsDate?: boolean; ft?: string; note?: string
+}
+
+const STEPS: Step[] = [
+  { id: 'sales', label: 'Sales Transactions', icon: '🛍️', kind: 'period', endpoint: 'commcalc/upload/sales', ft: 'sales',
+    source: 'b2bsoft — wsreports.b2bsoft.com', url: 'https://wsreports.b2bsoft.com', auto: false,
+    report: 'Sales Transaction Details — the 78-column export (ALL columns, NOT the grouped variant)',
+    note: 'The only report that can’t auto-sweep yet (login is IP-blocked; B2B FTP push is being wired). Upload it here each month.' },
+  { id: 'payment_detail', label: 'Commission Payment Detail', icon: '💳', kind: 'period', endpoint: 'commcalc/upload/payment_detail', ft: 'payment_detail',
+    source: 'ePay Owner Portal — ownerportal.epayworldwide.com', url: 'https://ownerportal.epayworldwide.com', auto: true,
+    report: 'Commission Payment Detail (report #50273)' },
+  { id: 'mi_report', label: 'MI & ATU Report', icon: '💰', kind: 'period', endpoint: 'commcalc/upload/mi_report', ft: 'mi_report',
+    source: 'ePay Owner Portal', url: 'https://ownerportal.epayworldwide.com', auto: true,
+    report: 'Monthly Incentive & ATU Subscriber Details (report #102817)' },
+  { id: 'comp_report', label: 'Comprehensive Comp', icon: '🏦', kind: 'period', endpoint: 'commcalc/upload/comp_report', ft: 'comp_report',
+    source: 'ePay Owner Portal', url: 'https://ownerportal.epayworldwide.com', auto: true,
+    report: 'Comprehensive Compensation Report (report #100614)',
+    note: 'Posts in arrears — a month is often empty until the carrier publishes it. The sweep replaces the open month daily and freezes it at month-end.' },
+  { id: 'dlar_rep', label: 'DLAR Rep KPI', icon: '📊', kind: 'period', endpoint: 'commcalc/upload/dlar_rep', ft: 'dlar_rep',
+    source: 'Boost Elevate GO — boostelevatego.com', url: 'https://boostelevatego.com', auto: true,
+    report: 'DLAR — Rep report' },
+  { id: 'dlar_store', label: 'DLAR Store KPI', icon: '🏪', kind: 'period', endpoint: 'commcalc/upload/dlar_store', ft: 'dlar_store',
+    source: 'Boost Elevate GO', url: 'https://boostelevatego.com', auto: true,
+    report: 'DLAR — Store / Advocate report' },
+  { id: 'hotsheet', label: 'Pricing Hotsheet', icon: '🏷️', kind: 'module', endpoint: 'commcalc/hotsheet/upload', needsDate: true,
+    source: 'Yoobic — Knowledge Library', url: 'https://app.yoobic.com', auto: false,
+    report: 'Boost pricing hotsheet (latest version)', note: 'Pick the date it became effective.' },
+  { id: 'vip_workbook', label: 'VIP Wireless Workbook', icon: '🧾', kind: 'module', endpoint: 'commcalc/vip/upload',
+    source: 'VIP Wireless portal — vipwireless.com', url: 'https://vipwireless.com', auto: true,
+    report: 'Invoices / PayGo workbook' },
+  { id: 'asset_ledger', label: 'Asset Ledger', icon: '📒', kind: 'module', endpoint: 'asset/upload',
+    source: 'VIP Wireless portal', url: 'https://vipwireless.com', auto: false,
+    report: 'Asset ledger export' },
+  { id: 'daily_closing', label: 'Daily Closing Sheet', icon: '🧮', kind: 'module', endpoint: 'closing/upload',
+    source: 'Google — "Envelopes Data (Responses)"', auto: false,
+    report: 'Daily closing envelopes export (.xlsx / .csv)' },
+]
+
+type Rec = { file_type: string; period: string | null; uploaded_at: string }
+
+export default function UploadWizardPage() {
+  const { period } = usePeriod()
+  const [history, setHistory] = useState<Rec[]>([])
+  const [busy, setBusy] = useState('')
+  const [msg, setMsg] = useState<Record<string, string>>({})
+  const [dates, setDates] = useState<Record<string, string>>({})
+
+  function loadHistory() {
+    fetch(`${API}/api/v1/commcalc/upload/history?org_id=${ORG_ID}&limit=200`)
+      .then(r => r.json()).then(d => setHistory(Array.isArray(d) ? d : [])).catch(() => setHistory([]))
+  }
+  useEffect(() => { loadHistory() }, [])
+
+  function lastUpload(s: Step): Rec | undefined {
+    if (!s.ft) return undefined
+    return history.find(h => h.file_type === s.ft && (s.kind !== 'period' || h.period === period))
+  }
+
+  async function upload(s: Step, file: File) {
+    setBusy(s.id); setMsg(m => ({ ...m, [s.id]: '' }))
+    try {
+      const form = new FormData(); form.append('file', file)
+      let q = `org_id=${ORG_ID}`
+      if (s.kind === 'period') q = `period=${enc(period)}&` + q
+      if (s.needsDate) {
+        const d = dates[s.id]
+        if (!d) { setMsg(m => ({ ...m, [s.id]: 'Pick an effective date first.' })); setBusy(''); return }
+        q = `effective_date=${enc(d)}&` + q
+      }
+      const res = await apiUpload(`/api/v1/${s.endpoint}?${q}`, form)
+      const rows = res?.rows_saved ?? res?.rows ?? res?.count
+      setMsg(m => ({ ...m, [s.id]: `✓ Uploaded${rows != null ? ` — ${rows} rows` : ''}.` }))
+      loadHistory()
+    } catch (e: any) {
+      setMsg(m => ({ ...m, [s.id]: `Error: ${e?.message || e}` }))
+    } finally { setBusy('') }
+  }
+
+  const periodSteps = STEPS.filter(s => s.kind === 'period')
+  const done = periodSteps.filter(s => lastUpload(s)).length
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧭 Upload Wizard</h1>
+        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
+          One guided place to get every report in — the exact report name, where to pull it, and whether it
+          already auto-sweeps. Working period: <strong>{period}</strong>. Core monthly reports loaded: <strong>{done}/{periodSteps.length}</strong>.
+        </p>
+      </div>
+
+      <div style={{ display: 'grid', gap: 12 }}>
+        {STEPS.map(s => {
+          const last = lastUpload(s)
+          const m = msg[s.id]
+          return (
+            <div key={s.id} className="card" style={{ padding: 14, display: 'grid', gap: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                <div style={{ minWidth: 260 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>
+                    <span style={{ marginRight: 6 }}>{s.icon}</span>{s.label}
+                    {s.auto
+                      ? <span style={{ marginLeft: 8, fontSize: 11, color: '#15803d', background: '#f0fdf4', padding: '2px 7px', borderRadius: 10 }}>auto-sweeps</span>
+                      : <span style={{ marginLeft: 8, fontSize: 11, color: '#b45309', background: '#fffbeb', padding: '2px 7px', borderRadius: 10 }}>manual upload</span>}
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--text)', marginTop: 4 }}><strong>Report:</strong> {s.report}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>
+                    <strong>From:</strong> {s.url ? <a href={s.url} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>{s.source} ↗</a> : s.source}
+                  </div>
+                  {s.note && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 4, fontStyle: 'italic' }}>{s.note}</div>}
+                </div>
+                <div style={{ textAlign: 'right', fontSize: 12, color: last ? '#15803d' : 'var(--text3)', whiteSpace: 'nowrap' }}>
+                  {last ? `✓ loaded ${String(last.uploaded_at).slice(0, 10)}` : (s.ft ? 'not loaded for this period' : '')}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                {s.needsDate && (
+                  <input type="date" className="input" value={dates[s.id] || ''} onChange={e => setDates(d => ({ ...d, [s.id]: e.target.value }))} style={{ width: 160 }} />
+                )}
+                <label className="btn" style={{ padding: '6px 12px', fontSize: 13, cursor: 'pointer' }}>
+                  {busy === s.id ? 'Uploading…' : '📤 Choose file & upload'}
+                  <input type="file" hidden disabled={busy === s.id}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) upload(s, f); e.currentTarget.value = '' }} />
+                </label>
+                {m && <span style={{ fontSize: 12, color: m.startsWith('Error') ? '#b91c1c' : '#15803d' }}>{m}</span>}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}

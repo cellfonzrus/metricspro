@@ -1544,6 +1544,49 @@ async def delete_store_alias(alias_id: str, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+@router.get("/store-unmatched")
+async def store_unmatched(org_id: str = ORG_ID):
+    """Diagnose store mismatches for the Store-Matching UI: distinct raw store strings across the
+    data sources that do NOT resolve to a canonical commcalc.store_mapping address (after the
+    alias / store_code / leading-number chain). These are the stores to map (add an alias) so the
+    P&L, Daily Targets and recon all attribute to one canonical store instead of splitting it."""
+    require_org(org_id)
+    client = sb()
+    from app.modules.account import coa
+    canon = {}
+    for m in (client.schema('commcalc').table('store_mapping')
+              .select('store_code,store_address,market').eq('org_id', org_id).execute().data or []):
+        a = (m.get('store_address') or '').strip()
+        if a:
+            canon[a.lower()] = m
+    resolve = coa.store_resolver(client, org_id)
+    # (table, column) carrying a store string in its own spelling
+    srcs = [('raw_sales', 'store'), ('asset_ledger', 'store'), ('rep_commissions', 'store'),
+            ('raw_comp_report', 'business_address'), ('vip_paygo', 'dealer'), ('vip_invoices', 'location')]
+    seen = {}
+    for table, col in srcs:
+        try:
+            rows = (client.schema('commcalc').table(table).select(col)
+                    .eq('org_id', org_id).limit(60000).execute().data) or []
+        except Exception:
+            continue  # table missing org_id / not present → skip that source
+        for r in rows:
+            v = (r.get(col) or '').strip()
+            if not v:
+                continue
+            e = seen.setdefault(v.lower(), {'raw': v, 'sources': set()})
+            e['sources'].add(table)
+    unmatched = []
+    for e in seen.values():
+        res = resolve(e['raw'])
+        if not res or res.lower() not in canon:
+            unmatched.append({'raw': e['raw'], 'sources': sorted(e['sources']), 'guess': res})
+    unmatched.sort(key=lambda x: x['raw'].lower())
+    return {'unmatched': unmatched, 'unmatched_count': len(unmatched),
+            'matched_distinct': len(seen) - len(unmatched),
+            'sources_scanned': [s[0] for s in srcs]}
+
+
 @router.get("/gp/{period}")
 async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
