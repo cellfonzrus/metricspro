@@ -203,7 +203,7 @@ def closing_rows(date: str = None, store_code: str = None, date_from: str = None
 
 # ── DM evening verification view: per-store totals + missing reps + B2B recon ─────────────
 @router.get("/summary")
-def closing_summary(date: str, market: str = None, org_id: str = ORG_ID):
+def closing_summary(date: str, market: str = None, tolerance: float = 1.0, org_id: str = ORG_ID):
     if not date:
         raise HTTPException(400, "date required (YYYY-MM-DD)")
     client = sb()
@@ -243,6 +243,13 @@ def closing_summary(date: str, market: str = None, org_id: str = ORG_ID):
             agg["acc_gp"] += float(a.get("acc_gp") or 0)
     except Exception as e:
         print("closing B2B recon RPC failed:", e)
+
+    # B2B MONEY actuals for that day (accessory gross, cash vs card by tender) → store money-recon.
+    try:
+        b2b_money = _b2b_money_by_store(client, org_id, date)
+    except Exception as e:
+        print("closing B2B money recon failed:", e)
+        b2b_money = {}
 
     # Verifications for that day.
     vers = (client.schema("commcalc").table("daily_closing_verification").select("*")
@@ -295,12 +302,41 @@ def closing_summary(date: str, market: str = None, org_id: str = ORG_ID):
                 "discrepancy": (act_var != 0 or upg_var != 0),
             }
 
+        # MONEY recon: store-declared closing $ vs B2B actuals (accessory gross, cash, credit).
+        # Shortage = declared LESS than B2B (money unaccounted). epay-vs-portal is wired but
+        # pending the ePay Daily Transactions Report sweep.
+        bm = b2b_money.get(code) if code else None
+        money_recon = None
+        if bm is not None:
+            closing_cash = round(totals["epay_cash"] + totals["store_cash"], 2)   # cash collected
+            closing_credit = round(totals["store_cc"] + totals["epay_cc"], 2)      # credit declared
+            closing_epay = round(totals["epay_cash"] + totals["epay_cc"], 2)       # total epay declared
+
+            def _cmp(closing_v, b2b_v):
+                var = round(closing_v - b2b_v, 2)
+                return {"closing": round(closing_v, 2), "b2b": round(b2b_v, 2), "var": var,
+                        "shortage": var < -tolerance, "overage": var > tolerance,
+                        "flag": abs(var) > tolerance}
+
+            money_recon = {
+                "tolerance": tolerance,
+                "accessory": _cmp(totals["acc_sale"], bm["acc_gross"]),  # gross vs gross
+                "cash": _cmp(closing_cash, bm["cash"]),
+                "credit": _cmp(closing_credit, bm["card"]),
+                "epay": {"declared": closing_epay, "portal": None, "portal_pending": True,
+                         "fee": None, "other": None, "var": None,
+                         "note": "ePay Daily Transactions Report sweep not yet wired"},
+                "b2b_total": bm["total"], "b2b_tenders": bm["tenders"],
+            }
+            money_recon["any_flag"] = any(money_recon[k]["flag"]
+                                          for k in ("accessory", "cash", "credit"))
+
         out.append({
             "store_code": code, "store_name": (reps[0].get("store_name") or code or "—"),
             "store_address": meta.get("address") or reps[0].get("store_address"),
             "market": mkt, "reps": reps, "totals": totals,
             "scheduled_count": len(scheduled), "missing_reps": missing,
-            "verification": ver_by_store.get(code), "recon": recon,
+            "verification": ver_by_store.get(code), "recon": recon, "money_recon": money_recon,
         })
 
     out.sort(key=lambda s: str(s.get("store_address") or s.get("store_name") or ""))
@@ -402,3 +438,89 @@ def _name_match(a: str, b: str) -> bool:
     if a == b or a in b or b in a:
         return True
     return a.split()[0] == b.split()[0]
+
+
+# ── B2B money actuals for the closing money-recon (accessory gross, cash vs card) ────────────
+import re as _re
+
+_CASH_HINTS = ("cash",)
+_CARD_HINTS = ("credit", "card", "debit", "visa", "master", "amex", "discover")
+
+
+def _tender_class(t: str) -> str:
+    """Bucket a B2B Tender Type string into cash / card / other (best-effort; the raw breakdown
+    is also returned so the mapping can be validated against a real day)."""
+    s = (t or "").strip().lower()
+    if not s:
+        return "other"
+    if any(h in s for h in _CASH_HINTS):
+        return "cash"
+    if any(h in s for h in _CARD_HINTS):
+        return "card"
+    return "other"
+
+
+def _num_key(s: str) -> str:
+    """Leading store-number, digits only ('116-36 Springfield Blvd' → '11636'). The project's
+    standard cross-source store join (calculator.py / coa.store_resolver)."""
+    m = _re.match(r"\s*([0-9][0-9-]*)", str(s or ""))
+    return _re.sub(r"\D", "", m.group(1)) if m else ""
+
+
+def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
+    """Aggregate that day's B2B sales (raw_sales) per store_code: accessory GROSS (ext_price,
+    dept Ondigo), cash vs card totals (by tender_type), plus the raw tender breakdown for
+    transparency. raw_sales.store is matched to store_code by exact address then by an
+    unambiguous leading street-number."""
+    addr_to_code, num_to_code, num_counts = {}, {}, {}
+    sm = (client.schema("commcalc").table("store_mapping")
+          .select("store_code,store_address").eq("org_id", org_id).execute().data) or []
+    for r in sm:
+        code = (r.get("store_code") or "").strip()
+        addr = (r.get("store_address") or "").strip()
+        if not (code and addr):
+            continue
+        addr_to_code[addr.lower()] = code
+        nk = _num_key(addr)
+        if nk:
+            num_counts[nk] = num_counts.get(nk, 0) + 1
+            num_to_code.setdefault(nk, code)
+
+    def resolve(store_str):
+        s = (store_str or "").strip()
+        if not s:
+            return None
+        c = addr_to_code.get(s.lower())
+        if c:
+            return c
+        nk = _num_key(s)
+        if nk and num_counts.get(nk, 0) == 1:    # ambiguous numbers stay unmatched, never mis-merge
+            return num_to_code.get(nk)
+        return None
+
+    rows = (client.schema("commcalc").table("raw_sales")
+            .select("store,department,tender_type,ext_price,voided")
+            .eq("org_id", org_id).eq("period", date[:7]).eq("trans_date", date)
+            .limit(100000).execute().data) or []
+
+    out = {}
+    for r in rows:
+        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+            continue
+        code = resolve(r.get("store"))
+        if not code:
+            continue
+        ext = _f(r.get("ext_price"))
+        agg = out.setdefault(code, {"acc_gross": 0.0, "cash": 0.0, "card": 0.0,
+                                    "other": 0.0, "total": 0.0, "tenders": {}})
+        agg["total"] += ext
+        agg[_tender_class(r.get("tender_type"))] += ext
+        if (r.get("department") or "").strip() == "Ondigo":
+            agg["acc_gross"] += ext
+        tname = (r.get("tender_type") or "—").strip() or "—"
+        agg["tenders"][tname] = round(agg["tenders"].get(tname, 0.0) + ext, 2)
+
+    for a in out.values():
+        for k in ("acc_gross", "cash", "card", "other", "total"):
+            a[k] = round(a[k], 2)
+    return out
