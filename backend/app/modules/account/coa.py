@@ -30,6 +30,10 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"
 DEVICE_DEPTS = {"Android - XP", "IPHONE - XP", "TABLET - XP"}
 ACCESSORY_DEPT = "Ondigo"
 VIP_FEE_CATS = {"PROCESSING FEE", "SHIPPING", "SIM KIT"}
+# Accounting rule (user-set 2026-06-20): accessory COGS is a flat 20% of gross accessory
+# sales, NOT the per-line recorded cost (B2B accessory lines often carry no cost → GP looked
+# inflated). Commission payout still treats accessories as 100% of gross sales separately.
+ACCESSORY_COGS_PCT = 0.20
 
 # ── chart-of-accounts line specs ───────────────────────────────────────────────────────────
 # section ∈ revenue|cogs|opex|other (P&L) and asset|liability|equity (Balance Sheet)
@@ -290,7 +294,7 @@ def build_inputs(client, org_id, period):
             st = _norm_store(r.get("store"))
             if dept == ACCESSORY_DEPT:
                 add("accessory_rev", st, ext)
-                add("accessory_cost", st, ext - gp)
+                add("accessory_cost", st, ext * ACCESSORY_COGS_PCT)
             elif dept in DEVICE_DEPTS:
                 add("device_rev", st, ext)
                 add("device_cost", st, ext - gp)
