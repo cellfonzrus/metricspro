@@ -189,8 +189,20 @@ def _report_running(page):
 
 
 def _wait_report_done(page, timeout_s=REPORT_RUN_TIMEOUT_S):
-    page.wait_for_timeout(2000)  # let the spinner appear
-    waited = 2000
+    # First wait for the run to actually START (spinner/Cancel appears, up to ~8s) so we don't
+    # conclude "done" and download a stale/empty export before the report has begun running —
+    # the cause of the "downloaded but contained no rows" failure when the Run click mis-fires.
+    waited = 0
+    while waited < 8000:
+        try:
+            if _report_running(page):
+                break
+        except Exception:
+            pass
+        page.wait_for_timeout(500)
+        waited += 500
+    # Then wait for it to FINISH.
+    waited = 0
     while waited < timeout_s * 1000:
         try:
             if not _report_running(page):
@@ -199,7 +211,32 @@ def _wait_report_done(page, timeout_s=REPORT_RUN_TIMEOUT_S):
             pass
         page.wait_for_timeout(3000)
         waited += 3000
-    raise EpayPortalError(f"MI/ATU report did not finish running within {timeout_s}s.")
+    raise EpayPortalError(f"report did not finish running within {timeout_s}s.")
+
+
+def _click_visible(page, text, timeout=20000):
+    """Click the first VISIBLE element whose text matches `text`.
+
+    The portal's jqx toolbar renders hidden duplicate controls (a toolbar separator reuses the
+    "Run Report" label) and, when several reports are opened in one browser session, the toolbar
+    buttons accumulate. A bare `text=` selector then resolves to multiple nodes and Playwright
+    clicks the FIRST — often an invisible separator — which either times out (Comprehensive Comp)
+    or silently no-ops so the report never runs and the export comes back empty (MI/ATU "no rows").
+    Restricting the click to a visible node fixes both failure modes."""
+    loc = page.locator(f"text={text}")
+    waited = 0
+    while waited <= timeout:
+        for i in range(loc.count()):
+            el = loc.nth(i)
+            try:
+                if el.is_visible():
+                    el.click()
+                    return
+            except Exception:
+                continue
+        page.wait_for_timeout(500)
+        waited += 500
+    raise EpayPortalError(f"Could not find a visible '{text}' control within {timeout}ms.")
 
 
 def _open_and_download(page, report_id, dest_path):
@@ -209,14 +246,14 @@ def _open_and_download(page, report_id, dest_path):
     page.wait_for_selector(f'[id="{report_id}"]', state="visible", timeout=20000)
     page.click(f'[id="{report_id}"]')
     page.wait_for_timeout(5000)
-    # run (Month defaults to the current month)
-    page.click("text=Run Report", timeout=20000)
+    # run (Month defaults to the current month) — click the VISIBLE Run Report button
+    _click_visible(page, "Run Report", timeout=20000)
     _wait_report_done(page)
-    # download as Excel
+    # download as Excel (same visible-only disambiguation)
     with page.expect_download(timeout=120000) as dl_info:
-        page.click("text=Download Report", timeout=30000)
+        _click_visible(page, "Download Report", timeout=30000)
         page.wait_for_timeout(1500)
-        page.click("text=as Excel spreadsheet", timeout=20000)
+        _click_visible(page, "as Excel spreadsheet", timeout=20000)
     dl_info.value.save_as(dest_path)
 
 
@@ -330,7 +367,18 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None):
         try:
             page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
             _login(page, user, pw)
-            for key in keys:
+            for idx, key in enumerate(keys):
+                if idx > 0:
+                    # Reload to a clean app shell between reports so each opens on a fresh toolbar
+                    # (no accumulated/stale "Run Report" buttons from the previous report); re-login
+                    # if the reload bounced back to the sign-in form.
+                    try:
+                        page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+                        page.wait_for_timeout(2500)
+                        if page.query_selector("#passwordInput"):
+                            _login(page, user, pw)
+                    except Exception:
+                        pass
                 tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
                 tmp.close()
                 try:
