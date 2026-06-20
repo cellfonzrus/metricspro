@@ -32,24 +32,40 @@ export default function StoreOpsAdminPage() {
   }
   useEffect(() => { loadAll() }, [])
 
+  const PHONE_EG = 'Enter a 10-digit number or include country code — e.g. 5162330422 or +1 516 233 0422'
+  function cleanPhone(raw: any): string | null {
+    const s = String(raw ?? '').trim()
+    if (!s) return ''                          // empty allowed
+    const hasPlus = s.startsWith('+')
+    const d = s.replace(/\D/g, '')
+    if (hasPlus && d.length >= 11 && d.length <= 15) return '+' + d
+    if (d.length === 10) return d
+    if (d.length === 11 && d.startsWith('1')) return '+' + d
+    return null                                // invalid → caller prompts with PHONE_EG
+  }
+
   const setEmp = (id: any, patch: any) => setEmps(es => es.map(e => e.id === id ? { ...e, ...patch } : e))
   const setStore = (id: any, patch: any) => setStores(ss => ss.map(s => s.id === id ? { ...s, ...patch } : s))
 
   async function saveEmp(e: any) {
     setMsg('')
+    const ph = cleanPhone(e.phone)
+    if (ph === null) { alert(PHONE_EG); return }
     try {
       await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify({
         name: e.name, employee_id: e.employee_id, home_store: e.home_store, role: e.role,
-        pay_rate: Number(e.pay_rate) || 0, is_active: !!e.is_active, email: e.email, phone: e.phone,
+        pay_rate: Number(e.pay_rate) || 0, is_active: !!e.is_active, email: e.email, phone: ph,
       }) })
       setMsg(`Saved ${e.name}`)
     } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)) }
   }
   async function addEmp() {
     if (!newEmp.name.trim()) { setMsg('Employee name is required.'); return }
+    const ph = cleanPhone(newEmp.phone)
+    if (ph === null) { alert(PHONE_EG); return }
     setMsg('')
     try {
-      await api('/api/v1/storeops/employees', { method: 'POST', body: JSON.stringify({ ...newEmp, pay_rate: Number(newEmp.pay_rate) || 0 }) })
+      await api('/api/v1/storeops/employees', { method: 'POST', body: JSON.stringify({ ...newEmp, phone: ph, pay_rate: Number(newEmp.pay_rate) || 0 }) })
       setMsg(`Added ${newEmp.name}`)
       setNewEmp({ name: '', employee_id: '', home_store: '', role: 'Sales Rep', pay_rate: '', email: '', phone: '' })
       await loadAll()
@@ -150,7 +166,7 @@ export default function StoreOpsAdminPage() {
               <select style={sel} value={newEmp.role} onChange={e => setNewEmp({ ...newEmp, role: e.target.value })}>{EMP_ROLES.map(r => <option key={r}>{r}</option>)}</select>
               <input style={{ ...sel, width: 90 }} type="number" placeholder="$/hr" value={newEmp.pay_rate} onChange={e => setNewEmp({ ...newEmp, pay_rate: e.target.value })} />
               <input style={{ ...sel, width: 170 }} placeholder="Email" value={newEmp.email} onChange={e => setNewEmp({ ...newEmp, email: e.target.value })} />
-              <input style={{ ...sel, width: 120 }} placeholder="Phone" value={newEmp.phone} onChange={e => setNewEmp({ ...newEmp, phone: e.target.value })} />
+              <input style={{ ...sel, width: 150 }} placeholder="Phone e.g. 5162330422" title={PHONE_EG} value={newEmp.phone} onChange={e => setNewEmp({ ...newEmp, phone: e.target.value })} />
               <button className="btn btn-primary" onClick={addEmp}>➕ Add</button>
             </div>
           </div>
@@ -187,7 +203,7 @@ export default function StoreOpsAdminPage() {
                     <td style={cell}><select style={sel} value={e.role || 'Other'} onChange={ev => setEmp(e.id, { role: ev.target.value })}>{EMP_ROLES.map(r => <option key={r}>{r}</option>)}</select></td>
                     <td style={cell}><input style={{ ...sel, width: 80 }} type="number" value={e.pay_rate ?? ''} onChange={ev => setEmp(e.id, { pay_rate: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 160 }} value={e.email || ''} onChange={ev => setEmp(e.id, { email: ev.target.value })} /></td>
-                    <td style={cell}><input style={{ ...sel, width: 110 }} value={e.phone || ''} onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></td>
+                    <td style={cell}><input style={{ ...sel, width: 130 }} placeholder="5162330422" title={PHONE_EG} value={e.phone || ''} onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></td>
                     <td style={cell}><input type="checkbox" checked={!!e.is_active} onChange={ev => setEmp(e.id, { is_active: ev.target.checked })} /></td>
                     <td style={cell}>
                       <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => saveEmp(e)}>💾</button>
