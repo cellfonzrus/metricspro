@@ -194,6 +194,13 @@ export default function UploadPage() {
                       {c.last_status ? ` · last: ${c.last_status}` : ''}
                       {c.last_run_at ? ` · ${fmtWhen(c.last_run_at)}` : ''}
                     </div>
+                    {(c.next_run_at || c.frequency) && (
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
+                        {c.frequency ? `🗓 ${c.frequency}` : ''}
+                        {c.next_run_at ? `${c.frequency ? ' · ' : ''}next: ${fmtWhen(c.next_run_at)}` : ''}
+                        <a href={s.configure} style={{ marginLeft: 6, fontSize: 11 }}>edit time</a>
+                      </div>
+                    )}
                     {c.last_detail && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{String(c.last_detail).slice(0, 90)}</div>}
                   </td>
                   <td style={{ padding: '10px 16px', verticalAlign: 'top' }}>
