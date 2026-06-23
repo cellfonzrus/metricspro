@@ -12,6 +12,7 @@ over-payment = warning). When ANTHROPIC_API_KEY is set, flagged stores get a Cla
 note that buckets MI/ATU by day (mi_activation_date) against the memo's date range.
 """
 import re
+import calendar
 from datetime import datetime, timezone
 
 from app.core.config import settings
@@ -20,6 +21,17 @@ from app.modules.account import coa
 
 DEFAULT_TOLERANCE = 1.0
 DEFAULT_DATE_COL = "mi_activation_date"
+
+
+def _period_keys(period):
+    """Both period spellings — 'June 2026' AND '2026-06' — so a period-string filter never silently
+    returns empty. raw_sales/raw_mi store the month-NAME form; reconcile was called with one spelling
+    and got $0 on the other (the recurring period-spelling bug). Mirrors coa.build_inputs."""
+    pm, py = coa.parse_period(period)
+    keys = {period}
+    if 1 <= pm <= 12 and py:
+        keys.add(f"{calendar.month_name[pm]} {py}")
+    return list(keys)
 
 
 def _norm(s):
@@ -41,7 +53,7 @@ def _rep_to_store(client, org_id, period, resolve_store):
     cmap = _rep_canon_map(client, org_id)
     mp = {}
     for r in coa._fetch_all(client, "rep_commissions", "epay_salesperson,storeops_name,store",
-                            {"org_id": org_id, "period": period}):
+                            {"org_id": org_id, "period": _period_keys(period)}):
         st = resolve_store(r.get("store"))
         if not st:
             continue
@@ -96,7 +108,7 @@ def reconcile(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEFA
     # credit memos for the period (exclude Xfinity)
     memos = coa._fetch_all(client, "vip_credit_memos",
                            "credit_memo_number,memo,company_name,store_address,grand_total,is_xfinity,"
-                           "memo_start,memo_end,created_on,period", {"org_id": org_id, "period": period})
+                           "memo_start,memo_end,created_on,period", {"org_id": org_id, "period": _period_keys(period)})
     memo_by_store, excluded, memo_total_all = {}, 0, 0.0
     for m in memos:
         if m.get("is_xfinity"):
@@ -117,11 +129,12 @@ def reconcile(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEFA
     from app.modules.commcalc.router import _canon
     rep2store, cmap = _rep_to_store(client, org_id, period, resolve_store)
     sel = "actual_mi_payout,actual_atu_payout,rep_username,mi_activation_date,residual_transfer_in_date"
+    _pk = _period_keys(period)
     try:
-        mi_rows = coa._fetch_all(client, "raw_mi", sel, {"org_id": org_id, "period": period})
+        mi_rows = coa._fetch_all(client, "raw_mi", sel, {"org_id": org_id, "period": _pk})
     except Exception:
         mi_rows = coa._fetch_all(client, "raw_mi", "actual_mi_payout,actual_atu_payout,rep_username",
-                                 {"org_id": org_id, "period": period})
+                                 {"org_id": org_id, "period": _pk})
 
     def _accrual(r):
         d = r.get(date_col) or r.get("mi_activation_date") or r.get("residual_transfer_in_date")

@@ -172,7 +172,7 @@ def run_invoice_sweep(client, org_id, user, pw, lookback_days, helpers):
     edate = today.strftime("%m/%d/%Y")
     raw = list_invoices(session, sdate, edate)
 
-    inv_rows, line_rows, dev_rows, vip_ids = [], [], [], []
+    inv_rows, line_rows, dev_rows, vip_ids, parsed_ids = [], [], [], [], []
     for inv in raw:
         vid = _vip_int(inv.get("Id"))
         if vid is None:
@@ -203,7 +203,10 @@ def run_invoice_sweep(client, org_id, user, pw, lookback_days, helpers):
         })
         try:
             lines, devices = parse_detail(session, inv.get("Id"))
+            parsed_ids.append(vid)   # detail fetched OK — safe to replace this invoice's lines/devices
         except Exception:
+            # Detail fetch/parse FAILED — leave this invoice's existing lines/devices alone (a flaky
+            # detail page would otherwise silently erase good history). Not added to parsed_ids.
             lines, devices = [], []
         for ln in lines:
             line_rows.append({
@@ -229,13 +232,14 @@ def run_invoice_sweep(client, org_id, user, pw, lookback_days, helpers):
                 "period": period, "period_month": pm, "period_year": py,
             })
 
-    # Upsert invoices on the (org_id, vip_id) unique key; replace lines/devices for the
-    # swept invoices only (delete-by-invoice then insert) so unchanged history is untouched.
+    # Upsert invoices on the (org_id, vip_id) unique key; replace lines/devices ONLY for invoices
+    # whose detail parse succeeded this run (delete-by-invoice then insert) so a flaky detail fetch
+    # can't erase previously-good line/device history, and unchanged invoices are untouched.
     for i in range(0, len(inv_rows), 500):
         client.schema("commcalc").table("vip_invoices").upsert(
             inv_rows[i:i + 500], on_conflict="org_id,vip_id").execute()
-    for i in range(0, len(vip_ids), 100):
-        chunk = vip_ids[i:i + 100]
+    for i in range(0, len(parsed_ids), 100):
+        chunk = parsed_ids[i:i + 100]
         for tbl in ("vip_invoice_lines", "vip_invoice_devices"):
             client.schema("commcalc").table(tbl).delete() \
                 .eq("org_id", org_id).in_("vip_invoice_id", chunk).execute()

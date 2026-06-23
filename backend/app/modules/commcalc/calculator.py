@@ -220,16 +220,17 @@ def calc_rep_commissions(
         cat = str(p.get('category','')).strip()
         amt = safe_float(p.get('amount'))
         if login not in pay_by_login:
-            pay_by_login[login] = {'comm':0,'reimb':0,'mdf':0,'chb':0}
+            pay_by_login[login] = {'comm':0,'reimb':0,'mdf':0,'chb':0,'trades':0}
         if cat == 'Commission': pay_by_login[login]['comm'] += amt
         elif cat == 'Re-imbursement': pay_by_login[login]['reimb'] += amt
         elif cat == 'MDF': pay_by_login[login]['mdf'] += amt
         elif cat == 'Chargeback': pay_by_login[login]['chb'] += amt
-        # Count trade-ins
-        pt = str(p.get('payment_type','')).lower()
-        if 'trade' in pt:
-            rep = rep_map.get(login.upper())
-            if rep: rep['trade_ins'] += 1
+        # Count trade-ins keyed by login (rep_username), resolved to the rep via rep['login'] in the
+        # per-rep loop — the SAME path comm/reimb already use (pay_by_login.get(rep['login'])). The old
+        # code did rep_map.get(login.upper()), but rep_map is keyed by salesperson NAME, so it ~always
+        # missed and trade-in spiff was silently $0 for every rep.
+        if 'trade' in str(p.get('payment_type','')).lower():
+            pay_by_login[login]['trades'] += 1
     
     # ── Calculate per rep ─────────────────────────────────────
     comm_rows = []
@@ -248,6 +249,7 @@ def calc_rep_commissions(
         # for the accessory-target check above.
         acc_comm     = rep['acc_sales'] * G['acc_rate']
         setup_comm   = rep['setup_fee_sales'] * G['setup_rate']
+        rep['trade_ins'] = pay_by_login.get(rep['login'], {}).get('trades', 0)
         trade_comm   = rep['trade_ins'] * G['trade_in_spiff']
         
         # ACIMA financing spiff
