@@ -49,25 +49,20 @@ def _mi_atu_by_period(client, org_id, periods):
 
     The Comprehensive Comp report this module trends is ~95% one-time promo/bounty COMPENSATION, not
     residual (see docs/SAAS_FRAMEWORK.md canonical model). Residual — recurring per-subscriber income
-    — is MI + ATU. We surface it alongside the comp total so the report stops mislabeling comp as
-    'residual'."""
+    — is MI + ATU. We surface it alongside the comp total so the report stops mislabeling comp.
+
+    Aggregated in Postgres via the `mi_atu_by_period` RPC — raw_mi is ~38k rows/MONTH, so summing in
+    Python (paginated) made this endpoint take 30s. Returns {} if the RPC isn't present yet (the page
+    stays fast; residual_mi_atu shows 0 until commcalc.mi_atu_by_period is created — see migration)."""
     if not periods:
         return {}
-    out, start, page = {}, 0, 1000
-    sel = "period,actual_mi_payout,actual_atu_payout"
-    while True:
-        resp = (client.schema("commcalc").table("raw_mi").select(sel)
-                .eq("org_id", org_id).in_("period", periods)
-                .range(start, start + page - 1).execute())
-        chunk = resp.data or []
-        for r in chunk:
-            p = (r.get("period") or "").strip()
-            if p:
-                out[p] = out.get(p, 0.0) + safe_float(r.get("actual_mi_payout")) + safe_float(r.get("actual_atu_payout"))
-        if len(chunk) < page:
-            break
-        start += page
-    return out
+    try:
+        rows = client.schema("commcalc").rpc(
+            "mi_atu_by_period", {"p_org_id": org_id, "p_periods": periods}).execute().data or []
+        return {r["period"]: safe_float(r.get("residual_mi_atu"))
+                for r in rows if r.get("period")}
+    except Exception:
+        return {}  # RPC not created yet — keep the trend fast, residual lights up once it exists
 
 
 def compute_residual_trend(client, org_id, months=6, store="", market="",
