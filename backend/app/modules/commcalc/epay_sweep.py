@@ -181,8 +181,25 @@ def map_comp_report_row(r, base):
 PAYMENT_DETAIL_REPORT_ID = "50273"
 COMP_REPORT_ID = "100614"
 
+# Comp posts in ARREARS (a closed month's compensation keeps accruing for weeks after month-end),
+# so each sweep refreshes the current month PLUS the most recent closed months. The portal's report
+# defaults its Month filter to the current month, which is why a just-closed month's comp was never
+# auto-swept (the design gap). _set_report_month drives the filter to each target month, and — the
+# key safety — every pull is stored under the period implied by its own rows' Begin Date
+# (period mode "data"), so even if the filter doesn't move, a pull can never be MISLABELED.
+COMP_REFRESH_MONTHS = 3  # current + 2 prior closed months
+
+# Partial-collapse guard: a REPLACE never overwrites a period that already holds >= REPLACE_MIN_ROWS
+# rows with a pull smaller than REPLACE_MIN_RETAIN of that count. A glitched/partial pull (e.g. the
+# portal returning a single stray row) is non-empty, so the empty-download guard misses it — this is
+# what silently reduced a populated month to one account. Below the floor (a month just starting, or
+# a first-ever load) the guard does nothing, so normal growth is unaffected.
+REPLACE_MIN_ROWS = 50
+REPLACE_MIN_RETAIN = 0.5
+
 # Report registry: key → how to download + map + store. MI derives its period from the report's
-# "Report Month" column; the others use the current month (the portal's default Month filter).
+# "Report Month" column; comp derives it from the data's Begin Date ("data"); payment uses the
+# current month ("current", the portal's default Month filter).
 REPORTS = {
     "mi": {"report_id": MI_REPORT_ID, "table": "raw_mi", "file_type": "mi_report",
            "period": "report_month", "map": map_mi_records, "label": "MI/ATU"},
@@ -190,10 +207,40 @@ REPORTS = {
                        "file_type": "payment_detail", "period": "current", "label": "Commission Payment Detail",
                        "map": lambda recs, base: _map_filtered(recs, base, map_payment_detail_row)},
     "comp_report": {"report_id": COMP_REPORT_ID, "table": "raw_comp_report",
-                    "file_type": "comp_report", "period": "current", "label": "Comprehensive Comp",
-                    # REPLACE the open month each pull (cumulative MTD snapshot); empty pull is guarded.
+                    "file_type": "comp_report", "period": "data", "label": "Comprehensive Comp",
+                    # REPLACE the open month each pull (cumulative MTD snapshot); empty + partial pulls
+                    # are guarded, and the period comes from the rows' Begin Date so it's never mislabeled.
                     "map": lambda recs, base: _map_filtered(recs, base, map_comp_report_row)},
 }
+
+
+def comp_period_from_records(records):
+    """Dominant (period, month, year) implied by a comp report's rows via their Begin Date — e.g.
+    rows dated '04/29/2026' -> ('April 2026', 4, 2026). Used so a comp pull is stored under the
+    month its data actually belongs to, regardless of what the portal's Month filter was set to.
+    Returns None when no Begin Date is parseable."""
+    import calendar as _cal
+    from collections import Counter
+    c = Counter()
+    for r in records:
+        bd = _comp_get(r, "Begin Date", "BeginDate")
+        mo = yr = None
+        if len(bd) >= 10 and bd[2] == "/" and bd[5] == "/":      # MM/DD/YYYY
+            try:
+                mo, yr = int(bd[0:2]), int(bd[6:10])
+            except ValueError:
+                pass
+        elif len(bd) >= 7 and bd[4] == "-":                       # YYYY-MM-DD
+            try:
+                yr, mo = int(bd[0:4]), int(bd[5:7])
+            except ValueError:
+                pass
+        if mo and yr and 1 <= mo <= 12:
+            c[(mo, yr)] += 1
+    if not c:
+        return None
+    (mo, yr), _n = c.most_common(1)[0]
+    return (f"{_cal.month_name[mo]} {yr}", mo, yr)
 
 
 # ── headless-browser login + report download ──────────────────────────────────────────────
@@ -289,14 +336,86 @@ def _click_visible(page, text, timeout=20000):
     raise EpayPortalError(f"Could not find a visible '{text}' control within {timeout}ms.")
 
 
-def _open_and_download(page, report_id, dest_path):
-    """Open a Commissions report by its menu id, run it for the current month, save the .xlsx."""
+def _set_report_month(page, month_name, year):
+    """Best-effort: drive the report's Month filter to `month_name year` (e.g. 'May 2026') before
+    the report is run, so an in-arrears closed month can be pulled instead of just the default
+    current month.
+
+    Written BLIND — the portal is only reachable from Railway's egress (WAF), so this cannot be
+    exercised from a dev box. It therefore tries several generic widget patterns and is fully
+    NON-FATAL: if it can't set the month, the report simply runs on its default month, and the
+    caller stores the result under the period implied by the DOWNLOADED DATA (comp_period_from_
+    records) — so a failed month-set wastes a pull but can never mislabel one. Returns True if it
+    believes it changed the filter."""
+    label = f"{month_name} {year}"
+    variants = [label, f"{month_name}-{year}", f"{month_name} - {year}", month_name]
+    try:
+        # 1) Native <select> month picker — the cleanest case.
+        for sel in page.query_selector_all("select"):
+            try:
+                opts = [(o.inner_text() or "").strip() for o in sel.query_selector_all("option")]
+            except Exception:
+                opts = []
+            for v in variants:
+                if any(v.lower() == o.lower() for o in opts):
+                    try:
+                        sel.select_option(label=next(o for o in opts if o.lower() == v.lower()))
+                        page.wait_for_timeout(800)
+                        return True
+                    except Exception:
+                        pass
+        # 2) jqx / Kendo dropdown: a widget currently SHOWING a month name. Open it, then click the
+        #    option that matches the target. Only touch elements whose own text is a month label, so
+        #    we never accidentally click an unrelated control.
+        months = [f"{__import__('calendar').month_name[m]}" for m in range(1, 13)]
+        opener = None
+        for el in page.query_selector_all(
+                ".jqx-dropdownlist, .jqx-combobox, [role='combobox'], .k-dropdown, .k-dropdownlist"):
+            try:
+                if not el.is_visible():
+                    continue
+                txt = (el.inner_text() or "").strip()
+                if any(mn in txt for mn in months):
+                    opener = el
+                    break
+            except Exception:
+                continue
+        if opener is not None:
+            opener.click()
+            page.wait_for_timeout(900)
+            for v in variants:
+                opt = page.locator(f"text={v}")
+                for i in range(min(opt.count(), 12)):
+                    try:
+                        node = opt.nth(i)
+                        if node.is_visible():
+                            node.click()
+                            page.wait_for_timeout(800)
+                            return True
+                    except Exception:
+                        continue
+    except Exception:
+        return False
+    return False
+
+
+def _open_and_download(page, report_id, dest_path, target=None):
+    """Open a Commissions report by its menu id, run it, and save the .xlsx.
+
+    `target` (optional) = a {'month_name','year'} dict; when given, the Month filter is driven to
+    that month before running (best-effort — see _set_report_month). When omitted the report runs
+    on its default (current) month."""
     page.hover("span.k-link:has-text('Commissions')", timeout=20000)
     page.wait_for_timeout(1500)
     page.wait_for_selector(f'[id="{report_id}"]', state="visible", timeout=20000)
     page.click(f'[id="{report_id}"]')
     page.wait_for_timeout(5000)
-    # run (Month defaults to the current month) — click the VISIBLE Run Report button
+    if target:
+        try:
+            _set_report_month(page, target["month_name"], target["year"])
+        except Exception:
+            pass  # non-fatal — period is derived from the downloaded data regardless
+    # run — click the VISIBLE Run Report button (Month defaults to current if not set above)
     _click_visible(page, "Run Report", timeout=20000)
     _wait_report_done(page)
     # download as Excel (same visible-only disambiguation)
@@ -350,36 +469,68 @@ def discover_reports(url, user, pw):
     return [{"id": k, "label": v} for k, v in seen.items()]
 
 
-def _process_report(client, org_id, page, key, xlsx_path):
+def _period_row_count(client, table, org_id, period):
+    """Existing row count for (org_id, period) — used by the partial-collapse guard. 0 on error."""
+    try:
+        resp = (client.schema("commcalc").table(table).select("org_id", count="exact")
+                .eq("org_id", org_id).eq("period", period).limit(1).execute())
+        return resp.count or 0
+    except Exception:
+        return 0
+
+
+def _process_report(client, org_id, page, key, xlsx_path, target=None):
     """Download one report by key, parse, derive its period, and store it. Every report REPLACES its
-    period (delete current period + insert) — for the daily comp pull that means the open month is
-    overwritten with the carrier's latest cumulative MTD snapshot, while closed months (a different
-    `period`) stay frozen. An empty download raises BEFORE touching the table — so an empty
-    current-month pull (carrier comp posts in arrears) can never wipe a populated period."""
+    period (delete that period + insert the fresh pull). For comp the period comes from the rows'
+    own Begin Date (mode 'data'), so the pull lands under the month it belongs to even if the portal
+    Month filter wasn't moved; closed months stay frozen because each is a distinct `period`.
+
+    `target` (optional) = {'month_name','month','year','period'} — the month to drive the report's
+    filter to (comp multi-month refresh). Two guards keep a populated period safe: an EMPTY download
+    raises before any write, and the PARTIAL-COLLAPSE guard refuses to overwrite a period that holds
+    >= REPLACE_MIN_ROWS rows with a pull < REPLACE_MIN_RETAIN of that count."""
     import pandas as pd
     spec = REPORTS[key]
-    _open_and_download(page, spec["report_id"], xlsx_path)
+    _open_and_download(page, spec["report_id"], xlsx_path, target=target)
     df = pd.read_excel(xlsx_path, dtype=str).fillna("")
     records = df.to_dict("records")
     if not records:
         raise EpayPortalError(f"{spec['label']} report downloaded but contained no rows.")
-    if spec["period"] == "report_month":
+    mode = spec["period"]
+    if mode == "report_month":
         report_month = ""
         for r in records:
             if str(r.get("Report Month", "")).strip():
                 report_month = str(r.get("Report Month")).strip()
                 break
         period, pm, py = _period_from_report_month(report_month)
-    else:
+    elif mode == "data":
+        # Store under the period the rows themselves belong to (their Begin Date). This is what makes
+        # a mis-set / non-moving Month filter harmless: the data is never mislabeled. Fall back to the
+        # requested target, then the current month, only if no Begin Date is parseable.
+        derived = comp_period_from_records(records)
+        if derived:
+            period, pm, py = derived
+        elif target:
+            period, pm, py = target["period"], target["month"], target["year"]
+        else:
+            period, pm, py = _period_now()
+    else:  # "current"
         period, pm, py = _period_now()
     base = {"org_id": org_id, "period": period, "period_month": pm, "period_year": py}
     rows = spec["map"](records, base)
 
-    # REPLACE the report's period: delete the current period, then insert the fresh pull. For comp
-    # this overwrites the open month with the carrier's latest cumulative MTD snapshot; a canceled
-    # account that has dropped out of the report correctly disappears. Closed months are a different
-    # `period`, so they're untouched and stay frozen. The empty-download guard above means an
-    # in-arrears month that hasn't posted is never wiped.
+    # PARTIAL-COLLAPSE guard: never replace a populated period with a drastically smaller pull. A
+    # canceled account legitimately dropping out shrinks a period slightly; a pull collapsing it to a
+    # fraction of its rows is a portal glitch (the failure that reduced a month to one account).
+    existing = _period_row_count(client, spec["table"], org_id, period)
+    if existing >= REPLACE_MIN_ROWS and len(rows) < existing * REPLACE_MIN_RETAIN:
+        return {"report": key, "label": spec["label"], "period": period, "rows": 0,
+                "mode": "skipped_guard", "existing": existing, "pulled": len(rows),
+                "note": f"kept {existing} existing rows — pull had only {len(rows)} (suspect/partial)"}
+
+    # REPLACE the period: delete it, then insert the fresh pull (the cumulative MTD snapshot for an
+    # open month; an idempotent re-pull for a frozen closed month). Other periods are untouched.
     saved = 0
     client.schema("commcalc").table(spec["table"]).delete() \
         .eq("org_id", org_id).eq("period", period).execute()
@@ -399,10 +550,42 @@ def _process_report(client, org_id, page, key, xlsx_path):
             "mode": "replace"}
 
 
+def _recent_months(n):
+    """The current UTC month plus the (n-1) preceding months, newest first, each as
+    {'period','month_name','month','year'} — the comp in-arrears refresh window."""
+    import calendar as _cal
+    now = datetime.now(timezone.utc)
+    y, m = now.year, now.month
+    out = []
+    for _ in range(max(1, n)):
+        out.append({"period": f"{_cal.month_name[m]} {y}", "month_name": _cal.month_name[m],
+                    "month": m, "year": y})
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+    return out
+
+
+def _expand_jobs(keys):
+    """Expand report keys into (key, target) jobs. comp_report fans out across the current month +
+    the most recent closed months (so in-arrears comp lands automatically); every other report is a
+    single current-month pull (target=None)."""
+    jobs = []
+    for k in keys:
+        if k == "comp_report":
+            for tm in _recent_months(COMP_REFRESH_MONTHS):
+                jobs.append((k, tm))
+        else:
+            jobs.append((k, None))
+    return jobs
+
+
 def run_epay_sweep(client, org_id, url, user, pw, reports=None):
     """Launch headless Chromium, log into the epay Owner Portal ONCE, and download + ingest each
-    requested report for the current month. `reports` = list of REPORTS keys; defaults to
-    ['mi'] for back-compat (MI/ATU only). Each report wipes+inserts its own period/table.
+    requested report. `reports` = list of REPORTS keys; defaults to ['mi'] for back-compat (MI/ATU
+    only). MI/payment pull the current month; comp pulls the current month + COMP_REFRESH_MONTHS-1
+    closed months (in-arrears) and stores each under the period its data belongs to. Each pull
+    REPLACEs its own period/table (empty + partial-collapse guarded).
 
     Returns a summary dict. Raises EpayLoginError if Chromium/Playwright isn't installed or login
     fails; EpayPortalError only if EVERY requested report failed (partial failures are reported)."""
@@ -427,11 +610,12 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None):
         try:
             page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
             _login(page, user, pw)
-            for idx, key in enumerate(keys):
+            jobs = _expand_jobs(keys)
+            for idx, (key, target) in enumerate(jobs):
                 if idx > 0:
-                    # Reload to a clean app shell between reports so each opens on a fresh toolbar
-                    # (no accumulated/stale "Run Report" buttons from the previous report); re-login
-                    # if the reload bounced back to the sign-in form.
+                    # Reload to a clean app shell between every report run so each opens on a fresh
+                    # toolbar (no accumulated/stale "Run Report" buttons + a reset Month filter);
+                    # re-login if the reload bounced back to the sign-in form.
                     try:
                         page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
                         page.wait_for_timeout(2500)
@@ -441,10 +625,11 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None):
                         pass
                 tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
                 tmp.close()
+                tgt = f" [{target['period']}]" if target else ""
                 try:
-                    results.append(_process_report(client, org_id, page, key, tmp.name))
+                    results.append(_process_report(client, org_id, page, key, tmp.name, target=target))
                 except Exception as e:
-                    errors.append(f"{REPORTS[key]['label']}: {type(e).__name__}: {e}")
+                    errors.append(f"{REPORTS[key]['label']}{tgt}: {type(e).__name__}: {e}")
                 finally:
                     try:
                         os.unlink(tmp.name)

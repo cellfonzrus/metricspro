@@ -54,9 +54,14 @@ async def upload_file(
     file_type: str,
     file: UploadFile = File(...),
     period: str = "",
+    force: bool = False,
     org_id: str = "00000000-0000-0000-0000-000000000001"
 ):
-    """Upload a data file (sales, payment_detail, mi, dlar_rep, dlar_store, catalog)"""
+    """Upload a data file (sales, payment_detail, mi, dlar_rep, dlar_store, catalog).
+
+    For comp_report, the selected `period` is checked against the month the file's rows actually
+    belong to (their Begin Date); a mismatch is rejected (pass force=true to override) so a file
+    can't be mislabeled into the wrong month — the bug that wiped a month's residual trend."""
     require_org(org_id)
     
     SUPPORTED = ["sales","daily_sales","payment_detail","mi_report","dlar_rep","dlar_store","catalog","master_cats","comp_report"]
@@ -116,6 +121,18 @@ async def upload_file(
     # Try schema-qualified first, fall back to public prefix
     table = TABLE_MAP[file_type]
     
+    # Guard against mislabeling a comp file into the wrong month (which deletes the chosen period
+    # then loads foreign data under it — how a month's comp got clobbered). The file's true month
+    # comes from its rows' Begin Date; reject a mismatch unless explicitly forced.
+    if file_type == 'comp_report' and period and not force:
+        derived = epay_sweep.comp_period_from_records(rows)
+        if derived and derived[0].strip().lower() != period.strip().lower():
+            raise HTTPException(
+                400,
+                f"This comp file's data is for '{derived[0]}', but you selected period '{period}'. "
+                f"Uploading it as '{period}' would overwrite that month with the wrong data. "
+                f"Re-select '{derived[0]}', or pass force=true if you really intend this.")
+
     # Delete existing for this period (skip for daily_sales — append mode)
     if has_period and period and file_type != 'daily_sales':
         try:
