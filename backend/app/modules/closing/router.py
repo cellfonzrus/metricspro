@@ -16,6 +16,16 @@ router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
 
+def _period_label(date_str):
+    """'2026-06-15' → 'June 2026'. raw_sales / the daily_sales_actuals RPC store the month-NAME
+    period spelling, so passing 'YYYY-MM' silently matched nothing — both closing reconciliations
+    (count + money) returned empty for every store. Convert to the spelling the data is stored under."""
+    try:
+        return dateparser.parse(str(date_str)).strftime("%B %Y")
+    except Exception:
+        return str(date_str)[:7]
+
+
 def sb():
     return get_supabase()
 
@@ -229,7 +239,7 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, org_i
     b2b = {}
     try:
         actuals = (client.schema("commcalc")
-                   .rpc("daily_sales_actuals", {"p_org_id": org_id, "p_period": date[:7]})
+                   .rpc("daily_sales_actuals", {"p_org_id": org_id, "p_period": _period_label(date)})
                    .execute().data) or []
         for a in actuals:
             if str(a.get("trans_date"))[:10] != date:
@@ -500,7 +510,7 @@ def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
 
     rows = (client.schema("commcalc").table("raw_sales")
             .select("store,department,tender_type,ext_price,voided")
-            .eq("org_id", org_id).eq("period", date[:7]).eq("trans_date", date)
+            .eq("org_id", org_id).in_("period", [_period_label(date), date[:7]]).eq("trans_date", date)
             .limit(100000).execute().data) or []
 
     out = {}

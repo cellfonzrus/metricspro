@@ -31,12 +31,13 @@ export default function CompTrendPage() {
 
   function buildPayload(): ExportPayload {
     return {
-      title: 'Carrier Residual Trend', subtitle: `last ${months} months${monthFilter ? ` · ${monthFilter}` : ''}${storeFilter ? ` · ${storeFilter}` : ''}`,
-      filename: `residual-trend`,
+      title: 'Total Compensation Trend', subtitle: `last ${months} months${monthFilter ? ` · ${monthFilter}` : ''}${storeFilter ? ` · ${storeFilter}` : ''}`,
+      filename: `total-compensation-trend`,
       sheets: [
         { name: 'By month', rows: totals, columns: [
           { header: 'Month', get: (r: any) => r.period },
-          { header: 'Residual', get: (r: any) => r.residual, money: true },
+          { header: 'Total Comp', get: (r: any) => r.total_comp ?? r.residual, money: true },
+          { header: 'Residual (MI+ATU)', get: (r: any) => r.residual_mi_atu, money: true },
           { header: 'Accounts', get: (r: any) => r.accounts },
           { header: 'Δ vs prev', get: (r: any) => r.delta_vs_prev, money: true },
           { header: '% vs prev', get: (r: any) => r.pct_vs_prev },
@@ -61,10 +62,12 @@ export default function CompTrendPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📉 Carrier Residual Trend</h1>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📊 Total Compensation Trend</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            Month-over-month Comprehensive-Comp residual per account. A <strong>dip</strong> = a residual that fell or an account that
-            dropped out of the report (a likely cancellation) — labeled by the month it happened.
+            Month-over-month <strong>total carrier compensation</strong> per account from the Comprehensive Comp report
+            (~95% activation/upgrade promos + bounties = Commission + SPIFF, <em>not</em> residual). True
+            <strong> Residual = MI + ATU</strong> is shown alongside. A <strong>dip</strong> = compensation that fell or an
+            account that dropped out (a likely cancellation), labeled by the month it happened.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -87,19 +90,21 @@ export default function CompTrendPage() {
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <Tile label={`Residual — ${latest.period || 'latest'}`} value={fmt(latest.residual || 0)} />
+            <Tile label={`Total comp — ${latest.period || 'latest'}`} value={fmt(latest.total_comp ?? latest.residual ?? 0)} />
+            <Tile label={`Residual (MI+ATU) — ${latest.period || 'latest'}`} value={fmt(latest.residual_mi_atu || 0)} accent="#15803d" />
             <Tile label="Δ vs prior month" value={fmt(latest.delta_vs_prev || 0)} accent={(latest.delta_vs_prev || 0) < 0 ? '#b91c1c' : '#15803d'} />
             <Tile label="Active accounts" value={latest.accounts ?? 0} />
-            <Tile label={`Residual lost to dips${monthFilter ? '' : ' (all shown)'}`} value={fmt(lostThisMonth)} accent="#b91c1c" />
+            <Tile label={`Comp lost to dips${monthFilter ? '' : ' (all shown)'}`} value={fmt(lostThisMonth)} accent="#b91c1c" />
             <Tile label="Accounts vanished" value={vanished} accent="#b45309" />
           </div>
 
           <div className="card" style={{ padding: 0, overflow: 'auto' }}>
-            <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>Residual by month — click a month to filter the dips below</div>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
+            <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>By month — total compensation vs. true residual (MI+ATU). Click a month to filter the dips below</div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
               <thead><tr style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Month</th>
-                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Residual</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Total Comp</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Residual (MI+ATU)</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Accounts</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Δ vs prev</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>% vs prev</th>
@@ -109,13 +114,14 @@ export default function CompTrendPage() {
                   <tr key={r.period} onClick={() => setMonthFilter(monthFilter === r.period ? '' : r.period)}
                       style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: monthFilter === r.period ? 'var(--surface2,#eef2ff)' : undefined }}>
                     <td style={{ padding: '7px 12px', fontSize: 13, fontWeight: 600 }}>{r.period}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13 }}>{fmt(r.residual)}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13 }}>{fmt(r.total_comp ?? r.residual)}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: '#15803d' }}>{fmt(r.residual_mi_atu || 0)}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13 }}>{r.accounts}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: (r.delta_vs_prev ?? 0) < 0 ? '#b91c1c' : ((r.delta_vs_prev ?? 0) > 0 ? '#15803d' : 'var(--text3)') }}>{r.delta_vs_prev == null ? '—' : fmt(r.delta_vs_prev)}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: (r.pct_vs_prev ?? 0) < 0 ? '#b91c1c' : 'var(--text3)' }}>{r.pct_vs_prev == null ? '—' : `${r.pct_vs_prev}%`}</td>
                   </tr>
                 ))}
-                {totals.length === 0 && <tr><td colSpan={5} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No comp data.</td></tr>}
+                {totals.length === 0 && <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No comp data.</td></tr>}
               </tbody>
             </table>
           </div>

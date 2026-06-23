@@ -33,6 +33,28 @@ class DlarLoginError(Exception):
     """Login failed — surfaced to the admin UI without ever echoing the password."""
 
 
+class DlarPortalError(Exception):
+    """Login worked but the pull was empty/degraded — surfaced as an error (NOT a silent
+    'OK — 0 stores') so a bad pull can never quietly wipe the live commission period."""
+
+
+# Load guards (mirror epay_sweep): never let an empty or drastically-smaller pull REPLACE a
+# populated period. The DLAR drives commissions and is auto-recalc'd after each sweep, so a silent
+# wipe here zeroes live payouts — this is the protection the epay sweep already had and DLAR lacked.
+REPLACE_MIN_ROWS = 20
+REPLACE_MIN_RETAIN = 0.5
+
+
+def _period_count(client, table, org_id, period):
+    """Existing row count for (org_id, period) — used by the partial-collapse guard. 0 on error."""
+    try:
+        resp = (client.schema("commcalc").table(table).select("org_id", count="exact")
+                .eq("org_id", org_id).eq("period", period).limit(1).execute())
+        return resp.count or 0
+    except Exception:
+        return 0
+
+
 def _num(v):
     """Coerce a DLAR cell ('71.43', '-100.00', '0', '', '0% / 71.43%', '55%') to float."""
     if v is None:
@@ -184,12 +206,27 @@ def run_dlar_sweep(client, org_id, user, pw):
     store_rows = [{**base, **normalize_store(r)} for r in store_recs]
     rep_rows = [{**base, **normalize_rep(r)} for r in rep_recs]
 
-    # Wipe-and-insert the period (replaces the manual monthly upload).
+    # GUARD: a DLAR pull that returns nothing is almost never a real empty month — it's an expired
+    # session or a portal layout change. Aborting BEFORE the wipe (instead of "OK — 0 stores") keeps
+    # an empty/auth-degraded pull from zeroing the live commission period that gets auto-recalc'd.
+    if not store_rows and not rep_rows:
+        raise DlarPortalError(
+            "DLAR returned 0 store and 0 rep rows — aborting before wiping the period (likely an "
+            "expired session or portal change, not a real empty month). Period left untouched.")
+
+    # Wipe-and-insert the period (replaces the manual monthly upload), per table, but never let a
+    # drastically-smaller pull REPLACE a populated table (partial-collapse guard).
+    skipped = []
     for tbl, rows in (("raw_dlar_store", store_rows), ("raw_dlar_rep", rep_rows)):
+        existing = _period_count(client, tbl, org_id, period)
+        if existing >= REPLACE_MIN_ROWS and len(rows) < existing * REPLACE_MIN_RETAIN:
+            skipped.append(f"{tbl} ({existing}->{len(rows)})")
+            continue
         client.schema("commcalc").table(tbl).delete() \
             .eq("org_id", org_id).eq("period", period).execute()
         for i in range(0, len(rows), 500):
             client.schema("commcalc").table(tbl).insert(rows[i:i + 500]).execute()
 
     return {"period": period, "import_date": import_date,
-            "stores": len(store_rows), "reps": len(rep_rows)}
+            "stores": len(store_rows), "reps": len(rep_rows),
+            "skipped_guard": skipped or None}

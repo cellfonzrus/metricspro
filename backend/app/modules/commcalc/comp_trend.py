@@ -44,6 +44,32 @@ def _acct_key(r):
                             ("business_address", "business_name", "terminal_id")))
 
 
+def _mi_atu_by_period(client, org_id, periods):
+    """TRUE RESIDUAL per period = Σ(actual_mi_payout + actual_atu_payout) from raw_mi.
+
+    The Comprehensive Comp report this module trends is ~95% one-time promo/bounty COMPENSATION, not
+    residual (see docs/SAAS_FRAMEWORK.md canonical model). Residual — recurring per-subscriber income
+    — is MI + ATU. We surface it alongside the comp total so the report stops mislabeling comp as
+    'residual'."""
+    if not periods:
+        return {}
+    out, start, page = {}, 0, 1000
+    sel = "period,actual_mi_payout,actual_atu_payout"
+    while True:
+        resp = (client.schema("commcalc").table("raw_mi").select(sel)
+                .eq("org_id", org_id).in_("period", periods)
+                .range(start, start + page - 1).execute())
+        chunk = resp.data or []
+        for r in chunk:
+            p = (r.get("period") or "").strip()
+            if p:
+                out[p] = out.get(p, 0.0) + safe_float(r.get("actual_mi_payout")) + safe_float(r.get("actual_atu_payout"))
+        if len(chunk) < page:
+            break
+        start += page
+    return out
+
+
 def compute_residual_trend(client, org_id, months=6, store="", market="",
                            min_drop_pct=20.0, min_drop_amt=1.0):
     rows = _fetch_comp(client, org_id)
@@ -81,6 +107,7 @@ def compute_residual_trend(client, org_id, months=6, store="", market="",
     ordered = sorted(totals.keys(), key=_pkey)
     kept = ordered[-months:] if months and months > 0 else ordered
     kept_set = set(kept)
+    mi_atu = _mi_atu_by_period(client, org_id, kept)  # true residual (MI+ATU) per period
 
     totals_by_month = []
     prev_total = None
@@ -90,9 +117,14 @@ def compute_residual_trend(client, org_id, months=6, store="", market="",
         pct = None
         if prev_total not in (None, 0):
             pct = round((t["residual"] - prev_total) / abs(prev_total) * 100, 1)
+        comp_total = round(t["residual"], 2)
         totals_by_month.append({
             "period": p,
-            "residual": round(t["residual"], 2),
+            # `residual` (legacy key) is actually TOTAL CARRIER COMPENSATION (promo + bounty +
+            # reimbursement). `total_comp` is the clear alias; `residual_mi_atu` is the real residual.
+            "residual": comp_total,
+            "total_comp": comp_total,
+            "residual_mi_atu": round(mi_atu.get(p, 0.0), 2),
             "accounts": len(t["accounts"]),
             "qty": round(t["qty"], 1),
             "delta_vs_prev": delta,

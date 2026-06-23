@@ -133,17 +133,11 @@ async def upload_file(
                 f"Uploading it as '{period}' would overwrite that month with the wrong data. "
                 f"Re-select '{derived[0]}', or pass force=true if you really intend this.")
 
-    # Delete existing for this period (skip for daily_sales — append mode)
-    if has_period and period and file_type != 'daily_sales':
-        try:
-            client.schema('commcalc').table(table).delete().eq('period', period).execute()
-        except Exception as e:
-            raise HTTPException(500, f"Failed to clear existing data: {e}. Run commcalc_master_fix.sql")
-    elif not has_period:
-        try:
-            client.schema('commcalc').table(table).delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
-        except: pass
-    
+    # NOTE: the delete-existing step is deliberately DEFERRED to after the rows are mapped (below),
+    # and guarded by `if mapped`. Deleting first meant a file that mapped to ZERO rows (a column-name
+    # drift that still passed the loose signature check, an all-header file, etc.) wiped the period
+    # and inserted nothing — silent data loss. Now an empty map leaves the existing data untouched.
+
     # Map and insert rows
     mapped = []
     for r in rows:
@@ -273,15 +267,29 @@ async def upload_file(
         if any(v for v in row.values() if v and v != org_id):
             mapped.append(row)
 
+    # GUARD: only NOW (rows successfully mapped) do we clear the existing data, and only if the
+    # upload actually produced rows — so a file that parsed to nothing can never wipe a populated
+    # period. daily_sales is append-mode (no clear). catalog/master_cats replace the whole table.
+    if mapped:
+        if has_period and period and file_type != 'daily_sales':
+            try:
+                client.schema('commcalc').table(table).delete().eq('org_id', org_id).eq('period', period).execute()
+            except Exception as e:
+                raise HTTPException(500, f"Failed to clear existing data: {e}. Run commcalc_master_fix.sql")
+        elif not has_period:
+            try:
+                client.schema('commcalc').table(table).delete().eq('org_id', org_id).neq('id', '00000000-0000-0000-0000-000000000000').execute()
+            except Exception:
+                pass
+
     # Insert in batches
     saved = 0
     for i in range(0, len(mapped), 500):
         batch = mapped[i:i+500]
         try:
-            # Plain insert for all upload types. Monthly wipes the period
-            # first, so there are no conflicts. The old unique dedup index
-            # was dropped because one transaction has many line items that
-            # share a single Trans ID.
+            # Plain insert for all upload types. The period was wiped just above (only when the
+            # upload produced rows), so there are no conflicts. The old unique dedup index was
+            # dropped because one transaction has many line items that share a single Trans ID.
             client.schema('commcalc').table(table).insert(batch).execute()
             saved += len(batch)
         except Exception as e:
