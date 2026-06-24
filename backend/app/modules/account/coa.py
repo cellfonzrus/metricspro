@@ -24,6 +24,7 @@ matching store) are "company-wide": they appear in the CONSOLIDATED view only an
 read 0 (with a note) under a company/store filter — honest beats mis-attributed.
 """
 from app.modules.commcalc.calculator import safe_float
+from app.modules.commcalc import carrier_map
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -282,11 +283,25 @@ def build_inputs(client, org_id, period):
     except Exception:
         pass
 
-    # raw_comp_report — carrier commissions/incentives (store via business_address if it matches)
+    # raw_comp_report — carrier commissions/incentives. Broken into canonical components via
+    # carrier_category_map (framework): same carrier_comm total, with a Commission/SPIFF/Reimbursement
+    # drill-down. Unmapped rows fall under "Unmapped" so nothing is hidden. (zero change to totals.)
     try:
+        try:
+            _cc_rules = carrier_map.load_rules(client, org_id)
+        except Exception:
+            _cc_rules = []
+        _CC_LABEL = {"COMMISSION": "Commission (promo)", "SPIFF": "SPIFF / bounty",
+                     "REIMBURSEMENT": "Reimbursement", "RESIDUAL": "Residual"}
         for r in _fetch_all(client, "raw_comp_report",
-                            "business_address,payment_amount,period", {"org_id": org_id, "period": period_keys}):
-            add("carrier_comm", _norm_store(r.get("business_address")), r.get("payment_amount"))
+                            "business_address,payment_amount,period,compensation_type",
+                            {"org_id": org_id, "period": period_keys}):
+            comp = None
+            if _cc_rules:
+                m = carrier_map.match_rule(_cc_rules, r.get("compensation_type"))
+                comp = m.get("component") if m else None
+            add("carrier_comm", _norm_store(r.get("business_address")), r.get("payment_amount"),
+                detail_label=_CC_LABEL.get(comp, "Unmapped"))
     except Exception:
         pass
 
