@@ -28,6 +28,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/store-match', label: 'Store Matching', icon: '🏬', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/settings', label: 'Commission Rates', icon: '⚙️', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/carrier-mapping', label: 'Carrier Mapping', icon: '🗺️', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/connectors', label: 'Connectors', icon: '🔌', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/expenses', label: 'Store Expenses', icon: '🏪', module: 'commissions', scopes: ['all', 'market'] },
   ]},
   { group: 'Targets', module: 'targets', items: [

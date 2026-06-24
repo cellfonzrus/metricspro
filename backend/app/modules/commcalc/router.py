@@ -983,6 +983,76 @@ def comp_by_component(period: str = "", carrier_id: str = "", org_id: str = ORG_
     return {"period": period, "components": comps}
 
 
+# ── Unified connector model (SaaS framework Phase 2: registry + live status + run-now dispatch) ──
+def _connector_status(client, org_id, cfg_table):
+    """Live status (last run / next run / enabled) read from the connector's existing *_sweep_config."""
+    if not cfg_table:
+        return {}
+    try:
+        rows = (client.schema('commcalc').table(cfg_table)
+                .select('enabled,last_run_at,last_status,last_detail,next_run_at')
+                .eq('org_id', org_id).limit(1).execute().data) or []
+        return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+@router.get("/connectors")
+def list_connectors(org_id: str = ORG_ID):
+    """Every vendor portal + the reports it provides + live sweep status. The single registry."""
+    require_org(org_id)
+    client = sb()
+    conns = (client.schema('commcalc').table('connector_instances').select('*')
+             .eq('org_id', org_id).order('sort_order').execute().data) or []
+    defs = (client.schema('commcalc').table('report_definitions').select('*')
+            .eq('org_id', org_id).order('sort_order').execute().data) or []
+    by_conn = {}
+    for d in defs:
+        by_conn.setdefault(d.get('connector_id'), []).append(d)
+    return [{**c, 'status': _connector_status(client, org_id, c.get('config_table')),
+             'reports': by_conn.get(c['id'], [])} for c in conns]
+
+
+@router.patch("/connectors/{cid}")
+def update_connector(cid: str, body: dict, org_id: str = ORG_ID):
+    require_org(org_id)
+    allow = ('label', 'enabled', 'automatable', 'twofa_method', 'twofa_status', 'portal_url', 'sort_order', 'notes')
+    row = {k: body[k] for k in allow if k in body}
+    row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
+    sb().schema('commcalc').table('connector_instances').update(row).eq('org_id', org_id).eq('id', cid).execute()
+    return {"ok": True}
+
+
+@router.patch("/report-definitions/{rid}")
+def update_report_def(rid: str, body: dict, org_id: str = ORG_ID):
+    require_org(org_id)
+    allow = ('label', 'source_name', 'report_id', 'period_mode', 'target_table', 'upload_endpoint',
+             'source_url', 'auto', 'refresh_months', 'sort_order', 'note')
+    row = {k: body[k] for k in allow if k in body}
+    row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
+    sb().schema('commcalc').table('report_definitions').update(row).eq('org_id', org_id).eq('id', rid).execute()
+    return {"ok": True}
+
+
+@router.post("/connectors/{cid}/run-now")
+def connector_run_now(cid: str, background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+    """Generic run-now: dispatch to the existing sweep by sweep_kind."""
+    require_org(org_id)
+    rows = sb().schema('commcalc').table('connector_instances').select('*').eq('org_id', org_id).eq('id', cid).execute().data or []
+    if not rows:
+        raise HTTPException(404, "connector not found")
+    kind = (rows[0].get('sweep_kind') or '').strip()
+    dispatch = {'vip': _do_vip_sweep, 'dlar': _do_dlar_sweep, 'epay': _do_epay_sweep, 'b2b': _do_b2b_sweep}
+    if kind in dispatch:
+        background_tasks.add_task(dispatch[kind], org_id)
+        return {"status": "started", "kind": kind}
+    if kind == 'google_closing':
+        from app.modules.closing.router import _do_closing_sweep
+        background_tasks.add_task(_do_closing_sweep, org_id)
+        return {"status": "started", "kind": kind}
+    raise HTTPException(400, f"'{rows[0].get('vendor_name')}' is manual-only — upload it on the Upload Wizard.")
+
+
 # ── Chargeback review bucket (VIP file + fraud) → assign to the rep → employee chargeback ────
 def _cb_now():
     return _datetime.now(_timezone.utc).isoformat()
