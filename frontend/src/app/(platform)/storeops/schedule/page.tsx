@@ -102,6 +102,20 @@ export default function SchedulePage() {
       .map(arr => ({ emp: arr[0].employee_name, date: arr[0].shift_date, stores: Array.from(new Set(arr.map(a => a.store_code))) }))
   }, [shifts])
 
+  // By-store coverage gaps: a store that IS being scheduled this week but has a day with nobody on it.
+  // Restricting to stores already in rotation keeps closed/out-of-scope stores from being false positives.
+  const coverageGaps = useMemo(() => {
+    if (view !== 'store') return [] as { store: string; date: string }[]
+    const covered = new Set(shifts.map(s => `${s.store_code}|${s.shift_date}`))
+    const inRotation = new Set(shifts.map(s => s.store_code))
+    const gaps: { store: string; date: string }[] = []
+    for (const st of filteredStores) {
+      if (!st.store_code || !inRotation.has(st.store_code)) continue
+      for (const d of weekDates) if (!covered.has(`${st.store_code}|${d}`)) gaps.push({ store: st.store_code, date: d })
+    }
+    return gaps
+  }, [view, shifts, filteredStores, weekDates])
+
   function prevWeek() { setWeekStart(w => addDays(w, -7)) }
   function nextWeek() { setWeekStart(w => addDays(w, 7)) }
 
@@ -333,6 +347,17 @@ export default function SchedulePage() {
             <span key={i}><strong>{c.emp}</strong> at {c.stores.join(' & ')} on {dayLabel(c.date).dow} {dayLabel(c.date).md}{i < Math.min(conflicts.length, 4) - 1 ? '; ' : ''}</span>
           ))}
           {conflicts.length > 4 && ` +${conflicts.length - 4} more`}
+        </div>
+      )}
+
+      {view === 'store' && coverageGaps.length > 0 && (
+        <div style={{ background: '#fee2e2', border: '1px solid #ef4444', color: '#991b1b', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 13 }}>
+          🪧 Coverage gaps — {coverageGaps.length} store-day{coverageGaps.length === 1 ? '' : 's'} with nobody scheduled:{' '}
+          {coverageGaps.slice(0, 6).map((g, i) => (
+            <span key={i}><strong>{g.store}</strong> {dayLabel(g.date).dow} {dayLabel(g.date).md}{i < Math.min(coverageGaps.length, 6) - 1 ? '; ' : ''}</span>
+          ))}
+          {coverageGaps.length > 6 && ` +${coverageGaps.length - 6} more`}
+          <span style={{ opacity: 0.75 }}> (only stores already scheduled this week)</span>
         </div>
       )}
 
