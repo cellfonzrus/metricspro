@@ -52,7 +52,7 @@ export default function SubmitClosingPage() {
     if (!f.employee_name.trim()) { setMsg('❌ Enter your name.'); return }
     setBusy(true); setMsg('')
     try {
-      await api('/api/v1/closing/row', { method: 'POST', body: JSON.stringify({
+      const r = await api('/api/v1/closing/row', { method: 'POST', body: JSON.stringify({
         close_date: f.close_date, sfid: f.sfid, store_code: f.store_code, store_name: f.store_name,
         employee_name: f.employee_name.trim(),
         store_cash: f.store_cash, store_cc: f.store_cc, epay_cash: f.epay_cash, epay_cc: f.epay_cc,
@@ -60,12 +60,16 @@ export default function SubmitClosingPage() {
         upgrade_count: f.upgrade_count, new_line_count: f.new_line_count, postpaid_count: f.postpaid_count,
         envelope_picture: f.envelope_picture, remarks: f.remarks,
       }) })
-      setMsg('✅ Closing submitted. You can enter another below.')
+      const flags: string[] = r?.recon?.flags || []
+      const pending = r?.recon?.status === 'recon_pending'
+      setMsg(flags.length ? `⚠️ Submitted — flagged: ${flags.join('; ')}`
+        : pending ? '✅ Submitted (B2B not loaded yet — will reconcile once it lands).'
+        : '✅ Closing submitted and tallies with B2B. You can enter another below.')
       // keep date + store + name; clear the money/counts for the next entry
       setF(p => ({ ...p, store_cash: '', store_cc: '', epay_cash: '', epay_cc: '', acc_sale: '', other_account: '',
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))
       loadRecent()
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    } catch (e: any) { setMsg('🚫 ' + (e?.message || e)) }
     finally { setBusy(false) }
   }
 
@@ -127,6 +131,9 @@ export default function SubmitClosingPage() {
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 16 }}>
           <button className="btn btn-primary" style={{ fontSize: 14 }} disabled={busy} onClick={submit}>{busy ? '⏳ Submitting…' : '✅ Submit closing'}</button>
           {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>
+          🔒 Your close is checked against B2B sales: a <b>cash shortage</b> or <b>credit above</b> B2B will block submission. Cash over / credit under are allowed but flagged.
         </div>
       </div>
 

@@ -490,8 +490,20 @@ def create_row(payload: dict, org_id: str = ORG_ID):
         "envelope_picture": (payload.get("envelope_picture") or "").strip() or None,
         "remarks": payload.get("remarks"), "source": "manual",
     }
+    # Close gate: rep can't submit if cash is SHORT or credit is OVER vs B2B (when B2B is loaded
+    # and the rep matches B2B sales). Cash-over / credit-under are allowed but flagged. If B2B
+    # isn't loaded yet, or the rep didn't match B2B, it's recon-pending and never blocks.
+    declared_cash = body["store_cash"] + body["epay_cash"]
+    declared_credit = body["store_cc"] + body["epay_cc"]
+    tol = float(payload.get("tolerance") or 1.0)
+    gate = _gate_row(client, org_id, body.get("store_code"), d, body.get("employee_name") or "",
+                     declared_cash, declared_credit, tol)
+    if gate["block_reasons"]:
+        raise HTTPException(409, "Can't close shift — " + "; ".join(gate["block_reasons"])
+                            + ". Recount and correct, then resubmit.")
     r = client.schema("commcalc").table("daily_closing").insert(body).execute()
-    return r.data[0] if r.data else body
+    saved = r.data[0] if r.data else body
+    return {**saved, "recon": {"status": gate["status"], "flags": gate["flags"], "b2b": gate["b2b"]}}
 
 
 @router.patch("/row/{row_id}")
@@ -517,6 +529,71 @@ def update_row(row_id: str, updates: dict, org_id: str = ORG_ID):
 def delete_row(row_id: str):
     sb().schema("commcalc").table("daily_closing").delete().eq("id", row_id).execute()
     return {"deleted": row_id}
+
+
+# ── Reconciliation sheet: every day's closing-vs-B2B errors over a period ────────────────────
+@router.get("/recon")
+def closing_recon(period: str, market: str = None, tolerance: float = 1.0, org_id: str = ORG_ID):
+    """Per-rep (money) + per-store (counts) reconciliation of declared closing vs B2B actuals for
+    a YYYY-MM period. Returns one error row per discrepancy with severity block | flag, plus
+    recon-pending rows where B2B isn't loaded / the rep didn't match B2B sales."""
+    if not period:
+        raise HTTPException(400, "period required (YYYY-MM)")
+    client = sb()
+    closing = (client.schema("commcalc").table("daily_closing").select("*")
+               .eq("org_id", org_id).eq("period", period).limit(50000).execute().data) or []
+    stores = (client.schema("storeops").table("stores").select("store_code,address,market").execute().data) or []
+    store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
+
+    by_date = {}
+    for r in closing:
+        by_date.setdefault(r.get("close_date"), []).append(r)
+
+    errors = []
+    blocks = flags = pending = 0
+    for date in sorted((d for d in by_date if d), reverse=True):
+        day = _b2b_day(client, org_id, date)
+        store_groups = {}
+        for r in by_date[date]:
+            store_groups.setdefault(r.get("store_code") or f"name:{r.get('store_name') or '—'}", []).append(r)
+        for key, reps in store_groups.items():
+            code = None if str(key).startswith("name:") else key
+            meta = store_meta.get(code, {}) if code else {}
+            if market and (meta.get("market") or "") != market:
+                continue
+            addr = meta.get("address") or (reps[0].get("store_address") if reps else None) or (reps[0].get("store_name") if reps else None)
+            for r in reps:
+                emp = (r.get("employee_name") or "").strip()
+                dcash = _f(r.get("store_cash")) + _f(r.get("epay_cash"))
+                dcred = _f(r.get("store_cc")) + _f(r.get("epay_cc"))
+                repb = _rep_b2b(day, code, emp) if (code and day["has_data"]) else None
+                if repb is None:
+                    pending += 1
+                    errors.append({"date": date, "store_code": code, "store_address": addr, "rep": emp or "—",
+                                   "metric": "recon", "severity": "pending", "status": "recon_pending",
+                                   "reason": "B2B not loaded / rep not matched yet", "declared": round(dcash + dcred, 2),
+                                   "b2b": None, "variance": None})
+                    continue
+                for it in _money_issues(dcash, dcred, repb["cash"], repb["card"], tolerance):
+                    blocks += it["severity"] == "block"
+                    flags += it["severity"] == "flag"
+                    errors.append({"date": date, "store_code": code, "store_address": addr, "rep": emp or "—",
+                                   "status": it["severity"], **it})
+            # store-level count recon
+            if code and day["has_data"] and code in day["counts"]:
+                cnt = day["counts"][code]
+                cl_act = sum(int(x.get("new_line_count") or 0) + int(x.get("postpaid_count") or 0) for x in reps)
+                cl_upg = sum(int(x.get("upgrade_count") or 0) for x in reps)
+                for metric, dv, bv in (("activations", cl_act, cnt["activations"]), ("upgrades", cl_upg, cnt["upgrades"])):
+                    if dv != bv:
+                        flags += 1
+                        errors.append({"date": date, "store_code": code, "store_address": addr, "rep": None,
+                                       "metric": metric, "declared": dv, "b2b": bv, "variance": dv - bv,
+                                       "severity": "flag", "status": "flag", "reason": f"{metric.title()} count mismatch (closing {dv} vs B2B {bv})"})
+
+    errors.sort(key=lambda e: (str(e.get("date")), 0 if e["severity"] == "block" else 1 if e["severity"] == "flag" else 2), reverse=True)
+    return {"period": period, "errors": errors,
+            "summary": {"blocks": blocks, "flags": flags, "pending": pending, "total": len(errors)}}
 
 
 # ── Google service-account auto-import of the closing responses sheet ───────────────────────
@@ -766,3 +843,134 @@ def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
         for k in ("acc_gross", "cash", "card", "other", "total"):
             a[k] = round(a[k], 2)
     return out
+
+
+# ── Reconciliation: rep-declared closing vs B2B actuals (cash/credit), + the close gate ──────
+def _usd(n) -> str:
+    return f"${_f(n):,.2f}"
+
+
+def _b2b_day(client, org_id: str, date: str) -> dict:
+    """One day's B2B raw_sales actuals: money per store_code and per (store_code, salesperson),
+    plus per-store activation/upgrade counts. has_data=False ⇒ B2B not loaded for that day yet
+    (the close gate then treats the rep as recon-pending rather than blocking)."""
+    addr_to_code, num_to_code, num_counts = {}, {}, {}
+    sm = (client.schema("commcalc").table("store_mapping")
+          .select("store_code,store_address").eq("org_id", org_id).execute().data) or []
+    for r in sm:
+        code = (r.get("store_code") or "").strip()
+        addr = (r.get("store_address") or "").strip()
+        if not (code and addr):
+            continue
+        addr_to_code[addr.lower()] = code
+        nk = _num_key(addr)
+        if nk:
+            num_counts[nk] = num_counts.get(nk, 0) + 1
+            num_to_code.setdefault(nk, code)
+
+    def resolve(store_str):
+        s = (store_str or "").strip()
+        if not s:
+            return None
+        c = addr_to_code.get(s.lower())
+        if c:
+            return c
+        nk = _num_key(s)
+        if nk and num_counts.get(nk, 0) == 1:
+            return num_to_code.get(nk)
+        return None
+
+    rows = (client.schema("commcalc").table("raw_sales")
+            .select("store,salesperson,department,tender_type,ext_price,voided")
+            .eq("org_id", org_id).in_("period", [_period_label(date), date[:7]]).eq("trans_date", date)
+            .limit(100000).execute().data) or []
+    by_store, by_rep = {}, {}
+    for r in rows:
+        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+            continue
+        code = resolve(r.get("store"))
+        if not code:
+            continue
+        ext = _f(r.get("ext_price"))
+        cls = _tender_class(r.get("tender_type"))
+        st = by_store.setdefault(code, {"cash": 0.0, "card": 0.0, "other": 0.0, "acc_gross": 0.0, "total": 0.0})
+        st[cls] += ext
+        st["total"] += ext
+        if (r.get("department") or "").strip() == "Ondigo":
+            st["acc_gross"] += ext
+        sp = (r.get("salesperson") or "").strip()
+        rp = by_rep.setdefault((code, sp.lower()),
+                               {"cash": 0.0, "card": 0.0, "other": 0.0, "acc_gross": 0.0, "total": 0.0, "salesperson": sp})
+        rp[cls] += ext
+        rp["total"] += ext
+        if (r.get("department") or "").strip() == "Ondigo":
+            rp["acc_gross"] += ext
+
+    counts = {}
+    try:
+        actuals = (client.schema("commcalc")
+                   .rpc("daily_sales_actuals", {"p_org_id": org_id, "p_period": _period_label(date)})
+                   .execute().data) or []
+        for a in actuals:
+            if str(a.get("trans_date"))[:10] != date:
+                continue
+            sc = a.get("store_code")
+            if not sc:
+                continue
+            c = counts.setdefault(sc, {"activations": 0, "upgrades": 0})
+            c["activations"] += int(a.get("prem_count") or 0) + int(a.get("byod_count") or 0)
+            c["upgrades"] += int(a.get("upg_count") or 0)
+    except Exception:
+        pass
+    return {"has_data": len(rows) > 0, "by_store": by_store, "by_rep": by_rep, "counts": counts}
+
+
+def _rep_b2b(day: dict, store_code: str, emp_name: str):
+    """Best B2B money match for a rep at a store (loose name match; sums if several aliases)."""
+    matches = [v for (c, _rl), v in day["by_rep"].items()
+               if c == store_code and _name_match(emp_name, v.get("salesperson", ""))]
+    if not matches:
+        return None
+    agg = {"cash": 0.0, "card": 0.0, "acc_gross": 0.0, "total": 0.0}
+    for m in matches:
+        for k in agg:
+            agg[k] += m.get(k, 0.0)
+    return agg
+
+
+def _money_issues(declared_cash, declared_credit, b2b_cash, b2b_card, tol=1.0) -> list:
+    """Apply the close rules: CASH short → block / over → flag; CREDIT over → block / under → flag."""
+    out = []
+    cv = round(_f(declared_cash) - _f(b2b_cash), 2)
+    if cv < -tol:
+        out.append({"metric": "cash", "declared": round(_f(declared_cash), 2), "b2b": round(_f(b2b_cash), 2),
+                    "variance": cv, "severity": "block", "reason": f"Cash short {_usd(-cv)} vs B2B sales"})
+    elif cv > tol:
+        out.append({"metric": "cash", "declared": round(_f(declared_cash), 2), "b2b": round(_f(b2b_cash), 2),
+                    "variance": cv, "severity": "flag", "reason": f"Cash over {_usd(cv)} vs B2B — investigate"})
+    rv = round(_f(declared_credit) - _f(b2b_card), 2)
+    if rv > tol:
+        out.append({"metric": "credit", "declared": round(_f(declared_credit), 2), "b2b": round(_f(b2b_card), 2),
+                    "variance": rv, "severity": "block", "reason": f"Credit {_usd(rv)} OVER B2B card sales"})
+    elif rv < -tol:
+        out.append({"metric": "credit", "declared": round(_f(declared_credit), 2), "b2b": round(_f(b2b_card), 2),
+                    "variance": rv, "severity": "flag", "reason": f"Credit under {_usd(-rv)} vs B2B"})
+    return out
+
+
+def _gate_row(client, org_id, store_code, date, emp_name, declared_cash, declared_credit, tol=1.0) -> dict:
+    """Recon a single rep's close vs B2B. Returns {status, block_reasons[], flags[], b2b}. status:
+    ok | flagged | blocked | recon_pending (B2B not loaded / rep not matched → never blocks)."""
+    if not store_code:
+        return {"status": "recon_pending", "block_reasons": [], "flags": [], "b2b": None}
+    day = _b2b_day(client, org_id, date)
+    if not day["has_data"]:
+        return {"status": "recon_pending", "block_reasons": [], "flags": [], "b2b": None}
+    repb = _rep_b2b(day, store_code, emp_name)
+    if repb is None:
+        return {"status": "recon_pending", "block_reasons": [], "flags": [], "b2b": None}
+    issues = _money_issues(declared_cash, declared_credit, repb["cash"], repb["card"], tol)
+    blocks = [i["reason"] for i in issues if i["severity"] == "block"]
+    flags = [i["reason"] for i in issues if i["severity"] == "flag"]
+    return {"status": "blocked" if blocks else ("flagged" if flags else "ok"),
+            "block_reasons": blocks, "flags": flags, "b2b": {"cash": repb["cash"], "card": repb["card"]}}
