@@ -321,7 +321,18 @@ async def upload_file(
     except Exception as e:
         print(f'WARN upload_log insert failed (run 007_upload_log.sql?): {e}')
 
-    return {"saved": saved, "file_type": file_type, "period": period}
+    # After a sales upload, scan for fraud (fake/reused email, duplicate id) → chargeback bucket.
+    fraud = None
+    if file_type in ('sales', 'daily_sales') and mapped:
+        try:
+            for p in sorted({m.get('period') for m in mapped if m.get('period')}) or [period]:
+                fr = _detect_fraud(client, org_id, p)
+                fraud = {'email_flags': (fraud or {}).get('email_flags', 0) + fr['email_flags'],
+                         'dupe_flags': (fraud or {}).get('dupe_flags', 0) + fr['dupe_flags']}
+        except Exception as e:
+            print(f'WARN fraud scan after sales upload failed (run 036?): {e}')
+
+    return {"saved": saved, "file_type": file_type, "period": period, "fraud": fraud}
 
 
 @router.get("/upload/history")
@@ -944,6 +955,103 @@ def chargeback_review_reopen(cb_id: str, org_id: str = ORG_ID):
         'status': 'open', 'assigned_rep': None, 'assigned_at': None, 'review': None,
         'chargeback_item_ref': None, 'updated_at': _cb_now()}).eq('id', cb_id).execute()
     return {"ok": True}
+
+
+# ── Fraud detectors → chargeback_review (fake/reused email · duplicate id/name) ─────────────
+def _is_fake_email(em: str) -> bool:
+    em = (em or "").strip().lower()
+    if not em:
+        return False
+    if "@" not in em or "." not in em.split("@")[-1]:
+        return True
+    local = em.split("@", 1)[0]
+    if len(local) <= 1:
+        return True
+    BAD = ("test@", "asdf", "qwerty", "noemail", "no@", "none@", "fake", "example.com",
+           "mailinator", "tempmail", "xxx@", "aaa@", "abc@", "123@", "n/a")
+    return any(b in em for b in BAD)
+
+
+def _fraud_row(org_id, r, source, severity, detail, dedupe_key, needs_review=False):
+    return {
+        "org_id": org_id, "source": source, "severity": severity, "needs_review": needs_review,
+        "store_address": r.get("store"), "period": r.get("period") or "",
+        "occurred_date": str(r.get("trans_date") or "")[:10],
+        "customer_name": r.get("customer"), "email": r.get("email"), "customer_no": r.get("customer_no"),
+        "phone_number": r.get("mdn"), "esn": r.get("serial_1"), "imei": r.get("serial_1"),
+        "amount": 0, "detail": detail,
+        "suggested_rep": (r.get("salesperson") or "").strip() or None,
+        "dedupe_key": dedupe_key,
+        "raw": {"trans_id": r.get("trans_id"), "contract_type": r.get("contract_type")},
+    }
+
+
+def _detect_fraud(client, org_id, period=None):
+    """Scan raw_sales activations for (a) fake / reused-across-customers email and (b) the same
+    customer id/name on multiple activations → stage candidates into chargeback_review. Each
+    candidate carries the sale's salesperson as suggested_rep. Re-runs preserve assignment/review."""
+    from collections import defaultdict
+    q = (client.schema("commcalc").table("raw_sales").select(
+        "trans_id,trans_date,period,store,salesperson,customer,email,customer_no,mdn,serial_1,contract_type,voided")
+        .eq("org_id", org_id))
+    if period:
+        q = q.eq("period", period)
+    rows = q.limit(200000).execute().data or []
+    acts = []
+    for r in rows:
+        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+            continue
+        mdn = re.sub(r"\D", "", str(r.get("mdn") or ""))
+        if not mdn and not (r.get("contract_type") or "").strip():
+            continue  # not an activation line
+        if not (r.get("email") or r.get("customer_no") or r.get("customer")):
+            continue  # no customer identity captured yet (pre-036 rows)
+        acts.append(r)
+
+    email_custs = defaultdict(set)
+    id_acts = defaultdict(list)
+    for r in acts:
+        em = (r.get("email") or "").strip().lower()
+        cust = (r.get("customer_no") or "").strip() or (r.get("customer") or "").strip().lower()
+        if em:
+            email_custs[em].add(cust or re.sub(r"\D", "", str(r.get("mdn") or "")))
+        if cust:
+            id_acts[cust].append(r)
+
+    cands = []
+    for r in acts:
+        em = (r.get("email") or "").strip().lower()
+        if em:
+            reused = len(email_custs.get(em, set())) > 1
+            fake = _is_fake_email(em)
+            if reused or fake:
+                why = "reused across customers" if reused else "fake/invalid"
+                cands.append(_fraud_row(org_id, r, "fraud_email", "critical",
+                                        f"Email {why}: {em}", f"fe:{r.get('trans_id')}"))
+        cust = (r.get("customer_no") or "").strip() or (r.get("customer") or "").strip().lower()
+        grp = id_acts.get(cust, [])
+        phones = {re.sub(r"\D", "", str(x.get("mdn") or "")) for x in grp if x.get("mdn")}
+        if cust and len(grp) > 1 and len(phones) > 1:
+            cands.append(_fraud_row(org_id, r, "fraud_dupe", "warning",
+                                    f"Same customer on {len(grp)} activations ({r.get('customer') or r.get('customer_no')})",
+                                    f"fd:{r.get('trans_id')}", needs_review=True))
+    for i in range(0, len(cands), 500):
+        client.schema("commcalc").table("chargeback_review").upsert(
+            cands[i:i + 500], on_conflict="org_id,dedupe_key").execute()
+    return {"email_flags": sum(1 for c in cands if c["source"] == "fraud_email"),
+            "dupe_flags": sum(1 for c in cands if c["source"] == "fraud_dupe"),
+            "scanned": len(acts)}
+
+
+@router.post("/chargeback-review/scan-fraud")
+def chargeback_scan_fraud(period: str = None, org_id: str = ORG_ID):
+    """Run the fraud detectors over raw_sales (optionally one period) → stage into the bucket."""
+    require_org(org_id)
+    try:
+        res = _detect_fraud(sb(), org_id, period)
+    except Exception as e:
+        raise HTTPException(500, f"fraud scan failed: {e}")
+    return {"ok": True, **res}
 
 
 # ── VIP PayGo / asset-lending ledger (read endpoints; data from the sweep, migration 014) ──

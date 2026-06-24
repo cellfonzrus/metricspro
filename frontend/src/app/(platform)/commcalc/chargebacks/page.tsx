@@ -37,6 +37,16 @@ export default function ChargebacksPage() {
 
   const set = (id: string, patch: Partial<Edit>) => setEdit(p => ({ ...p, [id]: { ...p[id], ...patch } }))
 
+  async function scan() {
+    setBusy('scan'); setMsg('')
+    try {
+      const r = await api('/api/v1/commcalc/chargeback-review/scan-fraud', { method: 'POST' })
+      setMsg(`✅ Scanned ${r.scanned} activations — ${r.email_flags} email flag(s), ${r.dupe_flags} duplicate-ID flag(s).`)
+      load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    finally { setBusy('') }
+  }
+
   async function act(id: string, kind: 'assign' | 'dismiss' | 'reopen') {
     setBusy(id + kind); setMsg('')
     try {
@@ -76,6 +86,9 @@ export default function ChargebacksPage() {
           <option value="fraud_email">Fake/reused email</option>
           <option value="fraud_dupe">Duplicate ID</option>
         </select>
+        <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={busy === 'scan'} onClick={scan}>
+          {busy === 'scan' ? '⏳ Scanning…' : '🔍 Scan sales for fraud'}
+        </button>
         {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
       </div>
 
