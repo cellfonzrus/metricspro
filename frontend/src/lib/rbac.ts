@@ -66,6 +66,7 @@ export const NAV: NavGroup[] = [
     { href: '/closing/submit', label: 'Submit Closing', icon: '➕', module: 'closing' },
     { href: '/closing/verify', label: 'DM Verify', icon: '✅', module: 'closing', scopes: ['all', 'market'] },
     { href: '/closing/recon', label: 'Reconciliation', icon: '🔎', module: 'closing', scopes: ['all', 'market'] },
+    { href: '/closing/pickup', label: 'Cash Pickup', icon: '💵', module: 'closing', scopes: ['all', 'market'] },
     { href: '/closing/imports', label: 'Auto-Import', icon: '🔄', module: 'closing', scopes: ['all'] },
   ]},
   { group: 'Notify', module: 'notify', items: [

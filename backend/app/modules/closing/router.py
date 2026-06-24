@@ -596,6 +596,158 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, org_i
             "summary": {"blocks": blocks, "flags": flags, "pending": pending, "total": len(errors)}}
 
 
+# ── DM cash-envelope pickup + notify the assigned recipient ─────────────────────────────────
+def _email_configured() -> bool:
+    try:
+        from app.modules.notify.channels import email_resend
+        return email_resend.is_configured()
+    except Exception:
+        return False
+
+
+def _wa_configured() -> bool:
+    try:
+        from app.modules.notify.channels import whatsapp_meta
+        return whatsapp_meta.is_configured()
+    except Exception:
+        return False
+
+
+async def _notify_pickup(client, org_id, dm_name, date, items, total) -> list:
+    """Best-effort email + WhatsApp to the assigned recipient after a pickup. Never raises."""
+    try:
+        rows = (client.schema("commcalc").table("cash_pickup_config").select("*").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows = []
+    cfg = rows[0] if rows else {}
+    lines = "\n".join(
+        f"• {it.get('store_name') or it.get('store_code') or '—'} — {it.get('employee_name') or '—'}: {_usd(it.get('amount') or it.get('cash'))}"
+        + (f"  ({it['note']})" if it.get("note") else "")
+        for it in items)
+    summary = (f"Cash pickup confirmed by {dm_name or 'DM'} on {date}: "
+               f"{len(items)} envelope(s), {_usd(total)} total.\n{lines}")
+    results = []
+    email = (cfg.get("recipient_email") or "").strip()
+    if cfg.get("notify_email", True) and email:
+        try:
+            from app.modules.notify.channels import email_resend
+            if email_resend.is_configured():
+                html = "<p>" + summary.replace("\n", "<br>") + "</p>"
+                mid = await email_resend.send_email(email, f"Cash pickup — {date} ({_usd(total)})", html)
+                results.append({"channel": "email", "to": email, "ok": True, "id": mid or "sent"})
+            else:
+                results.append({"channel": "email", "ok": False, "detail": "Resend not configured on the server"})
+        except Exception as e:
+            results.append({"channel": "email", "ok": False, "detail": str(e)[:200]})
+    wa = (cfg.get("recipient_whatsapp") or "").strip()
+    if cfg.get("notify_whatsapp", True) and wa:
+        try:
+            from app.modules.notify.channels import whatsapp_meta
+            if whatsapp_meta.is_configured():
+                mid = await whatsapp_meta.send_document(wa, b"", "text/plain", "pickup.txt", summary)
+                results.append({"channel": "whatsapp", "to": wa, "ok": True, "id": mid or "sent"})
+            else:
+                results.append({"channel": "whatsapp", "ok": False, "detail": "WhatsApp not configured on the server"})
+        except Exception as e:
+            results.append({"channel": "whatsapp", "ok": False, "detail": str(e)[:200]})
+    if not email and not wa:
+        results.append({"channel": "none", "ok": False, "detail": "No pickup recipient set — configure one on the Cash Pickup page."})
+    return results
+
+
+@router.get("/pickups")
+def closing_pickups(date: str, market: str = None, org_id: str = ORG_ID):
+    """Cash envelopes for a day + their pickup status. An envelope = a rep's closing row with cash
+    to collect (store_cash + epay_cash > 0) or an envelope photo."""
+    if not date:
+        raise HTTPException(400, "date required (YYYY-MM-DD)")
+    client = sb()
+    rows = (client.schema("commcalc").table("daily_closing").select("*")
+            .eq("org_id", org_id).eq("close_date", date).execute().data) or []
+    stores = (client.schema("storeops").table("stores").select("store_code,address,market").execute().data) or []
+    smeta = {s.get("store_code"): s for s in stores if s.get("store_code")}
+    try:
+        picks = (client.schema("commcalc").table("cash_pickup").select("*")
+                 .eq("org_id", org_id).eq("close_date", date).execute().data) or []
+    except Exception:
+        picks = []
+    pick_by = {((p.get("store_code") or ""), (p.get("employee_name") or "")): p for p in picks}
+
+    out = []
+    for r in rows:
+        cash = _f(r.get("store_cash")) + _f(r.get("epay_cash"))
+        if cash <= 0 and not r.get("envelope_picture"):
+            continue
+        code = r.get("store_code") or ""
+        meta = smeta.get(code, {})
+        mk = meta.get("market") or ""
+        if market and mk != market:
+            continue
+        p = pick_by.get((code, (r.get("employee_name") or "")))
+        out.append({
+            "store_code": r.get("store_code"),
+            "store_name": meta.get("address") or r.get("store_address") or r.get("store_name"),
+            "market": mk, "employee_name": r.get("employee_name"), "cash": round(cash, 2),
+            "envelope_picture": r.get("envelope_picture"),
+            "picked_up": bool(p and p.get("picked_up")),
+            "picked_up_by": p.get("picked_up_by") if p else None,
+            "picked_up_at": p.get("picked_up_at") if p else None, "note": p.get("note") if p else None,
+        })
+    out.sort(key=lambda e: (e["picked_up"], str(e.get("store_name") or "")))
+    return {"date": date, "envelopes": out,
+            "ready": sum(1 for e in out if not e["picked_up"]),
+            "collected": sum(1 for e in out if e["picked_up"])}
+
+
+@router.post("/pickup")
+async def confirm_pickup(payload: dict, org_id: str = ORG_ID):
+    """Confirm the DM picked up the selected cash envelopes, then notify the assigned recipient."""
+    client = sb()
+    date = _date(payload.get("date") or payload.get("close_date"))
+    if not date:
+        raise HTTPException(400, "valid date required")
+    items = payload.get("items") or []
+    if not items:
+        raise HTTPException(400, "Select at least one envelope.")
+    dm = (payload.get("picked_up_by") or "DM").strip()
+    total = 0.0
+    for it in items:
+        amt = _f(it.get("amount") or it.get("cash"))
+        total += amt
+        row = {"org_id": org_id, "close_date": date, "store_code": it.get("store_code") or "",
+               "store_name": it.get("store_name"), "employee_name": (it.get("employee_name") or ""),
+               "amount": amt, "picked_up": True, "picked_up_by": dm, "picked_up_at": _now(),
+               "note": (it.get("note") or "").strip() or None}
+        client.schema("commcalc").table("cash_pickup").upsert(
+            row, on_conflict="org_id,close_date,store_code,employee_name").execute()
+    notify = await _notify_pickup(client, org_id, dm, date, items, round(total, 2))
+    return {"ok": True, "count": len(items), "total": round(total, 2), "notify": notify}
+
+
+@router.get("/pickup-config")
+def get_pickup_config(org_id: str = ORG_ID):
+    try:
+        rows = (sb().schema("commcalc").table("cash_pickup_config").select("*").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows = []
+    c = rows[0] if rows else {}
+    return {"recipient_name": c.get("recipient_name") or "", "recipient_email": c.get("recipient_email") or "",
+            "recipient_whatsapp": c.get("recipient_whatsapp") or "",
+            "notify_email": c.get("notify_email", True) if c else True,
+            "notify_whatsapp": c.get("notify_whatsapp", True) if c else True,
+            "email_configured": _email_configured(), "whatsapp_configured": _wa_configured()}
+
+
+@router.put("/pickup-config")
+def put_pickup_config(body: dict, org_id: str = ORG_ID):
+    row = {"org_id": org_id, "updated_at": _now()}
+    for k in ("recipient_name", "recipient_email", "recipient_whatsapp", "notify_email", "notify_whatsapp"):
+        if k in body:
+            row[k] = body[k]
+    sb().schema("commcalc").table("cash_pickup_config").upsert(row, on_conflict="org_id").execute()
+    return get_pickup_config(org_id)
+
+
 # ── Google service-account auto-import of the closing responses sheet ───────────────────────
 _CLOSING_CFG_DEFAULTS = {"frequency": "daily", "day_of_week": 1, "day_of_month": 1, "hour": 22,
                          "timezone": "America/New_York", "enabled": False, "tab": ""}
