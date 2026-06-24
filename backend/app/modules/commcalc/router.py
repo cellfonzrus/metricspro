@@ -1000,16 +1000,27 @@ def comp_by_component(period: str = "", carrier_id: str = "", org_id: str = ORG_
 
 # ── Unified connector model (SaaS framework Phase 2: registry + live status + run-now dispatch) ──
 def _connector_status(client, org_id, cfg_table):
-    """Live status (last run / next run / enabled) read from the connector's existing *_sweep_config."""
+    """Live status (last run / next run / enabled / schedule) from the connector's *_sweep_config.
+    The schedule fields are read best-effort in a second query so a config table without them
+    never breaks the primary status."""
     if not cfg_table:
         return {}
     try:
         rows = (client.schema('commcalc').table(cfg_table)
                 .select('enabled,last_run_at,last_status,last_detail,next_run_at')
                 .eq('org_id', org_id).limit(1).execute().data) or []
-        return rows[0] if rows else {}
+        out = rows[0] if rows else {}
     except Exception:
         return {}
+    try:
+        sch = (client.schema('commcalc').table(cfg_table)
+               .select('frequency,day_of_week,day_of_month,hour,timezone')
+               .eq('org_id', org_id).limit(1).execute().data) or []
+        if sch:
+            out = {**out, **sch[0]}
+    except Exception:
+        pass
+    return out
 
 
 @router.get("/connectors")
@@ -1115,6 +1126,94 @@ def connector_run_now(cid: str, background_tasks: BackgroundTasks, org_id: str =
         background_tasks.add_task(_do_closing_sweep, org_id)
         return {"status": "started", "kind": kind}
     raise HTTPException(400, f"'{rows[0].get('vendor_name')}' is manual-only — upload it on the Upload Wizard.")
+
+
+@router.patch("/connectors/{cid}/schedule")
+def update_connector_schedule(cid: str, body: dict, org_id: str = ORG_ID):
+    """Set a connector's sweep schedule (frequency/day/hour/timezone/enabled) from the registry —
+    written to its *_sweep_config and re-deriving next_run_at via the shared scheduler. The registry
+    becomes the single place to schedule, instead of hunting for each vendor's own sweep page."""
+    require_org(org_id)
+    client = sb()
+    rows = (client.schema('commcalc').table('connector_instances').select('*')
+            .eq('org_id', org_id).eq('id', cid).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "connector not found")
+    conn = rows[0]
+    tbl = (conn.get('config_table') or '').strip()
+    if not tbl:
+        raise HTTPException(400, f"'{conn.get('vendor_name')}' is manual-only — nothing to schedule.")
+    try:
+        cur = (client.schema('commcalc').table(tbl)
+               .select('frequency,day_of_week,day_of_month,hour,timezone,enabled')
+               .eq('org_id', org_id).limit(1).execute().data) or []
+    except Exception as e:
+        raise HTTPException(400, f"{tbl} has no schedule columns: {str(e)[:120]}")
+    if not cur:
+        raise HTTPException(400, f"Set up {conn.get('vendor_name')}'s credentials first — no config row yet.")
+    merged = {**cur[0]}
+    upd = {}
+    for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone', 'enabled'):
+        if k in body and body[k] is not None:
+            upd[k] = body[k]
+            merged[k] = body[k]
+    upd['next_run_at'] = _vip_next_run(merged.get('frequency') or 'daily', merged.get('day_of_week'),
+                                       merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
+    try:
+        client.schema('commcalc').table(tbl).update({**upd, 'updated_at': _datetime.now(_timezone.utc).isoformat()}) \
+            .eq('org_id', org_id).execute()
+    except Exception:
+        client.schema('commcalc').table(tbl).update(upd).eq('org_id', org_id).execute()
+    return {"ok": True, "next_run_at": upd['next_run_at']}
+
+
+@router.post("/connectors/run-due")
+def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default=""), org_id: str = ORG_ID):
+    """ONE pg_cron entrypoint that fans out to every connector whose schedule is due — replacing the
+    per-vendor /{vendor}/sweep/run-due crons. Reads each enabled connector's *_sweep_config
+    (enabled + next_run_at), dispatches the due ones by sweep_kind, and advances next_run_at.
+    Additive: the per-vendor run-dues still work; point a single cron here and disable the others to
+    avoid double-runs. Guarded by NOTIFY_RUN_SECRET (reused — no new env var)."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    client = sb()
+    now_iso = _datetime.now(_timezone.utc).isoformat()
+    from app.modules.closing.router import _do_closing_sweep
+    dispatch = {'vip': _do_vip_sweep, 'dlar': _do_dlar_sweep, 'epay': _do_epay_sweep,
+                'b2b': _do_b2b_sweep, 'google_closing': _do_closing_sweep}
+    conns = (client.schema('commcalc').table('connector_instances').select('*')
+             .eq('enabled', True).execute().data) or []
+    triggered, checked = [], 0
+    for c in conns:
+        kind = (c.get('sweep_kind') or '').strip()
+        tbl = (c.get('config_table') or '').strip()
+        if kind not in dispatch or not tbl:
+            continue
+        oid = c.get('org_id') or org_id
+        try:
+            cfg = (client.schema('commcalc').table(tbl)
+                   .select('enabled,next_run_at,frequency,day_of_week,day_of_month,hour,timezone')
+                   .eq('org_id', oid).limit(1).execute().data) or []
+        except Exception:
+            continue
+        if not cfg:
+            continue
+        checked += 1
+        cf = cfg[0]
+        if not cf.get('enabled'):
+            continue
+        nra = cf.get('next_run_at')
+        if nra and nra > now_iso:
+            continue
+        nxt = _vip_next_run(cf.get('frequency') or 'daily', cf.get('day_of_week'),
+                            cf.get('day_of_month'), cf.get('hour'), cf.get('timezone'))
+        try:
+            client.schema('commcalc').table(tbl).update({'next_run_at': nxt}).eq('org_id', oid).execute()
+        except Exception:
+            pass
+        background_tasks.add_task(dispatch[kind], oid)
+        triggered.append(c.get('vendor_name'))
+    return {"triggered": triggered, "checked": checked}
 
 
 # ── Chargeback review bucket (VIP file + fraud) → assign to the rep → employee chargeback ────

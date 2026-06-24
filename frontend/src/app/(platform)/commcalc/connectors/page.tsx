@@ -9,6 +9,7 @@ const TWOFA: Record<string, { bg: string; fg: string }> = {
 }
 const dt = (s: string) => s ? new Date(s).toLocaleString() : '—'
 const fin: React.CSSProperties = { padding: '6px 9px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
+const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 export default function ConnectorsPage() {
   const [conns, setConns] = useState<any[]>([])
@@ -18,6 +19,7 @@ export default function ConnectorsPage() {
   const [showAdd, setShowAdd] = useState(false)
   const [nc, setNc] = useState<any>({ vendor_name: '', label: '', sweep_kind: 'manual', portal_url: '' })
   const [nr, setNr] = useState<Record<string, any>>({})
+  const [sched, setSched] = useState<Record<string, any>>({})
 
   const load = useCallback(() => {
     setLoading(true)
@@ -39,6 +41,17 @@ export default function ConnectorsPage() {
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     finally { setBusy('') }
   }
+  async function saveSchedule(c: any, sc: any) {
+    setBusy(c.id + 'sched'); setMsg('')
+    try {
+      const r = await api(`/api/v1/commcalc/connectors/${c.id}/schedule`, { method: 'PATCH', body: JSON.stringify({
+        frequency: sc.frequency, day_of_week: Number(sc.day_of_week), day_of_month: Number(sc.day_of_month),
+        hour: Number(sc.hour), enabled: !!sc.enabled,
+      }) })
+      setMsg(`✅ ${c.vendor_name} schedule saved — next run ${dt(r.next_run_at)}.`); load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    finally { setBusy('') }
+  }
   async function addConnector() {
     if (!nc.vendor_name?.trim()) { setMsg('Vendor name required.'); return }
     try { await api('/api/v1/commcalc/connectors', { method: 'POST', body: JSON.stringify(nc) }); setNc({ vendor_name: '', label: '', sweep_kind: 'manual', portal_url: '' }); setShowAdd(false); load() }
@@ -56,7 +69,10 @@ export default function ConnectorsPage() {
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔌 Connectors</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Every vendor portal and the reports it feeds, with live sweep status. The data-pipeline registry (framework Phase 2).
+          Every vendor portal and the reports it feeds, with live sweep status and per-connector schedule. The data-pipeline registry (framework Phase 2).
+        </p>
+        <p style={{ color: 'var(--text3)', fontSize: 12, margin: '4px 0 0' }}>
+          One cron drives them all: point pg_cron at <code>POST /api/v1/commcalc/connectors/run-due</code> (header <code>X-Notify-Secret</code>) and it fans out to every connector that's due.
         </p>
       </div>
       {msg && <div style={{ fontSize: 13, marginBottom: 10 }}>{msg}</div>}
@@ -109,6 +125,32 @@ export default function ConnectorsPage() {
                 {c.automatable && <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={busy === c.id} onClick={() => runNow(c)}>{busy === c.id ? '…' : '▶ Run now'}</button>}
               </div>
             </div>
+
+            {c.config_table && (() => {
+              const sc = sched[c.id] || { frequency: st.frequency || 'daily', day_of_week: st.day_of_week ?? 1, day_of_month: st.day_of_month ?? 1, hour: st.hour ?? 6, enabled: !!st.enabled }
+              const upd = (patch: any) => setSched(p => ({ ...p, [c.id]: { ...sc, ...patch } }))
+              return (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 10, fontSize: 12, color: 'var(--text2)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <input type="checkbox" checked={!!sc.enabled} onChange={e => upd({ enabled: e.target.checked })} /> auto-run on schedule
+                  </label>
+                  <select style={fin} value={sc.frequency} onChange={e => upd({ frequency: e.target.value })}>
+                    {['daily', 'weekly', 'monthly'].map(f => <option key={f} value={f}>{f}</option>)}
+                  </select>
+                  {sc.frequency === 'weekly' && (
+                    <select style={fin} value={sc.day_of_week} onChange={e => upd({ day_of_week: Number(e.target.value) })}>
+                      {DOW.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                    </select>
+                  )}
+                  {sc.frequency === 'monthly' && (
+                    <span>day <input style={{ ...fin, width: 52 }} value={sc.day_of_month} onChange={e => upd({ day_of_month: e.target.value })} /></span>
+                  )}
+                  <span>at <input style={{ ...fin, width: 52 }} value={sc.hour} onChange={e => upd({ hour: e.target.value })} />:00 {st.timezone || 'ET'}</span>
+                  <button className="btn btn-secondary" style={{ fontSize: 12 }} disabled={busy === c.id + 'sched'} onClick={() => saveSchedule(c, sc)}>{busy === c.id + 'sched' ? '…' : 'Save schedule'}</button>
+                  {st.next_run_at && <span style={{ color: 'var(--text3)' }}>next {dt(st.next_run_at)}</span>}
+                </div>
+              )
+            })()}
 
             {(c.reports || []).length > 0 && (
               <div className="table-wrapper" style={{ marginTop: 12 }}>
