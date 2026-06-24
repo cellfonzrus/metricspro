@@ -119,6 +119,33 @@ export default function SchedulePage() {
     } finally { setBusy(false) }
   }
 
+  // Pull LAST week's shifts into the current week (dedup against this week).
+  async function copyFromLastWeek() {
+    const ds = addDays(weekStart, -7), de = addDays(ds, 6)
+    const prev = await api(`/api/v1/storeops/shifts?week_start=${ds}&week_end=${de}`).catch(() => [])
+    if (!prev?.length) { alert('No shifts last week to copy.'); return }
+    if (!confirm(`Copy ${prev.length} shifts from last week into this week? Existing shifts are kept (duplicates skipped).`)) return
+    setBusy(true)
+    try {
+      const seen = new Set(shifts.map(s => `${s.employee_name}|${s.shift_date}|${s.start_time}`))
+      const created: any[] = []; let added = 0
+      for (const sh of prev) {
+        const nd = addDays(sh.shift_date, 7)
+        if (seen.has(`${sh.employee_name}|${nd}|${sh.start_time}`)) continue
+        try {
+          const c = await api('/api/v1/storeops/shifts', { method: 'POST', body: JSON.stringify({
+            employee_id: sh.employee_id, employee_name: sh.employee_name, store_code: sh.store_code,
+            shift_date: nd, start_time: sh.start_time, end_time: sh.end_time,
+            scheduled_hours: sh.scheduled_hours, status: 'scheduled',
+          }) })
+          created.push(c); added++
+        } catch { /* skip blocked (time-off) / failed rows */ }
+      }
+      setShifts(s => [...s, ...created])
+      alert(`Copied ${added} shift${added === 1 ? '' : 's'} from last week.`)
+    } finally { setBusy(false) }
+  }
+
   async function deleteShift(id: number) {
     if (!confirm('Remove this shift?')) return
     await api(`/api/v1/storeops/shifts/${id}`, { method: 'DELETE' })
@@ -253,6 +280,7 @@ export default function SchedulePage() {
           <button className="btn btn-secondary" onClick={prevWeek}>← Prev</button>
           <button className="btn btn-secondary" onClick={() => setWeekStart(mondayOf())}>Today</button>
           <button className="btn btn-secondary" onClick={nextWeek}>Next →</button>
+          <button className="btn btn-secondary" disabled={busy} onClick={copyFromLastWeek} title="Pull last week's shifts into this week">⬅️ Copy last week</button>
           <button className="btn btn-primary" disabled={busy} onClick={copyWeeks} title="Duplicate this week's shifts into one or more following weeks">📋 Copy weeks</button>
           <ExportButtons payload={buildPayload} compact />
         </div>
