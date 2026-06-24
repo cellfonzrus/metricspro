@@ -36,6 +36,13 @@ export default function ExecOverviewPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (
         <>
+          {data?.pl && (data.pl.revenue != null || data.pl.net_income != null) && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
+              <Tile label="Revenue" value={fmt(data.pl.revenue)} />
+              <Tile label="Gross profit" value={fmt(data.pl.gross_profit)} tone={(data.pl.gross_profit ?? 0) < 0 ? '#b42318' : '#16794a'} />
+              <Tile label="Net income" value={fmt(data.pl.net_income)} tone={(data.pl.net_income ?? 0) < 0 ? '#b42318' : '#16794a'} sub={<Link href="/accounts/pl" style={{ fontSize: 11 }}>P&L →</Link>} />
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12, marginBottom: 18 }}>
             <Tile label="Commissions paid" value={fmt(t.commissions_paid)} />
             <Tile label="Commission at risk" value={fmt(t.commission_at_risk)} tone="#b45309" sub={`${t.below_tier || 0} reps below tier`} />
@@ -81,7 +88,7 @@ export default function ExecOverviewPage() {
   )
 }
 
-const Tile = ({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: string }) => (
+const Tile = ({ label, value, sub, tone }: { label: string; value: string; sub?: React.ReactNode; tone?: string }) => (
   <div className="card" style={{ padding: 14 }}>
     <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
     <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2, color: tone || 'var(--text)' }}>{value}</div>

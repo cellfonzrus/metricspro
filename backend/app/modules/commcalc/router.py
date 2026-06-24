@@ -2897,7 +2897,20 @@ def exec_overview(period: str, org_id: str = ORG_ID):
     for d in stores:
         for k in ('paid', 'at_risk', 'chargebacks', 'on_table'):
             d[k] = round(d[k], 2)
-    return {"period": period,
+    # P&L headline from the Account module's consolidated statement (period stored as YYYY-MM).
+    pl = {}
+    try:
+        pm = parse_period(period)
+        ym = f"{pm['year']}-{pm['month']:02d}"
+        prow = (sb().schema('commcalc').table('account_statements').select('payload')
+                .eq('org_id', org_id).eq('period', ym).eq('statement_type', 'pl')
+                .eq('scope_key', 'consolidated').limit(1).execute().data) or []
+        if prow:
+            p = prow[0].get('payload') or {}
+            pl = {'revenue': p.get('revenue'), 'gross_profit': p.get('gross_profit'), 'net_income': p.get('net_income')}
+    except Exception:
+        pass
+    return {"period": period, "pl": pl,
             "tiles": {"commissions_paid": round(sum(r.get('final_payout') or 0 for r in reps), 2),
                       "commission_at_risk": s.get('total_at_risk', 0),
                       "chargebacks_deducted": s.get('total_chargebacks', 0),
