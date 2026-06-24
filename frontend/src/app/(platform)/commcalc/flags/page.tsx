@@ -26,6 +26,7 @@ export default function FlagsPage() {
   const [fSearch, setFSearch] = useState('')
   const [fModel, setFModel] = useState('')
   const [fWindow, setFWindow] = useState('')
+  const [fActMonth, setFActMonth] = useState('')
   const [sortKey, setSortKey] = useState('days_active')
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc')
   const [showMatrix, setShowMatrix] = useState(false)
@@ -41,6 +42,7 @@ export default function FlagsPage() {
   const types  = useMemo(() => [...new Set(flags.map(f => f.flag_type).filter(Boolean))].sort(), [flags])
   const reps   = useMemo(() => [...new Set(flags.map(f => f.epay_salesperson).filter(Boolean))].sort(), [flags])
   const stores = useMemo(() => [...new Set(flags.map(f => f.store_address).filter(Boolean))].sort(), [flags])
+  const actMonths = useMemo(() => [...new Set(flags.map(f => String(f.activation_date || f.transaction_date || '').slice(0, 7)).filter(Boolean))].sort().reverse(), [flags])
 
   const filtered = useMemo(() => {
     let rows = flags.filter(f => {
@@ -48,6 +50,7 @@ export default function FlagsPage() {
       if (fRep && f.epay_salesperson !== fRep) return false
       if (fStore && f.store_address !== fStore) return false
       if (fModel && !(f.phone_model || '').toLowerCase().includes(fModel.toLowerCase())) return false
+      if (fActMonth && String(f.activation_date || f.transaction_date || '').slice(0, 7) !== fActMonth) return false
       if (fSearch) {
         const q = fSearch.toLowerCase()
         const hay = `${f.mdn||''} ${f.imei||''} ${f.description||''}`.toLowerCase()
@@ -73,7 +76,7 @@ export default function FlagsPage() {
       return 0
     })
     return rows
-  }, [flags, fType, fRep, fStore, fModel, fSearch, fWindow, sortKey, sortDir])
+  }, [flags, fType, fRep, fStore, fModel, fSearch, fWindow, fActMonth, sortKey, sortDir])
 
   const totalAtRisk = filtered.reduce((s, f) => s + Math.abs(f.amount || 0), 0)
 
@@ -93,11 +96,12 @@ export default function FlagsPage() {
   }
 
   function exportCSV() {
-    const head = 'Flag Type,Severity,Days Active,Rep,Store,MDN,IMEI,Phone Model,Plan,Amount,Description'
+    const head = 'Flag Type,Severity,Days Active,Rep,Store,MDN,IMEI,Phone Model,Plan,Activated,Amount,Description'
     const rows = filtered.map(f => [
       f.flag_type, f.severity, f.days_active ?? '', f.epay_salesperson || '',
       `"${(f.store_address||'').replace(/"/g,'')}"`, f.mdn || '', f.imei || '',
       `"${(f.phone_model||'').replace(/"/g,'')}"`, `"${(f.customer_plan||'').replace(/"/g,'')}"`,
+      String(f.activation_date||f.transaction_date||'').slice(0,10),
       f.amount || '', `"${(f.description||'').replace(/"/g,'').replace(/\n/g,' ')}"`,
     ].join(','))
     const a = document.createElement('a')
@@ -146,12 +150,16 @@ export default function FlagsPage() {
         <select className="select" value={fWindow} onChange={e => setFWindow(e.target.value)}>
           {WINDOWS.map(w => <option key={w.id} value={w.id}>{w.label}</option>)}
         </select>
+        <select className="select" value={fActMonth} onChange={e => setFActMonth(e.target.value)} title="Filter by the month the line was activated">
+          <option value="">Any activation month</option>
+          {actMonths.map(m => <option key={m} value={m}>Activated {m}</option>)}
+        </select>
         <input className="input" placeholder="Search MDN / IMEI…" value={fSearch}
           onChange={e => setFSearch(e.target.value)} style={{ width: 160 }} />
         <input className="input" placeholder="Phone model…" value={fModel}
           onChange={e => setFModel(e.target.value)} style={{ width: 140 }} />
-        {(fType||fRep||fStore||fWindow||fSearch||fModel) && (
-          <button className="btn btn-secondary" onClick={() => { setFType('');setFRep('');setFStore('');setFWindow('');setFSearch('');setFModel('') }}>✕ Clear</button>
+        {(fType||fRep||fStore||fWindow||fSearch||fModel||fActMonth) && (
+          <button className="btn btn-secondary" onClick={() => { setFType('');setFRep('');setFStore('');setFWindow('');setFSearch('');setFModel('');setFActMonth('') }}>✕ Clear</button>
         )}
       </div>
 
@@ -236,12 +244,13 @@ export default function FlagsPage() {
                 <TH k="imei" label="IMEI" />
                 <TH k="phone_model" label="Phone Model" />
                 <TH k="customer_plan" label="Plan" />
+                <TH k="activation_date" label="Activated" />
                 <TH k="amount" label="Amount" align="right" />
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={10} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>
+                <tr><td colSpan={11} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>
                   {flags.length === 0 ? 'No flags — run calculation to generate' : 'No flags match filters'}
                 </td></tr>
               ) : filtered.map((f, i) => (
@@ -263,7 +272,8 @@ export default function FlagsPage() {
                   <td style={{ padding: '8px 10px', fontSize: 11, fontFamily: 'monospace' }}>{f.imei || '—'}</td>
                   <td style={{ padding: '8px 10px', fontSize: 11 }}>{(f.phone_model||'—').substring(0,30)}</td>
                   <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text3)' }}>{(f.customer_plan||'—').substring(0,25)}</td>
-                  <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{f.amount ? fmt(Math.abs(f.amount)) : '—'}</td>
+                  <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text3)' }}>{String(f.activation_date||f.transaction_date||'—').substring(0,10)}</td>
+                  <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }} title={f.flag_type==='CHARGEBACK'?'Rebate lost':''}>{f.amount ? fmt(Math.abs(f.amount)) : '—'}</td>
                 </tr>
               ))}
             </tbody>

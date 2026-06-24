@@ -1605,6 +1605,15 @@ async def _run_calculation(period: str, org_id: str):
         # Compute and save flags
         try:
             pm = parse_period(period)
+            # asset lookup (device model + reimbursement by IMEI) so a chargeback shows the REBATE LOST
+            asset_by_imei = {}
+            try:
+                for a in fetch('asset_ledger'):
+                    k = str(a.get('esn_imei') or '').replace('.0', '').strip().upper()
+                    if k:
+                        asset_by_imei[k] = a
+            except Exception:
+                pass
             flag_list = calc_flags(
                 sales=valid,
                 pay_detail=pay_detail,
@@ -1614,6 +1623,7 @@ async def _run_calculation(period: str, org_id: str):
                 period=period,
                 period_month=pm['month'],
                 period_year=pm['year'],
+                asset_by_imei=asset_by_imei,
             )
             # Add port-out / transfer-out / suspended flags from MI report
             try:

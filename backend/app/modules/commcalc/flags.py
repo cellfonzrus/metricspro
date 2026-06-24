@@ -16,6 +16,19 @@ def safe_float(v) -> float:
 def street_num(addr: str) -> str:
     return str(addr or '').strip().split(' ')[0]
 
+def _days_since(date_str):
+    """Whole days from an activation/acquired date string to today (None if unparseable)."""
+    s = str(date_str or '').strip()
+    if not s:
+        return None
+    try:
+        from datetime import date
+        from dateutil import parser as _dp
+        return (date.today() - _dp.parse(s).date()).days
+    except Exception:
+        return None
+
+
 def calc_flags(
     sales: list[dict],
     pay_detail: list[dict],
@@ -25,10 +38,13 @@ def calc_flags(
     period: str,
     period_month: int,
     period_year: int,
+    asset_by_imei: dict | None = None,
 ) -> list[dict]:
-    """Returns list of flag dicts ready to insert into commcalc.flags."""
+    """Returns list of flag dicts ready to insert into commcalc.flags. asset_by_imei maps an IMEI
+    (upper, no '.0') → its asset_ledger row, used to show a chargeback's REBATE LOST + device + age."""
 
     flags = []
+    asset_by_imei = asset_by_imei or {}
     base = {'period': period, 'period_month': period_month, 'period_year': period_year}
 
     valid_sales = [
@@ -37,20 +53,35 @@ def calc_flags(
         and str(r.get('trans_type', '')).strip() != 'Return'
     ]
 
-    # ── 1. CHARGEBACK ─────────────────────────────────────────────
+    # ── 1. CHARGEBACK — show the REBATE LOST for that phone, not the bill-pay amount ──────
     for r in pay_detail:
         if str(r.get('category', '')).strip() == 'Chargeback':
             amt = safe_float(r.get('amount'))
             if amt != 0:
+                imei = str(r.get('imei', '') or '').replace('.0', '').strip()
+                a = asset_by_imei.get(imei.upper()) if imei else None
+                rebate = safe_float(a.get('reimbursement')) if a else 0.0
+                model = ((a.get('device_model') if a else '') or '').strip()
+                acq = (a.get('acquired_date') if a else None) or (a.get('payg_date') if a else None)
+                disp = rebate if rebate > 0 else abs(amt)   # rebate lost; fall back to bill-pay if no asset match
+                txn = str(r.get('payment_date') or r.get('trans_date') or r.get('date') or '')[:10] or acq
+                desc = f"Chargeback — rebate lost ${disp:,.2f}"
+                if rebate > 0:
+                    desc += f" (bill-pay ${abs(amt):,.2f})"
+                if model:
+                    desc += f" · {model}"
                 flags.append({**base,
-                    'flag_type': 'CHARGEBACK', 'source': 'payment_detail',
-                    'severity': 'HIGH',
+                    'flag_type': 'CHARGEBACK', 'source': 'payment_detail', 'severity': 'HIGH',
                     'store_address': r.get('business_address', ''),
                     'epay_salesperson': r.get('rep_username', ''),
-                    'mdn': r.get('mdn', ''), 'imei': r.get('imei', ''),
-                    'amount': amt,
-                    'description': f"Chargeback of ${abs(amt):.2f} from Boost",
-                    'coaching_note': 'Review activation quality. Customer may have ported out or disputed.',
+                    'mdn': r.get('mdn', ''), 'imei': imei,
+                    'amount': round(disp, 2),
+                    'rebate_lost': round(rebate, 2) if a else None,
+                    'phone_model': model, 'days_active': _days_since(acq),
+                    'activation_date': acq, 'transaction_date': txn,
+                    'customer_plan': ((a.get('contract_type') if a else '') or '').strip(),
+                    'description': desc,
+                    'coaching_note': 'Rebate clawed back — review activation quality (port-out / dispute / early cancel).',
                 })
 
     # ── 2. UNMAPPED PAYMENT TYPE ──────────────────────────────────
