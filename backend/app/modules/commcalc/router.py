@@ -17,6 +17,7 @@ from app.modules.commcalc import epay_sweep
 from app.modules.commcalc import b2b_sweep
 from app.modules.commcalc import sales_analyzer
 from app.modules.commcalc import comp_trend
+from app.modules.commcalc import carrier_map
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 import calendar as _calendar
@@ -841,6 +842,145 @@ async def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: 
             {'next_run_at': nxt}).eq('org_id', oid).execute()
         background_tasks.add_task(_do_vip_sweep, oid)
     return {"triggered": len(due)}
+
+
+# ── Carrier category map (SaaS framework Phase 1: config-driven canonical components) ────────
+def _period_variants(p):
+    p = (p or "").strip()
+    if not p:
+        return []
+    out = {p}
+    try:
+        from dateutil import parser as _dp
+        d = _dp.parse(p if len(p) > 7 else p + "-01")
+        out.add(d.strftime("%B %Y"))
+        out.add(d.strftime("%Y-%m"))
+    except Exception:
+        pass
+    return list(out)
+
+
+@router.get("/carriers")
+def list_carriers(org_id: str = ORG_ID):
+    require_org(org_id)
+    return (sb().schema("commcalc").table("carrier").select("*").eq("org_id", org_id).order("name").execute().data) or []
+
+
+@router.post("/carriers")
+def create_carrier(body: dict, org_id: str = ORG_ID):
+    require_org(org_id)
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    row = {"org_id": org_id, "name": name, "code": (body.get("code") or "").strip() or None,
+           "is_default": bool(body.get("is_default"))}
+    r = sb().schema("commcalc").table("carrier").upsert(row, on_conflict="org_id,name").execute()
+    return r.data[0] if r.data else row
+
+
+@router.delete("/carriers/{cid}")
+def delete_carrier(cid: str, org_id: str = ORG_ID):
+    require_org(org_id)
+    sb().schema("commcalc").table("carrier").delete().eq("org_id", org_id).eq("id", cid).execute()
+    return {"ok": True}
+
+
+@router.get("/carrier-category-map")
+def list_category_map(carrier_id: str = "", org_id: str = ORG_ID):
+    require_org(org_id)
+    q = sb().schema("commcalc").table("carrier_category_map").select("*").eq("org_id", org_id)
+    if carrier_id:
+        q = q.eq("carrier_id", carrier_id)
+    return q.order("priority").execute().data or []
+
+
+@router.post("/carrier-category-map")
+def upsert_category_rule(body: dict, org_id: str = ORG_ID):
+    require_org(org_id)
+    comp = (body.get("component") or "").strip().upper()
+    if comp not in carrier_map.COMPONENTS:
+        raise HTTPException(400, "component must be one of " + "|".join(carrier_map.COMPONENTS))
+    raw = (body.get("raw_category") or "").strip()
+    if not raw:
+        raise HTTPException(400, "raw_category required")
+    row = {"org_id": org_id, "carrier_id": body.get("carrier_id") or None, "raw_category": raw,
+           "match_type": (body.get("match_type") or "exact").lower(), "component": comp,
+           "subtype": (body.get("subtype") or "").strip() or None,
+           "priority": int(body.get("priority") or 100),
+           "is_active": body.get("is_active", True) is not False,
+           "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    if body.get("id"):
+        sb().schema("commcalc").table("carrier_category_map").update(row).eq("id", body["id"]).execute()
+        return {"ok": True, "id": body["id"]}
+    r = sb().schema("commcalc").table("carrier_category_map").upsert(
+        row, on_conflict="org_id,carrier_id,raw_category,match_type").execute()
+    return r.data[0] if r.data else row
+
+
+@router.delete("/carrier-category-map/{rid}")
+def delete_category_rule(rid: str, org_id: str = ORG_ID):
+    require_org(org_id)
+    sb().schema("commcalc").table("carrier_category_map").delete().eq("org_id", org_id).eq("id", rid).execute()
+    return {"ok": True}
+
+
+@router.get("/carrier-category-map/unmapped")
+def unmapped_categories(period: str = "", carrier_id: str = "", org_id: str = ORG_ID):
+    """Distinct raw comp categories (raw_comp_report) split into mapped vs NOT-yet-mapped, so the
+    admin can map what's missing. Never silently drops a category from the canonical model."""
+    require_org(org_id)
+    client = sb()
+    rules = carrier_map.load_rules(client, org_id, carrier_id or None)
+    q = client.schema("commcalc").table("raw_comp_report").select("compensation_type,payment_amount,period").eq("org_id", org_id)
+    if period:
+        q = q.in_("period", _period_variants(period))
+    rows = q.limit(200000).execute().data or []
+    agg = {}
+    for r in rows:
+        cat = (r.get("compensation_type") or "").strip()
+        if not cat:
+            continue
+        d = agg.setdefault(cat, {"category": cat, "amount": 0.0, "count": 0})
+        d["amount"] += safe_float(r.get("payment_amount"))
+        d["count"] += 1
+    mapped, unmapped = [], []
+    for cat, d in agg.items():
+        d["amount"] = round(d["amount"], 2)
+        m = carrier_map.match_rule(rules, cat)
+        if m:
+            d["component"], d["subtype"] = m.get("component"), m.get("subtype")
+            mapped.append(d)
+        else:
+            unmapped.append(d)
+    mapped.sort(key=lambda x: -x["amount"])
+    unmapped.sort(key=lambda x: -x["amount"])
+    return {"period": period, "mapped": mapped, "unmapped": unmapped,
+            "unmapped_total": round(sum(x["amount"] for x in unmapped), 2)}
+
+
+@router.get("/comp-by-component")
+def comp_by_component(period: str = "", carrier_id: str = "", org_id: str = ORG_ID):
+    """Apply the category map to raw_comp_report → $ per canonical component (the payoff)."""
+    require_org(org_id)
+    client = sb()
+    rules = carrier_map.load_rules(client, org_id, carrier_id or None)
+    q = client.schema("commcalc").table("raw_comp_report").select("compensation_type,payment_amount,period").eq("org_id", org_id)
+    if period:
+        q = q.in_("period", _period_variants(period))
+    rows = q.limit(200000).execute().data or []
+    out = {c: 0.0 for c in carrier_map.COMPONENTS}
+    unmapped = 0.0
+    for r in rows:
+        amt = safe_float(r.get("payment_amount"))
+        m = carrier_map.match_rule(rules, r.get("compensation_type"))
+        if m and m.get("component") in out:
+            out[m["component"]] += amt
+        else:
+            unmapped += amt
+    comps = {k: round(v, 2) for k, v in out.items()}
+    comps["UNMAPPED"] = round(unmapped, 2)
+    comps["TOTAL"] = round(sum(out.values()) + unmapped, 2)
+    return {"period": period, "components": comps}
 
 
 # ── Chargeback review bucket (VIP file + fraud) → assign to the rep → employee chargeback ────
