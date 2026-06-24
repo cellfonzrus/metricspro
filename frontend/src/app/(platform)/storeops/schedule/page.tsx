@@ -43,6 +43,7 @@ export default function SchedulePage() {
   const [addModal, setAddModal] = useState<{ date: string; store?: string; emp?: string; editId?: number } | null>(null)
   const [newShift, setNewShift] = useState({ start_time: '10:00', end_time: '18:00', store_code: '', employee_name: '' })
   const [busy, setBusy] = useState(false)
+  const [timeOff, setTimeOff] = useState<any[]>([])
 
   const weekEnd = addDays(weekStart, 6)
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart])
@@ -53,7 +54,8 @@ export default function SchedulePage() {
       api(`/api/v1/storeops/shifts?week_start=${weekStart}&week_end=${weekEnd}`),
       api('/api/v1/storeops/employees'),
       api('/api/v1/storeops/stores'),
-    ]).then(([s, e, st]) => { setShifts(s || []); setEmployees(e || []); setStores(st || []) })
+      api('/api/v1/storeops/time-off').catch(() => []),
+    ]).then(([s, e, st, to]) => { setShifts(s || []); setEmployees(e || []); setStores(st || []); setTimeOff(to || []) })
       .catch(console.error).finally(() => setLoading(false))
   }, [weekStart])
 
@@ -64,6 +66,22 @@ export default function SchedulePage() {
     return m
   }, [stores])
   const markets = useMemo(() => Array.from(new Set(stores.map(s => s.market).filter(Boolean))).sort(), [stores])
+
+  // Approved time-off → {employee_name: Set(dates off this week)} for the grid (employee view).
+  const empById = useMemo(() => Object.fromEntries(employees.map(e => [String(e.id), e.name])), [employees])
+  const offByName = useMemo(() => {
+    const m: Record<string, Set<string>> = {}
+    for (const t of timeOff) {
+      if (String(t.status || '').toLowerCase() !== 'approved') continue
+      const name = t.employee_name || empById[String(t.employee_id)]
+      if (!name || !t.start_date || !t.end_date) continue
+      let cur = t.start_date < weekStart ? weekStart : t.start_date
+      const end = t.end_date > weekEnd ? weekEnd : t.end_date
+      let guard = 0
+      while (cur <= end && guard++ < 60) { (m[name] ||= new Set()).add(cur); cur = addDays(cur, 1) }
+    }
+    return m
+  }, [timeOff, empById, weekStart, weekEnd])
 
   const filteredStores = stores.filter(s =>
     s.store_code &&
@@ -237,9 +255,10 @@ export default function SchedulePage() {
   const rows = view === 'store' ? filteredStores : filteredEmps
 
   // Render the chips of shifts inside one grid cell.
-  const Cell = ({ date, cellShifts, onAdd }: { date: string; cellShifts: Shift[]; onAdd: () => void }) => (
-    <td style={{ padding: '4px 6px', textAlign: 'center', borderRight: '1px solid var(--border)', cursor: 'pointer', verticalAlign: 'top', background: date === today ? 'rgba(37,99,235,0.04)' : undefined }}
+  const Cell = ({ date, cellShifts, onAdd, off }: { date: string; cellShifts: Shift[]; onAdd: () => void; off?: boolean }) => (
+    <td style={{ padding: '4px 6px', textAlign: 'center', borderRight: '1px solid var(--border)', cursor: 'pointer', verticalAlign: 'top', background: off ? 'rgba(245,158,11,0.10)' : date === today ? 'rgba(37,99,235,0.04)' : undefined }}
       onClick={onAdd}>
+      {off && <div style={{ fontSize: 10, color: '#b45309', fontWeight: 700, marginBottom: 2 }} title="Approved time off">🌴 OFF</div>}
       {cellShifts.map(s => (
         <div key={s.id} title="Click to edit times" onClick={e => { e.stopPropagation(); openEdit(s) }}
           style={{ background: 'var(--accent2)', borderRadius: 6, padding: '3px 6px', fontSize: 11, color: 'white', position: 'relative', marginBottom: 3, textAlign: 'left' }}>
@@ -335,6 +354,7 @@ export default function SchedulePage() {
                     {weekDates.map(date => (
                       <Cell key={date} date={date}
                         cellShifts={rowShifts.filter(s => s.shift_date === date)}
+                        off={!isStore && (offByName[r.name]?.has(date) ?? false)}
                         onAdd={() => openAdd(date, isStore ? { store: r.store_code } : { emp: r.name })} />
                     ))}
                     <td style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 700, fontSize: 13 }}>{total.toFixed(1)}h</td>
