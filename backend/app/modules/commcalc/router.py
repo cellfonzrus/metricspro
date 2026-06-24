@@ -713,6 +713,18 @@ def _vip_set_status(client, org_id, status, detail, mark_run=False):
     client.schema('commcalc').table('vip_sweep_config').update(upd).eq('org_id', org_id).execute()
 
 
+def _registry_auto_map(client, org_id):
+    """report_definitions.auto by report_key — the registry (Connectors page) drives which reports a
+    sweep pulls. A report with no registry row falls back to the connector's config toggle, so this is
+    a zero-behavior-change cutover (the seeded auto flags already match the live toggles)."""
+    try:
+        rows = (client.schema('commcalc').table('report_definitions')
+                .select('report_key,auto').eq('org_id', org_id).execute().data) or []
+        return {r['report_key']: bool(r['auto']) for r in rows if r.get('report_key')}
+    except Exception:
+        return {}
+
+
 def _do_vip_sweep(org_id):
     """Background worker: read creds from the config table, run the invoice sweep, record status."""
     client = sb()
@@ -723,11 +735,14 @@ def _do_vip_sweep(org_id):
     _vip_set_status(client, org_id, 'running', 'Sweep in progress…')
     # Default to the invoice sweep (back-compat: cfg may predate the toggles). sweep_asset
     # additionally pulls the PayGo / asset-lending weekly billing ledger (migration 014).
-    do_invoices = cfg.get('sweep_invoices') is not False
-    do_asset = bool(cfg.get('sweep_asset'))
-    do_creditmemo = bool(cfg.get('sweep_creditmemo'))
-    do_asset_ledger = cfg.get('sweep_asset_ledger') is not False  # default ON (refresh asset_ledger)
-    do_chargebacks = cfg.get('sweep_chargebacks') is not False    # default ON (stage VIP chargebacks)
+    amap = _registry_auto_map(client, org_id)
+    def _en(key, fb):
+        return amap[key] if key in amap else fb
+    do_invoices = _en('vip_workbook', cfg.get('sweep_invoices') is not False)
+    do_asset = bool(cfg.get('sweep_asset'))               # PayGo billing: no registry row → config
+    do_creditmemo = bool(cfg.get('sweep_creditmemo'))     # credit memos: no registry row → config
+    do_asset_ledger = _en('asset_ledger', cfg.get('sweep_asset_ledger') is not False)
+    do_chargebacks = _en('vip_chargebacks', cfg.get('sweep_chargebacks') is not False)
     lookback = int(cfg.get('lookback_days') or 14)
     u, pw = cfg['portal_user'], cfg['portal_pass']
     helpers = (_vip_money, _vip_int, _vip_ts, _vip_period)
@@ -1686,13 +1701,17 @@ def _do_epay_sweep(org_id):
         _epay_set_status(client, org_id, 'error', 'No epay portal credentials set in the admin area', mark_run=True)
         return
     _epay_set_status(client, org_id, 'running', 'Sweep in progress…')
-    # which reports to pull — sweep_mi defaults on (back-compat); comp/payment opt-in
+    # which reports to pull — driven by the registry (report_definitions.auto), falling back to the
+    # config toggle per report. registry 'mi_report' maps to the epay_sweep key 'mi'.
+    amap = _registry_auto_map(client, org_id)
+    def _en(key, fb):
+        return amap[key] if key in amap else fb
     reports = []
-    if cfg.get('sweep_mi') is not False:
+    if _en('mi_report', cfg.get('sweep_mi') is not False):
         reports.append('mi')
-    if cfg.get('sweep_comp'):
+    if _en('comp_report', bool(cfg.get('sweep_comp'))):
         reports.append('comp_report')
-    if cfg.get('sweep_payment'):
+    if _en('payment_detail', bool(cfg.get('sweep_payment'))):
         reports.append('payment_detail')
     try:
         res = epay_sweep.run_epay_sweep(client, org_id, cfg.get('portal_url'),
