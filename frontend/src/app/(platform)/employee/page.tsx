@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { api, fmt, ORG_ID } from '@/lib/client'
+import { api, fmt, ORG_ID, localToday } from '@/lib/client'
 import Link from 'next/link'
 
 const sel: React.CSSProperties = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, background: 'var(--surface)' }
@@ -30,6 +30,7 @@ export default function EmployeeDashboardPage() {
   const [eid, setEid] = useState('')
   const [data, setData] = useState<any>(null)
   const [coach, setCoach] = useState<any>(null)
+  const [repTargets, setRepTargets] = useState<any>(null)
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -43,13 +44,15 @@ export default function EmployeeDashboardPage() {
   useEffect(() => {
     if (!eid) return
     setLoading(true)
-    setCoach(null)
+    setCoach(null); setRepTargets(null)
     api(`/api/v1/core/employee-dashboard?org_id=${ORG_ID}&employee_id=${encodeURIComponent(eid)}`)
       .then((d: any) => {
         setData(d)
-        const nm = d?.employee?.name, per = d?.period
+        const nm = d?.employee?.name, per = d?.period, store = d?.employee?.store
         if (nm && per) api(`/api/v1/commcalc/coaching/${encodeURIComponent(per)}?rep=${encodeURIComponent(nm)}`)
           .then((c: any) => setCoach((c?.reps || [])[0] || null)).catch(() => {})
+        if (nm && per && store) api(`/api/v1/commcalc/targets/${encodeURIComponent(per)}/calendar?scope=rep&store_code=${encodeURIComponent(store)}&rep=${encodeURIComponent(nm)}&today=${localToday()}`)
+          .then(setRepTargets).catch(() => {})
       }).catch(console.error).finally(() => setLoading(false))
   }, [eid])
 
@@ -126,10 +129,34 @@ export default function EmployeeDashboardPage() {
 
           {on('targets') && (
             <Card title="Targets" icon="🎯" right={<Link href="/commcalc/targets/my" style={{ fontSize: 12 }}>Open →</Link>}>
-              <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
-                <div><div style={{ fontSize: 11, color: 'var(--text3)' }}>Accessory Target</div><div style={{ fontSize: 20, fontWeight: 700 }}>{data.targets.acc_target != null ? fmt(data.targets.acc_target) : '—'}</div></div>
-                <div><div style={{ fontSize: 11, color: 'var(--text3)' }}>Accessory Achieved</div><div style={{ fontSize: 20, fontWeight: 700 }}>{data.targets.acc_comm != null ? fmt(data.targets.acc_comm) : '—'}</div></div>
-              </div>
+              {repTargets?.categories ? (
+                <>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead><tr style={{ color: 'var(--text3)', fontSize: 11 }}>
+                      {['', 'Today', 'Month', 'Done'].map((h, i) => <th key={i} style={{ textAlign: i ? 'right' : 'left', padding: '3px 6px' }}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {[['activations', 'Activations'], ['upgrades', 'Upgrades'], ['byod', 'BYOD'], ['accessories', 'Accessories']].map(([k, lbl]) => {
+                        const m = repTargets.categories[k]; if (!m) return null
+                        const money = m.unit !== 'count'
+                        const v = (x: any) => x == null ? '—' : money ? fmt(x) : Math.round(x)
+                        return <tr key={k} style={{ borderTop: '1px solid var(--border)' }}>
+                          <td style={{ padding: '4px 6px', fontWeight: 600 }}>{lbl}</td>
+                          <td style={{ padding: '4px 6px', textAlign: 'right', color: 'var(--accent)', fontWeight: 700 }}>{v(m.today_target)}</td>
+                          <td style={{ padding: '4px 6px', textAlign: 'right' }}>{v(m.monthly)}</td>
+                          <td style={{ padding: '4px 6px', textAlign: 'right', color: 'var(--text3)' }}>{v(m.achieved_mtd)}</td>
+                        </tr>
+                      })}
+                    </tbody>
+                  </table>
+                  {repTargets.rep_share != null && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>Your share: {Math.round(repTargets.rep_share * 100)}% of {repTargets.store_code} scheduled hours</div>}
+                </>
+              ) : (
+                <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+                  <div><div style={{ fontSize: 11, color: 'var(--text3)' }}>Accessory Target</div><div style={{ fontSize: 20, fontWeight: 700 }}>{data.targets.acc_target != null ? fmt(data.targets.acc_target) : '—'}</div></div>
+                  <div><div style={{ fontSize: 11, color: 'var(--text3)' }}>Accessory Achieved</div><div style={{ fontSize: 20, fontWeight: 700 }}>{data.targets.acc_comm != null ? fmt(data.targets.acc_comm) : '—'}</div></div>
+                </div>
+              )}
             </Card>
           )}
 
