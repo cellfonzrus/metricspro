@@ -1123,6 +1123,27 @@ def chargeback_review_list(status: str = None, source: str = None, store: str = 
     return {"rows": rows, "counts": counts, "total": len(rows)}
 
 
+@router.post("/chargeback-review")
+def create_chargeback_review(payload: dict, org_id: str = ORG_ID):
+    """Manually add a candidate to the chargeback bucket (e.g. Sales-Analyzer early-churn → charge
+    the rep the rebate lost). Upsert by dedupe_key so re-flagging the same item is idempotent."""
+    require_org(org_id)
+    detail = (payload.get('detail') or 'Chargeback')
+    dk = payload.get('dedupe_key') or f"manual:{detail[:50]}"
+    row = {'org_id': org_id, 'source': (payload.get('source') or 'manual').strip(),
+           'severity': payload.get('severity') or 'warning', 'needs_review': bool(payload.get('needs_review')),
+           'store_code': payload.get('store_code'),
+           'store_address': payload.get('store_address') or payload.get('store'),
+           'period': payload.get('period') or '', 'occurred_date': payload.get('occurred_date'),
+           'customer_name': payload.get('customer_name'), 'email': payload.get('email'),
+           'phone_number': payload.get('phone_number'), 'esn': payload.get('esn'),
+           'imei': payload.get('imei') or payload.get('esn'),
+           'amount': abs(safe_float(payload.get('amount'))), 'detail': detail[:300],
+           'suggested_rep': (payload.get('suggested_rep') or '').strip() or None, 'dedupe_key': dk}
+    sb().schema('commcalc').table('chargeback_review').upsert(row, on_conflict='org_id,dedupe_key').execute()
+    return {"ok": True, "dedupe_key": dk}
+
+
 @router.post("/chargeback-review/{cb_id}/assign")
 def chargeback_review_assign(cb_id: str, payload: dict, org_id: str = ORG_ID):
     """Assign a chargeback to the rep → write the employee chargeback_items row for that period.

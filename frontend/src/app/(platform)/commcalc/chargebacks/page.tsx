@@ -9,7 +9,7 @@ import { useAuth } from '@/lib/auth-context'
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const tin: React.CSSProperties = { ...sel, width: 130 }
 const cell: React.CSSProperties = { padding: '8px 10px', borderTop: '1px solid var(--border)', fontSize: 13, verticalAlign: 'top' }
-const SRC: Record<string, string> = { vip_file: 'VIP file', fraud_email: 'Fake/reused email', fraud_dupe: 'Duplicate ID' }
+const SRC: Record<string, string> = { vip_file: 'VIP file', fraud_email: 'Fake/reused email', fraud_dupe: 'Duplicate ID', analyzer_churn: 'Early churn', manual: 'Manual' }
 
 type Edit = { rep: string; amount: string; reason: string }
 
@@ -85,6 +85,7 @@ export default function ChargebacksPage() {
           <option value="vip_file">VIP file</option>
           <option value="fraud_email">Fake/reused email</option>
           <option value="fraud_dupe">Duplicate ID</option>
+          <option value="analyzer_churn">Early churn</option>
         </select>
         <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={busy === 'scan'} onClick={scan}>
           {busy === 'scan' ? '⏳ Scanning…' : '🔍 Scan sales for fraud'}

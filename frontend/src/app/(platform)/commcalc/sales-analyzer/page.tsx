@@ -11,6 +11,22 @@ export default function SalesAnalyzerPage() {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [selRep, setSelRep] = useState('')
+  const [flagged, setFlagged] = useState<Record<string, boolean>>({})
+
+  async function flagChurn(c: any) {
+    const k = `${c.phone_number || ''}|${c.activation_date || ''}`
+    try {
+      await api('/api/v1/commcalc/chargeback-review', { method: 'POST', body: JSON.stringify({
+        source: 'analyzer_churn', severity: 'warning', needs_review: true,
+        store: c.store, period, occurred_date: c.churn_date || c.activation_date,
+        phone_number: c.phone_number, esn: c.device_serial, imei: c.device_serial,
+        amount: 0, suggested_rep: c.rep,
+        detail: `Early churn (${c.days_active ?? '?'}d): ${c.device_model || ''}${c.sold_for ? ` · sold ${c.sold_for}` : ''}`,
+        dedupe_key: `churn:${k}`,
+      }) })
+      setFlagged(f => ({ ...f, [k]: true }))
+    } catch (e: any) { alert('Flag failed: ' + (e?.message || e)) }
+  }
 
   function load() {
     setLoading(true)
@@ -130,6 +146,7 @@ export default function SalesAnalyzerPage() {
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Churned</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Days</th>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Reason</th>
+                <th style={{ textAlign: 'center', padding: '8px 12px' }}>→ CB</th>
               </tr></thead>
               <tbody>
                 {churned.map((c: any, i: number) => (
@@ -144,9 +161,14 @@ export default function SalesAnalyzerPage() {
                     <td style={{ padding: '6px 12px', fontSize: 12, color: '#b91c1c' }}>{c.churn_date || '—'}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right' }}>{c.days_active}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{c.reason}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'center' }}>
+                      {flagged[`${c.phone_number || ''}|${c.activation_date || ''}`]
+                        ? <span style={{ color: '#16794a', fontSize: 11 }}>✓ flagged</span>
+                        : <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => flagChurn(c)} title="Send to the Chargebacks & Fraud bucket for this rep">🔻 Charge</button>}
+                    </td>
                   </tr>
                 ))}
-                {churned.length === 0 && <tr><td colSpan={10} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No early churn{selRep ? ' for this rep' : ''}.</td></tr>}
+                {churned.length === 0 && <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No early churn{selRep ? ' for this rep' : ''}.</td></tr>}
               </tbody>
             </table>
           </div>
