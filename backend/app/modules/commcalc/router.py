@@ -188,6 +188,10 @@ async def upload_file(
                 'tender_type': str(r.get('Tender Type','')).strip(),
                 'voided': str(r.get('Voided','')).strip(),
                 'trans_type': str(r.get('Trans Type','')).strip(),
+                # customer identity (78-col Sales Transaction Details) — feeds the fraud detectors
+                'customer': str(r.get('Customer','')).strip() or None,
+                'email': str(r.get('Email','')).strip() or None,
+                'customer_no': str(r.get('Customer #','') or r.get('Customer No','')).replace('.0','').strip() or None,
             }
         elif file_type == "payment_detail":
             # Single source of truth shared with the epay sweep (epay_sweep.map_payment_detail_row).
@@ -672,7 +676,7 @@ def _vip_next_run(frequency, day_of_week, day_of_month, hour, tzname):
 _VIP_CFG_DEFAULTS = {'enabled': False, 'frequency': 'weekly', 'day_of_week': 0,
                      'day_of_month': 1, 'hour': 6, 'timezone': 'America/New_York',
                      'lookback_days': 14, 'sweep_invoices': True, 'sweep_asset': False,
-                     'sweep_creditmemo': False, 'sweep_asset_ledger': True}
+                     'sweep_creditmemo': False, 'sweep_asset_ledger': True, 'sweep_chargebacks': True}
 
 
 def _vip_public_cfg(cfg):
@@ -684,7 +688,7 @@ def _vip_public_cfg(cfg):
     out = {k: cfg.get(k) for k in (
         'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
         'lookback_days', 'sweep_invoices', 'sweep_asset', 'sweep_creditmemo', 'sweep_asset_ledger',
-        'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail')}
+        'sweep_chargebacks', 'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail')}
     out['configured'] = True
     out['has_credentials'] = bool(cfg.get('portal_user') and cfg.get('portal_pass'))
     return out
@@ -711,6 +715,7 @@ def _do_vip_sweep(org_id):
     do_asset = bool(cfg.get('sweep_asset'))
     do_creditmemo = bool(cfg.get('sweep_creditmemo'))
     do_asset_ledger = cfg.get('sweep_asset_ledger') is not False  # default ON (refresh asset_ledger)
+    do_chargebacks = cfg.get('sweep_chargebacks') is not False    # default ON (stage VIP chargebacks)
     lookback = int(cfg.get('lookback_days') or 14)
     parts = []
     try:
@@ -736,6 +741,10 @@ def _do_vip_sweep(org_id):
             # Asset_Lending.xlsx (per-device PayGo ledger) → commcalc.asset_ledger (the asset module).
             al = vip_sweep.run_asset_ledger_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'])
             parts.append(f"Asset ledger: {al['rows']} rows")
+        if do_chargebacks:
+            # VIP chargebacks export → commcalc.chargeback_review (assign-first bucket).
+            cb = vip_sweep.run_chargeback_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'])
+            parts.append(f"Chargebacks: {cb['rows']} staged")
         if not parts:
             parts.append("nothing enabled (tick Invoices, Asset-lending, Credit memos and/or Asset ledger)")
         _vip_set_status(client, org_id, 'ok', "OK — " + " · ".join(parts), mark_run=True)
@@ -761,7 +770,7 @@ async def vip_sweep_put_config(body: dict, org_id: str = ORG_ID):
     row = {'org_id': org_id}
     for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
               'lookback_days', 'sweep_invoices', 'sweep_asset', 'sweep_creditmemo',
-              'sweep_asset_ledger', 'enabled', 'portal_user'):
+              'sweep_asset_ledger', 'sweep_chargebacks', 'enabled', 'portal_user'):
         if k in body and body[k] is not None:
             row[k] = body[k]
     pw = (body.get('portal_pass') or '').strip()
@@ -805,6 +814,136 @@ async def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: 
             {'next_run_at': nxt}).eq('org_id', oid).execute()
         background_tasks.add_task(_do_vip_sweep, oid)
     return {"triggered": len(due)}
+
+
+# ── Chargeback review bucket (VIP file + fraud) → assign to the rep → employee chargeback ────
+def _cb_now():
+    return _datetime.now(_timezone.utc).isoformat()
+
+
+@router.get("/chargeback-review")
+def chargeback_review_list(status: str = None, source: str = None, store: str = None, org_id: str = ORG_ID):
+    """The chargeback bucket. Each row is a candidate to ASSIGN to the rep who did the sale.
+    Adds a suggested_rep (matched from raw_sales by serial/phone) to the still-open rows."""
+    require_org(org_id)
+    client = sb()
+    q = client.schema('commcalc').table('chargeback_review').select('*').eq('org_id', org_id)
+    if status:
+        q = q.eq('status', status)
+    if source:
+        q = q.eq('source', source)
+    rows = q.order('created_at', desc=True).limit(5000).execute().data or []
+    if store:
+        rows = [r for r in rows if r.get('store_code') == store]
+    # suggested rep: match esn/imei → raw_sales.serial_1, phone → raw_sales.mdn (best-effort)
+    by_serial, by_phone = {}, {}
+    if any(not r.get('assigned_rep') and not r.get('suggested_rep') for r in rows):
+        try:
+            sales = (client.schema('commcalc').table('raw_sales')
+                     .select('serial_1,mdn,salesperson').eq('org_id', org_id).limit(100000).execute().data) or []
+            for s in sales:
+                sp = (s.get('salesperson') or '').strip()
+                if not sp:
+                    continue
+                ser = re.sub(r'\W', '', str(s.get('serial_1') or '')).upper()
+                ph = re.sub(r'\D', '', str(s.get('mdn') or ''))
+                if ser:
+                    by_serial.setdefault(ser, sp)
+                if ph:
+                    by_phone.setdefault(ph[-10:], sp)
+        except Exception:
+            pass
+    for r in rows:
+        if r.get('assigned_rep') or r.get('suggested_rep'):
+            continue
+        sug = None
+        for key in (r.get('esn'), r.get('imei')):
+            k = re.sub(r'\W', '', str(key or '')).upper()
+            if k and k in by_serial:
+                sug = by_serial[k]
+                break
+        if not sug:
+            ph = re.sub(r'\D', '', str(r.get('phone_number') or ''))[-10:]
+            if ph and ph in by_phone:
+                sug = by_phone[ph]
+        r['suggested_rep'] = sug
+    counts = {}
+    for r in rows:
+        st = r.get('status') or 'open'
+        counts[st] = counts.get(st, 0) + 1
+    return {"rows": rows, "counts": counts, "total": len(rows)}
+
+
+@router.post("/chargeback-review/{cb_id}/assign")
+def chargeback_review_assign(cb_id: str, payload: dict, org_id: str = ORG_ID):
+    """Assign a chargeback to the rep → write the employee chargeback_items row for that period.
+    For a fraud_dupe item this also records a 'disapproved' review (mgmt confirmed it's bad)."""
+    require_org(org_id)
+    client = sb()
+    rows = client.schema('commcalc').table('chargeback_review').select('*').eq('org_id', org_id).eq('id', cb_id).execute().data or []
+    if not rows:
+        raise HTTPException(404, "chargeback not found")
+    cb = rows[0]
+    rep = (payload.get('rep') or '').strip()
+    if not rep:
+        raise HTTPException(400, "rep required")
+    reason = (payload.get('reason') or '').strip()
+    amount = abs(safe_float(payload.get('amount'))) if payload.get('amount') is not None else abs(safe_float(cb.get('amount')))
+    period = cb.get('period') or ''
+    if not period and cb.get('occurred_date'):
+        try:
+            from dateutil import parser as _dp
+            period = _dp.parse(str(cb['occurred_date'])).strftime('%B %Y')
+        except Exception:
+            period = ''
+    ref = f"cbr-{cb_id}"
+    desc = (cb.get('detail') or 'Chargeback') + (f" — {reason}" if reason else "")
+    by = (payload.get('assigned_by') or 'admin')
+    item = {
+        'org_id': org_id, 'period': period or 'Unassigned', 'epay_salesperson': rep,
+        'store': cb.get('store_address') or cb.get('store_code') or '',
+        'source': 'chargeback_review', 'source_ref': ref, 'description': desc[:300],
+        'amount': amount, 'mdn': cb.get('phone_number') or '',
+        'imei': cb.get('imei') or cb.get('esn') or '',
+        'deduct': True if payload.get('deduct') is None else bool(payload.get('deduct')),
+        'decided_at': _cb_now(),
+    }
+    client.schema('commcalc').table('chargeback_items').delete().eq('org_id', org_id).eq('source', 'chargeback_review').eq('source_ref', ref).execute()
+    client.schema('commcalc').table('chargeback_items').insert(item).execute()
+    upd = {'status': 'assigned', 'assigned_rep': rep, 'assigned_by': by, 'assigned_at': _cb_now(),
+           'reason': reason or None, 'amount': amount, 'chargeback_item_ref': ref, 'updated_at': _cb_now()}
+    if cb.get('needs_review'):
+        upd.update({'review': 'disapproved', 'reviewed_by': by, 'reviewed_at': _cb_now()})
+    client.schema('commcalc').table('chargeback_review').update(upd).eq('id', cb_id).execute()
+    return {"ok": True, "period": period, "rep": rep, "amount": amount}
+
+
+@router.post("/chargeback-review/{cb_id}/dismiss")
+def chargeback_review_dismiss(cb_id: str, payload: dict = {}, org_id: str = ORG_ID):
+    """Dismiss a candidate (no chargeback). For a fraud review item this records 'approved' (legit)."""
+    require_org(org_id)
+    client = sb()
+    ref = f"cbr-{cb_id}"
+    client.schema('commcalc').table('chargeback_items').delete().eq('org_id', org_id).eq('source', 'chargeback_review').eq('source_ref', ref).execute()
+    cur = client.schema('commcalc').table('chargeback_review').select('needs_review').eq('id', cb_id).execute().data or []
+    body = {'status': 'dismissed', 'assigned_rep': None, 'assigned_at': None,
+            'chargeback_item_ref': None, 'reason': (payload or {}).get('reason') or None, 'updated_at': _cb_now()}
+    if cur and cur[0].get('needs_review'):
+        body.update({'review': 'approved', 'reviewed_by': (payload or {}).get('reviewed_by') or 'admin', 'reviewed_at': _cb_now()})
+    client.schema('commcalc').table('chargeback_review').update(body).eq('id', cb_id).execute()
+    return {"ok": True}
+
+
+@router.post("/chargeback-review/{cb_id}/reopen")
+def chargeback_review_reopen(cb_id: str, org_id: str = ORG_ID):
+    require_org(org_id)
+    client = sb()
+    ref = f"cbr-{cb_id}"
+    client.schema('commcalc').table('chargeback_items').delete().eq('org_id', org_id).eq('source', 'chargeback_review').eq('source_ref', ref).execute()
+    client.schema('commcalc').table('chargeback_review').update({
+        'status': 'open', 'assigned_rep': None, 'assigned_at': None, 'review': None,
+        'chargeback_item_ref': None, 'updated_at': _cb_now()}).eq('id', cb_id).execute()
+    return {"ok": True}
 
 
 # ── VIP PayGo / asset-lending ledger (read endpoints; data from the sweep, migration 014) ──
@@ -1428,7 +1567,10 @@ async def _run_calculation(period: str, org_id: str):
                 seen.add(k)
                 unique_items.append(it)
             cb_items = unique_items
-            client.schema('commcalc').table('chargeback_items').delete().eq('period', period).execute()
+            # preserve manually-assigned chargebacks from the review bucket (recalc only manages
+            # the auto-detected ones); otherwise an assigned VIP/fraud chargeback vanishes on recalc.
+            (client.schema('commcalc').table('chargeback_items').delete()
+             .eq('period', period).neq('source', 'chargeback_review').execute())
             if cb_items:
                 for i in range(0, len(cb_items), 500):
                     client.schema('commcalc').table('chargeback_items').insert(cb_items[i:i+500]).execute()

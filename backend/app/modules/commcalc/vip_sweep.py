@@ -102,6 +102,81 @@ def run_asset_ledger_sweep(client, org_id, user, pw):
     return {"rows": res.get("rows_imported", 0), "bytes": len(data)}
 
 
+def run_chargeback_sweep(client, org_id, user, pw):
+    """Download the VIP chargebacks export (GET /paygodashboard/DownloadFile →
+    Dealer-NNNNN-Chargebacks.xlsx) and stage each per-ESN incentive-credit clawback into
+    commcalc.chargeback_review (source='vip_file', status OPEN). They are then ASSIGNED to the rep
+    who did the sale, which pushes them into the employee chargeback file. Re-sweep PRESERVES any
+    existing assignment (upsert omits the status/assignment columns)."""
+    import io
+    import pandas as pd
+    from dateutil import parser as _dp
+    session = requests.Session()
+    session.headers.update({"User-Agent": UA})
+    login(session, user, pw)
+    r = session.get(f"{BASE}/paygodashboard/DownloadFile",
+                    headers={"Referer": f"{BASE}/account/paygo/dashboard"}, timeout=240)
+    r.raise_for_status()
+    data = r.content
+    ct = r.headers.get("Content-Type", "").lower()
+    if not any(k in ct for k in ("sheet", "excel", "octet")) or len(data) < 1000:
+        raise RuntimeError(f"Chargebacks download was not a valid Excel file (ct={ct[:40]})")
+    df = pd.read_excel(io.BytesIO(data), dtype=str).fillna("")
+    norm = {re.sub(r"[^a-z0-9]", "", c.lower()): c for c in df.columns}
+
+    def col(*names):
+        for n in names:
+            if n in norm:
+                return norm[n]
+        return None
+
+    cmap = {"customer_no": col("customerid"), "salesforceid": col("salesforceid"),
+            "subscriber": col("subscriberid"), "esn": col("esn"), "imei": col("imei"),
+            "phone": col("phonenumber"), "brand": col("brand"), "plan": col("plan"),
+            "orig": col("originalincentivecredit"), "corr": col("correctedincentivecredit"),
+            "amount": col("chargebackamount"), "pdate": col("chargebackprocessingdate")}
+    sm = (client.schema("commcalc").table("store_mapping")
+          .select("salesforce_id,store_code,store_address").eq("org_id", org_id).execute().data) or []
+    by_sfid = {(s.get("salesforce_id") or "").strip(): s for s in sm if s.get("salesforce_id")}
+
+    def _per(d):
+        try:
+            return _dp.parse(str(d)).strftime("%B %Y")
+        except Exception:
+            return ""
+
+    rows = []
+    for _, x in df.iterrows():
+        def g(k):
+            c = cmap.get(k)
+            return str(x.get(c) or "").strip() if c else ""
+        esn, imei = g("esn"), g("imei")
+        amt = _money(g("amount")) or 0.0
+        if not (esn or imei) and not amt:
+            continue
+        smr = by_sfid.get(g("salesforceid"), {})
+        pdate = g("pdate")
+        orig, corr = _money(g("orig")), _money(g("corr"))
+        detail = "VIP incentive chargeback" + (f" (incentive {orig}→{corr})" if orig is not None and corr is not None else "")
+        rows.append({
+            "org_id": org_id, "source": "vip_file", "severity": "warning",
+            "store_code": smr.get("store_code"), "store_address": smr.get("store_address"),
+            "period": _per(pdate), "occurred_date": pdate,
+            "customer_name": g("subscriber") or None, "customer_no": g("customer_no") or None,
+            "phone_number": g("phone") or None, "esn": esn or None, "imei": imei or None,
+            "brand": g("brand") or None, "plan": g("plan") or None,
+            "amount": abs(amt), "detail": detail,
+            "dedupe_key": f"vip:{esn or imei}:{pdate}:{amt}",
+            "raw": {k: g(k) for k in cmap},
+        })
+    if not rows:
+        raise RuntimeError("Chargebacks file parsed to 0 rows")
+    for i in range(0, len(rows), 500):
+        client.schema("commcalc").table("chargeback_review").upsert(
+            rows[i:i + 500], on_conflict="org_id,dedupe_key").execute()
+    return {"rows": len(rows)}
+
+
 def list_invoices(session, sdate, edate, page_size=100):
     """Page through POST /Invoice/InvoiceList (MM/dd/yyyy dates). Returns the JSON rows."""
     rows, skip, page, total = [], 0, 1, None

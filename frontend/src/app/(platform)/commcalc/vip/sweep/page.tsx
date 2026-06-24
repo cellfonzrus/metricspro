@@ -8,7 +8,7 @@ type Cfg = {
   configured: boolean; has_credentials: boolean; portal_user: string | null
   enabled: boolean; frequency: string; day_of_week: number; day_of_month: number
   hour: number; timezone: string; lookback_days: number
-  sweep_invoices: boolean; sweep_asset: boolean; sweep_creditmemo: boolean; sweep_asset_ledger: boolean
+  sweep_invoices: boolean; sweep_asset: boolean; sweep_creditmemo: boolean; sweep_asset_ledger: boolean; sweep_chargebacks: boolean
   next_run_at: string | null; last_run_at: string | null
   last_status: string | null; last_detail: string | null
 }
@@ -45,6 +45,7 @@ export default function VipSweepAdmin() {
         timezone: cfg.timezone, lookback_days: cfg.lookback_days,
         sweep_invoices: cfg.sweep_invoices, sweep_asset: cfg.sweep_asset,
         sweep_creditmemo: cfg.sweep_creditmemo, sweep_asset_ledger: cfg.sweep_asset_ledger,
+        sweep_chargebacks: cfg.sweep_chargebacks,
       }
       if (pass.trim()) body.portal_pass = pass.trim()
       const res = await fetch(`${API}/api/v1/commcalc/vip/sweep/config?org_id=${ORG_ID}`, {
@@ -181,6 +182,9 @@ export default function VipSweepAdmin() {
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Download Asset_Lending.xlsx and refresh the Asset Ledger (needs migration 035)">
             <input type="checkbox" checked={cfg.sweep_asset_ledger !== false} onChange={e => set('sweep_asset_ledger', e.target.checked)} /> Asset ledger (devices)
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Download the VIP chargebacks export into the Chargebacks & Fraud bucket (needs migration 036)">
+            <input type="checkbox" checked={cfg.sweep_chargebacks !== false} onChange={e => set('sweep_chargebacks', e.target.checked)} /> Chargebacks
           </label>
         </div>
       </div>
