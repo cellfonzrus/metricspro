@@ -184,6 +184,43 @@ def delete_employee(emp_id: str):
     return {"ok": True, "deleted": emp_id, "name": existing[0].get("name")}
 
 
+@router.post("/employees/merge")
+def merge_employees(body: dict):
+    """Merge a DUPLICATE employee into a TARGET: reassign the duplicate's shifts + time-off to the
+    target (by employee_id and by name), then delete the duplicate (deactivate if delete is blocked)."""
+    dup_id = str(body.get("dup_id") or "").strip()
+    target_id = str(body.get("target_id") or "").strip()
+    if not dup_id or not target_id or dup_id == target_id:
+        raise HTTPException(400, "dup_id and target_id (different) are required")
+    dup = sb().table("employees").select("*").eq("id", dup_id).execute().data
+    tgt = sb().table("employees").select("*").eq("id", target_id).execute().data
+    if not dup or not tgt:
+        raise HTTPException(404, "employee not found")
+    dup, tgt = dup[0], tgt[0]
+    moved = {"shifts": 0, "time_off": 0}
+    reassign = {"employee_id": str(tgt["id"]), "employee_name": tgt.get("name")}
+    for field, val in (("employee_id", str(dup["id"])), ("employee_name", dup.get("name"))):
+        if not val:
+            continue
+        try:
+            r = sb().table("shifts").update(reassign).eq(field, val).execute()
+            moved["shifts"] += len(r.data or [])
+        except Exception:
+            pass
+    try:
+        r = sb().table("time_off_requests").update({"employee_id": str(tgt["id"])}).eq("employee_id", str(dup["id"])).execute()
+        moved["time_off"] += len(r.data or [])
+    except Exception:
+        pass
+    deleted = True
+    try:
+        sb().table("employees").delete().eq("id", dup_id).execute()
+    except Exception:
+        sb().table("employees").update({"is_active": False}).eq("id", dup_id).execute()
+        deleted = False
+    return {"ok": True, "merged_into": tgt.get("name"), "moved": moved, "deleted_duplicate": deleted}
+
+
 @router.post("/employees/bulk-payscale")
 def bulk_payscale(body: dict):
     """Bulk set pay rates from a list. Body: {rows:[{employee_id|name, pay_rate}]}.

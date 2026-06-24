@@ -46,6 +46,30 @@ export default function EmployeesPage() {
     setSaving(null)
   }
 
+  async function deleteEmp(e: Employee) {
+    if (!confirm(`Delete ${e.name}? If they're linked to shifts you'll be offered to deactivate instead.`)) return
+    try {
+      await api(`/api/v1/storeops/employees/${e.id}`, { method: 'DELETE' })
+      setEmployees(es => es.filter(x => x.id !== e.id)); setMsg(`Deleted ${e.name}`)
+    } catch (err: any) {
+      if (confirm(`Couldn't delete (${err?.message || 'linked records'}). Deactivate ${e.name} instead?`)) {
+        await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify({ is_active: false }) })
+        setEmp(e.id, { is_active: false }); setMsg(`Deactivated ${e.name}`)
+      }
+    }
+  }
+
+  async function mergeEmp(dup: Employee, targetId: string) {
+    if (!targetId) return
+    const tgt = employees.find(o => String(o.id) === String(targetId))
+    if (!tgt || !confirm(`Merge ${dup.name} INTO ${tgt.name}?\n${dup.name}'s shifts + time-off move to ${tgt.name}, then ${dup.name} is removed.`)) return
+    try {
+      const r = await api('/api/v1/storeops/employees/merge', { method: 'POST', body: JSON.stringify({ dup_id: dup.id, target_id: tgt.id }) })
+      setEmployees(es => es.filter(x => x.id !== dup.id))
+      setMsg(`Merged ${dup.name} → ${tgt.name} (${r.moved?.shifts || 0} shifts, ${r.moved?.time_off || 0} time-off moved).`)
+    } catch (err: any) { setMsg('Merge failed: ' + (err?.message || err)) }
+  }
+
   const filtered = employees.filter(e => {
     if (!showInactive && !e.is_active) return false
     if (search && ![e.name, e.home_store, e.role, e.email, e.epay_salesperson]
@@ -95,7 +119,16 @@ export default function EmployeesPage() {
                   <td style={cell}><input style={{ ...sel, width: 120 }} value={e.epay_login || ''} onChange={ev => setEmp(e.id, { epay_login: ev.target.value })} /></td>
                   <td style={cell}><input style={{ ...sel, width: 150 }} value={e.epay_salesperson || ''} onChange={ev => setEmp(e.id, { epay_salesperson: ev.target.value })} /></td>
                   <td style={cell}><input type="checkbox" checked={!!e.is_active} onChange={ev => setEmp(e.id, { is_active: ev.target.checked })} /></td>
-                  <td style={cell}><button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }} disabled={saving === e.id} onClick={() => saveEmp(e)}>{saving === e.id ? '…' : '💾'}</button></td>
+                  <td style={cell}>
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 8px' }} disabled={saving === e.id} onClick={() => saveEmp(e)} title="Save">{saving === e.id ? '…' : '💾'}</button>
+                      <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px' }} onClick={() => deleteEmp(e)} title="Delete employee">🗑</button>
+                      <select style={{ ...sel, width: 80 }} value="" title="Merge this duplicate INTO another employee" onChange={ev => { mergeEmp(e, ev.target.value); ev.target.value = '' }}>
+                        <option value="">merge→</option>
+                        {employees.filter(o => o.id !== e.id).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                      </select>
+                    </div>
+                  </td>
                 </tr>
               ))}
               {filtered.length === 0 && (
