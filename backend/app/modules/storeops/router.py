@@ -1,5 +1,5 @@
 """StoreOps API Router — /api/v1/storeops/*"""
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException
 from app.core.database import get_supabase
 
@@ -278,6 +278,80 @@ def _emp_name_map():
     return {str(e["employee_id"]): e.get("name")
             for e in (sb().table("employees").select("employee_id,name").execute().data or [])
             if e.get("employee_id")}
+
+
+# ── Recurring shift templates: save a week as a per-employee template, apply to any week ─────
+@router.get("/shift-templates")
+def get_shift_templates():
+    return sb().table("shift_templates").select("*").order("weekday").execute().data or []
+
+
+@router.post("/shift-templates/save-week")
+def save_week_as_template(body: dict):
+    """Save a week's shifts as the recurring template (replaces existing templates for those employees)."""
+    week_start = (body.get("week_start") or "").strip()
+    if not week_start:
+        raise HTTPException(400, "week_start required")
+    we = (datetime.fromisoformat(week_start).date() + timedelta(days=6)).isoformat()
+    shifts = (sb().table("shifts").select("*").eq("is_deleted", False)
+              .gte("shift_date", week_start).lte("shift_date", we).execute().data) or []
+    if not shifts:
+        raise HTTPException(400, "No shifts in that week to save as a template.")
+    emp_ids = list({str(s.get("employee_id")) for s in shifts if s.get("employee_id")})
+    for eid in emp_ids:
+        sb().table("shift_templates").delete().eq("employee_id", eid).execute()
+    by_key = {}
+    for s in shifts:
+        try:
+            wd = datetime.fromisoformat(str(s.get("shift_date"))).date().weekday()  # Mon=0
+        except Exception:
+            continue
+        eid = str(s.get("employee_id")) if s.get("employee_id") else None
+        by_key[(eid, wd, s.get("store_code"))] = {
+            "employee_id": eid, "employee_name": s.get("employee_name"), "store_code": s.get("store_code"),
+            "weekday": wd, "start_time": s.get("start_time"), "end_time": s.get("end_time"),
+            "scheduled_hours": s.get("scheduled_hours") or 0}
+    rows = list(by_key.values())
+    for i in range(0, len(rows), 500):
+        sb().table("shift_templates").upsert(rows[i:i + 500], on_conflict="org_id,employee_id,weekday,store_code").execute()
+    return {"saved": len(rows), "employees": len(emp_ids)}
+
+
+@router.post("/shift-templates/apply")
+def apply_templates(body: dict):
+    """Create shifts for a week from the saved templates (dedup-safe; skips time-off-blocked days)."""
+    week_start = (body.get("week_start") or "").strip()
+    if not week_start:
+        raise HTTPException(400, "week_start required")
+    ws = datetime.fromisoformat(week_start).date()
+    we = (ws + timedelta(days=6)).isoformat()
+    templates = sb().table("shift_templates").select("*").execute().data or []
+    if not templates:
+        raise HTTPException(400, "No templates saved yet — save a week first.")
+    existing = (sb().table("shifts").select("employee_name,shift_date,start_time,store_code")
+                .eq("is_deleted", False).gte("shift_date", week_start).lte("shift_date", we).execute().data) or []
+    seen = {(e.get("employee_name"), str(e.get("shift_date")), e.get("start_time"), e.get("store_code")) for e in existing}
+    added = skipped_off = 0
+    for t in templates:
+        target = (ws + timedelta(days=int(t.get("weekday") or 0))).isoformat()
+        if (t.get("employee_name"), target, t.get("start_time"), t.get("store_code")) in seen:
+            continue
+        eid = t.get("employee_id")
+        if eid:
+            conflict = (sb().table("time_off_requests").select("id").eq("employee_id", str(eid))
+                        .eq("status", "approved").lte("start_date", target).gte("end_date", target).limit(1).execute().data)
+            if conflict:
+                skipped_off += 1
+                continue
+        try:
+            sb().table("shifts").insert({
+                "employee_id": eid, "employee_name": t.get("employee_name"), "store_code": t.get("store_code"),
+                "shift_date": target, "start_time": t.get("start_time"), "end_time": t.get("end_time"),
+                "scheduled_hours": t.get("scheduled_hours") or 0, "status": "scheduled"}).execute()
+            added += 1
+        except Exception:
+            pass
+    return {"added": added, "skipped_timeoff": skipped_off, "templates": len(templates)}
 
 
 @router.get("/shift-swaps")

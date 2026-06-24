@@ -164,6 +164,25 @@ export default function SchedulePage() {
     } finally { setBusy(false) }
   }
 
+  // Recurring templates: save this week as the per-employee template; apply templates to this week.
+  async function saveTemplate() {
+    if (!shifts.length) { alert('No shifts this week to save as a template.'); return }
+    if (!confirm("Save this week's shifts as the recurring weekly template? Replaces existing templates for these employees.")) return
+    setBusy(true)
+    try { const r = await api('/api/v1/storeops/shift-templates/save-week', { method: 'POST', body: JSON.stringify({ week_start: weekStart }) }); alert(`Saved ${r.saved} template entries for ${r.employees} employee(s).`) }
+    catch (e: any) { alert(e?.message || 'Could not save template.') } finally { setBusy(false) }
+  }
+  async function applyTemplate() {
+    if (!confirm('Fill this week from the saved templates? Existing shifts are kept (duplicates skipped).')) return
+    setBusy(true)
+    try {
+      const r = await api('/api/v1/storeops/shift-templates/apply', { method: 'POST', body: JSON.stringify({ week_start: weekStart }) })
+      const s = await api(`/api/v1/storeops/shifts?week_start=${weekStart}&week_end=${weekEnd}`)
+      setShifts(s || [])
+      alert(`Added ${r.added} shift${r.added === 1 ? '' : 's'} from templates${r.skipped_timeoff ? `, skipped ${r.skipped_timeoff} (time off)` : ''}.`)
+    } catch (e: any) { alert(e?.message || 'Could not apply template.') } finally { setBusy(false) }
+  }
+
   async function deleteShift(id: number) {
     if (!confirm('Remove this shift?')) return
     await api(`/api/v1/storeops/shifts/${id}`, { method: 'DELETE' })
@@ -301,6 +320,8 @@ export default function SchedulePage() {
           <button className="btn btn-secondary" onClick={nextWeek}>Next →</button>
           <button className="btn btn-secondary" disabled={busy} onClick={copyFromLastWeek} title="Pull last week's shifts into this week">⬅️ Copy last week</button>
           <button className="btn btn-primary" disabled={busy} onClick={copyWeeks} title="Duplicate this week's shifts into one or more following weeks">📋 Copy weeks</button>
+          <button className="btn btn-secondary" disabled={busy} onClick={saveTemplate} title="Save this week as the recurring weekly template">⭐ Save template</button>
+          <button className="btn btn-secondary" disabled={busy} onClick={applyTemplate} title="Fill this week from the saved templates">📌 Apply template</button>
           <ExportButtons payload={buildPayload} compact />
         </div>
       </div>
