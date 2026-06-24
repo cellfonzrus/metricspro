@@ -40,7 +40,7 @@ export default function SchedulePage() {
   const [filterStore, setFilterStore] = useState('')
   const [loading, setLoading] = useState(true)
   // addModal carries the day + the fixed dimension (store OR emp) depending on the view.
-  const [addModal, setAddModal] = useState<{ date: string; store?: string; emp?: string } | null>(null)
+  const [addModal, setAddModal] = useState<{ date: string; store?: string; emp?: string; editId?: number } | null>(null)
   const [newShift, setNewShift] = useState({ start_time: '10:00', end_time: '18:00', store_code: '', employee_name: '' })
   const [busy, setBusy] = useState(false)
 
@@ -135,8 +135,25 @@ export default function SchedulePage() {
     setAddModal({ date, ...fixed })
   }
 
+  // Edit an existing shift — reuse the modal (store + employee fixed; adjust the times).
+  function openEdit(s: Shift) {
+    setNewShift({ start_time: s.start_time, end_time: s.end_time, store_code: s.store_code, employee_name: s.employee_name })
+    setAddModal({ date: s.shift_date, store: s.store_code, emp: s.employee_name, editId: s.id })
+  }
+
   async function addShift() {
     if (!addModal) return
+    if (addModal.editId) {
+      setBusy(true)
+      try {
+        const upd = { start_time: newShift.start_time, end_time: newShift.end_time,
+          scheduled_hours: hoursBetween(newShift.start_time, newShift.end_time) }
+        await api(`/api/v1/storeops/shifts/${addModal.editId}`, { method: 'PATCH', body: JSON.stringify(upd) })
+        setShifts(s => s.map(sh => sh.id === addModal.editId ? { ...sh, ...upd } : sh))
+        setAddModal(null)
+      } catch (e: any) { alert(e?.message || 'Could not save shift.') } finally { setBusy(false) }
+      return
+    }
     const store_code = addModal.store || newShift.store_code
     const employee_name = addModal.emp || newShift.employee_name
     if (!store_code) { alert('Pick a store.'); return }
@@ -197,7 +214,8 @@ export default function SchedulePage() {
     <td style={{ padding: '4px 6px', textAlign: 'center', borderRight: '1px solid var(--border)', cursor: 'pointer', verticalAlign: 'top', background: date === today ? 'rgba(37,99,235,0.04)' : undefined }}
       onClick={onAdd}>
       {cellShifts.map(s => (
-        <div key={s.id} style={{ background: 'var(--accent2)', borderRadius: 6, padding: '3px 6px', fontSize: 11, color: 'white', position: 'relative', marginBottom: 3, textAlign: 'left' }}>
+        <div key={s.id} title="Click to edit times" onClick={e => { e.stopPropagation(); openEdit(s) }}
+          style={{ background: 'var(--accent2)', borderRadius: 6, padding: '3px 6px', fontSize: 11, color: 'white', position: 'relative', marginBottom: 3, textAlign: 'left' }}>
           <div style={{ fontWeight: 600, paddingRight: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {view === 'store' ? s.employee_name : s.store_code}
           </div>
@@ -352,7 +370,7 @@ export default function SchedulePage() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy} onClick={addShift}>{busy ? 'Adding…' : 'Add Shift'}</button>
+              <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy} onClick={addShift}>{busy ? 'Saving…' : (addModal.editId ? 'Save Shift' : 'Add Shift')}</button>
               <button className="btn btn-secondary" onClick={() => setAddModal(null)}>Cancel</button>
             </div>
           </div>
