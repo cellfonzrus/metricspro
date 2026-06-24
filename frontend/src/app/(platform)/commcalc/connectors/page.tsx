@@ -84,7 +84,7 @@ export default function ConnectorsPage() {
               <div className="table-wrapper" style={{ marginTop: 12 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead><tr style={{ background: 'var(--surface2)' }}>
-                    {['Report', 'Portal source', 'Target table', 'Period', 'Mode', ''].map(h =>
+                    {['Report', 'Portal source', 'Target table', 'Last loaded', 'Mode', ''].map(h =>
                       <th key={h} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
                   </tr></thead>
                   <tbody>
@@ -93,6 +93,7 @@ export default function ConnectorsPage() {
                         <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 13, fontWeight: 600 }}>{r.label || r.report_key}</td>
                         <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text3)' }}>{r.source_name || '—'}{r.report_id ? ` (#${r.report_id})` : ''}</td>
                         <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 12, fontFamily: 'monospace', color: 'var(--text3)' }}>{r.target_table || '—'}</td>
+                        <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text3)' }}>{r.last_upload ? <span title={`${r.last_upload.rows_saved ?? ''} rows · ${r.last_upload.period ?? ''}`}>{dt(r.last_upload.uploaded_at)}</span> : '—'}</td>
                         <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text3)' }}>{r.period_mode}</td>
                         <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)' }}>
                           <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>

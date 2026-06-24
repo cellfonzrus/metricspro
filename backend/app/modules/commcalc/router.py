@@ -1006,8 +1006,20 @@ def list_connectors(org_id: str = ORG_ID):
              .eq('org_id', org_id).order('sort_order').execute().data) or []
     defs = (client.schema('commcalc').table('report_definitions').select('*')
             .eq('org_id', org_id).order('sort_order').execute().data) or []
+    # last upload per report (upload_log.file_type == report_key for the period reports)
+    last_up = {}
+    try:
+        logs = (client.schema('commcalc').table('upload_log').select('file_type,period,uploaded_at,rows_saved')
+                .eq('org_id', org_id).order('uploaded_at', desc=True).limit(500).execute().data) or []
+        for lg in logs:
+            ft = lg.get('file_type')
+            if ft and ft not in last_up:
+                last_up[ft] = lg
+    except Exception:
+        pass
     by_conn = {}
     for d in defs:
+        d['last_upload'] = last_up.get(d.get('report_key'))
         by_conn.setdefault(d.get('connector_id'), []).append(d)
     return [{**c, 'status': _connector_status(client, org_id, c.get('config_table')),
              'reports': by_conn.get(c['id'], [])} for c in conns]
