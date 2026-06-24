@@ -2643,11 +2643,25 @@ async def get_target_calendar(
 
     hours_by_day = targets_engine.scope_hours_by_day(shifts, store_code, rep_arg)
     actuals_by_day = targets_engine.scope_actuals_by_day(actuals, store_code, rep_arg)
+    month_end = end - _timedelta(days=1)
+
+    # Employee target PRORATION (#10/#11): a rep's monthly target = the store monthly × the rep's
+    # share of the store's scheduled hours (projected to the full month), NOT the full store target.
+    # compute_scope then spreads it over the rep's days, so Σ(rep days) = store_monthly × rep_share.
+    rep_share = 1.0
+    if rep_arg:
+        store_hours = targets_engine.scope_hours_by_day(shifts, store_code, None)
+        store_eff = {**store_hours, **targets_engine.project_future_hours(store_hours, today, month_end)}
+        rep_eff = {**hours_by_day, **targets_engine.project_future_hours(hours_by_day, today, month_end)}
+        sh, rh = sum(store_eff.values()), sum(rep_eff.values())
+        rep_share = (rh / sh) if sh > 0 else 0.0
+        monthly = {c: round((v or 0) * rep_share, 2) for c, v in monthly.items()}
+
     result = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today,
-                                          round_counts=True, month_end=end - _timedelta(days=1))
+                                          round_counts=True, month_end=month_end)
     result.update({
         'period': period, 'scope': scope, 'store_code': store_code,
-        'rep': rep_arg, 'monthly_targets': monthly,
+        'rep': rep_arg, 'monthly_targets': monthly, 'rep_share': round(rep_share, 4),
         'reps': targets_engine.reps_in_scope(shifts, actuals, store_code),
     })
     # Conversion (boxes ÷ bill-payments). Always include the store rate; for a rep scope

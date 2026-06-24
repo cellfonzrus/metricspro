@@ -139,7 +139,7 @@ export default function MyTargetsPage() {
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
             <div style={{ fontSize: 13, color: 'var(--text2)' }}>
-              <strong>{rep}</strong> · {fmtN(detail.scheduled_hours_total, 0)}h scheduled this month · today {detail.today}
+              <strong>{rep}</strong> · {fmtN(detail.scheduled_hours_total, 0)}h scheduled this month{detail.rep_share != null ? ` · ${Math.round(detail.rep_share * 100)}% of store hours (your target share)` : ''} · today {detail.today}
             </div>
             <ExportButtons payload={buildPayload} compact />
           </div>
