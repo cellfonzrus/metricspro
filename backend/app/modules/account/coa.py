@@ -346,15 +346,22 @@ def build_inputs(client, org_id, period):
     except Exception:
         pass
 
-    # vip_paygo_payments — cash paid to VIP this period (approved batches) + current owed (pending, BS)
+    # vip_paygo_payments — cash paid to VIP this period (approved batches) + current owed (pending, BS).
+    # NOTE: the PayGo `dealer` field is the VIP DEALER ACCOUNT (one legal entity — e.g. "Cellular
+    # Services Dot net LLC (228 N Wood Ave, Syosset, NY 11791)"), NOT a retail store: 176/178 batches
+    # carry that single account string. Resolving it as a store made it a PHANTOM per-store bucket that
+    # wrecked per-store / per-company P&L — the device-lending bill is settled at the dealer-account
+    # (company) level, and the batch grain has no per-store split. So book it COMPANY-WIDE (store=None).
+    # Per-store allocation would require joining each PayGo line to the lent devices' stores via
+    # asset_ledger — a future enhancement, not an alias.
     try:
         for r in _fetch_all(client, "vip_paygo_payments", "dealer,amount,amount_overdue,batch_type,period",
                             {"org_id": org_id, "period": period_keys}):
             if (r.get("batch_type") or "").lower() == "approved":
-                add("vip_device_pay", _norm_store(r.get("dealer")), r.get("amount"))
+                add("vip_device_pay", None, r.get("amount"))
         for r in _fetch_all(client, "vip_paygo_payments", "dealer,amount,batch_type"):
             if (r.get("batch_type") or "").lower() == "pending":
-                add("owed_vip", _norm_store(r.get("dealer")), r.get("amount"))
+                add("owed_vip", None, r.get("amount"))
     except Exception:
         pass
 
