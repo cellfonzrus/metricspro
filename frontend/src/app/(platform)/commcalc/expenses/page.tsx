@@ -28,6 +28,7 @@ export default function ExpensesPage() {
   const [storeSearch, setStoreSearch] = useState('')
   const [newCat, setNewCat] = useState({ name: '', type: 'Fixed' })
   const [upBusy, setUpBusy] = useState(false)
+  const [carriedFrom, setCarriedFrom] = useState('')
 
   function load() {
     setLoading(true)
@@ -36,6 +37,7 @@ export default function ExpensesPage() {
       api(`/api/v1/commcalc/expenses/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => ({ expenses: [] })),
     ]).then(([st, ex]: any) => {
       setStores((st || []).filter((s: any) => s.is_active !== false))
+      setCarriedFrom(ex?.carried_from || '')
       const map: any = {}; const extra: Record<string, string> = {}
       ;(ex.expenses || []).forEach((e: any) => {
         if (!map[e.store_code]) map[e.store_code] = {}
@@ -135,6 +137,13 @@ export default function ExpensesPage() {
             onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.currentTarget.value = '' }} />
         </label>
       </div>
+
+      {carriedFrom && !loading && (
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#eef6ff', borderLeft: '4px solid var(--accent)', fontSize: 13 }}>
+          📋 <b>Carried forward from {carriedFrom}</b> — no expenses entered for {period} yet, so last month's are pre-filled below.
+          Review and <b>Save All</b> to keep them for {period} (they'll carry to next month too).
+        </div>
+      )}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>

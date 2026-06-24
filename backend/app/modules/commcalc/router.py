@@ -3065,13 +3065,34 @@ async def delete_rep_alias(alias: str, org_id: str = ORG_ID):
 
 
 # ── Store Expenses (#11 — schema-correct CRUD; old page used the dead public table) ──
+def _exp_period_key(p):
+    try:
+        pp = parse_period(p)
+        return (pp['year'], pp['month'])
+    except Exception:
+        return (0, 0)
+
+
 @router.get("/expenses/{period}")
 async def get_expenses(period: str, org_id: str = ORG_ID):
-    """All store expenses for a period (commcalc.store_expenses)."""
+    """Store expenses for a period. STICKY: if the period has none yet, carry forward the latest
+    prior period's expenses (returned pre-filled with carried_from set) so they persist month-to-month
+    until changed — the user reviews and Saves to keep them for this period."""
     client = sb()
     rows = (client.schema('commcalc').table('store_expenses').select('*')
             .eq('org_id', org_id).eq('period', period).order('store_code').execute().data) or []
-    return {"period": period, "expenses": rows}
+    carried_from = None
+    if not rows:
+        allp = (client.schema('commcalc').table('store_expenses').select('period')
+                .eq('org_id', org_id).execute().data) or []
+        cur = _exp_period_key(period)
+        priors = sorted({p['period'] for p in allp if p.get('period') and _exp_period_key(p['period']) < cur},
+                        key=_exp_period_key)
+        if priors:
+            carried_from = priors[-1]
+            rows = (client.schema('commcalc').table('store_expenses').select('*')
+                    .eq('org_id', org_id).eq('period', carried_from).order('store_code').execute().data) or []
+    return {"period": period, "expenses": rows, "carried_from": carried_from}
 
 
 @router.put("/expenses/{period}")
