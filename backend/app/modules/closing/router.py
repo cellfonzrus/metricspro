@@ -4,12 +4,15 @@ Upload the closing sheet (one row per rep per day), DM evening verification (per
 missing-rep check vs the schedule), and reconciliation against B2B actual daily sales. Tables live
 in commcalc.* (migration 029).
 """
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks, Header
 from app.core.database import get_supabase
-from datetime import datetime, timezone
+from app.core.config import settings
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from dateutil import parser as dateparser
 import pandas as pd
 import io
+from . import gsheet
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -134,14 +137,18 @@ async def upload_closing(file: UploadFile = File(...), org_id: str = ORG_ID):
             df = pd.read_excel(io.BytesIO(contents), dtype=str)
     except Exception as e:
         raise HTTPException(400, f"Could not read the file: {e}")
-    df = df.fillna("")
+    return _ingest_dataframe(sb(), org_id, df)
 
+
+def _ingest_dataframe(client, org_id: str, df) -> dict:
+    """Parse a closing DataFrame (from the sheet upload OR the Google auto-sweep) into
+    daily_closing rows, then idempotently replace the sheet-sourced rows for the covered dates
+    (manual in-app rows are preserved)."""
+    df = df.fillna("")
     cm = _build_colmap(df)
     if "close_date" not in cm or "sfid" not in cm:
-        raise HTTPException(400, f"This doesn't look like the closing sheet — need at least a Date and "
-                                 f"SFID column. Found: {list(df.columns)}")
-
-    client = sb()
+        raise HTTPException(400, "This doesn't look like the closing sheet — need at least a Date "
+                                 f"and SFID column. Found: {list(df.columns)}")
     by_sfid = _store_resolver(client, org_id)
 
     def g(row, field):
@@ -172,9 +179,9 @@ async def upload_closing(file: UploadFile = File(...), org_id: str = ORG_ID):
         dates.add(d)
 
     if not rows:
-        raise HTTPException(400, "No rows with a valid Date found in the file.")
+        raise HTTPException(400, "No rows with a valid Date found.")
 
-    # Idempotent re-upload: wipe sheet-uploaded rows for the covered dates, keep manual rows.
+    # Idempotent: wipe sheet-sourced rows for the covered dates, keep manual rows, then insert.
     (client.schema("commcalc").table("daily_closing").delete()
      .eq("org_id", org_id).eq("source", "sheet_upload").in_("close_date", sorted(dates)).execute())
     for i in range(0, len(rows), 500):
@@ -510,6 +517,146 @@ def update_row(row_id: str, updates: dict, org_id: str = ORG_ID):
 def delete_row(row_id: str):
     sb().schema("commcalc").table("daily_closing").delete().eq("id", row_id).execute()
     return {"deleted": row_id}
+
+
+# ── Google service-account auto-import of the closing responses sheet ───────────────────────
+_CLOSING_CFG_DEFAULTS = {"frequency": "daily", "day_of_week": 1, "day_of_month": 1, "hour": 22,
+                         "timezone": "America/New_York", "enabled": False, "tab": ""}
+
+
+def _closing_cfg(client, org_id: str) -> dict:
+    rows = (client.schema("commcalc").table("closing_sweep_config").select("*")
+            .eq("org_id", org_id).execute().data) or []
+    return rows[0] if rows else {}
+
+
+def _closing_public_cfg(cfg: dict) -> dict:
+    cfg = cfg or {}
+    return {
+        "sheet_id": cfg.get("sheet_id") or "", "tab": cfg.get("tab") or "",
+        "enabled": bool(cfg.get("enabled")), "frequency": cfg.get("frequency") or "daily",
+        "day_of_week": cfg.get("day_of_week"), "day_of_month": cfg.get("day_of_month"),
+        "hour": cfg.get("hour"), "timezone": cfg.get("timezone") or "America/New_York",
+        "next_run_at": cfg.get("next_run_at"), "last_run_at": cfg.get("last_run_at"),
+        "last_status": cfg.get("last_status"), "last_detail": cfg.get("last_detail"),
+        # the SA key lives in a server env var, never the DB — surface only whether it's set + its email
+        "service_account_email": gsheet.sa_email(),
+        "service_account_configured": gsheet.sa_info() is not None,
+    }
+
+
+def _next_run(frequency, dow, dom, hour, tzname) -> str:
+    tz = ZoneInfo(tzname or "America/New_York")
+    now = datetime.now(tz)
+    hour = int(hour if hour is not None else 22)
+    cand = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    freq = (frequency or "daily").lower()
+    if freq == "weekly":
+        dow = int(dow if dow is not None else 1)
+        cand += timedelta(days=(dow - cand.weekday()) % 7)
+        if cand <= now:
+            cand += timedelta(days=7)
+    elif freq == "monthly":
+        import calendar
+        dom = int(dom if dom is not None else 1)
+        def at(yy, mm):
+            d = min(dom, calendar.monthrange(yy, mm)[1])
+            return now.replace(year=yy, month=mm, day=d, hour=hour, minute=0, second=0, microsecond=0)
+        cand = at(now.year, now.month)
+        if cand <= now:
+            ny, nm = (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
+            cand = at(ny, nm)
+    else:  # daily
+        if cand <= now:
+            cand += timedelta(days=1)
+    return cand.astimezone(timezone.utc).isoformat()
+
+
+def _closing_sweep_status(client, org_id, status, detail, mark_run=False):
+    body = {"org_id": org_id, "last_status": status, "last_detail": (detail or "")[:500], "updated_at": _now()}
+    if mark_run:
+        body["last_run_at"] = _now()
+    try:
+        client.schema("commcalc").table("closing_sweep_config").upsert(body, on_conflict="org_id").execute()
+    except Exception:
+        pass
+
+
+def _do_closing_sweep(org_id: str):
+    client = sb()
+    try:
+        cfg = _closing_cfg(client, org_id)
+        sheet_id = (cfg.get("sheet_id") or "").strip()
+        if not sheet_id:
+            _closing_sweep_status(client, org_id, "error", "No Google sheet id configured.", mark_run=True)
+            return
+        values, tab = gsheet.fetch_values(sheet_id, cfg.get("tab"))
+        if not values or len(values) < 2:
+            _closing_sweep_status(client, org_id, "error",
+                                  "Sheet empty or unreadable — is it shared with the service account?", mark_run=True)
+            return
+        header = [str(h) for h in values[0]]
+        body = [list(r) + [""] * (len(header) - len(r)) for r in values[1:]]
+        df = pd.DataFrame(body, columns=header).astype(str)
+        res = _ingest_dataframe(client, org_id, df)
+        detail = f"OK — {res['rows_saved']} rows across {len(res['dates'])} day(s) from tab '{tab}'"
+        if res["unresolved_stores"]:
+            detail += f"; {res['unresolved_stores']} rows had an unrecognized SFID"
+        _closing_sweep_status(client, org_id, "ok", detail, mark_run=True)
+    except HTTPException as he:
+        _closing_sweep_status(client, org_id, "error", str(he.detail), mark_run=True)
+    except Exception as e:
+        _closing_sweep_status(client, org_id, "error", f"Sweep failed: {e}", mark_run=True)
+
+
+@router.get("/sweep/config")
+def closing_sweep_get_config(org_id: str = ORG_ID):
+    return _closing_public_cfg(_closing_cfg(sb(), org_id))
+
+
+@router.put("/sweep/config")
+def closing_sweep_put_config(body: dict, org_id: str = ORG_ID):
+    client = sb()
+    cur = _closing_cfg(client, org_id) or {}
+    row = {"org_id": org_id}
+    for k in ("sheet_id", "tab", "enabled", "frequency", "day_of_week", "day_of_month", "hour", "timezone"):
+        if k in body and body[k] is not None:
+            row[k] = body[k]
+    merged = {**_CLOSING_CFG_DEFAULTS, **cur, **row}
+    row["next_run_at"] = _next_run(merged.get("frequency"), merged.get("day_of_week"),
+                                   merged.get("day_of_month"), merged.get("hour"), merged.get("timezone"))
+    row["updated_at"] = _now()
+    client.schema("commcalc").table("closing_sweep_config").upsert(row, on_conflict="org_id").execute()
+    return _closing_public_cfg(_closing_cfg(client, org_id))
+
+
+@router.post("/sweep/run-now")
+def closing_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+    cfg = _closing_cfg(sb(), org_id)
+    if not (cfg.get("sheet_id") or "").strip():
+        raise HTTPException(400, "Set the Google sheet id first.")
+    if gsheet.sa_info() is None:
+        raise HTTPException(400, "GOOGLE_SERVICE_ACCOUNT_JSON is not set on the server.")
+    background_tasks.add_task(_do_closing_sweep, org_id)
+    return {"status": "started"}
+
+
+@router.post("/sweep/run-due")
+def closing_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint — run every enabled config whose next_run_at has passed."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    client = sb()
+    now_iso = _now()
+    due = (client.schema("commcalc").table("closing_sweep_config").select("*")
+           .eq("enabled", True).lte("next_run_at", now_iso).execute().data) or []
+    for cfg in due:
+        oid = cfg.get("org_id") or ORG_ID
+        nxt = _next_run(cfg.get("frequency"), cfg.get("day_of_week"), cfg.get("day_of_month"),
+                        cfg.get("hour"), cfg.get("timezone"))
+        client.schema("commcalc").table("closing_sweep_config").update({"next_run_at": nxt}).eq("org_id", oid).execute()
+        background_tasks.add_task(_do_closing_sweep, oid)
+    return {"triggered": len(due)}
 
 
 @router.get("/health")

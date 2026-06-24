@@ -44,8 +44,9 @@ const STEPS: Step[] = [
     source: 'VIP Wireless portal', url: 'https://vipwireless.com', auto: false,
     report: 'Asset ledger export' },
   { id: 'daily_closing', label: 'Daily Closing Sheet', icon: '🧮', kind: 'module', endpoint: 'closing/upload',
-    source: 'Google — "Envelopes Data (Responses)"', auto: false,
-    report: 'Daily closing envelopes export (.xlsx / .csv)' },
+    source: 'Google — "Envelopes Data (Responses)"', auto: true, url: '/closing/imports',
+    report: 'Daily closing envelopes export (.xlsx / .csv)',
+    note: 'Auto-imports via a Google service account once set up — configure on Daily Closing → Auto-Import. Manual upload still available.' },
 ]
 
 type Rec = { file_type: string; period: string | null; uploaded_at: string }
