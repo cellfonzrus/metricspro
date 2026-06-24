@@ -728,41 +728,57 @@ def _do_vip_sweep(org_id):
     do_asset_ledger = cfg.get('sweep_asset_ledger') is not False  # default ON (refresh asset_ledger)
     do_chargebacks = cfg.get('sweep_chargebacks') is not False    # default ON (stage VIP chargebacks)
     lookback = int(cfg.get('lookback_days') or 14)
-    parts = []
-    try:
-        if do_invoices:
-            res = vip_sweep.run_invoice_sweep(
-                client, org_id, cfg['portal_user'], cfg['portal_pass'], lookback,
-                (_vip_money, _vip_int, _vip_ts, _vip_period))
-            parts.append(f"{res['invoices']} invoices, {res['lines']} lines, "
-                         f"{res['devices']} devices ({res['window']})")
-        if do_asset:
-            ar = vip_sweep.run_paygo_sweep(
-                client, org_id, cfg['portal_user'], cfg['portal_pass'], lookback)
-            owed = f"${ar['current_owed']:,.2f}" if ar.get('current_owed') is not None else "n/a"
-            parts.append(f"PayGo: {ar['payments']} batches (current owed {owed}), "
-                         f"{ar['invoice_links']} invoice links from {ar['batches_detailed']} recent batches")
-        if do_creditmemo:
-            # #10 recon input: VIP 'Weekly Incentive Credit' memos (Xfinity flagged/excluded).
-            cr = vip_sweep.run_creditmemo_sweep(
-                client, org_id, cfg['portal_user'], cfg['portal_pass'],
-                (_vip_money, _vip_int, _vip_ts, _vip_period))
-            parts.append(f"Credit memos: {cr['credit_memos']} ({cr['xfinity_excluded']} Xfinity excluded)")
-        if do_asset_ledger:
-            # Asset_Lending.xlsx (per-device PayGo ledger) → commcalc.asset_ledger (the asset module).
-            al = vip_sweep.run_asset_ledger_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'])
-            parts.append(f"Asset ledger: {al['rows']} rows")
-        if do_chargebacks:
-            # VIP chargebacks export → commcalc.chargeback_review (assign-first bucket).
-            cb = vip_sweep.run_chargeback_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'])
-            parts.append(f"Chargebacks: {cb['rows']} staged")
-        if not parts:
-            parts.append("nothing enabled (tick Invoices, Asset-lending, Credit memos and/or Asset ledger)")
-        _vip_set_status(client, org_id, 'ok', "OK — " + " · ".join(parts), mark_run=True)
-    except vip_sweep.VipLoginError as e:
-        _vip_set_status(client, org_id, 'error', str(e), mark_run=True)
-    except Exception as e:
-        _vip_set_status(client, org_id, 'error', f"Sweep failed: {e}", mark_run=True)
+    u, pw = cfg['portal_user'], cfg['portal_pass']
+    helpers = (_vip_money, _vip_int, _vip_ts, _vip_period)
+    parts, errs = [], []
+
+    # Each step runs independently (its own login + session): a network timeout / portal hiccup on
+    # one report no longer aborts the rest, so the asset-ledger + chargebacks still land even if an
+    # earlier step flakes. A login failure surfaces per-step. Status = ok | partial | error.
+    def _step(name, enabled, fn):
+        if not enabled:
+            return
+        try:
+            parts.append(fn())
+        except vip_sweep.VipLoginError as e:
+            errs.append(f"{name}: {e}")
+        except Exception as e:
+            errs.append(f"{name}: {str(e)[:140]}")
+
+    def _invoices():
+        res = vip_sweep.run_invoice_sweep(client, org_id, u, pw, lookback, helpers)
+        return f"{res['invoices']} invoices, {res['lines']} lines, {res['devices']} devices ({res['window']})"
+
+    def _paygo():
+        ar = vip_sweep.run_paygo_sweep(client, org_id, u, pw, lookback)
+        owed = f"${ar['current_owed']:,.2f}" if ar.get('current_owed') is not None else "n/a"
+        return f"PayGo: {ar['payments']} batches (current owed {owed})"
+
+    def _creditmemo():
+        cr = vip_sweep.run_creditmemo_sweep(client, org_id, u, pw, helpers)
+        return f"Credit memos: {cr['credit_memos']} ({cr['xfinity_excluded']} Xfinity excluded)"
+
+    def _asset_ledger():
+        al = vip_sweep.run_asset_ledger_sweep(client, org_id, u, pw)
+        return f"Asset ledger: {al['rows']} rows"
+
+    def _chargebacks():
+        cb = vip_sweep.run_chargeback_sweep(client, org_id, u, pw)
+        return f"Chargebacks: {cb['rows']} staged"
+
+    _step('invoices', do_invoices, _invoices)
+    _step('paygo', do_asset, _paygo)
+    _step('creditmemo', do_creditmemo, _creditmemo)
+    _step('asset_ledger', do_asset_ledger, _asset_ledger)
+    _step('chargebacks', do_chargebacks, _chargebacks)
+
+    if not parts and not errs:
+        _vip_set_status(client, org_id, 'ok', "Nothing enabled (tick a report on the VIP Sweep page)", mark_run=True)
+        return
+    status = 'ok' if not errs else ('partial' if parts else 'error')
+    detail = (("OK — " if status == 'ok' else "") + " · ".join(parts)
+              + ((" | FAILED: " if parts else "FAILED: ") + " · ".join(errs) if errs else ""))
+    _vip_set_status(client, org_id, status, detail, mark_run=True)
 
 
 @router.get("/vip/sweep/config")
