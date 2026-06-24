@@ -37,6 +37,21 @@ export default function ClosingReconPage() {
   }, [period, market, tol])
   useEffect(() => { load() }, [load])
 
+  const [charged, setCharged] = useState<Record<string, boolean>>({})
+  async function chargeRow(e: any) {
+    const k = `${e.date}|${e.rep}|${e.metric}`
+    try {
+      await api('/api/v1/commcalc/chargeback-review', { method: 'POST', body: JSON.stringify({
+        source: 'closing_recon', severity: e.severity === 'block' ? 'critical' : 'warning', needs_review: true,
+        store: e.store_address, store_code: e.store_code, period, occurred_date: e.date,
+        suggested_rep: e.rep && e.rep !== '—' ? e.rep : '', amount: Math.abs(e.variance || 0),
+        detail: `Closing ${e.metric}: ${e.reason || ''}`.trim(),
+        dedupe_key: `closing:${e.date}:${e.store_code}:${e.rep}:${e.metric}`,
+      }) })
+      setCharged(c => ({ ...c, [k]: true }))
+    } catch (err: any) { alert('Charge failed: ' + (err?.message || err)) }
+  }
+
   const s = data?.summary || {}
   const errors: any[] = data?.errors || []
   const shown = filter === 'all' ? errors : errors.filter(e => e.severity === filter)
@@ -95,7 +110,14 @@ export default function ClosingReconPage() {
                         <td style={td}>{e.metric === 'activations' || e.metric === 'upgrades' ? (e.declared ?? '—') : money(e.declared)}</td>
                         <td style={td}>{e.metric === 'activations' || e.metric === 'upgrades' ? (e.b2b ?? '—') : money(e.b2b)}</td>
                         <td style={{ ...td, fontWeight: 600, color: sv.fg }}>{e.variance == null ? '—' : (e.metric === 'activations' || e.metric === 'upgrades' ? `${e.variance > 0 ? '+' : ''}${e.variance}` : `${e.variance > 0 ? '+' : ''}${fmt(e.variance)}`)}</td>
-                        <td style={{ ...td, color: 'var(--text3)', whiteSpace: 'normal', maxWidth: 280 }}>{e.reason}</td>
+                        <td style={{ ...td, color: 'var(--text3)', whiteSpace: 'normal', maxWidth: 280 }}>
+                          {e.reason}
+                          {e.rep && e.rep !== '—' && (e.metric === 'cash' || e.metric === 'credit') && e.severity !== 'pending' && (
+                            charged[`${e.date}|${e.rep}|${e.metric}`]
+                              ? <span style={{ color: '#16794a', fontSize: 11, marginLeft: 6 }}>✓ charged</span>
+                              : <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', marginLeft: 6 }} onClick={() => chargeRow(e)} title="Send to the chargeback bucket for this rep">🔻 Charge</button>
+                          )}
+                        </td>
                       </tr>
                     )
                   })}
