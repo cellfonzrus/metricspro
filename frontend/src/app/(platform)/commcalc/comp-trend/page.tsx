@@ -104,6 +104,9 @@ export default function CompTrendPage() {
               <thead><tr style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Month</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Total Comp</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }} title="From carrier_category_map (migration 038)">Commission</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>SPIFF</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Reimb</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Residual (MI+ATU)</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Accounts</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Δ vs prev</th>
@@ -115,13 +118,16 @@ export default function CompTrendPage() {
                       style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: monthFilter === r.period ? 'var(--surface2,#eef2ff)' : undefined }}>
                     <td style={{ padding: '7px 12px', fontSize: 13, fontWeight: 600 }}>{r.period}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13 }}>{fmt(r.total_comp ?? r.residual)}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: '#16794a' }}>{fmt(r.components?.COMMISSION || 0)}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: '#b45309' }}>{fmt(r.components?.SPIFF || 0)}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: '#7c3aed' }}>{fmt(r.components?.REIMBURSEMENT || 0)}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: '#15803d' }}>{fmt(r.residual_mi_atu || 0)}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13 }}>{r.accounts}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: (r.delta_vs_prev ?? 0) < 0 ? '#b91c1c' : ((r.delta_vs_prev ?? 0) > 0 ? '#15803d' : 'var(--text3)') }}>{r.delta_vs_prev == null ? '—' : fmt(r.delta_vs_prev)}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: (r.pct_vs_prev ?? 0) < 0 ? '#b91c1c' : 'var(--text3)' }}>{r.pct_vs_prev == null ? '—' : `${r.pct_vs_prev}%`}</td>
                   </tr>
                 ))}
-                {totals.length === 0 && <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No comp data.</td></tr>}
+                {totals.length === 0 && <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No comp data.</td></tr>}
               </tbody>
             </table>
           </div>

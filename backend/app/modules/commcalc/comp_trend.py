@@ -10,6 +10,9 @@ Self-contained (paginated read + Python aggregation). Comp is ~10-14k rows/month
 large, push the per-(account,period) aggregation into a Postgres RPC per the perf guidance.
 """
 from app.modules.commcalc.calculator import parse_period, safe_float
+from app.modules.commcalc import carrier_map
+
+_COMPS = ("RESIDUAL", "COMMISSION", "SPIFF", "REIMBURSEMENT", "UNMAPPED")
 
 
 def _pkey(period):
@@ -69,8 +72,12 @@ def compute_residual_trend(client, org_id, months=6, store="", market="",
                            min_drop_pct=20.0, min_drop_amt=1.0):
     rows = _fetch_comp(client, org_id)
     store_q = (store or "").strip().lower()
+    try:
+        rules = carrier_map.load_rules(client, org_id)  # canonical component classification (migration 038)
+    except Exception:
+        rules = []
 
-    totals = {}      # period -> {"residual","qty","accounts":set()}
+    totals = {}      # period -> {"residual","qty","accounts":set(),"components":{...}}
     acct = {}        # acct_key -> {"name","store","addr", periods:{period:{"residual","qty"}}}
     for r in rows:
         addr = (r.get("business_address") or "").strip()
@@ -84,10 +91,14 @@ def compute_residual_trend(client, org_id, months=6, store="", market="",
         qty = safe_float(r.get("quantity"))
         k = _acct_key(r)
 
-        t = totals.setdefault(period, {"residual": 0.0, "qty": 0.0, "accounts": set()})
+        t = totals.setdefault(period, {"residual": 0.0, "qty": 0.0, "accounts": set(),
+                                       "components": {c: 0.0 for c in _COMPS}})
         t["residual"] += amt
         t["qty"] += qty
         t["accounts"].add(k)
+        if rules:
+            m = carrier_map.match_rule(rules, r.get("compensation_type"))
+            t["components"][m["component"] if (m and m.get("component") in _COMPS) else "UNMAPPED"] += amt
 
         a = acct.setdefault(k, {"name": name, "store": addr or name, "periods": {}})
         if name and not a["name"]:
@@ -124,6 +135,7 @@ def compute_residual_trend(client, org_id, months=6, store="", market="",
             "qty": round(t["qty"], 1),
             "delta_vs_prev": delta,
             "pct_vs_prev": pct,
+            "components": {c: round(t["components"][c], 2) for c in _COMPS},
         })
         prev_total = t["residual"]
 
