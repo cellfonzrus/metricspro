@@ -99,7 +99,11 @@ export default function ConnectorsPage() {
       ) : conns.map((c: any) => {
         const tf = TWOFA[c.twofa_status] || TWOFA.ok
         const st = c.status || {}
+        const cr = c.creds || {}
         const stColor = st.last_status === 'ok' ? '#16794a' : st.last_status === 'partial' ? '#b45309' : st.last_status === 'error' ? '#b42318' : 'var(--text3)'
+        const credReady = !!(cr.has_user && cr.has_pass)
+        const ready = !!(c.automatable && credReady && st.enabled && st.next_run_at)
+        const missing = !c.automatable ? 'manual-only' : !credReady ? 'credentials' : !st.enabled ? 'schedule off' : !st.next_run_at ? 'no schedule' : ''
         return (
           <div key={c.id} className="card" style={{ padding: 16, marginBottom: 14, opacity: c.enabled ? 1 : 0.6 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
@@ -110,6 +114,17 @@ export default function ConnectorsPage() {
                   <span style={{ marginLeft: 8, background: tf.bg, color: tf.fg, padding: '1px 7px', borderRadius: 99, fontSize: 11, fontWeight: 600 }}>2FA: {c.twofa_status}</span>
                   <span style={{ marginLeft: 6, fontSize: 11, color: c.automatable ? '#16794a' : '#b45309', fontWeight: 600 }}>{c.automatable ? 'auto' : 'manual-only'}</span>
                 </div>
+                {c.config_table && (
+                  <div style={{ fontSize: 11, marginTop: 4, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ background: credReady ? '#e6f7ec' : '#fef3e2', color: credReady ? '#16794a' : '#b45309', padding: '1px 7px', borderRadius: 99, fontWeight: 600 }}>
+                      {credReady ? `🔑 credentials set${cr.user_hint ? ` (${cr.user_hint})` : ''}` : '⚠️ no credentials'}
+                    </span>
+                    <span style={{ background: ready ? '#e6f7ec' : 'var(--surface2)', color: ready ? '#16794a' : 'var(--text3)', padding: '1px 7px', borderRadius: 99, fontWeight: 600 }}>
+                      {ready ? '✅ ready to auto-run' : `needs setup: ${missing}`}
+                    </span>
+                    {!credReady && <span style={{ color: 'var(--text3)' }}>set credentials on the vendor’s sweep page</span>}
+                  </div>
+                )}
                 {(st.last_run_at || st.last_status) && (
                   <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 6 }}>
                     Last run {dt(st.last_run_at)} · <b style={{ color: stColor }}>{st.last_status || '—'}</b>

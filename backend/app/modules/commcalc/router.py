@@ -1023,6 +1023,28 @@ def _connector_status(client, org_id, cfg_table):
     return out
 
 
+def _connector_creds(client, org_id, cfg_table):
+    """Whether the connector's portal credentials are present — NEVER returns the password.
+    Lets the registry show a cred/readiness state without exposing or relocating any secret
+    (the actual move of creds under the connector model is a separate, human-reviewed step)."""
+    blank = {'has_user': False, 'has_pass': False, 'user_hint': ''}
+    if not cfg_table:
+        return blank
+    try:
+        rows = (client.schema('commcalc').table(cfg_table)
+                .select('portal_user,portal_pass').eq('org_id', org_id).limit(1).execute().data) or []
+    except Exception:
+        return blank
+    if not rows:
+        return blank
+    u = (rows[0].get('portal_user') or '').strip()
+    has_pass = bool((rows[0].get('portal_pass') or '').strip())  # presence only; value discarded
+    hint = ''
+    if u:
+        hint = (u[:2] + '***' + ('@' + u.split('@', 1)[1] if '@' in u else '')) if len(u) > 2 else '***'
+    return {'has_user': bool(u), 'has_pass': has_pass, 'user_hint': hint}
+
+
 @router.get("/connectors")
 def list_connectors(org_id: str = ORG_ID):
     """Every vendor portal + the reports it provides + live sweep status. The single registry."""
@@ -1048,6 +1070,7 @@ def list_connectors(org_id: str = ORG_ID):
         d['last_upload'] = last_up.get(d.get('report_key'))
         by_conn.setdefault(d.get('connector_id'), []).append(d)
     return [{**c, 'status': _connector_status(client, org_id, c.get('config_table')),
+             'creds': _connector_creds(client, org_id, c.get('config_table')),
              'reports': by_conn.get(c['id'], [])} for c in conns]
 
 
