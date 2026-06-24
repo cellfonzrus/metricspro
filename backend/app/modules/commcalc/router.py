@@ -1025,6 +1025,25 @@ def list_connectors(org_id: str = ORG_ID):
              'reports': by_conn.get(c['id'], [])} for c in conns]
 
 
+@router.post("/connectors")
+def create_connector(body: dict, org_id: str = ORG_ID):
+    """Onboard a new vendor connector to the registry (no SQL). Upsert by vendor_name."""
+    require_org(org_id)
+    name = (body.get('vendor_name') or '').strip()
+    if not name:
+        raise HTTPException(400, "vendor_name required")
+    row = {'org_id': org_id, 'vendor_name': name, 'label': body.get('label'),
+           'sweep_kind': (body.get('sweep_kind') or 'manual').strip(), 'portal_url': body.get('portal_url'),
+           'auth_type': body.get('auth_type') or 'form', 'twofa_method': body.get('twofa_method') or 'none',
+           'twofa_status': body.get('twofa_status') or 'needs_setup',
+           'automatable': body.get('automatable', True) is not False, 'enabled': True,
+           'config_table': (body.get('config_table') or '').strip() or None,
+           'sort_order': int(body.get('sort_order') or 100),
+           'updated_at': _datetime.now(_timezone.utc).isoformat()}
+    r = sb().schema('commcalc').table('connector_instances').upsert(row, on_conflict='org_id,vendor_name').execute()
+    return r.data[0] if r.data else row
+
+
 @router.patch("/connectors/{cid}")
 def update_connector(cid: str, body: dict, org_id: str = ORG_ID):
     require_org(org_id)
@@ -1033,6 +1052,24 @@ def update_connector(cid: str, body: dict, org_id: str = ORG_ID):
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
     sb().schema('commcalc').table('connector_instances').update(row).eq('org_id', org_id).eq('id', cid).execute()
     return {"ok": True}
+
+
+@router.post("/report-definitions")
+def create_report_def(body: dict, org_id: str = ORG_ID):
+    """Add a report to a connector in the registry (no SQL). Upsert by report_key."""
+    require_org(org_id)
+    rk = (body.get('report_key') or '').strip()
+    if not rk:
+        raise HTTPException(400, "report_key required")
+    row = {'org_id': org_id, 'connector_id': body.get('connector_id'), 'report_key': rk,
+           'label': body.get('label'), 'source_name': body.get('source_name'), 'report_id': body.get('report_id'),
+           'period_mode': body.get('period_mode') or 'current', 'target_table': body.get('target_table'),
+           'upload_endpoint': body.get('upload_endpoint'), 'source_url': body.get('source_url'),
+           'auto': bool(body.get('auto')), 'refresh_months': int(body.get('refresh_months') or 1),
+           'sort_order': int(body.get('sort_order') or 100),
+           'updated_at': _datetime.now(_timezone.utc).isoformat()}
+    r = sb().schema('commcalc').table('report_definitions').upsert(row, on_conflict='org_id,report_key').execute()
+    return r.data[0] if r.data else row
 
 
 @router.patch("/report-definitions/{rid}")

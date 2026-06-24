@@ -8,12 +8,16 @@ const TWOFA: Record<string, { bg: string; fg: string }> = {
   ok: { bg: '#e6f7ec', fg: '#16794a' }, needs_setup: { bg: '#fef3e2', fg: '#b45309' }, blocked: { bg: '#fde8e8', fg: '#b42318' },
 }
 const dt = (s: string) => s ? new Date(s).toLocaleString() : '—'
+const fin: React.CSSProperties = { padding: '6px 9px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
 export default function ConnectorsPage() {
   const [conns, setConns] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
+  const [showAdd, setShowAdd] = useState(false)
+  const [nc, setNc] = useState<any>({ vendor_name: '', label: '', sweep_kind: 'manual', portal_url: '' })
+  const [nr, setNr] = useState<Record<string, any>>({})
 
   const load = useCallback(() => {
     setLoading(true)
@@ -35,6 +39,17 @@ export default function ConnectorsPage() {
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     finally { setBusy('') }
   }
+  async function addConnector() {
+    if (!nc.vendor_name?.trim()) { setMsg('Vendor name required.'); return }
+    try { await api('/api/v1/commcalc/connectors', { method: 'POST', body: JSON.stringify(nc) }); setNc({ vendor_name: '', label: '', sweep_kind: 'manual', portal_url: '' }); setShowAdd(false); load() }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function addReport(cid: string) {
+    const r = nr[cid] || {}
+    if (!r.report_key?.trim()) { setMsg('report_key required.'); return }
+    try { await api('/api/v1/commcalc/report-definitions', { method: 'POST', body: JSON.stringify({ ...r, connector_id: cid }) }); setNr(p => ({ ...p, [cid]: {} })); load() }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
 
   return (
     <div>
@@ -45,6 +60,21 @@ export default function ConnectorsPage() {
         </p>
       </div>
       {msg && <div style={{ fontSize: 13, marginBottom: 10 }}>{msg}</div>}
+
+      <div style={{ marginBottom: 14 }}>
+        <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => setShowAdd(s => !s)}>{showAdd ? '✕ Cancel' : '＋ Add connector'}</button>
+        {showAdd && (
+          <div className="card" style={{ padding: 14, marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input style={fin} placeholder="Vendor name *" value={nc.vendor_name} onChange={e => setNc({ ...nc, vendor_name: e.target.value })} />
+            <input style={fin} placeholder="Label" value={nc.label} onChange={e => setNc({ ...nc, label: e.target.value })} />
+            <input style={fin} placeholder="Portal URL" value={nc.portal_url} onChange={e => setNc({ ...nc, portal_url: e.target.value })} />
+            <select style={fin} value={nc.sweep_kind} onChange={e => setNc({ ...nc, sweep_kind: e.target.value })} title="run-now dispatch kind">
+              {['manual', 'vip', 'dlar', 'epay', 'b2b', 'google_closing'].map(k => <option key={k} value={k}>{k}</option>)}
+            </select>
+            <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={addConnector}>Add</button>
+          </div>
+        )}
+      </div>
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
@@ -108,6 +138,13 @@ export default function ConnectorsPage() {
                 </table>
               </div>
             )}
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--text3)' }}>+ report:</span>
+              <input style={{ ...fin, width: 110 }} placeholder="key *" value={nr[c.id]?.report_key || ''} onChange={e => setNr(p => ({ ...p, [c.id]: { ...p[c.id], report_key: e.target.value } }))} />
+              <input style={{ ...fin, width: 140 }} placeholder="label" value={nr[c.id]?.label || ''} onChange={e => setNr(p => ({ ...p, [c.id]: { ...p[c.id], label: e.target.value } }))} />
+              <input style={{ ...fin, width: 130 }} placeholder="target_table" value={nr[c.id]?.target_table || ''} onChange={e => setNr(p => ({ ...p, [c.id]: { ...p[c.id], target_table: e.target.value } }))} />
+              <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => addReport(c.id)}>Add</button>
+            </div>
           </div>
         )
       })}
