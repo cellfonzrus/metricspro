@@ -29,6 +29,7 @@ export default function EmployeeDashboardPage() {
   const [emps, setEmps] = useState<any[]>([])
   const [eid, setEid] = useState('')
   const [data, setData] = useState<any>(null)
+  const [coach, setCoach] = useState<any>(null)
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -42,8 +43,14 @@ export default function EmployeeDashboardPage() {
   useEffect(() => {
     if (!eid) return
     setLoading(true)
+    setCoach(null)
     api(`/api/v1/core/employee-dashboard?org_id=${ORG_ID}&employee_id=${encodeURIComponent(eid)}`)
-      .then(setData).catch(console.error).finally(() => setLoading(false))
+      .then((d: any) => {
+        setData(d)
+        const nm = d?.employee?.name, per = d?.period
+        if (nm && per) api(`/api/v1/commcalc/coaching/${encodeURIComponent(per)}?rep=${encodeURIComponent(nm)}`)
+          .then((c: any) => setCoach((c?.reps || [])[0] || null)).catch(() => {})
+      }).catch(console.error).finally(() => setLoading(false))
   }, [eid])
 
   const w = data?.widgets || {}
@@ -67,6 +74,25 @@ export default function EmployeeDashboardPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16, alignItems: 'start' }}>
+
+          {coach && (
+            <Card title="Coaching — what's costing you" icon="🎓">
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                {(coach.kpis || []).map((kpi: any) => (
+                  <span key={kpi.kpi} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 99, fontWeight: 600,
+                    background: kpi.met ? '#e6f7ec' : '#fde8e8', color: kpi.met ? '#16794a' : '#b42318' }}>
+                    {kpi.met ? '✓' : '✗'} {kpi.label} {kpi.actual}/{kpi.target}
+                  </span>
+                ))}
+              </div>
+              {coach.tier < 1
+                ? <div style={{ fontSize: 13 }}>💸 <b>{fmt(coach.at_risk)}</b> at risk — short on <b>{(coach.short_kpis || []).join(', ') || '—'}</b>{coach.need_for_full ? <> · hit <b>{coach.need_for_full}</b> more KPI(s) for full payout</> : null}.</div>
+                : <div style={{ fontSize: 13, color: 'var(--green, #16794a)' }}>✅ Full tier — all KPIs on target.</div>}
+              {coach.chargeback_deducted > 0 && <div style={{ fontSize: 13, color: '#b42318', marginTop: 4 }}>🔻 {fmt(coach.chargeback_deducted)} chargebacks deducted ({coach.chargeback_count}).</div>}
+              <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 6 }}>On the table this period: <b style={{ color: coach.money_on_table > 0 ? '#b42318' : 'inherit' }}>{fmt(coach.money_on_table)}</b></div>
+              {(coach.coaching_notes || []).length > 0 && <ul style={{ margin: '6px 0 0', paddingLeft: 16, fontSize: 12, color: 'var(--text3)' }}>{coach.coaching_notes.map((n: string, i: number) => <li key={i}>{n}</li>)}</ul>}
+            </Card>
+          )}
 
           {on('report_card') && (
             <Card title="Report Card" icon="🏅" right={<span className="badge" style={{ fontSize: 11 }}>{Math.round((data.report_card.tier || 0) * 100)}% tier</span>}>

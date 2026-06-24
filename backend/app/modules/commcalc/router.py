@@ -2496,6 +2496,112 @@ _AP_CAT_LABEL = {'activations': 'Activations', 'upgrades': 'Upgrades',
                  'byod': 'BYOD', 'accessories': 'Accessories'}
 
 
+@router.get("/coaching/{period}")
+def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", org_id: str = ORG_ID):
+    """Per-rep COACHING view: which KPIs each rep met vs missed, and WHY they're losing money
+    (commission at risk below tier 1.0 + chargebacks deducted) + flags & coaching notes. Reuses
+    the KPI defs + tier/at-risk logic from the action plan; adds per-rep chargebacks + flags.
+    Powers the admin/DM coaching dashboard and the employee's own coaching card (rep filter)."""
+    require_org(org_id)
+    client = sb()
+    cfg_rows = (client.schema('commcalc').table('payout_config')
+                .select('*').eq('period', period).limit(1).execute().data) or []
+    cfg = cfg_rows[0] if cfg_rows else {}
+    kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in ACTION_KPI_DEFS}
+    t100 = int(cfg.get('tier_100_min_kpis') or 7)
+    comms = (client.schema('commcalc').table('rep_commissions').select('*').eq('period', period).execute().data) or []
+    cb = (client.schema('commcalc').table('chargeback_items')
+          .select('epay_salesperson,amount,deduct').eq('period', period).execute().data) or []
+    flags = (client.schema('commcalc').table('flags')
+             .select('epay_salesperson,severity,description,coaching_note').eq('period', period).execute().data) or []
+    stores = (client.schema('storeops').table('stores').select('store_code,address,market').execute().data) or []
+    mkt_by = {}
+    for s in stores:
+        for key in (s.get('store_code'), s.get('address')):
+            if key:
+                mkt_by[str(key).strip().upper()] = s.get('market') or ''
+
+    cb_by, fl_by = {}, {}
+    for it in cb:
+        k = (it.get('epay_salesperson') or '').strip().upper()
+        if not k:
+            continue
+        d = cb_by.setdefault(k, {'total': 0.0, 'count': 0, 'deducted': 0.0})
+        amt = safe_float(it.get('amount'))
+        d['count'] += 1
+        d['total'] += amt
+        if it.get('deduct'):
+            d['deducted'] += amt
+    for f in flags:
+        k = (f.get('epay_salesperson') or '').strip().upper()
+        if not k:
+            continue
+        d = fl_by.setdefault(k, {'count': 0, 'high': 0, 'notes': []})
+        d['count'] += 1
+        if (f.get('severity') or '').upper() == 'HIGH':
+            d['high'] += 1
+        note = f.get('coaching_note') or f.get('description')
+        if note and note not in d['notes'] and len(d['notes']) < 3:
+            d['notes'].append(note)
+
+    reps = []
+    for cr in comms:
+        name = (cr.get('storeops_name') or cr.get('epay_salesperson') or '').strip()
+        if not name:
+            continue
+        eslp = (cr.get('epay_salesperson') or '').strip()
+        if rep and rep.strip().upper() not in (name.upper(), eslp.upper()):
+            continue
+        st = (cr.get('store') or '').strip()
+        if store and store.strip().upper() != st.upper():
+            continue
+        mk = mkt_by.get(st.upper(), '')
+        if market and mk != market:
+            continue
+        tier = safe_float(cr.get('tier'))
+        subtotal = safe_float(cr.get('subtotal'))
+        kv = cr.get('kpi_values') or {}
+        kpis = [{'kpi': k, 'label': lab, 'target': kpi_targets[k],
+                 'actual': round(safe_float(kv.get(k)), 1), 'met': safe_float(kv.get(k)) >= kpi_targets[k]}
+                for (k, lab, _c, _d) in ACTION_KPI_DEFS]
+        kpis_met = cr.get('kpis_met')
+        kpis_met = sum(1 for x in kpis if x['met']) if kpis_met is None else kpis_met
+        at_risk = round(subtotal * (1.0 - tier), 2) if tier < 1.0 else 0.0
+        keys = {name.upper(), eslp.upper()} - {''}
+        cbd = {'total': 0.0, 'count': 0, 'deducted': 0.0}
+        fld = {'count': 0, 'high': 0, 'notes': []}
+        for kk in keys:
+            x = cb_by.get(kk)
+            if x:
+                cbd['total'] += x['total']; cbd['count'] += x['count']; cbd['deducted'] += x['deducted']
+            y = fl_by.get(kk)
+            if y:
+                fld['count'] += y['count']; fld['high'] += y['high']
+                for n in y['notes']:
+                    if n not in fld['notes'] and len(fld['notes']) < 3:
+                        fld['notes'].append(n)
+        total_payout = round(safe_float(cr.get('total_payout')), 2)
+        fp = cr.get('final_payout')
+        final_payout = round(safe_float(fp) if fp is not None else total_payout - cbd['deducted'], 2)
+        reps.append({
+            'rep': name, 'store': st, 'market': mk, 'tier': tier,
+            'kpis_met': kpis_met, 'total_kpis': cr.get('total_kpis') or 7,
+            'subtotal': round(subtotal, 2), 'total_payout': total_payout, 'final_payout': final_payout,
+            'at_risk': at_risk, 'kpis': kpis, 'short_kpis': [x['label'] for x in kpis if not x['met']],
+            'need_for_full': max(0, t100 - kpis_met),
+            'chargeback_total': round(cbd['total'], 2), 'chargeback_deducted': round(cbd['deducted'], 2),
+            'chargeback_count': cbd['count'], 'flag_count': fld['count'], 'flag_high': fld['high'],
+            'coaching_notes': fld['notes'], 'money_on_table': round(at_risk + cbd['deducted'], 2),
+        })
+    reps.sort(key=lambda r: -r['money_on_table'])
+    summary = {'reps': len(reps),
+               'total_at_risk': round(sum(r['at_risk'] for r in reps), 2),
+               'total_chargebacks': round(sum(r['chargeback_deducted'] for r in reps), 2),
+               'total_money_on_table': round(sum(r['money_on_table'] for r in reps), 2),
+               'below_tier': sum(1 for r in reps if r['tier'] < 1.0)}
+    return {"period": period, "reps": reps, "summary": summary}
+
+
 @router.get("/targets/{period}/action-plan")
 async def get_action_plan(period: str, today: str = "", store_code: str = "", rep: str = "",
                           org_id: str = ORG_ID):
