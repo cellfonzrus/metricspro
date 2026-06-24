@@ -166,11 +166,16 @@ def run_chargeback_sweep(client, org_id, user, pw):
             "phone_number": g("phone") or None, "esn": esn or None, "imei": imei or None,
             "brand": g("brand") or None, "plan": g("plan") or None,
             "amount": abs(amt), "detail": detail,
-            "dedupe_key": f"vip:{esn or imei}:{pdate}:{amt}",
+            "dedupe_key": "vip:" + "|".join(str(g(k) or "") for k in
+                                            ("esn", "imei", "pdate", "amount", "phone", "customer_no")),
             "raw": {k: g(k) for k in cmap},
         })
     if not rows:
         raise RuntimeError("Chargebacks file parsed to 0 rows")
+    # De-dupe within the batch: the export can list the same (esn/date/amount/phone) row twice;
+    # identical rows collapse to one, else Postgres rejects the upsert with "ON CONFLICT DO UPDATE
+    # command cannot affect row a second time".
+    rows = list({r["dedupe_key"]: r for r in rows}.values())
     for i in range(0, len(rows), 500):
         client.schema("commcalc").table("chargeback_review").upsert(
             rows[i:i + 500], on_conflict="org_id,dedupe_key").execute()
