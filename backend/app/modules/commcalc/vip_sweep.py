@@ -79,6 +79,29 @@ def _fetch(session, path):
     return r.text
 
 
+def run_asset_ledger_sweep(client, org_id, user, pw):
+    """Download Asset_Lending.xlsx and refresh commcalc.asset_ledger.
+
+    Source = the 'Asset Lending' download icon on /account/dashboard, whose link is a direct
+    GET /paygodashboard/DownloadAssetLanding (file 'Asset_Lending.xlsx', sheet 'DataSheet' — the
+    per-device PayGo ledger: Category/ESN/Owed to VIP/Reimbursement/Status/dates/SFID/…). Reuses
+    the asset module's upload processing (parse + market/selling-price backfill + flag syncs).
+    Never wipes the ledger on an empty/non-Excel download."""
+    session = requests.Session()
+    session.headers.update({"User-Agent": UA})
+    login(session, user, pw)
+    r = session.get(f"{BASE}/paygodashboard/DownloadAssetLanding",
+                    headers={"Referer": f"{BASE}/account/dashboard"}, timeout=240)
+    r.raise_for_status()
+    ct = r.headers.get("Content-Type", "").lower()
+    data = r.content
+    if not any(k in ct for k in ("sheet", "excel", "octet")) or len(data) < 2000:
+        raise RuntimeError(f"Asset Lending download was not a valid Excel file (ct={ct[:40]}, {len(data)} bytes)")
+    from app.modules.asset.router import process_asset_ledger_bytes
+    res = process_asset_ledger_bytes(data, org_id)
+    return {"rows": res.get("rows_imported", 0), "bytes": len(data)}
+
+
 def list_invoices(session, sdate, edate, page_size=100):
     """Page through POST /Invoice/InvoiceList (MM/dd/yyyy dates). Returns the JSON rows."""
     rows, skip, page, total = [], 0, 1, None

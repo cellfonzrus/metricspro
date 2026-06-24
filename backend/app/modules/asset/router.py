@@ -8,39 +8,26 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"
 def sb():
     return get_supabase()
 
-@router.post("/upload")
-async def upload_asset_ledger(file: UploadFile = File(...), org_id: str = ORG_ID):
-    """Upload Asset_Lending.xlsx — clears existing rows for org then re-inserts."""
+def process_asset_ledger_bytes(file_bytes: bytes, org_id: str) -> dict:
+    """Parse Asset_Lending.xlsx bytes → refresh commcalc.asset_ledger (delete+insert) → backfill
+    market + selling price + sync appeal/RMA/undercharge flags. Shared by the manual upload AND
+    the VIP auto-sweep. Raises ValueError if the file parses to zero rows (so an empty/bad
+    download never wipes the ledger)."""
     from app.modules.asset.asset_parser import parse_asset_ledger
-    file_bytes = await file.read()
-    try:
-        rows = parse_asset_ledger(file_bytes, org_id)
-    except Exception as e:
-        import traceback
-        raise HTTPException(status_code=400, detail=f"Parse error: {e}\n{traceback.format_exc()}")
-
+    rows = parse_asset_ledger(file_bytes, org_id)
     if not rows:
-        raise HTTPException(status_code=400, detail="No rows parsed from file")
+        raise ValueError("No rows parsed from Asset_Lending file")
 
     client = sb()
-    # Clear existing
     client.schema("commcalc").table("asset_ledger").delete().eq("org_id", org_id).execute()
-
-    # Insert in chunks of 500
     for i in range(0, len(rows), 500):
-        chunk = rows[i:i+500]
-        client.schema("commcalc").table("asset_ledger").insert(chunk).execute()
+        client.schema("commcalc").table("asset_ledger").insert(rows[i:i + 500]).execute()
 
-    # Backfill market from store_mapping + manual corrections (file has no market)
     _backfill_market(client, org_id)
-
-    # Backfill customer selling price from sales transactions (matched by IMEI)
     try:
         _backfill_selling_price(client, org_id)
     except Exception as _e:
         print(f"selling-price backfill failed (run 009_asset_selling_price.sql?): {_e}")
-
-    # Auto-sync appeal rows into the Flags page (critical Boost non-payment)
     try:
         _sync_appeal_flags(client, org_id)
     except Exception as _e:
@@ -49,13 +36,23 @@ async def upload_asset_ledger(file: UploadFile = File(...), org_id: str = ORG_ID
         _sync_rma_flags(client, org_id)
     except Exception as _e:
         print(f"rma flag sync failed: {_e}")
-    # Undercharge flags: cost (owed_to_vip) > reimbursement + selling_price
     try:
         _sync_undercharge_flags(client, org_id)
     except Exception as _e:
         print(f"undercharge flag sync failed: {_e}")
+    return {"rows_imported": len(rows)}
 
-    return {"status": "ok", "rows_imported": len(rows)}
+
+@router.post("/upload")
+async def upload_asset_ledger(file: UploadFile = File(...), org_id: str = ORG_ID):
+    """Upload Asset_Lending.xlsx — clears existing rows for org then re-inserts."""
+    file_bytes = await file.read()
+    try:
+        res = process_asset_ledger_bytes(file_bytes, org_id)
+    except Exception as e:
+        import traceback
+        raise HTTPException(status_code=400, detail=f"Parse error: {e}\n{traceback.format_exc()}")
+    return {"status": "ok", "rows_imported": res["rows_imported"]}
 
 
 # Stores whose asset address differs from store_mapping, plus the two not in it.
