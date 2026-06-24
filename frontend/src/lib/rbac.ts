@@ -54,13 +54,17 @@ export const NAV: NavGroup[] = [
     { href: '/storeops/schedule', label: 'Schedule', icon: '📅', module: 'storeops' },
     { href: '/storeops/visits', label: 'Store Visits', icon: '📝', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/visits/settings', label: 'Visit Checklist', icon: '🧾', module: 'storeops', scopes: ['all'] },
-    { href: '/storeops/closing', label: 'Daily Closing', icon: '🧾', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/employees', label: 'Employees', icon: '👥', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/timeoff', label: 'Time Off', icon: '🌴', module: 'storeops' },
     { href: '/storeops/swaps', label: 'Shift Swaps', icon: '🔄', module: 'storeops' },
     { href: '/storeops/reports', label: 'Reports', icon: '📋', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/payroll', label: 'Payroll', icon: '💵', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/admin', label: 'Admin', icon: '🛠️', module: 'storeops', scopes: ['all', 'market'] },
+  ]},
+  { group: 'Daily Closing', module: 'closing', items: [
+    { href: '/closing', label: 'Dashboard', icon: '🧾', module: 'closing', scopes: ['all', 'market', 'store'] },
+    { href: '/closing/submit', label: 'Submit Closing', icon: '➕', module: 'closing' },
+    { href: '/closing/verify', label: 'DM Verify', icon: '✅', module: 'closing', scopes: ['all', 'market'] },
   ]},
   { group: 'Notify', module: 'notify', items: [
     { href: '/notify', label: 'Notify', icon: '📤', module: 'notify' },
@@ -74,6 +78,7 @@ export function moduleForPath(path: string): string {
   if (path.startsWith('/admin')) return 'admin'
   if (path.startsWith('/employee')) return 'targets'
   if (path.startsWith('/storeops')) return 'storeops'
+  if (path.startsWith('/closing')) return 'closing'
   if (path.startsWith('/accounts')) return 'accounts'
   if (path.startsWith('/notify')) return 'notify'
   if (path.startsWith('/commcalc/targets')) return 'targets'

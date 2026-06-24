@@ -211,6 +211,90 @@ def closing_rows(date: str = None, store_code: str = None, date_from: str = None
     return q.order("close_date", desc=True).limit(2000).execute().data or []
 
 
+# ── Stores (for the rep submission form's store picker) ────────────────────────────────────
+@router.get("/stores")
+def closing_stores(org_id: str = ORG_ID):
+    """Store options for the in-app closing form — SFID + canonical store + market."""
+    client = sb()
+    sm = (client.schema("commcalc").table("store_mapping")
+          .select("salesforce_id,store_code,store_address").eq("org_id", org_id).execute().data) or []
+    stores = (client.schema("storeops").table("stores").select("store_code,market").execute().data) or []
+    mkt = {s.get("store_code"): s.get("market") for s in stores if s.get("store_code")}
+    out = [{
+        "sfid": (r.get("salesforce_id") or "").strip(),
+        "store_code": (r.get("store_code") or "").strip(),
+        "store_address": r.get("store_address"),
+        "market": mkt.get((r.get("store_code") or "").strip()) or "",
+    } for r in sm]
+    out.sort(key=lambda s: str(s.get("store_address") or ""))
+    return out
+
+
+# ── Monthly rollup (dashboard summaries: per-store + per-rep over a YYYY-MM period) ──────────
+@router.get("/rollup")
+def closing_rollup(period: str, market: str = None, org_id: str = ORG_ID):
+    """Aggregate daily_closing for a YYYY-MM period into per-store and per-rep money + counts +
+    days-submitted, plus DM verification coverage. Powers the Daily Closing dashboard."""
+    if not period:
+        raise HTTPException(400, "period required (YYYY-MM)")
+    client = sb()
+    rows = (client.schema("commcalc").table("daily_closing").select("*")
+            .eq("org_id", org_id).eq("period", period).limit(50000).execute().data) or []
+    stores = (client.schema("storeops").table("stores").select("store_code,address,market").execute().data) or []
+    store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
+
+    vers = (client.schema("commcalc").table("daily_closing_verification")
+            .select("store_code,close_date,verified").eq("org_id", org_id)
+            .gte("close_date", period + "-01").lte("close_date", period + "-31").execute().data) or []
+    verified_keys = {(v.get("store_code"), str(v.get("close_date"))) for v in vers if v.get("verified")}
+
+    MONEY = ("store_cash", "store_cc", "epay_cash", "epay_cc", "acc_sale", "other_account")
+    COUNT = ("upgrade_count", "new_line_count", "postpaid_count")
+
+    def blank():
+        d = {k: 0.0 for k in MONEY}
+        d.update({k: 0 for k in COUNT})
+        d.update({"rows": 0, "_days": set()})
+        return d
+
+    by_store, by_rep, grand = {}, {}, blank()
+    for r in rows:
+        raw_code = r.get("store_code")
+        key = raw_code or f"name:{r.get('store_name') or '—'}"
+        meta = store_meta.get(raw_code, {}) if raw_code else {}
+        mk = meta.get("market") or ""
+        if market and mk != market:
+            continue
+        s_ = by_store.setdefault(key, {**blank(), "store_code": raw_code,
+                                       "store_address": meta.get("address") or r.get("store_address"),
+                                       "store_name": r.get("store_name"), "market": mk})
+        rep_key = f"{(r.get('employee_name') or '—').strip()}||{key}"
+        r_ = by_rep.setdefault(rep_key, {**blank(), "employee_name": (r.get("employee_name") or "—").strip(),
+                                         "store_code": raw_code,
+                                         "store_address": meta.get("address") or r.get("store_address"), "market": mk})
+        for agg in (s_, r_, grand):
+            for k in MONEY:
+                agg[k] = round(agg[k] + _f(r.get(k)), 2)
+            for k in COUNT:
+                agg[k] += int(r.get(k) or 0)
+            agg["rows"] += 1
+            if r.get("close_date"):
+                agg["_days"].add(str(r.get("close_date")))
+
+    def finalize(d):
+        d = {k: v for k, v in d.items() if k != "_days"} | {"days": len(d["_days"])}
+        return d
+
+    submitted_keys = {(r.get("store_code"), str(r.get("close_date"))) for r in rows if r.get("store_code")}
+    bs = sorted((finalize(v) for v in by_store.values()),
+                key=lambda s: str(s.get("store_address") or s.get("store_name") or ""))
+    br = sorted((finalize(v) for v in by_rep.values()), key=lambda s: -s.get("rows", 0))
+    return {
+        "period": period, "by_store": bs, "by_rep": br, "totals": finalize(grand),
+        "verified_keys": len(verified_keys & submitted_keys), "submitted_keys": len(submitted_keys),
+    }
+
+
 # ── DM evening verification view: per-store totals + missing reps + B2B recon ─────────────
 @router.get("/summary")
 def closing_summary(date: str, market: str = None, tolerance: float = 1.0, org_id: str = ORG_ID):
@@ -396,6 +480,7 @@ def create_row(payload: dict, org_id: str = ORG_ID):
         "acc_sale": _money(payload.get("acc_sale")), "other_account": _money(payload.get("other_account")),
         "upgrade_count": _int(payload.get("upgrade_count")), "new_line_count": _int(payload.get("new_line_count")),
         "postpaid_count": _int(payload.get("postpaid_count")),
+        "envelope_picture": (payload.get("envelope_picture") or "").strip() or None,
         "remarks": payload.get("remarks"), "source": "manual",
     }
     r = client.schema("commcalc").table("daily_closing").insert(body).execute()
