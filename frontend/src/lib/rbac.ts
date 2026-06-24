@@ -14,6 +14,7 @@ export type NavGroup = { group: string; module: string; items: NavItem[] }
 export const NAV: NavGroup[] = [
   { group: 'Commissions', module: 'commissions', items: [
     { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions' },
+    { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/upload', label: 'Upload Files', icon: '📁', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/upload/wizard', label: 'Upload Wizard', icon: '🧭', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/reports', label: 'All Reports', icon: '📋', module: 'commissions' },

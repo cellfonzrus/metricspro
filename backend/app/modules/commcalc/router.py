@@ -2869,6 +2869,44 @@ def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", 
     return {"period": period, "reps": reps, "summary": summary}
 
 
+@router.get("/exec-overview/{period}")
+def exec_overview(period: str, org_id: str = ORG_ID):
+    """Owner/exec single-pane: headline tiles + a store leaderboard, rolled up from the per-rep
+    coaching aggregation (commissions paid / at-risk / chargebacks / flags / reps below tier)."""
+    require_org(org_id)
+    cd = rep_coaching(period, org_id=org_id)
+    reps = cd.get("reps", [])
+    s = cd.get("summary", {})
+    try:
+        cbr = sb().schema('commcalc').table('chargeback_review').select('status').eq('org_id', org_id).execute().data or []
+        open_cb = sum(1 for r in cbr if (r.get('status') or 'open') == 'open')
+    except Exception:
+        open_cb = 0
+    by_store = {}
+    for r in reps:
+        st = r.get('store') or '—'
+        d = by_store.setdefault(st, {'store': st, 'market': r.get('market') or '', 'reps': 0,
+                                     'paid': 0.0, 'at_risk': 0.0, 'chargebacks': 0.0, 'flags': 0, 'on_table': 0.0})
+        d['reps'] += 1
+        d['paid'] += r.get('final_payout') or 0
+        d['at_risk'] += r.get('at_risk') or 0
+        d['chargebacks'] += r.get('chargeback_deducted') or 0
+        d['flags'] += r.get('flag_count') or 0
+        d['on_table'] += r.get('money_on_table') or 0
+    stores = sorted(by_store.values(), key=lambda x: -x['paid'])
+    for d in stores:
+        for k in ('paid', 'at_risk', 'chargebacks', 'on_table'):
+            d[k] = round(d[k], 2)
+    return {"period": period,
+            "tiles": {"commissions_paid": round(sum(r.get('final_payout') or 0 for r in reps), 2),
+                      "commission_at_risk": s.get('total_at_risk', 0),
+                      "chargebacks_deducted": s.get('total_chargebacks', 0),
+                      "money_on_table": s.get('total_money_on_table', 0),
+                      "reps": s.get('reps', 0), "below_tier": s.get('below_tier', 0),
+                      "open_chargebacks": open_cb},
+            "stores": stores}
+
+
 @router.get("/targets/{period}/action-plan")
 async def get_action_plan(period: str, today: str = "", store_code: str = "", rep: str = "",
                           org_id: str = ORG_ID):
