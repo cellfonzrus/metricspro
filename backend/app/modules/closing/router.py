@@ -250,10 +250,12 @@ def closing_rollup(period: str, market: str = None, org_id: str = ORG_ID):
     stores = (client.schema("storeops").table("stores").select("store_code,address,market").execute().data) or []
     store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
 
+    # filter by period prefix in Python — "period + '-31'" makes an invalid date (e.g. 2026-06-31)
+    # that Postgres rejects on the date cast. The verification table is small (one row per store/day).
     vers = (client.schema("commcalc").table("daily_closing_verification")
-            .select("store_code,close_date,verified").eq("org_id", org_id)
-            .gte("close_date", period + "-01").lte("close_date", period + "-31").execute().data) or []
-    verified_keys = {(v.get("store_code"), str(v.get("close_date"))) for v in vers if v.get("verified")}
+            .select("store_code,close_date,verified").eq("org_id", org_id).execute().data) or []
+    verified_keys = {(v.get("store_code"), str(v.get("close_date"))) for v in vers
+                     if v.get("verified") and str(v.get("close_date") or "").startswith(period)}
 
     MONEY = ("store_cash", "store_cc", "epay_cash", "epay_cc", "acc_sale", "other_account")
     COUNT = ("upgrade_count", "new_line_count", "postpaid_count")
