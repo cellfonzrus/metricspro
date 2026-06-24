@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { apiUpload, ORG_ID } from '@/lib/client'
+import Link from 'next/link'
+import { api, apiUpload, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -13,7 +14,47 @@ type Step = {
   auto: boolean; kind: 'period' | 'module'; endpoint: string; needsDate?: boolean; ft?: string; note?: string
 }
 
-const STEPS: Step[] = [
+// The wizard is now driven by the connector registry (report_definitions). These two maps only hold
+// the polish the registry doesn't carry — an icon and the curated upload note — keyed by report_key.
+const ICONS: Record<string, string> = {
+  sales: '🛍️', payment_detail: '💳', mi_report: '💰', comp_report: '🏦', dlar_rep: '📊',
+  dlar_store: '🏪', hotsheet: '🏷️', vip_workbook: '🧾', asset_ledger: '📒', daily_closing: '🧮',
+}
+const NOTES: Record<string, string> = {
+  sales: 'The only report that can’t auto-sweep yet (login is IP-blocked; B2B FTP push is being wired). Upload it here each month.',
+  comp_report: 'Posts in arrears — a month is often empty until the carrier publishes it. The sweep replaces the open month daily and freezes it at month-end.',
+  hotsheet: 'Pick the date it became effective.',
+  asset_ledger: 'Auto-swept with the VIP sweep (GET /paygodashboard/DownloadAssetLanding). Manual upload still available.',
+  daily_closing: 'Auto-imports via a Google service account once set up — configure on Daily Closing → Auto-Import. Manual upload still available.',
+}
+const URL_OVERRIDE: Record<string, string> = { daily_closing: '/closing/imports' }
+
+// Map the registry (GET /connectors → nested report_definitions) into wizard steps. Only reports with
+// an upload_endpoint are shown (sweep-only reports like chargebacks/inventory aren't manually uploaded).
+// `kind` is derived from the endpoint: the generic commcalc/upload/* route = a period upload.
+function stepsFromRegistry(conns: any[]): Step[] {
+  const out: Step[] = []
+  for (const c of conns || []) {
+    for (const r of (c.reports || [])) {
+      const ep: string = r.upload_endpoint
+      if (!ep) continue
+      const kind: 'period' | 'module' = ep.startsWith('commcalc/upload/') ? 'period' : 'module'
+      out.push({
+        id: r.report_key, label: r.label || r.report_key, icon: ICONS[r.report_key] || '📄',
+        source: c.vendor_name + (c.label ? ` — ${c.label}` : ''),
+        report: (r.source_name || r.label || r.report_key) + (r.report_id ? ` (report #${r.report_id})` : ''),
+        url: URL_OVERRIDE[r.report_key] || r.source_url || c.portal_url,
+        auto: !!r.auto, kind, endpoint: ep,
+        needsDate: r.report_key === 'hotsheet',
+        ft: kind === 'period' ? r.report_key : undefined,
+        note: NOTES[r.report_key],
+      })
+    }
+  }
+  return out
+}
+
+const FALLBACK_STEPS: Step[] = [
   { id: 'sales', label: 'Sales Transactions', icon: '🛍️', kind: 'period', endpoint: 'commcalc/upload/sales', ft: 'sales',
     source: 'b2bsoft — wsreports.b2bsoft.com', url: 'https://wsreports.b2bsoft.com', auto: false,
     report: 'Sales Transaction Details — the 78-column export (ALL columns, NOT the grouped variant)',
@@ -55,6 +96,7 @@ type Rec = { file_type: string; period: string | null; uploaded_at: string }
 export default function UploadWizardPage() {
   const { period } = usePeriod()
   const [history, setHistory] = useState<Rec[]>([])
+  const [conns, setConns] = useState<any[]>([])
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState<Record<string, string>>({})
   const [dates, setDates] = useState<Record<string, string>>({})
@@ -64,6 +106,12 @@ export default function UploadWizardPage() {
       .then(r => r.json()).then(d => setHistory(Array.isArray(d) ? d : [])).catch(() => setHistory([]))
   }
   useEffect(() => { loadHistory() }, [])
+  useEffect(() => { api('/api/v1/commcalc/connectors').then((d: any) => setConns(Array.isArray(d) ? d : [])).catch(() => setConns([])) }, [])
+
+  // Registry is the source of truth; the hardcoded list is only a fallback if it's empty/unreachable.
+  const registrySteps = stepsFromRegistry(conns)
+  const STEPS = registrySteps.length ? registrySteps : FALLBACK_STEPS
+  const fromRegistry = registrySteps.length > 0
 
   function lastUpload(s: Step): Rec | undefined {
     if (!s.ft) return undefined
@@ -95,12 +143,16 @@ export default function UploadWizardPage() {
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧭 Upload Wizard</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
-          One guided place to get every report in — the exact report name, where to pull it, and whether it
-          already auto-sweeps. Working period: <strong>{period}</strong>. Core monthly reports loaded: <strong>{done}/{periodSteps.length}</strong>.
-        </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧭 Upload Wizard</h1>
+          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
+            One guided place to get every report in — the exact report name, where to pull it, and whether it
+            already auto-sweeps. Working period: <strong>{period}</strong>. Core monthly reports loaded: <strong>{done}/{periodSteps.length}</strong>.
+            {fromRegistry && <span style={{ color: 'var(--text3)' }}> The list and auto/manual badges come from the connector registry.</span>}
+          </p>
+        </div>
+        <Link href="/commcalc/connectors" className="btn btn-secondary" style={{ fontSize: 13, whiteSpace: 'nowrap' }}>🔌 Manage in Connectors</Link>
       </div>
 
       <div style={{ display: 'grid', gap: 12 }}>
