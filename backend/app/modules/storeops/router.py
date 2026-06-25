@@ -665,3 +665,41 @@ def add_manual_hours(body: dict, org_id: str = ORG_ID):
 def delete_manual_hours(mid: str, org_id: str = ORG_ID):
     sb().table("manual_hours").delete().eq("org_id", org_id).eq("id", mid).execute()
     return {"ok": True}
+
+
+@router.get("/payroll-raw")
+def payroll_raw(start: str, end: str, org_id: str = ORG_ID):
+    """Raw payroll inputs for a pay period — actual clocked hours (timelog) + manual adjustments +
+    pay rate + W-4 settings per employee. The browser runs the tax calc (so stored figures never go
+    stale when rates change), per the StoreOps payroll spec."""
+    emps = (sb().table("employees").select("employee_id,name,home_store,pay_rate,is_active")
+            .eq("is_active", True).execute().data) or []
+    tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date")
+          .eq("org_id", org_id).gte("work_date", start).lte("work_date", end).limit(20000).execute().data) or []
+    mh = (sb().table("manual_hours").select("employee_id,hours")
+          .eq("org_id", org_id).gte("work_date", start).lte("work_date", end).limit(5000).execute().data) or []
+    ps = (sb().table("payroll_settings").select("*").eq("org_id", org_id).execute().data) or []
+    settings = {s["employee_id"]: s for s in ps}
+    clocked, manual = {}, {}
+    for t in tl:
+        if t.get("clock_out") and t.get("hours") is not None:   # only closed punches count
+            clocked[t["employee_id"]] = clocked.get(t["employee_id"], 0.0) + float(t["hours"] or 0)
+    for m in mh:
+        manual[m["employee_id"]] = manual.get(m["employee_id"], 0.0) + float(m["hours"] or 0)
+    out = []
+    for e in emps:
+        eid = e["employee_id"]
+        ch = round(clocked.get(eid, 0.0), 2)
+        mhh = round(manual.get(eid, 0.0), 2)
+        if ch == 0 and mhh == 0:
+            continue
+        s = settings.get(eid) or {}
+        out.append({"employee_id": eid, "name": e.get("name"), "store": e.get("home_store"),
+                    "pay_rate": float(e.get("pay_rate") or 0), "clocked_hours": ch, "manual_hours": mhh,
+                    "total_hours": round(ch + mhh, 2),
+                    "settings": {"filing_status": s.get("filing_status") or "Single",
+                                 "allowances": s.get("allowances") or 0, "state": s.get("state") or "NY",
+                                 "extra_withholding": float(s.get("extra_withholding") or 0),
+                                 "skipped": bool(s.get("skipped"))}})
+    out.sort(key=lambda r: r["name"] or "")
+    return {"start": start, "end": end, "rows": out}
