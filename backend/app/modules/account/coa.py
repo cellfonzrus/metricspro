@@ -371,14 +371,19 @@ def build_inputs(client, org_id, period):
     # (company) level, and the batch grain has no per-store split. So book it COMPANY-WIDE (store=None).
     # Per-store allocation would require joining each PayGo line to the lent devices' stores via
     # asset_ledger — a future enhancement, not an alias.
-    # owed_vip (BS liability) is NOT booked here: it comes solely from the Asset Lending file
-    # (asset_ledger.owed_to_vip on unsold devices, above). PayGo pending used to ALSO add owed_vip,
-    # double-counting the same device-financing liability — removed per the confirmed model.
+    # owed_vip (BS liability) — PayGo-pending batches ARE a real, standalone amount owed to VIP for
+    # device lending (weekly billing not yet settled). USER-CONFIRMED 2026-06-25: this does NOT
+    # double-count the asset_ledger on-inventory owed (which nets ~$0 — those devices carry no owed)
+    # nor the VIP-invoices-unpaid AP line. Booked company-wide (same dealer-account grain as the COGS
+    # line above), so it shows on the consolidated BS, not as a phantom per-store bucket.
     try:
         for r in _fetch_all(client, "vip_paygo_payments", "dealer,amount,amount_overdue,batch_type,period",
                             {"org_id": org_id, "period": period_keys}):
             if (r.get("batch_type") or "").lower() == "approved":
                 add("vip_device_pay", None, r.get("amount"))
+        for r in _fetch_all(client, "vip_paygo_payments", "dealer,amount,batch_type"):
+            if (r.get("batch_type") or "").lower() == "pending":
+                add("owed_vip", None, r.get("amount"))
     except Exception:
         pass
 
