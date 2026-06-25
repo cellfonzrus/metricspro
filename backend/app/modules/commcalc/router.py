@@ -887,10 +887,36 @@ def create_carrier(body: dict, org_id: str = ORG_ID):
     name = (body.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "name required")
+    is_default = bool(body.get("is_default"))
     row = {"org_id": org_id, "name": name, "code": (body.get("code") or "").strip() or None,
-           "is_default": bool(body.get("is_default"))}
-    r = sb().schema("commcalc").table("carrier").upsert(row, on_conflict="org_id,name").execute()
+           "is_default": is_default}
+    client = sb()
+    if is_default:  # only one default carrier per org
+        client.schema("commcalc").table("carrier").update({"is_default": False}).eq("org_id", org_id).execute()
+    r = client.schema("commcalc").table("carrier").upsert(row, on_conflict="org_id,name").execute()
     return r.data[0] if r.data else row
+
+
+@router.patch("/carriers/{cid}")
+def update_carrier(cid: str, body: dict, org_id: str = ORG_ID):
+    require_org(org_id)
+    patch = {}
+    if "name" in body:
+        nm = (body.get("name") or "").strip()
+        if not nm:
+            raise HTTPException(400, "name cannot be empty")
+        patch["name"] = nm
+    if "code" in body:
+        patch["code"] = (body.get("code") or "").strip() or None
+    if "is_default" in body:
+        patch["is_default"] = bool(body.get("is_default"))
+    if not patch:
+        raise HTTPException(400, "nothing to update")
+    client = sb()
+    if patch.get("is_default"):  # only one default carrier per org
+        client.schema("commcalc").table("carrier").update({"is_default": False}).eq("org_id", org_id).neq("id", cid).execute()
+    client.schema("commcalc").table("carrier").update(patch).eq("org_id", org_id).eq("id", cid).execute()
+    return {"ok": True, "id": cid}
 
 
 @router.delete("/carriers/{cid}")

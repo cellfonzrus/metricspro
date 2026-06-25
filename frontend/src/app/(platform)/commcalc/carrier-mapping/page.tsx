@@ -21,9 +21,34 @@ export default function CarrierMappingPage() {
   const [unmapped, setUnmapped] = useState<any[]>([])
   const [nu, setNu] = useState<Record<string, string>>({})
   const [add, setAdd] = useState({ raw_category: '', match_type: 'contains', component: 'COMMISSION', subtype: '', priority: '100' })
+  const [cAdd, setCAdd] = useState({ name: '', code: '', is_default: false })
   const [msg, setMsg] = useState('')
 
-  useEffect(() => { api('/api/v1/commcalc/carriers').then((c: any) => { setCarriers(c || []); if (c?.length && !cid) setCid(c[0].id) }).catch(() => {}) }, []) // eslint-disable-line
+  const loadCarriers = useCallback((selectId?: string) => {
+    api('/api/v1/commcalc/carriers').then((c: any) => {
+      setCarriers(c || [])
+      setCid(prev => selectId || prev || (c?.[0]?.id ?? ''))
+    }).catch(() => {})
+  }, [])
+  useEffect(() => { loadCarriers() }, [loadCarriers])
+
+  async function addCarrier() {
+    const name = cAdd.name.trim()
+    if (!name) { setMsg('Enter a carrier name.'); return }
+    try {
+      const r: any = await api('/api/v1/commcalc/carriers', { method: 'POST', body: JSON.stringify({ name, code: cAdd.code.trim() || undefined, is_default: cAdd.is_default }) })
+      setMsg('✅ Carrier added.'); setCAdd({ name: '', code: '', is_default: false }); loadCarriers(r?.id)
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function saveCarrier(c: any) {
+    try { await api(`/api/v1/commcalc/carriers/${c.id}`, { method: 'PATCH', body: JSON.stringify({ name: c.name, code: c.code || '', is_default: !!c.is_default }) }); setMsg('✅ Saved.'); loadCarriers(c.id) }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function delCarrier(c: any) {
+    if (!window.confirm(`Delete carrier "${c.name}"? Its category rules are kept but will no longer be carrier-scoped.`)) return
+    try { await api(`/api/v1/commcalc/carriers/${c.id}`, { method: 'DELETE' }); loadCarriers() } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  const setCarrier = (i: number, patch: any) => setCarriers(cs => cs.map((c, j) => j === i ? { ...c, ...patch } : c))
 
   const loadRules = useCallback(() => {
     if (!cid) return
@@ -65,10 +90,40 @@ export default function CarrierMappingPage() {
         </p>
       </div>
 
+      {/* Carriers manager (add / edit / delete) */}
+      <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>📡 Carriers</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr style={{ background: 'var(--surface2)' }}>
+            {['Name', 'Code', 'Default', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {carriers.map((c, i) => (
+              <tr key={c.id}>
+                <td style={cell}><input style={{ ...sel, width: '100%' }} value={c.name || ''} onChange={e => setCarrier(i, { name: e.target.value })} /></td>
+                <td style={cell}><input style={{ ...sel, width: 110 }} placeholder="optional" value={c.code || ''} onChange={e => setCarrier(i, { code: e.target.value })} /></td>
+                <td style={cell}><input type="radio" name="defcarrier" checked={!!c.is_default} onChange={() => setCarrier(i, { is_default: true })} /></td>
+                <td style={cell}>
+                  <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={() => saveCarrier(carriers[i])}>Save</button>
+                  <button className="btn btn-secondary" style={{ fontSize: 12, marginLeft: 4 }} onClick={() => delCarrier(c)}>✕</button>
+                </td>
+              </tr>
+            ))}
+            <tr style={{ background: 'var(--surface2)' }}>
+              <td style={cell}><input style={{ ...sel, width: '100%' }} placeholder="e.g. Cricket" value={cAdd.name} onChange={e => setCAdd({ ...cAdd, name: e.target.value })} /></td>
+              <td style={cell}><input style={{ ...sel, width: 110 }} placeholder="code" value={cAdd.code} onChange={e => setCAdd({ ...cAdd, code: e.target.value })} /></td>
+              <td style={cell}><input type="checkbox" checked={cAdd.is_default} onChange={e => setCAdd({ ...cAdd, is_default: e.target.checked })} /></td>
+              <td style={cell}><button className="btn btn-primary" style={{ fontSize: 12 }} onClick={addCarrier}>+ Add carrier</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, color: 'var(--text2)' }}>Mapping rules for:</span>
         <select style={sel} value={cid} onChange={e => setCid(e.target.value)}>
           {carriers.map(c => <option key={c.id} value={c.id}>{c.name}{c.is_default ? ' (default)' : ''}</option>)}
-          {carriers.length === 0 && <option value="">No carriers — run migration 038</option>}
+          {carriers.length === 0 && <option value="">No carriers yet — add one above</option>}
         </select>
         {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
       </div>
