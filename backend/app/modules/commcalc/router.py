@@ -1777,24 +1777,122 @@ def upsert_item_mapping(body: dict, org_id: str = ORG_ID):
     key = (body.get("item_key") or _item_key(body.get("sku"), body.get("item_desc")))
     if not key:
         raise HTTPException(400, "item_key (or sku/item_desc) required")
+    item_type = (body.get("item_type") or "unclassified").strip()
+    device_model = (body.get("device_model") or "").strip() or None
+    if item_type == "phone" and not device_model:
+        raise HTTPException(400, "Phone model is required when the item type is 'phone'.")
     row = {"org_id": org_id, "item_key": key,
            "sku": (body.get("sku") or "").strip() or None,
            "item_desc": (body.get("item_desc") or "").strip() or None,
-           "item_type": (body.get("item_type") or "unclassified").strip(),
-           "device_model": (body.get("device_model") or "").strip() or None,
+           "item_type": item_type, "device_model": device_model,
            "department": body.get("department"), "category": body.get("category"),
            "source": "manual", "updated_at": _cb_now()}
     try:
         sb().schema("commcalc").table("item_mapping").upsert(row, on_conflict="org_id,item_key").execute()
+        if device_model:
+            _register_device_model(org_id, device_model)
     except Exception as e:
         raise HTTPException(500, f"save failed — run migration 041 first: {e}")
     return {"ok": True, "item_key": key}
+
+
+@router.post("/item-mapping/bulk")
+def bulk_item_mapping(body: dict, org_id: str = ORG_ID):
+    """Apply a type and/or phone model to MANY items at once. Body: {item_keys: [...],
+    item_type?, device_model?}. Only the provided fields are changed on each row."""
+    require_org(org_id)
+    keys = [k for k in (body.get("item_keys") or []) if k]
+    if not keys:
+        raise HTTPException(400, "item_keys required")
+    item_type = (body.get("item_type") or "").strip() or None
+    device_model = (body.get("device_model") or "").strip() or None
+    if item_type == "phone" and not device_model:
+        raise HTTPException(400, "Phone model is required when setting type to 'phone'. Pick a model to apply to the selected items.")
+    if not item_type and not device_model:
+        raise HTTPException(400, "Provide item_type and/or device_model to apply.")
+    patch = {"source": "manual", "updated_at": _cb_now()}
+    if item_type:
+        patch["item_type"] = item_type
+    if device_model:
+        patch["device_model"] = device_model
+    client = sb()
+    updated = 0
+    for i in range(0, len(keys), 200):
+        chunk = keys[i:i + 200]
+        try:
+            client.schema("commcalc").table("item_mapping").update(patch).eq("org_id", org_id).in_("item_key", chunk).execute()
+            updated += len(chunk)
+        except Exception as e:
+            raise HTTPException(500, f"bulk update failed — run migration 041 first: {e}")
+    if device_model:
+        _register_device_model(org_id, device_model)
+    return {"ok": True, "updated": len(keys), "item_type": item_type, "device_model": device_model}
 
 
 @router.delete("/item-mapping/{item_id}")
 def delete_item_mapping(item_id: str, org_id: str = ORG_ID):
     require_org(org_id)
     sb().schema("commcalc").table("item_mapping").delete().eq("org_id", org_id).eq("id", item_id).execute()
+    return {"ok": True}
+
+
+# ── Phone-model registry (the Item/Model "catalogue") ─────────────────────────────────────────
+def _register_device_model(org_id, model):
+    """Best-effort: ensure a model used on an item is in the canonical registry too."""
+    m = (model or "").strip()
+    if not m:
+        return
+    try:
+        sb().schema("commcalc").table("device_model").upsert(
+            {"org_id": org_id, "model": m}, on_conflict="org_id,model").execute()
+    except Exception:
+        pass  # registry table may not exist yet (migration 043) — non-fatal
+
+
+@router.get("/device-models")
+def list_device_models(org_id: str = ORG_ID):
+    """Canonical phone models for the combobox: the registry UNION the distinct models already used
+    on item_mapping, so existing data is never lost even before the registry is populated."""
+    require_org(org_id)
+    client = sb()
+    models = set()
+    reg = []
+    try:
+        reg = client.schema("commcalc").table("device_model").select("id,model").eq("org_id", org_id).execute().data or []
+        for r in reg:
+            if r.get("model"):
+                models.add(r["model"].strip())
+    except Exception:
+        pass  # registry table not created yet
+    try:
+        used = client.schema("commcalc").table("item_mapping").select("device_model").eq("org_id", org_id).eq("item_type", "phone").limit(100000).execute().data or []
+        for r in used:
+            if r.get("device_model"):
+                models.add(r["device_model"].strip())
+    except Exception:
+        pass
+    return {"models": sorted(m for m in models if m), "registry": reg}
+
+
+@router.post("/device-models")
+def add_device_model(body: dict, org_id: str = ORG_ID):
+    require_org(org_id)
+    model = (body.get("model") or "").strip()
+    if not model:
+        raise HTTPException(400, "model required")
+    try:
+        r = sb().schema("commcalc").table("device_model").upsert(
+            {"org_id": org_id, "model": model}, on_conflict="org_id,model").execute()
+    except Exception as e:
+        raise HTTPException(500, f"add failed — run migration 043 first: {e}")
+    return r.data[0] if r.data else {"ok": True, "model": model}
+
+
+@router.delete("/device-models/{mid}")
+def delete_device_model(mid: str, org_id: str = ORG_ID):
+    """Remove a model from the registry. Does NOT touch items already using it."""
+    require_org(org_id)
+    sb().schema("commcalc").table("device_model").delete().eq("org_id", org_id).eq("id", mid).execute()
     return {"ok": True}
 
 
