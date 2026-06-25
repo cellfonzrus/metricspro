@@ -41,6 +41,18 @@ CREATE TABLE IF NOT EXISTS commcalc.flag_rules (
   CONSTRAINT flag_rules_singleton CHECK (id = 1)
 );
 
+-- RLS + grants (service_role doesn't get privileges on new commcalc tables automatically).
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['commcalc.item_mapping', 'commcalc.flag_rules'] LOOP
+    EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS open_all ON %s', t);
+    EXECUTE format('CREATE POLICY open_all ON %s FOR ALL TO anon, authenticated USING (true) WITH CHECK (true)', t);
+    EXECUTE format('GRANT ALL ON %s TO anon, authenticated, service_role', t);
+  END LOOP;
+END $$;
+
 INSERT INTO commcalc.flag_rules (id, org_id, accessory_threshold, accessory_chargeback_amount)
 VALUES (1, '00000000-0000-0000-0000-000000000001', 35, 0)
 ON CONFLICT (id) DO NOTHING;
