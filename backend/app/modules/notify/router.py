@@ -69,6 +69,81 @@ async def health():
             "from_email": settings.NOTIFY_FROM_EMAIL or None}
 
 
+# ── unified report → designated recipient routing (Theme 4) ───────────────────
+@router.get("/report-config")
+async def get_report_config(org_id: str = ORG_ID):
+    """EVERY sendable report merged with its saved designated-recipient config, so one page can show
+    the full routing table (report → who it's sent to). Reports with no config come back with empty
+    recipients + sensible defaults."""
+    saved = {}
+    try:
+        for r in (sb().table("report_config").select("*").eq("org_id", org_id).execute().data or []):
+            saved[r["report_key"]] = r
+    except Exception:
+        pass  # table may not exist yet (migration 044)
+    out = []
+    for r in report_registry.list_reports():
+        c = saved.get(r["key"]) or {}
+        out.append({"report_key": r["key"], "label": r["label"],
+                    "recipient_ids": c.get("recipient_ids") or [],
+                    "ad_hoc_emails": c.get("ad_hoc_emails") or [],
+                    "ad_hoc_phones": c.get("ad_hoc_phones") or [],
+                    "channels": c.get("channels") or ["email"],
+                    "formats": c.get("formats") or ["xlsx", "pdf"],
+                    "is_active": c.get("is_active", True),
+                    "configured": r["key"] in saved})
+    return {"reports": out}
+
+
+@router.put("/report-config/{report_key}")
+async def put_report_config(report_key: str, body: dict, org_id: str = ORG_ID):
+    """Set the designated recipients + channels for one report."""
+    if report_key not in report_registry.REPORTS:
+        raise HTTPException(400, f"unknown report_key '{report_key}'")
+    row = {"org_id": org_id, "report_key": report_key,
+           "recipient_ids": body.get("recipient_ids") or [],
+           "ad_hoc_emails": body.get("ad_hoc_emails") or [],
+           "ad_hoc_phones": body.get("ad_hoc_phones") or [],
+           "channels": body.get("channels") or ["email"],
+           "formats": body.get("formats") or ["xlsx", "pdf"],
+           "is_active": body.get("is_active", True),
+           "updated_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        sb().table("report_config").upsert(row, on_conflict="org_id,report_key").execute()
+    except Exception as e:
+        raise HTTPException(500, f"save failed — run migration 044 first: {e}")
+    return {"ok": True, "report_key": report_key}
+
+
+@router.post("/send-to-designated")
+async def send_to_designated(body: dict, org_id: str = ORG_ID):
+    """Send a report to its CONFIGURED designated recipients (report_config). The single entry point
+    every module uses for 'send this to the designated person' — envelope-mismatch alerts, daily
+    targets, cash pickup, etc. Body: report_key, filters?. No recipients in the body — they come from
+    the routing config."""
+    report_key = body.get("report_key")
+    if report_key not in report_registry.REPORTS:
+        raise HTTPException(400, f"unknown report_key '{report_key}'")
+    cfg = (sb().table("report_config").select("*").eq("org_id", org_id)
+           .eq("report_key", report_key).limit(1).execute().data or [])
+    if not cfg or cfg[0].get("is_active") is False:
+        return {"sent": 0, "failed": 0, "skipped": "no active designated recipients for this report"}
+    cfg = cfg[0]
+    emails, phones = _resolve_targets(sb(), org_id, {
+        "recipient_ids": cfg.get("recipient_ids") or [],
+        "emails": cfg.get("ad_hoc_emails") or [],
+        "phones": cfg.get("ad_hoc_phones") or []})
+    if not emails and not phones:
+        return {"sent": 0, "failed": 0, "skipped": "designated recipients have no contact info"}
+    channels = cfg.get("channels") or (["email"] if emails else []) + (["whatsapp"] if phones else [])
+    try:
+        return await _dispatch(org_id, report_key, body.get("filters") or {}, channels,
+                               cfg.get("formats"), emails, phones, body.get("message"),
+                               triggered_by="designated")
+    except (KeyError, ValueError) as e:
+        raise HTTPException(400, str(e))
+
+
 # ── dispatch core (shared by on-demand send + scheduled run-due) ──────────────
 def _normalize_phone(raw) -> str:
     """WhatsApp Cloud API needs digits-only with a country code. Strip +/space/

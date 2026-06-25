@@ -85,6 +85,7 @@ export const NAV: NavGroup[] = [
   ]},
   { group: 'Notify', module: 'notify', items: [
     { href: '/notify', label: 'Notify', icon: '📤', module: 'notify' },
+    { href: '/notify/report-recipients', label: 'Report Recipients', icon: '📬', module: 'notify' },
   ]},
   { group: 'Configurations', module: 'admin', items: [
     { href: '/configurations', label: 'All Settings', icon: '⚙️', module: 'admin' },
