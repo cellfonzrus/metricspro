@@ -16,6 +16,7 @@ from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
 from app.modules.commcalc import b2b_sweep
 from app.modules.commcalc import sales_analyzer
+from app.modules.commcalc import sales_recon
 from app.modules.commcalc import comp_trend
 from app.modules.commcalc import carrier_map
 from app.modules.commcalc import column_mapping
@@ -118,7 +119,9 @@ async def upload_file(
         "catalog": "raw_catalog",
         "master_cats": "raw_categories",
         "comp_report": "raw_comp_report",
-        "daily_sales": "raw_sales",
+        # daily B2B feed lands in its OWN table so the monthly 'sales' period-replace never wipes it;
+        # the two are reconciled at trans_id grain (GET /commcalc/sales-recon). See migration 047.
+        "daily_sales": "daily_sales_feed",
     }
     # Try schema-qualified first, fall back to public prefix
     table = TABLE_MAP[file_type]
@@ -195,6 +198,10 @@ async def upload_file(
                 'email': str(r.get('Email','')).strip() or None,
                 'customer_no': str(r.get('Customer #','') or r.get('Customer No','')).replace('.0','').strip() or None,
             }
+            # For the daily feed, use the parsed date (handles Excel serials too) so the per-day
+            # idempotent re-pull and the recon's date column are always a clean ISO date.
+            if file_type == 'daily_sales':
+                row['trans_date'] = td.strftime('%Y-%m-%d')
         elif file_type == "payment_detail":
             # Single source of truth shared with the epay sweep (epay_sweep.map_payment_detail_row).
             row = epay_sweep.map_payment_detail_row(r, base)
@@ -275,9 +282,20 @@ async def upload_file(
 
     # GUARD: only NOW (rows successfully mapped) do we clear the existing data, and only if the
     # upload actually produced rows — so a file that parsed to nothing can never wipe a populated
-    # period. daily_sales is append-mode (no clear). catalog/master_cats replace the whole table.
+    # period. catalog/master_cats replace the whole table.
     if mapped:
-        if has_period and period and file_type != 'daily_sales':
+        if file_type == 'daily_sales':
+            # The daily feed is keyed by day, not month. Make a re-pull of the same day(s) idempotent
+            # by clearing only the trans_dates this file covers (never the whole month — other days'
+            # feed rows survive). Rows with no parseable date can't be deduped, so they just append.
+            feed_dates = sorted({m.get('trans_date') for m in mapped if m.get('trans_date')})
+            if feed_dates:
+                try:
+                    client.schema('commcalc').table(table).delete()\
+                        .eq('org_id', org_id).in_('trans_date', feed_dates).execute()
+                except Exception as e:
+                    raise HTTPException(500, f"Failed to clear existing daily feed: {e}. Run migration 047.")
+        elif has_period and period:
             try:
                 client.schema('commcalc').table(table).delete().eq('org_id', org_id).eq('period', period).execute()
             except Exception as e:
@@ -323,9 +341,11 @@ async def upload_file(
     except Exception as e:
         print(f'WARN upload_log insert failed (run 007_upload_log.sql?): {e}')
 
-    # After a sales upload, scan for fraud (fake/reused email, duplicate id) → chargeback bucket.
+    # After a MONTHLY sales upload, scan for fraud (fake/reused email, duplicate id) → chargeback
+    # bucket. The daily feed lands in daily_sales_feed (not raw_sales, which the detectors read), and
+    # is for recon — so it does not trigger fraud scanning.
     fraud = None
-    if file_type in ('sales', 'daily_sales') and mapped:
+    if file_type == 'sales' and mapped:
         try:
             for p in sorted({m.get('period') for m in mapped if m.get('period')}) or [period]:
                 fr = _detect_fraud(client, org_id, p)
@@ -3035,6 +3055,24 @@ async def delete_comp_rate(comp_rate_id: int, org_id: str = ORG_ID):
     client = sb()
     client.schema("commcalc").table("comp_rates")        .delete().eq("org_id", org_id).eq("id", comp_rate_id).execute()
     return {"status": "ok"}
+
+
+# ─────────────────────────────────────────────
+# SALES FEED RECON (Theme 5) — monthly authoritative vs daily B2B feed, trans_id grain
+# ─────────────────────────────────────────────
+
+@router.get("/sales-recon")
+async def sales_feed_recon(period: str = "", org_id: str = ORG_ID):
+    """Reconcile the authoritative monthly sales upload (raw_sales) against the daily B2B feed
+    (daily_sales_feed) for a period. `period` accepts 'June 2026' or '2026-06'. Read-only.
+    Returns {} structure with summary + by_store + rows (see sales_recon.run_sales_recon)."""
+    require_org(org_id)
+    if not period:
+        raise HTTPException(400, "period required")
+    try:
+        return sales_recon.run_sales_recon(period)
+    except Exception as e:
+        raise HTTPException(500, f"Sales recon failed: {e} (run migration 047?)")
 
 
 # ─────────────────────────────────────────────
