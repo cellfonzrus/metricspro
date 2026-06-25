@@ -1,0 +1,222 @@
+"""Generic, config-driven column mapping — the "any-carrier" ingestion spine (SaaS framework A2).
+
+A new carrier's export uses different column headers than Boost's. Rather than hard-code a
+map_*_row per report, commcalc.column_mapping stores the mapping as DATA: source spreadsheet
+header -> canonical target field (+ a transform). This module is the engine over that table.
+
+ADDITIVE + SAFE: the legacy hard-coded upload branches (router.upload_file) are untouched and stay
+the proven path for the seeded Boost reports. The generic importer (router.upload_mapped) uses this
+engine for NEW connector reports. TARGET_FIELDS below also seeds sensible defaults (the existing
+Boost layouts) so every report shows up editable in the mapping UI from day one.
+"""
+from datetime import datetime, timezone
+
+
+def _sf(v):
+    from app.modules.commcalc.calculator import safe_float
+    return safe_float(v)
+
+
+# ── value transforms ─────────────────────────────────────────────────────────────────────────
+def _t_text(v):   return "" if v is None else str(v).strip()
+def _t_number(v): return _sf(v)
+def _t_int(v):
+    f = _sf(v)
+    return int(f) if f else None
+def _t_date10(v):
+    s = "" if v is None else str(v).strip()
+    return s[:10] or None
+def _t_mdn(v):    return ("" if v is None else str(v)).replace(".0", "").strip()
+def _t_upper(v):  return _t_text(v).upper()
+def _t_lower(v):  return _t_text(v).lower()
+def _t_bool(v):   return str(v).strip().lower() in ("1", "true", "yes", "y", "t")
+
+TRANSFORMS = {
+    "text": _t_text, "number": _t_number, "int": _t_int, "date10": _t_date10,
+    "mdn": _t_mdn, "upper": _t_upper, "lower": _t_lower, "bool": _t_bool,
+}
+TRANSFORM_KEYS = list(TRANSFORMS.keys())
+
+
+def apply_transform(val, transform):
+    return TRANSFORMS.get(transform or "text", _t_text)(val)
+
+
+# ── canonical target-field registry per report_key ───────────────────────────────────────────
+# Each field: (target_field, label, transform, required, default_source_header, [aliases...])
+# default_source_header + aliases drive both seeding (POST /column-mapping/seed) and the
+# upload-sample auto-suggest. Derived verbatim from the existing map_*_row functions.
+TARGET_FIELDS = {
+    "comp_report": [
+        ("begin_date", "Begin date", "date10", True, "Begin Date", ["BeginDate"]),
+        ("end_date", "End date", "date10", False, "End Date", ["EndDate"]),
+        ("retailer_account", "Retailer account", "text", False, "Retailer Account", ["RetailerAccount"]),
+        ("owner_id", "Owner ID", "text", False, "OwnerID", ["Owner ID"]),
+        ("terminal_id", "Terminal ID", "text", False, "TerminalID", ["Terminal ID"]),
+        ("account_id", "Account ID", "text", False, "AccountID", ["Account ID"]),
+        ("business_name", "Business name", "text", False, "Business Name", ["BusinessName"]),
+        ("business_address", "Business address", "text", False, "Business Address", ["BusinessAddress"]),
+        ("compensation_type", "Compensation type", "text", True, "Compensation Type", ["CompensationType", "category"]),
+        ("brand", "Brand", "text", False, "Brand", []),
+        ("salesforce_id", "Salesforce ID", "text", False, "SalesForce ID", ["Salesforce ID", "SalesForceID"]),
+        ("quantity", "Quantity", "number", False, "Quantity", []),
+        ("payment_amount", "Payment amount", "number", True, "Payment Amount", ["PaymentAmount", "amount"]),
+        ("external_reference_id", "External reference ID", "text", False, "ExternalReferenceID", ["External Reference ID"]),
+        ("has_payment_detail", "Has payment detail", "text", False, "HasPaymentDetail", ["Has Payment Detail"]),
+        ("internal_brand", "Internal brand", "text", False, "InternalBrand", ["Internal Brand"]),
+    ],
+    "mi_report": [
+        ("salesforce_id", "Salesforce ID", "text", True, "SalesForceID", ["Salesforce ID"]),
+        ("subscriber_id", "Subscriber ID", "text", False, "SubscriberID", ["Subscriber ID"]),
+        ("subscriber_status", "Subscriber status", "text", True, "Subscriber Status", []),
+        ("phone_number", "Phone number", "mdn", False, "Phone Number", ["MDN"]),
+        ("device_serial", "Device serial", "mdn", False, "Device Serial", ["IMEI", "Serial"]),
+        ("mi_activation_date", "MI activation date", "date10", False, "MI Activation Date", []),
+        ("mi_deactivation_date", "MI deactivation date", "date10", False, "MI Deactivation Date", []),
+        ("residual_transfer_in_date", "Residual transfer-in date", "date10", False, "Residual Transfer In Date", []),
+        ("residual_transfer_out_date", "Residual transfer-out date", "date10", False, "Residual Transfer Out Date", []),
+        ("customer_plan", "Customer plan", "text", False, "Customer Plan", []),
+        ("base_mrc", "Base MRC", "number", False, "Base MRC Amount", []),
+        ("commissionable_mrc", "Commissionable MRC", "number", False, "Commissionable MRC Amount", []),
+        ("actual_mi_payout", "Actual MI payout", "number", False, "Actual MI Payout Amount", []),
+        ("actual_atu_payout", "Actual ATU payout", "number", False, "Actual ATU Payout Amount", []),
+        ("rep_username", "Rep username", "text", False, "Rep Username", []),
+        ("door_type", "Door type", "text", False, "Door Type", []),
+        ("report_month", "Report month", "text", False, "Report Month", []),
+    ],
+    "payment_detail": [
+        ("business_address", "Business address", "text", False, "Business Address", []),
+        ("payment_type", "Payment type", "text", True, "Payment Type", []),
+        ("amount", "Amount", "number", True, "Amount", []),
+        ("mdn", "MDN / phone", "mdn", False, "Phone Number", ["MDN"]),
+        ("imei", "IMEI", "mdn", False, "IMEI", []),
+        ("payment_date", "Payment date", "date10", False, "Payment Date", []),
+        ("rep_username", "Rep username", "text", False, "Rep Username", []),
+    ],
+    "sales": [
+        ("store", "Store", "text", False, "Store", []),
+        ("salesperson", "Salesperson", "text", True, "Salesperson", []),
+        ("user_login", "User login", "text", False, "User Login", []),
+        ("contract_type", "Contract type", "text", False, "Contract Type", []),
+        ("department", "Department", "text", False, "Department", []),
+        ("category", "Category", "text", False, "Category", []),
+        ("product_desc", "Product description", "text", False, "Product Desc", ["Product Description"]),
+        ("product_id", "Product ID", "int", False, "Product ID", []),
+        ("gp", "Gross profit", "number", False, "GP", []),
+        ("ext_price", "Ext price", "number", False, "Ext Price", []),
+        ("trans_id", "Transaction ID", "text", True, "Trans ID", []),
+        ("trans_date", "Transaction date", "date10", False, "Trans Date Time", ["Trans Date"]),
+        ("mdn", "Mobile number", "mdn", False, "Activated Mobile Number", ["Primary Account Number"]),
+        ("serial_1", "Serial", "text", False, "Serial 1", []),
+        ("register", "Register", "text", False, "Register", []),
+        ("tender_type", "Tender type", "text", False, "Tender Type", []),
+        ("voided", "Voided", "text", False, "Voided", []),
+        ("trans_type", "Transaction type", "text", False, "Trans Type", []),
+        ("customer", "Customer", "text", False, "Customer", []),
+        ("email", "Email", "text", False, "Email", []),
+        ("customer_no", "Customer #", "mdn", False, "Customer #", ["Customer No"]),
+    ],
+}
+
+# Target table for the seeded report keys. New report keys resolve their target_table from
+# report_definitions (the endpoint passes it in).
+TABLE_MAP = {
+    "comp_report": "raw_comp_report",
+    "mi_report": "raw_mi",
+    "payment_detail": "raw_payment_detail",
+    "sales": "raw_sales",
+}
+
+
+def known_report_keys():
+    return list(TARGET_FIELDS.keys())
+
+
+def target_fields(report_key):
+    """The canonical field registry for a report_key, as a list of dicts for the UI."""
+    out = []
+    for (tf, label, transform, required, default_src, aliases) in TARGET_FIELDS.get(report_key, []):
+        out.append({"target_field": tf, "label": label, "transform": transform,
+                    "required": required, "default_source": default_src, "aliases": aliases})
+    return out
+
+
+def default_mapping(report_key):
+    """Seed rows (target_field -> default source header) from the known Boost layout."""
+    return [{"target_field": tf, "source_header": default_src, "transform": transform, "priority": 100}
+            for (tf, label, transform, required, default_src, aliases) in TARGET_FIELDS.get(report_key, [])]
+
+
+# ── rule loading + application ────────────────────────────────────────────────────────────────
+def load_rules(client, org_id, report_key, carrier_id=None):
+    """Effective mapping rules for (org, report_key, carrier): carrier-specific rules override the
+    NULL/global rules for the same target_field. Returns a list of rule dicts."""
+    q = (client.schema("commcalc").table("column_mapping").select("*")
+         .eq("org_id", org_id).eq("report_key", report_key).eq("is_active", True))
+    rows = q.execute().data or []
+    by_field = {}
+    # global (carrier_id NULL) first, then carrier-specific overrides win
+    for r in sorted(rows, key=lambda x: (x.get("carrier_id") is not None, x.get("priority") or 100)):
+        cid = r.get("carrier_id")
+        if cid and carrier_id and cid != carrier_id:
+            continue          # a different carrier's override — ignore
+        if cid and not carrier_id:
+            continue          # carrier-specific rule but no carrier context — ignore
+        by_field[r["target_field"]] = r
+    return list(by_field.values())
+
+
+def apply_mapping(row, rules, base):
+    """Build a target-table row from a source spreadsheet row using the mapping rules.
+    Header match is case-insensitive. `base` carries org_id + period fields."""
+    idx = {str(k).strip().lower(): v for k, v in row.items()}
+    out = dict(base)
+    for rule in rules:
+        src = str(rule.get("source_header") or "").strip().lower()
+        val = idx.get(src)
+        out[rule["target_field"]] = apply_transform(val, rule.get("transform"))
+    return out
+
+
+def map_records(records, rules, base):
+    """Map a list of source rows; drop rows that produced nothing but the base (org_id/period)."""
+    org_id = base.get("org_id")
+    keys = set(base.keys())
+    out = []
+    for r in records:
+        mapped = apply_mapping(r, rules, base)
+        if any(v for k, v in mapped.items() if k not in keys and v not in (None, "", 0, 0.0)):
+            out.append(mapped)
+    return out
+
+
+# ── auto-suggest from an uploaded sample's headers ────────────────────────────────────────────
+def suggest(headers, report_key, existing_rules=None):
+    """For each canonical target field, suggest the best-matching header from the uploaded file.
+    Confidence: 'mapped' (already configured) > 'exact' > 'alias' > 'fuzzy' > '' (no match)."""
+    existing = {r["target_field"]: r for r in (existing_rules or [])}
+    hmap = {str(h).strip().lower(): str(h).strip() for h in headers if str(h).strip()}
+    out = []
+    for (tf, label, transform, required, default_src, aliases) in TARGET_FIELDS.get(report_key, []):
+        suggested, conf = "", ""
+        if tf in existing and str(existing[tf].get("source_header") or "").strip().lower() in hmap:
+            suggested, conf = hmap[str(existing[tf]["source_header"]).strip().lower()], "mapped"
+        else:
+            candidates = [default_src] + list(aliases) + [label]
+            for c in candidates:                       # exact header match
+                if str(c).strip().lower() in hmap:
+                    suggested, conf = hmap[str(c).strip().lower()], ("exact" if c == default_src else "alias")
+                    break
+            if not suggested:                          # fuzzy: header contains the field token
+                token = tf.replace("_", "")
+                for low, orig in hmap.items():
+                    if token and token in low.replace(" ", "").replace("_", ""):
+                        suggested, conf = orig, "fuzzy"
+                        break
+        out.append({"target_field": tf, "label": label, "transform": transform, "required": required,
+                    "suggested_source": suggested, "confidence": conf})
+    return out
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()

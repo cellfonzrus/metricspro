@@ -7,7 +7,8 @@ type Item = { href: string; icon: string; label: string; desc: string }
 
 const ITEMS: Item[] = [
   { href: '/commcalc/store-match', icon: '🏬', label: 'Store Matching', desc: 'Map raw store names from data feeds to a canonical store.' },
-  { href: '/commcalc/carrier-mapping', icon: '🗺️', label: 'Carrier Mapping', desc: 'Map carrier comp categories → Residual / Commission / SPIFF / Reimbursement.' },
+  { href: '/commcalc/carrier-mapping', icon: '🗺️', label: 'Carrier Mapping', desc: 'Add carriers + map their comp categories → Residual / Commission / SPIFF / Reimbursement.' },
+  { href: '/commcalc/column-mapping', icon: '🧩', label: 'Column Mapping', desc: 'Map any carrier’s spreadsheet columns → our fields. Config-driven ingest for new carriers.' },
   { href: '/commcalc/item-mapping', icon: '🧩', label: 'Item / Model Mapping', desc: 'Classify items (accessory vs phone) + set phone model — the SU sheet. Drives Accessory Flags.' },
   { href: '/commcalc/rep-aliases', icon: '🔗', label: 'Rep Aliases', desc: 'Merge name variants of the same rep into one canonical person.' },
   { href: '/commcalc/asset/hotsheet-recon', icon: '🏷️', label: 'Pricing Hotsheet', desc: 'Carrier promo pricing by device model — expected-vs-paid reconciliation.' },

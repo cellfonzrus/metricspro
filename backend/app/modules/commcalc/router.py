@@ -18,6 +18,7 @@ from app.modules.commcalc import b2b_sweep
 from app.modules.commcalc import sales_analyzer
 from app.modules.commcalc import comp_trend
 from app.modules.commcalc import carrier_map
+from app.modules.commcalc import column_mapping
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 import calendar as _calendar
@@ -924,6 +925,169 @@ def delete_carrier(cid: str, org_id: str = ORG_ID):
     require_org(org_id)
     sb().schema("commcalc").table("carrier").delete().eq("org_id", org_id).eq("id", cid).execute()
     return {"ok": True}
+
+
+# ── Generic column mapping (A2) — config-driven, any-carrier ingestion ────────────────────────
+@router.get("/column-mapping/targets")
+def column_mapping_targets(report_key: str = "", org_id: str = ORG_ID):
+    """Canonical target fields for a report_key (drives the mapping UI), plus the list of known
+    report keys. New report keys (from report_definitions) have no registry → empty fields list,
+    and the UI lets the user type target field names freely."""
+    require_org(org_id)
+    return {"report_keys": column_mapping.known_report_keys(),
+            "transforms": column_mapping.TRANSFORM_KEYS,
+            "fields": column_mapping.target_fields(report_key) if report_key else []}
+
+
+@router.get("/column-mapping")
+def list_column_mapping(report_key: str = "", carrier_id: str = "", org_id: str = ORG_ID):
+    require_org(org_id)
+    q = sb().schema("commcalc").table("column_mapping").select("*").eq("org_id", org_id)
+    if report_key:
+        q = q.eq("report_key", report_key)
+    if carrier_id:
+        q = q.eq("carrier_id", carrier_id)
+    return q.order("priority").execute().data or []
+
+
+@router.post("/column-mapping")
+def upsert_column_mapping(body: dict, org_id: str = ORG_ID):
+    require_org(org_id)
+    rk = (body.get("report_key") or "").strip()
+    tf = (body.get("target_field") or "").strip()
+    sh = (body.get("source_header") or "").strip()
+    if not rk or not tf or not sh:
+        raise HTTPException(400, "report_key, target_field and source_header are required")
+    transform = (body.get("transform") or "text").strip()
+    if transform not in column_mapping.TRANSFORMS:
+        raise HTTPException(400, "transform must be one of " + "|".join(column_mapping.TRANSFORM_KEYS))
+    row = {"org_id": org_id, "report_key": rk, "carrier_id": body.get("carrier_id") or None,
+           "target_field": tf, "source_header": sh, "transform": transform,
+           "is_active": body.get("is_active", True) is not False,
+           "priority": int(body.get("priority") or 100),
+           "updated_at": column_mapping.now_iso()}
+    client = sb()
+    if body.get("id"):
+        client.schema("commcalc").table("column_mapping").update(row).eq("id", body["id"]).execute()
+        return {"ok": True, "id": body["id"]}
+    r = client.schema("commcalc").table("column_mapping").upsert(
+        row, on_conflict="org_id,report_key,carrier_id,target_field").execute()
+    return r.data[0] if r.data else row
+
+
+@router.delete("/column-mapping/{rid}")
+def delete_column_mapping(rid: str, org_id: str = ORG_ID):
+    require_org(org_id)
+    sb().schema("commcalc").table("column_mapping").delete().eq("org_id", org_id).eq("id", rid).execute()
+    return {"ok": True}
+
+
+@router.post("/column-mapping/seed")
+def seed_column_mapping(report_key: str, carrier_id: str = "", overwrite: bool = False, org_id: str = ORG_ID):
+    """Seed the known Boost layout for a report_key as editable mapping rows, so a new carrier can
+    start from the default and only change the headers that differ. Skips fields already mapped
+    unless overwrite=true."""
+    require_org(org_id)
+    defaults = column_mapping.default_mapping(report_key)
+    if not defaults:
+        raise HTTPException(400, f"No default layout known for report_key '{report_key}'")
+    client = sb()
+    existing = {r["target_field"] for r in (client.schema("commcalc").table("column_mapping").select("target_field")
+                .eq("org_id", org_id).eq("report_key", report_key)
+                .eq("carrier_id", carrier_id) if carrier_id else
+                client.schema("commcalc").table("column_mapping").select("target_field")
+                .eq("org_id", org_id).eq("report_key", report_key).is_("carrier_id", "null")).execute().data or []}
+    seeded = 0
+    for d in defaults:
+        if not overwrite and d["target_field"] in existing:
+            continue
+        client.schema("commcalc").table("column_mapping").upsert(
+            {"org_id": org_id, "report_key": report_key, "carrier_id": carrier_id or None,
+             "target_field": d["target_field"], "source_header": d["source_header"],
+             "transform": d["transform"], "priority": d["priority"], "is_active": True,
+             "updated_at": column_mapping.now_iso()},
+            on_conflict="org_id,report_key,carrier_id,target_field").execute()
+        seeded += 1
+    return {"ok": True, "seeded": seeded, "report_key": report_key}
+
+
+@router.post("/column-mapping/detect")
+async def detect_column_mapping(report_key: str = Form(...), carrier_id: str = Form(""),
+                                file: UploadFile = File(...), org_id: str = ORG_ID):
+    """Read an uploaded sample sheet's headers and suggest a source-header → target-field mapping
+    (no ingest). Confidence: mapped > exact > alias > fuzzy. Lets the wizard pre-fill the mapping."""
+    require_org(org_id)
+    contents = await file.read()
+    try:
+        df = pd.read_excel(io.BytesIO(contents), dtype=str, nrows=5)
+    except Exception as e:
+        raise HTTPException(400, f"Could not read Excel file: {e}")
+    headers = [str(c).strip() for c in df.columns]
+    rules = column_mapping.load_rules(sb(), org_id, report_key, carrier_id or None)
+    return {"headers": headers, "suggestions": column_mapping.suggest(headers, report_key, rules)}
+
+
+@router.post("/upload-mapped")
+async def upload_mapped(
+    report_key: str = Form(...),
+    target_table: str = Form(""),
+    carrier_id: str = Form(""),
+    period: str = Form(""),
+    file: UploadFile = File(...),
+    org_id: str = ORG_ID,
+):
+    """Generic, config-driven ingest for a NEW carrier's report. Maps the sheet via
+    commcalc.column_mapping into the report's target_table, applying the SAME safety guards as the
+    legacy upload (defer-delete, never-wipe-on-empty, batched insert, upload_log). The legacy
+    /upload/{file_type} path is untouched — this is the additive any-carrier path."""
+    require_org(org_id)
+    table = (target_table or column_mapping.TABLE_MAP.get(report_key) or "").strip()
+    if not table:
+        # resolve from report_definitions if the caller didn't pass it
+        rd = (sb().schema("commcalc").table("report_definitions").select("target_table")
+              .eq("org_id", org_id).eq("report_key", report_key).limit(1).execute().data) or []
+        table = (rd[0].get("target_table") if rd else "") or ""
+    if not table:
+        raise HTTPException(400, f"No target_table for report_key '{report_key}'. Pass target_table or set it on the report definition.")
+
+    rules = column_mapping.load_rules(sb(), org_id, report_key, carrier_id or None)
+    if not rules:
+        raise HTTPException(400, f"No column mapping configured for '{report_key}'. Map its columns first (or seed defaults).")
+
+    contents = await file.read()
+    try:
+        df = pd.read_excel(io.BytesIO(contents), dtype=str).fillna("")
+    except Exception as e:
+        raise HTTPException(400, f"Could not read Excel file: {e}")
+
+    pm = parse_period(period) if period else {"month": 0, "year": 0}
+    base = {"org_id": org_id}
+    if period:
+        base.update({"period": period, "period_month": pm["month"], "period_year": pm["year"]})
+    mapped = column_mapping.map_records(df.to_dict("records"), rules, base)
+
+    client = sb()
+    # GUARD: only clear the period once we actually have rows — an empty/misaligned file never wipes.
+    if mapped and period:
+        try:
+            client.schema("commcalc").table(table).delete().eq("org_id", org_id).eq("period", period).execute()
+        except Exception as e:
+            raise HTTPException(500, f"Failed to clear existing data for {table}/{period}: {e}")
+    saved = 0
+    for i in range(0, len(mapped), 500):
+        try:
+            client.schema("commcalc").table(table).insert(mapped[i:i + 500]).execute()
+            saved += len(mapped[i:i + 500])
+        except Exception as e:
+            raise HTTPException(500, f"Insert into {table} failed at row {i}: {e}")
+    try:
+        client.schema("commcalc").table("upload_log").insert(
+            {"org_id": org_id, "file_type": report_key, "period": period or None,
+             "filename": getattr(file, "filename", None), "rows_saved": saved}).execute()
+    except Exception as e:
+        print(f"WARN upload_log insert failed: {e}")
+    return {"saved": saved, "report_key": report_key, "target_table": table, "period": period,
+            "rules_used": len(rules), "mapped": len(mapped)}
 
 
 @router.get("/carrier-category-map")
