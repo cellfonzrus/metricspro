@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from dateutil import parser as dateparser
 import pandas as pd
 import io
+import base64
 from . import gsheet
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
@@ -470,8 +471,87 @@ def verify_store(payload: dict, org_id: str = ORG_ID):
 
 
 # ── Manual in-app row entry (the eventual switch off the Google sheet) ─────────────────────
+# ── Envelope photo: real capture/upload + OCR mismatch (Theme 3) ──────────────────────────────
+ENVELOPE_BUCKET = "closing-envelopes"
+
+
+def _ensure_envelope_bucket():
+    c = get_supabase()
+    try:
+        c.storage.get_bucket(ENVELOPE_BUCKET)
+    except Exception:
+        try:
+            c.storage.create_bucket(ENVELOPE_BUCKET)
+        except Exception:
+            pass
+    return c
+
+
+def _upload_envelope(org_id, data_url):
+    if not data_url or "," not in str(data_url):
+        return None
+    try:
+        header, b64 = data_url.split(",", 1)
+        raw = base64.b64decode(b64)
+        ext = "png" if "png" in header else "jpg"
+        path = f"{org_id}/{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}.{ext}"
+        _ensure_envelope_bucket().storage.from_(ENVELOPE_BUCKET).upload(
+            path, raw, {"content-type": f"image/{'png' if ext == 'png' else 'jpeg'}", "upsert": "true"})
+        return path
+    except Exception as e:
+        print(f"WARN envelope upload failed: {e}")
+        return None
+
+
+def _signed_envelope(path):
+    """Sign a storage path; pass through legacy http links / plain text unchanged."""
+    p = str(path or "")
+    if not p or p.startswith("http") or "/" not in p:
+        return path
+    try:
+        res = get_supabase().storage.from_(ENVELOPE_BUCKET).create_signed_url(p, 3600)
+        return (res.get("signedURL") or res.get("signed_url")) if isinstance(res, dict) else res
+    except Exception:
+        return path
+
+
+@router.post("/envelope-photo")
+def upload_envelope_photo(body: dict, org_id: str = ORG_ID):
+    """Store a captured envelope photo (base64) → return its path + a signed URL. The path goes into
+    daily_closing.envelope_picture on submit."""
+    path = _upload_envelope(org_id, body.get("image"))
+    if not path:
+        raise HTTPException(400, "no image provided")
+    return {"path": path, "url": _signed_envelope(path)}
+
+
+async def _notify_envelope_mismatch(client, org_id, summary):
+    """Best-effort email + WhatsApp of an envelope OCR mismatch to the designated closing recipient."""
+    try:
+        rows = (client.schema("commcalc").table("cash_pickup_config").select("*").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows = []
+    cfg = rows[0] if rows else {}
+    email = (cfg.get("recipient_email") or "").strip()
+    wa = (cfg.get("recipient_whatsapp") or "").strip()
+    if email and cfg.get("notify_email", True):
+        try:
+            from app.modules.notify.channels import email_resend
+            if email_resend.is_configured():
+                await email_resend.send_email(email, "⚠️ Envelope mismatch", "<p>" + summary.replace("\n", "<br>") + "</p>")
+        except Exception:
+            pass
+    if wa and cfg.get("notify_whatsapp", True):
+        try:
+            from app.modules.notify.channels import whatsapp_meta
+            if whatsapp_meta.is_configured():
+                await whatsapp_meta.send_document(wa, b"", "text/plain", "mismatch.txt", summary)
+        except Exception:
+            pass
+
+
 @router.post("/row")
-def create_row(payload: dict, org_id: str = ORG_ID):
+async def create_row(payload: dict, org_id: str = ORG_ID):
     client = sb()
     d = _date(payload.get("close_date"))
     if not d:
@@ -505,7 +585,29 @@ def create_row(payload: dict, org_id: str = ORG_ID):
                             + ". Recount and correct, then resubmit.")
     r = client.schema("commcalc").table("daily_closing").insert(body).execute()
     saved = r.data[0] if r.data else body
-    return {**saved, "recon": {"status": gate["status"], "flags": gate["flags"], "b2b": gate["b2b"]}}
+
+    # 3-way envelope recon: OCR'd cash (from the photo) vs entered cash vs B2B. A mismatch beyond
+    # tolerance is surfaced to the rep AND sent to the designated closing recipient.
+    ocr_mismatch = None
+    if payload.get("ocr_cash") not in (None, ""):
+        ocr_cash = _money(payload.get("ocr_cash"))
+        diff = round(ocr_cash - declared_cash, 2)
+        if abs(diff) > tol:
+            ocr_mismatch = {"ocr_cash": ocr_cash, "declared_cash": declared_cash, "diff": diff,
+                            "b2b_cash": (gate.get("b2b") or {}).get("cash")}
+            summary = (f"Envelope OCR mismatch — {body.get('store_name') or body.get('store_code') or '—'}, "
+                       f"{body.get('employee_name') or '—'} on {d}: photo reads {_usd(ocr_cash)} but "
+                       f"{_usd(declared_cash)} was entered (off by {_usd(diff)}). "
+                       f"B2B cash: {_usd((gate.get('b2b') or {}).get('cash'))}.")
+            try:
+                await _notify_envelope_mismatch(client, org_id, summary)
+            except Exception:
+                pass
+    recon = {"status": gate["status"], "flags": gate["flags"], "b2b": gate["b2b"]}
+    if ocr_mismatch:
+        recon["envelope_mismatch"] = ocr_mismatch
+        recon["flags"] = list(recon["flags"]) + [f"Envelope photo reads {_usd(ocr_mismatch['ocr_cash'])} vs {_usd(declared_cash)} entered"]
+    return {**saved, "recon": recon, "envelope_url": _signed_envelope(saved.get("envelope_picture"))}
 
 
 @router.patch("/row/{row_id}")

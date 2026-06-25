@@ -28,8 +28,39 @@ export default function SubmitClosingPage() {
   const [recent, setRecent] = useState<any[]>([])
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  const [envPreview, setEnvPreview] = useState('')
+  const [ocrCash, setOcrCash] = useState('')
+  const [ocrAmounts, setOcrAmounts] = useState<number[]>([])
+  const [ocrBusy, setOcrBusy] = useState(false)
 
   const set = (patch: Partial<State>) => setF(p => ({ ...p, ...patch }))
+
+  const enteredCash = (parseFloat(f.store_cash) || 0) + (parseFloat(f.epay_cash) || 0)
+  const ocrNum = parseFloat(ocrCash) || 0
+  const ocrMismatch = ocrCash !== '' && Math.abs(ocrNum - enteredCash) > 1
+
+  async function onPickPhoto(file: File) {
+    const reader = new FileReader()
+    reader.onload = async () => {
+      const dataUrl = reader.result as string
+      setEnvPreview(dataUrl)
+      try { const u: any = await api('/api/v1/closing/envelope-photo', { method: 'POST', body: JSON.stringify({ image: dataUrl }) }); set({ envelope_picture: u.path }) }
+      catch (e: any) { setMsg('Photo upload failed: ' + (e?.message || e)) }
+      runOcr(dataUrl)
+    }
+    reader.readAsDataURL(file)
+  }
+  async function runOcr(dataUrl: string) {
+    setOcrBusy(true); setOcrAmounts([])
+    try {
+      const T = await loadTesseract()
+      const { data } = await T.recognize(dataUrl, 'eng')
+      const nums = (String(data?.text || '').match(/\d[\d,]*\.?\d{0,2}/g) || [])
+        .map((s: string) => parseFloat(s.replace(/,/g, ''))).filter((n: number) => !isNaN(n) && n >= 1)
+      setOcrAmounts(nums)
+      if (nums.length) setOcrCash(String(Math.max(...nums)))
+    } catch { /* OCR best-effort */ } finally { setOcrBusy(false) }
+  }
 
   useEffect(() => { api('/api/v1/closing/stores').then(s => setStores(s || [])).catch(() => {}) }, [])
   useEffect(() => { if (user?.full_name && !f.employee_name) set({ employee_name: user.full_name }) }, [user]) // eslint-disable-line
@@ -59,6 +90,7 @@ export default function SubmitClosingPage() {
         acc_sale: f.acc_sale, other_account: f.other_account,
         upgrade_count: f.upgrade_count, new_line_count: f.new_line_count, postpaid_count: f.postpaid_count,
         envelope_picture: f.envelope_picture, remarks: f.remarks,
+        ocr_cash: ocrCash || undefined,
       }) })
       const flags: string[] = r?.recon?.flags || []
       const pending = r?.recon?.status === 'recon_pending'
@@ -68,6 +100,7 @@ export default function SubmitClosingPage() {
       // keep date + store + name; clear the money/counts for the next entry
       setF(p => ({ ...p, store_cash: '', store_cc: '', epay_cash: '', epay_cc: '', acc_sale: '', other_account: '',
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))
+      setEnvPreview(''); setOcrCash(''); setOcrAmounts([])
       loadRecent()
     } catch (e: any) { setMsg('🚫 ' + (e?.message || e)) }
     finally { setBusy(false) }
@@ -120,9 +153,28 @@ export default function SubmitClosingPage() {
         </Row>
 
         {/* Envelope + remarks */}
-        <SectionLabel>Envelope & remarks</SectionLabel>
+        <SectionLabel>Envelope photo & remarks</SectionLabel>
         <Row>
-          <Field label="Envelope photo link" wide><input style={inp} value={f.envelope_picture} onChange={e => set({ envelope_picture: e.target.value })} placeholder="Paste a Drive/photo link" /></Field>
+          <Field label="Envelope photo" wide>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <label className="btn btn-secondary" style={{ fontSize: 13, cursor: 'pointer' }}>
+                📷 Take / choose photo
+                <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { const file = e.target.files?.[0]; if (file) onPickPhoto(file) }} />
+              </label>
+              {envPreview && <img src={envPreview} alt="envelope" style={{ height: 70, borderRadius: 8, border: '1px solid var(--border)' }} />}
+              {ocrBusy && <span style={{ fontSize: 13, color: 'var(--text3)' }}>🔍 Reading envelope…</span>}
+            </div>
+            {(ocrCash !== '' || ocrAmounts.length > 0) && (
+              <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: ocrMismatch ? '#fdeaea' : '#e7f6ec', fontSize: 13 }}>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span>📸 OCR cash read: <b>$</b><input style={{ ...inp, width: 110, display: 'inline-block', padding: '4px 8px' }} inputMode="decimal" value={ocrCash} onChange={e => setOcrCash(e.target.value)} /></span>
+                  <span>vs entered cash <b>${enteredCash.toFixed(2)}</b></span>
+                  {ocrMismatch ? <span style={{ color: '#b42318', fontWeight: 600 }}>⚠️ mismatch — off by ${Math.abs(ocrNum - enteredCash).toFixed(2)}</span> : <span style={{ color: '#16794a' }}>✓ matches</span>}
+                </div>
+                {ocrAmounts.length > 0 && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>amounts detected: {ocrAmounts.map(n => `$${n}`).join(', ')} — adjust the read above if wrong (handwriting reads roughly).</div>}
+              </div>
+            )}
+          </Field>
         </Row>
         <Row>
           <Field label="Remarks" wide><input style={inp} value={f.remarks} onChange={e => set({ remarks: e.target.value })} placeholder="Optional note" /></Field>
@@ -185,3 +237,19 @@ const Field = ({ label, children, wide }: { label: string; children: React.React
 const SectionLabel = ({ children }: { children: React.ReactNode }) => (
   <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', margin: '14px 0 8px', borderTop: '1px solid var(--border)', paddingTop: 12 }}>{children}</div>
 )
+
+// tesseract.js loaded on demand from CDN (in-browser OCR, no API key). Best-effort: printed digits
+// read well, handwriting roughly — the rep confirms/edits the read before submitting.
+let _tessP: Promise<any> | null = null
+function loadTesseract(): Promise<any> {
+  if ((window as any).Tesseract) return Promise.resolve((window as any).Tesseract)
+  if (_tessP) return _tessP
+  _tessP = new Promise((resolve, reject) => {
+    const s = document.createElement('script')
+    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'
+    s.onload = () => resolve((window as any).Tesseract)
+    s.onerror = reject
+    document.body.appendChild(s)
+  })
+  return _tessP
+}
