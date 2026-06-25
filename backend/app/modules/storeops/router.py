@@ -1,9 +1,11 @@
 """StoreOps API Router — /api/v1/storeops/*"""
+import base64
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException
 from app.core.database import get_supabase
 
 router = APIRouter(prefix="/storeops", tags=["StoreOps"])
+ORG_ID = "00000000-0000-0000-0000-000000000001"
 
 def sb():
     # StoreOps tables live in the storeops.* schema (see migration 003).
@@ -433,3 +435,233 @@ def update_shift_swap(swap_id: int, updates: dict):
         _apply_swap(cur[0])
     r = sb().table("shift_swap_requests").update({"status": status}).eq("id", swap_id).execute()
     return r.data[0] if r.data else {"id": swap_id, "status": status}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TIME CLOCK — clock-in/out, face recognition, manual hours, payroll settings (Part B / mig 045)
+# ═══════════════════════════════════════════════════════════════════════════════
+TIMECLOCK_BUCKET = "timeclock-selfies"
+
+
+def _ensure_selfie_bucket():
+    client = get_supabase()
+    try:
+        client.storage.get_bucket(TIMECLOCK_BUCKET)
+    except Exception:
+        try:
+            client.storage.create_bucket(TIMECLOCK_BUCKET)   # private by default
+        except Exception:
+            pass
+    return client
+
+
+def _upload_selfie(org_id, employee_id, data_url):
+    """Decode a 'data:image/jpeg;base64,...' selfie and store it; return the storage path (or None)."""
+    if not data_url or "," not in str(data_url):
+        return None
+    try:
+        header, b64 = data_url.split(",", 1)
+        raw = base64.b64decode(b64)
+        ext = "png" if "png" in header else "jpg"
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        path = f"{org_id}/{employee_id}/{ts}.{ext}"
+        _ensure_selfie_bucket().storage.from_(TIMECLOCK_BUCKET).upload(
+            path, raw, {"content-type": f"image/{'png' if ext == 'png' else 'jpeg'}", "upsert": "true"})
+        return path
+    except Exception as e:
+        print(f"WARN selfie upload failed: {e}")
+        return None
+
+
+def _signed_selfie(path):
+    if not path:
+        return None
+    try:
+        res = get_supabase().storage.from_(TIMECLOCK_BUCKET).create_signed_url(path, 3600)
+        if isinstance(res, dict):
+            return res.get("signedURL") or res.get("signedUrl") or res.get("signed_url")
+        return res
+    except Exception:
+        return None
+
+
+def _emp_name(org_id, employee_id):
+    r = sb().table("employees").select("name,home_store").eq("employee_id", employee_id).limit(1).execute().data or []
+    return (r[0].get("name") if r else None), (r[0].get("home_store") if r else None)
+
+
+def _fmt_time(iso):
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone().strftime("%I:%M %p").lstrip("0")
+    except Exception:
+        return iso
+
+
+@router.get("/timeclock/status")
+def timeclock_status(employee_id: str, org_id: str = ORG_ID):
+    """Is this employee currently clocked in? Returns the open entry if so."""
+    rows = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
+            .is_("clock_out", "null").order("clock_in", desc=True).limit(1).execute().data) or []
+    if rows:
+        e = rows[0]; e["selfie_url"] = _signed_selfie(e.get("selfie_path"))
+        return {"clockedIn": True, "entry": e}
+    return {"clockedIn": False, "entry": None}
+
+
+@router.post("/timeclock/clock-in")
+def clock_in(body: dict, org_id: str = ORG_ID):
+    """Record a clock-in (one row). Selfie (base64) + GPS + face-match% are stored for audit."""
+    employee_id = (body.get("employee_id") or "").strip()
+    if not employee_id:
+        raise HTTPException(400, "employee_id required")
+    # guard: don't open a second concurrent entry
+    open_rows = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
+                 .is_("clock_out", "null").limit(1).execute().data) or []
+    if open_rows:
+        raise HTTPException(409, "Already clocked in — clock out first.")
+    name, home_store = _emp_name(org_id, employee_id)
+    now = datetime.now(timezone.utc)
+    selfie_path = _upload_selfie(org_id, employee_id, body.get("selfie"))
+    row = {"org_id": org_id, "employee_id": employee_id, "employee_name": name,
+           "store_code": body.get("store_code") or home_store,
+           "clock_in": now.isoformat(), "work_date": now.date().isoformat(),
+           "device": body.get("device"), "selfie_path": selfie_path,
+           "gps_lat": body.get("gps_lat"), "gps_lng": body.get("gps_lng"),
+           "gps_accuracy_m": body.get("gps_accuracy_m"), "face_match_pct": body.get("face_match_pct")}
+    r = sb().table("timelog").insert(row).execute()
+    saved = r.data[0] if r.data else row
+    return {"success": True, "data": {"time": _fmt_time(saved.get("clock_in")), "entry_id": saved.get("id")}}
+
+
+@router.post("/timeclock/clock-out")
+def clock_out(body: dict, org_id: str = ORG_ID):
+    """Close the open entry for this employee (updates the SAME row) and compute hours."""
+    employee_id = (body.get("employee_id") or "").strip()
+    entry_id = body.get("entry_id")
+    q = sb().table("timelog").select("*").eq("org_id", org_id).is_("clock_out", "null")
+    if entry_id:
+        q = q.eq("id", entry_id)
+    elif employee_id:
+        q = q.eq("employee_id", employee_id)
+    else:
+        raise HTTPException(400, "employee_id or entry_id required")
+    rows = q.order("clock_in", desc=True).limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(404, "No open clock-in found.")
+    entry = rows[0]
+    now = datetime.now(timezone.utc)
+    try:
+        ci = datetime.fromisoformat(str(entry["clock_in"]).replace("Z", "+00:00"))
+        hours = round((now - ci).total_seconds() / 3600.0, 2)
+    except Exception:
+        hours = None
+    sb().table("timelog").update({"clock_out": now.isoformat(), "hours": hours}).eq("id", entry["id"]).execute()
+    return {"success": True, "data": {"time": _fmt_time(now.isoformat()), "hours": hours,
+                                      "clock_in": _fmt_time(entry.get("clock_in"))}}
+
+
+@router.get("/timeclock/list")
+def timeclock_list(start: str = "", end: str = "", employee_id: str = "", org_id: str = ORG_ID):
+    """Timelog entries for a date range (+ optional employee). Newest first."""
+    q = sb().table("timelog").select("*").eq("org_id", org_id)
+    if employee_id:
+        q = q.eq("employee_id", employee_id)
+    if start:
+        q = q.gte("work_date", start)
+    if end:
+        q = q.lte("work_date", end)
+    rows = q.order("clock_in", desc=True).limit(5000).execute().data or []
+    for e in rows:
+        e["selfie_url"] = _signed_selfie(e.get("selfie_path"))
+    return rows
+
+
+# ── face recognition (face-api.js 128-float descriptors) ──────────────────────────────────────
+@router.get("/timeclock/face")
+def get_face(employee_id: str, action: str = "", org_id: str = ORG_ID):
+    """Registration status (and the descriptor itself when action=descriptor, for verify)."""
+    rows = (sb().table("face_descriptors").select("*").eq("org_id", org_id)
+            .eq("employee_id", employee_id).limit(1).execute().data) or []
+    if not rows:
+        return {"registered": False}
+    if action == "descriptor":
+        return {"registered": True, "descriptor": rows[0].get("descriptor")}
+    return {"registered": True, "register_count": rows[0].get("register_count")}
+
+
+@router.post("/timeclock/face")
+def save_face(body: dict, org_id: str = ORG_ID):
+    """Save (or re-register) an averaged 128-float descriptor for an employee."""
+    employee_id = (body.get("employee_id") or "").strip()
+    descriptor = body.get("descriptor")
+    if not employee_id or not isinstance(descriptor, list) or len(descriptor) != 128:
+        raise HTTPException(400, "employee_id and a 128-float descriptor are required")
+    existing = (sb().table("face_descriptors").select("id,register_count").eq("org_id", org_id)
+                .eq("employee_id", employee_id).limit(1).execute().data) or []
+    now = datetime.now(timezone.utc).isoformat()
+    if existing:
+        sb().table("face_descriptors").update(
+            {"descriptor": descriptor, "register_count": (existing[0].get("register_count") or 1) + 1,
+             "updated_at": now}).eq("id", existing[0]["id"]).execute()
+    else:
+        sb().table("face_descriptors").insert(
+            {"org_id": org_id, "employee_id": employee_id, "descriptor": descriptor,
+             "register_count": 1, "registered_at": now, "updated_at": now}).execute()
+    return {"ok": True, "employee_id": employee_id}
+
+
+# ── payroll settings (W-4 / state) + manual hours ──────────────────────────────────────────────
+@router.get("/payroll-settings/{employee_id}")
+def get_payroll_settings(employee_id: str, org_id: str = ORG_ID):
+    rows = (sb().table("payroll_settings").select("*").eq("org_id", org_id)
+            .eq("employee_id", employee_id).limit(1).execute().data) or []
+    if rows:
+        return rows[0]
+    return {"employee_id": employee_id, "filing_status": "Single", "allowances": 0,
+            "state": "NY", "extra_withholding": 0, "skipped": False}
+
+
+@router.put("/payroll-settings/{employee_id}")
+def put_payroll_settings(employee_id: str, body: dict, org_id: str = ORG_ID):
+    row = {"org_id": org_id, "employee_id": employee_id,
+           "filing_status": body.get("filing_status") or "Single",
+           "allowances": int(body.get("allowances") or 0),
+           "state": (body.get("state") or "NY").upper()[:2],
+           "extra_withholding": float(body.get("extra_withholding") or 0),
+           "skipped": bool(body.get("skipped")),
+           "updated_at": datetime.now(timezone.utc).isoformat()}
+    sb().table("payroll_settings").upsert(row, on_conflict="org_id,employee_id").execute()
+    return {"ok": True, "employee_id": employee_id}
+
+
+@router.get("/manual-hours")
+def list_manual_hours(employee_id: str = "", start: str = "", end: str = "", org_id: str = ORG_ID):
+    q = sb().table("manual_hours").select("*").eq("org_id", org_id)
+    if employee_id:
+        q = q.eq("employee_id", employee_id)
+    if start:
+        q = q.gte("work_date", start)
+    if end:
+        q = q.lte("work_date", end)
+    return q.order("work_date", desc=True).limit(2000).execute().data or []
+
+
+@router.post("/manual-hours")
+def add_manual_hours(body: dict, org_id: str = ORG_ID):
+    employee_id = (body.get("employee_id") or "").strip()
+    reason = (body.get("reason") or "").strip()
+    if not employee_id or not reason:
+        raise HTTPException(400, "employee_id and reason are required")
+    if body.get("hours") in (None, ""):
+        raise HTTPException(400, "hours required")
+    row = {"org_id": org_id, "employee_id": employee_id,
+           "work_date": body.get("work_date") or datetime.now(timezone.utc).date().isoformat(),
+           "hours": float(body.get("hours")), "reason": reason, "added_by": body.get("added_by")}
+    r = sb().table("manual_hours").insert(row).execute()
+    return r.data[0] if r.data else row
+
+
+@router.delete("/manual-hours/{mid}")
+def delete_manual_hours(mid: str, org_id: str = ORG_ID):
+    sb().table("manual_hours").delete().eq("org_id", org_id).eq("id", mid).execute()
+    return {"ok": True}
