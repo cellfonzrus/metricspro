@@ -173,15 +173,25 @@ def update_employee(emp_id: str, updates: dict):
 @router.delete("/employees/{emp_id}")
 def delete_employee(emp_id: str):
     """Delete an employee (StoreOps Admin). 404 if missing; 409 if blocked by linked rows
-    (shifts / app_users) — the UI can then deactivate (is_active=false) instead."""
-    existing = sb().table("employees").select("id,name").eq("id", emp_id).execute().data
+    (shifts / app_users) — the UI can then deactivate (is_active=false) instead.
+    Also cascades to the login (app_users row + Supabase Auth account) so the person doesn't
+    resurface as a ghost manual user in Roles & Access — i.e. a StoreOps delete is now reflected
+    in Roles & Assignments too."""
+    existing = sb().table("employees").select("id,name,email,employee_id").eq("id", emp_id).execute().data
     if not existing:
         raise HTTPException(404, "employee not found")
+    e = existing[0]
     try:
         sb().table("employees").delete().eq("id", emp_id).execute()
-    except Exception as e:
-        raise HTTPException(409, f"cannot delete (linked records exist — try deactivating): {e}")
-    return {"ok": True, "deleted": emp_id, "name": existing[0].get("name")}
+    except Exception as ex:
+        raise HTTPException(409, f"cannot delete (linked records exist — try deactivating): {ex}")
+    login = {}
+    try:
+        from app.modules.core.router import purge_app_user, ORG_ID
+        login = purge_app_user(ORG_ID, email=e.get("email"), employee_id=e.get("employee_id"), hard=True)
+    except Exception:
+        pass
+    return {"ok": True, "deleted": emp_id, "name": e.get("name"), "login": login}
 
 
 @router.post("/employees/merge")
@@ -218,7 +228,15 @@ def merge_employees(body: dict):
     except Exception:
         sb().table("employees").update({"is_active": False}).eq("id", dup_id).execute()
         deleted = False
-    return {"ok": True, "merged_into": tgt.get("name"), "moved": moved, "deleted_duplicate": deleted}
+    # Cascade the duplicate's login too (delete it if the row was deleted, else deactivate) so the
+    # merged-away person doesn't linger in Roles & Access.
+    login = {}
+    try:
+        from app.modules.core.router import purge_app_user, ORG_ID
+        login = purge_app_user(ORG_ID, email=dup.get("email"), employee_id=dup.get("employee_id"), hard=deleted)
+    except Exception:
+        pass
+    return {"ok": True, "merged_into": tgt.get("name"), "moved": moved, "deleted_duplicate": deleted, "login": login}
 
 
 @router.post("/employees/bulk-payscale")

@@ -47,16 +47,25 @@ export default function EmployeesPage() {
   }
 
   async function deleteEmp(e: Employee) {
-    if (!confirm(`Delete ${e.name}? If they're linked to shifts you'll be offered to deactivate instead.`)) return
+    if (!confirm(`Permanently delete ${e.name}?\n\nThis also removes their role assignment + login (reflected in Roles & Access). History keyed by name is kept. If they're linked to shifts you'll be offered to deactivate instead.`)) return
     try {
       await api(`/api/v1/storeops/employees/${e.id}`, { method: 'DELETE' })
       setEmployees(es => es.filter(x => x.id !== e.id)); setMsg(`Deleted ${e.name}`)
     } catch (err: any) {
       if (confirm(`Couldn't delete (${err?.message || 'linked records'}). Deactivate ${e.name} instead?`)) {
-        await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify({ is_active: false }) })
-        setEmp(e.id, { is_active: false }); setMsg(`Deactivated ${e.name}`)
+        await deactivateEmp(e, true)
       }
     }
+  }
+
+  async function deactivateEmp(e: Employee, skipConfirm = false) {
+    if (!skipConfirm && !confirm(`Deactivate ${e.name}? Marks them inactive and revokes their login (reversible).`)) return
+    try {
+      await api('/api/v1/core/employees/purge', { method: 'POST', body: JSON.stringify({
+        employee_pk: e.id, email: e.email, employee_id: e.employee_id, mode: 'deactivate',
+      }) })
+      setEmp(e.id, { is_active: false }); setMsg(`Deactivated ${e.name}`)
+    } catch (err: any) { setMsg('Deactivate failed: ' + (err?.message || err)) }
   }
 
   async function mergeEmp(dup: Employee, targetId: string) {
@@ -122,7 +131,8 @@ export default function EmployeesPage() {
                   <td style={cell}>
                     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                       <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 8px' }} disabled={saving === e.id} onClick={() => saveEmp(e)} title="Save">{saving === e.id ? '…' : '💾'}</button>
-                      <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px' }} onClick={() => deleteEmp(e)} title="Delete employee">🗑</button>
+                      {e.is_active && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px' }} onClick={() => deactivateEmp(e)} title="Deactivate + revoke login">🚫</button>}
+                      <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px', color: '#dc2626' }} onClick={() => deleteEmp(e)} title="Delete employee (removes login too)">🗑</button>
                       <select style={{ ...sel, width: 80 }} value="" title="Merge this duplicate INTO another employee" onChange={ev => { mergeEmp(e, ev.target.value); ev.target.value = '' }}>
                         <option value="">merge→</option>
                         {employees.filter(o => o.id !== e.id).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}

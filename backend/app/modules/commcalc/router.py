@@ -1487,6 +1487,318 @@ def chargeback_scan_fraud(period: str = None, org_id: str = ORG_ID):
     return {"ok": True, **res}
 
 
+# ── Item mapping + "accessory sold over $X" → chargeback (migration 041) ─────────────────────
+# item_mapping maps each sales item (SKU, else description) to a type (accessory|phone|other|
+# unclassified) and a phone model (the "SU sheet"). It self-maintains: unseen items auto-add as a
+# guessed stub for the user to correct. The accessory-flags report finds accessory lines priced
+# above the user-set threshold and pushes them to the chargeback bucket, assigned to the seller.
+ACC_HINTS = ("ACCESS", "CASE", "SCREEN", "PROTECT", "CHARGER", "CABLE", "EARBUD", "HEADPHONE",
+             "HEADSET", "MOUNT", "HOLDER", "POPSOCKET", "GLASS", "TEMPERED", "SPEAKER", "BATTERY",
+             "POWER BANK", "ADAPTER", "STYLUS", "GRIP", "ONDIGO", "LIQUID", "WARRANTY")
+PHONE_HINTS = ("IPHONE", "GALAXY", "HANDSET", "SMARTPHONE", "TABLET", "ANDROID", "MOTO",
+               "MOTOROLA", "SAMSUNG", "APPLE", "PIXEL", " - XP")
+
+
+def _item_key(sku, desc):
+    s = str(sku or "").strip()
+    if s and s.lower() not in ("nan", "none", "0", "0.0"):
+        return s.upper()[:200]
+    return str(desc or "").strip().upper()[:200]
+
+
+def _guess_item_type(department, category, desc):
+    """Best-effort first-sight classification from raw_sales Department / Category / description."""
+    blob = " ".join(str(x or "") for x in (department, category, desc)).upper()
+    if any(h in blob for h in ACC_HINTS):
+        return "accessory"
+    if any(h in blob for h in PHONE_HINTS):
+        return "phone"
+    return "unclassified"
+
+
+def _flag_rules(client, org_id):
+    try:
+        rows = client.schema("commcalc").table("flag_rules").select("*").eq("id", 1).limit(1).execute().data or []
+        if rows:
+            return rows[0]
+    except Exception:
+        pass
+    return {"accessory_threshold": 35, "accessory_chargeback_amount": 0}
+
+
+def _load_item_map(client, org_id):
+    """{item_key: row} for the org's item_mapping (empty dict if migration 041 isn't run yet)."""
+    try:
+        rows = client.schema("commcalc").table("item_mapping").select("*").eq("org_id", org_id).limit(100000).execute().data or []
+        return {r["item_key"]: r for r in rows if r.get("item_key")}
+    except Exception:
+        return {}
+
+
+@router.get("/flag-rules")
+def get_flag_rules(org_id: str = ORG_ID):
+    """The user-defined accessory flag rules: threshold + default chargeback amount."""
+    require_org(org_id)
+    return _flag_rules(sb(), org_id)
+
+
+@router.put("/flag-rules")
+def put_flag_rules(body: dict, org_id: str = ORG_ID):
+    require_org(org_id)
+    row = {"id": 1, "org_id": org_id, "updated_at": _cb_now()}
+    if body.get("accessory_threshold") is not None:
+        row["accessory_threshold"] = safe_float(body.get("accessory_threshold"))
+    if body.get("accessory_chargeback_amount") is not None:
+        row["accessory_chargeback_amount"] = safe_float(body.get("accessory_chargeback_amount"))
+    try:
+        sb().schema("commcalc").table("flag_rules").upsert(row, on_conflict="id").execute()
+    except Exception as e:
+        raise HTTPException(500, f"save failed — run migration 041 first: {e}")
+    return _flag_rules(sb(), org_id)
+
+
+@router.get("/item-mapping")
+def get_item_mapping(search: str = None, item_type: str = None, org_id: str = ORG_ID):
+    """The item → type + phone-model mapping (search by sku/desc/model; filter by type)."""
+    require_org(org_id)
+    try:
+        q = sb().schema("commcalc").table("item_mapping").select("*").eq("org_id", org_id)
+        if item_type:
+            q = q.eq("item_type", item_type)
+        rows = q.limit(100000).execute().data or []
+    except Exception as e:
+        return {"items": [], "ready": False, "detail": str(e)[:200], "counts": {}, "total": 0}
+    if search:
+        s = search.lower()
+        rows = [r for r in rows if s in (r.get("item_desc") or "").lower()
+                or s in (r.get("sku") or "").lower() or s in (r.get("device_model") or "").lower()]
+    rows.sort(key=lambda r: (r.get("item_type") or "", (r.get("item_desc") or r.get("sku") or "")))
+    counts = {}
+    for r in rows:
+        t = r.get("item_type") or "unclassified"
+        counts[t] = counts.get(t, 0) + 1
+    return {"items": rows, "ready": True, "counts": counts, "total": len(rows)}
+
+
+@router.post("/item-mapping")
+def upsert_item_mapping(body: dict, org_id: str = ORG_ID):
+    """Classify / edit one item (type + device_model). Keyed by item_key (sku, else description)."""
+    require_org(org_id)
+    key = (body.get("item_key") or _item_key(body.get("sku"), body.get("item_desc")))
+    if not key:
+        raise HTTPException(400, "item_key (or sku/item_desc) required")
+    row = {"org_id": org_id, "item_key": key,
+           "sku": (body.get("sku") or "").strip() or None,
+           "item_desc": (body.get("item_desc") or "").strip() or None,
+           "item_type": (body.get("item_type") or "unclassified").strip(),
+           "device_model": (body.get("device_model") or "").strip() or None,
+           "department": body.get("department"), "category": body.get("category"),
+           "source": "manual", "updated_at": _cb_now()}
+    try:
+        sb().schema("commcalc").table("item_mapping").upsert(row, on_conflict="org_id,item_key").execute()
+    except Exception as e:
+        raise HTTPException(500, f"save failed — run migration 041 first: {e}")
+    return {"ok": True, "item_key": key}
+
+
+@router.delete("/item-mapping/{item_id}")
+def delete_item_mapping(item_id: str, org_id: str = ORG_ID):
+    require_org(org_id)
+    sb().schema("commcalc").table("item_mapping").delete().eq("org_id", org_id).eq("id", item_id).execute()
+    return {"ok": True}
+
+
+@router.post("/item-mapping/seed-from-catalog")
+def seed_item_mapping_from_catalog(org_id: str = ORG_ID):
+    """Seed item_mapping from the Product Catalog ('SU sheet'): each catalog SKU → device_model
+    (from product_desc) + guessed type. Skips rows the user has classified (source='manual')."""
+    require_org(org_id)
+    client = sb()
+    try:
+        cat = client.schema("commcalc").table("raw_catalog").select("sku,product_desc").eq("org_id", org_id).limit(100000).execute().data or []
+    except Exception as e:
+        raise HTTPException(500, f"catalog read failed: {e}")
+    existing = _load_item_map(client, org_id)
+    rows, seen = [], set()
+    for c in cat:
+        key = _item_key(c.get("sku"), c.get("product_desc"))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        cur = existing.get(key)
+        if cur and cur.get("source") == "manual":
+            continue
+        desc = (c.get("product_desc") or "").strip()
+        rows.append({"org_id": org_id, "item_key": key, "sku": (c.get("sku") or "").strip() or None,
+                     "item_desc": desc or None, "device_model": (cur.get("device_model") if cur else None) or desc or None,
+                     "item_type": (cur.get("item_type") if cur else None) or _guess_item_type(None, None, desc),
+                     "source": "catalog", "updated_at": _cb_now()})
+    n = 0
+    try:
+        for i in range(0, len(rows), 500):
+            client.schema("commcalc").table("item_mapping").upsert(rows[i:i + 500], on_conflict="org_id,item_key").execute()
+            n += len(rows[i:i + 500])
+    except Exception as e:
+        raise HTTPException(500, f"seed failed — run migration 041 first: {e}")
+    return {"ok": True, "seeded": n, "catalog_rows": len(cat)}
+
+
+@router.get("/accessory-flags")
+def accessory_flags(start: str = None, end: str = None, store: str = None, rep: str = None,
+                    period: str = None, org_id: str = ORG_ID):
+    """Accessory sales priced ABOVE the configured threshold, over a date range / store / rep.
+    Each row carries the phone model (the transaction's phone line model, else the item's own mapped
+    model) + a default chargeback amount. Unseen items auto-add to item_mapping (type guessed from
+    Department/Category). already_flagged = a chargeback_review row already exists for that sale."""
+    require_org(org_id)
+    client = sb()
+    rules = _flag_rules(client, org_id)
+    threshold = safe_float(rules.get("accessory_threshold"))
+    default_cb = safe_float(rules.get("accessory_chargeback_amount"))
+
+    q = client.schema("commcalc").table("raw_sales").select(
+        "id,trans_id,trans_date,period,store,salesperson,department,category,product_desc,sku,ext_price,voided").eq("org_id", org_id)
+    if period:
+        q = q.eq("period", period)
+    if start:
+        q = q.gte("trans_date", start)
+    if end:
+        q = q.lte("trans_date", end)
+    if store:
+        q = q.eq("store", store)
+    if rep:
+        q = q.eq("salesperson", rep)
+    sales = q.limit(200000).execute().data or []
+
+    imap = _load_item_map(client, org_id)
+    # Auto-add unseen items so the mapping self-maintains (guess type from dept/category/desc).
+    new_rows = {}
+    for r in sales:
+        key = _item_key(r.get("sku"), r.get("product_desc"))
+        if not key or key in imap or key in new_rows:
+            continue
+        new_rows[key] = {"org_id": org_id, "item_key": key, "sku": (r.get("sku") or "").strip() or None,
+                         "item_desc": (r.get("product_desc") or "").strip() or None,
+                         "department": r.get("department"), "category": r.get("category"),
+                         "item_type": _guess_item_type(r.get("department"), r.get("category"), r.get("product_desc")),
+                         "source": "auto", "updated_at": _cb_now()}
+    if new_rows:
+        vals = list(new_rows.values())
+        try:
+            for i in range(0, len(vals), 500):
+                client.schema("commcalc").table("item_mapping").upsert(vals[i:i + 500], on_conflict="org_id,item_key").execute()
+            imap.update(new_rows)
+        except Exception:
+            pass  # migration 041 not run yet → degrade to dept/category-only matching below
+
+    # Per-transaction phone model = the phone line's mapped model (what the accessory was attached to).
+    trans_phone = {}
+    for r in sales:
+        m = imap.get(_item_key(r.get("sku"), r.get("product_desc")))
+        if m and m.get("item_type") == "phone":
+            model = (m.get("device_model") or m.get("item_desc") or r.get("product_desc") or "").strip()
+            if model:
+                trans_phone.setdefault(str(r.get("trans_id") or ""), model)
+
+    flagged = set()
+    try:
+        crs = client.schema("commcalc").table("chargeback_review").select("dedupe_key") \
+            .eq("org_id", org_id).eq("source", "accessory_over").limit(100000).execute().data or []
+        flagged = {c.get("dedupe_key") for c in crs}
+    except Exception:
+        pass
+
+    def _is_acc(m, r):
+        if m:
+            return m.get("item_type") == "accessory"
+        # Migration not run / item missing → fall back to a dept/category guess.
+        return _guess_item_type(r.get("department"), r.get("category"), r.get("product_desc")) == "accessory"
+
+    out = []
+    for r in sales:
+        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+            continue
+        key = _item_key(r.get("sku"), r.get("product_desc"))
+        m = imap.get(key)
+        if not _is_acc(m, r):
+            continue
+        price = safe_float(r.get("ext_price"))
+        if price <= threshold:
+            continue
+        tid = str(r.get("trans_id") or "")
+        phone_model = trans_phone.get(tid) or ((m or {}).get("device_model") or "").strip() or None
+        dk = f"acc:{tid}:{key}"
+        out.append({
+            "sale_id": r.get("id"), "trans_id": tid, "trans_date": r.get("trans_date"),
+            "period": r.get("period"), "store": r.get("store"), "rep": r.get("salesperson"),
+            "department": r.get("department"), "category": r.get("category"),
+            "item_desc": r.get("product_desc"), "sku": r.get("sku"),
+            "ext_price": round(price, 2), "phone_model": phone_model,
+            "chargeback_amount": default_cb, "dedupe_key": dk, "already_flagged": dk in flagged,
+        })
+    out.sort(key=lambda x: (x["store"] or "", x["rep"] or "", -(x["ext_price"] or 0)))
+    return {"rows": out, "threshold": threshold, "default_chargeback": default_cb,
+            "total": len(out), "flagged_qty": sum(1 for x in out if x["already_flagged"])}
+
+
+@router.post("/accessory-flags/push")
+def accessory_flags_push(body: dict, org_id: str = ORG_ID):
+    """Flag selected accessory rows → chargeback bucket, ASSIGNED to the rep who sold it (writes the
+    employee chargeback_items row). Body: {rows:[{trans_id,sku,item_desc,dedupe_key,rep,store,
+    store_code,period,trans_date,phone_model,ext_price,chargeback_amount}], assigned_by}.
+    Idempotent per dedupe_key — re-pushing updates the amount instead of duplicating."""
+    require_org(org_id)
+    rows = body.get("rows") or []
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(400, "rows[] required")
+    by = body.get("assigned_by") or "admin"
+    client = sb()
+    pushed, errors = 0, []
+    for r in rows:
+        rep = (r.get("rep") or "").strip()
+        dk = r.get("dedupe_key") or f"acc:{r.get('trans_id')}:{_item_key(r.get('sku'), r.get('item_desc'))}"
+        amount = abs(safe_float(r.get("chargeback_amount")))
+        if not rep:
+            errors.append({"dedupe_key": dk, "error": "no rep/salesperson on the sale"})
+            continue
+        detail = ("Accessory over threshold: " + (r.get("item_desc") or r.get("sku") or "accessory")
+                  + (f" ({r.get('phone_model')})" if r.get("phone_model") else "")
+                  + f" — sold ${round(safe_float(r.get('ext_price')), 2)}")
+        period = (r.get("period") or "").strip()
+        if not period and r.get("trans_date"):
+            try:
+                from dateutil import parser as _dp
+                period = _dp.parse(str(r.get("trans_date"))).strftime("%B %Y")
+            except Exception:
+                period = ""
+        review = {"org_id": org_id, "source": "accessory_over", "severity": "warning",
+                  "status": "assigned", "store_address": r.get("store"), "store_code": r.get("store_code"),
+                  "period": period or "", "occurred_date": str(r.get("trans_date") or "")[:10],
+                  "detail": detail[:300], "amount": amount, "suggested_rep": rep,
+                  "assigned_rep": rep, "assigned_by": by, "assigned_at": _cb_now(), "dedupe_key": dk,
+                  "raw": {"trans_id": r.get("trans_id"), "sku": r.get("sku"),
+                          "phone_model": r.get("phone_model"), "ext_price": r.get("ext_price")}}
+        try:
+            res = client.schema("commcalc").table("chargeback_review").upsert(
+                review, on_conflict="org_id,dedupe_key").execute()
+            cb_id = (res.data or [{}])[0].get("id")
+            ref = f"cbr-{cb_id}" if cb_id else f"acc-{dk}"
+            item = {"org_id": org_id, "period": period or "Unassigned", "epay_salesperson": rep,
+                    "store": r.get("store") or r.get("store_code") or "",
+                    "source": "chargeback_review", "source_ref": ref, "description": detail[:300],
+                    "amount": amount, "mdn": "", "imei": "", "deduct": True, "decided_at": _cb_now()}
+            client.schema("commcalc").table("chargeback_items").delete().eq("org_id", org_id) \
+                .eq("source", "chargeback_review").eq("source_ref", ref).execute()
+            client.schema("commcalc").table("chargeback_items").insert(item).execute()
+            if cb_id:
+                client.schema("commcalc").table("chargeback_review").update(
+                    {"chargeback_item_ref": ref, "updated_at": _cb_now()}).eq("id", cb_id).execute()
+            pushed += 1
+        except Exception as e:
+            errors.append({"dedupe_key": dk, "error": str(e)[:200]})
+    return {"ok": True, "pushed": pushed, "errors": errors, "total": len(rows)}
+
+
 # ── VIP PayGo / asset-lending ledger (read endpoints; data from the sweep, migration 014) ──
 @router.get("/vip/paygo/summary")
 async def vip_paygo_summary(org_id: str = ORG_ID):

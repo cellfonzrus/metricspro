@@ -327,7 +327,7 @@ def build_inputs(client, org_id, period):
     # inventory value (BS), owed-to-VIP (BS). One scan, multiple lines.
     try:
         for r in _fetch_all(client, "asset_ledger",
-                            "store,category,status,owed_to_vip,reimbursement,reimbursement_date,selling_price"):
+                            "store,category,status,owed_to_vip,reimbursement,reimbursement_date,selling_price,acquired_date"):
             st = _norm_store(r.get("store"))
             cat = (r.get("category") or "").strip().upper()
             status = (r.get("status") or "").strip()
@@ -337,8 +337,10 @@ def build_inputs(client, org_id, period):
             # reimbursement income — recognized in the period it was received
             if reimb and _in_period(r.get("reimbursement_date"), pm, py):
                 add("vip_reimb", st, reimb)
-            # VIP fee categories — booked as paid in the period (best-effort: count all on the books)
-            if cat in VIP_FEE_CATS:
+            # VIP fee categories — book ONCE, in the month the fee was assessed (the ledger charge
+            # date = acquired_date / the "Date" column). Was unfiltered ("count all on the books") →
+            # re-booked in every period computed, so this month's COGS carried every prior month's fees.
+            if cat in VIP_FEE_CATS and _in_period(r.get("acquired_date"), pm, py):
                 add("vip_fees", st, owed, detail_label=cat.title())
             # Balance Sheet (point-in-time, current): unsold on-hand value + outstanding payable
             if unsold:
@@ -361,7 +363,7 @@ def build_inputs(client, org_id, period):
     except Exception:
         pass
 
-    # vip_paygo_payments — cash paid to VIP this period (approved batches) + current owed (pending, BS).
+    # vip_paygo_payments — cash paid to VIP this period (approved batches), a COGS line. Company-wide.
     # NOTE: the PayGo `dealer` field is the VIP DEALER ACCOUNT (one legal entity — e.g. "Cellular
     # Services Dot net LLC (228 N Wood Ave, Syosset, NY 11791)"), NOT a retail store: 176/178 batches
     # carry that single account string. Resolving it as a store made it a PHANTOM per-store bucket that
@@ -369,14 +371,14 @@ def build_inputs(client, org_id, period):
     # (company) level, and the batch grain has no per-store split. So book it COMPANY-WIDE (store=None).
     # Per-store allocation would require joining each PayGo line to the lent devices' stores via
     # asset_ledger — a future enhancement, not an alias.
+    # owed_vip (BS liability) is NOT booked here: it comes solely from the Asset Lending file
+    # (asset_ledger.owed_to_vip on unsold devices, above). PayGo pending used to ALSO add owed_vip,
+    # double-counting the same device-financing liability — removed per the confirmed model.
     try:
         for r in _fetch_all(client, "vip_paygo_payments", "dealer,amount,amount_overdue,batch_type,period",
                             {"org_id": org_id, "period": period_keys}):
             if (r.get("batch_type") or "").lower() == "approved":
                 add("vip_device_pay", None, r.get("amount"))
-        for r in _fetch_all(client, "vip_paygo_payments", "dealer,amount,batch_type"):
-            if (r.get("batch_type") or "").lower() == "pending":
-                add("owed_vip", None, r.get("amount"))
     except Exception:
         pass
 

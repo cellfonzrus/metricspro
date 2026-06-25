@@ -183,7 +183,7 @@ async def list_employees(org_id: str = ORG_ID):
     Drives the assignment grid (assign a role, then create logins)."""
     client = sb()
     emps = client.schema("storeops").table("employees").select(
-        "id,employee_id,name,home_store,role,email,phone,is_active") \
+        "id,employee_id,name,home_store,role,pay_rate,email,phone,is_active") \
         .eq("org_id", org_id).order("name").execute().data or []
     try:
         users = client.schema("storeops").table("app_users").select("*").eq("org_id", org_id) \
@@ -206,7 +206,7 @@ async def list_employees(org_id: str = ORG_ID):
             created += 1
     if created:
         emps = client.schema("storeops").table("employees").select(
-            "id,employee_id,name,home_store,role,email,phone,is_active") \
+            "id,employee_id,name,home_store,role,pay_rate,email,phone,is_active") \
             .eq("org_id", org_id).order("name").execute().data or []
     by_email = {(u.get("email") or "").lower(): u for u in users if u.get("email")}
     by_emp = {u.get("employee_id"): u for u in users if u.get("employee_id")}
@@ -235,7 +235,7 @@ async def list_employees(org_id: str = ORG_ID):
             "id": -syn,
             "employee_id": u.get("employee_id"),
             "name": u.get("full_name") or u.get("email"),
-            "home_store": None, "role": None, "phone": None,
+            "home_store": None, "role": None, "phone": None, "pay_rate": None,
             "email": u.get("email"),
             "is_active": u.get("is_active", True),
             "app_role": u.get("role"),
@@ -447,6 +447,91 @@ async def deactivate_user(body: dict, org_id: str = ORG_ID):
         {"is_active": bool(body.get("is_active", False))}) \
         .eq("org_id", org_id).eq("email", email).execute()
     return {"updated": len(res.data or [])}
+
+
+def purge_app_user(org_id, *, email=None, employee_id=None, hard=True):
+    """Remove (or deactivate) the login(s) for a person, matched by email AND/OR employee_id.
+
+    Called by employee delete/deactivate from BOTH the StoreOps roster and the Roles & Access
+    page, so removing an employee is reflected everywhere instead of leaving the app_users row +
+    Supabase Auth account dangling as a "ghost" manual user in Roles (the reported delete-sync bug).
+      hard=True  → delete the app_users row(s) + the Supabase Auth account(s).
+      hard=False → flip is_active=False (keeps the auth account but blocks access).
+    No-op (matched:0) if no email/employee_id or nothing matches."""
+    email = (email or "").strip().lower()
+    employee_id = (str(employee_id).strip() or None) if employee_id is not None else None
+    if not email and not employee_id:
+        return {"matched": 0}
+    client = get_supabase()
+    tbl = lambda: client.schema("storeops").table("app_users")
+    found = {}
+    try:
+        if email:
+            for r in (tbl().select("id,auth_id,email,employee_id")
+                      .eq("org_id", org_id).eq("email", email).execute().data or []):
+                found[r["id"]] = r
+        if employee_id:
+            for r in (tbl().select("id,auth_id,email,employee_id")
+                      .eq("org_id", org_id).eq("employee_id", employee_id).execute().data or []):
+                found[r["id"]] = r
+    except Exception:
+        return {"matched": 0}
+    rows = list(found.values())
+    if not rows:
+        return {"matched": 0}
+    if not hard:
+        for r in rows:
+            tbl().update({"is_active": False}).eq("id", r["id"]).execute()
+        return {"matched": len(rows), "deactivated": len(rows)}
+    ids = [r["id"] for r in rows]
+    tbl().delete().in_("id", ids).execute()
+    admin, auth_deleted = None, 0
+    for r in rows:
+        if r.get("auth_id"):
+            try:
+                if admin is None:
+                    admin = get_supabase_admin()
+                admin.auth.admin.delete_user(r["auth_id"])
+                auth_deleted += 1
+            except Exception:
+                pass
+    return {"matched": len(rows), "deleted": len(ids), "auth_deleted": auth_deleted}
+
+
+@router.post("/employees/purge")
+async def purge_employee(body: dict, org_id: str = ORG_ID):
+    """Delete or deactivate a person from BOTH the StoreOps roster and the Roles module in one
+    call (the Roles & Access remove action). Identify by employee_pk (storeops.employees.id) for
+    a real employee, or by email/employee_id for a manually-added Roles user (which has no
+    employees row). mode='delete' hard-removes the employees row + login + Supabase Auth account;
+    mode='deactivate' flips both is_active=False and revokes access (keeps the auth account)."""
+    mode = (body.get("mode") or "delete").strip().lower()
+    hard = mode != "deactivate"
+    emp_pk = body.get("employee_pk", body.get("id"))
+    email = (body.get("email") or "").strip().lower()
+    employee_id = body.get("employee_id")
+    client = sb()
+    name = None
+    # Synthetic negative ids are Roles-only manual users (no employees row) — skip the roster op.
+    synthetic = False
+    try:
+        synthetic = int(str(emp_pk)) < 0
+    except (TypeError, ValueError):
+        synthetic = False
+    if emp_pk not in (None, "") and not synthetic:
+        rows = client.schema("storeops").table("employees").select("id,name,email,employee_id") \
+            .eq("org_id", org_id).eq("id", str(emp_pk)).limit(1).execute().data or []
+        if rows:
+            name = rows[0].get("name")
+            email = email or (rows[0].get("email") or "").lower()
+            employee_id = employee_id or rows[0].get("employee_id")
+            if hard:
+                client.schema("storeops").table("employees").delete().eq("id", str(emp_pk)).execute()
+            else:
+                client.schema("storeops").table("employees").update({"is_active": False}) \
+                    .eq("id", str(emp_pk)).execute()
+    login = purge_app_user(org_id, email=email, employee_id=employee_id, hard=hard)
+    return {"ok": True, "mode": mode, "name": name, "login": login}
 
 
 # ── Employee Dashboard (role-gated widgets) ───────────────────────────────────

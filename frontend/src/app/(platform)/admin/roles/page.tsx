@@ -31,6 +31,7 @@ type Role = { id: number; name: string; display_name: string; permissions: any }
 type Emp = {
   id: number; employee_id: string | null; name: string; home_store: string | null
   email: string | null; role: string | null; is_active: boolean
+  phone?: string | null; pay_rate?: number | null
   app_role: string | null; has_login: boolean; app_market: string | null; app_store: string | null
   widget_overrides?: Record<string, boolean> | null
   manual?: boolean
@@ -50,6 +51,7 @@ export default function RolesAdminPage() {
   const [upBusy, setUpBusy] = useState(false)
   const [upWithLogins, setUpWithLogins] = useState(false)
   const [widgetEmp, setWidgetEmp] = useState<number | null>(null)  // row with the widget editor open
+  const [editEmp, setEditEmp] = useState<number | null>(null)      // row with the edit/remove editor open
 
   async function loadAll() {
     setLoading(true)
@@ -145,6 +147,36 @@ export default function RolesAdminPage() {
     } catch (err: any) { setMsg('Widget save failed: ' + (err?.message || err)) }
   }
   function resetWidgets(e: Emp) { setEmp(e.id, { widget_overrides: null }) }
+
+  // ---- edit employee details + remove (delete / deactivate) ----
+  async function saveDetails(e: Emp) {
+    setMsg('')
+    try {
+      await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify({
+        name: e.name, home_store: e.home_store, role: e.role,
+        pay_rate: e.pay_rate == null || (e.pay_rate as any) === '' ? null : Number(e.pay_rate),
+        phone: e.phone || null, is_active: !!e.is_active,
+      }) })
+      setMsg(`Saved ${e.name}`)
+    } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)) }
+  }
+
+  async function removeEmp(e: Emp, mode: 'delete' | 'deactivate') {
+    const ok = confirm(mode === 'delete'
+      ? `⚠️ Permanently delete ${e.name}?\n\nRemoves the employee, their role assignment, AND their login everywhere (StoreOps + Roles). Historical records keyed by name (commissions, closing) are kept. This cannot be undone.`
+      : `Deactivate ${e.name}?\n\nMarks them inactive and revokes their login. Reversible.`)
+    if (!ok) return
+    setMsg('')
+    try {
+      const r = await api('/api/v1/core/employees/purge', { method: 'POST', body: JSON.stringify({
+        employee_pk: e.id, email: e.email, employee_id: e.employee_id, mode,
+      }) })
+      setEditEmp(null)
+      const auth = r?.login?.auth_deleted ? `, ${r.login.auth_deleted} login` : ''
+      setMsg(`${mode === 'delete' ? 'Deleted' : 'Deactivated'} ${e.name}${auth}`)
+      await loadAll()
+    } catch (err: any) { setMsg(`${mode === 'delete' ? 'Delete' : 'Deactivate'} failed: ` + (err?.message || err)) }
+  }
 
   async function createLogin(e: Emp) {
     if (!e.email) return
@@ -245,6 +277,7 @@ export default function RolesAdminPage() {
   }
 
   const sel = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
+  const lbl: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--text2)', fontWeight: 600 }
   const filtered = emps.filter(e => !search ||
     `${e.name} ${e.home_store || ''} ${e.email || ''} ${e.app_role || ''}`.toLowerCase().includes(search.toLowerCase()))
   const tempList = Object.entries(tempPw)
@@ -443,7 +476,9 @@ export default function RolesAdminPage() {
                           {e.has_login ? 'Reset pw' : 'Create login'}</button>}{' '}
                         {e.app_role && <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} title="Per-person dashboard widgets"
                           onClick={() => setWidgetEmp(widgetEmp === e.id ? null : e.id)}>
-                          🎛️ Widgets{ovCount ? ` (${ovCount})` : ''}</button>}
+                          🎛️ Widgets{ovCount ? ` (${ovCount})` : ''}</button>}{' '}
+                        <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} title="Edit details / remove this person"
+                          onClick={() => setEditEmp(editEmp === e.id ? null : e.id)}>✏️ Edit</button>
                       </td>
                     </tr>
                     {widgetEmp === e.id && (
@@ -470,6 +505,39 @@ export default function RolesAdminPage() {
                           <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => saveWidgets(e)}>💾 Save widgets</button>{' '}
                           <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => resetWidgets(e)}>↺ Reset to role default</button>
                           <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 10 }}>• = overridden for this person</span>
+                        </td>
+                      </tr>
+                    )}
+                    {editEmp === e.id && (
+                      <tr style={{ background: '#f8fafc' }}>
+                        <td colSpan={7} style={{ padding: '12px 16px', borderTop: '1px dashed var(--border)' }}>
+                          {e.id > 0 ? (
+                            <>
+                              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Edit {e.name}</div>
+                              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 10 }}>
+                                <label style={lbl}>Full name<input style={{ ...sel, width: 160 }} value={e.name || ''} onChange={ev => setEmp(e.id, { name: ev.target.value })} /></label>
+                                <label style={lbl}>Home store<input style={{ ...sel, width: 120 }} value={e.home_store || ''} onChange={ev => setEmp(e.id, { home_store: ev.target.value })} /></label>
+                                <label style={lbl}>Job title<input style={{ ...sel, width: 130 }} value={e.role || ''} placeholder="Sales Rep" onChange={ev => setEmp(e.id, { role: ev.target.value })} /></label>
+                                <label style={lbl}>Pay $/hr<input type="number" style={{ ...sel, width: 80 }} value={e.pay_rate ?? ''} onChange={ev => setEmp(e.id, { pay_rate: ev.target.value === '' ? null : (ev.target.value as any) })} /></label>
+                                <label style={lbl}>Phone<input style={{ ...sel, width: 150 }} value={e.phone || ''} placeholder="5162330422" onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></label>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, paddingBottom: 6 }}>
+                                  <input type="checkbox" checked={!!e.is_active} onChange={ev => setEmp(e.id, { is_active: ev.target.checked })} />Active
+                                </label>
+                              </div>
+                              <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => saveDetails(e)}>💾 Save details</button>{' '}
+                              <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => removeEmp(e, 'deactivate')}>🚫 Deactivate (revoke login)</button>{' '}
+                              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px', color: '#dc2626' }} onClick={() => removeEmp(e, 'delete')}>🗑 Delete permanently</button>
+                              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
+                                Delete removes the employee + role assignment + login everywhere. History keyed by name (commissions, closing) is kept.
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div style={{ fontSize: 12, marginBottom: 8 }}>✋ Manually-added Roles user — no StoreOps roster row to edit.</div>
+                              <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => removeEmp(e, 'deactivate')}>🚫 Deactivate (revoke login)</button>{' '}
+                              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px', color: '#dc2626' }} onClick={() => removeEmp(e, 'delete')}>🗑 Delete permanently</button>
+                            </>
+                          )}
                         </td>
                       </tr>
                     )}
