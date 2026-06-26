@@ -1,5 +1,25 @@
 # MetricsPro — System Bug Audit (2026-06-23)
 
+> ## 🔁 RE-AUDIT 2026-06-26 (verified against current code) — read this first
+> The ⬜ OPEN rows below are partly STALE. Verified status now:
+> - ✅ **FIXED since the audit** (do NOT re-fix): `calculator.py` trade-in login→name (now keyed by
+>   `pay_by_login[login]` + resolved via `rep['login']`, calculator.py ~228-252, commit 08dddf1) ·
+>   `account/recon.py` period-spelling (now `_period_keys()` IN-clause, ~26-136, 7249fea) ·
+>   `coa.py:354` PayGo phantom store (now booked **company-wide** `add(...,None,...)`, ~374-386, 74b814e) ·
+>   `coa.py` `vip_fees` now `_in_period`-guarded (~343) · `vip_sweep.py` flaky-detail (now `parsed_ids`
+>   gate — only replaces lines/devices when the detail parse succeeded, ~278-344, f3ec9de) ·
+>   `coa.py` `owed_vip` "double-count" — INVESTIGATED + CONFIRMED **not** a double-count (PayGo-pending is
+>   a real standalone ~$121k liability; asset_ledger owed ~$0), see memory owed-vip-paygo-standalone-liability.
+> - ✅ **FIXED 2026-06-26 this pass**: `coa.py:_in_period` 2-digit-year (`MM/DD/YY` → `20YY`; was dropped).
+> - ⬜ **STILL OPEN, deliberately NOT auto-fixed** (need user OK / a decision — not safe to do blind):
+>   • period-spelling normalizer across commcalc reads — **38** `.eq('period', period)` over **56**
+>     period endpoints; a blanket sweep is too broad to land safely autonomously. Recommend a
+>     `_canon_period()` (YYYY-MM→"Month YYYY", canonical spelling) applied at each read boundary.
+>   • `storeops/router.py` payroll `act==0 → sched` — fixing it would UNDERPAY everyone whose actual hours
+>     aren't entered yet (the common case). Needs a real no-show recording mechanism + a product decision.
+>   • `asset/router.py` upload atomicity — verified module; a safe fix needs a temp-table swap RPC (migration).
+>   • `closing/router.py` count-mapping (new_line+postpaid vs prem+byod) — needs a defined sheet→bucket mapping.
+
 Read-only audit of every backend module (4 parallel auditors) + live health probes. Goal: "test all
 systems for being bug-free" before the SaaS/multi-carrier build. Findings are grouped by theme; each
 is marked **✅ FIXED** (this session) or **⬜ OPEN** with `file:line` and severity.

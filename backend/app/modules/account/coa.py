@@ -91,7 +91,7 @@ def parse_period(period: str):
 
 
 def _in_period(date_str, pm, py):
-    """date_str like 'YYYY-MM-DD...' (or 'MM/DD/YYYY') falls in period (pm,py)?"""
+    """date_str like 'YYYY-MM-DD...' (or 'MM/DD/YYYY' / 'MM/DD/YY') falls in period (pm,py)?"""
     s = str(date_str or "").strip()
     if not s:
         return False
@@ -100,7 +100,12 @@ def _in_period(date_str, pm, py):
             y, m = int(s[:4]), int(s[5:7])
         elif "/" in s:
             a, b, c = (s[:10].split("/") + ["", "", ""])[:3]
-            m, y = int(a), int(c[:4]) if c[:4].isdigit() else 0
+            cc = "".join(ch for ch in c if ch.isdigit())
+            if not a.isdigit() or not cc:
+                return False
+            m, y = int(a), int(cc)
+            if y < 100:            # 2-digit year ('26' → 2026); previously dropped (never matched a 4-digit py)
+                y += 2000
         else:
             return False
         return m == pm and y == py
