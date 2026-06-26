@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { api, fmt } from '@/lib/client'
+import { api, fmt, parseLocalDate } from '@/lib/client'
 
 interface PayrollRow {
   employee_id: string; name: string; store: string; pay_rate: number
@@ -33,7 +33,7 @@ export default function PayrollPage() {
     a.download = `payroll-${month}.csv`; a.click()
   }
 
-  const monthName = new Date(month + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  const monthName = parseLocalDate(month + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
 
   return (
     <div>

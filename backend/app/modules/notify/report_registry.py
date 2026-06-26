@@ -385,6 +385,67 @@ async def _sales_recon(org_id, f):
             "filename": f"sales-recon-{period.replace(' ', '-')}", "sheets": sheets}
 
 
+async def _storeops_schedule(org_id, f):
+    """Week schedule from storeops.shifts → emailable/WhatsApp-able report. The server twin of the
+    schedule page's export, so 'publish & notify' delivers the same grid the page shows."""
+    from datetime import timedelta
+    from app.core.database import get_supabase
+    ws = (f or {}).get("week_start")
+    try:
+        start = date.fromisoformat(str(ws)[:10]) if ws else date.today()
+    except Exception:
+        start = date.today()
+    start = start - timedelta(days=start.weekday())   # snap to Monday
+    end = start + timedelta(days=6)
+    q = (get_supabase().schema("storeops").table("shifts").select("*")
+         .eq("is_deleted", False)
+         .gte("shift_date", start.isoformat()).lte("shift_date", end.isoformat()))
+    sc = (f or {}).get("store_code")
+    if sc:
+        q = q.eq("store_code", sc)
+    shifts = q.order("shift_date").execute().data or []
+
+    def _wd(s):
+        try:
+            return date.fromisoformat(str(s)[:10]).strftime("%a")
+        except Exception:
+            return ""
+
+    rows, by_emp = [], {}
+    for s in shifts:
+        st, en = str(s.get("start_time") or "")[:5], str(s.get("end_time") or "")[:5]
+        rows.append({"day": _wd(s.get("shift_date")), "date": str(s.get("shift_date") or "")[:10],
+                     "store": s.get("store_code") or "", "employee": s.get("employee_name") or "",
+                     "shift": f"{st}–{en}".strip("–"), "hours": s.get("scheduled_hours") or 0,
+                     "role": s.get("role") or ""})
+        k = s.get("employee_name") or "—"
+        e = by_emp.setdefault(k, {"employee": k, "shifts": 0, "hours": 0.0})
+        e["shifts"] += 1
+        try:
+            e["hours"] += float(s.get("scheduled_hours") or 0)
+        except Exception:
+            pass
+    by_emp_list = sorted(by_emp.values(), key=lambda e: e["employee"])
+    for e in by_emp_list:
+        e["hours"] = round(e["hours"], 2)
+    total_hours = round(sum(e["hours"] for e in by_emp_list), 2)
+    return {"title": "Store Schedule",
+            "subtitle": f"Week of {start.isoformat()} – {end.isoformat()} · {len(shifts)} shifts · {total_hours} hrs",
+            "filename": f"schedule-{start.isoformat()}",
+            "sheets": [
+                {"name": "Shifts", "rows": rows, "columns": [
+                    {"header": "Day", "key": "day"}, {"header": "Date", "key": "date"},
+                    {"header": "Store", "key": "store"}, {"header": "Employee", "key": "employee"},
+                    {"header": "Shift", "key": "shift"},
+                    {"header": "Hours", "key": "hours", "align": "right"},
+                    {"header": "Role", "key": "role"}]},
+                {"name": "By Employee", "rows": by_emp_list, "columns": [
+                    {"header": "Employee", "key": "employee"},
+                    {"header": "Shifts", "key": "shifts", "align": "right"},
+                    {"header": "Hours", "key": "hours", "align": "right"}]},
+            ]}
+
+
 async def _top_sellers(org_id, f):
     period = _resolve_period(f)
     data = await C.get_top_sellers(period=period, limit=int(f.get("limit") or 25), org_id=org_id)
@@ -565,6 +626,10 @@ REPORTS = {
         "label": "Sales Feed Recon", "filters": ["period"],
         "live_path": lambda f: "/commcalc/sales-recon" + _qs(f, ["period"]),
         "build": _sales_recon},
+    "storeops_schedule": {
+        "label": "Store Schedule (Week)", "filters": ["week_start", "store_code"],
+        "live_path": lambda f: "/storeops/schedule",
+        "build": _storeops_schedule},
     "top_sellers": {
         "label": "Top Sellers", "filters": ["period", "limit"],
         "live_path": lambda f: "/commcalc/kpi", "build": _top_sellers},

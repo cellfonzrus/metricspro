@@ -3387,6 +3387,27 @@ def _fetch_shifts(client, start, end):
     return rows
 
 
+def _is_open_month(period):
+    """True if `period` ('June 2026') is the current in-progress calendar month."""
+    try:
+        pm = parse_period(period)
+        t = _date.today()
+        return pm['month'] == t.month and pm['year'] == t.year
+    except Exception:
+        return False
+
+
+def _merge_actuals(monthly, feed):
+    """Per (store_code, rep_name, trans_date), the daily-feed row REPLACES the monthly row when present
+    (the daily B2B feed is fresher intra-month); days only in the monthly file are kept."""
+    def key(r):
+        return (str(r.get('store_code') or ''), str(r.get('rep_name') or ''), str(r.get('trans_date') or ''))
+    out = {key(r): r for r in monthly}
+    for r in feed:
+        out[key(r)] = r
+    return list(out.values())
+
+
 def _fetch_actuals(client, org_id, period):
     try:
         rows = (client.schema('commcalc')
@@ -3395,6 +3416,19 @@ def _fetch_actuals(client, org_id, period):
     except Exception as e:
         print('daily_sales_actuals RPC failed:', e)
         return []
+    # THEME 5(2) intra-month freshness: for the CURRENT open month the authoritative monthly file lags
+    # (re-uploaded periodically) while the daily B2B feed is current, so prefer the feed per day. Closed
+    # months stay monthly-authoritative (the THEME 5 design decision). Graceful: if the sibling feed RPC
+    # isn't deployed (migration 048) or returns nothing, behavior is identical to before.
+    if _is_open_month(period):
+        try:
+            feed = (client.schema('commcalc')
+                    .rpc('daily_sales_feed_actuals', {'p_org_id': org_id, 'p_period': period})
+                    .execute().data) or []
+        except Exception:
+            feed = []
+        if feed:
+            rows = _merge_actuals(rows, feed)
     cmap = _rep_canon_map(client, org_id)
     for r in rows:
         if r.get('rep_name'):

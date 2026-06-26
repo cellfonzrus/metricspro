@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api, localToday, parseLocalDate, addDays, mondayOf } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 interface Shift {
   id: number
@@ -337,6 +338,7 @@ export default function SchedulePage() {
           <button className="btn btn-secondary" disabled={busy} onClick={saveTemplate} title="Save this week as the recurring weekly template">⭐ Save template</button>
           <button className="btn btn-secondary" disabled={busy} onClick={applyTemplate} title="Fill this week from the saved templates">📌 Apply template</button>
           <ExportButtons payload={buildPayload} compact />
+          <SendReportButton reportKey="storeops_schedule" filters={{ week_start: weekStart, ...(filterStore ? { store_code: filterStore } : {}) }} compact />
         </div>
       </div>
 
