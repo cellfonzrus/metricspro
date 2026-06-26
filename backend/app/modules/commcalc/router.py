@@ -3075,6 +3075,34 @@ async def sales_feed_recon(period: str = "", org_id: str = ORG_ID):
         raise HTTPException(500, f"Sales recon failed: {e} (run migration 047?)")
 
 
+@router.post("/sales-recon/sync-flags")
+async def sales_recon_sync_flags(period: str = "", notify: bool = False,
+                                 include_mismatch: bool = True, org_id: str = ORG_ID):
+    """Persist the sales-feed recon findings for `period` into commcalc.flags (source='sales_recon':
+    missing_in_monthly → critical 'sales_leak'; amount_mismatch → warning). Idempotent — delete-first
+    by source, so re-running refreshes without touching other flag sources. If notify=true AND there
+    are leaks, also sends the 'sales_recon' report to its designated recipients (Theme 4 routing).
+    Returns the flag counts + any notify result."""
+    require_org(org_id)
+    if not period:
+        raise HTTPException(400, "period required")
+    try:
+        result = sales_recon.sync_recon_flags(period, include_mismatch=include_mismatch)
+    except Exception as e:
+        raise HTTPException(500, f"Sales recon flag sync failed: {e} (run migration 047?)")
+    if notify and result.get("missing_in_monthly", 0) > 0:
+        try:
+            from app.modules.notify import router as N  # lazy: avoids notify↔commcalc import cycle
+            result["notify"] = await N.send_to_designated(
+                {"report_key": "sales_recon", "filters": {"period": result["period"]},
+                 "message": (f"{result['missing_in_monthly']} sales-feed leak(s) totalling "
+                             f"${(result.get('leak_total') or 0):,.2f} detected for {result['period']}.")},
+                org_id=org_id)
+        except Exception as e:
+            result["notify_error"] = str(e)
+    return result
+
+
 # ─────────────────────────────────────────────
 # DISCREPANCY ENDPOINTS
 # ─────────────────────────────────────────────

@@ -169,3 +169,67 @@ def run_sales_recon(period: str):
         "by_store": by_store_list,
         "rows": sorted(rows, key=lambda r: abs(r["delta"] or 0), reverse=True),
     }
+
+
+def _period_my(plabel: str):
+    """('June 2026') -> (6, 2026); best-effort, (None, None) on failure."""
+    parts = (plabel or "").strip().split()
+    if len(parts) == 2 and parts[0] in _MONTHS and parts[1].isdigit():
+        return _MONTHS.index(parts[0]) + 1, int(parts[1])
+    return None, None
+
+
+def sync_recon_flags(period: str, include_mismatch: bool = True):
+    """Persist sales-feed recon findings into commcalc.flags so leaks show on the Flags page and can be
+    routed/notified like any other flag. Writes:
+      • missing_in_monthly → flag_type 'sales_leak' (severity 'critical') — money in the daily B2B feed
+        that never reached the authoritative monthly file: a real revenue/commission leak or an
+        unrecorded void.
+      • amount_mismatch    → flag_type 'sales_amount_mismatch' (severity 'warning'), when include_mismatch.
+    (missing_in_daily is a feed-coverage gap, not a money leak — intentionally not flagged.)
+    Delete-first by (org_id, period, source='sales_recon') then insert, so re-running is idempotent and
+    never touches other flag sources (matches the asset _sync_*_flags pattern). Returns counts."""
+    res = run_sales_recon(period)
+    plabel = res["period"]
+    pm, py = _period_my(plabel)
+    client = get_supabase()
+
+    flags = []
+    for r in res["rows"]:
+        b = r["bucket"]
+        if b == "missing_in_monthly":
+            flags.append({
+                "period": plabel, "period_month": pm, "period_year": py,
+                "flag_type": "sales_leak", "source": "sales_recon", "severity": "critical",
+                "store_address": r["store"], "epay_salesperson": r.get("salesperson") or "",
+                "amount": r.get("daily_total"),
+                "description": (f"Trans {r['trans_id']} is in the daily B2B feed "
+                                f"(${(r.get('daily_total') or 0):,.2f}, {r.get('trans_date') or 'n/a'}) "
+                                f"but NOT in the authoritative monthly sales file — revenue/commission "
+                                f"leak or an unrecorded void."),
+            })
+        elif b == "amount_mismatch" and include_mismatch:
+            flags.append({
+                "period": plabel, "period_month": pm, "period_year": py,
+                "flag_type": "sales_amount_mismatch", "source": "sales_recon", "severity": "warning",
+                "store_address": r["store"], "epay_salesperson": r.get("salesperson") or "",
+                "amount": r.get("delta"),
+                "description": (f"Trans {r['trans_id']} totals differ: monthly "
+                                f"${(r.get('monthly_total') or 0):,.2f} vs daily "
+                                f"${(r.get('daily_total') or 0):,.2f} (Δ ${(r.get('delta') or 0):,.2f})."),
+            })
+
+    (client.schema("commcalc").table("flags").delete()
+     .eq("org_id", ORG_ID).eq("period", plabel).eq("source", "sales_recon").execute())
+    if flags:
+        for f in flags:
+            f["org_id"] = ORG_ID
+        for i in range(0, len(flags), 500):
+            client.schema("commcalc").table("flags").insert(flags[i:i + 500]).execute()
+
+    return {
+        "period": plabel, "has_feed": res["has_feed"], "flagged": len(flags),
+        "missing_in_monthly": res["summary"]["missing_in_monthly"],
+        "amount_mismatch": res["summary"]["amount_mismatch"] if include_mismatch else 0,
+        "leak_total": res["summary"]["missing_in_monthly_total"],
+    }

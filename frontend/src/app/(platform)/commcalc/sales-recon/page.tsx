@@ -38,6 +38,8 @@ export default function SalesReconPage() {
   const [tab, setTab] = useState('missing_in_monthly')
   const [storeFilter, setStoreFilter] = useState('')
   const [search, setSearch] = useState('')
+  const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState('')
 
   const load = async () => {
     setLoading(true); setErr('')
@@ -48,6 +50,21 @@ export default function SalesReconPage() {
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [period])
+
+  const flagAndNotify = async () => {
+    setSyncing(true); setSyncMsg('')
+    try {
+      const r = await api(
+        `/api/v1/commcalc/sales-recon/sync-flags?period=${encodeURIComponent(period)}&notify=true&org_id=${ORG_ID}`,
+        { method: 'POST' })
+      const n = r.notify
+      const notifyTxt = r.notify_error ? ` · notify failed: ${r.notify_error}`
+        : n ? (n.skipped ? ` · notify skipped (${n.skipped})` : ` · notified ${n.sent || 0} recipient(s)`)
+        : ' · no leaks to notify'
+      setSyncMsg(`Flagged ${r.flagged} finding(s): ${r.missing_in_monthly} leak(s), ${r.amount_mismatch} mismatch(es)${notifyTxt}. They now appear on the Flags page.`)
+    } catch (e: any) { setSyncMsg(`Flag sync failed: ${e.message || e}`) }
+    finally { setSyncing(false) }
+  }
 
   const stores = useMemo(() =>
     data ? Array.from(new Set(data.rows.map(r => r.store))).sort() : [], [data])
@@ -83,13 +100,21 @@ export default function SalesReconPage() {
             Monthly authoritative upload vs the daily B2B feed — {period}
           </p>
         </div>
-        <button onClick={load} disabled={loading}
-          style={{ background: loading ? '#9ca3af' : '#111827', color: 'white', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, cursor: loading ? 'default' : 'pointer', fontSize: 14 }}>
-          {loading ? 'Loading…' : 'Refresh'}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={flagAndNotify} disabled={syncing || loading || !data?.has_feed}
+            title={data?.has_feed ? 'Write leaks/mismatches to the Flags page and notify the designated recipient' : 'No daily feed loaded yet — nothing to flag'}
+            style={{ background: (syncing || !data?.has_feed) ? '#9ca3af' : '#b91c1c', color: 'white', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, cursor: (syncing || loading || !data?.has_feed) ? 'default' : 'pointer', fontSize: 14 }}>
+            {syncing ? 'Flagging…' : 'Flag leaks & notify'}
+          </button>
+          <button onClick={load} disabled={loading}
+            style={{ background: loading ? '#9ca3af' : '#111827', color: 'white', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, cursor: loading ? 'default' : 'pointer', fontSize: 14 }}>
+            {loading ? 'Loading…' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       {err && <div style={{ background: '#fef2f2', color: '#991b1b', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>{err}</div>}
+      {syncMsg && <div style={{ background: '#eff6ff', color: '#1e40af', border: '1px solid #bfdbfe', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>{syncMsg}</div>}
 
       {data && !data.has_feed && (
         <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: '#92400e' }}>

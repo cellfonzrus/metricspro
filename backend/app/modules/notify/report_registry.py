@@ -354,6 +354,37 @@ async def _phantom(org_id, f):
             "filename": f"phantom-{period.replace(' ', '-')}", "sheets": sheets}
 
 
+async def _sales_recon(org_id, f):
+    from app.modules.commcalc import sales_recon as SR
+    period = _resolve_period(f)
+    data = SR.run_sales_recon(period)
+    s = data["summary"]
+    leaks = [r for r in data["rows"] if r["bucket"] in ("missing_in_monthly", "amount_mismatch")]
+    sheets = [
+        {"name": "Leaks & Mismatches", "rows": leaks, "columns": [
+            {"header": "Bucket", "key": "bucket"},
+            {"header": "Trans ID", "key": "trans_id"},
+            {"header": "Store", "key": "store"},
+            {"header": "Rep", "key": "salesperson"},
+            DATE("Date", "trans_date"),
+            {"header": "Monthly", "key": "monthly_total", "money": True},
+            {"header": "Daily", "key": "daily_total", "money": True},
+            {"header": "Delta", "key": "delta", "money": True},
+        ]},
+        {"name": "By Store", "rows": data["by_store"], "columns": [
+            {"header": "Store", "key": "store"},
+            {"header": "Missing in Monthly", "key": "missing_in_monthly", "align": "right"},
+            {"header": "Amount Mismatch", "key": "amount_mismatch", "align": "right"},
+            {"header": "Missing in Daily", "key": "missing_in_daily", "align": "right"},
+            {"header": "Net Delta", "key": "delta_total", "money": True},
+        ]},
+    ]
+    return {"title": "Sales Feed Recon",
+            "subtitle": f"{period} — {s['missing_in_monthly']} leak(s) (${s['missing_in_monthly_total']:,.2f}) · "
+                        f"{s['amount_mismatch']} mismatch(es)",
+            "filename": f"sales-recon-{period.replace(' ', '-')}", "sheets": sheets}
+
+
 async def _top_sellers(org_id, f):
     period = _resolve_period(f)
     data = await C.get_top_sellers(period=period, limit=int(f.get("limit") or 25), org_id=org_id)
@@ -530,6 +561,10 @@ REPORTS = {
     "phantom": {
         "label": "Phantom Payments", "filters": ["period"],
         "live_path": lambda f: "/commcalc/discrepancy", "build": _phantom},
+    "sales_recon": {
+        "label": "Sales Feed Recon", "filters": ["period"],
+        "live_path": lambda f: "/commcalc/sales-recon" + _qs(f, ["period"]),
+        "build": _sales_recon},
     "top_sellers": {
         "label": "Top Sellers", "filters": ["period", "limit"],
         "live_path": lambda f: "/commcalc/kpi", "build": _top_sellers},
