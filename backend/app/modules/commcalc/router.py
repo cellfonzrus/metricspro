@@ -51,6 +51,29 @@ def _month_year(period: str):
     pm = parse_period(s)
     return pm.get("month", 0), pm.get("year", 0)
 
+def _pvariants(period):
+    """All known spellings of a month-period so a query matches data stored as EITHER 'June 2026' or
+    '2026-06' (spelling-agnostic — the recurring period-mismatch class of bug). Returns the original
+    plus both canonical forms, deduped; falls back to [period] if it can't be parsed as a month-period
+    (so non-month values pass through unchanged). Use `.in_('period', _pvariants(period))` in place of
+    `.in_('period', _pvariants(period))`. Safe for both reads (superset match) and same-month delete-then-insert."""
+    p = str(period or "").strip()
+    # STRICT parse (don't lean on parse_period — it leniently maps unknown input to January). Only a
+    # clearly-valid month-period is expanded; anything else passes through unchanged → behaves exactly
+    # like the old .eq (and never 500s on empty/malformed input).
+    if len(p) >= 7 and p[:4].isdigit() and p[4] == "-" and p[5:7].isdigit():
+        mo, yr = int(p[5:7]), int(p[:4])
+    else:
+        parts = p.split()
+        names = {m.lower(): i for i, m in enumerate(_calendar.month_name) if m}
+        if len(parts) == 2 and parts[0].lower() in names and parts[1].isdigit():
+            mo, yr = names[parts[0].lower()], int(parts[1])
+        else:
+            return [p]
+    if not (1 <= mo <= 12 and yr):
+        return [p]
+    return list({p, f"{_calendar.month_name[mo]} {yr}", f"{yr}-{mo:02d}"})
+
 # ── Upload endpoints ─────────────────────────────────────────
 @router.post("/upload/{file_type}")
 async def upload_file(
@@ -297,7 +320,7 @@ async def upload_file(
                     raise HTTPException(500, f"Failed to clear existing daily feed: {e}. Run migration 047.")
         elif has_period and period:
             try:
-                client.schema('commcalc').table(table).delete().eq('org_id', org_id).eq('period', period).execute()
+                client.schema('commcalc').table(table).delete().eq('org_id', org_id).in_('period', _pvariants(period)).execute()
             except Exception as e:
                 raise HTTPException(500, f"Failed to clear existing data: {e}. Run commcalc_master_fix.sql")
         elif not has_period:
@@ -384,7 +407,7 @@ async def upload_history(org_id: str = ORG_ID, period: str = "", limit: int = 10
              .select('id,file_type,period,filename,rows_saved,uploaded_at')
              .eq('org_id', org_id))
         if period:
-            q = q.eq('period', period)
+            q = q.in_('period', _pvariants(period))
         resp = q.order('uploaded_at', desc=True).limit(min(max(limit, 1), 500)).execute()
         return resp.data or []
     except Exception as e:
@@ -574,7 +597,7 @@ def _vip_fetch(client, org_id, period=None, location=None, status=None, cols="*"
     while True:
         q = client.schema('commcalc').table('vip_invoices').select(cols).eq('org_id', org_id)
         if period:
-            q = q.eq('period', period)
+            q = q.in_('period', _pvariants(period))
         if location:
             q = q.eq('location', location)
         if status:
@@ -649,7 +672,7 @@ async def vip_invoices_list(org_id: str = ORG_ID, period: str = "", location: st
         "sub_total,shipping,discount,other_cost,other_deductions,tax,grand_total,period"
     ).eq('org_id', org_id)
     if period:
-        q = q.eq('period', period)
+        q = q.in_('period', _pvariants(period))
     if location:
         q = q.eq('location', location)
     if status:
@@ -1105,7 +1128,7 @@ async def upload_mapped(
     # GUARD: only clear the period once we actually have rows — an empty/misaligned file never wipes.
     if mapped and period:
         try:
-            client.schema("commcalc").table(table).delete().eq("org_id", org_id).eq("period", period).execute()
+            client.schema("commcalc").table(table).delete().eq("org_id", org_id).in_("period", _pvariants(period)).execute()
         except Exception as e:
             raise HTTPException(500, f"Failed to clear existing data for {table}/{period}: {e}")
     saved = 0
@@ -1653,7 +1676,7 @@ def _detect_fraud(client, org_id, period=None):
         "trans_id,trans_date,period,store,salesperson,customer,email,customer_no,mdn,serial_1,contract_type,voided")
         .eq("org_id", org_id))
     if period:
-        q = q.eq("period", period)
+        q = q.in_("period", _pvariants(period))
     rows = q.limit(200000).execute().data or []
     acts = []
     for r in rows:
@@ -1982,7 +2005,7 @@ def accessory_flags(start: str = None, end: str = None, store: str = None, rep: 
     q = client.schema("commcalc").table("raw_sales").select(
         "id,trans_id,trans_date,period,store,salesperson,department,category,product_desc,sku,ext_price,voided").eq("org_id", org_id)
     if period:
-        q = q.eq("period", period)
+        q = q.in_("period", _pvariants(period))
     if start:
         q = q.gte("trans_date", start)
     if end:
@@ -2649,7 +2672,7 @@ async def _run_calculation(period: str, org_id: str):
         
         # Save commissions
         try:
-            client.schema('commcalc').table('rep_commissions').delete().eq('period', period).execute()
+            client.schema('commcalc').table('rep_commissions').delete().in_('period', _pvariants(period)).execute()
             comms = result['commissions']
             for row in comms:
                 row['org_id'] = org_id
@@ -2688,7 +2711,7 @@ async def _run_calculation(period: str, org_id: str):
             except Exception as pe:
                 save_errors.append(f'portout: {pe}')
 
-            client.schema('commcalc').table('flags').delete().eq('period', period).execute()
+            client.schema('commcalc').table('flags').delete().in_('period', _pvariants(period)).execute()
             if flag_list:
                 for row in flag_list:
                     row['org_id'] = org_id
@@ -2699,7 +2722,7 @@ async def _run_calculation(period: str, org_id: str):
 
         # ── Detect potential chargebacks per rep ─────────────────
         try:
-            existing = client.schema('commcalc').table('chargeback_items').select('source,source_ref,deduct').eq('period', period).execute().data or []
+            existing = client.schema('commcalc').table('chargeback_items').select('source,source_ref,deduct').in_('period', _pvariants(period)).execute().data or []
             decided = {(e['source'], e['source_ref']): e['deduct'] for e in existing}
             cb_items = []
             prem_rate = float(cfg.get('premium_flat') or 5)
@@ -2760,7 +2783,7 @@ async def _run_calculation(period: str, org_id: str):
             # preserve manually-assigned chargebacks from the review bucket (recalc only manages
             # the auto-detected ones); otherwise an assigned VIP/fraud chargeback vanishes on recalc.
             (client.schema('commcalc').table('chargeback_items').delete()
-             .eq('period', period).neq('source', 'chargeback_review').execute())
+             .in_('period', _pvariants(period)).neq('source', 'chargeback_review').execute())
             if cb_items:
                 for i in range(0, len(cb_items), 500):
                     client.schema('commcalc').table('chargeback_items').insert(cb_items[i:i+500]).execute()
@@ -2789,10 +2812,10 @@ async def _run_calculation(period: str, org_id: str):
 @router.get("/commissions/{period}")
 async def get_commissions(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.schema('commcalc').table('rep_commissions').select('*').eq('period', period).order('total_payout', desc=True).execute()
+    r = client.schema('commcalc').table('rep_commissions').select('*').in_('period', _pvariants(period)).order('total_payout', desc=True).execute()
     comms = r.data or []
     # Apply chargeback deductions (deduct=true) per rep
-    cb = client.schema('commcalc').table('chargeback_items').select('epay_salesperson,amount,deduct').eq('period', period).execute().data or []
+    cb = client.schema('commcalc').table('chargeback_items').select('epay_salesperson,amount,deduct').in_('period', _pvariants(period)).execute().data or []
     ded_by_rep = {}
     for item in cb:
         if item.get('deduct'):
@@ -2819,20 +2842,20 @@ async def get_dlar_store_kpis(period: str, org_id: str = ORG_ID):
         'location,address,store_code,atu,protect_pct,byod_pct,family_plan_pct,tmr3,'
         'aal_conversion,conversion_rate,total_acts,gross_adds,total_upgrades'
     ).eq('org_id', org_id)
-    q = q.eq('period_month', mo).eq('period_year', yr) if mo and yr else q.eq('period', period)
+    q = q.eq('period_month', mo).eq('period_year', yr) if mo and yr else q.in_('period', _pvariants(period))
     return q.order('location').execute().data or []
 
 
 @router.get("/flags/{period}")
 async def get_flags(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.schema('commcalc').table('flags').select('*').eq('period', period).order('severity').execute()
+    r = client.schema('commcalc').table('flags').select('*').in_('period', _pvariants(period)).order('severity').execute()
     return r.data or []
 
 @router.get("/config/{period}")
 async def get_config(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.schema('commcalc').table('payout_config').select('*').eq('period', period).limit(1).execute()
+    r = client.schema('commcalc').table('payout_config').select('*').in_('period', _pvariants(period)).limit(1).execute()
     if r.data: return r.data[0]
     return {}
 
@@ -2952,15 +2975,15 @@ async def store_unmatched(org_id: str = ORG_ID):
 @router.get("/gp/{period}")
 async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    sales      = client.schema('commcalc').table('raw_sales').select('*').eq('period', period).limit(50000).execute().data or []
-    pay_detail = client.schema('commcalc').table('raw_payment_detail').select('*').eq('period', period).limit(50000).execute().data or []
-    mi_rows    = client.schema('commcalc').table('raw_mi').select('*').eq('period', period).execute().data or []
-    rep_comms  = client.schema('commcalc').table('rep_commissions').select('*').eq('period', period).execute().data or []
-    expenses   = client.schema('commcalc').table('store_expenses').select('*').eq('period', period).execute().data or []
+    sales      = client.schema('commcalc').table('raw_sales').select('*').in_('period', _pvariants(period)).limit(50000).execute().data or []
+    pay_detail = client.schema('commcalc').table('raw_payment_detail').select('*').in_('period', _pvariants(period)).limit(50000).execute().data or []
+    mi_rows    = client.schema('commcalc').table('raw_mi').select('*').in_('period', _pvariants(period)).execute().data or []
+    rep_comms  = client.schema('commcalc').table('rep_commissions').select('*').in_('period', _pvariants(period)).execute().data or []
+    expenses   = client.schema('commcalc').table('store_expenses').select('*').in_('period', _pvariants(period)).execute().data or []
     catalog    = client.schema('commcalc').table('raw_catalog').select('*').execute().data or []
     store_map  = client.schema('commcalc').table('store_mapping').select('*').execute().data or []
     pay_cats   = client.schema('commcalc').table('payment_categories').select('*').execute().data or []
-    comp_rows  = client.schema('commcalc').table('raw_comp_report').select('*').eq('period', period).limit(50000).execute().data or []
+    comp_rows  = client.schema('commcalc').table('raw_comp_report').select('*').in_('period', _pvariants(period)).limit(50000).execute().data or []
     cat_map    = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
     for r in pay_detail:
         pt = str(r.get('payment_type', '') or '').strip()
@@ -2973,7 +2996,7 @@ async def get_gp_report(period: str, view: str = "store", market: str = "", org_
 @router.get("/chargebacks/{period}")
 async def get_chargebacks(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.schema('commcalc').table('chargeback_items').select('*').eq('period', period).order('epay_salesperson').execute()
+    r = client.schema('commcalc').table('chargeback_items').select('*').in_('period', _pvariants(period)).order('epay_salesperson').execute()
     return r.data or []
 
 @router.put("/chargebacks/{item_id}")
@@ -2988,7 +3011,7 @@ async def update_chargeback(item_id: str, body: dict, org_id: str = "00000000-00
 @router.get("/calc-status/{period}")
 async def get_calc_status(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.schema('commcalc').table('calc_status').select('*').eq('period', period).limit(1).execute()
+    r = client.schema('commcalc').table('calc_status').select('*').in_('period', _pvariants(period)).limit(1).execute()
     return r.data[0] if r.data else {'calc_status': 'not_run'}
 
 
@@ -3139,7 +3162,7 @@ async def run_discrepancy_check(payload: dict):
 async def get_discrepancy_results(period: str, org_id: str = ORG_ID):
     """Get all discrepancy results for a period, grouped by store."""
     client = sb()
-    resp = client.schema("commcalc").table("discrepancy_results")        .select("*")        .eq("org_id", org_id)        .eq("period", period)        .order("store")        .order("gap", desc=True)        .execute()
+    resp = client.schema("commcalc").table("discrepancy_results")        .select("*")        .eq("org_id", org_id)        .in_("period", _pvariants(period))        .order("store")        .order("gap", desc=True)        .execute()
     rows = resp.data or []
 
     # Group by store
@@ -3454,7 +3477,7 @@ def _fetch_actuals(client, org_id, period):
 def _byod_pct_default(client, period):
     try:
         r = (client.schema('commcalc').table('payout_config')
-             .select('kpi_byod_target').eq('period', period).limit(1).execute().data) or []
+             .select('kpi_byod_target').in_('period', _pvariants(period)).limit(1).execute().data) or []
         if r and r[0].get('kpi_byod_target') is not None:
             return safe_float(r[0]['kpi_byod_target'])
     except Exception:
@@ -3469,7 +3492,7 @@ async def get_targets(period: str, org_id: str = ORG_ID):
     client = sb()
     pm = parse_period(period)
     rows = (client.schema('commcalc').table('targets')
-            .select('*').eq('org_id', org_id).eq('period', period).execute().data) or []
+            .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
     by_code = {str(r.get('store_code', '')).upper(): r for r in rows}
     byod_def = _byod_pct_default(client, period)
 
@@ -3540,7 +3563,7 @@ async def get_target_calendar(
     byod_def = _byod_pct_default(client, period)
 
     trow = (client.schema('commcalc').table('targets')
-            .select('*').eq('org_id', org_id).eq('period', period)
+            .select('*').eq('org_id', org_id).in_('period', _pvariants(period))
             .eq('store_code', store_code).limit(1).execute().data) or []
     target_row = trow[0] if trow else {}
     # Seed accessories from store monthly_target when no explicit row yet.
@@ -3598,7 +3621,7 @@ async def get_targets_summary(period: str, today: str = "", org_id: str = ORG_ID
     byod_def = _byod_pct_default(client, period)
 
     trows = (client.schema('commcalc').table('targets')
-             .select('*').eq('org_id', org_id).eq('period', period).execute().data) or []
+             .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
     by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
     stores = (client.schema('storeops').table('stores')
               .select('store_code,address,market,monthly_target').execute().data) or []
@@ -3665,15 +3688,15 @@ def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", 
     require_org(org_id)
     client = sb()
     cfg_rows = (client.schema('commcalc').table('payout_config')
-                .select('*').eq('period', period).limit(1).execute().data) or []
+                .select('*').in_('period', _pvariants(period)).limit(1).execute().data) or []
     cfg = cfg_rows[0] if cfg_rows else {}
     kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in ACTION_KPI_DEFS}
     t100 = int(cfg.get('tier_100_min_kpis') or 7)
-    comms = (client.schema('commcalc').table('rep_commissions').select('*').eq('period', period).execute().data) or []
+    comms = (client.schema('commcalc').table('rep_commissions').select('*').in_('period', _pvariants(period)).execute().data) or []
     cb = (client.schema('commcalc').table('chargeback_items')
-          .select('epay_salesperson,amount,deduct').eq('period', period).execute().data) or []
+          .select('epay_salesperson,amount,deduct').in_('period', _pvariants(period)).execute().data) or []
     flags = (client.schema('commcalc').table('flags')
-             .select('epay_salesperson,severity,description,coaching_note').eq('period', period).execute().data) or []
+             .select('epay_salesperson,severity,description,coaching_note').in_('period', _pvariants(period)).execute().data) or []
     stores = (client.schema('storeops').table('stores').select('store_code,address,market').execute().data) or []
     mkt_by = {}
     for s in stores:
@@ -3826,7 +3849,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     month_end = end - _timedelta(days=1)
 
     trows = (client.schema('commcalc').table('targets')
-             .select('*').eq('org_id', org_id).eq('period', period).execute().data) or []
+             .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
     by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
     stores = (client.schema('storeops').table('stores')
               .select('store_code,address,market,monthly_target').execute().data) or []
@@ -3838,7 +3861,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     #    payout forfeited below tier 1.0 = subtotal × (1 − tier)). Empty/graceful if
     #    commissions haven't been run for the period yet.
     cfg_rows = (client.schema('commcalc').table('payout_config')
-                .select('*').eq('period', period).limit(1).execute().data) or []
+                .select('*').in_('period', _pvariants(period)).limit(1).execute().data) or []
     cfg = cfg_rows[0] if cfg_rows else {}
     kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in ACTION_KPI_DEFS}
     t100 = int(cfg.get('tier_100_min_kpis') or 7)
@@ -3846,7 +3869,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     comm_rows = (client.schema('commcalc').table('rep_commissions')
                  .select('storeops_name,epay_salesperson,tier,kpis_met,total_kpis,'
                          'kpi_values,subtotal,total_payout')
-                 .eq('period', period).execute().data) or []
+                 .in_('period', _pvariants(period)).execute().data) or []
     comm_by_rep = {}
     for cr in comm_rows:
         key = (cr.get('storeops_name') or cr.get('epay_salesperson') or '').strip().upper()
@@ -4059,7 +4082,7 @@ async def get_expenses(period: str, org_id: str = ORG_ID):
     until changed — the user reviews and Saves to keep them for this period."""
     client = sb()
     rows = (client.schema('commcalc').table('store_expenses').select('*')
-            .eq('org_id', org_id).eq('period', period).order('store_code').execute().data) or []
+            .eq('org_id', org_id).in_('period', _pvariants(period)).order('store_code').execute().data) or []
     carried_from = None
     if not rows:
         allp = (client.schema('commcalc').table('store_expenses').select('period')
@@ -4081,7 +4104,7 @@ async def put_expenses(period: str, body: dict, org_id: str = ORG_ID):
     rows = body.get('rows') or []
     client = sb()
     client.schema('commcalc').table('store_expenses').delete() \
-        .eq('org_id', org_id).eq('period', period).execute()
+        .eq('org_id', org_id).in_('period', _pvariants(period)).execute()
     ins = []
     for r in rows:
         try:
