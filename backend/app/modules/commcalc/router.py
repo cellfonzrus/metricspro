@@ -721,7 +721,11 @@ def _vip_next_run(frequency, day_of_week, day_of_month, hour, tzname):
         tz = ZoneInfo('America/New_York')
     now = _datetime.now(tz)
     hour = int(hour if hour is not None else 6)
-    if frequency == 'daily':
+    if frequency == 'hourly':
+        # Intra-day feed (e.g. the daily-transaction report pulled every hour for live targets).
+        # `hour` is ignored; the next run is simply the top of the next hour.
+        nxt = now.replace(minute=0, second=0, microsecond=0) + _timedelta(hours=1)
+    elif frequency == 'daily':
         nxt = now.replace(hour=hour, minute=0, second=0, microsecond=0)
         if nxt <= now:
             nxt += _timedelta(days=1)
@@ -4262,5 +4266,140 @@ async def ftp_run_due(x_notify_secret: str = Header(default="")):
         res = await _run_ftp_sweep(oid)
         nxt = _vip_next_run(cfg.get('frequency') or 'daily', None, None, cfg.get('hour'), 'America/New_York')
         client.schema('commcalc').table('ftp_sweep_config').update({'next_run_at': nxt}).eq('org_id', oid).execute()
+        ran.append({"org_id": oid, "result": res})
+    return {"ran": len(ran), "detail": ran}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GENERIC EMAIL (IMAP) SWEEP — sibling of the FTP sweep for vendors that EMAIL reports (mig 049)
+# ═══════════════════════════════════════════════════════════════════════════════
+from app.modules.commcalc import email_sweep as _email
+
+
+def _email_cfg(client, org_id):
+    rows = client.schema('commcalc').table('email_sweep_config').select('*').eq('org_id', org_id).limit(1).execute().data or []
+    return rows[0] if rows else None
+
+
+async def _run_email_sweep(org_id):
+    """Connect to the IMAP mailbox, download every NEW attachment matching a configured pattern, route
+    each through the existing upload pipeline, and record what was processed (dedup by message_id+name)."""
+    from starlette.datastructures import UploadFile as _UF
+    client = sb()
+    cfg = _email_cfg(client, org_id)
+    if not cfg or not (cfg.get('imap_host') or '').strip():
+        return {"ok": False, "error": "Email/IMAP not configured"}
+    seen = client.schema('commcalc').table('email_processed').select('message_id,filename').eq('org_id', org_id).limit(100000).execute().data or []
+    already = {(r.get('message_id'), r.get('filename')) for r in seen}
+    try:
+        files = _email.fetch_new_attachments(cfg, already)
+    except Exception as e:
+        client.schema('commcalc').table('email_sweep_config').update(
+            {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': f"connect error: {e}"}).eq('org_id', org_id).execute()
+        return {"ok": False, "error": str(e)}
+    results = []
+    for f in files:
+        name, size, ut, mid = f['name'], f['size'], f.get('upload_type'), f.get('message_id')
+        period = "" if ut == "daily_sales" else _ftp_current_period()
+        status, detail, rows_saved = "ok", None, 0
+        try:
+            uf = _UF(io.BytesIO(f['bytes']), filename=name)
+            res = await upload_file(ut, uf, period, False, org_id)
+            rows_saved = (res or {}).get('saved', 0)
+        except HTTPException as he:
+            status, detail = "error", str(he.detail)[:300]
+        except Exception as e:
+            status, detail = "error", str(e)[:300]
+        try:
+            client.schema('commcalc').table('email_processed').upsert(
+                {'org_id': org_id, 'message_id': mid, 'filename': name, 'file_size': size, 'upload_type': ut,
+                 'rows_saved': rows_saved, 'status': status, 'detail': detail,
+                 'processed_at': _datetime.now(_timezone.utc).isoformat()},
+                on_conflict='org_id,message_id,filename').execute()
+        except Exception:
+            pass
+        results.append({"file": name, "upload_type": ut, "status": status, "rows_saved": rows_saved, "detail": detail})
+    ok = sum(1 for r in results if r['status'] == 'ok')
+    client.schema('commcalc').table('email_sweep_config').update(
+        {'last_run_at': _datetime.now(_timezone.utc).isoformat(),
+         'last_status': f"{ok}/{len(results)} attachments ingested"}).eq('org_id', org_id).execute()
+    return {"ok": True, "ingested": ok, "files": results}
+
+
+@router.get("/email-sweep/config")
+def get_email_config(org_id: str = ORG_ID):
+    """Config WITHOUT the password (presence only)."""
+    require_org(org_id)
+    cfg = _email_cfg(sb(), org_id) or {"org_id": org_id, "patterns": [], "imap_port": 993, "use_ssl": True, "mailbox": "INBOX"}
+    cfg = dict(cfg)
+    cfg['has_password'] = bool(cfg.pop('password', None))
+    return cfg
+
+
+@router.put("/email-sweep/config")
+def put_email_config(body: dict, org_id: str = ORG_ID):
+    """Save config. Password only updated when a non-empty value is supplied (so it isn't wiped)."""
+    require_org(org_id)
+    row = {"org_id": org_id, "imap_host": (body.get("imap_host") or "").strip() or None,
+           "imap_port": int(body.get("imap_port") or 993), "username": (body.get("username") or "").strip() or None,
+           "use_ssl": body.get("use_ssl", True) is not False, "mailbox": (body.get("mailbox") or "INBOX").strip(),
+           "from_filter": (body.get("from_filter") or "").strip() or None,
+           "since_days": int(body.get("since_days") or 14),
+           "patterns": body.get("patterns") or [], "enabled": bool(body.get("enabled")),
+           "frequency": body.get("frequency") or "daily", "hour": int(body.get("hour") or 7),
+           "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    if (body.get("password") or "").strip():
+        row["password"] = body["password"]
+    if body.get("enabled"):
+        row["next_run_at"] = _vip_next_run(row["frequency"], None, None, row["hour"], "America/New_York")
+    sb().schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id").execute()
+    return {"ok": True}
+
+
+@router.post("/email-sweep/test")
+def test_email(body: dict, org_id: str = ORG_ID):
+    """Connect to the mailbox (merging any unsaved overrides) and list recent messages + their
+    attachments and which match a pattern. Used by the 'Test connection' button before saving creds."""
+    require_org(org_id)
+    cfg = dict(_email_cfg(sb(), org_id) or {})
+    for k in ("imap_host", "imap_port", "username", "password", "use_ssl", "mailbox", "from_filter", "since_days", "patterns"):
+        if k in body and body[k] not in (None, ""):
+            cfg[k] = body[k]
+    try:
+        msgs = _email.list_messages(cfg)
+    except Exception as e:
+        raise HTTPException(400, f"connection failed: {e}")
+    matched = sum(1 for m in msgs for a in m.get("attachments", []) if a.get("matches"))
+    return {"messages": msgs, "count": len(msgs), "matched_attachments": matched}
+
+
+@router.post("/email-sweep/run-now")
+async def email_run_now(org_id: str = ORG_ID):
+    require_org(org_id)
+    return await _run_email_sweep(org_id)
+
+
+@router.get("/email-sweep/processed")
+def email_processed(org_id: str = ORG_ID, limit: int = 100):
+    require_org(org_id)
+    return (sb().schema("commcalc").table("email_processed").select("*").eq("org_id", org_id)
+            .order("processed_at", desc=True).limit(limit).execute().data) or []
+
+
+@router.post("/email-sweep/run-due")
+async def email_run_due(x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint — run the email sweep if enabled + due, then advance next_run_at."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    client = sb()
+    now_iso = _datetime.now(_timezone.utc).isoformat()
+    due = (client.schema('commcalc').table('email_sweep_config').select('*')
+           .eq('enabled', True).lte('next_run_at', now_iso).execute().data) or []
+    ran = []
+    for cfg in due:
+        oid = cfg.get('org_id') or ORG_ID
+        res = await _run_email_sweep(oid)
+        nxt = _vip_next_run(cfg.get('frequency') or 'daily', None, None, cfg.get('hour'), 'America/New_York')
+        client.schema('commcalc').table('email_sweep_config').update({'next_run_at': nxt}).eq('org_id', oid).execute()
         ran.append({"org_id": oid, "result": res})
     return {"ran": len(ran), "detail": ran}

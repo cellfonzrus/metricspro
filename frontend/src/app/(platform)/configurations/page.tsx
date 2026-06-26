@@ -30,6 +30,8 @@ const GROUPS: Group[] = [
     desc: 'Vendor portals, sweep schedules and credentials.',
     items: [
       { href: '/commcalc/connectors', icon: '🔌', label: 'Connectors', desc: 'Vendor portal registry, sweep status, credentials, run-now.' },
+      { href: '/commcalc/ftp-imports', icon: '🔁', label: 'FTP Auto-Import', desc: 'Pull report files a vendor (B2B Soft, etc.) FTP-pushes; route each filename to its parser.' },
+      { href: '/commcalc/email-imports', icon: '📧', label: 'Email Auto-Import', desc: 'Poll a mailbox a vendor emails reports to; route each attachment to its parser. Alternative to FTP.' },
       { href: '/commcalc/upload', icon: '📁', label: 'Auto-Imports & Uploads', desc: 'Per-source schedules, last-loaded status, manual uploads.' },
       { href: '/commcalc/upload/wizard', icon: '🧭', label: 'Upload Wizard', desc: 'Guided per-report upload (exact report name + source link).' },
       { href: '/closing/imports', icon: '🔄', label: 'Closing Auto-Import', desc: 'Google Sheet closing import — sheet id, tab, schedule, service account.' },
