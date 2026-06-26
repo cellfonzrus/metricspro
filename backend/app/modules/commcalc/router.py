@@ -354,7 +354,22 @@ async def upload_file(
         except Exception as e:
             print(f'WARN fraud scan after sales upload failed (run 036?): {e}')
 
-    return {"saved": saved, "file_type": file_type, "period": period, "fraud": fraud}
+    # After a DAILY feed upload (manual daily_sales OR the FTP sweep, which reuses this endpoint), refresh
+    # the sales-feed recon FLAGS for each period the feed touched, so leaks/mismatches surface on the Flags
+    # + Sales Feed Recon pages automatically (closes the THEME 5 loop). Sync only — designated-notify stays
+    # manual/scheduled to avoid daily spam. Best-effort: a recon failure must never break the upload.
+    recon = None
+    if file_type == 'daily_sales' and mapped:
+        recon = {'flagged': 0, 'periods': []}
+        for p in sorted({m.get('period') for m in mapped if m.get('period')}):
+            try:
+                rr = sales_recon.sync_recon_flags(p)
+                recon['flagged'] += rr.get('flagged', 0)
+                recon['periods'].append(p)
+            except Exception as e:
+                print(f'WARN sales-recon flag sync after daily upload failed (run 047?): {e}')
+
+    return {"saved": saved, "file_type": file_type, "period": period, "fraud": fraud, "recon": recon}
 
 
 @router.get("/upload/history")
