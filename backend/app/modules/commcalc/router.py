@@ -74,6 +74,37 @@ def _pvariants(period):
         return [p]
     return list({p, f"{_calendar.month_name[mo]} {yr}", f"{yr}-{mo:02d}"})
 
+def _flatten_grouped_sales(df):
+    """Flatten a B2B Soft GROUPED 'Sales Transaction Details (Legacy)' export. In the grouped layout
+    Store and Trans ID are GROUP-HEADER rows — the first column reads 'Store: <addr>' / 'Trans ID:
+    <id>' instead of being columns — and each transaction is followed by a numeric SUBTOTAL row
+    (empty first column). We fill Store + Trans ID DOWN onto every detail line and drop the header +
+    subtotal rows, yielding the flat shape the mapper expects (Store + Trans ID columns present).
+
+    NO-OP on an already-flat file (the standard 78-col export, or any frame with no 'Store:'/'Trans ID:'
+    header rows) — it's returned unchanged, so the existing upload path has zero regression. The Legacy
+    export still omits Contract Type + Department; those stay inferred/empty downstream as before."""
+    if df is None or df.empty:
+        return df
+    first_col = df.columns[0]
+    col0 = df[first_col].astype(str)
+    if not col0.str.startswith("Store:").any() and not col0.str.startswith("Trans ID:").any():
+        return df  # already flat — leave untouched
+    cur_store, cur_tid, rows = None, None, []
+    for rec in df.to_dict("records"):
+        c0 = str(rec.get(first_col, "")).strip()
+        if c0.startswith("Store:"):
+            cur_store = c0[len("Store:"):].strip(); continue
+        if c0.startswith("Trans ID:"):
+            cur_tid = c0[len("Trans ID:"):].strip(); continue
+        if not c0:
+            continue  # per-transaction subtotal / blank row (no timestamp)
+        rec["Store"] = cur_store or rec.get("Store", "")
+        rec["Trans ID"] = cur_tid or rec.get("Trans ID", "")
+        rows.append(rec)
+    return pd.DataFrame(rows) if rows else df
+
+
 # ── Upload endpoints ─────────────────────────────────────────
 @router.post("/upload/{file_type}")
 async def upload_file(
@@ -95,12 +126,23 @@ async def upload_file(
         raise HTTPException(400, f"Unknown file type: {file_type}. Supported: {SUPPORTED}")
     
     contents = await file.read()
+    fname = (getattr(file, "filename", "") or "").lower()
     try:
-        df = pd.read_excel(io.BytesIO(contents), dtype=str)
+        if fname.endswith((".csv", ".txt")):
+            df = pd.read_csv(io.BytesIO(contents), dtype=str)
+        else:
+            df = pd.read_excel(io.BytesIO(contents), dtype=str)
     except Exception as e:
-        raise HTTPException(400, f"Could not read Excel file: {e}")
-    
+        raise HTTPException(400, f"Could not read file ({fname or 'upload'}): {e}")
+
     df = df.fillna('')
+
+    # B2B Soft can only schedule the GROUPED 'Sales Transaction Details (Legacy)' export — Store and
+    # Trans ID come as group-header rows, not columns. Flatten so each detail line carries its Store +
+    # Trans ID (no-op on already-flat files). Lets the emailed/swept Legacy file ingest without a
+    # manual flatten. See email_sweep / ftp_sweep routing.
+    if file_type in ("sales", "daily_sales"):
+        df = _flatten_grouped_sales(df)
 
     # ── Validate file matches the expected slot ──────────────────
     SIGNATURES = {
