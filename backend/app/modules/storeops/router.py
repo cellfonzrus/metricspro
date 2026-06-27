@@ -723,3 +723,195 @@ def payroll_raw(start: str, end: str, org_id: str = ORG_ID):
                                  "skipped": bool(s.get("skipped"))}})
     out.sort(key=lambda r: r["name"] or "")
     return {"start": start, "end": end, "rows": out}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# ORG HIERARCHY (migration 050) — a configurable tree of org units with user-defined levels.
+# Stores/employees attach via org_unit_id; a manager assigned to a node sees that node's subtree.
+# Span resolution returns store_codes that drop into the existing per-store rollups. RLS is open_all,
+# so this is DEFAULT-SCOPING (not a security boundary) until the Phase 5 backend enforcement lands.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+def _span_codes(rows) -> list:
+    """Dedup + clean store_codes returned by the span/subtree RPCs."""
+    return sorted({(r.get("store_code") or "").strip() for r in (rows or [])
+                   if (r.get("store_code") or "").strip()})
+
+
+def _caller_span_codes(authorization: str, org_id: str = ORG_ID) -> list:
+    """store_codes the SIGNED-IN manager may see (the union of their assigned subtrees). Empty list =
+    no manager assignment (the caller defaults to seeing nothing in the team views). Admins bypass
+    this upstream (they pick a unit explicitly)."""
+    eid = _caller_employee_id(authorization)
+    rows = sb().rpc("org_span_for_manager", {"p_org_id": org_id, "p_employee_id": eid}).execute().data
+    return _span_codes(rows)
+
+
+def _unit_store_codes(org_id: str, unit_id: str) -> list:
+    """store_codes under a chosen unit's subtree (for a manager/admin who picks a node)."""
+    rows = sb().rpc("org_store_codes_for_unit", {"p_org_id": org_id, "p_unit_id": unit_id}).execute().data
+    return _span_codes(rows)
+
+
+@router.get("/org/tree")
+def org_tree(org_id: str = ORG_ID):
+    """Full org tree for the admin page: levels + units (with parent/level/store_count/managers) +
+    the stores not yet placed in any unit."""
+    levels = sb().table("org_levels").select("*").order("rank").execute().data or []
+    units  = sb().table("org_units").select("*").order("sort_order").execute().data or []
+    mgrs   = sb().table("org_managers").select("*").execute().data or []
+    stores = sb().table("stores").select("store_code,address,market,org_unit_id").execute().data or []
+    emps   = sb().table("employees").select("employee_id,name").execute().data or []
+    name_by = {e.get("employee_id"): e.get("name") for e in emps if e.get("employee_id")}
+    store_cnt, mgr_by = {}, {}
+    for s in stores:
+        u = s.get("org_unit_id")
+        if u:
+            store_cnt[u] = store_cnt.get(u, 0) + 1
+    for m in mgrs:
+        mgr_by.setdefault(m.get("unit_id"), []).append(
+            {"employee_id": m.get("employee_id"), "name": name_by.get(m.get("employee_id"), m.get("employee_id"))})
+    for u in units:
+        u["store_count"] = store_cnt.get(u["id"], 0)
+        u["managers"] = mgr_by.get(u["id"], [])
+    unassigned = sorted([s for s in stores if not s.get("org_unit_id")],
+                        key=lambda s: (s.get("market") or "", s.get("address") or ""))
+    return {"levels": levels, "units": units, "unassigned_stores": unassigned}
+
+
+@router.post("/org/seed")
+def org_seed(org_id: str = ORG_ID):
+    """(Re)build Company -> Market -> stores from storeops.stores. Idempotent; manual placements survive."""
+    res = sb().rpc("seed_org_from_stores", {}).execute()
+    return {"ok": True, "result": getattr(res, "data", None)}
+
+
+# ── levels ───────────────────────────────────────────────────────────────────────────────────────
+@router.get("/org/levels")
+def org_levels_list(org_id: str = ORG_ID):
+    return sb().table("org_levels").select("*").order("rank").execute().data or []
+
+
+@router.post("/org/levels")
+def org_level_create(body: dict, org_id: str = ORG_ID):
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "Level name required.")
+    rank = body.get("rank")
+    if rank is None:
+        top = sb().table("org_levels").select("rank").order("rank", desc=True).limit(1).execute().data or []
+        rank = (top[0]["rank"] + 1) if top else 0
+    row = {"org_id": org_id, "name": name, "rank": int(rank)}
+    r = sb().table("org_levels").insert(row).execute()
+    return r.data[0] if r.data else row
+
+
+@router.put("/org/levels/{level_id}")
+def org_level_update(level_id: int, body: dict, org_id: str = ORG_ID):
+    upd = {}
+    if "name" in body:
+        upd["name"] = (body.get("name") or "").strip()
+    if "rank" in body:
+        upd["rank"] = int(body.get("rank"))
+    if upd:
+        sb().table("org_levels").update(upd).eq("id", level_id).execute()
+    return {"ok": True}
+
+
+@router.delete("/org/levels/{level_id}")
+def org_level_delete(level_id: int, org_id: str = ORG_ID):
+    used = sb().table("org_units").select("id").eq("level_id", level_id).limit(1).execute().data or []
+    if used:
+        raise HTTPException(409, "This level is in use by one or more units — reassign them first.")
+    sb().table("org_levels").delete().eq("id", level_id).execute()
+    return {"ok": True}
+
+
+# ── units ────────────────────────────────────────────────────────────────────────────────────────
+@router.post("/org/units")
+def org_unit_create(body: dict, org_id: str = ORG_ID):
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "Unit name required.")
+    row = {"org_id": org_id, "name": name, "parent_id": body.get("parent_id"),
+           "level_id": body.get("level_id"), "sort_order": body.get("sort_order") or 0}
+    r = sb().table("org_units").insert(row).execute()
+    return r.data[0] if r.data else row
+
+
+@router.put("/org/units/{unit_id}")
+def org_unit_update(unit_id: str, body: dict, org_id: str = ORG_ID):
+    """Rename / re-level / reorder / MOVE (set parent_id). Guards against cycles (can't move a unit
+    under itself or a descendant)."""
+    upd = {}
+    for k in ("name", "parent_id", "level_id", "sort_order", "is_active"):
+        if k in body:
+            upd[k] = body.get(k)
+    if "name" in upd:
+        upd["name"] = (upd["name"] or "").strip()
+    new_parent = upd.get("parent_id")
+    if new_parent:
+        if new_parent == unit_id:
+            raise HTTPException(400, "A unit can't be its own parent.")
+        sub = sb().rpc("org_subtree", {"p_org_id": org_id, "p_unit_id": unit_id}).execute().data or []
+        if any(n.get("id") == new_parent for n in sub):
+            raise HTTPException(400, "Can't move a unit under its own descendant.")
+    upd["updated_at"] = datetime.now(timezone.utc).isoformat()
+    sb().table("org_units").update(upd).eq("id", unit_id).execute()
+    return {"ok": True}
+
+
+@router.delete("/org/units/{unit_id}")
+def org_unit_delete(unit_id: str, org_id: str = ORG_ID):
+    """Delete a unit + its descendants (cascade). Stores/employees in the subtree are detached
+    (org_unit_id -> NULL) FIRST so they become 'unassigned' rather than violating the FK."""
+    sub = sb().rpc("org_subtree", {"p_org_id": org_id, "p_unit_id": unit_id}).execute().data or []
+    ids = [n["id"] for n in sub if n.get("id")]
+    if ids:
+        sb().table("stores").update({"org_unit_id": None}).in_("org_unit_id", ids).execute()
+        sb().table("employees").update({"org_unit_id": None}).in_("org_unit_id", ids).execute()
+    sb().table("org_units").delete().eq("id", unit_id).execute()
+    return {"ok": True}
+
+
+# ── managers ───────────────────────────────────────────────────────────────────────────────────
+@router.post("/org/units/{unit_id}/managers")
+def org_unit_add_manager(unit_id: str, body: dict, org_id: str = ORG_ID):
+    eid = (body.get("employee_id") or "").strip()
+    if not eid:
+        raise HTTPException(400, "employee_id required.")
+    existing = (sb().table("org_managers").select("id").eq("unit_id", unit_id)
+                .eq("employee_id", eid).limit(1).execute().data) or []
+    if existing:
+        return existing[0]
+    row = {"org_id": org_id, "unit_id": unit_id, "employee_id": eid}
+    r = sb().table("org_managers").insert(row).execute()
+    return r.data[0] if r.data else row
+
+
+@router.delete("/org/units/{unit_id}/managers/{employee_id}")
+def org_unit_remove_manager(unit_id: str, employee_id: str, org_id: str = ORG_ID):
+    sb().table("org_managers").delete().eq("unit_id", unit_id).eq("employee_id", employee_id).execute()
+    return {"ok": True}
+
+
+# ── attach a store to a unit (or unassign with unit_id=null) ─────────────────────────────────────
+@router.put("/org/stores/{store_code}/unit")
+def org_assign_store(store_code: str, body: dict, org_id: str = ORG_ID):
+    sb().table("stores").update({"org_unit_id": body.get("unit_id")}).eq("store_code", store_code).execute()
+    return {"ok": True}
+
+
+# ── the signed-in caller's span (powers the portal "My Team" tab + default frontend scoping) ──────
+@router.get("/org/my-span")
+def org_my_span(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    try:
+        eid = _caller_employee_id(authorization)
+    except HTTPException:
+        return {"store_codes": [], "units": [], "is_manager": False}
+    rows = sb().rpc("org_span_for_manager", {"p_org_id": org_id, "p_employee_id": eid}).execute().data
+    codes = _span_codes(rows)
+    mrows = sb().table("org_managers").select("unit_id").eq("employee_id", eid).execute().data or []
+    uids = [m["unit_id"] for m in mrows if m.get("unit_id")]
+    units = (sb().table("org_units").select("id,name,level_id").in_("id", uids).execute().data or []) if uids else []
+    return {"employee_id": eid, "store_codes": codes, "units": units, "is_manager": bool(codes)}

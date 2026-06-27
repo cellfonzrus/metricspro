@@ -3835,6 +3835,62 @@ def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", 
     return {"period": period, "reps": reps, "summary": summary}
 
 
+def _team_totals(stores):
+    """Sum the additive per-category target fields across a set of stores for the team headline."""
+    cats = {}
+    for s in stores:
+        for cat, c in (s.get('categories') or {}).items():
+            t = cats.setdefault(cat, {'unit': c.get('unit'), 'monthly': 0.0, 'achieved_mtd': 0.0,
+                                      'need': 0.0, 'today_target': 0.0})
+            t['monthly']      += safe_float(c.get('monthly'))
+            t['achieved_mtd'] += safe_float(c.get('achieved_mtd'))
+            t['need']         += safe_float(c.get('need'))
+            t['today_target'] += safe_float(c.get('today_target'))
+    for t in cats.values():
+        for k in ('monthly', 'achieved_mtd', 'need', 'today_target'):
+            t[k] = round(t[k], 2)
+        t['pct'] = round(100 * t['achieved_mtd'] / t['monthly'], 1) if t['monthly'] > 0 else 0.0
+    return cats
+
+
+@router.get("/team/{period}/snapshot")
+async def team_snapshot(period: str, authorization: str = Header(default=""),
+                        unit_id: str = "", today: str = "", org_id: str = ORG_ID):
+    """Manager TEAM snapshot for the signed-in caller's span (or a chosen unit_id within it).
+    Reuses get_targets_summary (per-store today/pace/need/achieved) + rep_coaching (per-rep
+    money-at-risk/KPIs/chargebacks), filtered to the span's store_codes. Per-rep drill-down uses the
+    existing GET /core/employee-dashboard. Default-scoped (no hard refusal yet — Phase 5 enforces)."""
+    from app.modules.storeops.router import _caller_span_codes, _unit_store_codes
+    if unit_id:
+        codes = _unit_store_codes(org_id, unit_id)
+    else:
+        try:
+            codes = _caller_span_codes(authorization, org_id)
+        except HTTPException:
+            codes = []
+    codes_set = {c.strip().upper() for c in codes}
+    if not codes_set:
+        return {"period": period, "is_manager": False, "span_store_codes": [],
+                "stores": [], "reps": [], "totals": {}, "money_on_table": 0.0}
+    # store_code <-> address keys so coaching reps (whose 'store' may be an address) still match.
+    stores_meta = sb().schema('storeops').table('stores').select('store_code,address').execute().data or []
+    keys = set(codes_set)
+    for s in stores_meta:
+        sc = str(s.get('store_code') or '').strip().upper()
+        if sc in codes_set:
+            ad = str(s.get('address') or '').strip().upper()
+            if ad:
+                keys.add(ad)
+    summ = await get_targets_summary(period, today=today, org_id=org_id)
+    in_span = [s for s in summ.get('stores', []) if str(s.get('store_code') or '').strip().upper() in codes_set]
+    coach = rep_coaching(period, org_id=org_id)
+    team_reps = [r for r in coach.get('reps', []) if str(r.get('store') or '').strip().upper() in keys]
+    return {"period": period, "today": summ.get('today'), "is_manager": True,
+            "span_store_codes": sorted(codes_set), "stores": in_span, "reps": team_reps,
+            "totals": _team_totals(in_span),
+            "money_on_table": round(sum(safe_float(r.get('money_on_table')) for r in team_reps), 2)}
+
+
 @router.get("/exec-overview/{period}")
 def exec_overview(period: str, org_id: str = ORG_ID):
     """Owner/exec single-pane: headline tiles + a store leaderboard, rolled up from the per-rep

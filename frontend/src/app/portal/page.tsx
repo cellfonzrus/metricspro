@@ -3,6 +3,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { api, ORG_ID, localToday, supabase } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import EmployeeWidgets from '@/components/EmployeeWidgets'
+import ClosingSubmitForm from '@/components/ClosingSubmitForm'
+import TeamSnapshot from '@/components/TeamSnapshot'
 
 // Employee kiosk (Part B / B4 + B2): mobile-first, standalone (no platform chrome). Now GUARDED by a
 // real login — an employee signs in with their email + password, so a punch is locked to the
@@ -44,6 +46,10 @@ export default function PortalPage() {
   const [dash, setDash] = useState<any>(null)
   const [coach, setCoach] = useState<any>(null)
   const [repTargets, setRepTargets] = useState<any>(null)
+
+  // tabs + manager span (the "My Team" tab only shows if this employee manages an org unit)
+  const [tab, setTab] = useState<'dashboard' | 'closing' | 'team'>('dashboard')
+  const [span, setSpan] = useState<any>(null)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -104,6 +110,12 @@ export default function PortalPage() {
           .then(setRepTargets).catch(() => {})
       }).catch(() => setDash(null))
   }, [empId])
+
+  // is this employee a manager? (drives the "My Team" tab)
+  useEffect(() => {
+    if (!empId || !token) { setSpan(null); return }
+    authed('/api/v1/storeops/org/my-span').then(setSpan).catch(() => setSpan(null))
+  }, [empId, token, authed])
 
   // ── camera helpers ──────────────────────────────────────────────────────────────────────────
   async function openCamera() {
@@ -322,10 +334,32 @@ export default function PortalPage() {
         </div>
       </div>
 
-      {dash
+      {/* tabs */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        <TabBtn k="dashboard" label="📊 My Dashboard" tab={tab} setTab={setTab} />
+        <TabBtn k="closing" label="🧾 Daily Closing" tab={tab} setTab={setTab} />
+        {span?.is_manager && <TabBtn k="team" label="🫂 My Team" tab={tab} setTab={setTab} />}
+      </div>
+
+      {tab === 'dashboard' && (dash
         ? <EmployeeWidgets data={dash} coach={coach} repTargets={repTargets} />
-        : <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><div className="spinner" /></div>}
+        : <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><div className="spinner" /></div>)}
+
+      {tab === 'closing' && <ClosingSubmitForm defaultEmployeeName={empName || dash?.employee?.name} />}
+
+      {tab === 'team' && <TeamSnapshot period={dash?.period || ''} token={token || undefined} />}
     </div>
+  )
+}
+
+function TabBtn({ k, label, tab, setTab }:
+  { k: 'dashboard' | 'closing' | 'team'; label: string; tab: string; setTab: (t: any) => void }) {
+  const active = tab === k
+  return (
+    <button onClick={() => setTab(k)} style={{
+      padding: '9px 14px', borderRadius: 9, border: '1px solid var(--border)', cursor: 'pointer',
+      fontSize: 14, fontWeight: 600, background: active ? '#1E3A5F' : 'var(--surface)',
+      color: active ? '#fff' : 'var(--text2)' }}>{label}</button>
   )
 }
 

@@ -71,6 +71,7 @@ export const NAV: NavGroup[] = [
     { href: '/storeops/visits', label: 'Store Visits', icon: '📝', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/visits/settings', label: 'Visit Checklist', icon: '🧾', module: 'storeops', scopes: ['all'] },
     { href: '/storeops/employees', label: 'Employees', icon: '👥', module: 'storeops', scopes: ['all', 'market'] },
+    { href: '/storeops/team', label: 'My Team', icon: '🫂', module: 'storeops', scopes: ['all', 'market', 'store'] },
     { href: '/storeops/timeoff', label: 'Time Off', icon: '🌴', module: 'storeops' },
     { href: '/storeops/swaps', label: 'Shift Swaps', icon: '🔄', module: 'storeops' },
     { href: '/storeops/timeclock', label: 'Time Clock', icon: '⏱️', module: 'storeops', scopes: ['all', 'market'] },
@@ -94,6 +95,7 @@ export const NAV: NavGroup[] = [
   { group: 'Configurations', module: 'admin', items: [
     { href: '/configurations', label: 'All Settings', icon: '⚙️', module: 'admin' },
     { href: '/admin/roles', label: 'Roles & Access', icon: '🔐', module: 'admin' },
+    { href: '/admin/org', label: 'Org Structure', icon: '🌳', module: 'admin' },
   ]},
 ]
 
