@@ -1821,7 +1821,7 @@ def _flag_rules(client, org_id):
             return rows[0]
     except Exception:
         pass
-    return {"accessory_threshold": 35, "accessory_chargeback_amount": 0}
+    return {"accessory_threshold": 35, "accessory_chargeback_amount": 0, "accessory_min_threshold": 0}
 
 
 def _load_item_map(client, org_id):
@@ -1848,10 +1848,12 @@ def put_flag_rules(body: dict, org_id: str = ORG_ID):
         row["accessory_threshold"] = safe_float(body.get("accessory_threshold"))
     if body.get("accessory_chargeback_amount") is not None:
         row["accessory_chargeback_amount"] = safe_float(body.get("accessory_chargeback_amount"))
+    if body.get("accessory_min_threshold") is not None:
+        row["accessory_min_threshold"] = safe_float(body.get("accessory_min_threshold"))
     try:
         sb().schema("commcalc").table("flag_rules").upsert(row, on_conflict="id").execute()
     except Exception as e:
-        raise HTTPException(500, f"save failed — run migration 041 first: {e}")
+        raise HTTPException(500, f"save failed — run migrations 041 + 051 first: {e}")
     return _flag_rules(sb(), org_id)
 
 
@@ -2041,7 +2043,8 @@ def seed_item_mapping_from_catalog(org_id: str = ORG_ID):
 
 @router.get("/accessory-flags")
 def accessory_flags(start: str = None, end: str = None, store: str = None, rep: str = None,
-                    period: str = None, threshold: float = None, org_id: str = ORG_ID):
+                    period: str = None, threshold: float = None, min_threshold: float = None,
+                    org_id: str = ORG_ID):
     """Accessory sales priced ABOVE the threshold, over a date range / store / rep.
     The threshold defaults to the saved flag_rules value but can be OVERRIDDEN per request via the
     `threshold` query param (the page applies a user-defined value on Load without persisting it; the
@@ -2053,6 +2056,7 @@ def accessory_flags(start: str = None, end: str = None, store: str = None, rep: 
     client = sb()
     rules = _flag_rules(client, org_id)
     threshold = safe_float(threshold) if threshold is not None else safe_float(rules.get("accessory_threshold"))
+    min_t = safe_float(min_threshold) if min_threshold is not None else safe_float(rules.get("accessory_min_threshold"))
     default_cb = safe_float(rules.get("accessory_chargeback_amount"))
 
     q = client.schema("commcalc").table("raw_sales").select(
@@ -2122,8 +2126,13 @@ def accessory_flags(start: str = None, end: str = None, store: str = None, rep: 
         if not _is_acc(m, r):
             continue
         price = safe_float(r.get("ext_price"))
-        if price <= threshold:
+        # Flag accessories priced ABOVE the max threshold OR sold BELOW the allowed minimum (underselling).
+        # min_t <= 0 disables the under-min check (default), so behavior is unchanged until a min is set.
+        over = price > threshold
+        under = min_t > 0 and price < min_t
+        if not (over or under):
             continue
+        reason = "over" if over else "under"
         tid = str(r.get("trans_id") or "")
         phone_model = trans_phone.get(tid) or ((m or {}).get("device_model") or "").strip() or None
         dk = f"acc:{tid}:{key}"
@@ -2132,37 +2141,50 @@ def accessory_flags(start: str = None, end: str = None, store: str = None, rep: 
             "period": r.get("period"), "store": r.get("store"), "rep": r.get("salesperson"),
             "department": r.get("department"), "category": r.get("category"),
             "item_desc": r.get("product_desc"), "sku": r.get("sku"),
-            "ext_price": round(price, 2), "phone_model": phone_model,
+            "ext_price": round(price, 2), "phone_model": phone_model, "flag_reason": reason,
             "chargeback_amount": default_cb, "dedupe_key": dk, "already_flagged": dk in flagged,
         })
     out.sort(key=lambda x: (x["store"] or "", x["rep"] or "", -(x["ext_price"] or 0)))
 
-    # Per-rep + per-store rollup for the dashboard header (distinct transactions + $ totals).
-    def _rollup(rows, key):
+    # Rollups for the dashboard: "number of flags" = flagged line items; "$ amount" = ext_price total.
+    # keyfn yields the grouping key (a single field, or a (store, rep) tuple for the cross breakdown).
+    def _rollup(rows, keyfn, extra=None):
         agg = {}
         for x in rows:
-            k = x.get(key) or "—"
-            a = agg.setdefault(k, {"name": k, "txns": set(), "items": 0, "total": 0.0, "chargeback_total": 0.0, "flagged": 0})
+            k = keyfn(x)
+            a = agg.setdefault(k, {"txns": set(), "flags": 0, "total": 0.0, "chargeback_total": 0.0,
+                                   "already": 0, "over": 0, "under": 0})
             a["txns"].add(x["trans_id"])
-            a["items"] += 1
-            a["total"] += x["ext_price"] or 0
+            a["flags"] += 1                      # number of flagged accessory sales
+            a["total"] += x["ext_price"] or 0    # $ the accessories rung out in those flags
             a["chargeback_total"] += x["chargeback_amount"] or 0
+            a[x.get("flag_reason") or "over"] += 1
             if x["already_flagged"]:
-                a["flagged"] += 1
-        res = [{"name": a["name"], "txns": len(a["txns"]), "items": a["items"],
-                "total": round(a["total"], 2), "chargeback_total": round(a["chargeback_total"], 2),
-                "flagged": a["flagged"]} for a in agg.values()]
+                a["already"] += 1
+        res = []
+        for k, a in agg.items():
+            row = {"txns": len(a["txns"]), "flags": a["flags"], "items": a["flags"],
+                   "total": round(a["total"], 2), "chargeback_total": round(a["chargeback_total"], 2),
+                   "flagged": a["already"], "over": a["over"], "under": a["under"]}
+            row.update(extra(k) if extra else {"name": k})
+            res.append(row)
         res.sort(key=lambda r: -r["total"])
         return res
 
     summary = {
-        "txns": len({x["trans_id"] for x in out}), "items": len(out),
+        "txns": len({x["trans_id"] for x in out}), "items": len(out), "flags": len(out),
         "total": round(sum(x["ext_price"] or 0 for x in out), 2),
         "chargeback_total": round(sum(x["chargeback_amount"] or 0 for x in out), 2),
+        "over": sum(1 for x in out if x.get("flag_reason") != "under"),
+        "under": sum(1 for x in out if x.get("flag_reason") == "under"),
     }
-    return {"rows": out, "threshold": threshold, "default_chargeback": default_cb,
+    return {"rows": out, "threshold": threshold, "min_threshold": min_t, "default_chargeback": default_cb,
             "total": len(out), "flagged_qty": sum(1 for x in out if x["already_flagged"]),
-            "summary": summary, "by_rep": _rollup(out, "rep"), "by_store": _rollup(out, "store")}
+            "summary": summary,
+            "by_rep": _rollup(out, lambda x: x.get("rep") or "—"),
+            "by_store": _rollup(out, lambda x: x.get("store") or "—"),
+            "by_store_rep": _rollup(out, lambda x: ((x.get("store") or "—"), (x.get("rep") or "—")),
+                                    extra=lambda k: {"store": k[0], "rep": k[1]})}
 
 
 @router.get("/accessory-flags/receipt")

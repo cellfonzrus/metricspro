@@ -10,10 +10,11 @@ type Row = {
   sale_id: string; trans_id: string; trans_date: string | null; period: string | null
   store: string | null; rep: string | null; department: string | null; category: string | null
   item_desc: string | null; sku: string | null; ext_price: number; phone_model: string | null
-  chargeback_amount: number; dedupe_key: string; already_flagged: boolean
+  chargeback_amount: number; dedupe_key: string; already_flagged: boolean; flag_reason?: 'over' | 'under'
 }
-type Agg = { name: string; txns: number; items: number; total: number; chargeback_total: number; flagged: number }
-type Summary = { txns: number; items: number; total: number; chargeback_total: number }
+type Agg = { name: string; txns: number; items: number; flags: number; total: number; chargeback_total: number; flagged: number; over: number; under: number }
+type StoreRepAgg = { store: string; rep: string; txns: number; flags: number; items: number; total: number; chargeback_total: number; over: number; under: number }
+type Summary = { txns: number; items: number; flags: number; total: number; chargeback_total: number; over: number; under: number }
 type ReceiptLine = {
   product_desc: string | null; sku: string | null; item_type: string | null; department: string | null
   category: string | null; contract_type: string | null; ext_price: number; gp: number
@@ -37,9 +38,11 @@ export default function AccessoryFlagsPage() {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [byRep, setByRep] = useState<Agg[]>([])
   const [byStore, setByStore] = useState<Agg[]>([])
+  const [byStoreRep, setByStoreRep] = useState<StoreRepAgg[]>([])
   const [amts, setAmts] = useState<Record<string, number>>({})
   const [picked, setPicked] = useState<Record<string, boolean>>({})
   const [threshold, setThreshold] = useState(35)
+  const [minThreshold, setMinThreshold] = useState(0)
   const [defaultCb, setDefaultCb] = useState(0)
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState('')
@@ -49,6 +52,7 @@ export default function AccessoryFlagsPage() {
   const loadRules = useCallback(() => {
     api('/api/v1/commcalc/flag-rules').then((r: any) => {
       setThreshold(Number(r.accessory_threshold ?? 35)); setDefaultCb(Number(r.accessory_chargeback_amount ?? 0))
+      setMinThreshold(Number(r.accessory_min_threshold ?? 0))
     }).catch(() => {})
   }, [])
   useEffect(() => { loadRules() }, [loadRules])
@@ -57,8 +61,8 @@ export default function AccessoryFlagsPage() {
     setMsg('')
     try {
       await api('/api/v1/commcalc/flag-rules', { method: 'PUT', body: JSON.stringify({
-        accessory_threshold: threshold, accessory_chargeback_amount: defaultCb }) })
-      setMsg('Saved as the default threshold.')
+        accessory_threshold: threshold, accessory_min_threshold: minThreshold, accessory_chargeback_amount: defaultCb }) })
+      setMsg('Saved as the default thresholds.')
     } catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) }
   }
 
@@ -68,18 +72,21 @@ export default function AccessoryFlagsPage() {
       const qs = new URLSearchParams()
       if (start) qs.set('start', start)
       if (end) qs.set('end', end)
-      if (threshold || threshold === 0) qs.set('threshold', String(threshold))  // apply the user-defined value now
+      if (threshold || threshold === 0) qs.set('threshold', String(threshold))     // apply the user-defined max now
+      if (minThreshold) qs.set('min_threshold', String(minThreshold))              // 0 = under-min check off
       const r = await api(`/api/v1/commcalc/accessory-flags?${qs.toString()}`)
       const rws: Row[] = r.rows || []
       setRows(rws)
-      setSummary(r.summary || null); setByRep(r.by_rep || []); setByStore(r.by_store || [])
+      setSummary(r.summary || null); setByRep(r.by_rep || []); setByStore(r.by_store || []); setByStoreRep(r.by_store_rep || [])
       setThreshold(Number(r.threshold ?? threshold)); setDefaultCb(Number(r.default_chargeback ?? defaultCb))
+      setMinThreshold(Number(r.min_threshold ?? minThreshold))
       setAmts(Object.fromEntries(rws.map(x => [x.dedupe_key, x.chargeback_amount])))
       setPicked({})
-      setMsg(`${rws.length} accessory sale(s) over ${money(r.threshold)}${r.flagged_qty ? ` · ${r.flagged_qty} already flagged` : ''}.`)
+      const um = r.summary?.under ? ` (${r.summary.under} under ${money(r.min_threshold)})` : ''
+      setMsg(`${rws.length} flagged accessory sale(s)${um}${r.flagged_qty ? ` · ${r.flagged_qty} already pushed` : ''}.`)
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
     setLoading(false)
-  }, [start, end, threshold, defaultCb])
+  }, [start, end, threshold, minThreshold, defaultCb])
 
   async function openReceipt(trans_id: string) {
     setReceiptBusy(true); setReceipt(null)
@@ -118,17 +125,18 @@ export default function AccessoryFlagsPage() {
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔖 Accessory Flags</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Accessories sold over your threshold, by store + rep + date range. Click any row to see the full receipt; flag rows to push a chargeback to the rep who sold it.
+          Accessories sold <b>over</b> the max threshold or <b>under</b> the allowed minimum (underselling), by store + rep + date range. Click any row for the full receipt; flag rows to push a chargeback to the rep who sold it.
         </p>
       </div>
 
       {/* Dashboard summary */}
       {summary && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-          <Tile label="Flagged transactions" value={String(summary.txns)} sub={`${summary.items} line item(s)`} />
-          <Tile label="Total sold $" value={money(summary.total)} sub="over threshold" />
+          <Tile label="Flags" value={String(summary.flags)} sub={`${summary.txns} transaction(s)`} />
+          <Tile label="Over max" value={String(summary.over)} sub={`> ${money(threshold)}`} />
+          <Tile label="Under min" value={String(summary.under)} sub={minThreshold > 0 ? `< ${money(minThreshold)}` : 'min off'} />
+          <Tile label="Total rung $" value={money(summary.total)} sub="in flagged sales" />
           <Tile label="Chargeback exposure" value={money(summary.chargeback_total)} sub="at default amounts" />
-          <Tile label="Threshold applied" value={money(threshold)} sub={`${start} → ${end}`} />
         </div>
       )}
       {(byStore.length > 0 || byRep.length > 0) && (
@@ -137,16 +145,19 @@ export default function AccessoryFlagsPage() {
           <AggCard title="By rep" rows={byRep} onPick={(n) => setRepF(n === repF ? '' : n)} active={repF} />
         </div>
       )}
+      {byStoreRep.length > 0 && <StoreRepCard rows={byStoreRep} onPick={(s, r) => { setStoreF(s === storeF ? '' : s); setRepF(r === repF ? '' : r) }} activeStore={storeF} activeRep={repF} />}
 
       {/* Rules / threshold */}
       <div className="card" style={{ padding: 14, marginBottom: 14, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Flag accessories over ($)<br />
-          <input type="number" style={{ ...sel, width: 110, marginTop: 4 }} value={threshold} onChange={e => setThreshold(Number(e.target.value))} /></label>
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Flag over ($)<br />
+          <input type="number" style={{ ...sel, width: 100, marginTop: 4 }} value={threshold} onChange={e => setThreshold(Number(e.target.value))} /></label>
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Flag under ($)<br />
+          <input type="number" style={{ ...sel, width: 100, marginTop: 4 }} value={minThreshold} onChange={e => setMinThreshold(Number(e.target.value))} placeholder="0 = off" /></label>
         <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Default chargeback ($)<br />
           <input type="number" style={{ ...sel, width: 130, marginTop: 4 }} value={defaultCb} onChange={e => setDefaultCb(Number(e.target.value))} /></label>
         <button className="btn btn-primary" onClick={load} disabled={loading}>{loading ? '…' : '🔍 Apply & load'}</button>
         <button className="btn" onClick={saveRules}>💾 Save as default</button>
-        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Type any value and <b>Apply &amp; load</b> to use it now; <b>Save as default</b> persists it. Override the chargeback per row below.</span>
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Flags accessories sold <b>over</b> the max <i>or</i> <b>under</b> the min (underselling; set 0 to disable). <b>Apply &amp; load</b> uses the typed values now; <b>Save as default</b> persists them.</span>
       </div>
 
       {/* Filters */}
@@ -173,7 +184,7 @@ export default function AccessoryFlagsPage() {
       <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1000 }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>
-            {['', 'Date', 'Store', 'Rep', 'Item', 'SKU', 'Dept / Cat', 'Phone model', 'Sold $', 'Chargeback $', 'Receipt'].map(h =>
+            {['', 'Date', 'Store', 'Rep', 'Item', 'SKU', 'Dept / Cat', 'Phone model', 'Sold $', 'Reason', 'Chargeback $', 'Receipt'].map(h =>
               <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>)}
           </tr></thead>
           <tbody>
@@ -190,6 +201,12 @@ export default function AccessoryFlagsPage() {
                 <td style={{ ...cell, fontSize: 11, color: 'var(--text3)' }}>{[r.department, r.category].filter(Boolean).join(' / ') || '—'}</td>
                 <td style={cell}>{r.phone_model || <span style={{ color: 'var(--text3)' }}>—</span>}</td>
                 <td style={{ ...cell, fontWeight: 600 }}>{money(r.ext_price)}</td>
+                <td style={cell}>
+                  <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 7px', borderRadius: 10,
+                    background: r.flag_reason === 'under' ? '#fef3c7' : '#fee2e2',
+                    color: r.flag_reason === 'under' ? '#92400e' : '#b42318' }}>
+                    {r.flag_reason === 'under' ? '▼ under' : '▲ over'}</span>
+                </td>
                 <td style={cell}><input type="number" style={{ ...sel, width: 100 }} value={amts[r.dedupe_key] ?? r.chargeback_amount}
                   onChange={e => setAmts(a => ({ ...a, [r.dedupe_key]: Number(e.target.value) }))} /></td>
                 <td style={cell}>
@@ -198,7 +215,7 @@ export default function AccessoryFlagsPage() {
                 </td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><td colSpan={11} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>{loading ? 'Loading…' : 'No accessory sales over the threshold for this range. Click Load.'}</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={12} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>{loading ? 'Loading…' : 'No flagged accessory sales for this range. Click Load.'}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -228,18 +245,52 @@ function AggCard({ title, rows, onPick, active }: { title: string; rows: Agg[]; 
       <div style={{ maxHeight: 240, overflowY: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>
-            {['Name', 'Txns', 'Items', 'Total $'].map(h => <th key={h} style={{ textAlign: h === 'Name' ? 'left' : 'right', padding: '6px 10px', fontSize: 11, color: 'var(--text2)', fontWeight: 600 }}>{h}</th>)}
+            {['Name', 'Flags', 'Total $'].map(h => <th key={h} style={{ textAlign: h === 'Name' ? 'left' : 'right', padding: '6px 10px', fontSize: 11, color: 'var(--text2)', fontWeight: 600 }}>{h}</th>)}
           </tr></thead>
           <tbody>
             {rows.map(a => (
               <tr key={a.name} onClick={() => onPick(a.name)} style={{ cursor: 'pointer', background: active === a.name ? 'var(--surface2)' : undefined }}>
                 <td style={{ ...cell, whiteSpace: 'normal' }}>{a.name}</td>
-                <td style={{ ...cell, textAlign: 'right' }}>{a.txns}</td>
-                <td style={{ ...cell, textAlign: 'right' }}>{a.items}</td>
+                <td style={{ ...cell, textAlign: 'right' }}>{a.flags}{a.under ? <span style={{ color: '#92400e', fontSize: 11 }}> ({a.under}▼)</span> : ''}</td>
                 <td style={{ ...cell, textAlign: 'right', fontWeight: 600 }}>{money(a.total)}</td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={4} style={{ padding: 16, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>No data</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={3} style={{ padding: 16, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>No data</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function StoreRepCard({ rows, onPick, activeStore, activeRep }:
+  { rows: StoreRepAgg[]; onPick: (store: string, rep: string) => void; activeStore: string; activeRep: string }) {
+  return (
+    <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 14 }}>
+      <div style={{ padding: '10px 12px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+        By store · per employee <span style={{ fontWeight: 400, color: 'var(--text3)' }}>— flags &amp; $ rung out per rep</span>
+      </div>
+      <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr style={{ background: 'var(--surface2)' }}>
+            {['Store', 'Employee', 'Flags', 'Over', 'Under', 'Txns', 'Total $'].map(h =>
+              <th key={h} style={{ textAlign: h === 'Store' || h === 'Employee' ? 'left' : 'right', padding: '6px 10px', fontSize: 11, color: 'var(--text2)', fontWeight: 600 }}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {rows.map((a, i) => {
+              const on = activeStore === a.store && activeRep === a.rep
+              return (
+                <tr key={i} onClick={() => onPick(a.store, a.rep)} style={{ cursor: 'pointer', background: on ? 'var(--surface2)' : undefined }}>
+                  <td style={{ ...cell, whiteSpace: 'normal' }}>{a.store}</td>
+                  <td style={{ ...cell, whiteSpace: 'normal' }}>{a.rep}</td>
+                  <td style={{ ...cell, textAlign: 'right', fontWeight: 600 }}>{a.flags}</td>
+                  <td style={{ ...cell, textAlign: 'right', color: '#b42318' }}>{a.over || ''}</td>
+                  <td style={{ ...cell, textAlign: 'right', color: '#92400e' }}>{a.under || ''}</td>
+                  <td style={{ ...cell, textAlign: 'right' }}>{a.txns}</td>
+                  <td style={{ ...cell, textAlign: 'right', fontWeight: 600 }}>{money(a.total)}</td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
