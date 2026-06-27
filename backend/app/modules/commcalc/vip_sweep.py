@@ -382,7 +382,7 @@ def list_paygo_payments(session, endpoint, page_size=100):
         r = session.post(f"{BASE}{endpoint}",
                          data={"take": page_size, "skip": skip, "page": page, "pageSize": page_size},
                          headers={"X-Requested-With": "XMLHttpRequest",
-                                  "Referer": f"{BASE}/account/paygo/payments/dashboard"}, timeout=40)
+                                  "Referer": f"{BASE}/account/paygo/payments/dashboard"}, timeout=120)
         r.raise_for_status()
         j = r.json()
         if isinstance(j, dict) and j.get("Errors"):
@@ -546,7 +546,7 @@ def list_credit_memos(session, page_size=200):
         r = session.post(f"{BASE}/CreditMemo/CreditMemoListList",
                          data={"take": page_size, "skip": skip, "page": page, "pageSize": page_size},
                          headers={"X-Requested-With": "XMLHttpRequest",
-                                  "Referer": f"{BASE}/CreditMemo"}, timeout=40)
+                                  "Referer": f"{BASE}/CreditMemo"}, timeout=120)
         r.raise_for_status()
         j = r.json()
         if isinstance(j, dict) and j.get("Errors"):
