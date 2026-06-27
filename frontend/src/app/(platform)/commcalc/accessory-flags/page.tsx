@@ -34,6 +34,7 @@ export default function AccessoryFlagsPage() {
   const [end, setEnd] = useState(today())
   const [storeF, setStoreF] = useState('')
   const [repF, setRepF] = useState('')
+  const [reasonF, setReasonF] = useState<'' | 'over' | 'under'>('')
   const [rows, setRows] = useState<Row[]>([])
   const [summary, setSummary] = useState<Summary | null>(null)
   const [byRep, setByRep] = useState<Agg[]>([])
@@ -97,7 +98,7 @@ export default function AccessoryFlagsPage() {
 
   const stores = Array.from(new Set(rows.map(r => r.store || '').filter(Boolean))).sort()
   const reps = Array.from(new Set(rows.map(r => r.rep || '').filter(Boolean))).sort()
-  const filtered = rows.filter(r => (!storeF || r.store === storeF) && (!repF || r.rep === repF))
+  const filtered = rows.filter(r => (!storeF || r.store === storeF) && (!repF || r.rep === repF) && (!reasonF || r.flag_reason === reasonF))
   const pickedRows = filtered.filter(r => picked[r.dedupe_key])
 
   function toggleAll(v: boolean) {
@@ -155,14 +156,14 @@ export default function AccessoryFlagsPage() {
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>Flags accessories sold <b>over</b> the max <i>or</i> <b>under</b> the min (underselling; set 0 to disable). <b>Apply &amp; load</b> uses the typed values now; <b>Save as default</b> persists them.</span>
       </div>
 
-      {/* Dashboard summary */}
+      {/* Dashboard summary — tiles drill the table down */}
       {summary && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-          <Tile label="Flags" value={String(summary.flags)} sub={`${summary.txns} transaction(s)`} />
-          <Tile label="Over max" value={String(summary.over)} sub={`> ${money(threshold)}`} />
-          <Tile label="Under min" value={String(summary.under)} sub={minThreshold > 0 ? `< ${money(minThreshold)}` : 'min off'} />
-          <Tile label="Total rung $" value={money(summary.total)} sub="in flagged sales" />
-          <Tile label="Chargeback exposure" value={money(summary.chargeback_total)} sub="at default amounts" />
+          <Tile label="Flags" value={String(summary.flags)} sub={`${summary.txns} transaction(s)`} onClick={() => setReasonF('')} active={reasonF === ''} />
+          <Tile label="Over max" value={String(summary.over)} sub={`> ${money(threshold)}`} onClick={() => setReasonF(reasonF === 'over' ? '' : 'over')} active={reasonF === 'over'} />
+          <Tile label="Under min" value={String(summary.under)} sub={minThreshold > 0 ? `< ${money(minThreshold)}` : 'min off'} onClick={() => setReasonF(reasonF === 'under' ? '' : 'under')} active={reasonF === 'under'} />
+          <Tile label="Total rung $" value={money(summary.total)} sub="in flagged sales" onClick={() => setReasonF('')} active={false} />
+          <Tile label="Chargeback exposure" value={money(summary.chargeback_total)} sub="at default amounts" onClick={() => setReasonF('')} active={false} />
         </div>
       )}
       {(byStore.length > 0 || byRep.length > 0) && (
@@ -227,10 +228,12 @@ export default function AccessoryFlagsPage() {
   )
 }
 
-function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function Tile({ label, value, sub, onClick, active }: { label: string; value: string; sub?: string; onClick?: () => void; active?: boolean }) {
   return (
-    <div className="card" style={{ flex: '1 1 170px', minWidth: 150, padding: 14 }}>
-      <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{label}</div>
+    <div className="card" onClick={onClick} style={{ flex: '1 1 170px', minWidth: 150, padding: 14,
+      cursor: onClick ? 'pointer' : 'default', border: active ? '2px solid #1E3A5F' : undefined,
+      outline: active ? 'none' : undefined }}>
+      <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{label}{active ? ' •' : ''}</div>
       <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
     </div>
