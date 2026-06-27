@@ -2953,10 +2953,10 @@ async def _run_calculation(period: str, org_id: str):
 @router.get("/commissions/{period}")
 async def get_commissions(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.schema('commcalc').table('rep_commissions').select('*').in_('period', _pvariants(period)).order('total_payout', desc=True).execute()
+    r = client.schema('commcalc').table('rep_commissions').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).order('total_payout', desc=True).execute()
     comms = r.data or []
     # Apply chargeback deductions (deduct=true) per rep
-    cb = client.schema('commcalc').table('chargeback_items').select('epay_salesperson,amount,deduct').in_('period', _pvariants(period)).execute().data or []
+    cb = client.schema('commcalc').table('chargeback_items').select('epay_salesperson,amount,deduct').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data or []
     ded_by_rep = {}
     for item in cb:
         if item.get('deduct'):
@@ -2990,13 +2990,13 @@ async def get_dlar_store_kpis(period: str, org_id: str = ORG_ID):
 @router.get("/flags/{period}")
 async def get_flags(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.schema('commcalc').table('flags').select('*').in_('period', _pvariants(period)).order('severity').execute()
+    r = client.schema('commcalc').table('flags').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).order('severity').execute()
     return r.data or []
 
 @router.get("/config/{period}")
 async def get_config(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.schema('commcalc').table('payout_config').select('*').in_('period', _pvariants(period)).limit(1).execute()
+    r = client.schema('commcalc').table('payout_config').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute()
     if r.data: return r.data[0]
     return {}
 
@@ -3010,7 +3010,7 @@ async def save_config(period: str, config: dict, org_id: str = "00000000-0000-00
 @router.get("/stores")
 async def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.schema('commcalc').table('store_mapping').select('*').order('store_address').execute()
+    r = client.schema('commcalc').table('store_mapping').select('*').eq('org_id', org_id).order('store_address').execute()
     return r.data or []
 
 @router.put("/stores/{store_id}")
@@ -3116,15 +3116,15 @@ async def store_unmatched(org_id: str = ORG_ID):
 @router.get("/gp/{period}")
 async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    sales      = client.schema('commcalc').table('raw_sales').select('*').in_('period', _pvariants(period)).limit(50000).execute().data or []
-    pay_detail = client.schema('commcalc').table('raw_payment_detail').select('*').in_('period', _pvariants(period)).limit(50000).execute().data or []
-    mi_rows    = client.schema('commcalc').table('raw_mi').select('*').in_('period', _pvariants(period)).execute().data or []
-    rep_comms  = client.schema('commcalc').table('rep_commissions').select('*').in_('period', _pvariants(period)).execute().data or []
-    expenses   = client.schema('commcalc').table('store_expenses').select('*').in_('period', _pvariants(period)).execute().data or []
-    catalog    = client.schema('commcalc').table('raw_catalog').select('*').execute().data or []
-    store_map  = client.schema('commcalc').table('store_mapping').select('*').execute().data or []
-    pay_cats   = client.schema('commcalc').table('payment_categories').select('*').execute().data or []
-    comp_rows  = client.schema('commcalc').table('raw_comp_report').select('*').in_('period', _pvariants(period)).limit(50000).execute().data or []
+    sales      = client.schema('commcalc').table('raw_sales').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(50000).execute().data or []
+    pay_detail = client.schema('commcalc').table('raw_payment_detail').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(50000).execute().data or []
+    mi_rows    = client.schema('commcalc').table('raw_mi').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data or []
+    rep_comms  = client.schema('commcalc').table('rep_commissions').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data or []
+    expenses   = client.schema('commcalc').table('store_expenses').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data or []
+    catalog    = client.schema('commcalc').table('raw_catalog').select('*').eq('org_id', org_id).execute().data or []
+    store_map  = client.schema('commcalc').table('store_mapping').select('*').eq('org_id', org_id).execute().data or []
+    pay_cats   = client.schema('commcalc').table('payment_categories').select('*').eq('org_id', org_id).execute().data or []
+    comp_rows  = client.schema('commcalc').table('raw_comp_report').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(50000).execute().data or []
     cat_map    = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
     for r in pay_detail:
         pt = str(r.get('payment_type', '') or '').strip()
@@ -3137,7 +3137,7 @@ async def get_gp_report(period: str, view: str = "store", market: str = "", org_
 @router.get("/chargebacks/{period}")
 async def get_chargebacks(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.schema('commcalc').table('chargeback_items').select('*').in_('period', _pvariants(period)).order('epay_salesperson').execute()
+    r = client.schema('commcalc').table('chargeback_items').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).order('epay_salesperson').execute()
     return r.data or []
 
 @router.put("/chargebacks/{item_id}")
@@ -3847,16 +3847,16 @@ def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", 
     require_org(org_id)
     client = sb()
     cfg_rows = (client.schema('commcalc').table('payout_config')
-                .select('*').in_('period', _pvariants(period)).limit(1).execute().data) or []
+                .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute().data) or []
     cfg = cfg_rows[0] if cfg_rows else {}
     kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in ACTION_KPI_DEFS}
     t100 = int(cfg.get('tier_100_min_kpis') or 7)
-    comms = (client.schema('commcalc').table('rep_commissions').select('*').in_('period', _pvariants(period)).execute().data) or []
+    comms = (client.schema('commcalc').table('rep_commissions').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
     cb = (client.schema('commcalc').table('chargeback_items')
-          .select('epay_salesperson,amount,deduct').in_('period', _pvariants(period)).execute().data) or []
+          .select('epay_salesperson,amount,deduct').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
     flags = (client.schema('commcalc').table('flags')
-             .select('epay_salesperson,severity,description,coaching_note').in_('period', _pvariants(period)).execute().data) or []
-    stores = (client.schema('storeops').table('stores').select('store_code,address,market').execute().data) or []
+             .select('epay_salesperson,severity,description,coaching_note').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
+    stores = (client.schema('storeops').table('stores').select('store_code,address,market').eq('org_id', org_id).execute().data) or []
     mkt_by = {}
     for s in stores:
         for key in (s.get('store_code'), s.get('address')):
@@ -4092,7 +4092,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     comm_rows = (client.schema('commcalc').table('rep_commissions')
                  .select('storeops_name,epay_salesperson,tier,kpis_met,total_kpis,'
                          'kpi_values,subtotal,total_payout')
-                 .in_('period', _pvariants(period)).execute().data) or []
+                 .eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
     comm_by_rep = {}
     for cr in comm_rows:
         key = (cr.get('storeops_name') or cr.get('epay_salesperson') or '').strip().upper()
@@ -4245,7 +4245,7 @@ async def get_rep_aliases(org_id: str = ORG_ID):
         pass
     try:
         for r in (client.schema('commcalc').table('raw_dlar_rep').select('rep_name')
-                  .limit(50000).execute().data or []):
+                  .eq('org_id', org_id).limit(50000).execute().data or []):
             n = (r.get('rep_name') or '').strip()
             if n:
                 names.add(n)
