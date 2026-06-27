@@ -786,6 +786,67 @@ def org_seed(org_id: str = ORG_ID):
     return {"ok": True, "result": getattr(res, "data", None)}
 
 
+# Standard corporate ladder + departments — the one-click scaffold.
+_STD_LEVELS = ["Executive", "Director", "Regional Manager", "District Manager", "Store Manager", "Sales Consultant"]
+_STD_DEPTS = ["Finance", "Human Resources", "Marketing", "IT", "Inventory", "Operations", "Sales"]
+
+
+@router.post("/org/build-standard")
+def org_build_standard(org_id: str = ORG_ID):
+    """⚠️ REPLACES the org structure with a standard corporate org: Company (Executive) → departments
+    (Director) → from existing markets/stores under Sales: Region (Regional Manager) → District
+    (District Manager) → Store (Store Manager); sales consultants are the employees under each store
+    (via home_store). The user then just assigns the people (CEO/COO/CFO on Company, Directors on
+    departments, etc.). Wipes the current units/levels/manager-assignments first (store + employee
+    placements are detached, not deleted)."""
+    c = sb()
+    # 1. detach stores + employees from any unit (avoid FK violations on the wipe)
+    unit_ids = [u["id"] for u in (c.table("org_units").select("id").eq("org_id", org_id).execute().data or [])]
+    if unit_ids:
+        for i in range(0, len(unit_ids), 100):
+            chunk = unit_ids[i:i + 100]
+            c.table("stores").update({"org_unit_id": None}).in_("org_unit_id", chunk).execute()
+            c.table("employees").update({"org_unit_id": None}).in_("org_unit_id", chunk).execute()
+    # 2. wipe units (cascades managers + children) then levels
+    c.table("org_units").delete().eq("org_id", org_id).execute()
+    c.table("org_levels").delete().eq("org_id", org_id).execute()
+
+    # 3. the 6-level corporate ladder
+    lvl = {}
+    for rank, name in enumerate(_STD_LEVELS):
+        r = c.table("org_levels").insert({"org_id": org_id, "name": name, "rank": rank}).execute()
+        lvl[name] = r.data[0]["id"]
+
+    def mk(name, level, parent_id, code=None):
+        r = c.table("org_units").insert({"org_id": org_id, "name": name, "level_id": lvl[level],
+                                         "parent_id": parent_id, "code": code}).execute()
+        return r.data[0]["id"]
+
+    # 4. Company (Executive) + departments (Director)
+    root = mk("Company", "Executive", None, "__ROOT__")
+    dept = {d: mk(d, "Director", root, f"dept:{d.lower()}") for d in _STD_DEPTS}
+
+    # 5. retail line under Sales, from the existing markets/stores
+    sales = dept["Sales"]
+    stores = c.table("stores").select("store_code,address,market").execute().data or []
+    district_by_market = {}
+    placed = 0
+    for s in stores:
+        code = (s.get("store_code") or "").strip()
+        if not code:
+            continue
+        mkt = (s.get("market") or "").strip() or "Unassigned"
+        if mkt not in district_by_market:
+            reg = mk(f"{mkt} Region", "Regional Manager", sales, f"region:{mkt.lower()}")
+            district_by_market[mkt] = mk(f"{mkt} District", "District Manager", reg, f"district:{mkt.lower()}")
+        store_node = mk(s.get("address") or code, "Store Manager", district_by_market[mkt])
+        c.table("stores").update({"org_unit_id": store_node}).eq("store_code", code).execute()
+        placed += 1
+
+    return {"ok": True, "levels": _STD_LEVELS, "departments": _STD_DEPTS,
+            "markets": len(district_by_market), "stores_placed": placed}
+
+
 # ── levels ───────────────────────────────────────────────────────────────────────────────────────
 @router.get("/org/levels")
 def org_levels_list(org_id: str = ORG_ID):

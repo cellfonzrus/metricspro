@@ -78,6 +78,10 @@ export default function OrgStructurePage() {
     if (!confirm('Rebuild Company → Market → Stores from your stores list?\nManual placements you already made are kept.')) return
     run(() => api('/api/v1/storeops/org/seed', { method: 'POST', body: '{}' }))
   }
+  const buildStandard = () => {
+    if (!confirm('Build a STANDARD corporate org?\n\nCompany (Executive) → departments (Director): Finance, HR, Marketing, IT, Inventory, Operations, Sales → under Sales, from your markets/stores: Region (Regional Manager) → District (District Manager) → Store (Store Manager); sales consultants are the employees under each store.\n\n⚠️ This REPLACES the current structure (levels, units, manager assignments). Then you just assign the people to each node.')) return
+    run(() => api('/api/v1/storeops/org/build-standard', { method: 'POST', body: '{}' }))
+  }
   const addChild = (parent: Unit | null) => {
     const name = prompt(parent ? `New unit under "${parent.name}":` : 'New top-level unit name:')
     if (!name?.trim()) return
@@ -182,9 +186,10 @@ export default function OrgStructurePage() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🌳 Org Structure</h1>
         <span style={{ flex: 1 }} />
+        <button className="btn btn-primary" disabled={busy} onClick={buildStandard}>🏛️ Build standard org</button>
         <button className="btn" disabled={busy} onClick={() => setShowLevels(s => !s)}>Manage levels</button>
         <button className="btn" disabled={busy} onClick={() => addChild(null)}>+ Top-level unit</button>
-        <button className="btn btn-primary" disabled={busy} onClick={seed}>Seed from stores</button>
+        <button className="btn" disabled={busy} onClick={seed}>Seed from stores (markets only)</button>
       </div>
       <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
         A configurable tree of org units. Assign a manager to any node and they see every store + rep in that
@@ -197,7 +202,7 @@ export default function OrgStructurePage() {
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {roots.length === 0
-          ? <div style={{ padding: 20, color: 'var(--text3)' }}>No units yet. Click <b>Seed from stores</b> to build Company → Market → Stores from your store list, then customize.</div>
+          ? <div style={{ padding: 20, color: 'var(--text3)' }}>No units yet. Click <b>🏛️ Build standard org</b> for a ready-made CEO → Directors (Finance/HR/Marketing/IT/Inventory/Operations/Sales) → Regional → District → Store → Sales Consultant structure, then assign your people. (Or <b>Seed from stores</b> for just Company → Market → Stores.)</div>
           : roots.map(r => renderNode(r, 0))}
       </div>
 
