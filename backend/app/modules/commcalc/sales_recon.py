@@ -171,6 +171,48 @@ def run_sales_recon(period: str):
     }
 
 
+def transaction_detail(period: str, trans_id: str):
+    """Line-item drill-down for ONE transaction: every raw_sales (monthly) line vs every
+    daily_sales_feed line for that trans_id, so you can see exactly WHAT differs (a missing line, a
+    price change, a void). Powers the Sales Feed Recon row click-through."""
+    client = get_supabase()
+    plabel = _period_label(period)
+    cols = ("trans_id,trans_date,store,salesperson,product_desc,department,category,"
+            "ext_price,gp,mdn,serial_1,voided,contract_type,tender_type")
+
+    def fetch(table):
+        rows = (client.schema("commcalc").table(table).select(cols)
+                .eq("org_id", ORG_ID).eq("period", plabel).eq("trans_id", str(trans_id))
+                .limit(2000).execute().data) or []
+        lines, total = [], 0.0
+        for r in rows:
+            voided = _is_void(r.get("voided"))
+            try:
+                amt = float(r.get("ext_price") or 0)
+            except Exception:
+                amt = 0.0
+            if not voided:
+                total += amt
+            lines.append({
+                "product_desc": r.get("product_desc"), "department": r.get("department"),
+                "category": r.get("category"), "contract_type": r.get("contract_type"),
+                "tender_type": r.get("tender_type"), "ext_price": round(amt, 2),
+                "voided": voided, "mdn": r.get("mdn"), "serial_1": r.get("serial_1"),
+                "trans_date": str(r.get("trans_date") or "")[:10],
+            })
+        lines.sort(key=lambda x: -(x["ext_price"] or 0))
+        return lines, round(total, 2)
+
+    monthly, m_tot = fetch("raw_sales")
+    daily, d_tot = fetch("daily_sales_feed")
+    hdr = (daily or monthly or [{}])[0]
+    return {"trans_id": str(trans_id), "period": plabel,
+            "store": hdr.get("store") if isinstance(hdr, dict) else None,
+            "monthly": monthly, "daily": daily,
+            "monthly_total": m_tot, "daily_total": d_tot, "delta": round(d_tot - m_tot, 2),
+            "in_monthly": len(monthly) > 0, "in_daily": len(daily) > 0}
+
+
 def _period_my(plabel: str):
     """('June 2026') -> (6, 2026); best-effort, (None, None) on failure."""
     parts = (plabel or "").strip().split()

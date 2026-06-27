@@ -38,8 +38,20 @@ export default function SalesReconPage() {
   const [tab, setTab] = useState('missing_in_monthly')
   const [storeFilter, setStoreFilter] = useState('')
   const [search, setSearch] = useState('')
+  const [dayFrom, setDayFrom] = useState('')
+  const [dayTo, setDayTo] = useState('')
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState('')
+  const [drillId, setDrillId] = useState('')
+  const [drill, setDrill] = useState<any>(null)
+  const [drillBusy, setDrillBusy] = useState(false)
+
+  const openTxn = async (trans_id: string) => {
+    setDrillId(trans_id); setDrill(null); setDrillBusy(true)
+    try {
+      setDrill(await api(`/api/v1/commcalc/sales-recon/transaction?period=${encodeURIComponent(period)}&trans_id=${encodeURIComponent(trans_id)}&org_id=${ORG_ID}`))
+    } catch (e: any) { setErr(e.message || 'detail failed') } finally { setDrillBusy(false) }
+  }
 
   const load = async () => {
     setLoading(true); setErr('')
@@ -79,9 +91,12 @@ export default function SalesReconPage() {
         if (!r.trans_id?.toLowerCase().includes(s) && !r.store?.toLowerCase().includes(s) &&
             !r.salesperson?.toLowerCase().includes(s)) return false
       }
+      const d = (r.trans_date || '').slice(0, 10)
+      if (dayFrom && d && d < dayFrom) return false
+      if (dayTo && d && d > dayTo) return false
       return true
     })
-  }, [data, tab, storeFilter, search])
+  }, [data, tab, storeFilter, search, dayFrom, dayTo])
 
   const s = data?.summary
   const tabMeta = TABS.find(t => t.key === tab)!
@@ -181,9 +196,15 @@ export default function SalesReconPage() {
           {stores.map(st => <option key={st} value={st}>{st}</option>)}
         </select>
         <input placeholder="Search Trans ID / store / rep" value={search} onChange={e => setSearch(e.target.value)}
-          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14, flex: 1, minWidth: 200 }} />
-        {(storeFilter || search) && (
-          <button onClick={() => { setStoreFilter(''); setSearch('') }}
+          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14, flex: 1, minWidth: 180 }} />
+        <label style={{ fontSize: 12, color: '#6b7280', display: 'flex', alignItems: 'center', gap: 4 }}>From
+          <input type="date" value={dayFrom} onChange={e => setDayFrom(e.target.value)}
+            style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14 }} /></label>
+        <label style={{ fontSize: 12, color: '#6b7280', display: 'flex', alignItems: 'center', gap: 4 }}>To
+          <input type="date" value={dayTo} onChange={e => setDayTo(e.target.value)}
+            style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14 }} /></label>
+        {(storeFilter || search || dayFrom || dayTo) && (
+          <button onClick={() => { setStoreFilter(''); setSearch(''); setDayFrom(''); setDayTo('') }}
             style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', fontSize: 14 }}>Clear</button>
         )}
       </div>
@@ -232,8 +253,9 @@ export default function SalesReconPage() {
               </tr></thead>
               <tbody>
                 {rows.slice(0, 500).map((r, i) => (
-                  <tr key={`${r.trans_id}-${i}`} style={{ borderTop: '1px solid #f3f4f6' }}>
-                    <td style={{ padding: '6px 12px', fontFamily: 'monospace', fontSize: 12 }}>{r.trans_id}</td>
+                  <tr key={`${r.trans_id}-${i}`} onClick={() => openTxn(r.trans_id)} title="Click to investigate the line items"
+                    style={{ borderTop: '1px solid #f3f4f6', cursor: 'pointer' }}>
+                    <td style={{ padding: '6px 12px', fontFamily: 'monospace', fontSize: 12, color: '#2563eb' }}>{r.trans_id}</td>
                     <td style={{ padding: '6px 12px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.store}</td>
                     <td style={{ padding: '6px 12px' }}>{r.salesperson}</td>
                     <td style={{ padding: '6px 12px' }}>{r.trans_date}</td>
@@ -257,6 +279,61 @@ export default function SalesReconPage() {
           </div>
         </>
       )}
+
+      {(drillId) && (
+        <div onClick={() => { setDrillId(''); setDrill(null) }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 12, maxWidth: 860, width: '100%', maxHeight: '85vh', overflowY: 'auto', padding: 18 }}>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>🔎 Transaction {drillId}</div>
+              <span style={{ flex: 1 }} />
+              <button onClick={() => { setDrillId(''); setDrill(null) }} style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', fontSize: 13 }}>Close</button>
+            </div>
+            {drillBusy && <div style={{ color: '#6b7280', padding: 20 }}>Loading line items…</div>}
+            {drill && (
+              <>
+                <div style={{ display: 'flex', gap: 12, fontSize: 13, marginBottom: 12, flexWrap: 'wrap' }}>
+                  <span><b>Monthly:</b> {fmt(drill.monthly_total)} {drill.in_monthly ? '' : '(not in monthly file)'}</span>
+                  <span><b>Daily feed:</b> {fmt(drill.daily_total)} {drill.in_daily ? '' : '(not in daily feed)'}</span>
+                  <span style={{ fontWeight: 700, color: Math.abs(drill.delta) > 0.01 ? '#dc2626' : '#15803d' }}>Δ {fmt(drill.delta)}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                  <ReconLines title="Monthly (authoritative file)" lines={drill.monthly} />
+                  <ReconLines title="Daily B2B feed" lines={drill.daily} />
+                </div>
+                <p style={{ fontSize: 12, color: '#6b7280', marginTop: 10 }}>
+                  Compare the two sides — a line present on one side only, a price change, or a void explains the discrepancy.
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ReconLines({ title, lines }: { title: string; lines: any[] }) {
+  return (
+    <div style={{ flex: '1 1 360px', minWidth: 300, border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{ padding: '8px 12px', fontWeight: 700, fontSize: 12, background: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>{title} ({(lines || []).length})</div>
+      {(!lines || lines.length === 0)
+        ? <div style={{ padding: 14, color: '#9ca3af', fontSize: 13 }}>No lines on this side.</div>
+        : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <tbody>
+              {lines.map((l: any, i: number) => (
+                <tr key={i} style={{ borderTop: '1px solid #f3f4f6', opacity: l.voided ? 0.5 : 1 }}>
+                  <td style={{ padding: '5px 10px' }}>
+                    {l.product_desc || '—'}{l.voided && <span style={{ color: '#dc2626' }}> (void)</span>}
+                    {(l.department || l.contract_type) && <div style={{ fontSize: 10, color: '#9ca3af' }}>{[l.contract_type, l.department].filter(Boolean).join(' · ')}</div>}
+                  </td>
+                  <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{fmt(l.ext_price)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
     </div>
   )
 }

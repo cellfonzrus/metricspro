@@ -3254,6 +3254,19 @@ async def sales_feed_recon(period: str = "", org_id: str = ORG_ID):
         raise HTTPException(500, f"Sales recon failed: {e} (run migration 047?)")
 
 
+@router.get("/sales-recon/transaction")
+async def sales_feed_recon_transaction(period: str, trans_id: str, org_id: str = ORG_ID):
+    """Line-item drill-down for one transaction — monthly (raw_sales) vs daily (daily_sales_feed)
+    lines side by side, so you can see exactly what differs. Powers the recon row click-through."""
+    require_org(org_id)
+    if not period or not trans_id:
+        raise HTTPException(400, "period and trans_id required")
+    try:
+        return sales_recon.transaction_detail(period, trans_id)
+    except Exception as e:
+        raise HTTPException(500, f"Transaction detail failed: {e}")
+
+
 @router.post("/sales-recon/sync-flags")
 async def sales_recon_sync_flags(period: str = "", notify: bool = False,
                                  include_mismatch: bool = True, org_id: str = ORG_ID):
