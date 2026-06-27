@@ -6,11 +6,19 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON)
 
-// API client for FastAPI backend
+// API client for FastAPI backend. Attaches the Supabase session token so the backend can identify
+// the caller for span-scoped reads (Phase 5). The backend ignores it while RBAC enforcement is off.
+// An explicit Authorization in opts.headers still wins (spread last).
 export async function api(path: string, opts: RequestInit = {}) {
+  let authHeader: Record<string, string> = {}
+  try {
+    const { data } = await supabase.auth.getSession()
+    const tok = data?.session?.access_token
+    if (tok) authHeader = { Authorization: `Bearer ${tok}` }
+  } catch { /* not signed in / open mode */ }
   const res = await fetch(`${API_URL}${path}`, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', ...opts.headers },
+    headers: { 'Content-Type': 'application/json', ...authHeader, ...opts.headers },
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))

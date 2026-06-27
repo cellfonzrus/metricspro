@@ -240,7 +240,7 @@ def closing_stores(org_id: str = ORG_ID):
 
 # ── Monthly rollup (dashboard summaries: per-store + per-rep over a YYYY-MM period) ──────────
 @router.get("/rollup")
-def closing_rollup(period: str, market: str = None, org_id: str = ORG_ID):
+def closing_rollup(period: str, market: str = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Aggregate daily_closing for a YYYY-MM period into per-store and per-rep money + counts +
     days-submitted, plus DM verification coverage. Powers the Daily Closing dashboard."""
     if not period:
@@ -299,6 +299,11 @@ def closing_rollup(period: str, market: str = None, org_id: str = ORG_ID):
     bs = sorted((finalize(v) for v in by_store.values()),
                 key=lambda s: str(s.get("store_address") or s.get("store_name") or ""))
     br = sorted((finalize(v) for v in by_rep.values()), key=lambda s: -s.get("rows", 0))
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        bs = [s for s in bs if in_keyset(ks, s.get("store_code"), s.get("store_address"))]
+        br = [s for s in br if in_keyset(ks, s.get("store_code"), s.get("store_address"))]
     return {
         "period": period, "by_store": bs, "by_rep": br, "totals": finalize(grand),
         "verified_keys": len(verified_keys & submitted_keys), "submitted_keys": len(submitted_keys),
@@ -307,7 +312,7 @@ def closing_rollup(period: str, market: str = None, org_id: str = ORG_ID):
 
 # ── DM evening verification view: per-store totals + missing reps + B2B recon ─────────────
 @router.get("/summary")
-def closing_summary(date: str, market: str = None, tolerance: float = 1.0, org_id: str = ORG_ID):
+def closing_summary(date: str, market: str = None, tolerance: float = 1.0, authorization: str = Header(default=""), org_id: str = ORG_ID):
     if not date:
         raise HTTPException(400, "date required (YYYY-MM-DD)")
     client = sb()
@@ -444,6 +449,10 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, org_i
         })
 
     out.sort(key=lambda s: str(s.get("store_address") or s.get("store_name") or ""))
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        out = [s for s in out if in_keyset(ks, s.get("store_code"), s.get("store_address"))]
     return {"date": date, "stores": out}
 
 
@@ -637,7 +646,7 @@ def delete_row(row_id: str):
 
 # ── Reconciliation sheet: every day's closing-vs-B2B errors over a period ────────────────────
 @router.get("/recon")
-def closing_recon(period: str, market: str = None, tolerance: float = 1.0, org_id: str = ORG_ID):
+def closing_recon(period: str, market: str = None, tolerance: float = 1.0, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Per-rep (money) + per-store (counts) reconciliation of declared closing vs B2B actuals for
     a YYYY-MM period. Returns one error row per discrepancy with severity block | flag, plus
     recon-pending rows where B2B isn't loaded / the rep didn't match B2B sales."""
@@ -696,6 +705,13 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, org_i
                                        "severity": "flag", "status": "flag", "reason": f"{metric.title()} count mismatch (closing {dv} vs B2B {bv})"})
 
     errors.sort(key=lambda e: (str(e.get("date")), 0 if e["severity"] == "block" else 1 if e["severity"] == "flag" else 2), reverse=True)
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        errors = [e for e in errors if in_keyset(ks, e.get("store_code"), e.get("store_address"))]
+        blocks = sum(1 for e in errors if e["severity"] == "block")
+        flags = sum(1 for e in errors if e["severity"] == "flag")
+        pending = sum(1 for e in errors if e["severity"] == "pending")
     return {"period": period, "errors": errors,
             "summary": {"blocks": blocks, "flags": flags, "pending": pending, "total": len(errors)}}
 

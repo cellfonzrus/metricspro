@@ -915,3 +915,74 @@ def org_my_span(authorization: str = Header(default=""), org_id: str = ORG_ID):
     uids = [m["unit_id"] for m in mrows if m.get("unit_id")]
     units = (sb().table("org_units").select("id,name,level_id").in_("id", uids).execute().data or []) if uids else []
     return {"employee_id": eid, "store_codes": codes, "units": units, "is_manager": bool(codes)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# PHASE 5 — span ENFORCEMENT for scoped reads. GATED on the RBAC master switch (app_config.
+# rbac_enabled): when login enforcement is OFF (today's default) this is a strict NO-OP, so the app
+# keeps working exactly as before. When ON, a non-admin manager's reads are filtered to the stores in
+# their org-unit span; an 'all'-scope (admin) role and any caller we can't identify stay unrestricted.
+# This is application-layer scoping; full DB-level lockdown (RLS keyed on auth.uid) is a later step.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+def _rbac_enabled(org_id: str = ORG_ID) -> bool:
+    try:
+        rows = sb().table("app_config").select("rbac_enabled").eq("id", 1).limit(1).execute().data or []
+        return bool(rows and rows[0].get("rbac_enabled"))
+    except Exception:
+        return False
+
+
+def caller_scope(authorization: str, org_id: str = ORG_ID):
+    """How to scope a read for the signed-in caller.
+    Returns None  -> UNRESTRICTED (enforcement off, no/invalid token, unprovisioned, or 'all' scope).
+    Returns a SET of store_codes the caller may see otherwise (a manager's span; possibly empty)."""
+    if not _rbac_enabled(org_id):
+        return None
+    from app.modules.core.router import _uid_from_token
+    uid = _uid_from_token(authorization)
+    if not uid:
+        return None
+    rows = sb().table("app_users").select("role,employee_id").eq("auth_id", uid).limit(1).execute().data or []
+    if not rows:
+        return None
+    role = (rows[0].get("role") or "").strip()
+    scope = "all"
+    if role:
+        try:
+            rr = sb().table("roles").select("permissions").eq("name", role).limit(1).execute().data or []
+            if rr:
+                scope = ((rr[0].get("permissions") or {}).get("scope")) or "all"
+        except Exception:
+            scope = "all"
+    if scope == "all":
+        return None
+    eid = (rows[0].get("employee_id") or "").strip()
+    if not eid:
+        return set()
+    spans = sb().rpc("org_span_for_manager", {"p_org_id": org_id, "p_employee_id": eid}).execute().data
+    return set(_span_codes(spans))
+
+
+def scope_keyset(authorization: str, org_id: str = ORG_ID):
+    """None = unrestricted; else a set of UPPER store keys (store_codes + their addresses) the caller
+    may see — so rows whose store field is EITHER a code or an address still match."""
+    codes = caller_scope(authorization, org_id)
+    if codes is None:
+        return None
+    keys = {c.strip().upper() for c in codes}
+    if keys:
+        meta = sb().table("stores").select("store_code,address").execute().data or []
+        for s in meta:
+            sc = str(s.get("store_code") or "").strip().upper()
+            if sc in keys:
+                ad = str(s.get("address") or "").strip().upper()
+                if ad:
+                    keys.add(ad)
+    return keys
+
+
+def in_keyset(keyset, *vals) -> bool:
+    """True when unrestricted (keyset None) or any of vals matches an allowed store key."""
+    if keyset is None:
+        return True
+    return any(str(v or "").strip().upper() in keyset for v in vals)

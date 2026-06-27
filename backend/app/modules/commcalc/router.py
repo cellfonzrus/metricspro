@@ -3729,8 +3729,9 @@ async def get_target_calendar(
 
 
 @router.get("/targets/{period}/summary")
-async def get_targets_summary(period: str, today: str = "", org_id: str = ORG_ID):
-    """All-stores overview: store-level today/pace/need/monthly/achieved per category."""
+async def get_targets_summary(period: str, today: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """All-stores overview: store-level today/pace/need/monthly/achieved per category. When RBAC
+    enforcement is on, a non-admin manager only sees the stores in their org-unit span (Phase 5)."""
     client = sb()
     start, end, today = _period_bounds(period, today)
     byod_def = _byod_pct_default(client, period)
@@ -3776,6 +3777,10 @@ async def get_targets_summary(period: str, today: str = "", org_id: str = ORG_ID
             'reps': reps,
         })
     out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        out = [s for s in out if in_keyset(ks, s.get('store_code'), s.get('address'))]
     return {'period': period, 'today': today.isoformat(), 'stores': out}
 
 
@@ -3795,7 +3800,7 @@ _AP_CAT_LABEL = {'activations': 'Activations', 'upgrades': 'Upgrades',
 
 
 @router.get("/coaching/{period}")
-def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", org_id: str = ORG_ID):
+def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Per-rep COACHING view: which KPIs each rep met vs missed, and WHY they're losing money
     (commission at risk below tier 1.0 + chargebacks deducted) + flags & coaching notes. Reuses
     the KPI defs + tier/at-risk logic from the action plan; adds per-rep chargebacks + flags.
@@ -3892,6 +3897,10 @@ def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", 
             'coaching_notes': fld['notes'], 'money_on_table': round(at_risk + cbd['deducted'], 2),
         })
     reps.sort(key=lambda r: -r['money_on_table'])
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        reps = [r for r in reps if in_keyset(ks, r.get('store'))]
     summary = {'reps': len(reps),
                'total_at_risk': round(sum(r['at_risk'] for r in reps), 2),
                'total_chargebacks': round(sum(r['chargeback_deducted'] for r in reps), 2),
@@ -3925,7 +3934,7 @@ async def team_snapshot(period: str, authorization: str = Header(default=""),
     Reuses get_targets_summary (per-store today/pace/need/achieved) + rep_coaching (per-rep
     money-at-risk/KPIs/chargebacks), filtered to the span's store_codes. Per-rep drill-down uses the
     existing GET /core/employee-dashboard. Default-scoped (no hard refusal yet — Phase 5 enforces)."""
-    from app.modules.storeops.router import _caller_span_codes, _unit_store_codes
+    from app.modules.storeops.router import _caller_span_codes, _unit_store_codes, caller_scope
     if unit_id:
         codes = _unit_store_codes(org_id, unit_id)
     else:
@@ -3933,6 +3942,10 @@ async def team_snapshot(period: str, authorization: str = Header(default=""),
             codes = _caller_span_codes(authorization, org_id)
         except HTTPException:
             codes = []
+    # Phase 5: when enforcement is on, a non-admin can't roll up a unit outside their own span.
+    allowed = caller_scope(authorization, org_id)   # None = unrestricted (admin / open mode)
+    if allowed is not None:
+        codes = [c for c in codes if c in allowed]
     codes_set = {c.strip().upper() for c in codes}
     if not codes_set:
         return {"period": period, "is_manager": False, "span_store_codes": [],
