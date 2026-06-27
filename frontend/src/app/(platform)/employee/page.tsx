@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, ORG_ID, localToday } from '@/lib/client'
 import EmployeeWidgets from '@/components/EmployeeWidgets'
+import PortalReports from '@/components/PortalReports'
 
 const sel: React.CSSProperties = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, background: 'var(--surface)' }
 
@@ -55,6 +56,11 @@ export default function EmployeeDashboardPage() {
       ) : (
         <EmployeeWidgets data={data} coach={coach} repTargets={repTargets} />
       )}
+
+      <div style={{ marginTop: 18 }}>
+        <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 8px' }}>📊 My Reports</h2>
+        <PortalReports compact />
+      </div>
     </div>
   )
 }

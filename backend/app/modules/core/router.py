@@ -47,6 +47,38 @@ async def set_auth_config(body: dict, org_id: str = ORG_ID):
     return {"rbac_enabled": enabled}
 
 
+# ── Portal reports: which reports are surfaced in the employee portal + to which roles (mig 052) ──
+@router.get("/portal-reports")
+async def get_portal_reports(org_id: str = ORG_ID):
+    """Per-report portal config keyed by href: {href: {enabled, roles[], label, category}}. The
+    Reports hub merges this over the report catalog; the portal/employee surfaces read it to gate
+    what each role sees. Empty {} if migration 052 hasn't run."""
+    try:
+        rows = sb().schema("storeops").table("portal_reports").select("*").eq("org_id", org_id).execute().data or []
+    except Exception:
+        return {"config": {}}
+    return {"config": {r["href"]: {"enabled": bool(r.get("enabled", True)), "roles": r.get("roles") or [],
+                                   "label": r.get("label"), "category": r.get("category")} for r in rows if r.get("href")}}
+
+
+@router.put("/portal-reports")
+async def set_portal_report(body: dict, org_id: str = ORG_ID):
+    """Upsert one report's portal config. Body: {href, enabled, roles[], label?, category?}."""
+    href = (body.get("href") or "").strip()
+    if not href:
+        raise HTTPException(400, "href required")
+    row = {"org_id": org_id, "href": href,
+           "enabled": bool(body.get("enabled", True)),
+           "roles": body.get("roles") or [],
+           "label": body.get("label"), "category": body.get("category"),
+           "updated_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        sb().schema("storeops").table("portal_reports").upsert(row, on_conflict="org_id,href").execute()
+    except Exception as e:
+        raise HTTPException(500, f"save failed — run migration 052 first: {e}")
+    return {"ok": True, "href": href}
+
+
 # ── Identity (token-verified "who am I") ───────────────────────────────────────────────
 def _uid_from_token(authorization: str):
     """Validate the Supabase Auth JWT (server-side) and return its auth user id, or None."""

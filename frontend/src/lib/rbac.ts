@@ -12,6 +12,9 @@ export type NavGroup = { group: string; module: string; items: NavItem[] }
 
 // scopes (when present) further restricts an item to those scope tiers, e.g. settings = admin only.
 export const NAV: NavGroup[] = [
+  { group: 'Reports', module: 'targets', items: [
+    { href: '/reports', label: 'Report Center', icon: '📊', module: 'targets' },
+  ]},
   { group: 'Commissions', module: 'commissions', items: [
     { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions' },
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'] },
@@ -101,6 +104,7 @@ export const NAV: NavGroup[] = [
 ]
 
 export function moduleForPath(path: string): string {
+  if (path.startsWith('/reports')) return 'targets'
   if (path.startsWith('/admin')) return 'admin'
   if (path.startsWith('/configurations')) return 'admin'
   if (path.startsWith('/employee')) return 'targets'
@@ -129,7 +133,7 @@ export function canSeeItem(perms: Permissions, item: NavItem): boolean {
 }
 
 // Pages a self-scoped (rep) user may always reach, on top of their home.
-const SELF_ALLOWED = ['/commcalc/targets/my', '/account/password']
+const SELF_ALLOWED = ['/commcalc/targets/my', '/account/password', '/reports']
 
 export function canAccessPath(perms: Permissions, path: string): boolean {
   if (path === '/' || path.startsWith('/account/password')) return true

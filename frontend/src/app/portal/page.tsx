@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-context'
 import EmployeeWidgets from '@/components/EmployeeWidgets'
 import ClosingSubmitForm from '@/components/ClosingSubmitForm'
 import TeamSnapshot from '@/components/TeamSnapshot'
+import PortalReports from '@/components/PortalReports'
 
 // Employee kiosk (Part B / B4 + B2): mobile-first, standalone (no platform chrome). Now GUARDED by a
 // real login — an employee signs in with their email + password, so a punch is locked to the
@@ -48,7 +49,7 @@ export default function PortalPage() {
   const [repTargets, setRepTargets] = useState<any>(null)
 
   // tabs + manager span (the "My Team" tab only shows if this employee manages an org unit)
-  const [tab, setTab] = useState<'dashboard' | 'closing' | 'team'>('dashboard')
+  const [tab, setTab] = useState<'dashboard' | 'closing' | 'team' | 'reports'>('dashboard')
   const [span, setSpan] = useState<any>(null)
 
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -339,6 +340,7 @@ export default function PortalPage() {
         <TabBtn k="dashboard" label="📊 My Dashboard" tab={tab} setTab={setTab} />
         <TabBtn k="closing" label="🧾 Daily Closing" tab={tab} setTab={setTab} />
         {span?.is_manager && <TabBtn k="team" label="🫂 My Team" tab={tab} setTab={setTab} />}
+        <TabBtn k="reports" label="📊 Reports" tab={tab} setTab={setTab} />
       </div>
 
       {tab === 'dashboard' && (dash
@@ -348,12 +350,14 @@ export default function PortalPage() {
       {tab === 'closing' && <ClosingSubmitForm defaultEmployeeName={empName || dash?.employee?.name} />}
 
       {tab === 'team' && <TeamSnapshot period={dash?.period || ''} token={token || undefined} />}
+
+      {tab === 'reports' && <PortalReports />}
     </div>
   )
 }
 
 function TabBtn({ k, label, tab, setTab }:
-  { k: 'dashboard' | 'closing' | 'team'; label: string; tab: string; setTab: (t: any) => void }) {
+  { k: 'dashboard' | 'closing' | 'team' | 'reports'; label: string; tab: string; setTab: (t: any) => void }) {
   const active = tab === k
   return (
     <button onClick={() => setTab(k)} style={{
