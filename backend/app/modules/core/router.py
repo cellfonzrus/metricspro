@@ -790,21 +790,21 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
     }
 
     # Commission (current period) + tracking (all periods).
-    comm = client.schema("commcalc").table("rep_commissions").select("*").eq("period", period).execute().data or []
+    comm = client.schema("commcalc").table("rep_commissions").select("*").eq("org_id", org_id).eq("period", period).execute().data or []
     myc = next((c for c in comm if _is_me(c, "storeops_name", "epay_salesperson")), None)
     out["commission"] = myc
     allc = (client.schema("commcalc").table("rep_commissions")
             .select("period,period_year,period_month,total_payout,tier,kpis_met,total_kpis,storeops_name,epay_salesperson")
-            .execute().data or [])
+            .eq("org_id", org_id).execute().data or [])
     track = [c for c in allc if _is_me(c, "storeops_name", "epay_salesperson")]
     track.sort(key=lambda r: (r.get("period_year") or 0, r.get("period_month") or 0))
     out["commission_tracking"] = track
 
     # Flags + chargebacks attributed to this rep.
-    fl = client.schema("commcalc").table("flags").select("*").eq("period", period).execute().data or []
+    fl = client.schema("commcalc").table("flags").select("*").eq("org_id", org_id).eq("period", period).execute().data or []
     myf = [f for f in fl if _is_me(f, "epay_salesperson")]
     out["flags"] = myf
-    cbs = client.schema("commcalc").table("chargeback_items").select("*").eq("period", period).execute().data or []
+    cbs = client.schema("commcalc").table("chargeback_items").select("*").eq("org_id", org_id).eq("period", period).execute().data or []
     mycb = [c for c in cbs if _is_me(c, "epay_salesperson")]
     out["chargebacks"] = mycb
 
