@@ -11,6 +11,7 @@ with no anon policy; the service role bypasses RLS).
 """
 import re
 import secrets
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Header
@@ -133,6 +134,109 @@ async def password_changed(authorization: str = Header(default="")):
         raise HTTPException(401, "not authenticated")
     sb().schema("storeops").table("app_users").update({"must_reset_password": False}) \
         .eq("auth_id", uid).execute()
+    return {"ok": True}
+
+
+# ── Tenants (SaaS logins) — super-admin onboarding ────────────────────────────────────
+# A tenant = an org_id + metadata. Super-admins create tenants and provision each tenant's first
+# admin login; that admin then manages their own company's users. ADDITIVE — single-tenant app
+# is unaffected (org_id-from-session is a later phase). Backend is the guard (super_admin gate).
+def _app_user_from_token(authorization: str):
+    uid = _uid_from_token(authorization)
+    if not uid:
+        return None
+    rows = sb().schema("storeops").table("app_users").select("*").eq("auth_id", uid).limit(1).execute().data or []
+    return rows[0] if rows else None
+
+
+def _require_super_admin(authorization: str):
+    """Super-admin = the super_admin flag, OR (bootstrap) a house-org admin — so the very first
+    operator is never locked out before the flag is seeded."""
+    u = _app_user_from_token(authorization)
+    ok = u and (u.get("super_admin") or (u.get("org_id") == ORG_ID and u.get("role") == "admin"))
+    if not ok:
+        raise HTTPException(403, "super-admin only")
+    return u
+
+
+def _mods(**on):
+    base = {k: False for k in ("commissions", "targets", "asset", "vip", "storeops", "notify", "helpdesk", "admin")}
+    base.update(on)
+    return base
+
+
+# the role set seeded into every new tenant (mirror of migration 015 + helpdesk); the tenant admin
+# edits them afterward on their own Roles & Access.
+_BASE_ROLES = [
+    ("admin", "Admin", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True, helpdesk=True, admin=True), "scope": "all", "home": "/commcalc"}),
+    ("market_manager", "Market Manager", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True, helpdesk=True), "scope": "market", "home": "/commcalc/targets"}),
+    ("store_manager", "Store Manager", {"modules": _mods(commissions=True, targets=True, asset=True, storeops=True, helpdesk=True), "scope": "store", "home": "/commcalc/targets"}),
+    ("sales_rep", "Sales Rep", {"modules": _mods(targets=True, helpdesk=True), "scope": "self", "home": "/commcalc/targets/my"}),
+]
+_DEFAULT_TENANT_MODULES = ["commissions", "targets", "asset", "storeops", "closing", "notify", "helpdesk"]
+
+
+@router.get("/tenants")
+async def list_tenants(authorization: str = Header(default="")):
+    _require_super_admin(authorization)
+    client = sb()
+    tens = client.schema("storeops").table("tenants").select("*").order("created_at").execute().data or []
+    users = client.schema("storeops").table("app_users").select("org_id,auth_id").execute().data or []
+    cnt: dict = {}
+    for u in users:
+        o = u.get("org_id")
+        c = cnt.setdefault(o, {"users": 0, "logins": 0})
+        c["users"] += 1
+        if u.get("auth_id"):
+            c["logins"] += 1
+    for t in tens:
+        t.update(cnt.get(t["org_id"], {"users": 0, "logins": 0}))
+    return {"tenants": tens}
+
+
+@router.post("/tenants")
+async def create_tenant(body: dict, authorization: str = Header(default="")):
+    """Create a tenant: new org_id + seed its base roles + module entitlements + provision its first
+    admin login. Returns the temp password to hand off (admin resets on first login)."""
+    _require_super_admin(authorization)
+    name = (body.get("name") or "").strip()
+    admin_email = (body.get("admin_email") or "").strip().lower()
+    if not name or not admin_email:
+        raise HTTPException(400, "name and admin_email required")
+    client = sb()
+    new_org = str(uuid.uuid4())
+    slug = (body.get("slug") or re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-"))[:60]
+    client.schema("storeops").table("tenants").insert({"org_id": new_org, "name": name, "slug": slug}).execute()
+    client.schema("storeops").table("roles").insert(
+        [{"org_id": new_org, "name": n, "display_name": d, "permissions": p} for (n, d, p) in _BASE_ROLES]).execute()
+    try:
+        client.schema("storeops").table("tenant_modules").insert(
+            [{"org_id": new_org, "module_key": m, "is_enabled": True} for m in _DEFAULT_TENANT_MODULES]).execute()
+    except Exception:
+        pass  # tenant_modules (mig 053) may be absent in some envs — non-fatal
+    admin = get_supabase_admin()
+    temp_pw = body.get("temp_password") or ("Mp" + secrets.token_urlsafe(6))
+    auth_id, created, err = _create_or_link_auth(admin, admin_email, temp_pw)
+    client.schema("storeops").table("app_users").insert({
+        "org_id": new_org, "auth_id": auth_id, "email": admin_email,
+        "full_name": body.get("admin_name") or f"{name} Admin", "role": "admin",
+        "is_active": True, "must_reset_password": True, "super_admin": False,
+    }).execute()
+    return {"org_id": new_org, "name": name, "admin_email": admin_email,
+            "temp_password": temp_pw, "auth_created": created, "auth_error": err}
+
+
+@router.patch("/tenants/{org_id}")
+async def update_tenant(org_id: str, body: dict, authorization: str = Header(default="")):
+    _require_super_admin(authorization)
+    upd = {}
+    if "name" in body:
+        upd["name"] = body["name"]
+    if "is_active" in body:
+        upd["is_active"] = bool(body["is_active"])
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    sb().schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
     return {"ok": True}
 
 

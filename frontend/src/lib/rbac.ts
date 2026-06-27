@@ -103,6 +103,7 @@ export const NAV: NavGroup[] = [
   ]},
   { group: 'Configurations', module: 'admin', items: [
     { href: '/configurations', label: 'All Settings', icon: '⚙️', module: 'admin' },
+    { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin' },
     { href: '/admin/roles', label: 'Roles & Access', icon: '🔐', module: 'admin' },
     { href: '/admin/org', label: 'Org Structure', icon: '🌳', module: 'admin' },
     { href: '/admin/org-chart', label: 'Employee Org Chart', icon: '👥', module: 'admin' },

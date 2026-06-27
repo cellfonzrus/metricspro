@@ -10,6 +10,7 @@ export type AppUser = {
   role: string | null; role_display?: string | null
   market: string | null; store_code: string | null; store_codes: string[] | null
   employee_id: string | null; is_active: boolean; must_reset_password: boolean
+  super_admin?: boolean; org_id?: string | null
 }
 
 type AuthState = {
