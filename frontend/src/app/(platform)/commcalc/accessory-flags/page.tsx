@@ -5,12 +5,22 @@ import { api } from '@/lib/client'
 // Accessories sold above the user-defined threshold → flag → push to the rep's chargebacks.
 // Phone model comes from the item mapping (the SU sheet). Chargeback $ is per-row editable with a
 // configurable default. Unseen items auto-add to the mapping (manage them on Item / Model Mapping).
+// Top dashboard rolls the flagged sales up per store + per rep; each row drills into the full receipt.
 type Row = {
   sale_id: string; trans_id: string; trans_date: string | null; period: string | null
   store: string | null; rep: string | null; department: string | null; category: string | null
   item_desc: string | null; sku: string | null; ext_price: number; phone_model: string | null
   chargeback_amount: number; dedupe_key: string; already_flagged: boolean
 }
+type Agg = { name: string; txns: number; items: number; total: number; chargeback_total: number; flagged: number }
+type Summary = { txns: number; items: number; total: number; chargeback_total: number }
+type ReceiptLine = {
+  product_desc: string | null; sku: string | null; item_type: string | null; department: string | null
+  category: string | null; contract_type: string | null; ext_price: number; gp: number
+  mdn: string | null; serial_1: string | null; voided: boolean
+}
+type Receipt = { trans_id: string; header: any; lines: ReceiptLine[]; line_count: number; total: number }
+
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13, whiteSpace: 'nowrap' }
 const money = (n: number) => '$' + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -24,12 +34,17 @@ export default function AccessoryFlagsPage() {
   const [storeF, setStoreF] = useState('')
   const [repF, setRepF] = useState('')
   const [rows, setRows] = useState<Row[]>([])
+  const [summary, setSummary] = useState<Summary | null>(null)
+  const [byRep, setByRep] = useState<Agg[]>([])
+  const [byStore, setByStore] = useState<Agg[]>([])
   const [amts, setAmts] = useState<Record<string, number>>({})
   const [picked, setPicked] = useState<Record<string, boolean>>({})
   const [threshold, setThreshold] = useState(35)
   const [defaultCb, setDefaultCb] = useState(0)
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState('')
+  const [receipt, setReceipt] = useState<Receipt | null>(null)
+  const [receiptBusy, setReceiptBusy] = useState(false)
 
   const loadRules = useCallback(() => {
     api('/api/v1/commcalc/flag-rules').then((r: any) => {
@@ -43,25 +58,34 @@ export default function AccessoryFlagsPage() {
     try {
       await api('/api/v1/commcalc/flag-rules', { method: 'PUT', body: JSON.stringify({
         accessory_threshold: threshold, accessory_chargeback_amount: defaultCb }) })
-      setMsg('Rules saved.')
+      setMsg('Saved as the default threshold.')
     } catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) }
   }
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true); setMsg('')
     try {
       const qs = new URLSearchParams()
       if (start) qs.set('start', start)
       if (end) qs.set('end', end)
+      if (threshold || threshold === 0) qs.set('threshold', String(threshold))  // apply the user-defined value now
       const r = await api(`/api/v1/commcalc/accessory-flags?${qs.toString()}`)
       const rws: Row[] = r.rows || []
       setRows(rws)
+      setSummary(r.summary || null); setByRep(r.by_rep || []); setByStore(r.by_store || [])
       setThreshold(Number(r.threshold ?? threshold)); setDefaultCb(Number(r.default_chargeback ?? defaultCb))
       setAmts(Object.fromEntries(rws.map(x => [x.dedupe_key, x.chargeback_amount])))
       setPicked({})
       setMsg(`${rws.length} accessory sale(s) over ${money(r.threshold)}${r.flagged_qty ? ` · ${r.flagged_qty} already flagged` : ''}.`)
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
     setLoading(false)
+  }, [start, end, threshold, defaultCb])
+
+  async function openReceipt(trans_id: string) {
+    setReceiptBusy(true); setReceipt(null)
+    try { setReceipt(await api(`/api/v1/commcalc/accessory-flags/receipt?trans_id=${encodeURIComponent(trans_id)}`)) }
+    catch (e: any) { setMsg('Receipt failed: ' + (e?.message || e)) }
+    setReceiptBusy(false)
   }
 
   const stores = Array.from(new Set(rows.map(r => r.store || '').filter(Boolean))).sort()
@@ -94,18 +118,35 @@ export default function AccessoryFlagsPage() {
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔖 Accessory Flags</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Accessories sold over your threshold, by store + rep + date range. Flag them to push a chargeback to the rep who sold it.
+          Accessories sold over your threshold, by store + rep + date range. Click any row to see the full receipt; flag rows to push a chargeback to the rep who sold it.
         </p>
       </div>
 
-      {/* Rules */}
+      {/* Dashboard summary */}
+      {summary && (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+          <Tile label="Flagged transactions" value={String(summary.txns)} sub={`${summary.items} line item(s)`} />
+          <Tile label="Total sold $" value={money(summary.total)} sub="over threshold" />
+          <Tile label="Chargeback exposure" value={money(summary.chargeback_total)} sub="at default amounts" />
+          <Tile label="Threshold applied" value={money(threshold)} sub={`${start} → ${end}`} />
+        </div>
+      )}
+      {(byStore.length > 0 || byRep.length > 0) && (
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 14 }}>
+          <AggCard title="By store" rows={byStore} onPick={(n) => setStoreF(n === storeF ? '' : n)} active={storeF} />
+          <AggCard title="By rep" rows={byRep} onPick={(n) => setRepF(n === repF ? '' : n)} active={repF} />
+        </div>
+      )}
+
+      {/* Rules / threshold */}
       <div className="card" style={{ padding: 14, marginBottom: 14, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
         <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Flag accessories over ($)<br />
           <input type="number" style={{ ...sel, width: 110, marginTop: 4 }} value={threshold} onChange={e => setThreshold(Number(e.target.value))} /></label>
         <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Default chargeback ($)<br />
           <input type="number" style={{ ...sel, width: 130, marginTop: 4 }} value={defaultCb} onChange={e => setDefaultCb(Number(e.target.value))} /></label>
-        <button className="btn" onClick={saveRules}>💾 Save rules</button>
-        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Applies to all flagged rows; override per row below.</span>
+        <button className="btn btn-primary" onClick={load} disabled={loading}>{loading ? '…' : '🔍 Apply & load'}</button>
+        <button className="btn" onClick={saveRules}>💾 Save as default</button>
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Type any value and <b>Apply &amp; load</b> to use it now; <b>Save as default</b> persists it. Override the chargeback per row below.</span>
       </div>
 
       {/* Filters */}
@@ -132,7 +173,7 @@ export default function AccessoryFlagsPage() {
       <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1000 }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>
-            {['', 'Date', 'Store', 'Rep', 'Item', 'SKU', 'Dept / Cat', 'Phone model', 'Sold $', 'Chargeback $', ''].map(h =>
+            {['', 'Date', 'Store', 'Rep', 'Item', 'SKU', 'Dept / Cat', 'Phone model', 'Sold $', 'Chargeback $', 'Receipt'].map(h =>
               <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>)}
           </tr></thead>
           <tbody>
@@ -142,14 +183,19 @@ export default function AccessoryFlagsPage() {
                 <td style={cell}>{(r.trans_date || '').slice(0, 10)}</td>
                 <td style={cell}>{r.store || '—'}</td>
                 <td style={cell}>{r.rep || <span style={{ color: '#dc2626' }}>no rep</span>}</td>
-                <td style={{ ...cell, whiteSpace: 'normal', maxWidth: 240 }}>{r.item_desc || '—'}</td>
+                <td style={{ ...cell, whiteSpace: 'normal', maxWidth: 240 }}>
+                  <button onClick={() => openReceipt(r.trans_id)} style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent, #2563eb)', textAlign: 'left', fontSize: 13 }}>{r.item_desc || '—'}</button>
+                </td>
                 <td style={cell}>{r.sku || '—'}</td>
                 <td style={{ ...cell, fontSize: 11, color: 'var(--text3)' }}>{[r.department, r.category].filter(Boolean).join(' / ') || '—'}</td>
                 <td style={cell}>{r.phone_model || <span style={{ color: 'var(--text3)' }}>—</span>}</td>
                 <td style={{ ...cell, fontWeight: 600 }}>{money(r.ext_price)}</td>
                 <td style={cell}><input type="number" style={{ ...sel, width: 100 }} value={amts[r.dedupe_key] ?? r.chargeback_amount}
                   onChange={e => setAmts(a => ({ ...a, [r.dedupe_key]: Number(e.target.value) }))} /></td>
-                <td style={cell}>{r.already_flagged && <span className="badge badge-blue" style={{ fontSize: 11 }}>flagged</span>}</td>
+                <td style={cell}>
+                  <button className="btn btn-sm" onClick={() => openReceipt(r.trans_id)}>🧾 View</button>
+                  {r.already_flagged && <span className="badge badge-blue" style={{ fontSize: 11, marginLeft: 6 }}>flagged</span>}
+                </td>
               </tr>
             ))}
             {filtered.length === 0 && <tr><td colSpan={11} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>{loading ? 'Loading…' : 'No accessory sales over the threshold for this range. Click Load.'}</td></tr>}
@@ -159,6 +205,99 @@ export default function AccessoryFlagsPage() {
       <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
         Items are classified on the <a href="/commcalc/item-mapping">Item / Model Mapping</a> page. New items auto-add there as "unclassified" — set their type so they flag correctly.
       </p>
+
+      {(receipt || receiptBusy) && <ReceiptModal receipt={receipt} busy={receiptBusy} onClose={() => { setReceipt(null); setReceiptBusy(false) }} />}
+    </div>
+  )
+}
+
+function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="card" style={{ flex: '1 1 170px', minWidth: 150, padding: 14 }}>
+      <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+    </div>
+  )
+}
+
+function AggCard({ title, rows, onPick, active }: { title: string; rows: Agg[]; onPick: (n: string) => void; active: string }) {
+  return (
+    <div className="card" style={{ flex: '1 1 320px', minWidth: 280, padding: 0, overflow: 'hidden' }}>
+      <div style={{ padding: '10px 12px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>{title}</div>
+      <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr style={{ background: 'var(--surface2)' }}>
+            {['Name', 'Txns', 'Items', 'Total $'].map(h => <th key={h} style={{ textAlign: h === 'Name' ? 'left' : 'right', padding: '6px 10px', fontSize: 11, color: 'var(--text2)', fontWeight: 600 }}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {rows.map(a => (
+              <tr key={a.name} onClick={() => onPick(a.name)} style={{ cursor: 'pointer', background: active === a.name ? 'var(--surface2)' : undefined }}>
+                <td style={{ ...cell, whiteSpace: 'normal' }}>{a.name}</td>
+                <td style={{ ...cell, textAlign: 'right' }}>{a.txns}</td>
+                <td style={{ ...cell, textAlign: 'right' }}>{a.items}</td>
+                <td style={{ ...cell, textAlign: 'right', fontWeight: 600 }}>{money(a.total)}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={4} style={{ padding: 16, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>No data</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function ReceiptModal({ receipt, busy, onClose }: { receipt: Receipt | null; busy: boolean; onClose: () => void }) {
+  const h = receipt?.header || {}
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex',
+      alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} className="card" style={{ maxWidth: 720, width: '100%', maxHeight: '85vh', overflowY: 'auto', padding: 18 }}>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>🧾 Receipt {receipt?.trans_id ? `#${receipt.trans_id}` : ''}</div>
+          <span style={{ flex: 1 }} />
+          <button className="btn btn-sm" onClick={onClose}>Close</button>
+        </div>
+        {busy && <div style={{ color: 'var(--text3)', padding: 20 }}>Loading receipt…</div>}
+        {receipt && (
+          <>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 13, color: 'var(--text2)', marginBottom: 12 }}>
+              <span><b>Store:</b> {h.store || '—'}</span>
+              <span><b>Rep:</b> {h.rep || '—'}</span>
+              <span><b>Date:</b> {(h.trans_date || '').slice(0, 10) || '—'}</span>
+              {h.register && <span><b>Register:</b> {h.register}</span>}
+              {h.tender_type && <span><b>Tender:</b> {h.tender_type}</span>}
+              {h.trans_type && <span><b>Type:</b> {h.trans_type}</span>}
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr style={{ background: 'var(--surface2)' }}>
+                {['Item', 'Type', 'Dept / Cat', 'Contract', 'GP', 'Price'].map(c =>
+                  <th key={c} style={{ textAlign: c === 'GP' || c === 'Price' ? 'right' : 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)', fontWeight: 600 }}>{c}</th>)}
+              </tr></thead>
+              <tbody>
+                {receipt.lines.map((l, i) => (
+                  <tr key={i} style={{ opacity: l.voided ? 0.5 : 1 }}>
+                    <td style={{ ...cell, whiteSpace: 'normal', maxWidth: 260 }}>
+                      {l.product_desc || '—'}{l.voided && <span style={{ color: '#dc2626', fontSize: 11 }}> (void)</span>}
+                      {(l.mdn || l.serial_1) && <div style={{ fontSize: 11, color: 'var(--text3)' }}>{[l.mdn, l.serial_1].filter(Boolean).join(' · ')}</div>}
+                    </td>
+                    <td style={cell}>{l.item_type || '—'}</td>
+                    <td style={{ ...cell, fontSize: 11, color: 'var(--text3)' }}>{[l.department, l.category].filter(Boolean).join(' / ') || '—'}</td>
+                    <td style={{ ...cell, fontSize: 12 }}>{l.contract_type || '—'}</td>
+                    <td style={{ ...cell, textAlign: 'right' }}>{money(l.gp)}</td>
+                    <td style={{ ...cell, textAlign: 'right', fontWeight: 600 }}>{money(l.ext_price)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot><tr>
+                <td colSpan={5} style={{ ...cell, textAlign: 'right', fontWeight: 700 }}>Receipt total</td>
+                <td style={{ ...cell, textAlign: 'right', fontWeight: 700 }}>{money(receipt.total)}</td>
+              </tr></tfoot>
+            </table>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>{receipt.line_count} line item(s) on this transaction.</div>
+          </>
+        )}
+      </div>
     </div>
   )
 }

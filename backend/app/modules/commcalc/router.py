@@ -2041,15 +2041,18 @@ def seed_item_mapping_from_catalog(org_id: str = ORG_ID):
 
 @router.get("/accessory-flags")
 def accessory_flags(start: str = None, end: str = None, store: str = None, rep: str = None,
-                    period: str = None, org_id: str = ORG_ID):
-    """Accessory sales priced ABOVE the configured threshold, over a date range / store / rep.
-    Each row carries the phone model (the transaction's phone line model, else the item's own mapped
-    model) + a default chargeback amount. Unseen items auto-add to item_mapping (type guessed from
-    Department/Category). already_flagged = a chargeback_review row already exists for that sale."""
+                    period: str = None, threshold: float = None, org_id: str = ORG_ID):
+    """Accessory sales priced ABOVE the threshold, over a date range / store / rep.
+    The threshold defaults to the saved flag_rules value but can be OVERRIDDEN per request via the
+    `threshold` query param (the page applies a user-defined value on Load without persisting it; the
+    page's Save still writes the default). Each row carries the phone model (the transaction's phone
+    line model, else the item's own mapped model) + a default chargeback amount. Unseen items auto-add
+    to item_mapping. already_flagged = a chargeback_review row already exists for that sale. The
+    response also rolls the flagged rows up per rep + per store (count + $ total) for the dashboard."""
     require_org(org_id)
     client = sb()
     rules = _flag_rules(client, org_id)
-    threshold = safe_float(rules.get("accessory_threshold"))
+    threshold = safe_float(threshold) if threshold is not None else safe_float(rules.get("accessory_threshold"))
     default_cb = safe_float(rules.get("accessory_chargeback_amount"))
 
     q = client.schema("commcalc").table("raw_sales").select(
@@ -2133,8 +2136,70 @@ def accessory_flags(start: str = None, end: str = None, store: str = None, rep: 
             "chargeback_amount": default_cb, "dedupe_key": dk, "already_flagged": dk in flagged,
         })
     out.sort(key=lambda x: (x["store"] or "", x["rep"] or "", -(x["ext_price"] or 0)))
+
+    # Per-rep + per-store rollup for the dashboard header (distinct transactions + $ totals).
+    def _rollup(rows, key):
+        agg = {}
+        for x in rows:
+            k = x.get(key) or "—"
+            a = agg.setdefault(k, {"name": k, "txns": set(), "items": 0, "total": 0.0, "chargeback_total": 0.0, "flagged": 0})
+            a["txns"].add(x["trans_id"])
+            a["items"] += 1
+            a["total"] += x["ext_price"] or 0
+            a["chargeback_total"] += x["chargeback_amount"] or 0
+            if x["already_flagged"]:
+                a["flagged"] += 1
+        res = [{"name": a["name"], "txns": len(a["txns"]), "items": a["items"],
+                "total": round(a["total"], 2), "chargeback_total": round(a["chargeback_total"], 2),
+                "flagged": a["flagged"]} for a in agg.values()]
+        res.sort(key=lambda r: -r["total"])
+        return res
+
+    summary = {
+        "txns": len({x["trans_id"] for x in out}), "items": len(out),
+        "total": round(sum(x["ext_price"] or 0 for x in out), 2),
+        "chargeback_total": round(sum(x["chargeback_amount"] or 0 for x in out), 2),
+    }
     return {"rows": out, "threshold": threshold, "default_chargeback": default_cb,
-            "total": len(out), "flagged_qty": sum(1 for x in out if x["already_flagged"])}
+            "total": len(out), "flagged_qty": sum(1 for x in out if x["already_flagged"]),
+            "summary": summary, "by_rep": _rollup(out, "rep"), "by_store": _rollup(out, "store")}
+
+
+@router.get("/accessory-flags/receipt")
+def accessory_receipt(trans_id: str, org_id: str = ORG_ID):
+    """Full receipt snapshot for one transaction — EVERY raw_sales line item for that trans_id (phones
+    + accessories + plans), with a header (store/rep/date/register/tender). Powers the click-through
+    drill-down on the Accessory Flags page."""
+    require_org(org_id)
+    client = sb()
+    rows = (client.schema("commcalc").table("raw_sales").select(
+        "trans_id,trans_date,period,store,salesperson,user_login,department,category,contract_type,"
+        "product_desc,sku,product_id,gp,ext_price,mdn,serial_1,register,tender_type,trans_type,voided")
+        .eq("org_id", org_id).eq("trans_id", str(trans_id)).limit(2000).execute().data) or []
+    if not rows:
+        return {"trans_id": trans_id, "header": {}, "lines": [], "line_count": 0, "total": 0.0}
+    imap = _load_item_map(client, org_id)
+    lines, total = [], 0.0
+    for r in rows:
+        price = safe_float(r.get("ext_price"))
+        total += price
+        m = imap.get(_item_key(r.get("sku"), r.get("product_desc")))
+        itype = (m.get("item_type") if m else None) or _guess_item_type(r.get("department"), r.get("category"), r.get("product_desc"))
+        lines.append({
+            "product_desc": r.get("product_desc"), "sku": r.get("sku"), "item_type": itype,
+            "department": r.get("department"), "category": r.get("category"),
+            "contract_type": r.get("contract_type"), "ext_price": round(price, 2),
+            "gp": round(safe_float(r.get("gp")), 2), "mdn": r.get("mdn"), "serial_1": r.get("serial_1"),
+            "voided": str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"),
+        })
+    # phones/plans first, accessories next, then the rest — reads like a real receipt
+    order = {"phone": 0, "plan": 1, "accessory": 2}
+    lines.sort(key=lambda l: (order.get(l["item_type"], 3), -(l["ext_price"] or 0)))
+    h = rows[0]
+    header = {"trans_id": trans_id, "trans_date": h.get("trans_date"), "period": h.get("period"),
+              "store": h.get("store"), "rep": h.get("salesperson"), "register": h.get("register"),
+              "tender_type": h.get("tender_type"), "trans_type": h.get("trans_type")}
+    return {"trans_id": trans_id, "header": header, "lines": lines, "line_count": len(lines), "total": round(total, 2)}
 
 
 @router.post("/accessory-flags/push")
