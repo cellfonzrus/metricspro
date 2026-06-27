@@ -78,18 +78,32 @@ def _name_map(client, org_id):
     return out
 
 
+def _is_accessory_line(dept, cat):
+    """Accessory line in the B2B sales export — the 'Ondigo' department is the accessory-GP
+    convention used elsewhere (daily_sales_actuals.acc_gp); also catch any 'accessor*' label."""
+    d = (dept or "").strip().lower()
+    c = (cat or "").strip().lower()
+    return d == "ondigo" or "accessor" in d or "accessor" in c
+
+
 def _sales_index(client, org_id):
-    """phone(mdn) / serial → {model, sold, store, sale_date, rep} from raw_sales."""
-    by_phone, by_serial = {}, {}
+    """phone(mdn) / serial → device line {model, sold, gp, store, sale_date, rep, trans_id}, PLUS
+    accessory $ summed per trans_id (accessories share the device's transaction, with no mdn of their
+    own). The device line is the highest-value line on the phone/serial; cost = sold − gp."""
+    by_phone, by_serial, acc_by_trans = {}, {}, {}
     for r in _fetch_all(client, "raw_sales",
-                        "store,salesperson,product_desc,ext_price,trans_date,mdn,serial_1,department,contract_type",
+                        "store,salesperson,product_desc,ext_price,gp,trans_id,trans_date,mdn,serial_1,department,category,contract_type",
                         {"org_id": org_id}):
-        # prefer device lines (a model/price), skip pure plan/accessory rows for the device detail
+        price = safe_float(r.get("ext_price"))
+        tid = (r.get("trans_id") or "").strip()
+        if tid and _is_accessory_line(r.get("department"), r.get("category")):
+            acc_by_trans[tid] = acc_by_trans.get(tid, 0.0) + price
         info = {"model": (r.get("product_desc") or "").strip(),
-                "sold": safe_float(r.get("ext_price")),
+                "sold": price, "gp": safe_float(r.get("gp")),
                 "store": (r.get("store") or "").strip(),
                 "sale_date": r.get("trans_date"),
-                "rep": (r.get("salesperson") or "").strip()}
+                "rep": (r.get("salesperson") or "").strip(),
+                "trans_id": tid}
         mdn = (r.get("mdn") or "").strip()
         ser = (r.get("serial_1") or "").strip()
         # keep the highest-value line per phone/serial — that's the device sale (model + price),
@@ -98,14 +112,14 @@ def _sales_index(client, org_id):
             by_phone[mdn] = info
         if ser and (ser not in by_serial or info["sold"] > by_serial[ser]["sold"]):
             by_serial[ser] = info
-    return by_phone, by_serial
+    return by_phone, by_serial, acc_by_trans
 
 
 def analyze(client, org_id, period, window_days=90, rep=""):
     cy, cm = _cohort_month(period)
     cohort_label = date(cy, cm, 1).strftime("%B %Y")
     namemap = _name_map(client, org_id)
-    by_phone, by_serial = _sales_index(client, org_id)
+    by_phone, by_serial, acc_by_trans = _sales_index(client, org_id)
 
     # Dedupe raw_mi to one row per subscriber, preferring the row that carries a deactivation
     # date (the churn signal) so we don't miss subs that dropped off later MI reports.
@@ -129,12 +143,13 @@ def analyze(client, org_id, period, window_days=90, rep=""):
             continue                                   # only the 3-months-ago cohort
         login = (r.get("rep_username") or "").strip()
         name = namemap.get(login.lower()) or login or "(unknown rep)"
-        agg = reps.setdefault(login, {"rep_login": login, "rep": name,
-                                      "cohort": 0, "churned": 0})
+        agg = reps.setdefault(login, {"rep_login": login, "rep": name, "cohort": 0, "churned": 0,
+                                      "emp_loss": 0, "cust_loss": 0, "mixed_loss": 0})
         agg["cohort"] += 1
 
         deact = _d(r.get("mi_deactivation_date"))
-        lost_before_3rd = bool(deact and (deact - act).days <= window_days)
+        days = (deact - act).days if deact else None
+        lost_before_3rd = bool(deact and days <= window_days)
         if not lost_before_3rd:
             continue
         agg["churned"] += 1
@@ -142,16 +157,42 @@ def analyze(client, org_id, period, window_days=90, rep=""):
         serial = (r.get("device_serial") or "").strip()
         sale = by_phone.get(phone) or by_serial.get(serial) or {}
         mrc = safe_float(r.get("base_mrc")) or safe_float(r.get("commissionable_mrc"))
+        sold = round(safe_float(sale.get("sold")), 2)
+        gp = round(safe_float(sale.get("gp")), 2)
+        device_cost = round(sold - gp, 2) if sold else 0.0
+        acc = round(acc_by_trans.get(sale.get("trans_id") or "", 0.0), 2)
+
+        # Customer- vs employee-driven LOSS heuristic (transparent + tunable). The sale signals an
+        # employee-driven loss when the rep gave away margin (sold at/below cost) and/or didn't attach
+        # any accessory — a low-value sale. A clean sale (positive margin + accessory attached) that
+        # still churned reads as customer-driven. fast-churn (<=30d) is shown as an extra signal.
+        below_cost = bool(sold) and gp <= 0
+        no_attach = acc <= 0
+        fast = days is not None and days <= 30
+        score = (1 if below_cost else 0) + (1 if no_attach else 0)
+        loss_type = "employee" if score >= 2 else ("customer" if score == 0 else "mixed")
+        reasons = []
+        if below_cost: reasons.append("sold at/below cost")
+        if no_attach: reasons.append("no accessory attach")
+        if fast: reasons.append(f"churned in {days}d")
+        agg[{"employee": "emp_loss", "customer": "cust_loss", "mixed": "mixed_loss"}[loss_type]] += 1
+
         churned_rows.append({
             "rep": name, "rep_login": login,
             "phone_number": phone,
             "device_model": sale.get("model") or r.get("customer_plan") or "",
             "charged_mrc": round(mrc, 2),
-            "sold_for": round(safe_float(sale.get("sold")), 2),
+            "sold_for": sold,
+            "device_cost": device_cost,
+            "margin": gp,
+            "accessory_sale": acc,
+            "loss_type": loss_type,
+            "loss_reasons": reasons,
+            "fast_churn": fast,
             "store": sale.get("store") or "",
             "activation_date": r.get("mi_activation_date"),
             "churn_date": r.get("mi_deactivation_date"),
-            "days_active": (deact - act).days,
+            "days_active": days,
             "reason": _churn_reason(r.get("subscriber_status")),
             "plan": (r.get("customer_plan") or "").strip(),
         })
@@ -182,10 +223,16 @@ def analyze(client, org_id, period, window_days=90, rep=""):
                    "retained": tot_cohort - tot_churn,
                    "retention_pct": round(100.0 * (tot_cohort - tot_churn) / tot_cohort, 1) if tot_cohort else 0.0,
                    "lost_value_sold": round(sum(c["sold_for"] for c in churned_rows), 2),
-                   "lost_mrc": round(sum(c["charged_mrc"] for c in churned_rows), 2)},
+                   "lost_mrc": round(sum(c["charged_mrc"] for c in churned_rows), 2),
+                   "lost_accessory": round(sum(c["accessory_sale"] for c in churned_rows), 2),
+                   "employee_driven": sum(1 for c in churned_rows if c["loss_type"] == "employee"),
+                   "customer_driven": sum(1 for c in churned_rows if c["loss_type"] == "customer"),
+                   "mixed": sum(1 for c in churned_rows if c["loss_type"] == "mixed")},
         "reps": summary,
         "churned": churned_rows,
         "note": ("3MR cohort = subscribers a rep activated in " + cohort_label +
                  f"; 'churned before 3rd bill' = deactivated within {window_days} days of activation. "
-                 "Device model / sold-for / store come from the matching B2B sale (by phone or serial)."),
+                 "Device model / cost (sold − GP) / accessory attach come from the matching B2B sale "
+                 "(by phone or serial). Loss type: EMPLOYEE-driven = sold at/below cost AND/OR no "
+                 "accessory attach; CUSTOMER-driven = a clean sale (margin + attach) that still churned."),
     }

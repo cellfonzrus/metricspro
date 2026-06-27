@@ -11,6 +11,7 @@ export default function SalesAnalyzerPage() {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [selRep, setSelRep] = useState('')
+  const [lossFilter, setLossFilter] = useState('')   // '' | employee | customer | mixed
   const [flagged, setFlagged] = useState<Record<string, boolean>>({})
 
   async function flagChurn(c: any) {
@@ -38,7 +39,8 @@ export default function SalesAnalyzerPage() {
   const reps = (data?.reps || []).filter((r: any) => !repFilter || (r.rep || '').toLowerCase().includes(repFilter.toLowerCase()))
   const churned = (data?.churned || []).filter((c: any) =>
     (!repFilter || (c.rep || '').toLowerCase().includes(repFilter.toLowerCase())) &&
-    (!selRep || c.rep_login === selRep))
+    (!selRep || c.rep_login === selRep) &&
+    (!lossFilter || c.loss_type === lossFilter))
   const t = data?.totals || {}
 
   function buildPayload(): ExportPayload {
@@ -57,8 +59,13 @@ export default function SalesAnalyzerPage() {
           { header: 'Rep', get: (r: any) => r.rep },
           { header: 'Phone', get: (r: any) => r.phone_number },
           { header: 'Device / plan', get: (r: any) => r.device_model },
-          { header: 'Charged MRC', get: (r: any) => r.charged_mrc, money: true },
           { header: 'Sold for', get: (r: any) => r.sold_for, money: true },
+          { header: 'Cost', get: (r: any) => r.device_cost, money: true },
+          { header: 'Margin', get: (r: any) => r.margin, money: true },
+          { header: 'Accessory', get: (r: any) => r.accessory_sale, money: true },
+          { header: 'Charged MRC', get: (r: any) => r.charged_mrc, money: true },
+          { header: 'Loss type', get: (r: any) => r.loss_type },
+          { header: 'Why', get: (r: any) => (r.loss_reasons || []).join('; ') },
           { header: 'Store', get: (r: any) => r.store },
           { header: 'Activated', get: (r: any) => r.activation_date },
           { header: 'Churned', get: (r: any) => r.churn_date },
@@ -102,6 +109,9 @@ export default function SalesAnalyzerPage() {
             <Tile label="3MR retention" value={`${t.retention_pct ?? 0}%`} accent={(t.retention_pct ?? 0) >= 70 ? '#15803d' : '#b45309'} />
             <Tile label="Lost — sold value" value={fmt(t.lost_value_sold || 0)} />
             <Tile label="Lost — monthly MRC" value={fmt(t.lost_mrc || 0)} />
+            <Tile label="Lost — accessory attach" value={fmt(t.lost_accessory || 0)} />
+            <Tile label="Employee-driven loss" value={t.employee_driven ?? 0} accent="#b45309" />
+            <Tile label="Customer-driven loss" value={t.customer_driven ?? 0} accent="#15803d" />
           </div>
 
           <div className="card" style={{ padding: 0, overflow: 'auto' }}>
@@ -131,19 +141,27 @@ export default function SalesAnalyzerPage() {
           </div>
 
           <div className="card" style={{ padding: 0, overflow: 'auto' }}>
-            <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>
-              Churned transactions{selRep ? ` — ${reps.find((r: any) => r.rep_login === selRep)?.rep || selRep}` : ''} ({churned.length})
+            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 700, fontSize: 13 }}>Churned transactions{selRep ? ` — ${reps.find((r: any) => r.rep_login === selRep)?.rep || selRep}` : ''} ({churned.length})</span>
+              <span style={{ flex: 1 }} />
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>Loss:</span>
+              {[['', 'All'], ['employee', '👤 Employee'], ['customer', '🙂 Customer'], ['mixed', '◐ Mixed']].map(([v, l]) => (
+                <button key={v} onClick={() => setLossFilter(v)} style={{ padding: '4px 10px', borderRadius: 14, border: '1px solid var(--border)',
+                  cursor: 'pointer', fontSize: 12, fontWeight: 600, background: lossFilter === v ? '#1E3A5F' : 'var(--surface)', color: lossFilter === v ? '#fff' : 'var(--text2)' }}>{l}</button>
+              ))}
             </div>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 920 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1120 }}>
               <thead><tr style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Rep</th>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Phone</th>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Device / plan</th>
-                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Charged (MRC)</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Sold for</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Cost</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Margin</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Accessory</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Charged (MRC)</th>
+                <th style={{ textAlign: 'left', padding: '8px 12px' }}>Loss type</th>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Store</th>
-                <th style={{ textAlign: 'left', padding: '8px 12px' }}>Activated</th>
-                <th style={{ textAlign: 'left', padding: '8px 12px' }}>Churned</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Days</th>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Reason</th>
                 <th style={{ textAlign: 'center', padding: '8px 12px' }}>→ CB</th>
@@ -154,12 +172,14 @@ export default function SalesAnalyzerPage() {
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{c.rep}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{c.phone_number}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{c.device_model || '—'}</td>
-                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right' }}>{c.charged_mrc ? fmt(c.charged_mrc) : '—'}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right' }}>{c.sold_for ? fmt(c.sold_for) : '—'}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: 'var(--text3)' }}>{c.device_cost ? fmt(c.device_cost) : '—'}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: (c.margin ?? 0) <= 0 ? '#b91c1c' : '#15803d', fontWeight: 600 }}>{c.sold_for ? fmt(c.margin) : '—'}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: (c.accessory_sale ?? 0) <= 0 ? '#b45309' : 'var(--text)' }}>{(c.accessory_sale ?? 0) > 0 ? fmt(c.accessory_sale) : '$0'}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right' }}>{c.charged_mrc ? fmt(c.charged_mrc) : '—'}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12 }}><LossPill type={c.loss_type} reasons={c.loss_reasons} /></td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{c.store || '—'}</td>
-                    <td style={{ padding: '6px 12px', fontSize: 12 }}>{c.activation_date || '—'}</td>
-                    <td style={{ padding: '6px 12px', fontSize: 12, color: '#b91c1c' }}>{c.churn_date || '—'}</td>
-                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right' }}>{c.days_active}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: c.fast_churn ? '#b91c1c' : undefined }}>{c.days_active}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{c.reason}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'center' }}>
                       {flagged[`${c.phone_number || ''}|${c.activation_date || ''}`]
@@ -168,7 +188,7 @@ export default function SalesAnalyzerPage() {
                     </td>
                   </tr>
                 ))}
-                {churned.length === 0 && <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No early churn{selRep ? ' for this rep' : ''}.</td></tr>}
+                {churned.length === 0 && <tr><td colSpan={13} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No early churn{selRep ? ' for this rep' : ''}{lossFilter ? ` (${lossFilter}-driven)` : ''}.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -176,6 +196,21 @@ export default function SalesAnalyzerPage() {
         </div>
       )}
     </div>
+  )
+}
+
+function LossPill({ type, reasons }: { type?: string; reasons?: string[] }) {
+  const cfg: Record<string, { bg: string; fg: string; label: string }> = {
+    employee: { bg: '#fef3c7', fg: '#92400e', label: '👤 Employee' },
+    customer: { bg: '#dcfce7', fg: '#15803d', label: '🙂 Customer' },
+    mixed: { bg: '#e5e7eb', fg: '#374151', label: '◐ Mixed' },
+  }
+  const c = cfg[type || 'mixed'] || cfg.mixed
+  return (
+    <span title={(reasons || []).join(' · ')} style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px',
+      borderRadius: 12, background: c.bg, color: c.fg, whiteSpace: 'nowrap', cursor: reasons?.length ? 'help' : 'default' }}>
+      {c.label}
+    </span>
   )
 }
 
