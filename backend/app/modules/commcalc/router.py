@@ -2125,6 +2125,10 @@ def accessory_flags(start: str = None, end: str = None, store: str = None, rep: 
         m = imap.get(key)
         if not _is_acc(m, r):
             continue
+        # Boost Protect (and all its variants) is a protection/insurance plan, NOT an accessory —
+        # never flag it. Substring match keeps real accessories like "screen protector" in scope.
+        if "boost protect" in (r.get("product_desc") or "").lower():
+            continue
         price = safe_float(r.get("ext_price"))
         # Flag accessories priced ABOVE the max threshold OR sold BELOW the allowed minimum (underselling).
         # min_t <= 0 disables the under-min check (default), so behavior is unchanged until a min is set.
