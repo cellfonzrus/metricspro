@@ -15,7 +15,8 @@ function Badge({ label, color }: { label?: string; color?: string }) {
     background: (color || '#888') + '22', color: color || '#555', border: `1px solid ${(color || '#888')}55` }}>{label}</span>
 }
 
-export default function PortalHelpdesk({ email, name, empId }: { email: string; name: string; empId: string }) {
+export default function PortalHelpdesk({ email, name, empId, onOpenCount }:
+  { email: string; name: string; empId: string; onOpenCount?: (n: number) => void }) {
   const [view, setView] = useState<'list' | 'new' | 'detail'>('list')
   const [tickets, setTickets] = useState<any[]>([])
   const [cfg, setCfg] = useState<any>(null)
@@ -35,10 +36,14 @@ export default function PortalHelpdesk({ email, name, empId }: { email: string; 
   const loadList = useCallback(() => {
     setLoading(true); setErr('')
     api(`/api/v1/helpdesk/tickets?org_id=${ORG_ID}&agent=false&requester=${enc(email)}`)
-      .then((d: any) => setTickets(Array.isArray(d) ? d : []))
+      .then((d: any) => {
+        const list = Array.isArray(d) ? d : []
+        setTickets(list)
+        onOpenCount?.(list.filter((t: any) => t.status?.stage !== 'done').length)
+      })
       .catch(e => setErr(e?.message || 'Could not load tickets'))
       .finally(() => setLoading(false))
-  }, [email])
+  }, [email, onOpenCount])
   useEffect(() => { loadList() }, [loadList])
   useEffect(() => {
     api(`/api/v1/helpdesk/config/bootstrap?org_id=${ORG_ID}`).then((d: any) => {

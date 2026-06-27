@@ -52,6 +52,7 @@ export default function PortalPage() {
   // tabs + manager span (the "My Team" tab only shows if this employee manages an org unit)
   const [tab, setTab] = useState<'dashboard' | 'closing' | 'team' | 'reports' | 'helpdesk'>('dashboard')
   const [span, setSpan] = useState<any>(null)
+  const [hdOpen, setHdOpen] = useState(0)   // employee's open helpdesk tickets (tab badge)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -118,6 +119,14 @@ export default function PortalPage() {
     if (!empId || !token) { setSpan(null); return }
     authed('/api/v1/storeops/org/my-span').then(setSpan).catch(() => setSpan(null))
   }, [empId, token, authed])
+
+  // open-ticket count for the Helpdesk tab badge (so it shows before they open the tab)
+  useEffect(() => {
+    if (!user?.email) { setHdOpen(0); return }
+    api(`/api/v1/helpdesk/tickets?org_id=${ORG_ID}&agent=false&requester=${encodeURIComponent(user.email)}`)
+      .then((d: any) => setHdOpen(Array.isArray(d) ? d.filter((t: any) => t.status?.stage !== 'done').length : 0))
+      .catch(() => setHdOpen(0))
+  }, [user?.email])
 
   // ── camera helpers ──────────────────────────────────────────────────────────────────────────
   async function openCamera() {
@@ -342,7 +351,7 @@ export default function PortalPage() {
         <TabBtn k="closing" label="🧾 Daily Closing" tab={tab} setTab={setTab} />
         {span?.is_manager && <TabBtn k="team" label="🫂 My Team" tab={tab} setTab={setTab} />}
         <TabBtn k="reports" label="📊 Reports" tab={tab} setTab={setTab} />
-        <TabBtn k="helpdesk" label="🎫 Helpdesk" tab={tab} setTab={setTab} />
+        <TabBtn k="helpdesk" label="🎫 Helpdesk" tab={tab} setTab={setTab} badge={hdOpen} />
       </div>
 
       {tab === 'dashboard' && (dash
@@ -355,19 +364,23 @@ export default function PortalPage() {
 
       {tab === 'reports' && <PortalReports />}
 
-      {tab === 'helpdesk' && <PortalHelpdesk email={user?.email || ''} name={empName || dash?.employee?.name || ''} empId={empId} />}
+      {tab === 'helpdesk' && <PortalHelpdesk email={user?.email || ''} name={empName || dash?.employee?.name || ''} empId={empId} onOpenCount={setHdOpen} />}
     </div>
   )
 }
 
-function TabBtn({ k, label, tab, setTab }:
-  { k: 'dashboard' | 'closing' | 'team' | 'reports' | 'helpdesk'; label: string; tab: string; setTab: (t: any) => void }) {
+function TabBtn({ k, label, tab, setTab, badge }:
+  { k: 'dashboard' | 'closing' | 'team' | 'reports' | 'helpdesk'; label: string; tab: string; setTab: (t: any) => void; badge?: number }) {
   const active = tab === k
   return (
     <button onClick={() => setTab(k)} style={{
       padding: '9px 14px', borderRadius: 9, border: '1px solid var(--border)', cursor: 'pointer',
       fontSize: 14, fontWeight: 600, background: active ? '#1E3A5F' : 'var(--surface)',
-      color: active ? '#fff' : 'var(--text2)' }}>{label}</button>
+      color: active ? '#fff' : 'var(--text2)' }}>
+      {label}
+      {badge ? <span style={{ marginLeft: 6, background: '#dc2626', color: '#fff', borderRadius: 10,
+        padding: '0 7px', fontSize: 12, fontWeight: 700 }}>{badge}</span> : null}
+    </button>
   )
 }
 
