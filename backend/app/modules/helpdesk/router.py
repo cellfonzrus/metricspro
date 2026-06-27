@@ -413,7 +413,7 @@ def _ensure_bucket():
         c.storage.get_bucket(BUCKET)
     except Exception:
         try:
-            c.storage.create_bucket(BUCKET, options={"public": False})
+            c.storage.create_bucket(BUCKET)   # private by default (matches the closing-envelope bucket)
         except Exception:
             pass
     return c
@@ -446,7 +446,8 @@ def attachment_url(tid: str, aid: str, org_id: str = ORG_ID):
         raise HTTPException(404, "attachment not found")
     try:
         res = get_supabase().storage.from_(BUCKET).create_signed_url(rows[0]["storage_path"], 3600)
-        return {"url": res.get("signedURL") or res.get("signed_url") or res.get("signedUrl")}
+        url = (res.get("signedURL") or res.get("signed_url") or res.get("signedUrl")) if isinstance(res, dict) else res
+        return {"url": url}
     except Exception as e:
         raise HTTPException(500, f"could not sign url: {e}")
 
