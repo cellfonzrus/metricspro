@@ -129,6 +129,32 @@ export default function AccessoryFlagsPage() {
         </p>
       </div>
 
+      {/* Filters (top of page) */}
+      <div className="card" style={{ padding: 14, marginBottom: 14, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>From<br /><input type="date" style={{ ...sel, marginTop: 4 }} value={start} onChange={e => setStart(e.target.value)} /></label>
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>To<br /><input type="date" style={{ ...sel, marginTop: 4 }} value={end} onChange={e => setEnd(e.target.value)} /></label>
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Store<br />
+          <select style={{ ...sel, marginTop: 4, minWidth: 150 }} value={storeF} onChange={e => setStoreF(e.target.value)}>
+            <option value="">All stores</option>{stores.map(s => <option key={s} value={s}>{s}</option>)}</select></label>
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Rep<br />
+          <select style={{ ...sel, marginTop: 4, minWidth: 150 }} value={repF} onChange={e => setRepF(e.target.value)}>
+            <option value="">All reps</option>{reps.map(s => <option key={s} value={s}>{s}</option>)}</select></label>
+        <button className="btn btn-primary" onClick={load} disabled={loading}>{loading ? '…' : '🔍 Load'}</button>
+      </div>
+
+      {/* Thresholds / rules */}
+      <div className="card" style={{ padding: 14, marginBottom: 14, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Flag over ($)<br />
+          <input type="number" style={{ ...sel, width: 100, marginTop: 4 }} value={threshold} onChange={e => setThreshold(Number(e.target.value))} /></label>
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Flag under ($)<br />
+          <input type="number" style={{ ...sel, width: 100, marginTop: 4 }} value={minThreshold} onChange={e => setMinThreshold(Number(e.target.value))} placeholder="0 = off" /></label>
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Default chargeback ($)<br />
+          <input type="number" style={{ ...sel, width: 130, marginTop: 4 }} value={defaultCb} onChange={e => setDefaultCb(Number(e.target.value))} /></label>
+        <button className="btn btn-primary" onClick={load} disabled={loading}>{loading ? '…' : '🔍 Apply & load'}</button>
+        <button className="btn" onClick={saveRules}>💾 Save as default</button>
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Flags accessories sold <b>over</b> the max <i>or</i> <b>under</b> the min (underselling; set 0 to disable). <b>Apply &amp; load</b> uses the typed values now; <b>Save as default</b> persists them.</span>
+      </div>
+
       {/* Dashboard summary */}
       {summary && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
@@ -146,33 +172,6 @@ export default function AccessoryFlagsPage() {
         </div>
       )}
       {byStoreRep.length > 0 && <StoreRepCard rows={byStoreRep} onPick={(s, r) => { setStoreF(s === storeF ? '' : s); setRepF(r === repF ? '' : r) }} activeStore={storeF} activeRep={repF} />}
-
-      {/* Rules / threshold */}
-      <div className="card" style={{ padding: 14, marginBottom: 14, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Flag over ($)<br />
-          <input type="number" style={{ ...sel, width: 100, marginTop: 4 }} value={threshold} onChange={e => setThreshold(Number(e.target.value))} /></label>
-        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Flag under ($)<br />
-          <input type="number" style={{ ...sel, width: 100, marginTop: 4 }} value={minThreshold} onChange={e => setMinThreshold(Number(e.target.value))} placeholder="0 = off" /></label>
-        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Default chargeback ($)<br />
-          <input type="number" style={{ ...sel, width: 130, marginTop: 4 }} value={defaultCb} onChange={e => setDefaultCb(Number(e.target.value))} /></label>
-        <button className="btn btn-primary" onClick={load} disabled={loading}>{loading ? '…' : '🔍 Apply & load'}</button>
-        <button className="btn" onClick={saveRules}>💾 Save as default</button>
-        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Flags accessories sold <b>over</b> the max <i>or</i> <b>under</b> the min (underselling; set 0 to disable). <b>Apply &amp; load</b> uses the typed values now; <b>Save as default</b> persists them.</span>
-      </div>
-
-      {/* Filters */}
-      <div className="card" style={{ padding: 14, marginBottom: 14, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>From<br /><input type="date" style={{ ...sel, marginTop: 4 }} value={start} onChange={e => setStart(e.target.value)} /></label>
-        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>To<br /><input type="date" style={{ ...sel, marginTop: 4 }} value={end} onChange={e => setEnd(e.target.value)} /></label>
-        <button className="btn btn-primary" onClick={load} disabled={loading}>{loading ? '…' : '🔍 Load'}</button>
-        <div style={{ flex: 1 }} />
-        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Store<br />
-          <select style={{ ...sel, marginTop: 4, minWidth: 150 }} value={storeF} onChange={e => setStoreF(e.target.value)}>
-            <option value="">All stores</option>{stores.map(s => <option key={s} value={s}>{s}</option>)}</select></label>
-        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Rep<br />
-          <select style={{ ...sel, marginTop: 4, minWidth: 150 }} value={repF} onChange={e => setRepF(e.target.value)}>
-            <option value="">All reps</option>{reps.map(s => <option key={s} value={s}>{s}</option>)}</select></label>
-      </div>
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
         <button className="btn" onClick={() => toggleAll(true)}>Select all ({filtered.length})</button>
