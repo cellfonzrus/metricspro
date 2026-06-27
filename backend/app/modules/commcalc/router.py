@@ -4542,7 +4542,94 @@ async def _run_email_sweep(org_id):
     client.schema('commcalc').table('email_sweep_config').update(
         {'last_run_at': _datetime.now(_timezone.utc).isoformat(),
          'last_status': f"{ok}/{len(results)} attachments ingested"}).eq('org_id', org_id).execute()
+    # Auto-derive the monthly commission basis (raw_sales) from the feed when 'sales' is set to auto
+    # on the Connectors page — best-effort + guarded, never breaks the sweep. This is what lets the
+    # user stop uploading the monthly Sales file by hand. OFF until 'sales' auto is enabled.
+    try:
+        if (any(r['upload_type'] == 'daily_sales' and r['status'] == 'ok' for r in results)
+                and _registry_auto_map(client, org_id).get('sales')):
+            _promote_feed_to_raw_sales(client, org_id, _ftp_current_period())
+    except Exception as e:
+        print(f"WARN auto-promote feed->raw_sales failed: {e}")
     return {"ok": True, "ingested": ok, "files": results}
+
+
+def _promote_feed_to_raw_sales(client, org_id, period, dry_run=False, force=False, retain=0.85):
+    """Derive the authoritative monthly raw_sales for `period` from the accumulated daily B2B email
+    feed (daily_sales_feed), so the monthly Sales file no longer has to be uploaded by hand.
+
+    MERGE, not blind replace: the rebuilt raw_sales = every feed transaction for the month PLUS any
+    transaction that exists in the current raw_sales but NOT in the feed — so a transaction is NEVER
+    dropped (the feed can lag the monthly file by a handful of transactions during the transition).
+    daily_sales_feed and raw_sales share an identical column shape (same parser), so feed rows copy
+    straight across; the period label is normalized to the monthly 'Month YYYY' form.
+
+    Guarded: if the merged result would shrink the existing raw_sales line count below `retain` of its
+    current size, the write is SKIPPED (a half-delivered feed can't wipe a good month) unless force.
+    dry_run returns the would-be delta WITHOUT writing — the safe way to validate before committing."""
+    pv = _pvariants(period)
+    canon = next((v for v in pv if v[:1].isalpha()), period)  # 'June 2026' form for raw_sales
+
+    def _all(table):
+        out, start = [], 0
+        while True:
+            rows = (client.schema('commcalc').table(table).select('*')
+                    .eq('org_id', org_id).in_('period', pv).range(start, start + 999).execute().data) or []
+            out.extend(rows)
+            if len(rows) < 1000:
+                return out
+            start += 1000
+
+    feed = _all('daily_sales_feed')
+    existing = _all('raw_sales')
+    feed_trans = {r.get('trans_id') for r in feed if r.get('trans_id')}
+    raw_cols = set(existing[0].keys()) if existing else None
+    DROP = {'id', 'created_at'}
+
+    new_rows = []
+    for r in feed:
+        row = {k: v for k, v in r.items() if k not in DROP and (raw_cols is None or k in raw_cols)}
+        row['org_id'] = org_id
+        row['period'] = canon
+        new_rows.append(row)
+    monthly_only = [r for r in existing if r.get('trans_id') not in feed_trans]
+    for r in monthly_only:
+        new_rows.append({k: v for k, v in r.items() if k != 'id'})
+
+    def _amt(rows):
+        return round(sum((safe_float(x.get('ext_price')) or 0) for x in rows), 2)
+    summary = {
+        "period": canon, "dry_run": dry_run,
+        "feed_lines": len(feed), "feed_trans": len(feed_trans),
+        "existing_lines": len(existing), "existing_trans": len({r.get('trans_id') for r in existing}),
+        "monthly_only_trans": len({r.get('trans_id') for r in monthly_only}),
+        "result_lines": len(new_rows), "result_trans": len({r.get('trans_id') for r in new_rows}),
+        "existing_amount": _amt(existing), "result_amount": _amt(new_rows),
+    }
+    if not new_rows:
+        summary["skipped"] = "no feed or monthly rows for this period"
+        return summary
+    if existing and not force and len(new_rows) < retain * len(existing):
+        summary["skipped"] = (f"guard: result {len(new_rows)} lines < {int(retain * 100)}% of existing "
+                              f"{len(existing)} — feed looks incomplete (use force to override)")
+        return summary
+    if dry_run:
+        return summary
+
+    client.schema('commcalc').table('raw_sales').delete().eq('org_id', org_id).in_('period', pv).execute()
+    for i in range(0, len(new_rows), 500):
+        client.schema('commcalc').table('raw_sales').insert(new_rows[i:i + 500]).execute()
+    summary["written"] = len(new_rows)
+    return summary
+
+
+@router.post("/sales/promote-feed")
+def promote_feed(period: str, org_id: str = ORG_ID, dry_run: bool = True, force: bool = False):
+    """Build the monthly commission basis (raw_sales) for a period from the daily B2B email feed.
+    dry_run=true (default) PREVIEWS the delta without writing — pass dry_run=false to commit, then
+    recompute the period. Idempotent + guarded; merges so no transaction is ever dropped."""
+    require_org(org_id)
+    return _promote_feed_to_raw_sales(sb(), org_id, period, dry_run=dry_run, force=force)
 
 
 @router.get("/email-sweep/config")

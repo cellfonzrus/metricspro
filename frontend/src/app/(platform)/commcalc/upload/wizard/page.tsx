@@ -21,7 +21,7 @@ const ICONS: Record<string, string> = {
   dlar_store: '🏪', hotsheet: '🏷️', vip_workbook: '🧾', asset_ledger: '📒', daily_closing: '🧮',
 }
 const NOTES: Record<string, string> = {
-  sales: 'The only report that can’t auto-sweep yet (login is IP-blocked; B2B FTP push is being wired). Upload it here each month.',
+  sales: 'Daily B2B Sales-Transaction-Details now arrive automatically via the email subscription (→ daily feed + Sales Feed Recon). Set the “Sales” connector to auto (Connectors page) to also auto-build the monthly commission basis from that feed — then this manual upload is only a fallback.',
   comp_report: 'Posts in arrears — a month is often empty until the carrier publishes it. The sweep replaces the open month daily and freezes it at month-end.',
   hotsheet: 'Pick the date it became effective.',
   asset_ledger: 'Auto-swept with the VIP sweep (GET /paygodashboard/DownloadAssetLanding). Manual upload still available.',
@@ -58,7 +58,7 @@ const FALLBACK_STEPS: Step[] = [
   { id: 'sales', label: 'Sales Transactions', icon: '🛍️', kind: 'period', endpoint: 'commcalc/upload/sales', ft: 'sales',
     source: 'b2bsoft — wsreports.b2bsoft.com', url: 'https://wsreports.b2bsoft.com', auto: false,
     report: 'Sales Transaction Details — the 78-column export (ALL columns, NOT the grouped variant)',
-    note: 'The only report that can’t auto-sweep yet (login is IP-blocked; B2B FTP push is being wired). Upload it here each month.' },
+    note: 'Daily B2B Sales-Transaction-Details now arrive automatically via the email subscription (→ daily feed + Sales Feed Recon). Set the “Sales” connector to auto (Connectors page) to also auto-build the monthly commission basis from that feed — then this manual upload is only a fallback.' },
   { id: 'payment_detail', label: 'Commission Payment Detail', icon: '💳', kind: 'period', endpoint: 'commcalc/upload/payment_detail', ft: 'payment_detail',
     source: 'ePay Owner Portal — ownerportal.epayworldwide.com', url: 'https://ownerportal.epayworldwide.com', auto: true,
     report: 'Commission Payment Detail (report #50273)' },
