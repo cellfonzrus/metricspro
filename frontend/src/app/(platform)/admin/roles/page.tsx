@@ -10,6 +10,7 @@ const MODULES: { key: string; label: string }[] = [
   { key: 'accounts', label: 'Accounts' },
   { key: 'storeops', label: 'StoreOps' },
   { key: 'notify', label: 'Notify' },
+  { key: 'helpdesk', label: 'Helpdesk' },
   { key: 'admin', label: 'Admin (role mgmt)' },
 ]
 const SCOPES = [

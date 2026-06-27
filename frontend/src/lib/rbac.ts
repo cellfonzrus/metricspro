@@ -95,6 +95,12 @@ export const NAV: NavGroup[] = [
     { href: '/notify', label: 'Notify', icon: '📤', module: 'notify' },
     { href: '/notify/report-recipients', label: 'Report Recipients', icon: '📬', module: 'notify' },
   ]},
+  { group: 'Helpdesk', module: 'helpdesk', items: [
+    { href: '/helpdesk', label: 'Tickets', icon: '🎫', module: 'helpdesk' },
+    { href: '/helpdesk/new', label: 'Raise a Ticket', icon: '➕', module: 'helpdesk' },
+    { href: '/helpdesk/dashboard', label: 'Dashboard', icon: '📊', module: 'helpdesk', scopes: ['all', 'market', 'store'] },
+    { href: '/helpdesk/settings', label: 'Settings', icon: '⚙️', module: 'helpdesk', scopes: ['all'] },
+  ]},
   { group: 'Configurations', module: 'admin', items: [
     { href: '/configurations', label: 'All Settings', icon: '⚙️', module: 'admin' },
     { href: '/admin/roles', label: 'Roles & Access', icon: '🔐', module: 'admin' },
@@ -112,6 +118,7 @@ export function moduleForPath(path: string): string {
   if (path.startsWith('/closing')) return 'closing'
   if (path.startsWith('/accounts')) return 'accounts'
   if (path.startsWith('/notify')) return 'notify'
+  if (path.startsWith('/helpdesk')) return 'helpdesk'
   if (path.startsWith('/commcalc/targets')) return 'targets'
   if (path.startsWith('/commcalc/asset')) return 'asset'
   if (path.startsWith('/commcalc/vip')) return 'vip'
@@ -133,7 +140,7 @@ export function canSeeItem(perms: Permissions, item: NavItem): boolean {
 }
 
 // Pages a self-scoped (rep) user may always reach, on top of their home.
-const SELF_ALLOWED = ['/commcalc/targets/my', '/account/password', '/reports']
+const SELF_ALLOWED = ['/commcalc/targets/my', '/account/password', '/reports', '/helpdesk']
 
 export function canAccessPath(perms: Permissions, path: string): boolean {
   if (path === '/' || path.startsWith('/account/password')) return true
