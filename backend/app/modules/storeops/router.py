@@ -902,6 +902,49 @@ def org_assign_store(store_code: str, body: dict, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+# ── EMPLOYEE org chart: where each person sits in the tree ────────────────────────────────────────
+@router.get("/org/employees")
+def org_employees(include_inactive: bool = False, org_id: str = ORG_ID):
+    """Every employee with the unit they roll up to — a DIRECT employees.org_unit_id wins, else their
+    home_store -> stores.org_unit_id. Plus is_manager (assigned to any node). Powers the org chart."""
+    q = sb().table("employees").select("employee_id,name,home_store,role,is_active,org_unit_id")
+    if not include_inactive:
+        q = q.eq("is_active", True)
+    emps = q.order("name").execute().data or []
+    stores = sb().table("stores").select("store_code,address,org_unit_id").execute().data or []
+    unit_by_store = {}
+    for s in stores:
+        u = s.get("org_unit_id")
+        if not u:
+            continue
+        for k in (s.get("store_code"), s.get("address")):
+            if k:
+                unit_by_store[str(k).strip().upper()] = u
+    mgr_ids = {m.get("employee_id") for m in (sb().table("org_managers").select("employee_id").execute().data or [])
+               if m.get("employee_id")}
+    out = []
+    for e in emps:
+        hs = str(e.get("home_store") or "").strip().upper()
+        out.append({
+            "employee_id": e.get("employee_id"), "name": e.get("name"),
+            "home_store": e.get("home_store"), "role": e.get("role"),
+            "is_active": e.get("is_active", True),
+            "org_unit_id": e.get("org_unit_id"),                       # direct placement (override)
+            "resolved_unit_id": e.get("org_unit_id") or unit_by_store.get(hs),  # where they show
+            "placed_by": "direct" if e.get("org_unit_id") else ("home_store" if unit_by_store.get(hs) else None),
+            "is_manager": e.get("employee_id") in mgr_ids,
+        })
+    return {"employees": out}
+
+
+@router.put("/org/employees/{employee_id}/unit")
+def org_assign_employee(employee_id: str, body: dict, org_id: str = ORG_ID):
+    """Place an employee directly on a unit (overrides the home-store rollup — for managers / roving /
+    overhead staff). unit_id=null clears the override so they fall back to their home store's unit."""
+    sb().table("employees").update({"org_unit_id": body.get("unit_id")}).eq("employee_id", employee_id).execute()
+    return {"ok": True}
+
+
 # ── the signed-in caller's span (powers the portal "My Team" tab + default frontend scoping) ──────
 @router.get("/org/my-span")
 def org_my_span(authorization: str = Header(default=""), org_id: str = ORG_ID):
