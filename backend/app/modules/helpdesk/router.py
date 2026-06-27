@@ -90,8 +90,9 @@ def _clean(table: str, body: dict) -> dict:
 
 
 def _cfg_list(table: str, org_id: str):
+    order_col = "name" if table == "ticket_teams" else "sort_order"  # teams has no sort_order column
     return (db(table).select("*").eq("org_id", org_id)
-            .order("sort_order").execute().data or [])
+            .order(order_col).execute().data or [])
 
 
 def _cfg_create(table: str, org_id: str, body: dict):
@@ -366,8 +367,8 @@ def update_ticket(tid: str, body: dict, org_id: str = ORG_ID, actor: str = ""):
             upd[f] = body[f]
             events.append((f, cur.get(f), body[f]))
 
-    # lifecycle timestamps off the new status's stage
-    if "status_id" in upd:
+    # lifecycle timestamps off the new status's stage (skip if status is being cleared → no id to look up)
+    if upd.get("status_id"):
         s = (db("ticket_statuses").select("stage").eq("id", upd["status_id"]).limit(1).execute().data or [{}])[0]
         stage = s.get("stage")
         if stage == "done":
@@ -387,6 +388,14 @@ def update_ticket(tid: str, body: dict, org_id: str = ORG_ID, actor: str = ""):
     rows = db("tickets").select("*").eq("org_id", org_id).eq("id", tid).limit(1).execute().data or []
     st, pr, ca, te = _maps(org_id)
     return _decorate(rows[0], st, pr, ca, te)
+
+
+@router.delete("/tickets/{tid}")
+def delete_ticket(tid: str, org_id: str = ORG_ID):
+    """Agent-only in the UI. Comments/events/attachments cascade via FK ON DELETE CASCADE."""
+    _require_module(org_id)
+    db("tickets").delete().eq("org_id", org_id).eq("id", tid).execute()
+    return {"deleted": True}
 
 
 @router.post("/tickets/{tid}/comments")
