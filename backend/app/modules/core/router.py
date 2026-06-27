@@ -9,6 +9,7 @@ creates the auth accounts (service key) and assigns roles. The frontend never re
 tables directly — it calls the token-verified /core/me — so the tables stay backend-only (RLS
 with no anon policy; the service role bypasses RLS).
 """
+import re
 import secrets
 from datetime import datetime, timezone
 
@@ -136,9 +137,58 @@ async def password_changed(authorization: str = Header(default="")):
 
 
 # ── Roles ────────────────────────────────────────────────────────────────────────────
+def _level_role_perms(rank: int) -> dict:
+    """Starting permissions for an org-level-derived role, scaled by org depth. The admin then
+    tunes them on the Role Permissions tab. RBAC is gated OFF until enforce-login is on, so these
+    grant nothing until the admin both assigns the role AND turns enforcement on."""
+    def M(**on):
+        base = {k: False for k in ("commissions", "targets", "asset", "vip", "storeops", "notify", "admin")}
+        base.update(on)
+        return base
+    if rank <= 1:    # Executive / Director — company-wide leadership
+        return {"modules": M(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True),
+                "scope": "all", "home": "/commcalc"}
+    if rank <= 3:    # Regional / District manager — market scope
+        return {"modules": M(commissions=True, targets=True, asset=True, storeops=True, notify=True),
+                "scope": "market", "home": "/commcalc/targets"}
+    if rank == 4:    # Store manager — store scope
+        return {"modules": M(commissions=True, targets=True, asset=True, storeops=True),
+                "scope": "store", "home": "/commcalc/targets"}
+    return {"modules": M(targets=True), "scope": "self", "home": "/commcalc/targets/my"}  # rep / consultant
+
+
+def _ensure_roles_for_levels(client, org_id: str) -> None:
+    """Make every org-chart level (Executive, Director, Regional/District Manager, …) an
+    assignable, editable access role so it shows up in the Roles & Access dropdown. Idempotent:
+    only INSERTS a role for a level that has no matching role name yet — never updates/clobbers an
+    existing (possibly admin-edited) role. Levels that already match a seeded role (e.g. a level
+    named to collide with 'store_manager') are left alone."""
+    levels = (client.schema("storeops").table("org_levels")
+              .select("name,rank").eq("org_id", org_id).execute().data or [])
+    if not levels:
+        return
+    existing = {r["name"] for r in (client.schema("storeops").table("roles")
+                .select("name").eq("org_id", org_id).execute().data or [])}
+    new_rows, seen = [], set()
+    for lv in levels:
+        nm = re.sub(r"[^a-z0-9]+", "_", (lv.get("name") or "").lower()).strip("_")
+        if not nm or nm in existing or nm in seen:
+            continue
+        seen.add(nm)
+        new_rows.append({"org_id": org_id, "name": nm, "display_name": lv.get("name"),
+                         "permissions": _level_role_perms(lv.get("rank") or 0)})
+    if new_rows:
+        client.schema("storeops").table("roles").insert(new_rows).execute()
+
+
 @router.get("/roles")
 async def list_roles(org_id: str = ORG_ID):
-    rows = sb().schema("storeops").table("roles").select("*").eq("org_id", org_id) \
+    client = sb()
+    try:
+        _ensure_roles_for_levels(client, org_id)   # org-chart levels become assignable roles
+    except Exception:
+        pass  # never block the roles list if the level→role sync fails
+    rows = client.schema("storeops").table("roles").select("*").eq("org_id", org_id) \
         .order("id").execute().data or []
     return {"roles": rows}
 
