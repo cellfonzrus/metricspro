@@ -419,12 +419,16 @@ async def upload_file(
         except Exception as e:
             print(f'WARN fraud scan after sales upload failed (run 036?): {e}')
 
-    # After a DAILY feed upload (manual daily_sales OR the FTP sweep, which reuses this endpoint), refresh
-    # the sales-feed recon FLAGS for each period the feed touched, so leaks/mismatches surface on the Flags
-    # + Sales Feed Recon pages automatically (closes the THEME 5 loop). Sync only — designated-notify stays
-    # manual/scheduled to avoid daily spam. Best-effort: a recon failure must never break the upload.
+    # Refresh the sales-feed recon FLAGS for each touched period after EITHER side of the recon changes:
+    #   • a DAILY feed upload (manual daily_sales OR the FTP/email sweep, which reuse this endpoint), and
+    #   • a MONTHLY 'sales' re-upload — the authoritative side. Without this, re-uploading a fresh monthly
+    #     file (the fix for a stale-monthly false-leak flood) would change the recon truth but leave the
+    #     old 'sales_leak' flags stale until the next daily sweep. sync_recon_flags is delete-first by
+    #     source='sales_recon', so a monthly re-upload now SELF-HEALS the leak flags to the new residual.
+    # Sync only — designated-notify stays manual/scheduled to avoid spam. Best-effort: a recon failure
+    # must never break the upload.
     recon = None
-    if file_type == 'daily_sales' and mapped:
+    if file_type in ('daily_sales', 'sales') and mapped:
         recon = {'flagged': 0, 'periods': []}
         for p in sorted({m.get('period') for m in mapped if m.get('period')}):
             try:
@@ -432,7 +436,7 @@ async def upload_file(
                 recon['flagged'] += rr.get('flagged', 0)
                 recon['periods'].append(p)
             except Exception as e:
-                print(f'WARN sales-recon flag sync after daily upload failed (run 047?): {e}')
+                print(f'WARN sales-recon flag sync after {file_type} upload failed (run 047?): {e}')
 
     return {"saved": saved, "file_type": file_type, "period": period, "fraud": fraud, "recon": recon}
 
