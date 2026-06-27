@@ -1,7 +1,7 @@
 """StoreOps API Router — /api/v1/storeops/*"""
 import base64
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from app.core.database import get_supabase
 
 router = APIRouter(prefix="/storeops", tags=["StoreOps"])
@@ -497,9 +497,28 @@ def _fmt_time(iso):
         return iso
 
 
+def _caller_employee_id(authorization: str) -> str:
+    """Resolve the signed-in caller's employee_id from their Supabase JWT (the kiosk/portal sends
+    `Authorization: Bearer <token>`). Self-service time-clock punches are LOCKED to this id so an
+    employee can only ever clock THEMSELVES — picking a name from a list no longer grants a punch
+    (closes the buddy-punching hole). 401 if not signed in; 403 if the login isn't linked to an
+    employee record."""
+    from app.modules.core.router import _uid_from_token  # local import avoids a circular import
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "Sign in to use the time clock.")
+    rows = (sb().table("app_users").select("employee_id").eq("auth_id", uid).limit(1).execute().data) or []
+    eid = ((rows[0].get("employee_id") if rows else "") or "").strip()
+    if not eid:
+        raise HTTPException(403, "Your login isn't linked to an employee record. "
+                                 "Ask an admin to set your Employee ID in Roles & Access.")
+    return eid
+
+
 @router.get("/timeclock/status")
-def timeclock_status(employee_id: str, org_id: str = ORG_ID):
-    """Is this employee currently clocked in? Returns the open entry if so."""
+def timeclock_status(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Is the SIGNED-IN employee currently clocked in? Identity comes from the auth token."""
+    employee_id = _caller_employee_id(authorization)
     rows = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
             .is_("clock_out", "null").order("clock_in", desc=True).limit(1).execute().data) or []
     if rows:
@@ -509,11 +528,11 @@ def timeclock_status(employee_id: str, org_id: str = ORG_ID):
 
 
 @router.post("/timeclock/clock-in")
-def clock_in(body: dict, org_id: str = ORG_ID):
-    """Record a clock-in (one row). Selfie (base64) + GPS + face-match% are stored for audit."""
-    employee_id = (body.get("employee_id") or "").strip()
-    if not employee_id:
-        raise HTTPException(400, "employee_id required")
+def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Record a clock-in (one row). Identity is the SIGNED-IN employee (from the auth token) — a
+    body employee_id is ignored, so you can only punch yourself. Selfie (base64) + GPS + face-match%
+    are still stored for audit (defense in depth)."""
+    employee_id = _caller_employee_id(authorization)
     # guard: don't open a second concurrent entry
     open_rows = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
                  .is_("clock_out", "null").limit(1).execute().data) or []
@@ -534,17 +553,15 @@ def clock_in(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/timeclock/clock-out")
-def clock_out(body: dict, org_id: str = ORG_ID):
-    """Close the open entry for this employee (updates the SAME row) and compute hours."""
-    employee_id = (body.get("employee_id") or "").strip()
+def clock_out(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Close the SIGNED-IN employee's open entry (updates the SAME row) and compute hours. Always
+    scoped to the caller's own employee_id so one employee can't close another's punch."""
+    employee_id = _caller_employee_id(authorization)
     entry_id = body.get("entry_id")
-    q = sb().table("timelog").select("*").eq("org_id", org_id).is_("clock_out", "null")
+    q = (sb().table("timelog").select("*").eq("org_id", org_id).is_("clock_out", "null")
+         .eq("employee_id", employee_id))
     if entry_id:
         q = q.eq("id", entry_id)
-    elif employee_id:
-        q = q.eq("employee_id", employee_id)
-    else:
-        raise HTTPException(400, "employee_id or entry_id required")
     rows = q.order("clock_in", desc=True).limit(1).execute().data or []
     if not rows:
         raise HTTPException(404, "No open clock-in found.")
@@ -578,8 +595,10 @@ def timeclock_list(start: str = "", end: str = "", employee_id: str = "", org_id
 
 # ── face recognition (face-api.js 128-float descriptors) ──────────────────────────────────────
 @router.get("/timeclock/face")
-def get_face(employee_id: str, action: str = "", org_id: str = ORG_ID):
-    """Registration status (and the descriptor itself when action=descriptor, for verify)."""
+def get_face(authorization: str = Header(default=""), action: str = "", org_id: str = ORG_ID):
+    """Registration status (and the descriptor itself when action=descriptor, for verify) for the
+    SIGNED-IN employee — identity comes from the auth token."""
+    employee_id = _caller_employee_id(authorization)
     rows = (sb().table("face_descriptors").select("*").eq("org_id", org_id)
             .eq("employee_id", employee_id).limit(1).execute().data) or []
     if not rows:
@@ -590,12 +609,13 @@ def get_face(employee_id: str, action: str = "", org_id: str = ORG_ID):
 
 
 @router.post("/timeclock/face")
-def save_face(body: dict, org_id: str = ORG_ID):
-    """Save (or re-register) an averaged 128-float descriptor for an employee."""
-    employee_id = (body.get("employee_id") or "").strip()
+def save_face(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Save (or re-register) an averaged 128-float descriptor for the SIGNED-IN employee — identity
+    comes from the auth token, so you can only enroll your own face."""
+    employee_id = _caller_employee_id(authorization)
     descriptor = body.get("descriptor")
-    if not employee_id or not isinstance(descriptor, list) or len(descriptor) != 128:
-        raise HTTPException(400, "employee_id and a 128-float descriptor are required")
+    if not isinstance(descriptor, list) or len(descriptor) != 128:
+        raise HTTPException(400, "a 128-float descriptor is required")
     existing = (sb().table("face_descriptors").select("id,register_count").eq("org_id", org_id)
                 .eq("employee_id", employee_id).limit(1).execute().data) or []
     now = datetime.now(timezone.utc).isoformat()
