@@ -77,7 +77,7 @@ def _seed_defaults(org_id: str):
 
 # ── Config: generic CRUD over the simple per-tenant config tables ───────────────────────────────
 _CONFIG_COLS = {
-    "ticket_categories": ["name", "description", "sort_order", "is_active"],
+    "ticket_categories": ["name", "description", "sort_order", "is_active", "notify_emails"],
     "ticket_priorities": ["key", "label", "color", "sort_order", "is_active"],
     "ticket_statuses": ["key", "label", "stage", "color", "sort_order", "is_active"],
     "ticket_teams": ["name", "is_active"],
@@ -497,8 +497,18 @@ def dashboard(org_id: str = ORG_ID):
 # ── Notify (best-effort; never blocks ticket creation) ─────────────────────────────────────────
 async def _notify_new_ticket(org_id: str, ticket: dict, requester: str):
     try:
-        s = db("ticket_settings").select("notify_emails").eq("org_id", org_id).limit(1).execute().data or []
-        emails = (s[0].get("notify_emails") if s else None) or []
+        # Route by category first (e.g. IT → IT lead), then fall back to the global recipient list.
+        emails = []
+        cat_id = ticket.get("category_id")
+        if cat_id:
+            try:
+                c = db("ticket_categories").select("notify_emails").eq("id", cat_id).limit(1).execute().data or []
+                emails = (c[0].get("notify_emails") if c else None) or []
+            except Exception:
+                emails = []   # column may not exist yet (migration 054 not run) → fall back
+        if not emails:
+            s = db("ticket_settings").select("notify_emails").eq("org_id", org_id).limit(1).execute().data or []
+            emails = (s[0].get("notify_emails") if s else None) or []
         if not emails:
             return
         from app.modules.notify.channels import email_resend

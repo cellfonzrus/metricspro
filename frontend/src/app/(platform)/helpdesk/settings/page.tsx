@@ -50,8 +50,11 @@ function Categories() {
   const { rows, msg, create, update, remove } = useList('categories')
   const [name, setName] = useState('')
   return <Card>{msg && <div style={{ color: '#c0392b', fontSize: 12 }}>{msg}</div>}
+    <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>Set <b>alert emails</b> per category to route new-ticket emails (e.g. IT → IT lead, HR/Payroll → HR). Leave blank to use the shared list on the <b>settings</b> tab.</div>
     {rows.map(r => <Row key={r.id}>
-      <input style={{ ...inp, flex: 1 }} defaultValue={r.name} onBlur={e => e.target.value !== r.name && update(r.id, { name: e.target.value })} />
+      <input style={{ ...inp, width: 150 }} defaultValue={r.name} onBlur={e => e.target.value !== r.name && update(r.id, { name: e.target.value })} />
+      <input style={{ ...inp, flex: 1, minWidth: 180 }} defaultValue={(r.notify_emails || []).join(', ')} placeholder="alert emails (optional)"
+        onBlur={e => { const v = e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean); update(r.id, { notify_emails: v }) }} />
       <label style={{ fontSize: 12 }}><input type="checkbox" checked={r.is_active} onChange={e => update(r.id, { is_active: e.target.checked })} /> active</label>
       <button className="btn btn-sm" style={{ color: '#c0392b' }} onClick={() => remove(r.id)}>Delete</button></Row>)}
     <Row><input style={{ ...inp, flex: 1 }} placeholder="New category name" value={name} onChange={e => setName(e.target.value)} />
