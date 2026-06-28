@@ -154,12 +154,12 @@ def wages_by_store(client, org_id, period):
     nxt = f"{py + 1:04d}-01-01" if pm == 12 else f"{py:04d}-{pm + 1:02d}-01"
     so = client.schema("storeops")
     code2addr = store_code_to_address(client, org_id)
-    emps = (so.table("employees").select("employee_id,pay_rate,home_store").execute().data) or []
+    emps = (so.table("employees").select("employee_id,pay_rate,home_store").eq("org_id", org_id).execute().data) or []
     rate = {e.get("employee_id"): safe_float(e.get("pay_rate")) for e in emps}
     home = {e.get("employee_id"): e.get("home_store") for e in emps}
     shifts = (so.table("shifts")
               .select("employee_id,store_code,scheduled_hours,actual_hours,shift_date,is_deleted")
-              .eq("is_deleted", False).gte("shift_date", f"{month}-01").lt("shift_date", nxt)
+              .eq("org_id", org_id).eq("is_deleted", False).gte("shift_date", f"{month}-01").lt("shift_date", nxt)
               .range(0, 9999).execute().data) or []
     out = {}
     for s in shifts:
