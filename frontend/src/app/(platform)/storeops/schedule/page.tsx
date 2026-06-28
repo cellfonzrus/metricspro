@@ -37,7 +37,10 @@ export default function SchedulePage() {
   const [employees, setEmployees] = useState<Employee[]>([])
   const [stores, setStores] = useState<Store[]>([])
   const [view, setView] = useState<'store' | 'employee'>('store')
-  const [filterMarket, setFilterMarket] = useState('')
+  // Markets are MULTI-select so a market/district manager can build the schedule for every store
+  // across all the markets he runs in one grid. Empty selection = all markets (the old default).
+  const [filterMarkets, setFilterMarkets] = useState<string[]>([])
+  const [mktOpen, setMktOpen] = useState(false)
   const [filterStore, setFilterStore] = useState('')
   const [loading, setLoading] = useState(true)
   // addModal carries the day + the fixed dimension (store OR emp) depending on the view.
@@ -84,12 +87,18 @@ export default function SchedulePage() {
     return m
   }, [timeOff, empById, weekStart, weekEnd])
 
+  // Multi-market filter: empty selection = all markets (matches the old "All markets" default).
+  const selMkt = useMemo(() => new Set(filterMarkets), [filterMarkets])
+  function toggleMarket(m: string) {
+    setFilterMarkets(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m])
+    setFilterStore('') // a store filter from a now-hidden market would otherwise show nothing
+  }
   const filteredStores = stores.filter(s =>
     s.store_code &&
-    (!filterMarket || s.market === filterMarket) &&
+    (selMkt.size === 0 || selMkt.has(s.market)) &&
     (!filterStore || s.store_code === filterStore))
   const filteredEmps = employees.filter(e =>
-    (!filterMarket || mktOf[e.home_store] === filterMarket) &&
+    (selMkt.size === 0 || selMkt.has(mktOf[e.home_store])) &&
     (!filterStore || e.home_store === filterStore))
 
   const shiftsOf = (pred: (s: Shift) => boolean) => shifts.filter(pred)
@@ -279,7 +288,7 @@ export default function SchedulePage() {
     ]
     return {
       title: `Schedule — week of ${parseLocalDate(weekStart).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`,
-      subtitle: `${view === 'store' ? 'By store' : 'By employee'}${filterMarket ? ` · ${filterMarket}` : ''}`,
+      subtitle: `${view === 'store' ? 'By store' : 'By employee'}${filterMarkets.length ? ` · ${filterMarkets.join(', ')}` : ''}`,
       filename: `schedule_${weekStart}`,
       sheets: [{ name: 'Schedule', columns: cols, rows }],
     }
@@ -322,13 +331,37 @@ export default function SchedulePage() {
             <button className="btn" style={{ borderRadius: 0, border: 'none', background: view === 'store' ? 'var(--accent)' : 'transparent', color: view === 'store' ? 'white' : 'var(--text2)' }} onClick={() => setView('store')}>By store</button>
             <button className="btn" style={{ borderRadius: 0, border: 'none', background: view === 'employee' ? 'var(--accent)' : 'transparent', color: view === 'employee' ? 'white' : 'var(--text2)' }} onClick={() => setView('employee')}>By employee</button>
           </div>
-          <select className="select" value={filterMarket} onChange={e => { setFilterMarket(e.target.value); setFilterStore('') }}>
-            <option value="">All markets</option>
-            {markets.map(m => <option key={m} value={m}>{m}</option>)}
-          </select>
+          {/* Multi-select markets: pick one or several markets to schedule a whole district at once. */}
+          <div style={{ position: 'relative' }}>
+            <button className="btn btn-secondary" onClick={() => setMktOpen(o => !o)}
+              style={{ minWidth: 150, display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 }}>
+                {filterMarkets.length === 0 ? 'All markets' : filterMarkets.length === 1 ? filterMarkets[0] : `${filterMarkets.length} markets`}
+              </span>
+              <span style={{ fontSize: 10, opacity: 0.7 }}>▾</span>
+            </button>
+            {mktOpen && (
+              <>
+                <div onClick={() => setMktOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                <div className="card" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 41, width: 240, maxHeight: 320, overflowY: 'auto', padding: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.18)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0 4px 8px', borderBottom: '1px solid var(--border)', marginBottom: 6 }}>
+                    <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 12 }} onClick={() => { setFilterMarkets(markets); setFilterStore('') }}>Select all</button>
+                    <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 12 }} onClick={() => { setFilterMarkets([]); setFilterStore('') }}>Clear</button>
+                  </div>
+                  {markets.length === 0 && <div style={{ padding: 8, color: 'var(--text3)', fontSize: 13 }}>No markets</div>}
+                  {markets.map(m => (
+                    <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px', cursor: 'pointer', fontSize: 13, borderRadius: 6 }}>
+                      <input type="checkbox" checked={filterMarkets.includes(m)} onChange={() => toggleMarket(m)} />
+                      <span>{m}</span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           <select className="select" value={filterStore} onChange={e => setFilterStore(e.target.value)}>
             <option value="">All stores</option>
-            {stores.filter(s => !filterMarket || s.market === filterMarket).map(s => <option key={s.store_code} value={s.store_code}>{s.store_code} — {s.address?.substring(0, 26)}</option>)}
+            {stores.filter(s => s.store_code && (selMkt.size === 0 || selMkt.has(s.market))).map(s => <option key={s.store_code} value={s.store_code}>{s.store_code} — {s.address?.substring(0, 26)}</option>)}
           </select>
           <button className="btn btn-secondary" onClick={prevWeek}>← Prev</button>
           <button className="btn btn-secondary" onClick={() => setWeekStart(mondayOf())}>Today</button>
