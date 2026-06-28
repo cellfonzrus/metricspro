@@ -2,6 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from app.core.tenant_middleware import TenantScopeMiddleware
 from app.modules.commcalc.router import router as commcalc_router
 from app.modules.storeops.router import router as storeops_router
 from app.modules.asset.router import router as asset_router
@@ -23,6 +24,10 @@ app = FastAPI(
 # gzip every response over ~1KB — JSON compresses ~10x, so big payloads (e.g. the 5MB flags list)
 # transfer far faster. System-wide latency win, zero behavior change.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+# SaaS P3 hardening (GATED OFF: enable with env MULTI_TENANT_ENFORCE=1 only AFTER the org_id leak
+# fixes are done + isolation test passes). Derives org_id from the verified token. Default = no-op.
+app.add_middleware(TenantScopeMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
