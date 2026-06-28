@@ -125,8 +125,7 @@ def analyze(client, org_id, period, window_days=90, rep=""):
     # date (the churn signal) so we don't miss subs that dropped off later MI reports.
     rows = _fetch_all(client, "raw_mi",
                       "subscriber_id,subscriber_status,phone_number,device_serial,mi_activation_date,"
-                      "mi_deactivation_date,base_mrc,commissionable_mrc,customer_plan,rep_username,period",
-                      {"org_id": org_id})
+                      "mi_deactivation_date,base_mrc,commissionable_mrc,customer_plan,rep_username,period")
     subs = {}
     for r in rows:
         key = (r.get("subscriber_id") or r.get("phone_number") or "").strip()

@@ -332,8 +332,7 @@ def build_inputs(client, org_id, period):
     # inventory value (BS), owed-to-VIP (BS). One scan, multiple lines.
     try:
         for r in _fetch_all(client, "asset_ledger",
-                            "store,category,status,owed_to_vip,reimbursement,reimbursement_date,selling_price,acquired_date",
-                            {"org_id": org_id}):
+                            "store,category,status,owed_to_vip,reimbursement,reimbursement_date,selling_price,acquired_date"):
             st = _norm_store(r.get("store"))
             cat = (r.get("category") or "").strip().upper()
             status = (r.get("status") or "").strip()
@@ -362,7 +361,7 @@ def build_inputs(client, org_id, period):
             st = _norm_store(r.get("location"))
             add("vip_fees", st, safe_float(r.get("shipping")) + safe_float(r.get("other_cost")),
                 detail_label="Invoice shipping/other")
-        for r in _fetch_all(client, "vip_invoices", "location,grand_total,status", {"org_id": org_id}):
+        for r in _fetch_all(client, "vip_invoices", "location,grand_total,status"):
             status = (r.get("status") or "").strip().lower()
             if status not in ("paid in full", "voided", "paid", "void"):
                 add("vip_ap", _norm_store(r.get("location")), r.get("grand_total"))
@@ -387,7 +386,7 @@ def build_inputs(client, org_id, period):
                             {"org_id": org_id, "period": period_keys}):
             if (r.get("batch_type") or "").lower() == "approved":
                 add("vip_device_pay", None, r.get("amount"))
-        for r in _fetch_all(client, "vip_paygo_payments", "dealer,amount,batch_type", {"org_id": org_id}):
+        for r in _fetch_all(client, "vip_paygo_payments", "dealer,amount,batch_type"):
             if (r.get("batch_type") or "").lower() == "pending":
                 add("owed_vip", None, r.get("amount"))
     except Exception:
