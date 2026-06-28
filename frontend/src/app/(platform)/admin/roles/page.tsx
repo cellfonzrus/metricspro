@@ -55,6 +55,7 @@ export default function RolesAdminPage() {
   const [upWithLogins, setUpWithLogins] = useState(false)
   const [widgetEmp, setWidgetEmp] = useState<number | null>(null)  // row with the widget editor open
   const [editEmp, setEditEmp] = useState<number | null>(null)      // row with the edit/remove editor open
+  const [markets, setMarkets] = useState<string[]>([])             // distinct markets → checkbox picker
 
   async function loadAll() {
     setLoading(true)
@@ -66,6 +67,10 @@ export default function RolesAdminPage() {
       const e = await api('/api/v1/core/employees')
       setEmps(e.employees || [])
       setWithEmail(e.with_email || 0)
+      try {
+        const st = await api('/api/v1/storeops/stores')
+        setMarkets(Array.from(new Set((st || []).map((s: any) => (s.market || '').trim()).filter(Boolean))).sort() as string[])
+      } catch { /* markets are best-effort */ }
     } catch (err: any) { setMsg('Load failed: ' + (err?.message || err)) }
     setLoading(false)
   }
@@ -458,7 +463,7 @@ export default function RolesAdminPage() {
                 <option value="">— role * —</option>
                 {roles.map(r => <option key={r.id} value={r.name}>{r.display_name}</option>)}
               </select>
-              <input style={{ ...sel, width: 150 }} placeholder="Market(s) — comma sep" title="One or more markets, comma-separated (e.g. North, South) — scopes the manager to all of them" value={np.market} onChange={e => setNp(v => ({ ...v, market: e.target.value }))} />
+              <MarketPicker value={np.market} markets={markets} onChange={v => setNp(x => ({ ...x, market: v }))} />
               <input style={{ ...sel, width: 110 }} placeholder="Store" value={np.store} onChange={e => setNp(v => ({ ...v, store: e.target.value }))} />
               <button className="btn btn-primary" onClick={addPerson}>➕ Add</button>
             </div>
@@ -522,9 +527,7 @@ export default function RolesAdminPage() {
                         </select>
                       </td>
                       <td style={{ padding: '8px 12px' }}>
-                        <input style={{ ...sel, width: 130 }} value={e.app_market || ''} placeholder="market(s)"
-                          title="One or more markets, comma-separated (e.g. North, South)"
-                          onChange={ev => setEmp(e.id, { app_market: ev.target.value })} />
+                        <MarketPicker value={e.app_market || ''} markets={markets} onChange={v => setEmp(e.id, { app_market: v })} />
                       </td>
                       <td style={{ padding: '8px 12px' }}>
                         <input style={{ ...sel, width: 110 }} value={e.app_store || ''} placeholder={e.home_store || '—'}
@@ -609,6 +612,40 @@ export default function RolesAdminPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// Checkbox market picker — assign one or many markets to a manager without touching the org tree.
+// Stores the selection as a comma-separated string (what the span resolver already reads).
+function MarketPicker({ value, markets, onChange }: { value: string; markets: string[]; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const chosen = new Set((value || '').split(',').map(s => s.trim()).filter(Boolean))
+  const toggle = (m: string) => {
+    const next = new Set(chosen); next.has(m) ? next.delete(m) : next.add(m)
+    onChange(Array.from(next).join(', '))
+  }
+  const label = chosen.size === 0 ? 'Market(s)…' : chosen.size === 1 ? Array.from(chosen)[0] : `${chosen.size} markets`
+  const btn: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', cursor: 'pointer', minWidth: 120, display: 'inline-flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button type="button" onClick={() => setOpen(o => !o)} style={btn}>
+        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 130 }}>{label}</span>
+        <span style={{ fontSize: 10, opacity: 0.6 }}>▾</span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 41, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 8, minWidth: 180, maxHeight: 300, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.18)' }}>
+            {markets.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)', padding: 4 }}>No markets found</div>}
+            {markets.map(m => (
+              <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', fontSize: 13, cursor: 'pointer' }}>
+                <input type="checkbox" checked={chosen.has(m)} onChange={() => toggle(m)} /> {m}
+              </label>
+            ))}
           </div>
         </>
       )}
