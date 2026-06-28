@@ -1058,6 +1058,46 @@ def list_column_mapping(report_key: str = "", carrier_id: str = "", org_id: str 
     return q.order("priority").execute().data or []
 
 
+# Which UPLOADED source reports each DESIRED OUTPUT report needs (the implementation wizard's matrix).
+_DESIRED_OUTPUTS = {
+    "Pay Discrepancy":     ["sales"],
+    "Total Compensation":  ["comp_report", "mi_report"],
+    "Commissions":         ["sales", "payment_detail", "comp_report"],
+    "Gross Profit / P&L":  ["sales", "payment_detail", "mi_report", "comp_report"],
+}
+
+
+@router.get("/column-mapping/readiness")
+def column_mapping_readiness(carrier_id: str = "", org_id: str = ORG_ID):
+    """Implementation-wizard summary: for each mappable SOURCE report (sales/payment_detail/mi/comp),
+    how many of its REQUIRED fields are mapped + is it ready; and for each DESIRED OUTPUT report,
+    whether all the source reports it needs are ready. Drives /commcalc/implementation."""
+    require_org(org_id)
+    rules = (sb().schema("commcalc").table("column_mapping")
+             .select("report_key,target_field,source_header,carrier_id").eq("org_id", org_id).execute().data) or []
+    by_report: dict = {}
+    for r in rules:
+        rc = r.get("carrier_id")
+        if carrier_id and rc and rc != carrier_id:
+            continue
+        if r.get("source_header"):
+            by_report.setdefault(r["report_key"], set()).add(r["target_field"])
+    reports = {}
+    for rk in column_mapping.known_report_keys():
+        flds = column_mapping.target_fields(rk)
+        req = [f["target_field"] for f in flds if f.get("required")]
+        mapped = by_report.get(rk, set())
+        req_mapped = [t for t in req if t in mapped]
+        reports[rk] = {"required": len(req), "required_mapped": len(req_mapped),
+                       "total_mapped": len(mapped), "total_fields": len(flds),
+                       "ready": bool(req) and len(req_mapped) == len(req)}
+    outputs = {}
+    for name, needs in _DESIRED_OUTPUTS.items():
+        missing = [s for s in needs if not reports.get(s, {}).get("ready")]
+        outputs[name] = {"needs": needs, "missing": missing, "ready": not missing}
+    return {"reports": reports, "outputs": outputs}
+
+
 @router.post("/column-mapping")
 def upsert_column_mapping(body: dict, org_id: str = ORG_ID):
     require_org(org_id)

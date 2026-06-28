@@ -1,0 +1,173 @@
+'use client'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import Link from 'next/link'
+import { api, apiUpload, ORG_ID } from '@/lib/client'
+
+// Implementation Wizard — onboard a new company's data end-to-end: map EVERY source report they
+// upload (auto-detect columns from a sample) → see exactly which DESIRED OUTPUT reports (Commissions,
+// Gross Profit / P&L, Total Comp, Pay Discrepancy) light up once the required inputs are mapped.
+
+const REPORT_LABELS: Record<string, string> = {
+  sales: 'Sales Transactions', payment_detail: 'Commission Payment Detail',
+  mi_report: 'MI & ATU Subscriber Detail', comp_report: 'Comprehensive Compensation',
+}
+const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
+const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
+
+export default function ImplementationWizard() {
+  const [carriers, setCarriers] = useState<any[]>([])
+  const [carrierId, setCarrierId] = useState('')
+  const [readiness, setReadiness] = useState<any>(null)
+  const [msg, setMsg] = useState('')
+
+  useEffect(() => { api('/api/v1/commcalc/carriers').then((c: any) => setCarriers(c || [])).catch(() => {}) }, [])
+  const loadReadiness = useCallback(() => {
+    api(`/api/v1/commcalc/column-mapping/readiness?org_id=${ORG_ID}${carrierId ? `&carrier_id=${carrierId}` : ''}`)
+      .then(setReadiness).catch(() => setReadiness(null))
+  }, [carrierId])
+  useEffect(() => { loadReadiness() }, [loadReadiness])
+
+  const reports = readiness?.reports || {}
+  const outputs = readiness?.outputs || {}
+  const reportKeys = Object.keys(reports)
+  const readyOut = Object.values(outputs).filter((o: any) => o.ready).length
+
+  return (
+    <div style={{ maxWidth: 900 }}>
+      <div style={{ marginBottom: 14 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧩 Implementation Wizard</h1>
+        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          Map every report this company uploads to our fields, and we&apos;ll produce the reports you want.
+          Upload a sample of each file — we auto-detect the columns; you confirm and save.
+        </p>
+      </div>
+
+      <div className="card" style={{ padding: 12, marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <b style={{ fontSize: 13 }}>Carrier mapping set:</b>
+        <select style={sel} value={carrierId} onChange={e => setCarrierId(e.target.value)}>
+          <option value="">Default (all carriers)</option>
+          {carriers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Pick a carrier to keep a separate column layout for it (e.g. Cricket vs Boost).</span>
+        <span style={{ flex: 1 }} />
+        <Link href="/commcalc/onboarding" style={{ fontSize: 13 }}>Full onboarding →</Link>
+      </div>
+
+      {/* desired outputs readiness */}
+      <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>📊 Reports you&apos;ll get</div>
+          <span style={{ fontSize: 13, color: 'var(--text3)' }}>{readyOut}/{Object.keys(outputs).length} ready</span>
+        </div>
+        <div style={{ display: 'grid', gap: 8 }}>
+          {Object.entries(outputs).map(([name, o]: any) => (
+            <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8,
+              background: o.ready ? '#f0fdf4' : 'var(--surface2)', border: `1px solid ${o.ready ? '#bbf7d0' : 'var(--border)'}` }}>
+              <span style={{ fontWeight: 600, minWidth: 170 }}>{name}</span>
+              {o.ready
+                ? <span style={{ color: '#15803d', fontSize: 13, fontWeight: 600 }}>✅ Ready</span>
+                : <span style={{ color: '#b45309', fontSize: 13 }}>Needs: {o.missing.map((m: string) => REPORT_LABELS[m] || m).join(', ')}</span>}
+              <span style={{ flex: 1 }} />
+              <span style={{ fontSize: 11, color: 'var(--text3)' }}>from: {o.needs.map((m: string) => REPORT_LABELS[m] || m).join(' + ')}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* source reports to map */}
+      <div className="card" style={{ padding: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>🗂️ Map your source reports</div>
+        <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 0 }}>Each report below feeds the outputs above. Expand one, upload a sample, confirm the column matches, Save.</p>
+        {reportKeys.length === 0 && <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div>}
+        {reportKeys.map(rk => (
+          <ReportMapper key={rk} reportKey={rk} info={reports[rk]} carrierId={carrierId}
+            onSaved={() => { loadReadiness(); setMsg('✅ Mappings saved.') }} setMsg={setMsg} />
+        ))}
+      </div>
+      {msg && <div style={{ marginTop: 12, fontSize: 13 }}>{msg}</div>}
+    </div>
+  )
+}
+
+function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
+  { reportKey: string; info: any; carrierId: string; onSaved: () => void; setMsg: (s: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [fields, setFields] = useState<any[]>([])
+  const [src, setSrc] = useState<Record<string, string>>({})
+  const [headers, setHeaders] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const load = useCallback(() => {
+    api(`/api/v1/commcalc/column-mapping/targets?report_key=${encodeURIComponent(reportKey)}`).then((t: any) => setFields(t?.fields || [])).catch(() => {})
+    api(`/api/v1/commcalc/column-mapping?report_key=${encodeURIComponent(reportKey)}${carrierId ? `&carrier_id=${carrierId}` : ''}`).then((rules: any) => {
+      const s: Record<string, string> = {}
+      for (const r of rules || []) if (carrierId ? r.carrier_id === carrierId : !r.carrier_id) s[r.target_field] = r.source_header
+      setSrc(s)
+    }).catch(() => {})
+  }, [reportKey, carrierId])
+  useEffect(() => { if (open) load() }, [open, load])
+
+  async function detect(file: File) {
+    setBusy(true)
+    const fd = new FormData(); fd.append('report_key', reportKey); if (carrierId) fd.append('carrier_id', carrierId); fd.append('file', file)
+    try {
+      const d: any = await apiUpload('/api/v1/commcalc/column-mapping/detect', fd)
+      setHeaders(d?.headers || [])
+      const s: Record<string, string> = {}; for (const sg of d?.suggestions || []) if (sg.suggested_source) s[sg.target_field] = sg.suggested_source
+      setSrc(prev => ({ ...prev, ...s }))
+      setMsg(`🔍 ${reportKey}: detected ${d?.headers?.length || 0} columns; matches pre-filled — review & Save.`)
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+  }
+  async function seed() {
+    try { const d: any = await api(`/api/v1/commcalc/column-mapping/seed?report_key=${encodeURIComponent(reportKey)}${carrierId ? `&carrier_id=${carrierId}` : ''}`, { method: 'POST' }); setMsg(`✅ Seeded ${d?.seeded ?? 0} defaults.`); load(); onSaved() } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function saveAll() {
+    setBusy(true); let n = 0
+    for (const f of fields) {
+      const sh = src[f.target_field]?.trim(); if (!sh) continue
+      try { await api('/api/v1/commcalc/column-mapping', { method: 'POST', body: JSON.stringify({ report_key: reportKey, carrier_id: carrierId || undefined, target_field: f.target_field, source_header: sh, transform: f.transform }) }); n++ } catch { /* keep going */ }
+    }
+    setBusy(false); setMsg(`✅ ${reportKey}: saved ${n} mapping(s).`); onSaved()
+  }
+
+  const pct = info?.required ? Math.round(100 * info.required_mapped / info.required) : 0
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', padding: '10px 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', flexWrap: 'wrap' }} onClick={() => setOpen(o => !o)}>
+        <span style={{ width: 16, color: 'var(--text3)' }}>{open ? '▾' : '▸'}</span>
+        <b style={{ minWidth: 200 }}>{REPORT_LABELS[reportKey] || reportKey}</b>
+        {info?.ready
+          ? <span style={{ fontSize: 12, color: '#15803d', background: '#f0fdf4', padding: '2px 8px', borderRadius: 10 }}>✅ ready</span>
+          : <span style={{ fontSize: 12, color: '#b45309', background: '#fffbeb', padding: '2px 8px', borderRadius: 10 }}>{info?.required_mapped || 0}/{info?.required || 0} required mapped</span>}
+        <div style={{ flex: 1, maxWidth: 160, height: 6, background: 'var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+          <div style={{ width: `${pct}%`, height: '100%', background: info?.ready ? '#22c55e' : '#f59e0b' }} />
+        </div>
+      </div>
+      {open && (
+        <div style={{ marginTop: 10, paddingLeft: 26 }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+            <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={busy} onClick={seed}>Seed default layout</button>
+            <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) detect(f); e.target.value = '' }} />
+            <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={busy} onClick={() => fileRef.current?.click()}>📄 Upload sample to auto-detect</button>
+            <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={busy} onClick={saveAll}>Save mappings</button>
+          </div>
+          {fields.length === 0
+            ? <p style={{ fontSize: 13, color: 'var(--text3)' }}>No default field registry for this report — map it on the full Column Mapping page.</p>
+            : <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: 620 }}>
+                <thead><tr style={{ background: 'var(--surface2)' }}>{['Our field', 'Your column'].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {fields.map(f => (
+                    <tr key={f.target_field}>
+                      <td style={cell}>{f.label}{f.required && <span style={{ color: '#b42318' }}> *</span>}</td>
+                      <td style={cell}><input list={`hdr-${reportKey}`} style={{ ...sel, width: '100%' }} placeholder="(unmapped)" value={src[f.target_field] || ''} onChange={e => setSrc(p => ({ ...p, [f.target_field]: e.target.value }))} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>}
+          {headers.length > 0 && <datalist id={`hdr-${reportKey}`}>{headers.map(h => <option key={h} value={h} />)}</datalist>}
+        </div>
+      )}
+    </div>
+  )
+}
