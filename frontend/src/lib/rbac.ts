@@ -4,6 +4,7 @@ export type Scope = 'all' | 'market' | 'store' | 'self'
 export type Permissions = {
   modules?: Record<string, boolean>
   reports?: Record<string, boolean>   // per-AREA report access (separate from the operational module)
+  pages?: Record<string, boolean>     // per-FUNCTION override (by nav href): explicit true/false wins over module
   scope?: Scope
   home?: string
 }
@@ -185,11 +186,30 @@ export function isSuperAdmin(perms: Permissions): boolean {
 }
 
 export function canSeeItem(perms: Permissions, item: NavItem): boolean {
-  if (!isSuperAdmin(perms) && !perms?.modules?.[item.module]) return false
+  if (isSuperAdmin(perms)) return true
   if (item.scopes && !item.scopes.includes(perms.scope || 'all')) return false
-  const area = reportAreaForPath(item.href)   // report pages need the separate report permission
+  // Per-function override wins (either direction) — lets an admin grant/deny each function per role.
+  const ov = perms.pages?.[item.href]
+  if (typeof ov === 'boolean') return ov
+  // Default: operational module gate + (for report pages) the report-area gate.
+  if (!perms?.modules?.[item.module]) return false
+  const area = reportAreaForPath(item.href)
   if (area && !hasReport(perms, area)) return false
   return true
+}
+
+// The per-function override for a path (exact href, else the longest matching nav-href prefix).
+function pageOverrideForPath(perms: Permissions, path: string): boolean | undefined {
+  const pages = perms.pages
+  if (!pages) return undefined
+  if (path in pages) return pages[path]
+  let best: boolean | undefined, bestLen = -1
+  for (const g of NAV) for (const it of g.items) {
+    if ((path === it.href || path.startsWith(it.href + '/')) && it.href.length > bestLen && (it.href in pages)) {
+      best = pages[it.href]; bestLen = it.href.length
+    }
+  }
+  return best
 }
 
 // Pages a self-scoped (rep) user may always reach, on top of their home.
@@ -209,6 +229,8 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
     }
   }
   if (isSuperAdmin(perms)) return true
+  const ov = pageOverrideForPath(perms, path)   // per-function override wins
+  if (typeof ov === 'boolean') return ov
   const area = reportAreaForPath(path)   // report pages need the separate report permission
   if (area && !hasReport(perms, area)) return false
   return !!perms?.modules?.[moduleForPath(path)]

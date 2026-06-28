@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, Fragment } from 'react'
 import { api } from '@/lib/client'
-import { REPORT_AREAS } from '@/lib/rbac'
+import { REPORT_AREAS, NAV, reportAreaForPath } from '@/lib/rbac'
 
 const MODULES: { key: string; label: string }[] = [
   { key: 'commissions', label: 'Commissions' },
@@ -96,6 +96,16 @@ export default function RolesAdminPage() {
     const r = p.reports
     if (r && Object.keys(r).length) return !!r[key]
     return (p.scope || 'all') === 'all'
+  }
+  // Effective visibility of a single nav function for a role: explicit per-function override wins,
+  // else the module gate (+ report-area gate for report pages). Mirrors canSeeItem in rbac.ts.
+  function fnEffective(p: any, item: any): boolean {
+    const ov = p.pages?.[item.href]
+    if (typeof ov === 'boolean') return ov
+    if (!p.modules?.[item.module]) return false
+    const area = reportAreaForPath(item.href)
+    if (area && !reportChecked(p, area)) return false
+    return true
   }
   async function saveRole(r: Role) {
     setMsg('')
@@ -401,6 +411,29 @@ export default function RolesAdminPage() {
                     </div>
                   </div>
                 </div>
+                {/* per-function (fine-grained) access — every nav function individually grant/deny */}
+                <details style={{ marginTop: 14 }}>
+                  <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'var(--text2)' }}>
+                    Functions — grant/deny every individual screen ({Object.keys(p.pages || {}).length} override{Object.keys(p.pages || {}).length === 1 ? '' : 's'})
+                  </summary>
+                  <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
+                    {NAV.map(g => (
+                      <div key={g.group}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>{g.group}</div>
+                        {g.items.map(it => (
+                          <label key={it.href} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '2px 0' }}>
+                            <input type="checkbox" checked={fnEffective(p, it)}
+                              onChange={ev => setPerm(r.id, pp => ({ ...pp, pages: { ...(pp.pages || {}), [it.href]: ev.target.checked } }))} />
+                            <span>{it.icon} {it.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
+                    Unchecked = hidden for this role even if the module is on. These per-function settings override the module/report toggles above.
+                  </div>
+                </details>
               </div>
             )
           })}
