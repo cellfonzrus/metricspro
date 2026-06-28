@@ -129,6 +129,9 @@ export const NAV: NavGroup[] = [
     { href: '/storeops/payroll-tax', label: 'Payroll (Tax)', icon: '🧾', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/admin', label: 'Admin', icon: '🛠️', module: 'storeops', scopes: ['all', 'market'] },
   ]},
+  { group: 'HR', module: 'hr', items: [
+    { href: '/hr', label: 'HR · Total Comp', icon: '🧑‍💼', module: 'hr', scopes: ['all', 'market'] },
+  ]},
   { group: 'Daily Closing', module: 'closing', items: [
     { href: '/closing', label: 'Dashboard', icon: '🧾', module: 'closing', scopes: ['all', 'market', 'store'] },
     { href: '/closing/submit', label: 'Submit Closing', icon: '➕', module: 'closing' },
@@ -162,6 +165,7 @@ export function moduleForPath(path: string): string {
   if (path.startsWith('/configurations')) return 'admin'
   if (path.startsWith('/employee')) return 'targets'
   if (path.startsWith('/storeops')) return 'storeops'
+  if (path.startsWith('/hr')) return 'hr'
   if (path.startsWith('/closing')) return 'closing'
   if (path.startsWith('/accounts')) return 'accounts'
   if (path.startsWith('/notify')) return 'notify'

@@ -284,13 +284,13 @@ def _level_role_perms(rank: int) -> dict:
     tunes them on the Role Permissions tab. RBAC is gated OFF until enforce-login is on, so these
     grant nothing until the admin both assigns the role AND turns enforcement on."""
     def M(**on):
-        base = {k: False for k in ("commissions", "targets", "asset", "vip", "storeops", "notify", "admin")}
+        base = {k: False for k in ("commissions", "targets", "asset", "vip", "storeops", "hr", "notify", "admin")}
         base.update(on)
         return base
     def R(on):  # per-area REPORT access (separate from the operational module)
         return {k: on for k in ("commissions", "asset", "vip", "accounts", "storeops", "closing")}
-    if rank <= 1:    # Executive / Director — company-wide leadership: full reports
-        return {"modules": M(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True),
+    if rank <= 1:    # Executive / Director — company-wide leadership: full reports + HR
+        return {"modules": M(commissions=True, targets=True, asset=True, vip=True, storeops=True, hr=True, notify=True),
                 "reports": R(True), "scope": "all", "home": "/commcalc"}
     if rank <= 3:    # Regional / District manager — market scope: operational only, NO reports by default
         return {"modules": M(commissions=True, targets=True, asset=True, storeops=True, notify=True),
