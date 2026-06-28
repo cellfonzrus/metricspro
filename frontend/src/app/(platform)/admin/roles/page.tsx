@@ -458,7 +458,7 @@ export default function RolesAdminPage() {
                 <option value="">— role * —</option>
                 {roles.map(r => <option key={r.id} value={r.name}>{r.display_name}</option>)}
               </select>
-              <input style={{ ...sel, width: 90 }} placeholder="Market" value={np.market} onChange={e => setNp(v => ({ ...v, market: e.target.value }))} />
+              <input style={{ ...sel, width: 150 }} placeholder="Market(s) — comma sep" title="One or more markets, comma-separated (e.g. North, South) — scopes the manager to all of them" value={np.market} onChange={e => setNp(v => ({ ...v, market: e.target.value }))} />
               <input style={{ ...sel, width: 110 }} placeholder="Store" value={np.store} onChange={e => setNp(v => ({ ...v, store: e.target.value }))} />
               <button className="btn btn-primary" onClick={addPerson}>➕ Add</button>
             </div>
@@ -522,7 +522,8 @@ export default function RolesAdminPage() {
                         </select>
                       </td>
                       <td style={{ padding: '8px 12px' }}>
-                        <input style={{ ...sel, width: 90 }} value={e.app_market || ''} placeholder="—"
+                        <input style={{ ...sel, width: 130 }} value={e.app_market || ''} placeholder="market(s)"
+                          title="One or more markets, comma-separated (e.g. North, South)"
                           onChange={ev => setEmp(e.id, { app_market: ev.target.value })} />
                       </td>
                       <td style={{ padding: '8px 12px' }}>

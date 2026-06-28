@@ -22,14 +22,18 @@ def get_stores(authorization: str = Header(default=""), org_id: str = "00000000-
     return rows
 
 @router.get("/employees")
-def get_employees(include_inactive: bool = False, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
+def get_employees(include_inactive: bool = False, all_company: bool = False, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
+    """Employees in the caller's span. all_company=true returns the WHOLE org roster (still
+    org-scoped) — used by the schedule picker so a manager can borrow an employee from another
+    store/market onto a shift, even if they're outside the manager's span."""
     q = sb().table("employees").select("*").eq("org_id", org_id)
     if not include_inactive:
         q = q.eq("is_active", True)
     rows = q.order("name").execute().data or []
-    ks = scope_keyset(authorization, org_id)
-    if ks is not None:
-        rows = [e for e in rows if in_keyset(ks, e.get("home_store"))]
+    if not all_company:
+        ks = scope_keyset(authorization, org_id)
+        if ks is not None:
+            rows = [e for e in rows if in_keyset(ks, e.get("home_store"))]
     return rows
 
 @router.get("/shifts")

@@ -34,7 +34,8 @@ function hoursBetween(start: string, end: string) {
 export default function SchedulePage() {
   const [weekStart, setWeekStart] = useState(() => mondayOf())
   const [shifts, setShifts] = useState<Shift[]>([])
-  const [employees, setEmployees] = useState<Employee[]>([])
+  const [employees, setEmployees] = useState<Employee[]>([])   // span-scoped — drives the grid
+  const [allEmps, setAllEmps] = useState<Employee[]>([])       // whole-company roster — for the picker
   const [stores, setStores] = useState<Store[]>([])
   const [view, setView] = useState<'store' | 'employee'>('store')
   // Markets are MULTI-select so a market/district manager can build the schedule for every store
@@ -59,7 +60,8 @@ export default function SchedulePage() {
       api('/api/v1/storeops/employees'),
       api('/api/v1/storeops/stores'),
       api('/api/v1/storeops/time-off').catch(() => []),
-    ]).then(([s, e, st, to]) => { setShifts(s || []); setEmployees(e || []); setStores(st || []); setTimeOff(to || []) })
+      api('/api/v1/storeops/employees?all_company=true').catch(() => []),
+    ]).then(([s, e, st, to, ae]) => { setShifts(s || []); setEmployees(e || []); setStores(st || []); setTimeOff(to || []); setAllEmps((ae && ae.length ? ae : e) || []) })
       .catch(console.error).finally(() => setLoading(false))
   }, [weekStart])
 
@@ -214,7 +216,7 @@ export default function SchedulePage() {
   }
 
   function openAdd(date: string, fixed: { store?: string; emp?: string }) {
-    const emp = fixed.emp ? employees.find(e => e.name === fixed.emp) : undefined
+    const emp = fixed.emp ? allEmps.find(e => e.name === fixed.emp) : undefined
     setNewShift({
       start_time: '10:00', end_time: '18:00',
       store_code: fixed.store || emp?.home_store || (filterStore || ''),
@@ -246,7 +248,7 @@ export default function SchedulePage() {
     const employee_name = addModal.emp || newShift.employee_name
     if (!store_code) { alert('Pick a store.'); return }
     if (!employee_name) { alert('Pick an employee.'); return }
-    const emp = employees.find(e => e.name === employee_name)
+    const emp = allEmps.find(e => e.name === employee_name)
     const payload = {
       employee_id: emp?.id?.toString() || '',
       employee_name,
@@ -469,7 +471,7 @@ export default function SchedulePage() {
                 <select className="select" style={{ width: '100%', marginTop: 4 }} value={newShift.employee_name}
                   onChange={e => setNewShift(s => ({ ...s, employee_name: e.target.value }))}>
                   <option value="">Select employee…</option>
-                  {employees.map(e => <option key={e.id} value={e.name}>{e.name}{e.home_store ? ` (${e.home_store})` : ''}</option>)}
+                  {allEmps.map(e => <option key={e.id} value={e.name}>{e.name}{e.home_store ? ` (${e.home_store})` : ''}</option>)}
                 </select>
               )}
             </div>
