@@ -6,6 +6,25 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON)
 
+// ── Tenant scoping (SaaS P2 — GATED OFF by default) ─────────────────────────────────────────────
+// When multi-tenant is enabled, every API call is scoped to the LOGGED-IN user's org instead of the
+// hardcoded house org. AuthProvider pushes the user's org_id here after /core/me resolves. Gated
+// behind a localStorage flag (`mp_multi_tenant`=='1'), default OFF, until the cross-tenant ISOLATION
+// TEST passes — so today this is a complete NO-OP: scopeOrg() returns the path unchanged and every
+// call still uses the house org_id the caller already put in the URL. P3 hardens this server-side.
+let _sessionOrgId: string | null = null
+export function setSessionOrgId(id: string | null | undefined) { _sessionOrgId = id || null }
+function multiTenantOn(): boolean {
+  try { return typeof window !== 'undefined' && window.localStorage.getItem('mp_multi_tenant') === '1' }
+  catch { return false }
+}
+function scopeOrg(path: string): string {
+  if (!multiTenantOn() || !_sessionOrgId) return path
+  return /[?&]org_id=/.test(path)
+    ? path.replace(/([?&]org_id=)[^&]*/, `$1${encodeURIComponent(_sessionOrgId)}`)
+    : path
+}
+
 // API client for FastAPI backend. Attaches the Supabase session token so the backend can identify
 // the caller for span-scoped reads (Phase 5). The backend ignores it while RBAC enforcement is off.
 // An explicit Authorization in opts.headers still wins (spread last).
@@ -16,7 +35,7 @@ export async function api(path: string, opts: RequestInit = {}) {
     const tok = data?.session?.access_token
     if (tok) authHeader = { Authorization: `Bearer ${tok}` }
   } catch { /* not signed in / open mode */ }
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await fetch(`${API_URL}${scopeOrg(path)}`, {
     ...opts,
     headers: { 'Content-Type': 'application/json', ...authHeader, ...opts.headers },
   })
@@ -30,7 +49,7 @@ export async function api(path: string, opts: RequestInit = {}) {
 // Multipart upload (FormData) — the JSON `api()` helper above forces a JSON content-type,
 // which breaks file uploads. Let the browser set the multipart boundary itself.
 export async function apiUpload(path: string, form: FormData) {
-  const res = await fetch(`${API_URL}${path}`, { method: 'POST', body: form })
+  const res = await fetch(`${API_URL}${scopeOrg(path)}`, { method: 'POST', body: form })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || `API error ${res.status}`)

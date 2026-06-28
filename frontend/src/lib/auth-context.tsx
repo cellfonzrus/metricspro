@@ -1,6 +1,6 @@
 'use client'
 import { createContext, useContext, useEffect, useState, useCallback } from 'react'
-import { supabase } from './client'
+import { supabase, setSessionOrgId } from './client'
 import type { Permissions } from './rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -42,7 +42,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loadProfile = useCallback(async (sess: any | null) => {
     if (!sess?.access_token) {
-      setUser(null); setPermissions({}); setProvisioned(false); setActive(false)
+      setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setSessionOrgId(null)
       return
     }
     try {
@@ -52,11 +52,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!res.ok) throw new Error(String(res.status))
       const d = await res.json()
       setUser(d.user || null)
+      setSessionOrgId(d.user?.org_id)   // SaaS P2: scope API calls to the user's org (gated OFF until enabled)
       setPermissions(d.permissions || {})
       setProvisioned(!!d.provisioned)
       setActive(d.active !== false)
     } catch {
-      setUser(null); setPermissions({}); setProvisioned(false); setActive(false)
+      setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setSessionOrgId(null)
     }
   }, [])
 
@@ -79,7 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
-    setSession(null); setUser(null); setPermissions({}); setProvisioned(false); setActive(false)
+    setSession(null); setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setSessionOrgId(null)
   }, [])
 
   const refresh = useCallback(async () => {
