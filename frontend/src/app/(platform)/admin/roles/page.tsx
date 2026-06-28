@@ -133,7 +133,12 @@ export default function RolesAdminPage() {
         await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH',
           body: JSON.stringify({ email: (e.email || '').trim() || null }) })
       }
-      if (!e.email) { setMsg(`Saved ${e.name}. Add an email above to assign a role / create a login.`); return }
+      if (!e.email) {
+        // A role assignment IS a login row (app_users keyed on email) — so an email is required.
+        // Make that explicit instead of a near-silent "Saved" that looks like the role stuck.
+        setMsg(`⚠️ ${e.name} needs an email before a role can be assigned — enter one in the Email column, then Save.${e.app_role ? ` (role "${e.app_role}" not yet applied)` : ''}`)
+        return
+      }
       await api('/api/v1/core/users/assign', { method: 'POST', body: JSON.stringify({
         email: e.email, full_name: e.name, role: e.app_role || 'sales_rep',
         market: e.app_market || null, store_code: e.app_store || e.home_store || null,
@@ -516,7 +521,10 @@ export default function RolesAdminPage() {
                       <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 500 }}>{e.name}{e.manual && <span className="badge" style={{ fontSize: 10, marginLeft: 6 }}>added</span>}<div style={{ fontSize: 11, color: 'var(--text3)' }}>{e.manual ? '✋ manual user' : (e.home_store || '—')}</div></td>
                       <td style={{ padding: '8px 12px' }}>
                         {e.id > 0
-                          ? <input style={{ ...sel, width: 200 }} type="email" value={e.email || ''} placeholder="add email…"
+                          ? <input
+                              style={{ ...sel, width: 200, ...(e.app_role && !(e.email || '').trim() ? { borderColor: '#dc2626', background: '#fef2f2' } : {}) }}
+                              type="email" value={e.email || ''}
+                              placeholder={e.app_role && !(e.email || '').trim() ? '✉️ email required for this role' : 'add email…'}
                               onChange={ev => setEmp(e.id, { email: ev.target.value })} />
                           : <span style={{ fontSize: 12, color: e.email ? 'var(--text2)' : '#dc2626' }}>{e.email || 'no email'}</span>}
                       </td>
