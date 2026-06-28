@@ -9,6 +9,7 @@ creates the auth accounts (service key) and assigns roles. The frontend never re
 tables directly — it calls the token-verified /core/me — so the tables stay backend-only (RLS
 with no anon policy; the service role bypasses RLS).
 """
+import os
 import re
 import secrets
 import uuid
@@ -194,18 +195,12 @@ async def list_tenants(authorization: str = Header(default="")):
     return {"tenants": tens}
 
 
-@router.post("/tenants")
-async def create_tenant(body: dict, authorization: str = Header(default="")):
-    """Create a tenant: new org_id + seed its base roles + module entitlements + provision its first
-    admin login. Returns the temp password to hand off (admin resets on first login)."""
-    _require_super_admin(authorization)
-    name = (body.get("name") or "").strip()
-    admin_email = (body.get("admin_email") or "").strip().lower()
-    if not name or not admin_email:
-        raise HTTPException(400, "name and admin_email required")
-    client = sb()
+def _provision_tenant(client, name, admin_email, admin_name=None, password=None, slug=None, must_reset=True):
+    """Create a tenant (org_id) + seed base roles + module entitlements + provision its first admin
+    login. Shared by super-admin create-tenant AND self-serve signup. Returns the temp password only
+    when one was auto-generated (super-admin flow), not when the caller chose it (signup)."""
     new_org = str(uuid.uuid4())
-    slug = (body.get("slug") or re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-"))[:60]
+    slug = (slug or re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-"))[:60]
     client.schema("storeops").table("tenants").insert({"org_id": new_org, "name": name, "slug": slug}).execute()
     client.schema("storeops").table("roles").insert(
         [{"org_id": new_org, "name": n, "display_name": d, "permissions": p} for (n, d, p) in _BASE_ROLES]).execute()
@@ -214,16 +209,59 @@ async def create_tenant(body: dict, authorization: str = Header(default="")):
             [{"org_id": new_org, "module_key": m, "is_enabled": True} for m in _DEFAULT_TENANT_MODULES]).execute()
     except Exception:
         pass  # tenant_modules (mig 053) may be absent in some envs — non-fatal
-    admin = get_supabase_admin()
-    temp_pw = body.get("temp_password") or ("Mp" + secrets.token_urlsafe(6))
-    auth_id, created, err = _create_or_link_auth(admin, admin_email, temp_pw)
+    pw = password or ("Mp" + secrets.token_urlsafe(6))
+    auth_id, created, err = _create_or_link_auth(get_supabase_admin(), admin_email, pw)
     client.schema("storeops").table("app_users").insert({
         "org_id": new_org, "auth_id": auth_id, "email": admin_email,
-        "full_name": body.get("admin_name") or f"{name} Admin", "role": "admin",
-        "is_active": True, "must_reset_password": True, "super_admin": False,
+        "full_name": admin_name or f"{name} Admin", "role": "admin",
+        "is_active": True, "must_reset_password": must_reset, "super_admin": False,
     }).execute()
     return {"org_id": new_org, "name": name, "admin_email": admin_email,
-            "temp_password": temp_pw, "auth_created": created, "auth_error": err}
+            "temp_password": (None if password else pw), "auth_created": created, "auth_error": err}
+
+
+@router.post("/tenants")
+async def create_tenant(body: dict, authorization: str = Header(default="")):
+    """Super-admin: create a tenant + provision its first admin login (returns a temp password)."""
+    _require_super_admin(authorization)
+    name = (body.get("name") or "").strip()
+    admin_email = (body.get("admin_email") or "").strip().lower()
+    if not name or not admin_email:
+        raise HTTPException(400, "name and admin_email required")
+    return _provision_tenant(sb(), name, admin_email, body.get("admin_name"),
+                             password=body.get("temp_password"), slug=body.get("slug"), must_reset=True)
+
+
+def _signups_open() -> bool:
+    return os.environ.get("SIGNUPS_OPEN", "").lower() in ("1", "true", "yes")
+
+
+@router.get("/signup-status")
+async def signup_status():
+    """PUBLIC: whether self-serve signup is open (env SIGNUPS_OPEN). The /signup page reads this."""
+    return {"open": _signups_open()}
+
+
+@router.post("/signup")
+async def signup(body: dict):
+    """PUBLIC self-serve signup — GATED on env SIGNUPS_OPEN (default OFF). Creates a new company + its
+    admin login with the chosen password. ⚠️ v1 auto-confirms the email — add real email verification
+    + rate-limit/captcha before opening this to the public internet."""
+    if not _signups_open():
+        raise HTTPException(403, "signups are closed")
+    name = (body.get("name") or "").strip()
+    admin_email = (body.get("admin_email") or "").strip().lower()
+    password = body.get("password") or ""
+    if not name or not admin_email or len(password) < 8:
+        raise HTTPException(400, "company name, email, and an 8+ character password are required")
+    if "@" not in admin_email or "." not in admin_email.split("@")[-1]:
+        raise HTTPException(400, "a valid email is required")
+    client = sb()
+    if client.schema("storeops").table("app_users").select("id").eq("email", admin_email).limit(1).execute().data:
+        raise HTTPException(409, "an account with this email already exists")
+    res = _provision_tenant(client, name, admin_email, body.get("admin_name"), password=password, must_reset=False)
+    return {"org_id": res["org_id"], "name": name, "admin_email": admin_email,
+            "message": "Company created — sign in with your email and password."}
 
 
 @router.patch("/tenants/{org_id}")
