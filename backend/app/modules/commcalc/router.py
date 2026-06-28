@@ -3117,19 +3117,20 @@ async def store_unmatched(org_id: str = ORG_ID):
 async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001", _debug: int = 0):
     import time as _t
     client = sb()
-    _q0 = _t.time()
     pv = _pvariants(period)
-    # Only the columns calc_gp_report actually reads — `select('*')` pulled ~90k WIDE rows (raw_mi alone
-    # is 38k rows × dozens of cols), which was the entire ~20s latency (compute is 0.06s). Narrowed.
-    sales      = client.schema('commcalc').table('raw_sales').select('store,department,gp,product_desc,ext_price,salesperson').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
-    pay_detail = client.schema('commcalc').table('raw_payment_detail').select('business_address,amount,payment_type').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
-    mi_rows    = client.schema('commcalc').table('raw_mi').select('salesforce_id,actual_mi_payout,actual_atu_payout').eq('org_id', org_id).in_('period', pv).execute().data or []
-    rep_comms  = client.schema('commcalc').table('rep_commissions').select('store,total_payout,epay_salesperson,storeops_name').eq('org_id', org_id).in_('period', pv).execute().data or []
-    expenses   = client.schema('commcalc').table('store_expenses').select('store_code,amount').eq('org_id', org_id).in_('period', pv).execute().data or []
-    catalog    = client.schema('commcalc').table('raw_catalog').select('product_id,cost').eq('org_id', org_id).execute().data or []
-    store_map  = client.schema('commcalc').table('store_mapping').select('store_address,salesforce_id,market,store_code,is_active').eq('org_id', org_id).execute().data or []
-    pay_cats   = client.schema('commcalc').table('payment_categories').select('description,category').eq('org_id', org_id).execute().data or []
-    comp_rows  = client.schema('commcalc').table('raw_comp_report').select('business_address,compensation_type,payment_amount').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
+    _pt = {}
+    def _timed(name, qb):
+        s = _t.time(); d = qb.execute().data or []; _pt[name] = round(_t.time() - s, 2); return d
+    sales      = _timed('sales', client.schema('commcalc').table('raw_sales').select('store,department,gp,product_desc,ext_price,salesperson').eq('org_id', org_id).in_('period', pv).limit(50000))
+    pay_detail = _timed('pay_detail', client.schema('commcalc').table('raw_payment_detail').select('business_address,amount,payment_type').eq('org_id', org_id).in_('period', pv).limit(50000))
+    mi_rows    = _timed('mi', client.schema('commcalc').table('raw_mi').select('salesforce_id,actual_mi_payout,actual_atu_payout').eq('org_id', org_id).in_('period', pv))
+    rep_comms  = _timed('rep_comms', client.schema('commcalc').table('rep_commissions').select('store,total_payout,epay_salesperson,storeops_name').eq('org_id', org_id).in_('period', pv))
+    expenses   = _timed('expenses', client.schema('commcalc').table('store_expenses').select('store_code,amount').eq('org_id', org_id).in_('period', pv))
+    catalog    = _timed('catalog', client.schema('commcalc').table('raw_catalog').select('product_id,cost').eq('org_id', org_id))
+    store_map  = _timed('store_map', client.schema('commcalc').table('store_mapping').select('store_address,salesforce_id,market,store_code,is_active').eq('org_id', org_id))
+    pay_cats   = _timed('pay_cats', client.schema('commcalc').table('payment_categories').select('description,category').eq('org_id', org_id))
+    comp_rows  = _timed('comp', client.schema('commcalc').table('raw_comp_report').select('business_address,compensation_type,payment_amount').eq('org_id', org_id).in_('period', pv).limit(50000))
+    _q1 = _q0 = 0
     _q1 = _t.time()
     cat_map    = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
     for r in pay_detail:
@@ -3139,7 +3140,7 @@ async def get_gp_report(period: str, view: str = "store", market: str = "", org_
     if market:
         result['store_rows'] = [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]
     if _debug:
-        result = {**result, "_timing": {"queries_s": round(_q1 - _q0, 2), "compute_s": round(_t.time() - _q1, 2),
+        result = {**result, "_timing": {"per_query_s": _pt, "total_queries_s": round(sum(_pt.values()), 2),
                   "rows": {"sales": len(sales), "pay_detail": len(pay_detail), "mi": len(mi_rows),
                            "comp": len(comp_rows), "rep_comms": len(rep_comms)}}}
     return result
