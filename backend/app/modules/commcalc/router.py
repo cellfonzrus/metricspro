@@ -3114,8 +3114,10 @@ async def store_unmatched(org_id: str = ORG_ID):
 
 
 @router.get("/gp/{period}")
-async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001", _debug: int = 0):
+    import time as _t
     client = sb()
+    _q0 = _t.time()
     sales      = client.schema('commcalc').table('raw_sales').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(50000).execute().data or []
     pay_detail = client.schema('commcalc').table('raw_payment_detail').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(50000).execute().data or []
     mi_rows    = client.schema('commcalc').table('raw_mi').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data or []
@@ -3125,6 +3127,7 @@ async def get_gp_report(period: str, view: str = "store", market: str = "", org_
     store_map  = client.schema('commcalc').table('store_mapping').select('*').eq('org_id', org_id).execute().data or []
     pay_cats   = client.schema('commcalc').table('payment_categories').select('*').eq('org_id', org_id).execute().data or []
     comp_rows  = client.schema('commcalc').table('raw_comp_report').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(50000).execute().data or []
+    _q1 = _t.time()
     cat_map    = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
     for r in pay_detail:
         pt = str(r.get('payment_type', '') or '').strip()
@@ -3132,6 +3135,10 @@ async def get_gp_report(period: str, view: str = "store", market: str = "", org_
     result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period, comp_rows=comp_rows)
     if market:
         result['store_rows'] = [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]
+    if _debug:
+        result = {**result, "_timing": {"queries_s": round(_q1 - _q0, 2), "compute_s": round(_t.time() - _q1, 2),
+                  "rows": {"sales": len(sales), "pay_detail": len(pay_detail), "mi": len(mi_rows),
+                           "comp": len(comp_rows), "rep_comms": len(rep_comms)}}}
     return result
 
 @router.get("/chargebacks/{period}")
