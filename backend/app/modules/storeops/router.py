@@ -61,6 +61,9 @@ def create_shift(shift: dict, org_id: str = ORG_ID):
         if conflict:
             who = shift.get("employee_name") or "This employee"
             raise HTTPException(409, f"{who} has approved time off on {sdate} — cannot schedule.")
+    # Stamp org_id so the row survives the org-scoped read filter on GET /shifts.
+    # (shifts.org_id has NO column default → an unstamped insert lands NULL and vanishes.)
+    shift = {**shift, "org_id": shift.get("org_id") or org_id}
     r = sb().table("shifts").insert(shift).execute()
     return r.data[0] if r.data else shift
 
@@ -85,13 +88,14 @@ def get_time_off(employee_id: str = None, authorization: str = Header(default=""
     return rows
 
 @router.post("/time-off")
-def create_time_off(request: dict):
+def create_time_off(request: dict, org_id: str = ORG_ID):
     if not (request.get("employee_id") and request.get("start_date") and request.get("end_date")):
         raise HTTPException(400, "employee_id, start_date and end_date are required")
     status = str(request.get("status") or "pending").lower()
     if status not in ("pending", "approved", "denied"):
         status = "pending"
-    row = {**request, "status": status}
+    # Stamp org_id (no column default) so the request survives the org-scoped GET /time-off filter.
+    row = {**request, "status": status, "org_id": request.get("org_id") or org_id}
     # Manager approve-at-submission: stamp approved_at if approved and not already set.
     if status == "approved" and not row.get("approved_at"):
         row["approved_at"] = datetime.now(timezone.utc).isoformat()
@@ -197,7 +201,6 @@ def bulk_create_employees(body: dict, org_id: str = ORG_ID):
     return {"inserted": inserted, "skipped": skipped}
 
 
-@router.post("/employees")
 def _ensure_employee_id(rec: dict) -> dict:
     """Every employee needs a stable employee_id to be placed in the org tree or assigned a role /
     manager. Auto-generate one (E<pk>) when it's missing, so no employee is unassignable."""
@@ -211,6 +214,7 @@ def _ensure_employee_id(rec: dict) -> dict:
     return rec
 
 
+@router.post("/employees")
 def create_employee(emp: dict):
     """Create an employee (StoreOps Admin)."""
     row = {k: emp[k] for k in EMP_FIELDS if k in emp}
@@ -432,6 +436,7 @@ def save_week_as_template(body: dict, org_id: str = ORG_ID):
             continue
         eid = str(s.get("employee_id")) if s.get("employee_id") else None
         by_key[(eid, wd, s.get("store_code"))] = {
+            "org_id": org_id,
             "employee_id": eid, "employee_name": s.get("employee_name"), "store_code": s.get("store_code"),
             "weekday": wd, "start_time": s.get("start_time"), "end_time": s.get("end_time"),
             "scheduled_hours": s.get("scheduled_hours") or 0}
@@ -469,6 +474,7 @@ def apply_templates(body: dict, org_id: str = ORG_ID):
                 continue
         try:
             sb().table("shifts").insert({
+                "org_id": org_id,
                 "employee_id": eid, "employee_name": t.get("employee_name"), "store_code": t.get("store_code"),
                 "shift_date": target, "start_time": t.get("start_time"), "end_time": t.get("end_time"),
                 "scheduled_hours": t.get("scheduled_hours") or 0, "status": "scheduled"}).execute()
