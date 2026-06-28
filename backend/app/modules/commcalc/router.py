@@ -3115,28 +3115,16 @@ async def store_unmatched(org_id: str = ORG_ID):
 
 @router.get("/gp/{period}")
 async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001"):
-    import asyncio
     client = sb()
-    pv = _pvariants(period)
-    sc = client.schema('commcalc')
-    # 9 independent reads — each is blocking I/O, so run them CONCURRENTLY (wall-time ≈ slowest single
-    # query, not the sum which was ~15s sequential). Same selects/filters → byte-identical result.
-    qbs = [
-        sc.table('raw_sales').select('*').eq('org_id', org_id).in_('period', pv).limit(50000),
-        sc.table('raw_payment_detail').select('*').eq('org_id', org_id).in_('period', pv).limit(50000),
-        sc.table('raw_mi').select('*').eq('org_id', org_id).in_('period', pv),
-        sc.table('rep_commissions').select('*').eq('org_id', org_id).in_('period', pv),
-        sc.table('store_expenses').select('*').eq('org_id', org_id).in_('period', pv),
-        sc.table('raw_catalog').select('*').eq('org_id', org_id),
-        sc.table('store_mapping').select('*').eq('org_id', org_id),
-        sc.table('payment_categories').select('*').eq('org_id', org_id),
-        sc.table('raw_comp_report').select('*').eq('org_id', org_id).in_('period', pv).limit(50000),
-    ]
-    async def _run(q):
-        r = await asyncio.to_thread(q.execute)
-        return r.data or []
-    (sales, pay_detail, mi_rows, rep_comms, expenses,
-     catalog, store_map, pay_cats, comp_rows) = await asyncio.gather(*[_run(q) for q in qbs])
+    sales      = client.schema('commcalc').table('raw_sales').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(50000).execute().data or []
+    pay_detail = client.schema('commcalc').table('raw_payment_detail').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(50000).execute().data or []
+    mi_rows    = client.schema('commcalc').table('raw_mi').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data or []
+    rep_comms  = client.schema('commcalc').table('rep_commissions').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data or []
+    expenses   = client.schema('commcalc').table('store_expenses').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data or []
+    catalog    = client.schema('commcalc').table('raw_catalog').select('*').eq('org_id', org_id).execute().data or []
+    store_map  = client.schema('commcalc').table('store_mapping').select('*').eq('org_id', org_id).execute().data or []
+    pay_cats   = client.schema('commcalc').table('payment_categories').select('*').eq('org_id', org_id).execute().data or []
+    comp_rows  = client.schema('commcalc').table('raw_comp_report').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(50000).execute().data or []
     cat_map    = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
     for r in pay_detail:
         pt = str(r.get('payment_type', '') or '').strip()
