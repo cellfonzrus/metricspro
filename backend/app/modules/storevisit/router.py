@@ -97,18 +97,18 @@ def delete_checklist_item(item_id: str):
 # ── Stores in a market + scheduled rep ───────────────────────────────────────────────────
 @router.get("/stores")
 def stores_in_market(market: str = None, org_id: str = ORG_ID):
-    rows = sb().table("stores").select("store_code,address,market").order("address").execute().data or []
+    rows = sb().table("stores").select("store_code,address,market").eq("org_id", org_id).order("address").execute().data or []
     if market:
         rows = [s for s in rows if (s.get("market") or "") == market]
     return rows
 
 
 @router.get("/scheduled-rep")
-def scheduled_rep(store_code: str, date: str):
+def scheduled_rep(store_code: str, date: str, org_id: str = ORG_ID):
     """Reps scheduled at a store on a given date (from storeops.shifts)."""
     rows = (sb().table("shifts")
             .select("employee_name,start_time,end_time,scheduled_hours")
-            .eq("is_deleted", False).eq("store_code", store_code).eq("shift_date", date)
+            .eq("org_id", org_id).eq("is_deleted", False).eq("store_code", store_code).eq("shift_date", date)
             .order("start_time").execute().data or [])
     names = [r.get("employee_name") for r in rows if r.get("employee_name")]
     return {"store_code": store_code, "date": date, "reps": names, "shifts": rows}
@@ -150,14 +150,14 @@ def create_visit(payload: dict, org_id: str = ORG_ID):
 
 
 @router.get("/visits/{visit_id}")
-def get_visit(visit_id: str):
-    v = sb().table("store_visits").select("*").eq("id", visit_id).limit(1).execute().data
+def get_visit(visit_id: str, org_id: str = ORG_ID):
+    v = sb().table("store_visits").select("*").eq("org_id", org_id).eq("id", visit_id).limit(1).execute().data
     if not v:
         raise HTTPException(404, "visit not found")
     visit = v[0]
-    responses = sb().table("store_visit_responses").select("*").eq("visit_id", visit_id).execute().data or []
+    responses = sb().table("store_visit_responses").select("*").eq("org_id", org_id).eq("visit_id", visit_id).execute().data or []
     accessories = (sb().table("store_visit_accessories").select("*")
-                   .eq("visit_id", visit_id).order("created_at").execute().data or [])
+                   .eq("org_id", org_id).eq("visit_id", visit_id).order("created_at").execute().data or [])
     for resp in responses:
         resp["photo_url"] = _signed_url(resp.get("photo_path"))
     visit["clean_store_photo_url"] = _signed_url(visit.get("clean_store_photo_path"))
@@ -248,19 +248,19 @@ async def upload_photo(visit_id: str, kind: str = Form("clean_store"),
 
 # ── Phase 2: action-item rollup overlay + rep action plan + sign-off ──────────────────────
 @router.get("/visits/{visit_id}/action")
-def get_visit_action(visit_id: str):
+def get_visit_action(visit_id: str, org_id: str = ORG_ID):
     """The DM's saved overlay (which rolled-up action items were discussed + comments + proof),
     the agreed rep action plan, and the sign-off state. The live rolled-up action items come from
     the commcalc action-plan engine — the frontend fetches those and merges this overlay onto them."""
-    v = sb().table("store_visits").select("*").eq("id", visit_id).limit(1).execute().data
+    v = sb().table("store_visits").select("*").eq("org_id", org_id).eq("id", visit_id).limit(1).execute().data
     if not v:
         raise HTTPException(404, "visit not found")
     visit = v[0]
-    items = sb().table("visit_action_items").select("*").eq("visit_id", visit_id).execute().data or []
+    items = sb().table("visit_action_items").select("*").eq("org_id", org_id).eq("visit_id", visit_id).execute().data or []
     for it in items:
         it["proof_photo_url"] = _signed_url(it.get("proof_photo_path"))
     plan = (sb().table("visit_action_plan").select("*")
-            .eq("visit_id", visit_id).order("created_at").execute().data or [])
+            .eq("org_id", org_id).eq("visit_id", visit_id).order("created_at").execute().data or [])
     signoff = {k: visit.get(k) for k in (
         "plan_rep_signed", "plan_rep_signed_by", "plan_rep_signed_at",
         "plan_dm_signed", "plan_dm_signed_by", "plan_dm_signed_at")}

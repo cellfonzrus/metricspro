@@ -369,7 +369,7 @@ def update_ticket(tid: str, body: dict, org_id: str = ORG_ID, actor: str = ""):
 
     # lifecycle timestamps off the new status's stage (skip if status is being cleared → no id to look up)
     if upd.get("status_id"):
-        s = (db("ticket_statuses").select("stage").eq("id", upd["status_id"]).limit(1).execute().data or [{}])[0]
+        s = (db("ticket_statuses").select("stage").eq("org_id", org_id).eq("id", upd["status_id"]).limit(1).execute().data or [{}])[0]
         stage = s.get("stage")
         if stage == "done":
             if not cur.get("resolved_at"):
@@ -502,7 +502,7 @@ async def _notify_new_ticket(org_id: str, ticket: dict, requester: str):
         cat_id = ticket.get("category_id")
         if cat_id:
             try:
-                c = db("ticket_categories").select("notify_emails").eq("id", cat_id).limit(1).execute().data or []
+                c = db("ticket_categories").select("notify_emails").eq("org_id", org_id).eq("id", cat_id).limit(1).execute().data or []
                 emails = (c[0].get("notify_emails") if c else None) or []
             except Exception:
                 emails = []   # column may not exist yet (migration 054 not run) → fall back

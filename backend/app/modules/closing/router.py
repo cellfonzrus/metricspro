@@ -226,7 +226,7 @@ def closing_stores(org_id: str = ORG_ID):
     client = sb()
     sm = (client.schema("commcalc").table("store_mapping")
           .select("salesforce_id,store_code,store_address").eq("org_id", org_id).execute().data) or []
-    stores = (client.schema("storeops").table("stores").select("store_code,market").execute().data) or []
+    stores = (client.schema("storeops").table("stores").select("store_code,market").eq("org_id", org_id).execute().data) or []
     mkt = {s.get("store_code"): s.get("market") for s in stores if s.get("store_code")}
     out = [{
         "sfid": (r.get("salesforce_id") or "").strip(),
@@ -248,7 +248,7 @@ def closing_rollup(period: str, market: str = None, authorization: str = Header(
     client = sb()
     rows = (client.schema("commcalc").table("daily_closing").select("*")
             .eq("org_id", org_id).eq("period", period).limit(50000).execute().data) or []
-    stores = (client.schema("storeops").table("stores").select("store_code,address,market").execute().data) or []
+    stores = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
     store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
 
     # filter by period prefix in Python — "period + '-31'" makes an invalid date (e.g. 2026-06-31)
@@ -321,12 +321,12 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
 
     # Store + market context.
     stores = (client.schema("storeops").table("stores")
-              .select("store_code,address,market").execute().data) or []
+              .select("store_code,address,market").eq("org_id", org_id).execute().data) or []
     store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
 
     # Scheduled reps that day (to flag who didn't submit).
     shifts = (client.schema("storeops").table("shifts").select("store_code,employee_name")
-              .eq("is_deleted", False).eq("shift_date", date).execute().data) or []
+              .eq("org_id", org_id).eq("is_deleted", False).eq("shift_date", date).execute().data) or []
     sched_by_store = {}
     for s in shifts:
         sc = s.get("store_code")
@@ -655,7 +655,7 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
     client = sb()
     closing = (client.schema("commcalc").table("daily_closing").select("*")
                .eq("org_id", org_id).eq("period", period).limit(50000).execute().data) or []
-    stores = (client.schema("storeops").table("stores").select("store_code,address,market").execute().data) or []
+    stores = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
     store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
 
     by_date = {}
@@ -784,7 +784,7 @@ def closing_pickups(date: str, market: str = None, org_id: str = ORG_ID):
     client = sb()
     rows = (client.schema("commcalc").table("daily_closing").select("*")
             .eq("org_id", org_id).eq("close_date", date).execute().data) or []
-    stores = (client.schema("storeops").table("stores").select("store_code,address,market").execute().data) or []
+    stores = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
     smeta = {s.get("store_code"): s for s in stores if s.get("store_code")}
     try:
         picks = (client.schema("commcalc").table("cash_pickup").select("*")

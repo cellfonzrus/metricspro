@@ -29,7 +29,7 @@ async def list_recipients(org_id: str = ORG_ID):
     """Saved notify recipients + active employees (with contact info) for the picker."""
     saved = sb().table("recipients").select("*").eq("org_id", org_id).order("name").execute().data or []
     emps = get_supabase().schema("storeops").table("employees") \
-        .select("name,email,phone,home_store").eq("is_active", True).order("name").execute().data or []
+        .select("name,email,phone,home_store").eq("org_id", org_id).eq("is_active", True).order("name").execute().data or []
     employees = [{"name": e.get("name"), "email": e.get("email"), "phone": e.get("phone"),
                   "store": e.get("home_store")} for e in emps if e.get("email") or e.get("phone")]
     return {"saved": saved, "employees": employees}

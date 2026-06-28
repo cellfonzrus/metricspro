@@ -77,7 +77,7 @@ def _backfill_market(client, org_id: str):
     """Populate asset_ledger.market: exact match to store_mapping, then overrides."""
     # Build address(lower) -> market map from store_mapping
     sm = client.schema("commcalc").table("store_mapping") \
-        .select("store_address,market").execute().data or []
+        .select("store_address,market").eq("org_id", org_id).execute().data or []
     addr_to_market = {}
     for m in sm:
         a = (m.get("store_address") or "").strip().lower()

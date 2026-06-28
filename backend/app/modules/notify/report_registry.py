@@ -398,6 +398,7 @@ async def _storeops_schedule(org_id, f):
     start = start - timedelta(days=start.weekday())   # snap to Monday
     end = start + timedelta(days=6)
     q = (get_supabase().schema("storeops").table("shifts").select("*")
+         .eq("org_id", org_id)
          .eq("is_deleted", False)
          .gte("shift_date", start.isoformat()).lte("shift_date", end.isoformat()))
     sc = (f or {}).get("store_code")
