@@ -1058,6 +1058,76 @@ def org_my_span(authorization: str = Header(default=""), org_id: str = ORG_ID):
     return {"employee_id": eid, "store_codes": codes, "units": units, "is_manager": bool(codes)}
 
 
+@router.get("/org/my-team")
+def org_my_team(authorization: str = Header(default=""), unit_id: str = "", org_id: str = ORG_ID):
+    """The caller's TEAM as the org subtree below the unit(s) they manage: each node = an org unit
+    with its manager(s), the employees that roll up to it (via org_unit_id or home_store), and its
+    child units (recursive). Drives the hierarchical 'My Team' — regional → market managers → their
+    employees → … at any depth. Admins / the /storeops/team picker may pass a unit_id to view a node;
+    a manager is restricted to their own assigned units."""
+    c = sb()
+    try:
+        eid = _caller_employee_id(authorization)
+    except HTTPException:
+        eid = ""
+    my_unit_ids = []
+    if eid:
+        mrows = c.table("org_managers").select("unit_id").eq("org_id", org_id).eq("employee_id", eid).execute().data or []
+        my_unit_ids = [m["unit_id"] for m in mrows if m.get("unit_id")]
+    unrestricted = caller_scope(authorization, org_id) is None   # admin / 'all' / enforcement off
+    if unit_id and (unrestricted or unit_id in my_unit_ids):
+        roots = [unit_id]
+    else:
+        roots = my_unit_ids
+    if not roots:
+        return {"is_manager": False, "tree": []}
+    levels = c.table("org_levels").select("id,name,rank").eq("org_id", org_id).execute().data or []
+    lvl_name = {l["id"]: l.get("name") for l in levels}
+    lvl_rank = {l["id"]: l.get("rank") for l in levels}
+    units = c.table("org_units").select("id,name,parent_id,level_id,sort_order").eq("org_id", org_id).execute().data or []
+    unit_by = {u["id"]: u for u in units}
+    children = {}
+    for u in units:
+        children.setdefault(u.get("parent_id"), []).append(u)
+    for k in children:
+        children[k].sort(key=lambda u: (u.get("sort_order") or 0, u.get("name") or ""))
+    mrows_all = c.table("org_managers").select("unit_id,employee_id").eq("org_id", org_id).execute().data or []
+    emps = c.table("employees").select("employee_id,name,role,home_store,org_unit_id,is_active").eq("org_id", org_id).execute().data or []
+    name_by_eid = {e.get("employee_id"): e.get("name") for e in emps if e.get("employee_id")}
+    mgr_eids = {m.get("employee_id") for m in mrows_all}
+    mgr_by_unit = {}
+    for m in mrows_all:
+        mgr_by_unit.setdefault(m.get("unit_id"), []).append(
+            {"employee_id": m.get("employee_id"), "name": name_by_eid.get(m.get("employee_id"), m.get("employee_id"))})
+    stores = c.table("stores").select("store_code,org_unit_id").eq("org_id", org_id).execute().data or []
+    unit_by_storecode = {(s.get("store_code") or "").strip().upper(): s.get("org_unit_id")
+                         for s in stores if (s.get("store_code") or "").strip()}
+    emp_by_unit = {}
+    for e in emps:
+        if not e.get("is_active", True):
+            continue
+        u = e.get("org_unit_id") or unit_by_storecode.get((e.get("home_store") or "").strip().upper())
+        if not u:
+            continue
+        emp_by_unit.setdefault(u, []).append(
+            {"employee_id": e.get("employee_id"), "name": e.get("name"), "role": e.get("role"),
+             "home_store": e.get("home_store"), "is_manager": e.get("employee_id") in mgr_eids})
+
+    def build(uid, depth=0):
+        u = unit_by.get(uid)
+        if not u or depth > 12:
+            return None
+        kids = [build(ch["id"], depth + 1) for ch in children.get(uid, [])]
+        return {"unit_id": uid, "name": u.get("name"),
+                "level": lvl_name.get(u.get("level_id")), "rank": lvl_rank.get(u.get("level_id")),
+                "managers": mgr_by_unit.get(uid, []),
+                "employees": sorted(emp_by_unit.get(uid, []), key=lambda x: (x.get("name") or "")),
+                "children": [k for k in kids if k]}
+
+    tree = [t for t in (build(r) for r in roots) if t]
+    return {"is_manager": True, "tree": tree}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 # PHASE 5 — span ENFORCEMENT for scoped reads. GATED on the RBAC master switch (app_config.
 # rbac_enabled): when login enforcement is OFF (today's default) this is a strict NO-OP, so the app

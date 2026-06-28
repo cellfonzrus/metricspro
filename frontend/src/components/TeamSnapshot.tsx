@@ -22,6 +22,7 @@ export default function TeamSnapshot({ period, token, unitId, today }:
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [empMap, setEmpMap] = useState<Record<string, string>>({})   // upper(name) -> employee_id
+  const [tree, setTree] = useState<any>(null)                         // org subtree (people hierarchy)
   const [drillRep, setDrillRep] = useState<string | null>(null)
   const [drill, setDrill] = useState<any>(null)
   const [drillBusy, setDrillBusy] = useState(false)
@@ -35,6 +36,8 @@ export default function TeamSnapshot({ period, token, unitId, today }:
     const qs = `?today=${encodeURIComponent(today || localToday())}${unitId ? `&unit_id=${encodeURIComponent(unitId)}` : ''}`
     authed(`/api/v1/commcalc/team/${encodeURIComponent(period)}/snapshot${qs}`)
       .then(setData).catch((e: any) => setErr(e?.message || 'Failed to load team')).finally(() => setLoading(false))
+    authed(`/api/v1/storeops/org/my-team${unitId ? `?unit_id=${encodeURIComponent(unitId)}` : ''}`)
+      .then(setTree).catch(() => setTree(null))
     api('/api/v1/storeops/employees').then((es: any[]) => {
       const m: Record<string, string> = {}
       ;(es || []).forEach(e => { if (e.employee_id && e.name) m[String(e.name).trim().toUpperCase()] = e.employee_id })
@@ -42,10 +45,8 @@ export default function TeamSnapshot({ period, token, unitId, today }:
     }).catch(() => {})
   }, [period, unitId, today, authed])
 
-  const openRep = (repName: string) => {
-    const eid = empMap[String(repName).trim().toUpperCase()]
-    if (!eid) { setDrillRep(repName); setDrill({ _noEmp: true }); return }
-    setDrillRep(repName); setDrill(null); setDrillBusy(true)
+  const loadDrill = (eid: string, label: string) => {
+    setDrillRep(label); setDrill(null); setDrillBusy(true)
     api(`/api/v1/core/employee-dashboard?org_id=${ORG_ID}&employee_id=${encodeURIComponent(eid)}`)
       .then(async (d: any) => {
         const out: any = { dash: d, coach: null, repTargets: null }
@@ -54,6 +55,17 @@ export default function TeamSnapshot({ period, token, unitId, today }:
         if (nm && per && store) { try { out.repTargets = await api(`/api/v1/commcalc/targets/${encodeURIComponent(per)}/calendar?scope=rep&store_code=${encodeURIComponent(store)}&rep=${encodeURIComponent(nm)}&today=${localToday()}`) } catch {} }
         setDrill(out)
       }).catch((e: any) => setDrill({ _err: e?.message || 'Failed to load rep' })).finally(() => setDrillBusy(false))
+  }
+  const openRep = (repName: string) => {
+    const eid = empMap[String(repName).trim().toUpperCase()]
+    if (!eid) { setDrillRep(repName); setDrill({ _noEmp: true }); return }
+    loadDrill(eid, repName)
+  }
+  // Drill straight from the people tree (employee_id known) — falls back to name lookup if missing.
+  const openEmpId = (eid: string, name: string) => {
+    const id = eid || empMap[String(name).trim().toUpperCase()]
+    if (!id) { setDrillRep(name); setDrill({ _noEmp: true }); return }
+    loadDrill(id, name)
   }
 
   if (loading) return <div style={{ padding: 24, color: 'var(--text3)' }}>Loading team…</div>
@@ -70,6 +82,10 @@ export default function TeamSnapshot({ period, token, unitId, today }:
   const catKeys = Object.keys(totals)
   const stores: any[] = data.stores || []
   const reps: any[] = data.reps || []
+  // Per-rep performance keyed by name, to annotate the people tree.
+  const perfByName: Record<string, any> = {}
+  reps.forEach((r: any) => { if (r.rep) perfByName[String(r.rep).trim().toUpperCase()] = r })
+  const treeNodes: any[] = tree?.tree || []
 
   return (
     <div>
@@ -94,6 +110,16 @@ export default function TeamSnapshot({ period, token, unitId, today }:
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>{stores.length} store{stores.length !== 1 ? 's' : ''} · {reps.length} rep{reps.length !== 1 ? 's' : ''}</div>
         </div>
       </div>
+
+      {/* people hierarchy — every employee under this manager, drillable (regional → market mgrs → reps) */}
+      {treeNodes.length > 0 && (
+        <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Team</div>
+          {treeNodes.map((n: any) => (
+            <UnitNode key={n.unit_id} node={n} perfByName={perfByName} onEmp={openEmpId} depth={0} />
+          ))}
+        </div>
+      )}
 
       {/* per-store */}
       {stores.length > 0 && (
@@ -154,6 +180,50 @@ export default function TeamSnapshot({ period, token, unitId, today }:
           {drill?._noEmp && <div style={{ color: 'var(--text3)', fontSize: 13 }}>No employee record matched “{drillRep}” — ask an admin to link this rep’s Employee ID.</div>}
           {drill?._err && <div style={{ color: '#c0392b', fontSize: 13 }}>{drill._err}</div>}
           {drill?.dash && <EmployeeWidgets data={drill.dash} coach={drill.coach} repTargets={drill.repTargets} />}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function countEmployees(n: any): number {
+  return (n.employees?.length || 0) + (n.children || []).reduce((a: number, c: any) => a + countEmployees(c), 0)
+}
+
+// One org-unit node in the drillable people tree: name + level + manager(s), its employees (each with
+// a money-on-table badge + drill), then its child units (recursive). Top two levels open by default.
+function UnitNode({ node, perfByName, onEmp, depth }:
+  { node: any; perfByName: Record<string, any>; onEmp: (eid: string, name: string) => void; depth: number }) {
+  const [open, setOpen] = useState(depth < 2)
+  const hasKids = (node.children?.length || 0) > 0 || (node.employees?.length || 0) > 0
+  return (
+    <div style={{ marginLeft: depth ? 12 : 0, borderLeft: depth ? '1px solid var(--border)' : undefined, paddingLeft: depth ? 10 : 0 }}>
+      <div onClick={() => hasKids && setOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: hasKids ? 'pointer' : 'default', padding: '4px 0', flexWrap: 'wrap' }}>
+        <span style={{ width: 12, color: 'var(--text3)', fontSize: 11 }}>{hasKids ? (open ? '▾' : '▸') : ''}</span>
+        <b style={{ fontSize: 13 }}>{node.name}</b>
+        {node.level && <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {node.level}</span>}
+        {node.managers?.length > 0 && <span style={{ fontSize: 11, color: 'var(--text2)' }}>👤 {node.managers.map((m: any) => m.name).join(', ')}</span>}
+        <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {countEmployees(node)} ppl</span>
+      </div>
+      {open && (
+        <div>
+          {(node.employees || []).map((e: any) => {
+            const p = perfByName[String(e.name || '').trim().toUpperCase()]
+            return (
+              <div key={e.employee_id || e.name} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0 3px 22px', fontSize: 13, flexWrap: 'wrap' }}>
+                <span>{e.is_manager ? '🧑‍💼' : '🧑'}</span>
+                <span style={{ fontWeight: 500 }}>{e.name}</span>
+                {e.role && <span style={{ fontSize: 11, color: 'var(--text3)' }}>{e.role}</span>}
+                {e.home_store && <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {e.home_store}</span>}
+                {p && p.money_on_table > 0 && <span style={{ fontSize: 11, color: '#b42318' }}>${Number(p.money_on_table).toLocaleString()} on table</span>}
+                <span style={{ flex: 1 }} />
+                <button className="btn btn-sm" onClick={() => onEmp(e.employee_id, e.name)}>View ▾</button>
+              </div>
+            )
+          })}
+          {(node.children || []).map((c: any) => (
+            <UnitNode key={c.unit_id} node={c} perfByName={perfByName} onEmp={onEmp} depth={depth + 1} />
+          ))}
         </div>
       )}
     </div>
