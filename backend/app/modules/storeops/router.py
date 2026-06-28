@@ -13,24 +13,36 @@ def sb():
 
 
 @router.get("/stores")
-def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
+def get_stores(authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
     r = sb().table("stores").select("*").eq("org_id", org_id).order("address").execute()
-    return r.data or []
+    rows = r.data or []
+    ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / enforcement off)
+    if ks is not None:
+        rows = [s for s in rows if in_keyset(ks, s.get("store_code"), s.get("address"))]
+    return rows
 
 @router.get("/employees")
-def get_employees(include_inactive: bool = False, org_id: str = "00000000-0000-0000-0000-000000000001"):
+def get_employees(include_inactive: bool = False, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
     q = sb().table("employees").select("*").eq("org_id", org_id)
     if not include_inactive:
         q = q.eq("is_active", True)
-    return q.order("name").execute().data or []
+    rows = q.order("name").execute().data or []
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [e for e in rows if in_keyset(ks, e.get("home_store"))]
+    return rows
 
 @router.get("/shifts")
-def get_shifts(store_code: str = None, week_start: str = None, week_end: str = None, org_id: str = ORG_ID):
+def get_shifts(store_code: str = None, week_start: str = None, week_end: str = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
     q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
     if store_code: q = q.eq("store_code", store_code)
     if week_start: q = q.gte("shift_date", week_start)
     if week_end:   q = q.lte("shift_date", week_end)
-    return q.order("shift_date").execute().data or []
+    rows = q.order("shift_date").execute().data or []
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [s for s in rows if in_keyset(ks, s.get("store_code"))]
+    return rows
 
 @router.post("/shifts")
 def create_shift(shift: dict, org_id: str = ORG_ID):
@@ -59,10 +71,14 @@ def delete_shift(shift_id: int):
     return {"deleted": shift_id}
 
 @router.get("/time-off")
-def get_time_off(employee_id: str = None, org_id: str = ORG_ID):
+def get_time_off(employee_id: str = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
     q = sb().table("time_off_requests").select("*").eq("org_id", org_id)
     if employee_id: q = q.eq("employee_id", employee_id)
-    return q.order("start_date", desc=True).execute().data or []
+    rows = q.order("start_date", desc=True).execute().data or []
+    eids = scope_emp_ids(authorization, org_id)   # None = unrestricted
+    if eids is not None:
+        rows = [r for r in rows if str(r.get("employee_id")) in eids]
+    return rows
 
 @router.post("/time-off")
 def create_time_off(request: dict):
@@ -88,7 +104,7 @@ def update_time_off(request_id: int, updates: dict):
     return r.data[0] if r.data else updates
 
 @router.get("/payroll")
-def get_payroll(month: str = None, org_id: str = ORG_ID):
+def get_payroll(month: str = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Returns scheduled vs actual hours per employee for payroll"""
     q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
     if month:
@@ -128,6 +144,9 @@ def get_payroll(month: str = None, org_id: str = ORG_ID):
     for r in rows:
         r["scheduled_pay"] = round(r["scheduled_hours"] * r["pay_rate"], 2)
         r["actual_pay"]    = round(r["actual_hours"] * r["pay_rate"], 2)
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store"))]
     return sorted(rows, key=lambda x: x["name"])
 
 
@@ -302,8 +321,12 @@ def _emp_name_map(org_id: str = ORG_ID):
 
 # ── Recurring shift templates: save a week as a per-employee template, apply to any week ─────
 @router.get("/shift-templates")
-def get_shift_templates(org_id: str = ORG_ID):
-    return sb().table("shift_templates").select("*").eq("org_id", org_id).order("weekday").execute().data or []
+def get_shift_templates(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    rows = sb().table("shift_templates").select("*").eq("org_id", org_id).order("weekday").execute().data or []
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [t for t in rows if in_keyset(ks, t.get("store_code"))]
+    return rows
 
 
 @router.post("/shift-templates/save-week")
@@ -375,12 +398,16 @@ def apply_templates(body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/shift-swaps")
-def get_shift_swaps(status: str = None, org_id: str = ORG_ID):
+def get_shift_swaps(status: str = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """List swap requests, enriched with employee names + shift details for display."""
     q = sb().table("shift_swap_requests").select("*").eq("org_id", org_id)
     if status:
         q = q.eq("status", status)
     reqs = q.order("created_at", desc=True).execute().data or []
+    eids = scope_emp_ids(authorization, org_id)   # None = unrestricted
+    if eids is not None:
+        reqs = [r for r in reqs if str(r.get("requester_id")) in eids
+                or (r.get("target_id") and str(r.get("target_id")) in eids)]
     names = _emp_name_map(org_id)
     ids = [r["shift_id"] for r in reqs if r.get("shift_id")] + \
           [r["target_shift_id"] for r in reqs if r.get("target_shift_id")]
@@ -578,7 +605,7 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
 
 
 @router.get("/timeclock/list")
-def timeclock_list(start: str = "", end: str = "", employee_id: str = "", org_id: str = ORG_ID):
+def timeclock_list(start: str = "", end: str = "", employee_id: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Timelog entries for a date range (+ optional employee). Newest first."""
     q = sb().table("timelog").select("*").eq("org_id", org_id)
     if employee_id:
@@ -588,6 +615,9 @@ def timeclock_list(start: str = "", end: str = "", employee_id: str = "", org_id
     if end:
         q = q.lte("work_date", end)
     rows = q.order("clock_in", desc=True).limit(5000).execute().data or []
+    eids = scope_emp_ids(authorization, org_id)   # None = unrestricted
+    if eids is not None:
+        rows = [e for e in rows if str(e.get("employee_id")) in eids]
     for e in rows:
         e["selfie_url"] = _signed_selfie(e.get("selfie_path"))
     return rows
@@ -655,7 +685,7 @@ def put_payroll_settings(employee_id: str, body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/manual-hours")
-def list_manual_hours(employee_id: str = "", start: str = "", end: str = "", org_id: str = ORG_ID):
+def list_manual_hours(employee_id: str = "", start: str = "", end: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     q = sb().table("manual_hours").select("*").eq("org_id", org_id)
     if employee_id:
         q = q.eq("employee_id", employee_id)
@@ -663,7 +693,11 @@ def list_manual_hours(employee_id: str = "", start: str = "", end: str = "", org
         q = q.gte("work_date", start)
     if end:
         q = q.lte("work_date", end)
-    return q.order("work_date", desc=True).limit(2000).execute().data or []
+    rows = q.order("work_date", desc=True).limit(2000).execute().data or []
+    eids = scope_emp_ids(authorization, org_id)   # None = unrestricted
+    if eids is not None:
+        rows = [r for r in rows if str(r.get("employee_id")) in eids]
+    return rows
 
 
 @router.post("/manual-hours")
@@ -688,7 +722,7 @@ def delete_manual_hours(mid: str, org_id: str = ORG_ID):
 
 
 @router.get("/payroll-raw")
-def payroll_raw(start: str, end: str, org_id: str = ORG_ID):
+def payroll_raw(start: str, end: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Raw payroll inputs for a pay period — actual clocked hours (timelog) + manual adjustments +
     pay rate + W-4 settings per employee. The browser runs the tax calc (so stored figures never go
     stale when rates change), per the StoreOps payroll spec."""
@@ -721,6 +755,9 @@ def payroll_raw(start: str, end: str, org_id: str = ORG_ID):
                                  "allowances": s.get("allowances") or 0, "state": s.get("state") or "NY",
                                  "extra_withholding": float(s.get("extra_withholding") or 0),
                                  "skipped": bool(s.get("skipped"))}})
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        out = [r for r in out if in_keyset(ks, r.get("store"))]
     out.sort(key=lambda r: r["name"] or "")
     return {"start": start, "end": end, "rows": out}
 
@@ -1090,3 +1127,15 @@ def in_keyset(keyset, *vals) -> bool:
     if keyset is None:
         return True
     return any(str(v or "").strip().upper() in keyset for v in vals)
+
+
+def scope_emp_ids(authorization: str, org_id: str = ORG_ID):
+    """employee_ids in the caller's span (None = UNRESTRICTED). For employee-keyed tables
+    (time-off, swaps, manual-hours, timeclock) that carry no store column — resolves each
+    employee to their home_store and keeps those inside the manager's span keyset."""
+    ks = scope_keyset(authorization, org_id)
+    if ks is None:
+        return None
+    emps = sb().table("employees").select("employee_id,home_store").eq("org_id", org_id).execute().data or []
+    return {str(e.get("employee_id")) for e in emps
+            if e.get("employee_id") and in_keyset(ks, e.get("home_store"))}
