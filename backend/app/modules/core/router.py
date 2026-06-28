@@ -789,9 +789,19 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
     client = sb()
     emp = (client.schema("storeops").table("employees").select("*")
            .eq("employee_id", employee_id).limit(1).execute().data or [])
-    if not emp:
-        raise HTTPException(404, "employee not found")
-    emp = emp[0]
+    if emp:
+        emp = emp[0]
+    else:
+        # Managers (and some leaders) exist only as app_users, with no storeops.employees row.
+        # Fall back to their app_user so the portal still renders the dashboard widgets (and
+        # clock-in) instead of a dead spinner; sales-derived sections just come back empty.
+        au = (client.schema("storeops").table("app_users").select("full_name,store_code,employee_id")
+              .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data or [])
+        if not au:
+            raise HTTPException(404, "employee not found")
+        a = au[0]
+        emp = {"employee_id": employee_id, "name": a.get("full_name") or "",
+               "home_store": a.get("store_code") or "", "epay_salesperson": "", "pay_rate": 0}
     name = (emp.get("name") or "").strip()
     eslp = (emp.get("epay_salesperson") or "").strip()
     period = _emp_period(period)

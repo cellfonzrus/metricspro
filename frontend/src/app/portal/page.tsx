@@ -46,6 +46,7 @@ export default function PortalPage() {
 
   // their dashboard widgets
   const [dash, setDash] = useState<any>(null)
+  const [dashErr, setDashErr] = useState('')
   const [coach, setCoach] = useState<any>(null)
   const [repTargets, setRepTargets] = useState<any>(null)
 
@@ -101,8 +102,8 @@ export default function PortalPage() {
 
   // load their widgets (scoped to the signed-in employee)
   useEffect(() => {
-    if (!empId) { setDash(null); return }
-    setCoach(null); setRepTargets(null)
+    if (!empId) { setDash(null); setDashErr(''); return }
+    setCoach(null); setRepTargets(null); setDashErr('')
     api(`/api/v1/core/employee-dashboard?org_id=${ORG_ID}&employee_id=${encodeURIComponent(empId)}`)
       .then((d: any) => {
         setDash(d)
@@ -111,7 +112,7 @@ export default function PortalPage() {
           .then((c: any) => setCoach((c?.reps || [])[0] || null)).catch(() => {})
         if (nm && per && store) api(`/api/v1/commcalc/targets/${encodeURIComponent(per)}/calendar?scope=rep&store_code=${encodeURIComponent(store)}&rep=${encodeURIComponent(nm)}&today=${localToday()}`)
           .then(setRepTargets).catch(() => {})
-      }).catch(() => setDash(null))
+      }).catch((e: any) => { setDash(null); setDashErr(e?.message || 'Could not load your dashboard.') })
   }, [empId])
 
   // is this employee a manager? (drives the "My Team" tab)
@@ -356,7 +357,9 @@ export default function PortalPage() {
 
       {tab === 'dashboard' && (dash
         ? <EmployeeWidgets data={dash} coach={coach} repTargets={repTargets} />
-        : <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><div className="spinner" /></div>)}
+        : dashErr
+          ? <div className="card" style={{ padding: 18, color: 'var(--text2)', fontSize: 14 }}>{dashErr}</div>
+          : <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><div className="spinner" /></div>)}
 
       {tab === 'closing' && <ClosingSubmitForm defaultEmployeeName={empName || dash?.employee?.name} />}
 
