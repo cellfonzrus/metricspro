@@ -3,8 +3,53 @@
 export type Scope = 'all' | 'market' | 'store' | 'self'
 export type Permissions = {
   modules?: Record<string, boolean>
+  reports?: Record<string, boolean>   // per-AREA report access (separate from the operational module)
   scope?: Scope
   home?: string
+}
+
+// Report (analytical) pages are gated by a per-area `reports` permission that is SEPARATE from the
+// operational module, so e.g. a market manager can run schedules/targets but see no reports.
+// Operational pages (targets entry, schedule, My Team, time clock…) are NOT listed here.
+export const REPORT_AREAS: { key: string; label: string }[] = [
+  { key: 'commissions', label: 'Commission reports' },
+  { key: 'asset', label: 'Asset reports' },
+  { key: 'vip', label: 'VIP reports' },
+  { key: 'accounts', label: 'Accounting reports (P&L / BS)' },
+  { key: 'storeops', label: 'StoreOps reports (hours / payroll)' },
+  { key: 'closing', label: 'Daily Closing reports' },
+]
+// Exact report pages (a bare path that is a report but whose tree also holds non-reports).
+const REPORT_EXACT: Record<string, string> = { '/commcalc': 'commissions', '/reports': '*' }
+// Report page TREES (prefix → area), boundary-matched; longest prefix wins.
+const REPORT_TREES: [string, string][] = [
+  ['/commcalc/exec', 'commissions'], ['/commcalc/reports', 'commissions'], ['/commcalc/gp', 'commissions'],
+  ['/commcalc/kpi', 'commissions'], ['/commcalc/coaching', 'commissions'], ['/commcalc/sales-analyzer', 'commissions'],
+  ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
+  ['/commcalc/accessory-flags', 'commissions'], ['/commcalc/discrepancy', 'commissions'], ['/commcalc/sales-recon', 'commissions'],
+  ['/commcalc/asset', 'asset'], ['/commcalc/vip', 'vip'], ['/accounts', 'accounts'],
+  ['/storeops/reports', 'storeops'], ['/storeops/payroll', 'storeops'], ['/storeops/payroll-tax', 'storeops'],
+  ['/closing/recon', 'closing'],
+]
+// The report area for a path, or null if it's an operational (non-report) page.
+export function reportAreaForPath(path: string): string | null {
+  if (REPORT_EXACT[path]) return REPORT_EXACT[path]
+  let best: string | null = null, bestLen = -1
+  for (const [pre, area] of REPORT_TREES) {
+    if ((path === pre || path.startsWith(pre + '/')) && pre.length > bestLen) { best = area; bestLen = pre.length }
+  }
+  return best
+}
+// May this user see report area `area`? Explicit `reports` config wins; otherwise default by scope —
+// company-wide ('all') leadership keeps reports, everyone else (market/store/self) gets none. So a
+// market manager has NO default report access, while admins/execs keep theirs, with no re-seeding.
+export function hasReport(perms: Permissions, area: string): boolean {
+  if (isSuperAdmin(perms)) return true
+  const r = perms.reports
+  if (r && Object.keys(r).length) {
+    return area === '*' ? Object.values(r).some(Boolean) : !!r[area]
+  }
+  return (perms.scope || 'all') === 'all'
 }
 
 export type NavItem = { href: string; label: string; icon: string; module: string; scopes?: Scope[] }
@@ -138,6 +183,8 @@ export function isSuperAdmin(perms: Permissions): boolean {
 export function canSeeItem(perms: Permissions, item: NavItem): boolean {
   if (!isSuperAdmin(perms) && !perms?.modules?.[item.module]) return false
   if (item.scopes && !item.scopes.includes(perms.scope || 'all')) return false
+  const area = reportAreaForPath(item.href)   // report pages need the separate report permission
+  if (area && !hasReport(perms, area)) return false
   return true
 }
 
@@ -158,6 +205,8 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
     }
   }
   if (isSuperAdmin(perms)) return true
+  const area = reportAreaForPath(path)   // report pages need the separate report permission
+  if (area && !hasReport(perms, area)) return false
   return !!perms?.modules?.[moduleForPath(path)]
 }
 

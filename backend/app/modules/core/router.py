@@ -287,16 +287,18 @@ def _level_role_perms(rank: int) -> dict:
         base = {k: False for k in ("commissions", "targets", "asset", "vip", "storeops", "notify", "admin")}
         base.update(on)
         return base
-    if rank <= 1:    # Executive / Director — company-wide leadership
+    def R(on):  # per-area REPORT access (separate from the operational module)
+        return {k: on for k in ("commissions", "asset", "vip", "accounts", "storeops", "closing")}
+    if rank <= 1:    # Executive / Director — company-wide leadership: full reports
         return {"modules": M(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True),
-                "scope": "all", "home": "/commcalc"}
-    if rank <= 3:    # Regional / District manager — market scope
+                "reports": R(True), "scope": "all", "home": "/commcalc"}
+    if rank <= 3:    # Regional / District manager — market scope: operational only, NO reports by default
         return {"modules": M(commissions=True, targets=True, asset=True, storeops=True, notify=True),
-                "scope": "market", "home": "/commcalc/targets"}
-    if rank == 4:    # Store manager — store scope
+                "reports": R(False), "scope": "market", "home": "/commcalc/targets"}
+    if rank == 4:    # Store manager — store scope: NO reports by default
         return {"modules": M(commissions=True, targets=True, asset=True, storeops=True),
-                "scope": "store", "home": "/commcalc/targets"}
-    return {"modules": M(targets=True), "scope": "self", "home": "/commcalc/targets/my"}  # rep / consultant
+                "reports": R(False), "scope": "store", "home": "/commcalc/targets"}
+    return {"modules": M(targets=True), "reports": R(False), "scope": "self", "home": "/commcalc/targets/my"}  # rep
 
 
 def _ensure_roles_for_levels(client, org_id: str) -> None:

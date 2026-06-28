@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, Fragment } from 'react'
 import { api } from '@/lib/client'
+import { REPORT_AREAS } from '@/lib/rbac'
 
 const MODULES: { key: string; label: string }[] = [
   { key: 'commissions', label: 'Commissions' },
@@ -87,6 +88,13 @@ export default function RolesAdminPage() {
   // ---- roles editing ----
   function setPerm(rid: number, fn: (p: any) => any) {
     setRoles(rs => rs.map(r => r.id === rid ? { ...r, permissions: fn({ ...(r.permissions || {}) }) } : r))
+  }
+  // Effective report access for a role+area: explicit `reports` config wins; else default by scope
+  // (company-wide 'all' keeps reports, market/store/self get none) — mirrors hasReport() in rbac.ts.
+  function reportChecked(p: any, key: string): boolean {
+    const r = p.reports
+    if (r && Object.keys(r).length) return !!r[key]
+    return (p.scope || 'all') === 'all'
   }
   async function saveRole(r: Role) {
     setMsg('')
@@ -346,6 +354,25 @@ export default function RolesAdminPage() {
                           {m.label}
                         </label>
                       ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Reports
+                      <span style={{ fontWeight: 400, color: 'var(--text3)' }}> — separate from the module</span></div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 18px' }}>
+                      {REPORT_AREAS.map(a => (
+                        <label key={a.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                          <input type="checkbox" checked={reportChecked(p, a.key)}
+                            onChange={ev => setPerm(r.id, pp => {
+                              const cur = REPORT_AREAS.reduce((acc, x) => ({ ...acc, [x.key]: reportChecked(pp, x.key) }), {} as Record<string, boolean>)
+                              return { ...pp, reports: { ...cur, [a.key]: ev.target.checked } }
+                            })} />
+                          {a.label}
+                        </label>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, maxWidth: 220 }}>
+                      Market/store managers default to <b>no</b> reports; company-wide roles keep them. Set explicitly here to override.
                     </div>
                   </div>
                   <div>
