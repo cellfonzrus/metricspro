@@ -121,13 +121,17 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
         if hrs == 0 and commission == 0 and not rate:
             continue   # nothing to show for this person
         total = round(wages + commission - cb, 2)
+        # Annualized projection: this period's total comp run-rate × 12 months.
+        annualized = round(total * 12, 2)
         rows.append({"employee_id": e.get("employee_id"), "name": e.get("name"),
                      "store": e.get("home_store"), "pay_rate": rate, "hours": hrs,
-                     "wages": wages, "commission": commission, "chargebacks": cb, "total_comp": total})
+                     "base_salary": wages, "commission": commission, "chargebacks": cb,
+                     "total_comp": total, "annualized": annualized})
         tot_w += wages; tot_c += commission; tot_cb += cb
 
     rows.sort(key=lambda r: -r["total_comp"])
+    total_comp = round(tot_w + tot_c - tot_cb, 2)
     return {"period": period, "rows": rows,
-            "totals": {"wages": round(tot_w, 2), "commission": round(tot_c, 2),
-                       "chargebacks": round(tot_cb, 2), "total_comp": round(tot_w + tot_c - tot_cb, 2),
-                       "employees": len(rows)}}
+            "totals": {"base_salary": round(tot_w, 2), "commission": round(tot_c, 2),
+                       "chargebacks": round(tot_cb, 2), "total_comp": total_comp,
+                       "annualized": round(total_comp * 12, 2), "employees": len(rows)}}

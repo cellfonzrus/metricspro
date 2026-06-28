@@ -31,6 +31,9 @@ export default function HRPage() {
   const [timeoff, setTimeoff] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
+  const [msg, setMsg] = useState('')
+  const [rowBusy, setRowBusy] = useState<number | ''>('')
+  const [upBusy, setUpBusy] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true); setErr('')
@@ -43,6 +46,38 @@ export default function HRPage() {
     setLoading(false)
   }, [tab, period])
   useEffect(() => { load() }, [load])
+
+  // ---- pay editing (HR owns pay rates; StoreOps no longer shows them) ----
+  const setPay = (id: number, v: string) => setEmps(es => es.map(e => e.id === id ? { ...e, pay_rate: v, _dirty: true } : e))
+  async function savePay(e: any) {
+    setRowBusy(e.id); setMsg(''); setErr('')
+    try {
+      await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify({ pay_rate: Number(e.pay_rate) || 0 }) })
+      setEmps(es => es.map(x => x.id === e.id ? { ...x, _dirty: false } : x))
+      setMsg(`Saved pay for ${e.name}`)
+    } catch (err: any) { setErr('Save failed: ' + (err?.message || err)) } finally { setRowBusy('') }
+  }
+  async function downloadPayTemplate() {
+    const XLSX = await import('xlsx')
+    const aoa = [['employee_id', 'name', 'pay_rate'], ...emps.map((e: any) => [e.employee_id || '', e.name, e.pay_rate ?? ''])]
+    const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 14 }, { wch: 24 }, { wch: 10 }]
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Payscale'); XLSX.writeFile(wb, 'payscale-template.xlsx')
+  }
+  async function uploadPayscale(file: File) {
+    setUpBusy(true); setMsg('Reading sheet…'); setErr('')
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer())
+      const raw: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+      const pick = (r: any, keys: string[]) => { for (const k of Object.keys(r)) if (keys.includes(k.trim().toLowerCase())) return String(r[k]).trim(); return '' }
+      const rows = raw.map(r => ({ employee_id: pick(r, ['employee_id', 'emp id', 'id']), name: pick(r, ['name', 'employee']), pay_rate: pick(r, ['pay_rate', 'pay rate', 'rate', 'pay']) }))
+        .filter(r => r.pay_rate !== '' && (r.employee_id || r.name))
+      if (!rows.length) { setMsg('No valid rows (need pay_rate + employee_id/name).'); setUpBusy(false); return }
+      const res = await api('/api/v1/storeops/employees/bulk-payscale', { method: 'POST', body: JSON.stringify({ rows }) })
+      setMsg(`Pay rates updated: ${res.updated}${(res.errors || []).length ? ` · ${res.errors.length} skipped` : ''}.`)
+      await load()
+    } catch (err: any) { setErr('Upload failed: ' + (err?.message || err)) } finally { setUpBusy(false) }
+  }
 
   function compPayload(): ExportPayload {
     const rows = comp?.rows || []
@@ -81,6 +116,7 @@ export default function HRPage() {
         {TABS.map(t => (
           <button key={t.k} onClick={() => setTab(t.k)} style={{ padding: '7px 16px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: tab === t.k ? 'var(--accent)' : 'var(--surface)', color: tab === t.k ? '#fff' : 'var(--text2)' }}>{t.label}</button>
         ))}
+        {msg && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{msg}</span>}
         <span style={{ flex: 1 }} />
         {tab === 'comp' && comp?.rows?.length > 0 && <ExportButtons payload={compPayload} compact />}
       </div>
@@ -92,7 +128,7 @@ export default function HRPage() {
             <>
               {comp?.totals && (
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-                  {[['Wages', comp.totals.wages], ['Commission', comp.totals.commission], ['Chargebacks', -comp.totals.chargebacks], ['Total comp', comp.totals.total_comp]].map(([l, v]: any) => (
+                  {[['Base salary', comp.totals.base_salary], ['Commission', comp.totals.commission], ['Total comp', comp.totals.total_comp], ['Annualized (proj.)', comp.totals.annualized]].map(([l, v]: any) => (
                     <div key={l} className="card" style={{ padding: '12px 18px', minWidth: 140 }}>
                       <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{l}</div>
                       <div style={{ fontSize: 20, fontWeight: 700 }}>{fmt(v)}</div>
@@ -104,28 +140,28 @@ export default function HRPage() {
                   </div>
                 </div>
               )}
+              <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 8px' }}>
+                Base salary = the period&apos;s hours × pay rate. Total comp = base + commission − chargebacks. Annualized = total comp × 12.
+              </p>
               <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
                   <thead><tr style={{ background: 'var(--surface2)' }}>
                     <th style={th}>Employee</th><th style={th}>Store</th>
-                    <th style={{ ...th, textAlign: 'right' }}>Pay $/hr</th><th style={{ ...th, textAlign: 'right' }}>Hours</th>
-                    <th style={{ ...th, textAlign: 'right' }}>Wages</th><th style={{ ...th, textAlign: 'right' }}>Commission</th>
-                    <th style={{ ...th, textAlign: 'right' }}>Chargebacks</th><th style={{ ...th, textAlign: 'right' }}>Total comp</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Base salary</th><th style={{ ...th, textAlign: 'right' }}>Commission</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Total comp</th><th style={{ ...th, textAlign: 'right' }}>Annualized (proj.)</th>
                   </tr></thead>
                   <tbody>
                     {(comp?.rows || []).map((r: any) => (
                       <tr key={r.employee_id || r.name}>
                         <td style={{ ...td, fontWeight: 600 }}>{r.name}</td>
                         <td style={td}>{r.store || '—'}</td>
-                        <td style={tdR}>{fmt(r.pay_rate)}</td>
-                        <td style={tdR}>{r.hours}</td>
-                        <td style={tdR}>{fmt(r.wages)}</td>
+                        <td style={tdR}>{fmt(r.base_salary)}{r.chargebacks > 0 ? <span title="chargebacks deducted" style={{ fontSize: 10, color: '#b42318' }}> −{fmt(r.chargebacks)}</span> : null}</td>
                         <td style={tdR}>{fmt(r.commission)}</td>
-                        <td style={{ ...tdR, color: r.chargebacks > 0 ? '#b42318' : 'inherit' }}>{r.chargebacks ? '−' + fmt(r.chargebacks) : '—'}</td>
                         <td style={{ ...tdR, fontWeight: 700 }}>{fmt(r.total_comp)}</td>
+                        <td style={tdR}>{fmt(r.annualized)}</td>
                       </tr>
                     ))}
-                    {(!comp?.rows || comp.rows.length === 0) && <tr><td style={td} colSpan={8}><span style={{ color: 'var(--text3)' }}>No compensation data for {period}.</span></td></tr>}
+                    {(!comp?.rows || comp.rows.length === 0) && <tr><td style={td} colSpan={6}><span style={{ color: 'var(--text3)' }}>No compensation data for {period}.</span></td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -133,27 +169,44 @@ export default function HRPage() {
           )}
 
           {tab === 'employees' && (
-            <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
-                <thead><tr style={{ background: 'var(--surface2)' }}>
-                  {['Name', 'Emp ID', 'Home store', 'Role', 'Pay $/hr', 'Email', 'Phone'].map(h => <th key={h} style={th}>{h}</th>)}
-                </tr></thead>
-                <tbody>
-                  {emps.map((e: any) => (
-                    <tr key={e.id}>
-                      <td style={{ ...td, fontWeight: 600 }}>{e.name}</td>
-                      <td style={td}>{e.employee_id || '—'}</td>
-                      <td style={td}>{e.home_store || '—'}</td>
-                      <td style={td}>{e.role || '—'}</td>
-                      <td style={td}>{e.pay_rate != null ? fmt(e.pay_rate) : '—'}</td>
-                      <td style={td}>{e.email || '—'}</td>
-                      <td style={td}>{e.phone || '—'}</td>
-                    </tr>
-                  ))}
-                  {emps.length === 0 && <tr><td style={td} colSpan={7}><span style={{ color: 'var(--text3)' }}>No employees in your area.</span></td></tr>}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, color: 'var(--text3)' }}>Pay rates are set here in HR and flow to payroll, total comp and the employee dashboard.</span>
+                <div style={{ flex: 1 }} />
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Bulk pay rates:</span>
+                <button className="btn" onClick={downloadPayTemplate}>⬇️ Template</button>
+                <label className="btn" style={{ cursor: upBusy ? 'default' : 'pointer', margin: 0 }}>
+                  {upBusy ? '⏳ Uploading…' : '⬆️ Upload pay rates'}
+                  <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={upBusy}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) uploadPayscale(f); e.currentTarget.value = '' }} />
+                </label>
+              </div>
+              <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
+                  <thead><tr style={{ background: 'var(--surface2)' }}>
+                    {['Name', 'Emp ID', 'Home store', 'Role', 'Pay $/hr', 'Email', 'Phone', ''].map(h => <th key={h} style={th}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {emps.map((e: any) => (
+                      <tr key={e.id}>
+                        <td style={{ ...td, fontWeight: 600 }}>{e.name}</td>
+                        <td style={td}>{e.employee_id || '—'}</td>
+                        <td style={td}>{e.home_store || '—'}</td>
+                        <td style={td}>{e.role || '—'}</td>
+                        <td style={td}>
+                          <input type="number" step="0.01" value={e.pay_rate ?? ''} onChange={ev => setPay(e.id, ev.target.value)}
+                            style={{ width: 90, padding: '4px 6px', borderRadius: 6, border: `1px solid ${e._dirty ? 'var(--accent)' : 'var(--border)'}`, fontSize: 13, background: 'var(--surface)' }} />
+                        </td>
+                        <td style={td}>{e.email || '—'}</td>
+                        <td style={td}>{e.phone || '—'}</td>
+                        <td style={td}>{e._dirty && <button className="btn btn-primary" style={{ fontSize: 12, padding: '3px 10px' }} disabled={rowBusy === e.id} onClick={() => savePay(e)}>{rowBusy === e.id ? '…' : '💾'}</button>}</td>
+                      </tr>
+                    ))}
+                    {emps.length === 0 && <tr><td style={td} colSpan={8}><span style={{ color: 'var(--text3)' }}>No employees in your area.</span></td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
 
           {tab === 'payroll' && (

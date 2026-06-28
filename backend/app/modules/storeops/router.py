@@ -185,12 +185,28 @@ def bulk_create_employees(body: dict, org_id: str = ORG_ID):
             existing.add(eid)
     inserted = 0
     for i in range(0, len(to_insert), 500):
-        r = sb().table("employees").insert(to_insert[i:i + 500]).execute()
-        inserted += len(r.data or to_insert[i:i + 500])
+        chunk = to_insert[i:i + 500]
+        r = sb().table("employees").insert(chunk).execute()
+        for rec in (r.data or []):
+            _ensure_employee_id(rec)   # so bulk-added people are assignable in the org
+        inserted += len(r.data or chunk)
     return {"inserted": inserted, "skipped": skipped}
 
 
 @router.post("/employees")
+def _ensure_employee_id(rec: dict) -> dict:
+    """Every employee needs a stable employee_id to be placed in the org tree or assigned a role /
+    manager. Auto-generate one (E<pk>) when it's missing, so no employee is unassignable."""
+    if rec and rec.get("id") and not str(rec.get("employee_id") or "").strip():
+        gen = f"E{rec['id']}"
+        try:
+            sb().table("employees").update({"employee_id": gen}).eq("id", rec["id"]).execute()
+            rec["employee_id"] = gen
+        except Exception:
+            pass
+    return rec
+
+
 def create_employee(emp: dict):
     """Create an employee (StoreOps Admin)."""
     row = {k: emp[k] for k in EMP_FIELDS if k in emp}
@@ -200,11 +216,11 @@ def create_employee(emp: dict):
     if row.get("is_active") is None:
         row["is_active"] = True
     # employee_id is TEXT UNIQUE: a blank '' collides on the 2nd person with no ID.
-    # Drop it so the column is NULL (multiple NULLs are allowed).
+    # Drop it so the column is NULL (multiple NULLs are allowed), then auto-assign one below.
     if not (row.get("employee_id") or "").strip():
         row.pop("employee_id", None)
     r = sb().table("employees").insert(row).execute()
-    return r.data[0] if r.data else row
+    return _ensure_employee_id(r.data[0]) if r.data else row
 
 
 @router.patch("/employees/{emp_id}")
@@ -221,7 +237,7 @@ def update_employee(emp_id: str, updates: dict):
     r = sb().table("employees").update(row).eq("id", emp_id).execute()
     if not r.data:
         raise HTTPException(404, "employee not found")
-    return r.data[0]
+    return _ensure_employee_id(r.data[0])
 
 
 @router.delete("/employees/{emp_id}")

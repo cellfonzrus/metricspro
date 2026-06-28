@@ -54,7 +54,7 @@ export default function StoreOpsAdminPage() {
     try {
       await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify({
         name: e.name, employee_id: e.employee_id, home_store: e.home_store, role: e.role,
-        pay_rate: Number(e.pay_rate) || 0, is_active: !!e.is_active, email: e.email, phone: ph,
+        is_active: !!e.is_active, email: e.email, phone: ph,   // pay_rate is set in HR, not here
       }) })
       setMsg(`Saved ${e.name}`)
     } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)) }
@@ -103,45 +103,14 @@ export default function StoreOpsAdminPage() {
     } catch (err: any) { setMsg('Add failed: ' + (err?.message || err)) }
   }
 
-  // ---- bulk payscale ----
-  async function downloadPayscaleTemplate() {
-    const XLSX = await import('xlsx')
-    const aoa = [['employee_id', 'name', 'pay_rate'],
-      ...emps.filter(e => e.is_active).map(e => [e.employee_id || '', e.name, e.pay_rate ?? ''])]
-    const ws = XLSX.utils.aoa_to_sheet(aoa)
-    ws['!cols'] = [{ wch: 16 }, { wch: 24 }, { wch: 10 }]
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Payscale')
-    XLSX.writeFile(wb, 'payscale-template.xlsx')
-  }
-  async function uploadPayscale(file: File) {
-    setUpBusy(true); setMsg('Reading sheet…')
-    try {
-      const XLSX = await import('xlsx')
-      const wb = XLSX.read(await file.arrayBuffer())
-      const raw: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
-      const pick = (r: any, keys: string[]) => { for (const k of Object.keys(r)) if (keys.includes(k.trim().toLowerCase())) return String(r[k]).trim(); return '' }
-      const rows = raw.map(r => ({
-        employee_id: pick(r, ['employee_id', 'emp id', 'id']),
-        name: pick(r, ['name', 'employee', 'full_name']),
-        pay_rate: pick(r, ['pay_rate', 'pay rate', 'rate', 'pay']),
-      })).filter(r => r.pay_rate !== '' && (r.employee_id || r.name))
-      if (!rows.length) { setMsg('No valid rows (need pay_rate + employee_id/name).'); setUpBusy(false); return }
-      const res = await api('/api/v1/storeops/employees/bulk-payscale', { method: 'POST', body: JSON.stringify({ rows }) })
-      const errs = (res.errors || []).map((e: any) => `Row ${e.row}: ${e.error}${e.ref ? ' (' + e.ref + ')' : ''}`)
-      setMsg(`Pay rates updated: ${res.updated}${errs.length ? ` · ${errs.length} skipped` : ''}.${errs.length ? ' ' + errs.slice(0, 4).join('; ') : ''}`)
-      await loadAll()
-    } catch (err: any) { setMsg('Upload failed: ' + (err?.message || err)) }
-    setUpBusy(false)
-  }
 
   // ---- bulk EMPLOYEE setup (full records — for standing up a new tenant fast) ----
   async function downloadEmpTemplate() {
     const XLSX = await import('xlsx')
-    const aoa = [['name', 'employee_id', 'home_store', 'role', 'pay_rate', 'email', 'phone'],
-      ['Jane Doe', 'E1001', 'STORE01', 'Sales Rep', '17.50', 'jane@example.com', '5162330422']]
+    const aoa = [['name', 'employee_id', 'home_store', 'role', 'email', 'phone'],
+      ['Jane Doe', 'E1001', 'STORE01', 'Sales Rep', 'jane@example.com', '5162330422']]
     const ws = XLSX.utils.aoa_to_sheet(aoa)
-    ws['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 10 }, { wch: 24 }, { wch: 16 }]
+    ws['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 24 }, { wch: 16 }]
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Employees')
     XLSX.writeFile(wb, 'employees-template.xlsx')
   }
@@ -157,7 +126,6 @@ export default function StoreOpsAdminPage() {
         employee_id: pick(r, ['employee_id', 'emp id', 'id']),
         home_store: pick(r, ['home_store', 'home store', 'store', 'store_code']),
         role: pick(r, ['role', 'title']) || 'Sales Rep',
-        pay_rate: parseFloat(pick(r, ['pay_rate', 'pay rate', 'rate', 'pay'])) || 0,
         email: pick(r, ['email']),
         phone: pick(r, ['phone', 'mobile', 'cell']),
       })).filter(r => r.name)
@@ -229,7 +197,6 @@ export default function StoreOpsAdminPage() {
               <input style={{ ...sel, width: 110 }} placeholder="Emp ID" value={newEmp.employee_id} onChange={e => setNewEmp({ ...newEmp, employee_id: e.target.value })} />
               <input style={{ ...sel, width: 110 }} placeholder="Home store" value={newEmp.home_store} onChange={e => setNewEmp({ ...newEmp, home_store: e.target.value })} />
               <select style={sel} value={newEmp.role} onChange={e => setNewEmp({ ...newEmp, role: e.target.value })}>{EMP_ROLES.map(r => <option key={r}>{r}</option>)}</select>
-              <input style={{ ...sel, width: 90 }} type="number" placeholder="$/hr" value={newEmp.pay_rate} onChange={e => setNewEmp({ ...newEmp, pay_rate: e.target.value })} />
               <input style={{ ...sel, width: 170 }} placeholder="Email" value={newEmp.email} onChange={e => setNewEmp({ ...newEmp, email: e.target.value })} />
               <input style={{ ...sel, width: 150 }} placeholder="Phone e.g. 5162330422" title={PHONE_EG} value={newEmp.phone} onChange={e => setNewEmp({ ...newEmp, phone: e.target.value })} />
               <button className="btn btn-primary" onClick={addEmp}>➕ Add</button>
@@ -251,19 +218,13 @@ export default function StoreOpsAdminPage() {
               <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={upBusy}
                 onChange={e => { const f = e.target.files?.[0]; if (f) uploadEmpBulk(f); e.currentTarget.value = '' }} />
             </label>
-            <span style={{ fontSize: 13, fontWeight: 600, marginLeft: 6 }}>Pay rates:</span>
-            <button className="btn" onClick={downloadPayscaleTemplate}>⬇️ Template</button>
-            <label className="btn" style={{ cursor: upBusy ? 'default' : 'pointer', margin: 0 }}>
-              {upBusy ? '⏳ Uploading…' : '⬆️ Upload pay rates'}
-              <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={upBusy}
-                onChange={e => { const f = e.target.files?.[0]; if (f) uploadPayscale(f); e.currentTarget.value = '' }} />
-            </label>
+            <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 6 }}>Pay rates are managed in the HR module.</span>
           </div>
 
           <div className="table-wrapper">
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['Name', 'Emp ID', 'Home store', 'Role', 'Pay $/hr', 'Email', 'Phone', 'Active', ''].map(h =>
+                {['Name', 'Emp ID', 'Home store', 'Role', 'Email', 'Phone', 'Active', ''].map(h =>
                   <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -273,7 +234,6 @@ export default function StoreOpsAdminPage() {
                     <td style={cell}><input style={{ ...sel, width: 100 }} value={e.employee_id || ''} onChange={ev => setEmp(e.id, { employee_id: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 100 }} value={e.home_store || ''} onChange={ev => setEmp(e.id, { home_store: ev.target.value })} /></td>
                     <td style={cell}><select style={sel} value={e.role || 'Other'} onChange={ev => setEmp(e.id, { role: ev.target.value })}>{EMP_ROLES.map(r => <option key={r}>{r}</option>)}</select></td>
-                    <td style={cell}><input style={{ ...sel, width: 80 }} type="number" value={e.pay_rate ?? ''} onChange={ev => setEmp(e.id, { pay_rate: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 160 }} value={e.email || ''} onChange={ev => setEmp(e.id, { email: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 130 }} placeholder="5162330422" title={PHONE_EG} value={e.phone || ''} onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></td>
                     <td style={cell}><input type="checkbox" checked={!!e.is_active} onChange={ev => setEmp(e.id, { is_active: ev.target.checked })} /></td>
