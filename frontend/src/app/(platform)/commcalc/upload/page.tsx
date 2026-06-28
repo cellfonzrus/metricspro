@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
-import { ORG_ID } from '@/lib/client'
+import { ORG_ID, api, apiUpload } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 
 const FILE_TYPES = [
@@ -51,9 +51,7 @@ const MODULE_LINKS = [
     desc: 'On-hand inventory by store & category — structured entry/recon, not a single file. Opens its page.' },
 ]
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-
-type UploadRecord = { id: string; file_type: string; period: string | null; filename: string | null; rows_saved: number; uploaded_at: string }
+type UploadRecord ={ id: string; file_type: string; period: string | null; filename: string | null; rows_saved: number; uploaded_at: string }
 
 function fmtWhen(iso: string) {
   const d = new Date(iso)
@@ -78,19 +76,17 @@ export default function UploadPage() {
   const [modDate, setModDate] = useState<Record<string, string>>({})
 
   const loadHistory = useCallback(async () => {
-    try {
-      const res = await fetch(`${API}/api/v1/commcalc/upload/history?org_id=${ORG_ID}&limit=200`)
-      if (res.ok) setHistory(await res.json())
-    } catch { /* best-effort */ }
+    // via api() so scopeOrg() rewrites org_id to the signed-in tenant (multi-tenant): a new tenant
+    // sees ITS upload history, not the house org's old uploads.
+    try { setHistory(await api(`/api/v1/commcalc/upload/history?org_id=${ORG_ID}&limit=200`)) }
+    catch { /* best-effort */ }
   }, [])
 
   const loadCfgs = useCallback(async () => {
     const out: Record<string, any> = {}
     await Promise.all(AUTO_SOURCES.map(async s => {
-      try {
-        const r = await fetch(`${API}/api/v1/commcalc/${s.cfg}?org_id=${ORG_ID}`)
-        if (r.ok) out[s.id] = await r.json()
-      } catch { /* ignore */ }
+      try { out[s.id] = await api(`/api/v1/commcalc/${s.cfg}?org_id=${ORG_ID}`) }
+      catch { /* ignore */ }
     }))
     setCfgs(out)
   }, [])
@@ -108,9 +104,7 @@ export default function UploadPage() {
     const dt = adate[s.id] || ''
     try {
       const qs = `scope=${encodeURIComponent(sc)}${dt ? '&date=' + encodeURIComponent(dt) : ''}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}`
-      const r = await fetch(`${API}/api/v1/commcalc/${s.run}?${qs}`, { method: 'POST' })
-      const d = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`)
+      await api(`/api/v1/commcalc/${s.run}?${qs}`, { method: 'POST' })
       setAutoMsg(m => ({ ...m, [s.id]: `▶ Started (${s.scopes.find(x => x.v === sc)?.l}). Refresh status in a moment.` }))
       setTimeout(loadCfgs, 4000)
     } catch (e: any) {
@@ -124,11 +118,9 @@ export default function UploadPage() {
     setUploading(fileType); setStatuses(s => ({ ...s, [fileType]: 'uploading' }))
     const form = new FormData(); form.append('file', file)
     try {
-      const res = await fetch(
-        `${API}/api/v1/commcalc/upload/${fileType}?${fileType !== 'daily_sales' ? 'period=' + encodeURIComponent(period) + '&' : ''}org_id=${ORG_ID}`,
-        { method: 'POST', body: form })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Upload failed')
+      const data = await apiUpload(
+        `/api/v1/commcalc/upload/${fileType}?${fileType !== 'daily_sales' ? 'period=' + encodeURIComponent(period) + '&' : ''}org_id=${ORG_ID}`,
+        form)
       setStatuses(s => ({ ...s, [fileType]: 'done' }))
       setMessages(m => ({ ...m, [fileType]: `✅ ${data.saved} rows saved` }))
       loadHistory()
@@ -145,9 +137,7 @@ export default function UploadPage() {
     const form = new FormData(); form.append('file', file)
     if (entry.needsDate) form.append('effective_date', modDate[entry.id])
     try {
-      const res = await fetch(`${API}/api/v1/${entry.endpoint}?org_id=${ORG_ID}`, { method: 'POST', body: form })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.detail || 'Upload failed')
+      const data = await apiUpload(`/api/v1/${entry.endpoint}?org_id=${ORG_ID}`, form)
       const n = data.rows_uploaded ?? data.saved ?? data.rows_saved ?? data.inserted ?? data.count ?? data.rows
       setStatuses(s => ({ ...s, [entry.id]: 'done' }))
       setMessages(m => ({ ...m, [entry.id]: `✅ ${n != null ? Number(n).toLocaleString() + ' rows' : 'Uploaded'}` }))

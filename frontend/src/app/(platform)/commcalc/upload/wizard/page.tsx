@@ -4,7 +4,6 @@ import Link from 'next/link'
 import { api, apiUpload, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const enc = encodeURIComponent
 
 // Each report: where it comes from, its EXACT name on the portal, whether it auto-sweeps, and how
@@ -102,8 +101,8 @@ export default function UploadWizardPage() {
   const [dates, setDates] = useState<Record<string, string>>({})
 
   function loadHistory() {
-    fetch(`${API}/api/v1/commcalc/upload/history?org_id=${ORG_ID}&limit=200`)
-      .then(r => r.json()).then(d => setHistory(Array.isArray(d) ? d : [])).catch(() => setHistory([]))
+    api(`/api/v1/commcalc/upload/history?org_id=${ORG_ID}&limit=200`)
+      .then((d: any) => setHistory(Array.isArray(d) ? d : [])).catch(() => setHistory([]))
   }
   useEffect(() => { loadHistory() }, [])
   useEffect(() => { api('/api/v1/commcalc/connectors').then((d: any) => setConns(Array.isArray(d) ? d : [])).catch(() => setConns([])) }, [])

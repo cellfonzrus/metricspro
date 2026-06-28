@@ -25,34 +25,51 @@ function scopeOrg(path: string): string {
     : path
 }
 
+// Render a FastAPI error body as a readable string. `detail` may be a string, an ARRAY of
+// validation errors (422 → [{loc,msg,...}]), or an object — coercing those with `+`/template
+// strings is what produced the "[object Object]" error users saw on upload.
+function errMsg(err: any, status?: number): string {
+  const d = err?.detail ?? err
+  if (typeof d === 'string') return d
+  if (Array.isArray(d)) return d.map((e: any) => e?.msg || (typeof e === 'string' ? e : JSON.stringify(e))).join('; ')
+  if (d && typeof d === 'object') return d.msg || d.message || JSON.stringify(d)
+  return String(d ?? (status ? `API error ${status}` : 'Request failed'))
+}
+
+async function bearer(): Promise<Record<string, string>> {
+  try {
+    const { data } = await supabase.auth.getSession()
+    const tok = data?.session?.access_token
+    if (tok) return { Authorization: `Bearer ${tok}` }
+  } catch { /* not signed in / open mode */ }
+  return {}
+}
+
 // API client for FastAPI backend. Attaches the Supabase session token so the backend can identify
 // the caller for span-scoped reads (Phase 5). The backend ignores it while RBAC enforcement is off.
 // An explicit Authorization in opts.headers still wins (spread last).
 export async function api(path: string, opts: RequestInit = {}) {
-  let authHeader: Record<string, string> = {}
-  try {
-    const { data } = await supabase.auth.getSession()
-    const tok = data?.session?.access_token
-    if (tok) authHeader = { Authorization: `Bearer ${tok}` }
-  } catch { /* not signed in / open mode */ }
+  const authHeader = await bearer()
   const res = await fetch(`${API_URL}${scopeOrg(path)}`, {
     ...opts,
     headers: { 'Content-Type': 'application/json', ...authHeader, ...opts.headers },
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || `API error ${res.status}`)
+    throw new Error(errMsg(err, res.status))
   }
   return res.json()
 }
 
 // Multipart upload (FormData) — the JSON `api()` helper above forces a JSON content-type,
-// which breaks file uploads. Let the browser set the multipart boundary itself.
+// which breaks file uploads. Let the browser set the multipart boundary itself. Sends the auth
+// token too (needed once enforcement is on).
 export async function apiUpload(path: string, form: FormData) {
-  const res = await fetch(`${API_URL}${scopeOrg(path)}`, { method: 'POST', body: form })
+  const authHeader = await bearer()
+  const res = await fetch(`${API_URL}${scopeOrg(path)}`, { method: 'POST', body: form, headers: authHeader })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || `API error ${res.status}`)
+    throw new Error(errMsg(err, res.status))
   }
   return res.json()
 }
