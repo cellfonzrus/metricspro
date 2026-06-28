@@ -79,20 +79,28 @@ export default function ActionPlanPage() {
   }
 
   const keep = (it: Item) => !hideOnTrack || it.severity !== 'good'
+  // Rep options span ALL the manager's stores when no single store is picked — so a manager can
+  // follow one rep across every store in their area (the cross-store rep filter).
+  const allReps = Array.from(new Set((data?.stores || []).flatMap(s => s.reps.map(r => r.rep)))).sort()
   const storeReps = storeFilter
     ? ((data?.stores.find(s => s.store_code === storeFilter)?.reps) || []).map(r => r.rep)
-    : []
+    : allReps
+  const crossRep = !!repFilter && !storeFilter
   const stores = (data?.stores || [])
     .filter(s => !storeFilter || s.store_code === storeFilter)
     .map(s => ({
       ...s,
-      items: s.items.filter(keep),
+      items: crossRep ? [] : s.items.filter(keep),   // cross-store rep view: focus on the rep, not stores
       reps: s.reps
         .filter(r => !repFilter || r.rep === repFilter)
         .map(r => ({ ...r, items: r.items.filter(keep) }))
         .filter(r => (repFilter && r.rep === repFilter) || r.items.length),
     }))
-    .filter(s => storeFilter ? true : (s.items.length || s.reps.length))
+    .filter(s => {
+      if (repFilter) return s.reps.length          // only stores where the chosen rep works
+      if (storeFilter) return true
+      return s.items.length || s.reps.length
+    })
 
   function buildPayload(): ExportPayload {
     const rows: any[] = []
@@ -141,9 +149,9 @@ export default function ActionPlanPage() {
               <option value="">All stores</option>
               {(data.stores || []).map(s => <option key={s.store_code} value={s.store_code}>{s.address || s.store_code}</option>)}
             </select>
-            <select value={repFilter} onChange={e => setRepFilter(e.target.value)} disabled={!storeFilter}
-              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', opacity: storeFilter ? 1 : 0.5 }}>
-              <option value="">All reps</option>
+            <select value={repFilter} onChange={e => setRepFilter(e.target.value)}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }}>
+              <option value="">{storeFilter ? 'All reps' : 'All reps (any store)'}</option>
               {storeReps.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
             <label style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', gap: 5, alignItems: 'center' }}>
@@ -175,6 +183,31 @@ export default function ActionPlanPage() {
           </div>
         </div>
       )}
+
+      {/* rolled-up target across ALL the manager's stores (sum of stores under them) */}
+      {data && data.stores.length > 1 && (() => {
+        const agg: Record<string, { label: string; unit: string; target: number; achieved: number; need: number }> = {}
+        for (const s of data.stores) for (const m of (s.metrics || [])) {
+          const a = agg[m.cat] || (agg[m.cat] = { label: m.label, unit: m.unit, target: 0, achieved: 0, need: 0 })
+          a.target += m.target || 0; a.achieved += m.achieved || 0; a.need += m.need || 0
+        }
+        const cats = Object.entries(agg)
+        if (!cats.length) return null
+        return (
+          <div className="card" style={{ padding: '12px 16px', marginBottom: 20 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 8 }}>Your team total · {data.stores.length} stores under you</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {cats.map(([cat, a]) => (
+                <div key={cat} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '6px 12px', minWidth: 120 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text3)' }}>{a.label}</div>
+                  <div style={{ fontSize: 15, fontWeight: 700 }}>{mval(a.unit, a.achieved)} <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>/ {mval(a.unit, a.target)}</span></div>
+                  <div style={{ fontSize: 10, color: a.need > 0 ? '#b45309' : 'var(--green)' }}>{a.need > 0 ? `${mval(a.unit, a.need)} to go` : 'target met'}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )
+      })()}
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>Loading…</div>

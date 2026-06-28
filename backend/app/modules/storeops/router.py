@@ -1153,7 +1153,7 @@ def caller_scope(authorization: str, org_id: str = ORG_ID):
     uid = _uid_from_token(authorization)
     if not uid:
         return None
-    rows = sb().table("app_users").select("role,employee_id").eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data or []
+    rows = sb().table("app_users").select("role,employee_id,store_code,store_codes").eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data or []
     if not rows:
         return None
     role = (rows[0].get("role") or "").strip()
@@ -1167,11 +1167,23 @@ def caller_scope(authorization: str, org_id: str = ORG_ID):
             scope = "all"
     if scope == "all":
         return None
-    eid = (rows[0].get("employee_id") or "").strip()
-    if not eid:
-        return set()
-    spans = sb().rpc("org_span_for_manager", {"p_org_id": org_id, "p_employee_id": eid}).execute().data
-    return set(_span_codes(spans))
+    u = rows[0]
+    eid = (u.get("employee_id") or "").strip()
+    span = set()
+    if eid:
+        spans = sb().rpc("org_span_for_manager", {"p_org_id": org_id, "p_employee_id": eid}).execute().data
+        span = set(_span_codes(spans))
+    # Market/store managers not yet wired into the org tree fall back to the store(s) pinned on their
+    # app_user, so scoping still works before assignments are complete. Reps ('self') are pinned to
+    # their own store by the frontend, so we leave their read scope empty here (the list views aren't
+    # theirs; the calendar guard only enforces a non-empty manager span).
+    if scope != "self":
+        if u.get("store_code"):
+            span.add(str(u["store_code"]).strip())
+        for sc in (u.get("store_codes") or []):
+            if sc and str(sc).strip():
+                span.add(str(sc).strip())
+    return span
 
 
 def scope_keyset(authorization: str, org_id: str = ORG_ID):

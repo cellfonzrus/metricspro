@@ -3693,7 +3693,7 @@ def _byod_pct_default(client, period):
 
 
 @router.get("/targets/{period}")
-async def get_targets(period: str, org_id: str = ORG_ID):
+async def get_targets(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """List per-store monthly target config, seeding defaults for stores without a row.
     Accessories seed from storeops.stores.monthly_target; byod_pct from KPI config."""
     client = sb()
@@ -3729,6 +3729,10 @@ async def get_targets(period: str, org_id: str = ORG_ID):
             }
         out.append(row)
     out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / enforcement off)
+    if ks is not None:
+        out = [r for r in out if in_keyset(ks, r.get('store_code'), r.get('address'))]
     return {'period': period, 'byod_pct_default': byod_def, 'targets': out}
 
 
@@ -3761,11 +3765,18 @@ async def save_target(period: str, body: dict, org_id: str = ORG_ID):
 @router.get("/targets/{period}/calendar")
 async def get_target_calendar(
     period: str, store_code: str, scope: str = "store",
-    rep: str = "", today: str = "", org_id: str = ORG_ID,
+    rep: str = "", today: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID,
 ):
     """Schedule-weighted daily targets + catch-up + pace + day-by-day calendar
     for a single store (scope=store) or a single rep within it (scope=rep)."""
     client = sb()
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    # Only a manager WITH a span (non-empty keyset) is restricted here. None = admin/unrestricted;
+    # an empty set = a self-scope rep (no managed stores) viewing their OWN store from the portal —
+    # must NOT be blocked. The store list a manager can reach is already span-scoped upstream.
+    ks = scope_keyset(authorization, org_id)
+    if ks and not in_keyset(ks, store_code):
+        raise HTTPException(403, "That store is outside your assigned area.")
     start, end, today = _period_bounds(period, today)
     byod_def = _byod_pct_default(client, period)
 
@@ -4114,7 +4125,7 @@ def exec_overview(period: str, org_id: str = ORG_ID):
 
 @router.get("/targets/{period}/action-plan")
 async def get_action_plan(period: str, today: str = "", store_code: str = "", rep: str = "",
-                          org_id: str = ORG_ID):
+                          authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Daily Action Plan — prioritized focus areas per store (per-category catch-up
     + conversion) and per rep (conversion + commission-at-risk). Reuses the SAME
     targets engine + conversion the Daily Targets pages use, plus the computed
@@ -4186,6 +4197,9 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
                 'detail': f'{comm["kpis_met"]}/{comm["total_kpis"]} KPIs met; short on {short}. '
                           f'${comm["at_risk"]:,.0f} of commission at risk this period{tail}'}
 
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / enforcement off)
+
     out = []
     tot_crit = tot_warn = 0
     tot_at_risk = 0.0
@@ -4195,6 +4209,8 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
             continue
         if store_code and code.upper() != store_code.strip().upper():
             continue
+        if ks is not None and not in_keyset(ks, code, s.get('address')):
+            continue   # outside the signed-in manager's span
         trow = by_code.get(code.upper())
         if not trow:
             trow = {'accessories_monthly': safe_float(s.get('monthly_target'))}
@@ -4239,9 +4255,15 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
         if rep:
             rep_plans = [rp for rp in rep_plans
                          if rp['rep'].strip().upper() == rep.strip().upper()]
+            # Cross-store rep view (rep picked, no single store): drop stores this rep didn't
+            # work, and focus on the rep — suppress store-level items.
+            if not store_code:
+                if not rep_plans:
+                    continue
+                store_items = []
         store_at_risk = round(sum((rp['commission'] or {}).get('at_risk', 0)
                                   for rp in rep_plans if rp.get('commission')), 2)
-        if store_at_risk > 0:
+        if store_at_risk > 0 and not (rep and not store_code):
             n = sum(1 for rp in rep_plans if (rp.get('commission') or {}).get('at_risk', 0) > 0)
             store_items.append({'severity': 'warning', 'metric': 'commission',
                                 'title': 'Commission at risk (store)',
