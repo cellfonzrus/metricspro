@@ -836,13 +836,70 @@ def _span_codes(rows) -> list:
                    if (r.get("store_code") or "").strip()})
 
 
+def _market_store_codes(org_id: str, market: str) -> set:
+    """store_codes in a market — org-tree-INDEPENDENT (straight off the store list)."""
+    m = (market or "").strip().upper()
+    if not m:
+        return set()
+    rows = sb().table("stores").select("store_code,market").eq("org_id", org_id).execute().data or []
+    return {str(s.get("store_code")).strip() for s in rows
+            if s.get("store_code") and str(s.get("market") or "").strip().upper() == m}
+
+
+def _login_extra_codes(au: dict, org_id: str) -> set:
+    """store_codes implied by an app_user's market + pinned store(s) — the org-tree-independent span,
+    so a market/store manager scopes correctly even before the org units/managers are wired."""
+    codes: set = set()
+    if not au:
+        return codes
+    for mkt in str(au.get("market") or "").split(","):
+        codes |= _market_store_codes(org_id, mkt)
+    if au.get("store_code"):
+        codes.add(str(au["store_code"]).strip())
+    for sc in (au.get("store_codes") or []):
+        if sc and str(sc).strip():
+            codes.add(str(sc).strip())
+    return {c for c in codes if c}
+
+
+def _caller_app_user(authorization: str, org_id: str = ORG_ID) -> dict:
+    """The signed-in caller's app_user row (role/employee_id/market/store_code/store_codes), or {}."""
+    from app.modules.core.router import _uid_from_token
+    uid = _uid_from_token(authorization)
+    if not uid:
+        return {}
+    rows = (sb().table("app_users").select("role,employee_id,market,store_code,store_codes")
+            .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
+    return rows[0] if rows else {}
+
+
+def _role_scope(org_id: str, role: str) -> str:
+    if not role:
+        return "all"
+    try:
+        rr = sb().table("roles").select("permissions").eq("org_id", org_id).eq("name", role).limit(1).execute().data or []
+        return (((rr[0].get("permissions") or {}).get("scope")) if rr else "all") or "all"
+    except Exception:
+        return "all"
+
+
 def _caller_span_codes(authorization: str, org_id: str = ORG_ID) -> list:
-    """store_codes the SIGNED-IN manager may see (the union of their assigned subtrees). Empty list =
-    no manager assignment (the caller defaults to seeing nothing in the team views). Admins bypass
-    this upstream (they pick a unit explicitly)."""
-    eid = _caller_employee_id(authorization)
-    rows = sb().rpc("org_span_for_manager", {"p_org_id": org_id, "p_employee_id": eid}).execute().data
-    return _span_codes(rows)
+    """store_codes the SIGNED-IN manager may see: the org-unit subtree(s) they manage UNION the
+    market + store(s) pinned on their login (so a market manager resolves their stores even before
+    the org tree is wired). An individual contributor (scope 'self') has no team → []. Empty list =
+    no resolvable scope."""
+    au = _caller_app_user(authorization, org_id)
+    if not au:
+        return []
+    if _role_scope(org_id, (au.get("role") or "").strip()) == "self":
+        return []
+    codes: set = set()
+    eid = (au.get("employee_id") or "").strip()
+    if eid:
+        rows = sb().rpc("org_span_for_manager", {"p_org_id": org_id, "p_employee_id": eid}).execute().data
+        codes |= set(_span_codes(rows))
+    codes |= _login_extra_codes(au, org_id)
+    return sorted(codes)
 
 
 def _unit_store_codes(org_id: str, unit_id: str) -> list:
@@ -1107,14 +1164,13 @@ def org_assign_employee(employee_id: str, body: dict, org_id: str = ORG_ID):
 # ── the signed-in caller's span (powers the portal "My Team" tab + default frontend scoping) ──────
 @router.get("/org/my-span")
 def org_my_span(authorization: str = Header(default=""), org_id: str = ORG_ID):
-    try:
-        eid = _caller_employee_id(authorization)
-    except HTTPException:
-        return {"store_codes": [], "units": [], "is_manager": False}
-    rows = sb().rpc("org_span_for_manager", {"p_org_id": org_id, "p_employee_id": eid}).execute().data
-    codes = _span_codes(rows)
-    mrows = sb().table("org_managers").select("unit_id").eq("org_id", org_id).eq("employee_id", eid).execute().data or []
-    uids = [m["unit_id"] for m in mrows if m.get("unit_id")]
+    au = _caller_app_user(authorization, org_id)
+    codes = _caller_span_codes(authorization, org_id)   # org tree UNION market/store from the login
+    eid = (au.get("employee_id") or "").strip()
+    uids = []
+    if eid:
+        mrows = sb().table("org_managers").select("unit_id").eq("org_id", org_id).eq("employee_id", eid).execute().data or []
+        uids = [m["unit_id"] for m in mrows if m.get("unit_id")]
     units = (sb().table("org_units").select("id,name,level_id").eq("org_id", org_id).in_("id", uids).execute().data or []) if uids else []
     return {"employee_id": eid, "store_codes": codes, "units": units, "is_manager": bool(codes)}
 
@@ -1214,36 +1270,23 @@ def caller_scope(authorization: str, org_id: str = ORG_ID):
     uid = _uid_from_token(authorization)
     if not uid:
         return None
-    rows = sb().table("app_users").select("role,employee_id,store_code,store_codes").eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data or []
+    rows = sb().table("app_users").select("role,employee_id,market,store_code,store_codes").eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data or []
     if not rows:
         return None
-    role = (rows[0].get("role") or "").strip()
-    scope = "all"
-    if role:
-        try:
-            rr = sb().table("roles").select("permissions").eq("org_id", org_id).eq("name", role).limit(1).execute().data or []
-            if rr:
-                scope = ((rr[0].get("permissions") or {}).get("scope")) or "all"
-        except Exception:
-            scope = "all"
+    u = rows[0]
+    scope = _role_scope(org_id, (u.get("role") or "").strip())
     if scope == "all":
         return None
-    u = rows[0]
     eid = (u.get("employee_id") or "").strip()
     span = set()
     if eid:
         spans = sb().rpc("org_span_for_manager", {"p_org_id": org_id, "p_employee_id": eid}).execute().data
         span = set(_span_codes(spans))
-    # Market/store managers not yet wired into the org tree fall back to the store(s) pinned on their
-    # app_user, so scoping still works before assignments are complete. Reps ('self') are pinned to
-    # their own store by the frontend, so we leave their read scope empty here (the list views aren't
-    # theirs; the calendar guard only enforces a non-empty manager span).
+    # Market/store managers not yet wired into the org tree fall back to the market + store(s) pinned
+    # on their app_user, so scoping works before the org units/managers are assigned. Reps ('self')
+    # are pinned to their own store by the frontend, so their read scope stays empty here.
     if scope != "self":
-        if u.get("store_code"):
-            span.add(str(u["store_code"]).strip())
-        for sc in (u.get("store_codes") or []):
-            if sc and str(sc).strip():
-                span.add(str(sc).strip())
+        span |= _login_extra_codes(u, org_id)
     return span
 
 

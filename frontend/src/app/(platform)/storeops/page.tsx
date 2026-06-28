@@ -14,7 +14,8 @@ function weekRange() {
 
 const LINKS = [
   { href: '/storeops/schedule', icon: '📅', label: 'Schedule', desc: 'Build and edit weekly shifts' },
-  { href: '/storeops/reports', icon: '📋', label: 'Reports', desc: 'Hours & payroll, by employee/store' },
+  { href: '/storeops/reports', icon: '📋', label: 'Hours & Payroll Reports', desc: 'Hours & payroll, by employee/store' },
+  { href: '/reports', icon: '📊', label: 'Report Center', desc: 'All the reports you have access to' },
   { href: '/storeops/timeoff', icon: '🌴', label: 'Time Off', desc: 'Requests & approvals' },
   { href: '/storeops/swaps', icon: '🔄', label: 'Shift Swaps', desc: 'Swap requests & approvals' },
   { href: '/storeops/payroll', icon: '💵', label: 'Payroll', desc: 'Scheduled vs actual pay' },
