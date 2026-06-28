@@ -46,9 +46,22 @@ export default function TenantsAdmin() {
   )
 
   const inp = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14 }
+  const mtOn = typeof window !== 'undefined' && window.localStorage.getItem('mp_multi_tenant') === '1'
   return (
     <div style={{ padding: 24, maxWidth: 900 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>🏢 Companies (Tenants)</h1>
+      <div className="card" style={{ padding: 12, marginBottom: 14, background: mtOn ? '#fffbeb' : 'var(--surface)', borderColor: mtOn ? '#fde68a' : 'var(--border)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <b style={{ fontSize: 14 }}>Multi-tenant mode (this browser):</b>
+          <button className={`btn btn-sm ${mtOn ? 'btn-primary' : ''}`}
+            onClick={() => { window.localStorage.setItem('mp_multi_tenant', mtOn ? '0' : '1'); location.reload() }}>
+            {mtOn ? 'ON — scoping API calls to your org' : 'OFF (house org)'}</button>
+          <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+            Turning ON makes every API call use YOUR org_id (the isolation test). For full server-side
+            enforcement set Railway env <code>MULTI_TENANT_ENFORCE=1</code>; for public signups set <code>SIGNUPS_OPEN=1</code>.
+          </span>
+        </div>
+      </div>
       <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
         Onboard a company onto MetricsPro: this creates its own org, seeds its roles + modules, and provisions its first admin login.
         That admin then manages their own staff in Roles &amp; Access.
