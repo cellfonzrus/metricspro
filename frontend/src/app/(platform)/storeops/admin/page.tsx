@@ -4,7 +4,6 @@ import { api } from '@/lib/client'
 
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderBottom: '1px solid var(--border)' }
-const EMP_ROLES = ['Sales Rep', 'Assistant Manager', 'Store Manager', 'Market Manager', 'Admin', 'Other']
 
 export default function StoreOpsAdminPage() {
   const [tab, setTab] = useState<'employees' | 'stores'>('employees')
@@ -15,7 +14,7 @@ export default function StoreOpsAdminPage() {
   const [search, setSearch] = useState('')
   const [showInactive, setShowInactive] = useState(false)
   const [upBusy, setUpBusy] = useState(false)
-  const [newEmp, setNewEmp] = useState<any>({ name: '', employee_id: '', home_store: '', role: 'Sales Rep', pay_rate: '', email: '', phone: '' })
+  const [newEmp, setNewEmp] = useState<any>({ name: '', employee_id: '', home_store: '', email: '', phone: '' })
   const [newStore, setNewStore] = useState<any>({ store_code: '', address: '', market: '', monthly_target: '' })
 
   async function loadAll() {
@@ -53,8 +52,8 @@ export default function StoreOpsAdminPage() {
     if (ph === null) { alert(PHONE_EG); return }
     try {
       await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify({
-        name: e.name, employee_id: e.employee_id, home_store: e.home_store, role: e.role,
-        is_active: !!e.is_active, email: e.email, phone: ph,   // pay_rate is set in HR, not here
+        name: e.name, employee_id: e.employee_id, home_store: e.home_store,
+        is_active: !!e.is_active, email: e.email, phone: ph,   // pay + role are set in HR / Roles & Access
       }) })
       setMsg(`Saved ${e.name}`)
     } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)) }
@@ -67,7 +66,7 @@ export default function StoreOpsAdminPage() {
     try {
       await api('/api/v1/storeops/employees', { method: 'POST', body: JSON.stringify({ ...newEmp, phone: ph, pay_rate: Number(newEmp.pay_rate) || 0 }) })
       setMsg(`Added ${newEmp.name}`)
-      setNewEmp({ name: '', employee_id: '', home_store: '', role: 'Sales Rep', pay_rate: '', email: '', phone: '' })
+      setNewEmp({ name: '', employee_id: '', home_store: '', email: '', phone: '' })
       await loadAll()
     } catch (err: any) { setMsg('Add failed: ' + (err?.message || err)) }
   }
@@ -107,10 +106,10 @@ export default function StoreOpsAdminPage() {
   // ---- bulk EMPLOYEE setup (full records — for standing up a new tenant fast) ----
   async function downloadEmpTemplate() {
     const XLSX = await import('xlsx')
-    const aoa = [['name', 'employee_id', 'home_store', 'role', 'email', 'phone'],
-      ['Jane Doe', 'E1001', 'STORE01', 'Sales Rep', 'jane@example.com', '5162330422']]
+    const aoa = [['name', 'employee_id', 'home_store', 'email', 'phone'],
+      ['Jane Doe', 'E1001', 'STORE01', 'jane@example.com', '5162330422']]
     const ws = XLSX.utils.aoa_to_sheet(aoa)
-    ws['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 24 }, { wch: 16 }]
+    ws['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 24 }, { wch: 16 }]
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Employees')
     XLSX.writeFile(wb, 'employees-template.xlsx')
   }
@@ -125,7 +124,6 @@ export default function StoreOpsAdminPage() {
         name: pick(r, ['name', 'employee', 'full_name']),
         employee_id: pick(r, ['employee_id', 'emp id', 'id']),
         home_store: pick(r, ['home_store', 'home store', 'store', 'store_code']),
-        role: pick(r, ['role', 'title']) || 'Sales Rep',
         email: pick(r, ['email']),
         phone: pick(r, ['phone', 'mobile', 'cell']),
       })).filter(r => r.name)
@@ -196,7 +194,6 @@ export default function StoreOpsAdminPage() {
               <input style={{ ...sel, width: 160 }} placeholder="Name *" value={newEmp.name} onChange={e => setNewEmp({ ...newEmp, name: e.target.value })} />
               <input style={{ ...sel, width: 110 }} placeholder="Emp ID" value={newEmp.employee_id} onChange={e => setNewEmp({ ...newEmp, employee_id: e.target.value })} />
               <input style={{ ...sel, width: 110 }} placeholder="Home store" value={newEmp.home_store} onChange={e => setNewEmp({ ...newEmp, home_store: e.target.value })} />
-              <select style={sel} value={newEmp.role} onChange={e => setNewEmp({ ...newEmp, role: e.target.value })}>{EMP_ROLES.map(r => <option key={r}>{r}</option>)}</select>
               <input style={{ ...sel, width: 170 }} placeholder="Email" value={newEmp.email} onChange={e => setNewEmp({ ...newEmp, email: e.target.value })} />
               <input style={{ ...sel, width: 150 }} placeholder="Phone e.g. 5162330422" title={PHONE_EG} value={newEmp.phone} onChange={e => setNewEmp({ ...newEmp, phone: e.target.value })} />
               <button className="btn btn-primary" onClick={addEmp}>➕ Add</button>
@@ -224,7 +221,7 @@ export default function StoreOpsAdminPage() {
           <div className="table-wrapper">
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['Name', 'Emp ID', 'Home store', 'Role', 'Email', 'Phone', 'Active', ''].map(h =>
+                {['Name', 'Emp ID', 'Home store', 'Email', 'Phone', 'Active', ''].map(h =>
                   <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -233,7 +230,6 @@ export default function StoreOpsAdminPage() {
                     <td style={cell}><input style={{ ...sel, width: 150 }} value={e.name || ''} onChange={ev => setEmp(e.id, { name: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 100 }} value={e.employee_id || ''} onChange={ev => setEmp(e.id, { employee_id: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 100 }} value={e.home_store || ''} onChange={ev => setEmp(e.id, { home_store: ev.target.value })} /></td>
-                    <td style={cell}><select style={sel} value={e.role || 'Other'} onChange={ev => setEmp(e.id, { role: ev.target.value })}>{EMP_ROLES.map(r => <option key={r}>{r}</option>)}</select></td>
                     <td style={cell}><input style={{ ...sel, width: 160 }} value={e.email || ''} onChange={ev => setEmp(e.id, { email: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 130 }} placeholder="5162330422" title={PHONE_EG} value={e.phone || ''} onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></td>
                     <td style={cell}><input type="checkbox" checked={!!e.is_active} onChange={ev => setEmp(e.id, { is_active: ev.target.checked })} /></td>
