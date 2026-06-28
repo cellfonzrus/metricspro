@@ -31,6 +31,8 @@ export default function ImplementationWizard() {
   const outputs = readiness?.outputs || {}
   const reportKeys = Object.keys(reports)
   const readyOut = Object.values(outputs).filter((o: any) => o.ready).length
+  // Display name for a report key: the company's custom label (if set), else our default, else the key.
+  const labelFor = (rk: string) => reports[rk]?.label || REPORT_LABELS[rk] || rk
 
   return (
     <div style={{ maxWidth: 900 }}>
@@ -66,9 +68,9 @@ export default function ImplementationWizard() {
               <span style={{ fontWeight: 600, minWidth: 170 }}>{name}</span>
               {o.ready
                 ? <span style={{ color: '#15803d', fontSize: 13, fontWeight: 600 }}>✅ Ready</span>
-                : <span style={{ color: '#b45309', fontSize: 13 }}>Needs: {o.missing.map((m: string) => REPORT_LABELS[m] || m).join(', ')}</span>}
+                : <span style={{ color: '#b45309', fontSize: 13 }}>Needs: {o.missing.map((m: string) => labelFor(m)).join(', ')}</span>}
               <span style={{ flex: 1 }} />
-              <span style={{ fontSize: 11, color: 'var(--text3)' }}>from: {o.needs.map((m: string) => REPORT_LABELS[m] || m).join(' + ')}</span>
+              <span style={{ fontSize: 11, color: 'var(--text3)' }}>from: {o.needs.map((m: string) => labelFor(m)).join(' + ')}</span>
             </div>
           ))}
         </div>
@@ -96,7 +98,22 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
   const [src, setSrc] = useState<Record<string, string>>({})
   const [headers, setHeaders] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [nameVal, setNameVal] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  const displayName = info?.label || REPORT_LABELS[reportKey] || reportKey
+
+  // Rename / label this report. PATCH the existing definition (safe — touches only the label) or
+  // create one if the company has none yet for this report, so onboarding can name each report.
+  async function saveName() {
+    const lbl = nameVal.trim()
+    setBusy(true)
+    try {
+      if (info?.def_id) await api(`/api/v1/commcalc/report-definitions/${info.def_id}`, { method: 'PATCH', body: JSON.stringify({ label: lbl }) })
+      else await api('/api/v1/commcalc/report-definitions', { method: 'POST', body: JSON.stringify({ report_key: reportKey, label: lbl }) })
+      setEditing(false); setMsg(`✅ Report name saved: “${lbl || reportKey}”.`); onSaved()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+  }
 
   const load = useCallback(() => {
     api(`/api/v1/commcalc/column-mapping/targets?report_key=${encodeURIComponent(reportKey)}`).then((t: any) => setFields(t?.fields || [])).catch(() => {})
@@ -136,7 +153,22 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
     <div style={{ borderTop: '1px solid var(--border)', padding: '10px 0' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', flexWrap: 'wrap' }} onClick={() => setOpen(o => !o)}>
         <span style={{ width: 16, color: 'var(--text3)' }}>{open ? '▾' : '▸'}</span>
-        <b style={{ minWidth: 200 }}>{REPORT_LABELS[reportKey] || reportKey}</b>
+        {editing ? (
+          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }} onClick={e => e.stopPropagation()}>
+            <input autoFocus style={{ ...sel, width: 220 }} value={nameVal} placeholder={REPORT_LABELS[reportKey] || reportKey}
+              onChange={e => setNameVal(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditing(false) }} />
+            <button className="btn btn-primary" style={{ fontSize: 12 }} disabled={busy} onClick={saveName}>Save</button>
+            <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setEditing(false)}>Cancel</button>
+          </span>
+        ) : (
+          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', minWidth: 200 }}>
+            <b>{displayName}</b>
+            <button title="Rename / label this report" onClick={e => { e.stopPropagation(); setNameVal(info?.label || ''); setEditing(true) }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: 'var(--text3)', padding: 0 }}>✏️</button>
+            <span style={{ fontSize: 11, color: 'var(--text3)' }}>({reportKey})</span>
+          </span>
+        )}
         {info?.ready
           ? <span style={{ fontSize: 12, color: '#15803d', background: '#f0fdf4', padding: '2px 8px', borderRadius: 10 }}>✅ ready</span>
           : <span style={{ fontSize: 12, color: '#b45309', background: '#fffbeb', padding: '2px 8px', borderRadius: 10 }}>{info?.required_mapped || 0}/{info?.required || 0} required mapped</span>}

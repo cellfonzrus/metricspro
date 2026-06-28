@@ -1091,6 +1091,15 @@ def column_mapping_readiness(carrier_id: str = "", org_id: str = ORG_ID):
         reports[rk] = {"required": len(req), "required_mapped": len(req_mapped),
                        "total_mapped": len(mapped), "total_fields": len(flds),
                        "ready": bool(req) and len(req_mapped) == len(req)}
+    # Custom display name (label) + report_definition id per report, so the wizard can show and
+    # rename each report. def_id lets the frontend PATCH the existing row (vs creating a new one).
+    defs = (sb().schema("commcalc").table("report_definitions")
+            .select("id,report_key,label").eq("org_id", org_id).execute().data) or []
+    def_by_key = {d.get("report_key"): d for d in defs}
+    for rk, info in reports.items():
+        d = def_by_key.get(rk) or {}
+        info["label"] = d.get("label")
+        info["def_id"] = d.get("id")
     outputs = {}
     for name, needs in _DESIRED_OUTPUTS.items():
         missing = [s for s in needs if not reports.get(s, {}).get("ready")]
