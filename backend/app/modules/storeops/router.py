@@ -157,6 +157,39 @@ EMP_FIELDS = ("name", "home_store", "role", "pay_rate", "is_active", "email",
 STORE_FIELDS = ("store_code", "address", "market", "monthly_target", "is_active", "phone", "notes")
 
 
+@router.post("/employees/bulk")
+def bulk_create_employees(body: dict, org_id: str = ORG_ID):
+    """Bulk-create employees from a filled template (new-tenant setup). Body: {employees:[{...}]}.
+    Skips blank-name rows and any employee_id that already exists (so re-upload is idempotent)."""
+    rows_in = body.get("employees") or body.get("rows") or []
+    if not isinstance(rows_in, list):
+        raise HTTPException(400, "employees must be a list")
+    existing = {str(e.get("employee_id")) for e in
+                (sb().table("employees").select("employee_id").eq("org_id", org_id).execute().data or [])
+                if e.get("employee_id")}
+    to_insert, skipped = [], 0
+    for e in rows_in:
+        row = {k: e[k] for k in EMP_FIELDS if k in e}
+        if not str(row.get("name") or "").strip():
+            skipped += 1; continue
+        eid = str(row.get("employee_id") or "").strip()
+        if eid and eid in existing:
+            skipped += 1; continue
+        if not eid:
+            row.pop("employee_id", None)
+        row["org_id"] = org_id
+        if row.get("is_active") is None:
+            row["is_active"] = True
+        to_insert.append(row)
+        if eid:
+            existing.add(eid)
+    inserted = 0
+    for i in range(0, len(to_insert), 500):
+        r = sb().table("employees").insert(to_insert[i:i + 500]).execute()
+        inserted += len(r.data or to_insert[i:i + 500])
+    return {"inserted": inserted, "skipped": skipped}
+
+
 @router.post("/employees")
 def create_employee(emp: dict):
     """Create an employee (StoreOps Admin)."""
@@ -285,6 +318,34 @@ def bulk_payscale(body: dict, org_id: str = ORG_ID):
         sb().table("employees").update({"pay_rate": rate}).eq("id", match["id"]).execute()
         updated += 1
     return {"updated": updated, "errors": errors, "total": len(rows)}
+
+
+@router.post("/stores/bulk")
+def bulk_create_stores(body: dict, org_id: str = ORG_ID):
+    """Bulk-create stores from a filled template (new-tenant setup). Body: {stores:[{...}]}.
+    Skips blank store_code rows and store_codes that already exist (idempotent re-upload)."""
+    rows_in = body.get("stores") or body.get("rows") or []
+    if not isinstance(rows_in, list):
+        raise HTTPException(400, "stores must be a list")
+    existing = {str(s.get("store_code")).strip().upper() for s in
+                (sb().table("stores").select("store_code").eq("org_id", org_id).execute().data or [])
+                if s.get("store_code")}
+    to_insert, skipped = [], 0
+    for s in rows_in:
+        row = {k: s[k] for k in STORE_FIELDS if k in s}
+        code = str(row.get("store_code") or "").strip()
+        if not code or code.upper() in existing:
+            skipped += 1; continue
+        row["org_id"] = org_id
+        if row.get("is_active") is None:
+            row["is_active"] = True
+        to_insert.append(row)
+        existing.add(code.upper())
+    inserted = 0
+    for i in range(0, len(to_insert), 500):
+        r = sb().table("stores").insert(to_insert[i:i + 500]).execute()
+        inserted += len(r.data or to_insert[i:i + 500])
+    return {"inserted": inserted, "skipped": skipped}
 
 
 @router.post("/stores")
