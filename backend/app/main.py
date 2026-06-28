@@ -1,6 +1,7 @@
 """MetricsPro Platform API — FastAPI main entry point"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from app.modules.commcalc.router import router as commcalc_router
 from app.modules.storeops.router import router as storeops_router
 from app.modules.asset.router import router as asset_router
@@ -18,6 +19,10 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# gzip every response over ~1KB — JSON compresses ~10x, so big payloads (e.g. the 5MB flags list)
+# transfer far faster. System-wide latency win, zero behavior change.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 app.add_middleware(
     CORSMiddleware,
