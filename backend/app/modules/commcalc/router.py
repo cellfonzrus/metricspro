@@ -3010,12 +3010,14 @@ async def get_commissions(period: str, org_id: str = "00000000-0000-0000-0000-00
     for item in cb:
         if item.get('deduct'):
             rep = item.get('epay_salesperson') or ''
-            ded_by_rep[rep] = ded_by_rep.get(rep, 0) + (item.get('amount') or 0)
+            # safe_float: a manually-assigned chargeback can store amount as a string
+            # ("25.00"), and 0 + "25.00" raised TypeError → the whole endpoint 500'd for that rep.
+            ded_by_rep[rep] = ded_by_rep.get(rep, 0) + safe_float(item.get('amount'))
     for cr in comms:
         rep = cr.get('epay_salesperson') or ''
         d = ded_by_rep.get(rep, 0)
         cr['chargeback_deduction'] = d
-        cr['final_payout'] = (cr.get('total_payout') or 0) - d
+        cr['final_payout'] = safe_float(cr.get('total_payout')) - safe_float(d)
     return comms
 
 @router.get("/dlar-store/{period}")

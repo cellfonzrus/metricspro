@@ -252,10 +252,12 @@ def calc_rep_commissions(
         rep['trade_ins'] = pay_by_login.get(rep['login'], {}).get('trades', 0)
         trade_comm   = rep['trade_ins'] * G['trade_in_spiff']
         
-        # ACIMA financing spiff
+        # ACIMA lease spiff — paid PER ACIMA TENDERED. The tender shows up as
+        # "ACIMA" / "ACIMA Lease" / "Acima Leasing" in raw_sales.tender_type, never the
+        # literal "financing" — the old exact-match made acima_count always 0 ($0 for everyone).
         acima_count = sum(
             1 for s in rep['sales']
-            if str(s.get('tender_type','')).lower() == 'financing'
+            if 'acima' in str(s.get('tender_type', '')).lower()
         )
         acima_comm = acima_count * G['acima_spiff']
         

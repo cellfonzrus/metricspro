@@ -286,11 +286,11 @@ export default function ReportsPage() {
                     </tr>
                     {(currentRep.acima_comm || 0) > 0 && (
                       <tr>
-                        <td>ACIMA Financing SPIFF</td>
+                        <td>ACIMA Lease SPIFF</td>
                         <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>
-                          {Math.round((currentRep.acima_comm || 0) / 25)} txns
+                          {Math.round((currentRep.acima_comm || 0) / (cfg.acima_spiff || 25))} txns
                         </td>
-                        <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>$25 each</td>
+                        <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>{fmt(cfg.acima_spiff || 25)} each</td>
                         <td style={{ textAlign: 'right', fontWeight: 600, color: '#7c3aed' }}>{fmt(currentRep.acima_comm)}</td>
                       </tr>
                     )}

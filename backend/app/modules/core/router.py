@@ -448,6 +448,7 @@ async def list_employees(org_id: str = ORG_ID):
             "has_login": bool((u or {}).get("auth_id")),
             "app_market": (u or {}).get("market"),
             "app_store": (u or {}).get("store_code"),
+            "app_store_codes": (u or {}).get("store_codes"),   # floaters: full store set
             "widget_overrides": (u or {}).get("widget_overrides"),
         })
     # Surface app_users that have no matching employee (manually added via "Add a person")
@@ -468,6 +469,7 @@ async def list_employees(org_id: str = ORG_ID):
             "has_login": bool(u.get("auth_id")),
             "app_market": u.get("market"),
             "app_store": u.get("store_code"),
+            "app_store_codes": u.get("store_codes"),   # floaters: full store set
             "widget_overrides": u.get("widget_overrides"),
             "manual": True,
         })

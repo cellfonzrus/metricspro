@@ -36,6 +36,7 @@ type Emp = {
   email: string | null; role: string | null; is_active: boolean
   phone?: string | null; pay_rate?: number | null
   app_role: string | null; has_login: boolean; app_market: string | null; app_store: string | null
+  app_store_codes?: string[] | null   // floaters cover several stores (app_users.store_codes)
   widget_overrides?: Record<string, boolean> | null
   manual?: boolean
 }
@@ -56,6 +57,7 @@ export default function RolesAdminPage() {
   const [widgetEmp, setWidgetEmp] = useState<number | null>(null)  // row with the widget editor open
   const [editEmp, setEditEmp] = useState<number | null>(null)      // row with the edit/remove editor open
   const [markets, setMarkets] = useState<string[]>([])             // distinct markets → checkbox picker
+  const [stores, setStores] = useState<{ code: string; label: string }[]>([])  // store dropdown source
 
   async function loadAll() {
     setLoading(true)
@@ -70,7 +72,11 @@ export default function RolesAdminPage() {
       try {
         const st = await api('/api/v1/storeops/stores')
         setMarkets(Array.from(new Set((st || []).map((s: any) => (s.market || '').trim()).filter(Boolean))).sort() as string[])
-      } catch { /* markets are best-effort */ }
+        setStores((st || [])
+          .map((s: any) => ({ code: String(s.store_code || '').trim(), label: `${s.store_code}${s.address ? ' — ' + String(s.address).substring(0, 26) : ''}` }))
+          .filter((s: any) => s.code)
+          .sort((a: any, b: any) => a.code.localeCompare(b.code)))
+      } catch { /* stores/markets are best-effort */ }
     } catch (err: any) { setMsg('Load failed: ' + (err?.message || err)) }
     setLoading(false)
   }
@@ -139,9 +145,15 @@ export default function RolesAdminPage() {
         setMsg(`⚠️ ${e.name} needs an email before a role can be assigned — enter one in the Email column, then Save.${e.app_role ? ` (role "${e.app_role}" not yet applied)` : ''}`)
         return
       }
+      // Floaters cover several stores: send the full set (store_codes) + a primary (store_code).
+      const codes = (e.app_store_codes && e.app_store_codes.length)
+        ? e.app_store_codes
+        : (e.app_store ? [e.app_store] : (e.home_store ? [e.home_store] : []))
       await api('/api/v1/core/users/assign', { method: 'POST', body: JSON.stringify({
         email: e.email, full_name: e.name, role: e.app_role || 'sales_rep',
-        market: e.app_market || null, store_code: e.app_store || e.home_store || null,
+        market: e.app_market || null,
+        store_code: codes[0] || e.home_store || null,   // primary store (unchanged contract)
+        store_codes: codes,                             // full set for floaters
         employee_id: e.employee_id,
       }) })
       setMsg(`Saved ${e.name} → ${e.app_role || 'sales_rep'}`)
@@ -538,8 +550,11 @@ export default function RolesAdminPage() {
                         <MarketPicker value={e.app_market || ''} markets={markets} onChange={v => setEmp(e.id, { app_market: v })} />
                       </td>
                       <td style={{ padding: '8px 12px' }}>
-                        <input style={{ ...sel, width: 110 }} value={e.app_store || ''} placeholder={e.home_store || '—'}
-                          onChange={ev => setEmp(e.id, { app_store: ev.target.value })} />
+                        <StorePicker
+                          value={(e.app_store_codes && e.app_store_codes.length) ? e.app_store_codes : (e.app_store ? [e.app_store] : [])}
+                          stores={stores}
+                          placeholder={e.home_store || 'Store(s)…'}
+                          onChange={codes => setEmp(e.id, { app_store_codes: codes, app_store: codes[0] || null })} />
                       </td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>
                         {e.has_login ? <span className="badge badge-blue" style={{ fontSize: 11 }}>✓ has login</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
@@ -620,6 +635,43 @@ export default function RolesAdminPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// Multi-select store picker — assign one or many stores to a rep (floaters cover several).
+// Emits a string[] of store_codes (what app_users.store_codes + the span resolver read), and
+// is a real dropdown of valid stores so a wrong/typo store can't be entered.
+function StorePicker({ value, stores, placeholder, onChange }:
+  { value: string[]; stores: { code: string; label: string }[]; placeholder?: string; onChange: (v: string[]) => void }) {
+  const [open, setOpen] = useState(false)
+  const chosen = new Set(value || [])
+  const toggle = (code: string) => {
+    const next = new Set(chosen); next.has(code) ? next.delete(code) : next.add(code)
+    onChange(Array.from(next))
+  }
+  const label = chosen.size === 0 ? (placeholder || 'Store(s)…')
+    : chosen.size === 1 ? Array.from(chosen)[0] : `${chosen.size} stores`
+  const btn: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', cursor: 'pointer', minWidth: 120, display: 'inline-flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button type="button" onClick={() => setOpen(o => !o)} style={btn}>
+        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 130 }}>{label}</span>
+        <span style={{ fontSize: 10, opacity: 0.6 }}>▾</span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 41, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 8, minWidth: 220, maxHeight: 320, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.18)' }}>
+            {stores.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)', padding: 4 }}>No stores found</div>}
+            {stores.map(s => (
+              <label key={s.code} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', fontSize: 13, cursor: 'pointer' }}>
+                <input type="checkbox" checked={chosen.has(s.code)} onChange={() => toggle(s.code)} /> {s.label}
+              </label>
+            ))}
           </div>
         </>
       )}
