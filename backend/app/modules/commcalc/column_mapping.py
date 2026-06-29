@@ -143,7 +143,7 @@ TARGET_FIELDS = {
         ("spiff_m5", "5th month spiff", "number", False, "5th Month Spiff", []),
         ("spiff_m6", "6th month spiff", "number", False, "6th Month Spiff", []),
         ("residual", "Residual", "number", False, "Residual", ["Residual Amount"]),
-        ("other_amount", "Other amount", "number", False, "Other", ["Wallet Funding Amount"]),
+        ("other_amount", "Other amount", "number", False, "Other", []),
     ],
 }
 

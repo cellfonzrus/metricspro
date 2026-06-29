@@ -3077,19 +3077,21 @@ def _apply_new_engines(client, org_id, period, comms):
             return {str(row.get("storeops_name") or "").strip().upper(),
                     str(row.get("epay_salesperson") or "").strip().upper()} - {""}
 
-        known = set(plan_by_rep) | set(stmt_by_rep)
-        matched = set()
+        plan_matched = set()
         for row in comms:
             ks = _keys(row)
             inst = next((inst_by_rep[k] for k in ks if k in inst_by_rep), 0.0)
             stmt = next((stmt_by_rep[k] for k in ks if k in stmt_by_rep), 0.0)
             pv = next((plan_by_rep[k] for k in ks if k in plan_by_rep), None)
-            matched |= (ks & known)
             if cols["residual_installment_comm"]:
                 row["residual_installment_comm"] = inst
+            # carrier_statement_comm = what the CARRIER paid the dealer for this rep (dealer revenue).
+            # Recorded for VISIBILITY / recon — NOT auto-added to rep pay. The rep's commission comes from
+            # the configured plan / multi-month %MRC schedule, not the dealer-level statement totals.
             if cols["carrier_statement_comm"]:
                 row["carrier_statement_comm"] = stmt
             if pv is not None:
+                plan_matched |= (ks & set(plan_by_rep))
                 if cols["plan_comm"]:
                     row["plan_comm"] = pv["amount"]
                 if cols["plan_name"]:
@@ -3097,32 +3099,32 @@ def _apply_new_engines(client, org_id, period, comms):
                 base = safe_float(pv["amount"])                       # a plan REPLACES the spiff subtotal
             else:
                 base = safe_float(row.get("total_payout"))            # keep the standard calc
-            row["total_payout"] = round(base + inst + stmt, 2)         # installments + statement are additive
+            row["total_payout"] = round(base + inst, 2)               # plan + installments = rep pay
 
-        # reps the standard calc produced no row for, but a plan or statement pays → add them
+        # reps with a PLAN but no standard row → add them (statement-only reps are captured in
+        # commcalc.carrier_commission for recon, not paid here)
         pm = parse_period(period)
-        for rn in (known - matched):
-            pv = plan_by_rep.get(rn)
+        for rn, pv in plan_by_rep.items():
+            if rn in plan_matched:
+                continue
             inst = inst_by_rep.get(rn, 0.0)
-            stmt = stmt_by_rep.get(rn, 0.0)
-            base = safe_float(pv["amount"]) if pv else 0.0
+            base = safe_float(pv["amount"])
             newrow = {"org_id": org_id, "period": period,
                       "period_month": pm.get("month"), "period_year": pm.get("year"),
                       "storeops_name": rn.title(), "epay_salesperson": rn,
                       "subtotal": base, "tier": 1,
-                      "total_payout": round(base + inst + stmt, 2)}
-            if pv and cols["plan_comm"]:
+                      "total_payout": round(base + inst, 2)}
+            if cols["plan_comm"]:
                 newrow["plan_comm"] = pv["amount"]
-            if pv and cols["plan_name"]:
+            if cols["plan_name"]:
                 newrow["plan_name"] = pv.get("plan_name")
             if cols["residual_installment_comm"]:
                 newrow["residual_installment_comm"] = inst
             if cols["carrier_statement_comm"]:
-                newrow["carrier_statement_comm"] = stmt
+                newrow["carrier_statement_comm"] = stmt_by_rep.get(rn, 0.0)
             comms.append(newrow)
         print(f"INFO new-engines applied org={org_id} period={period}: "
-              f"plan_reps={len(plan_by_rep)} statement_reps={len(stmt_by_rep)} installment_reps={len(inst_by_rep)} "
-              f"added_rows={len(known - matched)}")
+              f"plan_reps={len(plan_by_rep)} statement_reps={len(stmt_by_rep)} installment_reps={len(inst_by_rep)}")
         return comms
     except Exception as e:
         print(f"WARN new-engine wiring skipped (standard calc kept): {e}")
