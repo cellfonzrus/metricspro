@@ -10,6 +10,20 @@ const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: 
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
 const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 2 }
 
+// One-click IMAP presets so a user can add a Gmail/Yahoo/Outlook/etc. mailbox without knowing servers.
+const PROVIDERS: Record<string, { label: string; imap_host: string; imap_port: number; use_ssl: boolean; hint?: string }> = {
+  custom:  { label: 'Custom / other (enter manually)', imap_host: '', imap_port: 993, use_ssl: true },
+  gmail:   { label: 'Gmail / Google Workspace', imap_host: 'imap.gmail.com', imap_port: 993, use_ssl: true, hint: 'Gmail needs an App Password (Google Account → Security → 2-Step Verification → App passwords) — not your normal password. Also enable IMAP in Gmail settings.' },
+  outlook: { label: 'Outlook / Hotmail / Live / MSN', imap_host: 'outlook.office365.com', imap_port: 993, use_ssl: true, hint: 'Microsoft accounts with 2FA need an App Password (account.microsoft.com → Security → Advanced security options).' },
+  yahoo:   { label: 'Yahoo Mail', imap_host: 'imap.mail.yahoo.com', imap_port: 993, use_ssl: true, hint: 'Yahoo requires an App Password (Account Info → Account Security → Generate app password).' },
+  aol:     { label: 'AOL Mail', imap_host: 'imap.aol.com', imap_port: 993, use_ssl: true, hint: 'AOL requires an App Password (Account Security → Generate app password).' },
+  icloud:  { label: 'iCloud Mail', imap_host: 'imap.mail.me.com', imap_port: 993, use_ssl: true, hint: 'iCloud requires an app-specific password (appleid.apple.com → Sign-In and Security).' },
+  zoho:    { label: 'Zoho Mail', imap_host: 'imap.zoho.com', imap_port: 993, use_ssl: true },
+  gmx:     { label: 'GMX', imap_host: 'imap.gmx.com', imap_port: 993, use_ssl: true },
+}
+const providerOf = (host: string) =>
+  Object.keys(PROVIDERS).find(k => PROVIDERS[k].imap_host && PROVIDERS[k].imap_host === (host || '')) || 'custom'
+
 export default function EmailImportsPage() {
   const [cfg, setCfg] = useState<any>({ imap_port: 993, use_ssl: true, mailbox: 'INBOX', since_days: 14, patterns: [], frequency: 'daily', hour: 7 })
   const [pwd, setPwd] = useState('')
@@ -58,6 +72,17 @@ export default function EmailImportsPage() {
 
       <div className="card" style={{ padding: 16, marginBottom: 14 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 }}>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label style={lbl}>Email provider</label>
+            <select style={{ ...sel, width: '100%', maxWidth: 340 }} value={providerOf(cfg.imap_host)}
+              onChange={e => { const k = e.target.value; const p = PROVIDERS[k]; if (k === 'custom') { set({ imap_host: '' }) } else if (p) { set({ imap_host: p.imap_host, imap_port: p.imap_port, use_ssl: p.use_ssl }) } }}>
+              {Object.entries(PROVIDERS).map(([k, p]) => <option key={k} value={k}>{p.label}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>Pick a provider to auto-fill the server + port — then just enter the email + password below.</div>
+            {PROVIDERS[providerOf(cfg.imap_host)]?.hint && (
+              <div style={{ fontSize: 11, color: '#b45309', marginTop: 3 }}>💡 {PROVIDERS[providerOf(cfg.imap_host)].hint}</div>
+            )}
+          </div>
           <div><label style={lbl}>IMAP host</label><input style={{ ...sel, width: '100%' }} placeholder="mail.metricspro.tech" value={cfg.imap_host || ''} onChange={e => set({ imap_host: e.target.value })} /></div>
           <div><label style={lbl}>Port</label><input style={{ ...sel, width: '100%' }} value={cfg.imap_port || 993} onChange={e => set({ imap_port: Number(e.target.value) || 993 })} /></div>
           <div><label style={lbl}>Username</label><input style={{ ...sel, width: '100%' }} placeholder="b2b@metricspro.tech" value={cfg.username || ''} onChange={e => set({ username: e.target.value })} /></div>
