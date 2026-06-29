@@ -15,6 +15,7 @@ from app.modules.commcalc import vip_sweep
 from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
 from app.modules.commcalc import installment_engine
+from app.modules.commcalc import commission_engine
 from app.modules.commcalc import b2b_sweep
 from app.modules.commcalc import sales_analyzer
 from app.modules.commcalc import sales_recon
@@ -3240,6 +3241,129 @@ async def delete_distributor_payment(payment_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema('commcalc').table('distributor_payments').delete().eq('org_id', org_id).eq('id', payment_id).execute()
     return {"deleted": payment_id}
+
+
+# ── Configurable commission PLANS (migration 059) — user-built rules, assigned per scope ───────────
+# A PLAN is a set of RULES the user creates: each rule matches sale lines on any sales-report field and
+# defines how matching lines pay (flat/unit, %MRC, %GP, %price-over-cost, flat bonus), optionally tiered.
+# Plans are assigned to employee/store/market/default (precedence employee>store>market>default). The
+# preview is READ-ONLY — it never writes rep_commissions and never touches the live POST /calculate path
+# (the new system built ALONGSIDE calculator.py; wiring it live is a later, explicit step).
+
+@router.get("/commission-plans")
+async def list_commission_plans(org_id: str = ORG_ID):
+    """Plans with nested rules + tiers + assignments. {ready:false} if migration 059 isn't applied."""
+    client = sb()
+    plans, ready = commission_engine._load_plans(client, org_id)
+    if not ready:
+        return {"plans": [], "ready": False, "note": "Run migration 059_commission_plans.sql to enable."}
+    return {"plans": plans, "ready": True}
+
+
+@router.post("/commission-plans")
+async def save_commission_plan(body: dict, org_id: str = ORG_ID):
+    """Upsert a plan + REPLACE its rules / tiers / assignments (delete-then-insert children)."""
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    client = sb()
+    plan_row = {
+        "org_id": org_id, "name": name,
+        "carrier_id": body.get("carrier_id") or None,
+        "base_tier_metric": body.get("base_tier_metric") or None,
+        "is_active": bool(body.get("is_active", True)),
+        "notes": body.get("notes") or None,
+    }
+    try:
+        if body.get("id"):
+            r = client.schema('commcalc').table('commission_plan').update(plan_row).eq('id', body['id']).eq('org_id', org_id).execute()
+            plan_id = body['id']
+        else:
+            r = client.schema('commcalc').table('commission_plan').upsert(plan_row, on_conflict='org_id,name').execute()
+            plan_id = (r.data or [{}])[0].get('id')
+        if not plan_id:
+            # upsert on an existing name returns no row in some PostgREST configs — look it up
+            got = client.schema('commcalc').table('commission_plan').select('id').eq('org_id', org_id).eq('name', name).execute().data or []
+            plan_id = got[0]['id'] if got else None
+        if not plan_id:
+            raise HTTPException(500, "could not resolve plan id after save")
+
+        # replace children (delete-then-insert by plan)
+        for tbl in ('commission_rule', 'commission_tier', 'commission_plan_assignment'):
+            client.schema('commcalc').table(tbl).delete().eq('org_id', org_id).eq('plan_id', plan_id).execute()
+
+        rules = []
+        for i, rl in enumerate(body.get("rules") or []):
+            mf = (rl.get("match_field") or "any")
+            if mf not in commission_engine.MATCH_FIELDS:
+                mf = "any"
+            pk = (rl.get("payout_kind") or "flat_per_unit")
+            if pk not in commission_engine.PAYOUT_KINDS:
+                pk = "flat_per_unit"
+            rules.append({
+                "org_id": org_id, "plan_id": plan_id,
+                "label": rl.get("label") or None,
+                "match_field": mf,
+                "match_op": (rl.get("match_op") or "equals"),
+                "match_value": rl.get("match_value") or None,
+                "qualifies": bool(rl.get("qualifies", True)),
+                "payout_kind": pk,
+                "amount": safe_float(rl.get("amount")),
+                "pct": safe_float(rl.get("pct")),
+                "tiered": bool(rl.get("tiered")),
+                "sort": int(rl.get("sort") if rl.get("sort") is not None else i),
+            })
+        if rules:
+            client.schema('commcalc').table('commission_rule').insert(rules).execute()
+
+        tiers = []
+        for i, t in enumerate(body.get("tiers") or []):
+            tiers.append({
+                "org_id": org_id, "plan_id": plan_id,
+                "metric": t.get("metric") or body.get("base_tier_metric") or None,
+                "min_count": int(t.get("min_count") or 0),
+                "multiplier": safe_float(t.get("multiplier")) or 1,
+                "sort": int(t.get("sort") if t.get("sort") is not None else i),
+            })
+        if tiers:
+            client.schema('commcalc').table('commission_tier').insert(tiers).execute()
+
+        assigns = []
+        for a in body.get("assignments") or []:
+            scope = (a.get("scope") or "default")
+            assigns.append({
+                "org_id": org_id, "plan_id": plan_id, "scope": scope,
+                "scope_value": (a.get("scope_value") or None) if scope != "default" else None,
+                "priority": int(a.get("priority") or 0),
+            })
+        if assigns:
+            client.schema('commcalc').table('commission_plan_assignment').insert(assigns).execute()
+
+        return {"id": plan_id, "saved": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"save plan failed (is migration 059 applied?): {e}")
+
+
+@router.delete("/commission-plans/{plan_id}")
+async def delete_commission_plan(plan_id: str, org_id: str = ORG_ID):
+    """Delete a plan (children cascade via FK ON DELETE CASCADE)."""
+    client = sb()
+    client.schema('commcalc').table('commission_plan').delete().eq('org_id', org_id).eq('id', plan_id).execute()
+    return {"deleted": plan_id}
+
+
+@router.get("/commission-plans/preview")
+async def preview_commission_plan(period: str, plan_id: str = "", org_id: str = ORG_ID):
+    """READ-ONLY preview: apply plan rules to a period's raw_sales → per-rep payout + breakdown.
+    Writes nothing; does not touch rep_commissions or the live calc. plan_id optional (else per-rep
+    via assignment precedence)."""
+    if not period:
+        raise HTTPException(400, "period required")
+    client = sb()
+    return commission_engine.preview(client, org_id, period, plan_id=plan_id or None)
+
 
 @router.get("/stores")
 async def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):

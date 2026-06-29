@@ -84,6 +84,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/expenses', label: 'Store Expenses', icon: '🏪', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/settings', label: 'Commission Rates', icon: '⚙️', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/payout-schedules', label: 'Payout Schedules', icon: '📆', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/commission-plans', label: 'Commission Plans', icon: '🧮', module: 'commissions', scopes: ['all'] },
   ]},
   { group: 'Targets & Coaching', module: 'targets', items: [
     { href: '/commcalc/targets', label: 'Daily Targets', icon: '📈', module: 'targets', scopes: ['all', 'market', 'store'] },

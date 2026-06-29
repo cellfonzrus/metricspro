@@ -1,0 +1,379 @@
+'use client'
+import { useState, useEffect } from 'react'
+import { api, fmt } from '@/lib/client'
+import { ExportButtons, ExportPayload } from '@/lib/export'
+
+// Configurable commission PLAN engine (migration 059). A PLAN is a set of RULES the user creates — each
+// rule matches sale lines on any sales-transaction field (contract_type/tender_type/department/category/
+// product_desc/sku/trans_type/any) and defines how matching lines PAY (flat/unit, %MRC, %GP, %price-over-
+// cost, flat bonus), optionally TIERED by a qualifying-unit count → multiplier. Plans are ASSIGNED to
+// employee/store/market/default (precedence employee>store>market>default). PREVIEW is READ-ONLY: it shows
+// what the plan WOULD pay for a period from raw_sales — it does NOT change live commissions.
+
+type Rule = { id?: string; label?: string; match_field: string; match_op: string; match_value: string
+  qualifies: boolean; payout_kind: string; amount: number; pct: number; tiered: boolean }
+type Tier = { id?: string; metric?: string; min_count: number; multiplier: number }
+type Assign = { id?: string; scope: string; scope_value?: string | null; priority?: number }
+type Plan = { id?: string; name: string; carrier_id?: string | null; base_tier_metric?: string | null
+  is_active: boolean; notes?: string | null; rules?: Rule[]; tiers?: Tier[]; assignments?: Assign[] }
+
+const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
+const lbl: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, fontWeight: 600, color: 'var(--text2)' }
+const th: React.CSSProperties = { textAlign: 'left', padding: '5px 8px', fontSize: 11, color: 'var(--text2)' }
+const td: React.CSSProperties = { padding: '4px 8px', fontSize: 12, borderTop: '1px solid var(--border)' }
+
+const MATCH_FIELDS = ['any', 'contract_type', 'tender_type', 'department', 'category', 'product_desc', 'sku', 'trans_type']
+const MATCH_OPS = ['equals', 'contains', 'in']
+const PAYOUT_KINDS = [
+  { v: 'flat_per_unit', l: 'Flat $ per unit', use: 'amount' },
+  { v: 'pct_mrc', l: '% of MRC (raw_mi)', use: 'pct' },
+  { v: 'pct_gp', l: '% of GP', use: 'pct' },
+  { v: 'pct_price_over_cost', l: '% of price − cost', use: 'pct' },
+  { v: 'flat', l: 'Flat $ once', use: 'amount' },
+]
+const TIER_METRICS = ['none', 'activations', 'upgrades', 'boxes']
+const usesPct = (k: string) => PAYOUT_KINDS.find(p => p.v === k)?.use === 'pct'
+
+const FIELD_HELP: Record<string, string> = {
+  tender_type: 'e.g. acima (case-insensitive)',
+  department: 'e.g. accessories, insurance, internet, Ondigo',
+  contract_type: 'e.g. new activation, upgrade, swap, BYOD, Port-In',
+  category: 'e.g. accessory category as it appears on the report',
+  product_desc: 'e.g. Device Setup Charge (use "contains")',
+  sku: 'exact SKU (use "in" for a comma list)',
+  trans_type: 'e.g. Sale, Return',
+  any: 'matches every line (a blanket rule)',
+}
+
+const blankRule = (): Rule => ({ label: '', match_field: 'contract_type', match_op: 'equals', match_value: '', qualifies: true, payout_kind: 'flat_per_unit', amount: 0, pct: 0, tiered: false })
+const blankPlan = (): Plan => ({ name: '', carrier_id: '', base_tier_metric: 'none', is_active: true, notes: '', rules: [], tiers: [], assignments: [] })
+
+export default function CommissionPlansPage() {
+  const [plans, setPlans] = useState<Plan[]>([])
+  const [carriers, setCarriers] = useState<any[]>([])
+  const [employees, setEmployees] = useState<any[]>([])
+  const [stores, setStores] = useState<any[]>([])
+  const [ready, setReady] = useState(true)
+  const [msg, setMsg] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [draft, setDraft] = useState<Plan | null>(null)
+  const [period, setPeriod] = useState('June 2026')
+  const [preview, setPreview] = useState<any>(null)
+  const [previewBusy, setPreviewBusy] = useState(false)
+
+  async function load() {
+    try {
+      const r = await api('/api/v1/commcalc/commission-plans')
+      setPlans(r.plans || []); setReady(r.ready !== false)
+      if (r.ready === false) setMsg(r.note || 'Run migration 059 to enable.')
+      setCarriers(await api('/api/v1/commcalc/carriers').catch(() => []))
+      setEmployees(await api('/api/v1/storeops/employees?all_company=true').catch(() => []))
+      setStores(await api('/api/v1/storeops/stores').catch(() => []))
+    } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
+  }
+  useEffect(() => { load() }, [])
+
+  const markets = Array.from(new Set(stores.map(s => (s.market || '').trim()).filter(Boolean))).sort()
+  const carrierName = (id?: string | null) => carriers.find(c => c.id === id)?.name || ''
+
+  // ── plan-level mutators ──
+  const upd = (patch: Partial<Plan>) => setDraft(d => d ? { ...d, ...patch } : d)
+  const updRule = (i: number, patch: Partial<Rule>) => setDraft(d => d ? { ...d, rules: (d.rules || []).map((r, j) => j === i ? { ...r, ...patch } : r) } : d)
+  const addRule = () => setDraft(d => d ? { ...d, rules: [...(d.rules || []), blankRule()] } : d)
+  const delRule = (i: number) => setDraft(d => d ? { ...d, rules: (d.rules || []).filter((_, j) => j !== i) } : d)
+  const updTier = (i: number, patch: Partial<Tier>) => setDraft(d => d ? { ...d, tiers: (d.tiers || []).map((t, j) => j === i ? { ...t, ...patch } : t) } : d)
+  const addTier = () => setDraft(d => d ? { ...d, tiers: [...(d.tiers || []), { min_count: 0, multiplier: 1 }] } : d)
+  const delTier = (i: number) => setDraft(d => d ? { ...d, tiers: (d.tiers || []).filter((_, j) => j !== i) } : d)
+  const updAssign = (i: number, patch: Partial<Assign>) => setDraft(d => d ? { ...d, assignments: (d.assignments || []).map((a, j) => j === i ? { ...a, ...patch } : a) } : d)
+  const addAssign = () => setDraft(d => d ? { ...d, assignments: [...(d.assignments || []), { scope: 'default', scope_value: '', priority: 0 }] } : d)
+  const delAssign = (i: number) => setDraft(d => d ? { ...d, assignments: (d.assignments || []).filter((_, j) => j !== i) } : d)
+
+  async function save() {
+    if (!draft) return
+    if (!draft.name.trim()) { setMsg('Plan name is required.'); return }
+    setBusy(true); setMsg('')
+    try {
+      const body = {
+        ...draft, carrier_id: draft.carrier_id || null,
+        base_tier_metric: draft.base_tier_metric === 'none' ? null : draft.base_tier_metric,
+        rules: (draft.rules || []).map((r, i) => ({ ...r, amount: Number(r.amount) || 0, pct: Number(r.pct) || 0, sort: i })),
+        tiers: (draft.tiers || []).map((t, i) => ({ ...t, min_count: Number(t.min_count) || 0, multiplier: Number(t.multiplier) || 1, sort: i })),
+        assignments: (draft.assignments || []).map(a => ({ ...a, priority: Number(a.priority) || 0 })),
+      }
+      await api('/api/v1/commcalc/commission-plans', { method: 'POST', body: JSON.stringify(body) })
+      setMsg('✅ Saved.'); setDraft(null); load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+  }
+  async function del(id?: string) {
+    if (!id || !confirm('Delete this plan and all its rules/tiers/assignments?')) return
+    try { await api(`/api/v1/commcalc/commission-plans/${id}`, { method: 'DELETE' }); load() } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function runPreview(planId?: string) {
+    setPreviewBusy(true); setPreview(null)
+    try {
+      const q = `?period=${encodeURIComponent(period)}${planId ? `&plan_id=${planId}` : ''}`
+      setPreview(await api(`/api/v1/commcalc/commission-plans/preview${q}`))
+    } catch (e: any) { setMsg('❌ Preview: ' + (e?.message || e)) } finally { setPreviewBusy(false) }
+  }
+
+  function previewPayload(): ExportPayload {
+    return {
+      title: 'Commission Plan Preview (read-only)', subtitle: `${period} — does NOT change live commissions`,
+      filename: `commission-preview-${period.replace(/\s+/g, '-')}`,
+      sheets: [{
+        name: 'By Rep', rows: preview?.by_rep || [],
+        columns: [
+          { header: 'Rep', get: (r: any) => r.rep },
+          { header: 'Store', get: (r: any) => r.store },
+          { header: 'Plan', get: (r: any) => r.plan_name },
+          { header: 'Qual. units', get: (r: any) => r.qualifying_units },
+          { header: 'Tier ×', get: (r: any) => r.tier_multiplier },
+          { header: 'Total payout', get: (r: any) => r.total_payout, money: true },
+        ],
+      }],
+    }
+  }
+
+  return (
+    <div style={{ maxWidth: 1140 }}>
+      <div style={{ marginBottom: 14 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧮 Commission Plans</h1>
+        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          Build your own commission plans. Any line on the sales transaction report can qualify for commission
+          on rules YOU define — then assign each plan to employees / stores / markets. The preview shows what a
+          plan <strong>would</strong> pay; it is <strong>read-only</strong> and does not change live commissions.
+        </p>
+      </div>
+      {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {msg || 'Run migration 059_commission_plans.sql in Supabase to enable.'}</div>}
+
+      {/* list + new */}
+      {!draft && (
+        <div className="card" style={{ padding: 0, marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>Plans ({plans.length})</div>
+            <span style={{ flex: 1 }} />
+            <button className="btn btn-primary" onClick={() => setDraft(blankPlan())}>➕ New plan</button>
+          </div>
+          {plans.map(p => (
+            <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderTop: '1px solid var(--border)', fontSize: 13, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 700 }}>{p.name}</span>
+              {p.carrier_id && <span style={{ fontSize: 12, color: 'var(--text3)' }}>{carrierName(p.carrier_id)}</span>}
+              <span style={{ fontSize: 11, color: 'var(--text3)' }}>{(p.rules?.length || 0)} rules · {(p.tiers?.length || 0)} tiers · {(p.assignments?.length || 0)} assignments</span>
+              {p.base_tier_metric && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#ede9fe', color: '#6d28d9' }}>tier: {p.base_tier_metric}</span>}
+              {!p.is_active && <span style={{ fontSize: 11, color: '#b45309' }}>inactive</span>}
+              <span style={{ flex: 1 }} />
+              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => runPreview(p.id)}>👁️ Preview</button>
+              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setDraft({ ...blankPlan(), ...p, base_tier_metric: p.base_tier_metric || 'none', carrier_id: p.carrier_id || '', rules: p.rules || [], tiers: p.tiers || [], assignments: p.assignments || [] })}>Edit</button>
+              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => del(p.id)}>Delete</button>
+            </div>
+          ))}
+          {plans.length === 0 && ready && <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No plans yet — create one above.</div>}
+        </div>
+      )}
+
+      {/* editor */}
+      {draft && (
+        <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>{draft.id ? '✏️ Edit plan' : '➕ New plan'}</div>
+            <span style={{ flex: 1 }} />
+            <button className="btn btn-secondary" onClick={() => { setDraft(null); setMsg('') }}>Cancel</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
+            <label style={lbl}>Plan name *<input style={sel} value={draft.name} onChange={e => upd({ name: e.target.value })} /></label>
+            <label style={lbl}>Carrier
+              <select style={sel} value={draft.carrier_id || ''} onChange={e => upd({ carrier_id: e.target.value })}>
+                <option value="">Any / N/A</option>
+                {carriers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </label>
+            <label style={lbl}>Tier metric
+              <select style={sel} value={draft.base_tier_metric || 'none'} onChange={e => upd({ base_tier_metric: e.target.value })}>
+                {TIER_METRICS.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </label>
+            <label style={{ ...lbl, justifyContent: 'flex-end' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+                <input type="checkbox" checked={draft.is_active} onChange={e => upd({ is_active: e.target.checked })} /> Active
+              </span>
+            </label>
+          </div>
+
+          {/* RULES */}
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Rules — which line items qualify + how they pay</div>
+          <div style={{ overflowX: 'auto', marginBottom: 8 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 920 }}>
+              <thead><tr>{['Label', 'Match field', 'Op', 'Value', 'Qualifies', 'Payout', 'Amount / %', 'Tiered', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {(draft.rules || []).map((r, i) => (
+                  <tr key={i}>
+                    <td style={td}><input style={{ ...sel, width: 110 }} placeholder="(optional)" value={r.label || ''} onChange={e => updRule(i, { label: e.target.value })} /></td>
+                    <td style={td}>
+                      <select style={{ ...sel, width: 130 }} value={r.match_field} onChange={e => updRule(i, { match_field: e.target.value })}>
+                        {MATCH_FIELDS.map(f => <option key={f} value={f}>{f}</option>)}
+                      </select>
+                    </td>
+                    <td style={td}>
+                      <select style={{ ...sel, width: 90 }} value={r.match_op} onChange={e => updRule(i, { match_op: e.target.value })} disabled={r.match_field === 'any'}>
+                        {MATCH_OPS.map(o => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    </td>
+                    <td style={td}>
+                      <input style={{ ...sel, width: 150 }} placeholder={r.match_field === 'any' ? '(any line)' : FIELD_HELP[r.match_field] || 'value'} value={r.match_value} disabled={r.match_field === 'any'} onChange={e => updRule(i, { match_value: e.target.value })} />
+                    </td>
+                    <td style={{ ...td, textAlign: 'center' }}><input type="checkbox" checked={r.qualifies} onChange={e => updRule(i, { qualifies: e.target.checked })} /></td>
+                    <td style={td}>
+                      <select style={{ ...sel, width: 150 }} value={r.payout_kind} onChange={e => updRule(i, { payout_kind: e.target.value })}>
+                        {PAYOUT_KINDS.map(p => <option key={p.v} value={p.v}>{p.l}</option>)}
+                      </select>
+                    </td>
+                    <td style={td}>
+                      {usesPct(r.payout_kind)
+                        ? <input style={{ ...sel, width: 80 }} type="number" step="0.01" placeholder="0.10" value={r.pct} onChange={e => updRule(i, { pct: Number(e.target.value) })} title="fraction, e.g. 0.10 = 10%" />
+                        : <input style={{ ...sel, width: 80 }} type="number" step="0.01" placeholder="$" value={r.amount} onChange={e => updRule(i, { amount: Number(e.target.value) })} />}
+                    </td>
+                    <td style={{ ...td, textAlign: 'center' }}><input type="checkbox" checked={r.tiered} onChange={e => updRule(i, { tiered: e.target.checked })} /></td>
+                    <td style={td}><button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }} onClick={() => delRule(i)}>✕</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button className="btn btn-secondary" style={{ fontSize: 12, marginBottom: 16 }} onClick={addRule}>➕ Add rule</button>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 16 }}>
+            % payout uses a fraction (0.10 = 10%). pct_mrc joins raw_mi by mdn (then subscriber/serial); pct_price_over_cost uses raw_catalog cost by product_id.
+            “Tiered” rules are scaled by the plan’s tier multiplier; “qualifies” lines count toward the tier metric.
+          </div>
+
+          {/* TIERS */}
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Tiers — qualifying-unit count → multiplier {draft.base_tier_metric === 'none' && <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(set a tier metric above to use)</span>}</div>
+          <div style={{ overflowX: 'auto', marginBottom: 8 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: 520 }}>
+              <thead><tr>{['Metric', 'Min count', 'Multiplier', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {(draft.tiers || []).map((t, i) => (
+                  <tr key={i}>
+                    <td style={td}>
+                      <select style={{ ...sel, width: 130 }} value={t.metric || draft.base_tier_metric || 'none'} onChange={e => updTier(i, { metric: e.target.value })}>
+                        {TIER_METRICS.filter(m => m !== 'none').map(m => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </td>
+                    <td style={td}><input style={{ ...sel, width: 90 }} type="number" value={t.min_count} onChange={e => updTier(i, { min_count: Number(e.target.value) })} /></td>
+                    <td style={td}><input style={{ ...sel, width: 90 }} type="number" step="0.01" value={t.multiplier} onChange={e => updTier(i, { multiplier: Number(e.target.value) })} /></td>
+                    <td style={td}><button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }} onClick={() => delTier(i)}>✕</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button className="btn btn-secondary" style={{ fontSize: 12, marginBottom: 16 }} onClick={addTier}>➕ Add tier</button>
+
+          {/* ASSIGNMENTS */}
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Assignments — who this plan applies to <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(precedence employee &gt; store &gt; market &gt; default)</span></div>
+          <div style={{ overflowX: 'auto', marginBottom: 8 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: 620 }}>
+              <thead><tr>{['Scope', 'Value', 'Priority', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {(draft.assignments || []).map((a, i) => (
+                  <tr key={i}>
+                    <td style={td}>
+                      <select style={{ ...sel, width: 110 }} value={a.scope} onChange={e => updAssign(i, { scope: e.target.value, scope_value: '' })}>
+                        {['employee', 'store', 'market', 'default'].map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </td>
+                    <td style={td}>
+                      {a.scope === 'employee' ? (
+                        <select style={{ ...sel, width: 220 }} value={a.scope_value || ''} onChange={e => updAssign(i, { scope_value: e.target.value })}>
+                          <option value="">— pick employee —</option>
+                          {employees.map(e => { const v = (e.epay_salesperson || e.name || ''); return v ? <option key={e.id || v} value={v}>{e.name}{e.epay_salesperson ? ` (${e.epay_salesperson})` : ''}</option> : null })}
+                        </select>
+                      ) : a.scope === 'store' ? (
+                        <select style={{ ...sel, width: 220 }} value={a.scope_value || ''} onChange={e => updAssign(i, { scope_value: e.target.value })}>
+                          <option value="">— pick store —</option>
+                          {stores.map(s => <option key={s.id || s.address} value={s.address || s.store_code}>{s.address || s.store_code}</option>)}
+                        </select>
+                      ) : a.scope === 'market' ? (
+                        <select style={{ ...sel, width: 220 }} value={a.scope_value || ''} onChange={e => updAssign(i, { scope_value: e.target.value })}>
+                          <option value="">— pick market —</option>
+                          {markets.map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                      ) : <span style={{ fontSize: 12, color: 'var(--text3)' }}>all reps (fallback)</span>}
+                    </td>
+                    <td style={td}><input style={{ ...sel, width: 70 }} type="number" value={a.priority || 0} onChange={e => updAssign(i, { priority: Number(e.target.value) })} /></td>
+                    <td style={td}><button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }} onClick={() => delAssign(i)}>✕</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button className="btn btn-secondary" style={{ fontSize: 12, marginBottom: 16 }} onClick={addAssign}>➕ Add assignment</button>
+
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <input style={{ ...sel, flex: 1 }} placeholder="Notes" value={draft.notes || ''} onChange={e => upd({ notes: e.target.value })} />
+            <button className="btn btn-primary" disabled={busy} onClick={save}>💾 Save plan</button>
+          </div>
+          {msg && <div style={{ fontSize: 13, marginTop: 8 }}>{msg}</div>}
+        </div>
+      )}
+
+      {/* PREVIEW */}
+      <div className="card" style={{ padding: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>👁️ Preview <span style={{ fontWeight: 400, fontSize: 12, color: '#b45309' }}>(read-only — does NOT change live commissions)</span></div>
+          <span style={{ flex: 1 }} />
+          <input style={{ ...sel, width: 140 }} placeholder="June 2026" value={period} onChange={e => setPeriod(e.target.value)} />
+          <button className="btn btn-secondary" disabled={previewBusy} onClick={() => runPreview(draft?.id)}>{previewBusy ? '…' : draft?.id ? 'Preview this plan' : 'Preview (per assignment)'}</button>
+          {preview?.by_rep?.length > 0 && <ExportButtons payload={previewPayload} />}
+        </div>
+        {preview && (
+          preview.ready === false ? <div style={{ fontSize: 13, color: '#b45309' }}>{preview.note || 'Migration 059 not applied.'}</div>
+          : preview.by_rep?.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text3)' }}>{preview.note || 'No payout for this period (no matching sales / no plan resolved).'}</div>
+          : (
+            <>
+              <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8 }}>
+                {preview.totals?.reps} reps · {fmt(preview.totals?.payout || 0)} total · {preview.totals?.sale_lines} sale lines · period {preview.period}
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr>{['Rep', 'Store', 'Plan', 'Qual. units', 'Tier ×', 'Base', 'Tiered', 'Total'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {preview.by_rep.map((row: any, i: number) => (
+                      <PreviewRow key={i} row={row} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )
+        )}
+        {!preview && <div style={{ fontSize: 13, color: 'var(--text3)' }}>Enter a period and Preview to see what a plan would pay.</div>}
+      </div>
+    </div>
+  )
+}
+
+function PreviewRow({ row }: { row: any }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <tr style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
+        <td style={td}>{open ? '▾ ' : '▸ '}{row.rep}</td>
+        <td style={td}>{row.store || '—'}</td>
+        <td style={td}>{row.plan_name}</td>
+        <td style={td}>{row.qualifying_units}</td>
+        <td style={td}>{row.tier_multiplier}×</td>
+        <td style={td}>{fmt(row.base_payout)}</td>
+        <td style={td}>{fmt(row.tiered_payout)}</td>
+        <td style={{ ...td, fontWeight: 700 }}>{fmt(row.total_payout)}</td>
+      </tr>
+      {open && (row.rules || []).map((rb: any, j: number) => (
+        <tr key={j} style={{ background: '#f8fafc' }}>
+          <td style={{ ...td, paddingLeft: 24, color: 'var(--text3)' }} colSpan={3}>{rb.label || rb.payout_kind} · {rb.payout_kind}{rb.tiered ? ' · tiered' : ''}{rb.qualifies === false ? ' · non-qualifying' : ''}</td>
+          <td style={{ ...td, color: 'var(--text3)' }}>{rb.qualifying_units} / {rb.matched_lines}</td>
+          <td style={td} colSpan={3} />
+          <td style={td}>{fmt(rb.payout)}</td>
+        </tr>
+      ))}
+    </>
+  )
+}
