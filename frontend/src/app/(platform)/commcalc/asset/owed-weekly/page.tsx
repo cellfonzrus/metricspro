@@ -77,7 +77,7 @@ export default function OwedWeeklyPage() {
   function buildPayload(): ExportPayload {
     const filterLabel = [market||null, store||null].filter(Boolean).join(' · ') || 'All markets'
     return {
-      title: 'Weekly Owed to VIP',
+      title: 'Weekly Owed to Distributor',
       subtitle: `Billing ${pretty(friday)} · ${filterLabel}`,
       filename: `owed-weekly-${friday}${store?'-'+store.replace(/[^a-z0-9]+/gi,'-').toLowerCase():''}`,
       sheets: [
@@ -100,8 +100,8 @@ export default function OwedWeeklyPage() {
           { header:'Sold', get:r=> r.date_sold ? String(r.date_sold).slice(0,10) : '' },
           { header:'Due', get:r=> r.due_date ? String(r.due_date).slice(0,10) : '' },
           { header:'Owed', get:r=>r.owed_to_vip, money:true },
-          { header:'VIP Invoice #', get:r=>r.vip_invoice_number },
-          { header:'VIP Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
+          { header:'Distributor Invoice #', get:r=>r.vip_invoice_number },
+          { header:'Distributor Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
         ]},
       ],
     }
@@ -112,9 +112,9 @@ export default function OwedWeeklyPage() {
       <div style={{ marginBottom: 20, display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, flexWrap:'wrap' }}>
         <div>
           <a href="/commcalc/asset" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Asset Ledger</a>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>Weekly Owed to VIP</h1>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>Weekly Owed to Distributor</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            What VIP collects each Friday — phones sold (billed the following Friday) and aged inventory past 60 days.
+            What the Distributor collects each Friday — phones sold (billed the following Friday) and aged inventory past 60 days.
           </p>
         </div>
         {report && <ExportButtons payload={buildPayload} />}
@@ -224,7 +224,7 @@ export default function OwedWeeklyPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
                 <thead>
                   <tr style={{ background: 'var(--surface2)' }}>
-                    {['Store','Device','IMEI/ESN','Phone','Contract','Path','Sold','Due','Owed','VIP Invoice #','Invoice Date'].map(h => (
+                    {['Store','Device','IMEI/ESN','Phone','Contract','Path','Sold','Due','Owed','Distributor Invoice #','Invoice Date'].map(h => (
                       <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>

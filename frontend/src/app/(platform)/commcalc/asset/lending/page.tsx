@@ -84,7 +84,7 @@ export default function AssetLendingPage() {
 
   function buildPayload(): ExportPayload {
     return {
-      title: 'Asset Lending (VIP PayGo)', subtitle: `${dealer}${yearFilter ? ` · ${yearFilter}` : ''}`,
+      title: 'Asset Lending (Distributor PayGo)', subtitle: `${dealer}${yearFilter ? ` · ${yearFilter}` : ''}`,
       filename: `asset-lending${yearFilter ? `-${yearFilter}` : ''}`,
       sheets: [
         { name: 'Weekly batches', rows, columns: [
@@ -111,9 +111,9 @@ export default function AssetLendingPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📲 Asset Lending (VIP PayGo)</h1>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📲 Asset Lending (Distributor PayGo)</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            Weekly lent-device billing ledger from the VIP PayGo portal{dealer ? <> — <strong>{dealer}</strong></> : null}.
+            Weekly lent-device billing ledger from the Distributor PayGo portal{dealer ? <> — <strong>{dealer}</strong></> : null}.
             The <strong>pending</strong> batch is the current week owed; approved batches are settled weekly bills.
           </p>
         </div>
@@ -131,7 +131,7 @@ export default function AssetLendingPage() {
       ) : data?.error ? (
         <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {data.error}</div>
       ) : data?.configured === false ? (
-        <div className="card" style={{ padding: 16, color: 'var(--text2)' }}>VIP PayGo lending isn&apos;t configured yet (no batches found).</div>
+        <div className="card" style={{ padding: 16, color: 'var(--text2)' }}>Distributor PayGo lending isn&apos;t configured yet (no batches found).</div>
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>

@@ -32,8 +32,8 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
   { category: 'Asset', reports: [
     { href: '/commcalc/asset', label: 'Asset Ledger', module: 'asset' },
   ] },
-  { category: 'VIP', reports: [
-    { href: '/commcalc/vip', label: 'VIP Invoices', module: 'vip' },
+  { category: 'Distributor', reports: [
+    { href: '/commcalc/vip', label: 'Distributor Invoices', module: 'vip' },
   ] },
   { category: 'Accounts', reports: [
     { href: '/accounts', label: 'Accounts Dashboard', module: 'accounts', scopes: ['all', 'market'] },

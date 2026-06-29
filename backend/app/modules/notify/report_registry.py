@@ -148,7 +148,7 @@ async def _owed_weekly(org_id, f):
             {"header": "Owed", "key": "owed_to_vip", "money": True},
         ]},
     ]
-    return {"title": "Weekly Owed-to-VIP", "subtitle": f"Billing Friday {thursday}",
+    return {"title": "Weekly Owed-to-Distributor", "subtitle": f"Billing Friday {thursday}",
             "filename": f"owed-weekly-{thursday}", "sheets": sheets}
 
 
@@ -238,7 +238,7 @@ async def _vip_invoices(org_id, f):
             money_store("Grand Total", "grand_total"),
         ]},
     ]
-    return {"title": "VIP Invoices", "subtitle": period or "All periods",
+    return {"title": "Distributor Invoices", "subtitle": period or "All periods",
             "filename": "vip-invoices", "sheets": sheets}
 
 
@@ -581,7 +581,7 @@ REPORTS = {
         "live_path": lambda f: "/commcalc/asset/charges/rma" + _qs(f, ["store", "market", "month", "year"]),
         "build": _rma},
     "owed_weekly": {
-        "label": "Weekly Owed-to-VIP", "filters": ["thursday", "store", "market"],
+        "label": "Weekly Owed-to-Distributor", "filters": ["thursday", "store", "market"],
         "live_path": lambda f: "/commcalc/asset/owed-weekly" + _qs(f, ["thursday", "store", "market"]),
         "build": _owed_weekly},
     "charges_appeals": {
@@ -589,9 +589,9 @@ REPORTS = {
         "live_path": lambda f: "/commcalc/asset/charges/appeals" + _qs(f, ["store", "market", "month", "year"]),
         "build": _charges_builder("appeals", "Charges — Appeals & Denied Payments")},
     "charges_vip_fees": {
-        "label": "Charges — VIP Fees", "filters": ["store", "market", "month", "year", "week_friday"],
+        "label": "Charges — Distributor Fees", "filters": ["store", "market", "month", "year", "week_friday"],
         "live_path": lambda f: "/commcalc/asset/charges/vip_fees" + _qs(f, ["store", "market", "month", "year"]),
-        "build": _charges_builder("vip_fees", "Charges — VIP Fees")},
+        "build": _charges_builder("vip_fees", "Charges — Distributor Fees")},
     "charges_stock_balance": {
         "label": "Charges — Stock Balancing", "filters": ["store", "market", "month", "year", "week_friday"],
         "live_path": lambda f: "/commcalc/asset/charges/stock_balance" + _qs(f, ["store", "market", "month", "year"]),
@@ -605,7 +605,7 @@ REPORTS = {
         "live_path": lambda f: "/commcalc/asset/dashboard" + _qs(f, ["store", "market", "month", "year"]),
         "build": _charges_dashboard},
     "vip_invoices": {
-        "label": "VIP Invoices", "filters": ["period", "location", "status"],
+        "label": "Distributor Invoices", "filters": ["period", "location", "status"],
         "live_path": lambda f: "/commcalc/vip" + _qs(f, ["period", "location", "status"]),
         "build": _vip_invoices},
     "flags": {

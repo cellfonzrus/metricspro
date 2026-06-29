@@ -9,7 +9,7 @@ import { useAuth } from '@/lib/auth-context'
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const tin: React.CSSProperties = { ...sel, width: 130 }
 const cell: React.CSSProperties = { padding: '8px 10px', borderTop: '1px solid var(--border)', fontSize: 13, verticalAlign: 'top' }
-const SRC: Record<string, string> = { vip_file: 'VIP file', fraud_email: 'Fake/reused email', fraud_dupe: 'Duplicate ID', analyzer_churn: 'Early churn', closing_recon: 'Closing discrepancy', manual: 'Manual' }
+const SRC: Record<string, string> = { vip_file: 'Distributor file', fraud_email: 'Fake/reused email', fraud_dupe: 'Duplicate ID', analyzer_churn: 'Early churn', closing_recon: 'Closing discrepancy', manual: 'Manual' }
 
 type Edit = { rep: string; amount: string; reason: string }
 
@@ -82,7 +82,7 @@ export default function ChargebacksPage() {
         </select>
         <select style={sel} value={source} onChange={e => setSource(e.target.value)}>
           <option value="">All sources</option>
-          <option value="vip_file">VIP file</option>
+          <option value="vip_file">Distributor file</option>
           <option value="fraud_email">Fake/reused email</option>
           <option value="fraud_dupe">Duplicate ID</option>
           <option value="analyzer_churn">Early churn</option>
@@ -97,7 +97,7 @@ export default function ChargebacksPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : rows.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>Nothing here. VIP chargebacks stage automatically on the VIP sweep.</div>
+        <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>Nothing here. Distributor chargebacks stage automatically on the Distributor sweep.</div>
       ) : (
         <div className="card table-wrapper" style={{ padding: 0 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>

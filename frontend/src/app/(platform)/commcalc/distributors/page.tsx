@@ -14,7 +14,7 @@ const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 7, border: 
 const lbl: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, fontWeight: 600, color: 'var(--text2)' }
 const ARRANGE = [
   { v: 'terms', l: 'Terms (net credit)', d: 'Pay the invoice within N days (14/21/30/45/60).' },
-  { v: 'consignment', l: 'Consignment', d: 'Devices lent + billed on a cycle, settled over 60+ days (Asset Lending, like VIP).' },
+  { v: 'consignment', l: 'Consignment', d: 'Devices lent + billed on a cycle, settled over 60+ days (Asset Lending).' },
   { v: 'cod', l: 'COD', d: 'Cash on delivery — paid up front, no credit.' },
 ]
 const blank = (): Dist => ({ name: '', carrier_id: '', arrangement: 'terms', terms_days: 30, billing_cycle: 'net', has_asset_lending: false, default_funding: 'own', is_active: true, notes: '' })
@@ -82,7 +82,7 @@ export default function DistributorsPage() {
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🏬 Distributors</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Who you source devices/inventory from. Each has an <strong>arrangement</strong> — terms (net credit),
-          consignment (lent devices billed on a cycle, like VIP&apos;s Asset Lending), or COD — set at onboarding.
+          consignment (lent devices billed on a cycle, like Asset Lending), or COD — set at onboarding.
           Record each payment&apos;s <strong>funding source</strong> (own vs borrowed account).
         </p>
       </div>

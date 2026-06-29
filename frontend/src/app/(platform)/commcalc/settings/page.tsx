@@ -493,8 +493,8 @@ export default function SettingsPage() {
           <div style={{ fontWeight: 600, marginBottom: 16 }}>KPI Targets (minimum % to pass)</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
             <Field label="ATU %" field="kpi_atu_target" suffix="% target" />
-            <Field label="Boost Protect %" field="kpi_protect_target" suffix="% target" />
-            <Field label="Boost App %" field="kpi_boostapp_target" suffix="% target" />
+            <Field label="Carrier Protect %" field="kpi_protect_target" suffix="% target" />
+            <Field label="Carrier App %" field="kpi_boostapp_target" suffix="% target" />
             <Field label="Family Plan %" field="kpi_familyplan_target" suffix="% target" />
             <Field label="BYOD %" field="kpi_byod_target" suffix="% target" />
             <Field label="3MR %" field="kpi_tmr3_target" suffix="% target" />

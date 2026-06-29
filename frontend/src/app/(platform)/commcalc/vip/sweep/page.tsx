@@ -86,10 +86,10 @@ export default function VipSweepAdmin() {
 
   return (
     <div style={{ maxWidth: 760 }}>
-      <a href="/commcalc/vip" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← VIP Invoices</a>
-      <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 4px' }}>⚙️ VIP Auto-Sweep</h1>
+      <a href="/commcalc/vip" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Distributor Invoices</a>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 4px' }}>⚙️ Distributor Auto-Sweep</h1>
       <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 20px' }}>
-        Pulls VIP invoices from the dealer portal on a schedule (runs on the server, not your laptop).
+        Pulls Distributor invoices from the dealer portal on a schedule (runs on the server, not your laptop).
         Update the portal login here so a password change never needs a code change.
       </p>
 
@@ -116,11 +116,11 @@ export default function VipSweepAdmin() {
       <div className="card" style={{ marginBottom: 18, padding: '18px 20px' }}>
         <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 14 }}>Portal credentials</div>
         <div style={row}>
-          <span style={lab}>VIP email</span>
+          <span style={lab}>Distributor email</span>
           <input style={{ ...sel, width: 320 }} value={cfg.portal_user || ''} onChange={e => set('portal_user', e.target.value)} placeholder="dealer@example.com" />
         </div>
         <div style={row}>
-          <span style={lab}>VIP password</span>
+          <span style={lab}>Distributor password</span>
           <input type="password" style={{ ...sel, width: 320 }} value={pass} onChange={e => setPass(e.target.value)}
             placeholder={cfg.has_credentials ? '•••••••• (set — leave blank to keep)' : 'enter password'} autoComplete="new-password" />
         </div>
@@ -177,13 +177,13 @@ export default function VipSweepAdmin() {
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Pull the PayGo / asset-lending weekly billing ledger (needs migration 014)">
             <input type="checkbox" checked={cfg.sweep_asset} onChange={e => set('sweep_asset', e.target.checked)} /> Asset lending (PayGo)
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Pull VIP 'Weekly Incentive Credit' memos for the Account Module reconciliation (needs migration 022)">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Pull Distributor 'Weekly Incentive Credit' memos for the Account Module reconciliation (needs migration 022)">
             <input type="checkbox" checked={cfg.sweep_creditmemo} onChange={e => set('sweep_creditmemo', e.target.checked)} /> Credit memos (recon)
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Download Asset_Lending.xlsx and refresh the Asset Ledger (needs migration 035)">
             <input type="checkbox" checked={cfg.sweep_asset_ledger !== false} onChange={e => set('sweep_asset_ledger', e.target.checked)} /> Asset ledger (devices)
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Download the VIP chargebacks export into the Chargebacks & Fraud bucket (needs migration 036)">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="Download the Distributor chargebacks export into the Chargebacks & Fraud bucket (needs migration 036)">
             <input type="checkbox" checked={cfg.sweep_chargebacks !== false} onChange={e => set('sweep_chargebacks', e.target.checked)} /> Chargebacks
           </label>
         </div>

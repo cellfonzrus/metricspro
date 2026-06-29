@@ -86,7 +86,7 @@ function InvoiceDetailModal({ vipId, onClose }: { vipId: number; onClose: () => 
 
   function buildPayload(): ExportPayload {
     return {
-      title: `VIP Invoice ${inv?.invoice_number || vipId}`,
+      title: `Distributor Invoice ${inv?.invoice_number || vipId}`,
       subtitle: [inv?.location, d10(inv?.created_on || null), inv?.status].filter(Boolean).join(' · '),
       filename: `vip-invoice-${inv?.invoice_number || vipId}`,
       sheets: [
@@ -292,7 +292,7 @@ export default function VipInvoicesPage() {
     ]
     const filterLabel = [period || null, location || null, status || null].filter(Boolean).join(' · ') || 'All invoices'
     return {
-      title: 'VIP Wireless Invoices',
+      title: 'Distributor Invoices',
       subtitle: filterLabel,
       filename: `vip-invoices${location ? '-' + location.replace(/[^a-z0-9]+/gi, '-').toLowerCase() : ''}`,
       sheets: [
@@ -322,9 +322,9 @@ export default function VipInvoicesPage() {
     <div>
       <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧾 VIP Wireless Invoices</h1>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧾 Distributor Invoices</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            Scraped from the VIP dealer portal. Fees-by-type uses the invoice money buckets.
+            Scraped from the Distributor dealer portal. Fees-by-type uses the invoice money buckets.
           </p>
         </div>
         {summary && <ExportButtons payload={buildPayload} />}
@@ -335,7 +335,7 @@ export default function VipInvoicesPage() {
 
       {/* Import workbook */}
       <div className="card" style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>Import VIP workbook</span>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>Import Distributor workbook</span>
         <span style={{ color: 'var(--text3)', fontSize: 12, flex: 1 }}>
           The <code>vip_invoices.xlsx</code> from tools/vip_scraper (Invoices / Lines / Devices). Full replace.
         </span>
@@ -374,7 +374,7 @@ export default function VipInvoicesPage() {
         <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>Loading…</div>
       ) : !summary || summary.totals.invoices === 0 ? (
         <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
-          No VIP invoices. Import the workbook above to load data.
+          No Distributor invoices. Import the workbook above to load data.
         </div>
       ) : (
         <>

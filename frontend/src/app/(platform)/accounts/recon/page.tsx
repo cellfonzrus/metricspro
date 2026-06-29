@@ -28,7 +28,7 @@ export default function ReconPage() {
   useEffect(() => { load() }, [period])
 
   async function scrape() {
-    setBusy('scrape'); setMsg('Scraping VIP credit memos…')
+    setBusy('scrape'); setMsg('Scraping Distributor credit memos…')
     try {
       const r = await api(`/api/v1/account/credit-memos/sweep?org_id=${ORG_ID}`, { method: 'POST' })
       setMsg(`Scraped ${r.credit_memos} credit memos (${r.xfinity_excluded} Xfinity excluded).`); load()
@@ -47,7 +47,7 @@ export default function ReconPage() {
   const cw = data?.company_wide
   function buildPayload(): ExportPayload {
     return {
-      title: `VIP Credit-Memo Reconciliation — ${period}`,
+      title: `Distributor Credit-Memo Reconciliation — ${period}`,
       subtitle: `Credit memos vs MI+ATU · tolerance ${fmt(data?.tolerance || 1)}`,
       filename: `recon-${period.replace(/\s+/g, '-')}`,
       sheets: [{ name: 'Recon', rows: data?.stores || [], columns: [
@@ -64,8 +64,8 @@ export default function ReconPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔎 VIP Credit-Memo Reconciliation</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>{period} · VIP "Weekly Incentive Credit" memos vs MI + ATU earned (Xfinity excluded)</p>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔎 Distributor Credit-Memo Reconciliation</h1>
+          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>{period} · Distributor "Weekly Incentive Credit" memos vs MI + ATU earned (Xfinity excluded)</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--text2)', maxWidth: 320 }}>{msg}</span>}
@@ -87,7 +87,7 @@ export default function ReconPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : !data?.has_memos ? (
         <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>
-          No VIP credit memos loaded for {period}. Click <strong>Scrape credit memos</strong> above (uses the VIP sweep credentials).
+          No Distributor credit memos loaded for {period}. Click <strong>Scrape credit memos</strong> above (uses the Distributor sweep credentials).
         </div>
       ) : (
         <>
@@ -95,7 +95,7 @@ export default function ReconPage() {
             <div className="card" style={{ padding: 18, marginBottom: 16 }}>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Company-wide (authoritative)</div>
               <div style={{ display: 'flex', gap: 30, flexWrap: 'wrap', alignItems: 'center' }}>
-                <Tile label="VIP credit memos" v={cw.memo_total} />
+                <Tile label="Distributor credit memos" v={cw.memo_total} />
                 <Tile label="MI + ATU earned" v={cw.mi_atu_total} />
                 <Tile label="Difference" v={cw.diff} signed />
                 <span style={{ fontSize: 13, padding: '4px 12px', borderRadius: 999, fontWeight: 600, background: badge(cw.status).bg, color: badge(cw.status).c }}>{badge(cw.status).t}</span>

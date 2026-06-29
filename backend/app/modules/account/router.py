@@ -339,7 +339,7 @@ async def sweep_credit_memos(org_id: str = ORG_ID):
     cfg = (client.schema("commcalc").table("vip_sweep_config").select("portal_user,portal_pass")
            .eq("org_id", org_id).execute().data or [None])[0]
     if not cfg or not cfg.get("portal_user") or not cfg.get("portal_pass"):
-        raise HTTPException(400, "VIP portal credentials not set — configure them on the VIP sweep page first.")
+        raise HTTPException(400, "Distributor portal credentials not set — configure them on the Distributor sweep page first.")
     try:
         from app.modules.commcalc import vip_sweep
         from app.modules.commcalc.router import _vip_money, _vip_int, _vip_ts, _vip_period

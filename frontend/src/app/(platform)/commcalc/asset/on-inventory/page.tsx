@@ -115,7 +115,7 @@ export default function OnInventoryByStorePage() {
           <a href="/commcalc/asset" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Asset Ledger</a>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>On-Inventory by Store</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            Unsold On-Inventory devices and $ owed to VIP, rolled up per store. Aging buckets match Inventory Aging (&lt;45 / 45–60 WARN / &gt;60 MISSED, from acquired date).
+            Unsold On-Inventory devices and $ owed to the Distributor, rolled up per store. Aging buckets match Inventory Aging (&lt;45 / 45–60 WARN / &gt;60 MISSED, from acquired date).
           </p>
         </div>
         {data && <ExportButtons payload={buildPayload} />}
@@ -161,7 +161,7 @@ export default function OnInventoryByStorePage() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 24 }}>
             {[
               { label: 'On-Inventory Devices', val: data.totals.device_count.toLocaleString(), sub: `${data.totals.store_count} stores`, color: '#2563eb' },
-              { label: 'Total Owed to VIP', val: fmt(data.totals.owed), sub: 'unsold exposure', color: '#d97706' },
+              { label: 'Total Owed to Distributor', val: fmt(data.totals.owed), sub: 'unsold exposure', color: '#d97706' },
               { label: '45–60 WARN Owed', val: fmt(data.totals.warn_owed), sub: 'sell before day 60', color: '#d97706' },
               { label: '>60 MISSED Owed', val: fmt(data.totals.missed_owed), sub: 'past due — billed unsold', color: '#dc2626' },
             ].map(c => (

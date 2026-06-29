@@ -7,10 +7,10 @@ type Group = { key: string; label: string; count: number; owed: number }
 type Summary = { groups: Record<string, Group>; total_loss: { total: number; appeals: number; rma: number } }
 
 const TILES = [
-  { key:'appeals',       icon:'🚨', href:'/commcalc/asset/charges/appeals',      color:'#dc2626', blurb:'Boost denied or withheld payment — direct loss.' },
+  { key:'appeals',       icon:'🚨', href:'/commcalc/asset/charges/appeals',      color:'#dc2626', blurb:'Carrier denied or withheld payment — direct loss.' },
   { key:'rma',           icon:'🔁', href:'/commcalc/asset/charges/rma',          color:'#db2777', blurb:'Returned devices not reimbursed or short-paid.' },
   { key:'vip_fees',      icon:'🧾', href:'/commcalc/asset/charges/vip-fees',      color:'#2563eb', blurb:'Processing, shipping, and SIM kit fees.' },
-  { key:'stock_balance', icon:'📦', href:'/commcalc/asset/charges/stock-balance', color:'#d97706', blurb:'Phones returned to VIP (unsold before 60 days).' },
+  { key:'stock_balance', icon:'📦', href:'/commcalc/asset/charges/stock-balance', color:'#d97706', blurb:'Phones returned to the Distributor (unsold before 60 days).' },
   { key:'recon_oddity',  icon:'🔍', href:'/commcalc/asset/charges/recon',         color:'#7c3aed', blurb:'Payment/data mismatches to investigate.' },
 ]
 

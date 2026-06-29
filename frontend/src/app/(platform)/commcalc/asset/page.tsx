@@ -221,11 +221,11 @@ export default function AssetPage() {
         { header:'Selling Price', get:r=>r.selling_price, money:true },
         { header:'Uncovered', get:r=> (r.selling_price==null ? '' : Math.max(0, (r.owed_to_vip||0)-(r.reimbursement||0)-(r.selling_price||0))), money:true },
         { header:'Fees', get:r=>r.commissions, money:true },
-        { header:'VIP Invoice #', get:r=>r.vip_invoice_number },
-        { header:'VIP Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
+        { header:'Distributor Invoice #', get:r=>r.vip_invoice_number },
+        { header:'Distributor Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
       ]})
     }
-    return { title: 'Asset Ledger', subtitle: openCat ? `Category: ${openCat}` : 'VIP/DDP device financing summary',
+    return { title: 'Asset Ledger', subtitle: openCat ? `Category: ${openCat}` : 'Distributor/DDP device financing summary',
       filename: openCat ? `asset-${openCat.replace(/[^a-z0-9]+/gi,'-').toLowerCase()}` : 'asset-ledger', sheets }
   }
 
@@ -239,14 +239,14 @@ export default function AssetPage() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Asset Ledger</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            VIP/DDP device financing — rebate reconciliation & balance tracking
+            Distributor/DDP device financing — rebate reconciliation & balance tracking
           </p>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {uploadMsg && <span style={{ fontSize: 13 }}>{uploadMsg}</span>}
           {summary?.loaded && <ExportButtons payload={buildPayload} />}
           {summary?.loaded && <SendReportButton reportKey="asset_ledger" filters={{}} />}
-          <a className="btn" href="/commcalc/asset/owed-weekly" style={{ textDecoration: 'none' }}>📅 Weekly Owed to VIP</a>
+          <a className="btn" href="/commcalc/asset/owed-weekly" style={{ textDecoration: 'none' }}>📅 Weekly Owed to Distributor</a>
           <a className="btn" href="/commcalc/asset/aging" style={{ textDecoration: 'none' }}>⏳ Inventory Aging</a>
           <a className="btn" href="/commcalc/asset/on-inventory" style={{ textDecoration: 'none' }}>🏪 On-Inventory by Store</a>
           <a className="btn" href="/commcalc/asset/dashboard" style={{ textDecoration: 'none' }}>🧾 Charges</a>
@@ -302,9 +302,9 @@ export default function AssetPage() {
         <>
           {/* Top stat cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 16, marginBottom: 24 }}>
-            <StatCard label="VIP Fees Collected" value={fmt(summary.total_fees)} sub={`${summary.total_rows.toLocaleString()} devices`} color="var(--accent)" />
-            <StatCard label="Open Balance Owed" value={fmt(summary.total_open_balance)} sub="still owed to VIP" color="#dc2626" />
-            <StatCard label="Total Reimbursed" value={fmt(summary.total_reimbursed)} sub="Boost → VIP credited" color="#059669" />
+            <StatCard label="Distributor Fees Collected" value={fmt(summary.total_fees)} sub={`${summary.total_rows.toLocaleString()} devices`} color="var(--accent)" />
+            <StatCard label="Open Balance Owed" value={fmt(summary.total_open_balance)} sub="still owed to Distributor" color="#dc2626" />
+            <StatCard label="Total Reimbursed" value={fmt(summary.total_reimbursed)} sub="Carrier → Distributor credited" color="#059669" />
             <StatCard label="All-Time Owed" value={fmt(summary.total_owed_alltime)} sub="gross financed" />
             <StatCard label="On Inventory" value={fmt(summary.on_inventory)} sub="not yet sold" color="#d97706" />
           </div>
@@ -428,7 +428,7 @@ export default function AssetPage() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
                       <thead>
                         <tr style={{ background: 'var(--surface2)' }}>
-                          {['Store','ESN / IMEI','Device','Phone','Contract','Status','Date Sold','Owed','Reimbursed','Selling','Fees','VIP Invoice #','Invoice Date'].map(h => (
+                          {['Store','ESN / IMEI','Device','Phone','Contract','Status','Date Sold','Owed','Reimbursed','Selling','Fees','Distributor Invoice #','Invoice Date'].map(h => (
                             <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                           ))}
                         </tr>
@@ -477,7 +477,7 @@ export default function AssetPage() {
 
           {/* Recon callout */}
           <div style={{ background: '#fefce8', border: '1px solid #fde047', borderRadius: 10, padding: '14px 18px', fontSize: 13, color: '#92400e' }}>
-            <strong>🔍 3-Way Rebate Reconciliation coming next:</strong> Cross-match Boost payments → VIP reimbursements → open balance to flag missing credits and over-billed devices.
+            <strong>🔍 3-Way Rebate Reconciliation coming next:</strong> Cross-match Carrier payments → Distributor reimbursements → open balance to flag missing credits and over-billed devices.
           </div>
         </>
       )}

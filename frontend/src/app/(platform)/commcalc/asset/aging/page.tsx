@@ -34,7 +34,7 @@ function RowTable({ rows, accent }: { rows: Row[]; accent: string }) {
       <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
         <thead>
           <tr style={{ background: 'var(--surface2)' }}>
-            {['Store','Market','Device','IMEI/ESN','Acquired','Days','Due Date','Owed','Selling','VIP Invoice #','Invoice Date'].map(h => (
+            {['Store','Market','Device','IMEI/ESN','Acquired','Days','Due Date','Owed','Selling','Distributor Invoice #','Invoice Date'].map(h => (
               <th key={h} style={{ textAlign:'left', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
             ))}
           </tr>
@@ -107,8 +107,8 @@ export default function AgingPage() {
       { header:'Due Date', get:r=> r.due_date ? String(r.due_date).slice(0,10) : '' },
       { header:'Owed', get:r=>r.owed_to_vip, money:true },
       { header:'Selling Price', get:r=>r.selling_price, money:true },
-      { header:'VIP Invoice #', get:r=>r.vip_invoice_number },
-      { header:'VIP Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
+      { header:'Distributor Invoice #', get:r=>r.vip_invoice_number },
+      { header:'Distributor Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
     ]
     const filterLabel = [market||null, store||null].filter(Boolean).join(' · ') || 'All markets'
     return {
@@ -130,7 +130,7 @@ export default function AgingPage() {
           <a href="/commcalc/asset" style={{ fontSize:13, color:'var(--text3)', textDecoration:'none' }}>← Asset Ledger</a>
           <h1 style={{ fontSize:22, fontWeight:700, margin:'6px 0 0' }}>Inventory Aging — Sell Before 60 Days</h1>
           <p style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>
-            Unsold NET60 inventory. Devices in the 45–60 day window must sell before day 60 or VIP bills them unsold.
+            Unsold NET60 inventory. Devices in the 45–60 day window must sell before day 60 or the Distributor bills them unsold.
           </p>
         </div>
         {data && <ExportButtons payload={buildPayload} />}

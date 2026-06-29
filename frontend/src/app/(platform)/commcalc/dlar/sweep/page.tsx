@@ -112,11 +112,11 @@ export default function DlarSweepAdmin() {
       <div className="card" style={{ marginBottom: 18, padding: '18px 20px' }}>
         <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 14 }}>Portal credentials</div>
         <div style={row}>
-          <span style={lab}>Boost email</span>
+          <span style={lab}>Carrier email</span>
           <input style={{ ...sel, width: 320 }} value={cfg.portal_user || ''} onChange={e => set('portal_user', e.target.value)} placeholder="user@example.com" />
         </div>
         <div style={row}>
-          <span style={lab}>Boost password</span>
+          <span style={lab}>Carrier password</span>
           <input type="password" style={{ ...sel, width: 320 }} value={pass} onChange={e => setPass(e.target.value)}
             placeholder={cfg.has_credentials ? '•••••••• (set — leave blank to keep)' : 'enter password'} autoComplete="new-password" />
         </div>

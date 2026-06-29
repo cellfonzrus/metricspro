@@ -80,7 +80,7 @@ def calc_portout_flags(mi_rows, sales, store_mapping, period, period_month, peri
                 'mdn': phone, 'imei': imei, 'amount': mrc,
                 'days_active': d, 'phone_model': model_by_imei.get(imei,''), 'customer_plan': plan,
                 'description': f"Active customer's residual transferred out{f' after {d} days' if d is not None else ''} — upgraded at another store",
-                'coaching_note': 'Customer stayed with Boost but upgraded elsewhere. Retention/CS follow-up.',
+                'coaching_note': 'Customer stayed with the Carrier but upgraded elsewhere. Retention/CS follow-up.',
             })
 
         # ── INVOLUNTARY-SUSPENDED (non-payment, 3MR tracking) ────
