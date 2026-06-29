@@ -4,28 +4,28 @@ import { ORG_ID, api, apiUpload } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 
 const FILE_TYPES = [
-  { id: 'sales',          label: 'Sales Transactions',    icon: '🛍️', required: true,  desc: 'EPay Sales Transaction Details (78-col, all columns)' },
+  { id: 'sales',          label: 'Sales Transactions',    icon: '🛍️', required: true,  desc: 'POS Sales Transaction Details (78-col, all columns)' },
   { id: 'daily_sales',    label: 'Daily Sales Upload',      icon: '📅', required: false, desc: 'Append daily transactions — no period wipe, deduped by Trans ID' },
-  { id: 'payment_detail', label: 'Payment Detail',        icon: '💳', required: true,  desc: 'EPay Commission Payment Detail' },
-  { id: 'dlar_rep',       label: 'DLAR Rep Report',       icon: '📊', required: true,  desc: 'Elevate Go Rep KPI Report' },
-  { id: 'dlar_store',     label: 'DLAR Store Report',     icon: '🏪', required: false, desc: 'Elevate Go Store Level Data' },
+  { id: 'payment_detail', label: 'Payment Detail',        icon: '💳', required: true,  desc: 'Payment Processor Commission Payment Detail' },
+  { id: 'dlar_rep',       label: 'Metrics — Rep Report',  icon: '📊', required: true,  desc: 'Rep KPI report (per-carrier portal)' },
+  { id: 'dlar_store',     label: 'Metrics — Store Report', icon: '🏪', required: false, desc: 'Store-level KPI data (per-carrier portal)' },
   { id: 'mi_report',      label: 'MI & ATU Report',       icon: '💰', required: false, desc: 'Monthly Incentive + ATU Payout' },
   { id: 'catalog',        label: 'Product Catalog',       icon: '📱', required: false, desc: 'Device catalog with cost prices' },
   { id: 'master_cats',    label: 'Payment Categories',    icon: '🗂️', required: false, desc: 'Payment type → category mapping' },
-  { id: 'comp_report',    label: 'Comprehensive Comp Report', icon: '🏦', required: false, desc: 'Boost store-level rebates & MDF' },
+  { id: 'comp_report',    label: 'Comprehensive Comp Report', icon: '🏦', required: false, desc: 'Carrier store-level rebates & MDF' },
 ]
 const PERIODLESS = new Set(['catalog', 'master_cats'])
 const TYPE_META = Object.fromEntries(FILE_TYPES.map(t => [t.id, t]))
 
 // Auto-import sources + the period granularities the user asked for, per source.
 const AUTO_SOURCES = [
-  { id: 'dlar', name: 'DLAR (Boost Elevate GO)', icon: '📊', desc: 'Store + Rep KPI reports',
+  { id: 'dlar', name: 'Metrics Rep/Store (carrier KPI portal)', icon: '📊', desc: 'Store + Rep KPI reports',
     cfg: 'dlar/sweep/config', run: 'dlar/sweep/run-now', configure: '/commcalc/dlar/sweep',
     scopes: [{ v: 'mtd', l: 'Month-to-date' }, { v: 'full', l: 'Full month' }] },
-  { id: 'epay', name: 'ePay Owner Portal', icon: '💰', desc: 'MI · ATU · Commission · Comprehensive · Reconciliation',
+  { id: 'epay', name: 'Payment Processor Portal', icon: '💰', desc: 'MI · ATU · Commission · Comprehensive · Reconciliation',
     cfg: 'epay/sweep/config', run: 'epay/sweep/run-now', configure: '/commcalc/epay/sweep',
     scopes: [{ v: 'daily', l: 'Daily' }, { v: 'mtd', l: 'Month-to-date' }, { v: 'full', l: 'Full month' }] },
-  { id: 'b2b', name: 'b2bsoft (wsreports)', icon: '📦', desc: 'Inventory Aging · Sales Transaction',
+  { id: 'b2b', name: 'POS (b2bsoft / RTPOS / RQ)', icon: '📦', desc: 'Inventory Aging · Sales Transaction',
     cfg: 'b2b/sweep/config', run: 'b2b/sweep/run-now', configure: '/accounts/inventory',
     scopes: [{ v: 'day', l: 'Single day' }, { v: 'month', l: 'Month' }, { v: 'custom', l: 'Custom range' }] },
   { id: 'vip', name: 'VIP Wireless portal', icon: '🧾', desc: 'Invoices · PayGo · Credit memos',

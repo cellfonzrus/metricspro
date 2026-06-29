@@ -82,10 +82,10 @@ export default function DlarSweepAdmin() {
   return (
     <div style={{ maxWidth: 760 }}>
       <a href="/commcalc/upload" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Upload</a>
-      <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 4px' }}>⚙️ DLAR Auto-Import</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 4px' }}>⚙️ Metrics Rep/Store Auto-Import</h1>
       <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 20px' }}>
-        Pulls the store (DLAR) and rep (Advocate) reports from <strong>boostelevatego.com</strong> on a
-        schedule and loads them automatically — <strong>this replaces the manual monthly DLAR upload</strong>.
+        Pulls the Store and Rep KPI reports from the carrier&apos;s portal on a schedule and loads them
+        automatically — <strong>this replaces the manual monthly upload</strong>.
         Update the portal login here so a password change never needs a code change.
       </p>
 

@@ -153,8 +153,8 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/upload/wizard', label: 'Upload Wizard', icon: '🧭', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/ftp-imports', label: 'FTP Auto-Import', icon: '🔁', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/email-imports', label: 'Email Imports', icon: '📨', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/epay/sweep', label: 'ePay Sweep', icon: '🧹', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/dlar/sweep', label: 'DLAR Sweep', icon: '🧹', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/epay/sweep', label: 'Payment Processor Sync', icon: '🧹', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/dlar/sweep', label: 'Metrics Rep/Store Sync', icon: '🧹', module: 'commissions', scopes: ['all'] },
   ]},
   { group: 'Mapping', module: 'commissions', items: [
     { href: '/commcalc/mapping', label: 'All Mappings', icon: '🗂️', module: 'commissions', scopes: ['all'] },

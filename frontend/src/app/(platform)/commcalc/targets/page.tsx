@@ -440,7 +440,7 @@ function FreshnessBanner({ daily, dlar, period }: { daily?: any; dlar?: any; per
       </span>
       {dlar?.last_run_at && (
         <span style={{ color: 'var(--text3)' }}>
-          <strong>DLAR</strong> (conversion/KPIs): synced {fmtDate(dlar.last_run_at)}{dlarAge != null ? ` · ${dlarAge === 0 ? 'today' : `${dlarAge}d ago`}` : ''}
+          <strong>Metrics KPIs</strong> (conversion/KPIs): synced {fmtDate(dlar.last_run_at)}{dlarAge != null ? ` · ${dlarAge === 0 ? 'today' : `${dlarAge}d ago`}` : ''}
           {dlar.last_status && dlar.last_status !== 'ok' ? ` (${dlar.last_status})` : ''}
         </span>
       )}
