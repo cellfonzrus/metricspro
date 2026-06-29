@@ -11,7 +11,7 @@ import { usePeriod } from '@/lib/period-context'
 
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
-const STEPS = ['Company', 'Carrier', 'Connector & reports', 'Upload & columns', 'Categories', 'Stores', 'Distributors', 'Activate']
+const STEPS = ['Company', 'Carrier', 'Connector & reports', 'Upload & columns', 'Categories', 'Stores', 'Distributors', 'KPI Metrics', 'Activate']
 const SWEEP_KINDS = ['manual', 'epay', 'vip', 'dlar', 'b2b', 'google_closing']
 
 export default function OnboardingWizard() {
@@ -71,7 +71,7 @@ export default function OnboardingWizard() {
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
 
-  const canNext = [!!companyId, !!carrierId, !!connectorId, true, true, true, true, true][step]
+  const canNext = [!!companyId, !!carrierId, !!connectorId, true, true, true, true, true, true][step]
 
   return (
     <div>
@@ -196,10 +196,13 @@ export default function OnboardingWizard() {
         {/* STEP 7 — Distributors */}
         {step === 6 && <DistributorsStep carrierId={carrierId} setMsg={setMsg} />}
 
-        {/* STEP 8 — Activate */}
-        {step === 7 && (
+        {/* STEP 8 — KPI Metrics */}
+        {step === 7 && <KpiMetricsStep carrierId={carrierId} setMsg={setMsg} />}
+
+        {/* STEP 9 — Activate */}
+        {step === 8 && (
           <div>
-            <h3 style={{ marginTop: 0 }}>8. Activate</h3>
+            <h3 style={{ marginTop: 0 }}>9. Activate</h3>
             <ul style={{ fontSize: 14, lineHeight: 1.8 }}>
               <li>Company: <b>{companies.find(c => c.id === companyId)?.name || '—'}</b></li>
               <li>Carrier: <b>{carriers.find(c => c.id === carrierId)?.name || '—'}</b></li>
@@ -374,6 +377,55 @@ function DistributorsStep({ carrierId, setMsg }: { carrierId: string; setMsg: (s
         <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={add}>+ Add distributor</button>
         <Link href="/commcalc/distributors" style={{ fontSize: 13, alignSelf: 'center' }}>Manage →</Link>
       </div>
+    </div>
+  )
+}
+
+// ── Step 8: KPI metrics — define THIS carrier's KPI metrics + targets (not the Boost defaults) ───
+function KpiMetricsStep({ carrierId, setMsg }: { carrierId: string; setMsg: (s: string) => void }) {
+  const [metrics, setMetrics] = useState<any[]>([])
+  const [ready, setReady] = useState(true)
+  const [m, setM] = useState({ metric_key: '', label: '', target_default: '' })
+  const load = useCallback(() => api(`/api/v1/commcalc/carrier-kpi-metrics${carrierId ? `?carrier_id=${carrierId}` : ''}`)
+    .then((r: any) => { setMetrics(r?.metrics?.length ? r.metrics : (r?.defaults || [])); setReady(r?.ready !== false) })
+    .catch(() => {}), [carrierId])
+  useEffect(() => { load() }, [load])
+  async function add() {
+    if (!m.metric_key.trim() || !m.label.trim()) { setMsg('Metric key + label required.'); return }
+    try {
+      await api('/api/v1/commcalc/carrier-kpi-metrics', { method: 'POST', body: JSON.stringify({ ...m, carrier_id: carrierId || undefined, target_default: Number(m.target_default) || 0, sort: metrics.length + 1 }) })
+      setM({ metric_key: '', label: '', target_default: '' }); setMsg('✅ KPI metric saved.'); load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function del(id: string) {
+    if (!id) return
+    try { await api(`/api/v1/commcalc/carrier-kpi-metrics/${id}`, { method: 'DELETE' }); load() } catch { /* ignore */ }
+  }
+  return (
+    <div>
+      <h3 style={{ marginTop: 0 }}>8. KPI metrics &amp; targets</h3>
+      <p style={{ fontSize: 13, color: 'var(--text2)' }}>
+        Define the KPI metrics + target %s that drive <b>this carrier&apos;s</b> commission tier — instead of the
+        built-in Boost defaults (ATU / App Attach / Protection / …). {ready ? '' : '⚠️ Run migration 060 to save your own; showing the defaults for now.'}
+      </p>
+      <div style={{ display: 'grid', gap: 4, maxWidth: 560, marginBottom: 10 }}>
+        {metrics.map((x, i) => (
+          <div key={x.id || i} style={{ fontSize: 13, display: 'flex', gap: 10, alignItems: 'center' }}>
+            <b style={{ minWidth: 170 }}>{x.label}</b>
+            <span style={{ fontSize: 11, color: 'var(--text3)' }}>{x.metric_key} · target {x.target_default}%</span>
+            {x.id && ready && <button onClick={() => del(x.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 12 }}>✕</button>}
+          </div>
+        ))}
+        {metrics.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>No KPI metrics yet.</span>}
+      </div>
+      {ready && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input style={{ ...sel, width: 120 }} placeholder="key e.g. fios" value={m.metric_key} onChange={e => setM({ ...m, metric_key: e.target.value })} />
+          <input style={{ ...sel, width: 170 }} placeholder="Label e.g. FiOS Attach %" value={m.label} onChange={e => setM({ ...m, label: e.target.value })} />
+          <input style={{ ...sel, width: 90 }} type="number" placeholder="target %" value={m.target_default} onChange={e => setM({ ...m, target_default: e.target.value })} />
+          <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={add}>+ Add metric</button>
+        </div>
+      )}
     </div>
   )
 }

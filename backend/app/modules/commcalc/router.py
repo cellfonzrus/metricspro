@@ -4223,6 +4223,75 @@ ACTION_KPI_DEFS = [
 ]
 _AP_CAT_LABEL = {'activations': 'Activations', 'upgrades': 'Upgrades',
                  'byod': 'BYOD', 'accessories': 'Accessories'}
+_KPI_DEFAULT_CARRIER = '00000000-0000-0000-0000-000000000000'  # nil carrier_id = the org default set
+
+
+def _kpi_defs(org_id=ORG_ID, carrier_id=None):
+    """Per-carrier KPI metric definitions (migration 060) as (key, label, payout_config_col, default)
+    tuples — SAME shape as ACTION_KPI_DEFS, so callers are unchanged. Carrier-specific rows override the
+    org-default (nil-carrier) set per key; falls back to the hard-coded ACTION_KPI_DEFS if the table is
+    empty or migration 060 isn't applied (so behavior is unchanged until a tenant configures their own)."""
+    try:
+        rows = (sb().schema('commcalc').table('carrier_kpi_metric').select('*')
+                .eq('org_id', org_id).eq('is_active', True).order('sort').execute().data) or []
+    except Exception:
+        return ACTION_KPI_DEFS
+    if not rows:
+        return ACTION_KPI_DEFS
+    keep = [r for r in rows if r.get('carrier_id') in (_KPI_DEFAULT_CARRIER, carrier_id)]
+    by_key = {}
+    for r in sorted(keep, key=lambda r: 0 if r.get('carrier_id') == carrier_id and carrier_id else 1):
+        k = r.get('metric_key')
+        if k and k not in by_key:
+            by_key[k] = r
+    ordered = sorted(by_key.values(), key=lambda r: r.get('sort') or 0)
+    out = [(r['metric_key'], r.get('label') or r['metric_key'],
+            r.get('payout_config_col') or f"kpi_{r['metric_key']}_target",
+            safe_float(r.get('target_default'))) for r in ordered]
+    return out or ACTION_KPI_DEFS
+
+
+@router.get("/carrier-kpi-metrics")
+def list_carrier_kpi_metrics(carrier_id: str = "", org_id: str = ORG_ID):
+    """KPI metric definitions for the org (optionally a carrier). Falls back to the built-in defaults as
+    rows if migration 060 isn't applied yet, so the UI always has something to show."""
+    try:
+        rows = (sb().schema('commcalc').table('carrier_kpi_metric').select('*')
+                .eq('org_id', org_id).order('sort').execute().data) or []
+    except Exception:
+        return {"metrics": [], "ready": False,
+                "defaults": [{"metric_key": k, "label": l, "payout_config_col": c, "target_default": d}
+                             for (k, l, c, d) in ACTION_KPI_DEFS]}
+    if carrier_id:
+        rows = [r for r in rows if r.get('carrier_id') in (_KPI_DEFAULT_CARRIER, carrier_id)]
+    return {"metrics": rows, "ready": True, "default_carrier": _KPI_DEFAULT_CARRIER}
+
+
+@router.post("/carrier-kpi-metrics")
+def save_carrier_kpi_metric(body: dict, org_id: str = ORG_ID):
+    """Create/edit one KPI metric definition. carrier_id omitted/blank → the org default (nil) set."""
+    key = (body.get("metric_key") or "").strip()
+    if not key:
+        raise HTTPException(400, "metric_key required")
+    row = {"org_id": org_id, "carrier_id": body.get("carrier_id") or _KPI_DEFAULT_CARRIER,
+           "metric_key": key, "label": body.get("label") or key,
+           "target_default": safe_float(body.get("target_default")),
+           "payout_config_col": body.get("payout_config_col") or f"kpi_{key}_target",
+           "sort": int(body.get("sort") or 0), "is_active": bool(body.get("is_active", True))}
+    try:
+        if body.get("id"):
+            r = sb().schema('commcalc').table('carrier_kpi_metric').update(row).eq('id', body['id']).eq('org_id', org_id).execute()
+        else:
+            r = sb().schema('commcalc').table('carrier_kpi_metric').upsert(row, on_conflict='org_id,carrier_id,metric_key').execute()
+        return (r.data or [{}])[0]
+    except Exception as e:
+        raise HTTPException(500, f"save kpi metric failed (is migration 060 applied?): {e}")
+
+
+@router.delete("/carrier-kpi-metrics/{metric_id}")
+def delete_carrier_kpi_metric(metric_id: str, org_id: str = ORG_ID):
+    sb().schema('commcalc').table('carrier_kpi_metric').delete().eq('org_id', org_id).eq('id', metric_id).execute()
+    return {"deleted": metric_id}
 
 
 @router.get("/coaching/{period}")
@@ -4236,7 +4305,7 @@ def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", 
     cfg_rows = (client.schema('commcalc').table('payout_config')
                 .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute().data) or []
     cfg = cfg_rows[0] if cfg_rows else {}
-    kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in ACTION_KPI_DEFS}
+    kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in _kpi_defs(org_id)}
     t100 = int(cfg.get('tier_100_min_kpis') or 7)
     comms = (client.schema('commcalc').table('rep_commissions').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
     cb = (client.schema('commcalc').table('chargeback_items')
@@ -4292,7 +4361,7 @@ def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", 
         kv = cr.get('kpi_values') or {}
         kpis = [{'kpi': k, 'label': lab, 'target': kpi_targets[k],
                  'actual': round(safe_float(kv.get(k)), 1), 'met': safe_float(kv.get(k)) >= kpi_targets[k]}
-                for (k, lab, _c, _d) in ACTION_KPI_DEFS]
+                for (k, lab, _c, _d) in _kpi_defs(org_id)]
         kpis_met = cr.get('kpis_met')
         kpis_met = sum(1 for x in kpis if x['met']) if kpis_met is None else kpis_met
         at_risk = round(subtotal * (1.0 - tier), 2) if tier < 1.0 else 0.0
@@ -4473,7 +4542,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     cfg_rows = (client.schema('commcalc').table('payout_config')
                 .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute().data) or []
     cfg = cfg_rows[0] if cfg_rows else {}
-    kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in ACTION_KPI_DEFS}
+    kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in _kpi_defs(org_id)}
     t100 = int(cfg.get('tier_100_min_kpis') or 7)
     t75 = int(cfg.get('tier_75_min_kpis') or 5)
     comm_rows = (client.schema('commcalc').table('rep_commissions')
@@ -4494,7 +4563,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
         subtotal = safe_float(cr.get('subtotal'))
         kv = cr.get('kpi_values') or {}
         kpis = []
-        for (k, lab, _col, _dv) in ACTION_KPI_DEFS:
+        for (k, lab, _col, _dv) in _kpi_defs(org_id):
             actual = safe_float(kv.get(k))
             kpis.append({'kpi': k, 'label': lab, 'target': kpi_targets[k],
                          'actual': round(actual, 1), 'met': actual >= kpi_targets[k]})
