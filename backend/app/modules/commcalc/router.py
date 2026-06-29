@@ -3712,6 +3712,71 @@ async def preview_payout_installments(period: str, org_id: str = ORG_ID):
 # 'cod'. The payment ledger records HOW each payment was funded — own vs borrowed account — for any
 # company. "VIP" is now just one seeded distributor under the generic Distributors category.
 
+# ═══ UI label nicknames + nav capabilities (SaaS B-phase2) ══════════════════════════════════════
+# Per-tenant DISPLAY config for the sidebar: nickname labels (commcalc.ui_label_override, mig 068) +
+# computed capability flags so the nav can hide irrelevant items. Pure read for the platform layout;
+# writes are admin config. GRACEFUL: if mig 068 is absent, labels = {} and the built-in labels render.
+def _asset_lending_capability(client, org_id):
+    """True if the tenant has an active consignment / asset-lending distributor; False if it has
+    distributors but none lend assets; None if unknown (mig 058 absent or no distributors yet). The
+    sidebar shows the Asset-Lending nav on None/True and hides it ONLY on an explicit False — so a new
+    or un-migrated tenant always sees it (default-show safe)."""
+    try:
+        rows = (client.schema('commcalc').table('distributors')
+                .select('arrangement,has_asset_lending,is_active').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        return None
+    active = [r for r in rows if r.get('is_active', True)]
+    if not active:
+        return None
+    return any(bool(r.get('has_asset_lending')) or (r.get('arrangement') == 'consignment') for r in active)
+
+
+@router.get("/nav-config")
+def get_nav_config(org_id: str = ORG_ID):
+    """Sidebar config for a tenant: {labels:{key:nickname}, capabilities:{asset_lending:bool|null}}.
+    Consumed by the (platform) layout; degrades to empty labels (built-in labels show) pre-068."""
+    client = sb()
+    labels = {}
+    try:
+        rows = (client.schema('commcalc').table('ui_label_override').select('scope,key,label')
+                .eq('org_id', org_id).execute().data) or []
+        for r in rows:
+            k = (r.get('key') or '')
+            if r.get('scope') == 'group':
+                k = 'group:' + k
+            if k and r.get('label'):
+                labels[k] = r['label']
+    except Exception:
+        labels = {}
+    return {"labels": labels, "capabilities": {"asset_lending": _asset_lending_capability(client, org_id)}}
+
+
+@router.post("/nav-labels")
+def set_nav_label(body: dict, org_id: str = ORG_ID):
+    """Upsert one display nickname. body: {scope?: 'nav'|'group', key, label}. An empty label REMOVES
+    the override (reverts to the built-in label). Clear 400 (not 500) if migration 068 isn't applied.
+    Display-only: this never touches a DB column, route, report_key or data path."""
+    scope = (body.get('scope') or 'nav').strip()
+    key = (body.get('key') or '').strip()
+    label = (body.get('label') or '').strip()
+    if not key:
+        raise HTTPException(400, "key required")
+    client = sb()
+    try:
+        if not label:
+            client.schema('commcalc').table('ui_label_override').delete() \
+                .eq('org_id', org_id).eq('scope', scope).eq('key', key).execute()
+            return {"ok": True, "removed": key}
+        client.schema('commcalc').table('ui_label_override').upsert(
+            {"org_id": org_id, "scope": scope, "key": key, "label": label,
+             "updated_at": _datetime.now(_timezone.utc).isoformat()},
+            on_conflict="org_id,scope,key").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save label — run migration 068_ui_label_override.sql first. [{e}]")
+    return {"ok": True, "scope": scope, "key": key, "label": label}
+
+
 @router.get("/distributors")
 async def list_distributors(org_id: str = ORG_ID):
     client = sb()

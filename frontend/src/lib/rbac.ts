@@ -53,7 +53,10 @@ export function hasReport(perms: Permissions, area: string): boolean {
   return (perms.scope || 'all') === 'all'
 }
 
-export type NavItem = { href: string; label: string; icon: string; module: string; scopes?: Scope[] }
+// `cap` (optional) is a tenant CAPABILITY gate, separate from RBAC: the sidebar hides the item only when
+// the tenant's capability is explicitly false (e.g. asset_lending=false → no consignment distributor).
+// Unknown/true → shown, so it never hides anything by default. RBAC (module/scopes) still applies first.
+export type NavItem = { href: string; label: string; icon: string; module: string; scopes?: Scope[]; cap?: string }
 export type NavGroup = { group: string; module: string; items: NavItem[] }
 
 // scopes (when present) further restricts an item to those scope tiers, e.g. settings = admin only.
@@ -111,7 +114,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/asset/aging', label: 'Inventory Aging', icon: '⏳', module: 'asset', scopes: ['all', 'market'] },
     { href: '/commcalc/asset/on-inventory', label: 'On-Inventory by Store', icon: '🏬', module: 'asset', scopes: ['all', 'market'] },
     { href: '/commcalc/asset/borrowed', label: 'Borrowed / Lending', icon: '🔁', module: 'asset', scopes: ['all', 'market'] },
-    { href: '/commcalc/asset/lending', label: 'Asset Lending (PayGo)', icon: '📲', module: 'asset', scopes: ['all', 'market'] },
+    { href: '/commcalc/asset/lending', label: 'Asset Lending (PayGo)', icon: '📲', module: 'asset', scopes: ['all', 'market'], cap: 'asset_lending' },
     { href: '/commcalc/asset/charges/rma', label: 'RMA', icon: '↩️', module: 'asset', scopes: ['all', 'market'] },
     { href: '/commcalc/asset/inventory-recon', label: 'Inventory Recon', icon: '🔎', module: 'asset', scopes: ['all', 'market'] },
     { href: '/commcalc/asset/hotsheet-recon', label: 'Pricing Hotsheet', icon: '🏷️', module: 'commissions', scopes: ['all', 'market'] },
@@ -119,7 +122,7 @@ export const NAV: NavGroup[] = [
   { group: 'Distributors', module: 'vip', items: [
     { href: '/commcalc/distributors', label: 'Distributors', icon: '🏬', module: 'vip', scopes: ['all', 'market'] },
     { href: '/commcalc/vip', label: 'Distributor · Invoices', icon: '🧾', module: 'vip' },
-    { href: '/commcalc/vip/paygo', label: 'Distributor · PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'] },
+    { href: '/commcalc/vip/paygo', label: 'Distributor · PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'], cap: 'asset_lending' },
     { href: '/commcalc/vip/sweep', label: 'Distributor · Sweep', icon: '🧹', module: 'vip', scopes: ['all'] },
   ]},
   { group: 'Workforce', module: 'storeops', items: [
@@ -188,6 +191,7 @@ export const NAV: NavGroup[] = [
     { href: '/admin/roles', label: 'Roles & Access', icon: '🔐', module: 'admin' },
     { href: '/admin/org', label: 'Org Structure', icon: '🌳', module: 'admin' },
     { href: '/admin/org-chart', label: 'Employee Org Chart', icon: '👥', module: 'admin' },
+    { href: '/admin/labels', label: 'Display Labels', icon: '🏷️', module: 'admin' },
   ]},
 ]
 

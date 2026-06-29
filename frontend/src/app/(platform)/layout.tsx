@@ -4,7 +4,8 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
-import { NAV, canSeeItem, canAccessPath, safeHomeFor } from '@/lib/rbac'
+import { api } from '@/lib/client'
+import { NAV, canSeeItem, canAccessPath, safeHomeFor, type NavItem } from '@/lib/rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -32,11 +33,26 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   const { user, permissions, signOut } = useAuth()
   const [collapsed, setCollapsed] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [navCfg, setNavCfg] = useState<{ labels?: Record<string, string>; capabilities?: Record<string, boolean | null> }>({})
   const pathname = usePathname()
   const router = useRouter()
 
-  // When login isn't enforced (open), show the full nav (today's behavior); otherwise gate it.
+  // Per-tenant display config: nickname labels + capability flags. Best-effort — any failure leaves
+  // navCfg empty, so built-in labels show and every item stays visible (today's behavior). Never blocks.
+  useEffect(() => {
+    let alive = true
+    api('/commcalc/nav-config').then(c => { if (alive && c) setNavCfg(c) }).catch(() => {})
+    return () => { alive = false }
+  }, [])
+  const caps = navCfg.capabilities || {}
+  const labelOf = (key: string, fallback: string) => navCfg.labels?.[key] || fallback
+  // Hide an item ONLY when its capability is explicitly false; unknown/null/true → show (default-safe).
+  const capOK = (it: NavItem) => !it.cap || caps[it.cap] !== false
+
+  // When login isn't enforced (open), show the full nav (today's behavior); otherwise gate it. Then
+  // apply tenant capability gating (e.g. hide Asset Lending when no consignment distributor).
   const groups = (open ? NAV : NAV.map(g => ({ ...g, items: g.items.filter(it => canSeeItem(permissions, it)) })))
+    .map(g => ({ ...g, items: g.items.filter(capOK) }))
     .filter(g => g.items.length > 0)
 
   const initials = (user?.full_name || user?.email || '?').split(/[\s@.]+/).filter(Boolean)
@@ -76,7 +92,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
             <div key={group}>
               {!collapsed && (
                 <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, textTransform: 'uppercase',
-                  letterSpacing: '0.08em', padding: '12px 16px 4px', fontWeight: 600 }}>{group}</div>
+                  letterSpacing: '0.08em', padding: '12px 16px 4px', fontWeight: 600 }}>{labelOf('group:' + group, group)}</div>
               )}
               {items.map(({ href, label, icon }) => {
                 const active = pathname === href || pathname.startsWith(href + '/')
@@ -88,7 +104,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                     textDecoration: 'none', fontSize: 13, fontWeight: active ? 600 : 400,
                     borderLeft: active ? '3px solid rgba(255,255,255,0.6)' : '3px solid transparent', transition: 'all 0.1s' }}>
                     <span style={{ fontSize: 15 }}>{icon}</span>
-                    {!collapsed && label}
+                    {!collapsed && labelOf(href, label)}
                   </Link>
                 )
               })}
