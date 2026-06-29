@@ -434,7 +434,7 @@ async def upload_file(
         recon = {'flagged': 0, 'periods': []}
         for p in sorted({m.get('period') for m in mapped if m.get('period')}):
             try:
-                rr = sales_recon.sync_recon_flags(p)
+                rr = sales_recon.sync_recon_flags(p, org_id=org_id)
                 recon['flagged'] += rr.get('flagged', 0)
                 recon['periods'].append(p)
             except Exception as e:
@@ -3611,7 +3611,7 @@ async def sales_feed_recon(period: str = "", org_id: str = ORG_ID):
     if not period:
         raise HTTPException(400, "period required")
     try:
-        return sales_recon.run_sales_recon(period)
+        return sales_recon.run_sales_recon(period, org_id)
     except Exception as e:
         raise HTTPException(500, f"Sales recon failed: {e} (run migration 047?)")
 
@@ -3624,7 +3624,7 @@ async def sales_feed_recon_transaction(period: str, trans_id: str, org_id: str =
     if not period or not trans_id:
         raise HTTPException(400, "period and trans_id required")
     try:
-        return sales_recon.transaction_detail(period, trans_id)
+        return sales_recon.transaction_detail(period, trans_id, org_id)
     except Exception as e:
         raise HTTPException(500, f"Transaction detail failed: {e}")
 

@@ -71,13 +71,13 @@ def _aggregate(rows):
     return by_tid, round(total, 2), lines
 
 
-def _fetch(client, table, plabel):
+def _fetch(client, table, plabel, org_id=ORG_ID):
     """Pull the trans-level columns for a period from a sales-shaped table (paginated)."""
     out, start, PAGE = [], 0, 1000
     while True:
         resp = (client.schema("commcalc").table(table)
                 .select("trans_id,ext_price,store,salesperson,trans_date,voided")
-                .eq("org_id", ORG_ID).eq("period", plabel)
+                .eq("org_id", org_id).eq("period", plabel)
                 .range(start, start + PAGE - 1).execute())
         chunk = resp.data or []
         out.extend(chunk)
@@ -87,12 +87,12 @@ def _fetch(client, table, plabel):
     return out
 
 
-def run_sales_recon(period: str):
+def run_sales_recon(period: str, org_id: str = ORG_ID):
     client = get_supabase()
     plabel = _period_label(period)
 
-    monthly_rows = _fetch(client, "raw_sales", plabel)
-    feed_rows = _fetch(client, "daily_sales_feed", plabel)
+    monthly_rows = _fetch(client, "raw_sales", plabel, org_id)
+    feed_rows = _fetch(client, "daily_sales_feed", plabel, org_id)
 
     monthly, monthly_total, monthly_lines = _aggregate(monthly_rows)
     daily, daily_total, daily_lines = _aggregate(feed_rows)
@@ -171,7 +171,7 @@ def run_sales_recon(period: str):
     }
 
 
-def transaction_detail(period: str, trans_id: str):
+def transaction_detail(period: str, trans_id: str, org_id: str = ORG_ID):
     """Line-item drill-down for ONE transaction: every raw_sales (monthly) line vs every
     daily_sales_feed line for that trans_id, so you can see exactly WHAT differs (a missing line, a
     price change, a void). Powers the Sales Feed Recon row click-through."""
@@ -182,7 +182,7 @@ def transaction_detail(period: str, trans_id: str):
 
     def fetch(table):
         rows = (client.schema("commcalc").table(table).select(cols)
-                .eq("org_id", ORG_ID).eq("period", plabel).eq("trans_id", str(trans_id))
+                .eq("org_id", org_id).eq("period", plabel).eq("trans_id", str(trans_id))
                 .limit(2000).execute().data) or []
         lines, total = [], 0.0
         for r in rows:
@@ -221,7 +221,7 @@ def _period_my(plabel: str):
     return None, None
 
 
-def sync_recon_flags(period: str, include_mismatch: bool = True):
+def sync_recon_flags(period: str, include_mismatch: bool = True, org_id: str = ORG_ID):
     """Persist sales-feed recon findings into commcalc.flags so leaks show on the Flags page and can be
     routed/notified like any other flag. Writes:
       • missing_in_monthly → flag_type 'sales_leak' (severity 'critical') — money in the daily B2B feed
@@ -231,7 +231,7 @@ def sync_recon_flags(period: str, include_mismatch: bool = True):
     (missing_in_daily is a feed-coverage gap, not a money leak — intentionally not flagged.)
     Delete-first by (org_id, period, source='sales_recon') then insert, so re-running is idempotent and
     never touches other flag sources (matches the asset _sync_*_flags pattern). Returns counts."""
-    res = run_sales_recon(period)
+    res = run_sales_recon(period, org_id)
     plabel = res["period"]
     pm, py = _period_my(plabel)
     client = get_supabase()
@@ -262,10 +262,10 @@ def sync_recon_flags(period: str, include_mismatch: bool = True):
             })
 
     (client.schema("commcalc").table("flags").delete()
-     .eq("org_id", ORG_ID).eq("period", plabel).eq("source", "sales_recon").execute())
+     .eq("org_id", org_id).eq("period", plabel).eq("source", "sales_recon").execute())
     if flags:
         for f in flags:
-            f["org_id"] = ORG_ID
+            f["org_id"] = org_id
         for i in range(0, len(flags), 500):
             client.schema("commcalc").table("flags").insert(flags[i:i + 500]).execute()
 

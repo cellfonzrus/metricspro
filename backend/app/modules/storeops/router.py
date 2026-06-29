@@ -963,7 +963,7 @@ def org_tree(org_id: str = ORG_ID):
 @router.post("/org/seed")
 def org_seed(org_id: str = ORG_ID):
     """(Re)build Company -> Market -> stores from storeops.stores. Idempotent; manual placements survive."""
-    res = sb().rpc("seed_org_from_stores", {}).execute()
+    res = sb().rpc("seed_org_from_stores", {"p_org_id": org_id}).execute()
     return {"ok": True, "result": getattr(res, "data", None)}
 
 
