@@ -14,11 +14,11 @@ const SEND_KEY: Record<string, string> = {
 // URL slug -> backend group key + display config
 const GROUP_MAP: Record<string, { key: string; title: string; color: string; critical?: boolean; blurb: string }> = {
   'appeals':       { key:'appeals',       title:'Appeals & Denied Payments', color:'#dc2626', critical:true,
-                     blurb:'Boost denied or is withholding payment for these activations/reimbursements. Each is a potential direct loss — review and appeal.' },
-  'vip-fees':      { key:'vip_fees',       title:'VIP Fees', color:'#2563eb',
-                     blurb:'Processing, shipping, and SIM kit fees billed by VIP.' },
+                     blurb:'The carrier denied or is withholding payment for these activations/reimbursements. Each is a potential direct loss — review and appeal.' },
+  'vip-fees':      { key:'vip_fees',       title:'Distributor Fees', color:'#2563eb',
+                     blurb:'Processing, shipping, and SIM kit fees billed by the Distributor.' },
   'stock-balance': { key:'stock_balance',  title:'Stock Balancing / Returns', color:'#d97706',
-                     blurb:'Phones returned to VIP because they could not sell before 60 days (FIFO, unopened). Confirm VIP credited these.' },
+                     blurb:'Phones returned to the Distributor because they could not sell before 60 days (FIFO, unopened). Confirm the Distributor credited these.' },
   'recon':         { key:'recon_oddity',   title:'Reconciliation Oddities', color:'#7c3aed',
                      blurb:'Payment/data mismatches — wrong ESN paid, missing Elevate data, coupon issues, exchanges.' },
 }
@@ -120,8 +120,8 @@ export default function ChargeGroupPage() {
           { header:'Date', get:r=> r.period_date ? String(r.period_date).slice(0,10) : '' },
           { header:'Owed', get:r=>r.owed_to_vip, money:true },
           { header:'Selling Price', get:r=>r.selling_price, money:true },
-          { header:'VIP Invoice #', get:r=>r.vip_invoice_number },
-          { header:'VIP Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
+          { header:'Distributor Invoice #', get:r=>r.vip_invoice_number },
+          { header:'Distributor Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
         ]},
         { name: 'By Store', rows: group?.by_store || [], columns: [
           { header:'Store', get:r=>r.store },
@@ -154,7 +154,7 @@ export default function ChargeGroupPage() {
 
       {cfg.critical && (
         <div style={{ background:'#fef2f2', border:'2px solid #dc2626', borderRadius:10, padding:'14px 18px', marginBottom:20, color:'#991b1b' }}>
-          <strong>🚨 Critical — money at stake.</strong> These are denied/withheld Boost payments. Use “Push Appeals to Flags” on the dashboard to track them on the Flags page.
+          <strong>🚨 Critical — money at stake.</strong> These are denied/withheld carrier payments. Use “Push Appeals to Flags” on the dashboard to track them on the Flags page.
         </div>
       )}
 
@@ -259,8 +259,8 @@ export default function ChargeGroupPage() {
               <table style={{ width:'100%', borderCollapse:'collapse', minWidth:820 }}>
                 <thead><tr style={{ background:'var(--surface2)' }}>
                   {(isAppeals
-                    ? ['Store','Market','Category','Reason','Device','IMEI/ESN','Phone','Date','Owed','Selling','VIP Invoice #','Invoice Date']
-                    : ['Store','Market','Category','Device','IMEI/ESN','Phone','Date','Owed','Selling','VIP Invoice #','Invoice Date']
+                    ? ['Store','Market','Category','Reason','Device','IMEI/ESN','Phone','Date','Owed','Selling','Distributor Invoice #','Invoice Date']
+                    : ['Store','Market','Category','Device','IMEI/ESN','Phone','Date','Owed','Selling','Distributor Invoice #','Invoice Date']
                   ).map(h => (
                     <th key={h} style={{ textAlign:'left', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
                   ))}

@@ -175,7 +175,7 @@ def calc_flags(
                     'severity': 'HIGH',
                     'epay_salesperson': rep,
                     'description': f"{cnt} RSK register activation(s) by {rep}",
-                    'coaching_note': 'RSK activations require monitoring per Boost policy. Verify each activation is legitimate.',
+                    'coaching_note': 'RSK activations require monitoring per Carrier policy. Verify each activation is legitimate.',
                 })
 
     # ── 6. HIGH PORT-OUT RATE (from DLAR store) ───────────────────
@@ -201,7 +201,7 @@ def calc_flags(
                 'flag_type': 'MISSING_STORE_PAYMENT', 'source': 'payment_detail',
                 'severity': 'MEDIUM',
                 'store_address': store_addr,
-                'description': f"Store {store_addr} has sales data but no Boost payment received",
+                'description': f"Store {store_addr} has sales data but no Carrier payment received",
                 'coaching_note': 'Check if Payment Detail file is complete. May indicate reporting error or payment delay.',
             })
 

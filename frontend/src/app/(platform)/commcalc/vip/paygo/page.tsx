@@ -34,7 +34,7 @@ export default function PaygoPage() {
   function buildPayload(): ExportPayload {
     const rows = [...(data?.current ? [data.current] : []), ...(data?.history || [])]
     return {
-      title: 'VIP Asset Lending — PayGo Weekly Billing',
+      title: 'Distributor Asset Lending — PayGo Weekly Billing',
       subtitle: data?.current ? `Current week owed ${fmt(data.totals.current_owed)} (${pretty(data.current.created_on)})` : 'PayGo weekly ledger',
       filename: 'vip-paygo-weekly',
       sheets: [{
@@ -64,10 +64,10 @@ export default function PaygoPage() {
     <div>
       <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div>
-          <a href="/commcalc/vip" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← VIP Invoices</a>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>📦 VIP Asset Lending (PayGo)</h1>
+          <a href="/commcalc/vip" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Distributor Invoices</a>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>📦 Distributor Asset Lending (PayGo)</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            What VIP bills for lent (Pay-As-You-Go) devices each week, scraped from the dealer portal. Each weekly batch is a group of invoices — the invoice numbers join to your VIP invoices &amp; device IMEIs.
+            What the Distributor bills for lent (Pay-As-You-Go) devices each week, scraped from the dealer portal. Each weekly batch is a group of invoices — the invoice numbers join to your Distributor invoices &amp; device IMEIs.
           </p>
         </div>
         {data?.configured && <ExportButtons payload={buildPayload} />}
@@ -80,7 +80,7 @@ export default function PaygoPage() {
           <strong>Asset-lending data not loaded yet.</strong>
           <div style={{ marginTop: 8 }}>
             Run migration <code>014_vip_paygo.sql</code> in Supabase, then on the{' '}
-            <a href="/commcalc/vip/sweep">VIP Auto-sweep</a> page tick <strong>Asset lending (PayGo)</strong>, Save, and Run now.
+            <a href="/commcalc/vip/sweep">Distributor Auto-sweep</a> page tick <strong>Asset lending (PayGo)</strong>, Save, and Run now.
           </div>
           {data?.detail && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text3)' }}>({data.detail})</div>}
         </div>

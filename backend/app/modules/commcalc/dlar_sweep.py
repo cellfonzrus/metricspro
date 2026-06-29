@@ -75,7 +75,7 @@ def login(session, user, pw):
     r = session.get(f"{BASE}/login", timeout=30)
     tok_el = BeautifulSoup(r.text, "html.parser").find("input", attrs={"name": "_token"})
     if not tok_el:
-        raise DlarLoginError("Boost login page changed — no CSRF token found.")
+        raise DlarLoginError("Carrier login page changed — no CSRF token found.")
     session.post(
         f"{BASE}/login",
         data={"_token": tok_el.get("value", ""), "email": user, "password": pw},
@@ -85,7 +85,7 @@ def login(session, user, pw):
     )
     chk = session.get(f"{BASE}/reports/dlar", allow_redirects=False, timeout=30)
     if chk.status_code != 200:
-        raise DlarLoginError("Boost login failed — credentials rejected (or account/2FA changed).")
+        raise DlarLoginError("Carrier login failed — credentials rejected (or account/2FA changed).")
 
 
 def fetch_report(session, name, page=100):

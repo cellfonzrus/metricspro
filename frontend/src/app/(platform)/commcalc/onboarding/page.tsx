@@ -374,7 +374,7 @@ function DistributorsStep({ carrierId, setMsg }: { carrierId: string; setMsg: (s
       <h3 style={{ marginTop: 0 }}>7. Distributors &amp; payment terms</h3>
       <p style={{ fontSize: 13, color: 'var(--text2)' }}>
         Who does this company source devices/inventory from, and on what arrangement? Pick <b>terms</b> (net credit),
-        <b> consignment</b> (lent devices billed on a cycle — like VIP&apos;s Asset Lending), or <b>COD</b>. You can manage
+        <b> consignment</b> (lent devices billed on a cycle — like Asset Lending), or <b>COD</b>. You can manage
         these and record payment funding (own vs borrowed account) later on the Distributors page.
       </p>
       <div style={{ display: 'grid', gap: 6, maxWidth: 640, marginBottom: 10 }}>
@@ -437,7 +437,7 @@ function KpiMetricsStep({ carrierId, setMsg }: { carrierId: string; setMsg: (s: 
       <h3 style={{ marginTop: 0 }}>8. KPI metrics &amp; targets</h3>
       <p style={{ fontSize: 13, color: 'var(--text2)' }}>
         Define the KPI metrics + target %s that drive <b>this carrier&apos;s</b> commission tier — instead of the
-        built-in Boost defaults (ATU / App Attach / Protection / …). {ready ? '' : '⚠️ Run migration 060 to save your own; showing the defaults for now.'}
+        built-in carrier defaults (ATU / App Attach / Protection / …). {ready ? '' : '⚠️ Run migration 060 to save your own; showing the defaults for now.'}
       </p>
       <div style={{ display: 'grid', gap: 4, maxWidth: 560, marginBottom: 10 }}>
         {metrics.map((x, i) => (

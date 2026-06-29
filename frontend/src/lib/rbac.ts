@@ -15,7 +15,7 @@ export type Permissions = {
 export const REPORT_AREAS: { key: string; label: string }[] = [
   { key: 'commissions', label: 'Commission reports' },
   { key: 'asset', label: 'Asset reports' },
-  { key: 'vip', label: 'VIP reports' },
+  { key: 'vip', label: 'Distributor reports' },
   { key: 'accounts', label: 'Accounting reports (P&L / BS)' },
   { key: 'storeops', label: 'StoreOps reports (hours / payroll)' },
   { key: 'closing', label: 'Daily Closing reports' },
@@ -107,7 +107,7 @@ export const NAV: NavGroup[] = [
   { group: 'Assets', module: 'asset', items: [
     { href: '/commcalc/asset', label: 'Asset Ledger', icon: '📦', module: 'asset' },
     { href: '/commcalc/asset/dashboard', label: 'Charges Dashboard', icon: '📊', module: 'asset', scopes: ['all', 'market'] },
-    { href: '/commcalc/asset/owed-weekly', label: 'Weekly Owed-to-VIP', icon: '📅', module: 'asset', scopes: ['all', 'market'] },
+    { href: '/commcalc/asset/owed-weekly', label: 'Weekly Owed-to-Distributor', icon: '📅', module: 'asset', scopes: ['all', 'market'] },
     { href: '/commcalc/asset/aging', label: 'Inventory Aging', icon: '⏳', module: 'asset', scopes: ['all', 'market'] },
     { href: '/commcalc/asset/on-inventory', label: 'On-Inventory by Store', icon: '🏬', module: 'asset', scopes: ['all', 'market'] },
     { href: '/commcalc/asset/borrowed', label: 'Borrowed / Lending', icon: '🔁', module: 'asset', scopes: ['all', 'market'] },
@@ -118,9 +118,9 @@ export const NAV: NavGroup[] = [
   ]},
   { group: 'Distributors', module: 'vip', items: [
     { href: '/commcalc/distributors', label: 'Distributors', icon: '🏬', module: 'vip', scopes: ['all', 'market'] },
-    { href: '/commcalc/vip', label: 'VIP · Invoices', icon: '🧾', module: 'vip' },
-    { href: '/commcalc/vip/paygo', label: 'VIP · PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'] },
-    { href: '/commcalc/vip/sweep', label: 'VIP · Sweep', icon: '🧹', module: 'vip', scopes: ['all'] },
+    { href: '/commcalc/vip', label: 'Distributor · Invoices', icon: '🧾', module: 'vip' },
+    { href: '/commcalc/vip/paygo', label: 'Distributor · PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'] },
+    { href: '/commcalc/vip/sweep', label: 'Distributor · Sweep', icon: '🧹', module: 'vip', scopes: ['all'] },
   ]},
   { group: 'Workforce', module: 'storeops', items: [
     { href: '/storeops', label: 'Dashboard', icon: '🏠', module: 'storeops' },

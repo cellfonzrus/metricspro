@@ -64,7 +64,7 @@ export default function HotsheetReconPage() {
   }
 
   async function syncFlags() {
-    if (!confirm('Write a flag for every underpaid device (Boost reimbursed less than the hotsheet promo)? This replaces the previous hotsheet flags.')) return
+    if (!confirm('Write a flag for every underpaid device (carrier reimbursed less than the hotsheet promo)? This replaces the previous hotsheet flags.')) return
     setSyncing(true); setSyncMsg('')
     try {
       const r = await api(`/api/v1/asset/sync-hotsheet-flags?org_id=${ORG_ID}&tolerance=${tolerance}`, { method: 'POST' })
@@ -118,7 +118,7 @@ export default function HotsheetReconPage() {
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
             For each activated device, the <strong>expected</strong> promo from the pricing hotsheet (by device model + the
             hotsheet effective as of its acquired date, on the column chosen from the contract type:
-            Upgrade &gt; AAL &gt; Port-In &gt; Non-Port) vs the <strong>actual</strong> Boost reimbursement. Unsold On-Inventory is excluded.
+            Upgrade &gt; AAL &gt; Port-In &gt; Non-Port) vs the <strong>actual</strong> carrier reimbursement. Unsold On-Inventory is excluded.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

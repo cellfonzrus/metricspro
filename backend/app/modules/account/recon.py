@@ -227,9 +227,9 @@ def sync_flags(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEF
         sev = "critical" if cw["status"] == "under" else "warning"
         flags.append({
             "org_id": org_id, "period": period, "period_month": pm, "period_year": py,
-            "flag_type": "VIP credit-memo recon (company-wide)", "source": "account_recon",
+            "flag_type": "Distributor credit-memo recon (company-wide)", "source": "account_recon",
             "severity": sev, "amount": abs(cw["diff"]),
-            "description": (f"Company-wide: VIP credit memos {cw['memo_total']:.2f} vs MI+ATU earned "
+            "description": (f"Company-wide: Distributor credit memos {cw['memo_total']:.2f} vs MI+ATU earned "
                             f"{cw['mi_atu_total']:.2f} ({'short' if cw['status'] == 'under' else 'over'} "
                             f"by {abs(cw['diff']):.2f})."),
         })
@@ -239,7 +239,7 @@ def sync_flags(client, org_id, period, tolerance=DEFAULT_TOLERANCE, date_col=DEF
         sev = "critical" if r["status"] == "under" else "warning"
         flags.append({
             "org_id": org_id, "period": period, "period_month": pm, "period_year": py,
-            "flag_type": "VIP credit-memo recon (store)", "source": "account_recon",
+            "flag_type": "Distributor credit-memo recon (store)", "source": "account_recon",
             "severity": sev, "store_address": r["store"], "amount": abs(r["diff"]),
             "description": (f"{r['store']}: memos {r['memo_total']:.2f} vs MI+ATU {r['mi_atu_total']:.2f} "
                             f"({'short' if r['status'] == 'under' else 'over'} by {abs(r['diff']):.2f})."),

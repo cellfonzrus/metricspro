@@ -154,7 +154,7 @@ export default function DiscrepancyPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Pay Discrepancy</h1>
-          <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: 14 }}>Bounties earned vs paid by Boost — {period}</p>
+          <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: 14 }}>Bounties earned vs paid by the Carrier — {period}</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={() => setShowLegend(!showLegend)}
@@ -199,10 +199,10 @@ export default function DiscrepancyPage() {
       <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
         <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, flex: 1 }}>
           <div style={{ fontSize: 13, color: '#6b7280' }}>
-            {statusTab === 'open' ? 'Total Receivable from Boost'
+            {statusTab === 'open' ? 'Total Receivable from Carrier'
               : statusTab === 'pending' ? 'Pending (too recent to reconcile)'
               : statusTab === 'lagged' ? 'Lagged (awaiting prior-period data)'
-              : statusTab === 'phantom' ? 'Paid by Boost — no matching sale'
+              : statusTab === 'phantom' ? 'Paid by Carrier — no matching sale'
               : 'Informational total'}
           </div>
           <div style={{ fontSize: 28, fontWeight: 700, color: headlineColor }}>

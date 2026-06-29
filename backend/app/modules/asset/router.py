@@ -1027,7 +1027,7 @@ CHARGE_GROUPS = {
                       "Non-Promo Elevate Coupon", "Exchange/Return"],
 }
 GROUP_LABELS = {
-    "vip_fees": "VIP Fees", "stock_balance": "Stock Balancing / Returns",
+    "vip_fees": "Distributor Fees", "stock_balance": "Stock Balancing / Returns",
     "appeals": "Appeals & Denied Payments", "recon_oddity": "Reconciliation Oddities",
 }
 
@@ -1337,7 +1337,7 @@ def _sync_hotsheet_flags(client, org_id, tolerance=1.0):
             "imei": it.get("imei"), "mdn": it.get("mdn"),
             "amount": shortfall, "phone_model": it.get("device_model"),
             "description": (f"{it.get('promo_type') or '?'} promo: hotsheet expected {expected:.2f}, "
-                            f"Boost reimbursed {actual:.2f} (short {shortfall:.2f})"),
+                            f"Carrier reimbursed {actual:.2f} (short {shortfall:.2f})"),
         })
     client.schema("commcalc").table("flags").delete() \
         .eq("org_id", org_id).eq("source", "asset_hotsheet").execute()
@@ -1447,9 +1447,9 @@ def _appeal_reason(r, epay=None, epay_loaded=False):
         if reimb_pn:
             pn_note += f", ${reimb_pn} reimbursed there"
     base = {
-        "Re-Escalation": "Re-escalation submitted to Boost — awaiting decision",
-        "Missing 1st MRC": "Missing 1st month recurring charge (1st MRC) — no Boost payment received",
-        "Failed Activation. Check Boost Payment Status": "Failed activation — check Boost payment status",
+        "Re-Escalation": "Re-escalation submitted to Carrier — awaiting decision",
+        "Missing 1st MRC": "Missing 1st month recurring charge (1st MRC) — no Carrier payment received",
+        "Failed Activation. Check Boost Payment Status": "Failed activation — check Carrier payment status",
         "Over 10 Days Missing Reimbursement (CheckElevate/Submit Appeal)":
             "Over 10 days missing reimbursement — check Elevate / submit appeal",
     }.get(cat)
@@ -1465,7 +1465,7 @@ def _appeal_reason(r, epay=None, epay_loaded=False):
 
     if cat.startswith("Appeal Denied"):
         reason = (f"Appeal denied — {pn_note}." if pn_note else "Appeal denied.")
-        reason += f" {epay_note}." if epay_note else " See Boost Payment Detail Report (ePay)."
+        reason += f" {epay_note}." if epay_note else " See Carrier Payment Detail Report (ePay)."
         return reason
     if base:
         parts = [base]
@@ -1592,7 +1592,7 @@ def _sync_appeal_flags(client, org_id):
             "imei": r.get("esn_imei"), "mdn": r.get("phone_number"),
             "amount": float(r.get("owed_to_vip") or 0),
             "phone_model": r.get("device_model"),
-            "description": f"Boost {r.get('category')} — potential unpaid/denied amount",
+            "description": f"Carrier {r.get('category')} — potential unpaid/denied amount",
         })
 
     # delete-first then plain insert (dedup pattern)

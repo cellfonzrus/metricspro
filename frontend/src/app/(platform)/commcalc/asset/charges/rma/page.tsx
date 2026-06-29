@@ -26,7 +26,7 @@ function RmaTable({ rows, showShort }: { rows: Row[]; showShort?: boolean }) {
     <div style={{ overflowX:'auto' }}>
       <table style={{ width:'100%', borderCollapse:'collapse', minWidth:780 }}>
         <thead><tr style={{ background:'var(--surface2)' }}>
-          {['Store','Market','Device','IMEI/ESN','Sold','Owed','Reimbursed','Selling','Reimb Date','VIP Invoice #','Invoice Date', showShort?'Short':'Gap'].map(h => (
+          {['Store','Market','Device','IMEI/ESN','Sold','Owed','Reimbursed','Selling','Reimb Date','Distributor Invoice #','Invoice Date', showShort?'Short':'Gap'].map(h => (
             <th key={h} style={{ textAlign:'left', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
           ))}
         </tr></thead>
@@ -95,8 +95,8 @@ export default function RmaPage() {
       { header:'Reimbursed', get:r=>r.reimbursement, money:true },
       { header:'Selling Price', get:r=>r.selling_price, money:true },
       { header:'Reimb Date', get:r=> r.reimbursement_date ? String(r.reimbursement_date).slice(0,10) : '' },
-      { header:'VIP Invoice #', get:r=>r.vip_invoice_number },
-      { header:'VIP Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
+      { header:'Distributor Invoice #', get:r=>r.vip_invoice_number },
+      { header:'Distributor Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
       { header:'Shortfall', get:r=>r._shortfall, money:true },
     ]
     const filterLabel = [market||null, store||null].filter(Boolean).join(' · ') || 'All markets'
@@ -119,7 +119,7 @@ export default function RmaPage() {
           <a href="/commcalc/asset/dashboard" style={{ fontSize:13, color:'var(--text3)', textDecoration:'none' }}>← Charges Dashboard</a>
           <h1 style={{ fontSize:22, fontWeight:700, margin:'6px 0 0' }}>RMA Reconciliation</h1>
           <p style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>
-            Returned devices — which were reimbursed in full, short-paid, or never credited by VIP.
+            Returned devices — which were reimbursed in full, short-paid, or never credited by the Distributor.
           </p>
         </div>
         {data && <ExportButtons payload={buildPayload} />}

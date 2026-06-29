@@ -41,7 +41,7 @@ const MODULE_UPLOADS = [
   { id: 'hotsheet',      label: 'Pricing Hotsheet',     icon: '🏷️', endpoint: 'commcalc/hotsheet/upload', needsDate: true,
     desc: 'Carrier promo pricing by device — powers the Hotsheet expected-vs-paid recon. Pick the effective date.' },
   { id: 'vip_workbook',  label: 'VIP Wireless Workbook', icon: '🧾', endpoint: 'commcalc/vip/upload', needsDate: false,
-    desc: 'VIP scraper workbook (Invoices / Lines / Devices sheets). Full-replace of VIP history.' },
+    desc: 'Distributor scraper workbook (Invoices / Lines / Devices sheets). Full-replace of Distributor history.' },
   { id: 'asset_ledger',  label: 'Asset Ledger',         icon: '📒', endpoint: 'asset/upload', needsDate: false,
     desc: 'Asset_Lending.xlsx — wipes & re-inserts all asset rows, then backfills market + flags.' },
   { id: 'daily_closing', label: 'Daily Closing Sheet',  icon: '🧮', endpoint: 'closing/upload', needsDate: false,
@@ -277,7 +277,7 @@ export default function UploadPage() {
 
       {/* ── Module uploads (files that load into other modules) ──────────── */}
       <div style={{ fontWeight: 700, fontSize: 14, margin: '24px 0 10px' }}>
-        📦 Module uploads <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— files that feed the asset, VIP, hotsheet &amp; daily-closing modules</span>
+        📦 Module uploads <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— files that feed the asset, Distributor, hotsheet &amp; daily-closing modules</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
         {MODULE_UPLOADS.map(entry => {

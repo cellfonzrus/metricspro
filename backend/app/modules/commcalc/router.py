@@ -927,7 +927,7 @@ def _do_vip_sweep(org_id):
     client = sb()
     cfg = _vip_cfg(client, org_id)
     if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
-        _vip_set_status(client, org_id, 'error', 'No VIP credentials set in the admin area', mark_run=True)
+        _vip_set_status(client, org_id, 'error', 'No Distributor credentials set in the admin area', mark_run=True)
         return
     _vip_set_status(client, org_id, 'running', 'Sweep in progress…')
     # Default to the invoice sweep (back-compat: cfg may predate the toggles). sweep_asset
@@ -986,7 +986,7 @@ def _do_vip_sweep(org_id):
     _step('chargebacks', do_chargebacks, _chargebacks)
 
     if not parts and not errs:
-        _vip_set_status(client, org_id, 'ok', "Nothing enabled (tick a report on the VIP Sweep page)", mark_run=True)
+        _vip_set_status(client, org_id, 'ok', "Nothing enabled (tick a report on the Distributor Sweep page)", mark_run=True)
         return
     status = 'ok' if not errs else ('partial' if parts else 'error')
     detail = (("OK — " if status == 'ok' else "") + " · ".join(parts)
@@ -1031,7 +1031,7 @@ async def vip_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG
     require_org(org_id)
     cfg = _vip_cfg(sb(), org_id)
     if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
-        raise HTTPException(400, "Set the VIP credentials first.")
+        raise HTTPException(400, "Set the Distributor credentials first.")
     background_tasks.add_task(_do_vip_sweep, org_id)
     return {"status": "started"}
 
@@ -2620,7 +2620,7 @@ def _do_dlar_sweep(org_id):
     client = sb()
     cfg = _dlar_cfg(client, org_id)
     if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
-        _dlar_set_status(client, org_id, 'error', 'No Boost portal credentials set in the admin area', mark_run=True)
+        _dlar_set_status(client, org_id, 'error', 'No Carrier portal credentials set in the admin area', mark_run=True)
         return
     _dlar_set_status(client, org_id, 'running', 'Sweep in progress…')
     try:
@@ -2682,7 +2682,7 @@ async def dlar_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = OR
     require_org(org_id)
     cfg = _dlar_cfg(sb(), org_id)
     if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
-        raise HTTPException(400, "Set the Boost portal credentials first.")
+        raise HTTPException(400, "Set the Carrier portal credentials first.")
     background_tasks.add_task(_do_dlar_sweep, org_id)
     return {"status": "started"}
 
@@ -4538,7 +4538,7 @@ async def get_targets_summary(period: str, today: str = "", authorization: str =
 ACTION_KPI_DEFS = [
     ('atu', 'ATU', 'kpi_atu_target', 55),
     ('protect', 'Protect', 'kpi_protect_target', 80),
-    ('boostapp', 'Boost App', 'kpi_boostapp_target', 65),
+    ('boostapp', 'Carrier App', 'kpi_boostapp_target', 65),
     ('familyplan', 'Family Plan', 'kpi_familyplan_target', 45),
     ('byod', 'BYOD', 'kpi_byod_target', 35),
     ('tmr3', 'TMR3', 'kpi_tmr3_target', 70),

@@ -7,7 +7,7 @@ const MODULES: { key: string; label: string }[] = [
   { key: 'commissions', label: 'Commissions' },
   { key: 'targets', label: 'Targets' },
   { key: 'asset', label: 'Asset' },
-  { key: 'vip', label: 'VIP' },
+  { key: 'vip', label: 'Distributors' },
   { key: 'accounts', label: 'Accounts' },
   { key: 'storeops', label: 'StoreOps' },
   { key: 'hr', label: 'HR (salary + comp)' },

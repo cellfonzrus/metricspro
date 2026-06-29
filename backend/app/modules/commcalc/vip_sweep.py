@@ -53,7 +53,7 @@ def login(session, user, pw):
     form = s.find("form", attrs={"action": re.compile(r"/login", re.I)}) or s.find("form")
     token_el = (form or s).find("input", attrs={"name": "__RequestVerificationToken"})
     if not token_el:
-        raise VipLoginError("VIP login page layout changed (no anti-forgery token)")
+        raise VipLoginError("Distributor login page layout changed (no anti-forgery token)")
     payload = {
         "Email": user,
         "Password": pw,
@@ -68,7 +68,7 @@ def login(session, user, pw):
     chk = session.get(f"{BASE}/invoice/history", allow_redirects=False, timeout=30)
     ok = chk.status_code == 200 and "/login" not in chk.headers.get("Location", "")
     if not ok:
-        raise VipLoginError("VIP login failed — check the credentials in the admin area "
+        raise VipLoginError("Distributor login failed — check the credentials in the admin area "
                             "(or the portal may have added 2FA).")
     return True
 
@@ -157,7 +157,7 @@ def run_chargeback_sweep(client, org_id, user, pw):
         smr = by_sfid.get(g("salesforceid"), {})
         pdate = g("pdate")
         orig, corr = _money(g("orig")), _money(g("corr"))
-        detail = "VIP incentive chargeback" + (f" (incentive {orig}→{corr})" if orig is not None and corr is not None else "")
+        detail = "Distributor incentive chargeback" + (f" (incentive {orig}→{corr})" if orig is not None and corr is not None else "")
         rows.append({
             "org_id": org_id, "source": "vip_file", "severity": "warning",
             "store_code": smr.get("store_code"), "store_address": smr.get("store_address"),
