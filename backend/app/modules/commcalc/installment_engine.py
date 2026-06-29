@@ -106,7 +106,9 @@ def compute_installments(client, org_id, pay_period, persist=False):
                 "totals": {"amount": 0.0, "paid": 0, "withheld": 0, "pending": 0, "reps": 0},
                 "note": "No payout schedules configured (or migration 057 not applied) — single-month payout unchanged."}
 
-    max_n = min(3, max((s.get("num_months") or 1) for s in scheds))
+    # User-configurable horizon (default schedules use up to 3, but 6/12+ is allowed). Cap at 12 as a
+    # safety bound on how many prior raw_mi periods we pull for the gate check.
+    max_n = min(12, max((s.get("num_months") or 1) for s in scheds))
     periods = [pay_period] + [_shift_period(pay_period, -k) for k in range(1, max_n)]
     periods = [p for p in periods if p]
 

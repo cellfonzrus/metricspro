@@ -217,7 +217,7 @@ export default function SettingsPage() {
   }, {} as Record<string, any[]>)
 
   const tabs = [
-    { key: 'comprates', label: '💰 Boost Comp Rates' },
+    { key: 'comprates', label: '💰 Carrier Comp Rates' },
     { key: 'topphones', label: '📱 Top Phones' },
     { key: 'rates', label: '⚙️ Pay Settings' },
     { key: 'kpi', label: '🎯 KPI Targets' },
@@ -262,7 +262,7 @@ export default function SettingsPage() {
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
             <p style={{ margin: 0, fontSize: 13, color: 'var(--text2)' }}>
-              Boost bounty rates used by the discrepancy engine. Changes take effect on next run.
+              Carrier bounty/comp rates used by the discrepancy engine. Changes take effect on next run.
             </p>
             <button className="btn btn-primary" onClick={() => setShowAddRate(v => !v)} style={{ fontSize: 13 }}>
               {showAddRate ? '✕ Cancel' : '+ Add Rate'}

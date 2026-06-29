@@ -98,7 +98,7 @@ export default function PayoutSchedulesPage() {
           </label>
           <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Months<br />
             <select style={{ ...sel, marginTop: 4 }} value={draft.num_months} onChange={e => setNum(parseInt(e.target.value))}>
-              <option value={1}>1</option><option value={2}>2</option><option value={3}>3</option>
+              {Array.from({ length: 12 }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}</option>)}
             </select>
           </label>
           <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>“Paid” signal (months 2–3)<br />
