@@ -3118,6 +3118,9 @@ def _apply_new_engines(client, org_id, period, comms):
             if cols["carrier_statement_comm"]:
                 newrow["carrier_statement_comm"] = stmt
             comms.append(newrow)
+        print(f"INFO new-engines applied org={org_id} period={period}: "
+              f"plan_reps={len(plan_by_rep)} statement_reps={len(stmt_by_rep)} installment_reps={len(inst_by_rep)} "
+              f"added_rows={len(known - matched)}")
         return comms
     except Exception as e:
         print(f"WARN new-engine wiring skipped (standard calc kept): {e}")
