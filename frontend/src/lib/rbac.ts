@@ -57,6 +57,13 @@ export type NavItem = { href: string; label: string; icon: string; module: strin
 export type NavGroup = { group: string; module: string; items: NavItem[] }
 
 // scopes (when present) further restricts an item to those scope tiers, e.g. settings = admin only.
+// ── NAV taxonomy (reorganized 2026-06-28) ──────────────────────────────────────────────
+// Grouping is purely an information-architecture concern: a group renders if ANY of its
+// items passes canSeeItem(), which keys on item.module — so regrouping/relabeling here is a
+// ZERO-RBAC-CHANGE operation as long as each item keeps its existing `module` + `scopes`.
+// group.module is a representative tag only (not a gate). The old single /commcalc menu was a
+// catch-all spanning Commissions / Finance / Assets / VIP / Targets / Integrations; it's split
+// into those real domains below. Pages keep their URLs (a deeper re-home is a separate phase).
 export const NAV: NavGroup[] = [
   { group: 'Reports', module: 'targets', items: [
     { href: '/reports', label: 'Report Center', icon: '📊', module: 'targets' },
@@ -64,10 +71,7 @@ export const NAV: NavGroup[] = [
   { group: 'Commissions', module: 'commissions', items: [
     { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions' },
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/upload', label: 'Upload Files', icon: '📁', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/upload/wizard', label: 'Upload Wizard', icon: '🧭', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/reports', label: 'All Reports', icon: '📋', module: 'commissions' },
-    { href: '/commcalc/gp', label: 'Gross Profit', icon: '💰', module: 'commissions' },
     { href: '/commcalc/kpi', label: 'KPI Metrics', icon: '🎯', module: 'commissions' },
     { href: '/commcalc/coaching', label: 'Rep Coaching', icon: '🎓', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-analyzer', label: 'Sales Analyzer', icon: '📉', module: 'commissions', scopes: ['all', 'market', 'store'] },
@@ -77,60 +81,59 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/accessory-flags', label: 'Accessory Flags', icon: '🔖', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️', module: 'commissions' },
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', icon: '🔁', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/settings', label: 'Commission Rates', icon: '⚙️', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/connectors', label: 'Connectors', icon: '🔌', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/onboarding', label: 'Onboarding Wizard', icon: '🚀', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/ftp-imports', label: 'FTP Auto-Import', icon: '🔁', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/expenses', label: 'Store Expenses', icon: '🏪', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/settings', label: 'Commission Rates', icon: '⚙️', module: 'commissions', scopes: ['all'] },
   ]},
-  { group: 'Mapping', module: 'commissions', items: [
-    { href: '/commcalc/mapping', label: 'All Mappings', icon: '🗂️', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/store-match', label: 'Store Matching', icon: '🏬', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/carrier-mapping', label: 'Carrier Mapping', icon: '🗺️', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/column-mapping', label: 'Column Mapping', icon: '🧩', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/implementation', label: 'Implementation Wizard', icon: '🧭', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/item-mapping', label: 'Item / Model Mapping', icon: '🧩', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/rep-aliases', label: 'Rep Aliases', icon: '🔗', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/asset/hotsheet-recon', label: 'Pricing Hotsheet', icon: '🏷️', module: 'commissions', scopes: ['all', 'market'] },
-  ]},
-  { group: 'Targets', module: 'targets', items: [
+  { group: 'Targets & Coaching', module: 'targets', items: [
     { href: '/commcalc/targets', label: 'Daily Targets', icon: '📈', module: 'targets', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/targets/action-plan', label: 'Action Plan', icon: '✅', module: 'targets', scopes: ['all', 'market', 'store'] },
+    { href: '/commcalc/targets/rep-map', label: 'Rep → Store Map', icon: '🗺️', module: 'targets', scopes: ['all', 'market'] },
     { href: '/commcalc/targets/settings', label: 'Target Settings', icon: '🎚️', module: 'targets', scopes: ['all'] },
     { href: '/commcalc/targets/my', label: 'My Targets', icon: '🙋', module: 'targets' },
     { href: '/employee', label: 'Employee Dashboard', icon: '🧑‍💼', module: 'targets' },
   ]},
-  { group: 'Asset', module: 'asset', items: [
-    { href: '/commcalc/asset', label: 'Asset Ledger', icon: '📦', module: 'asset' },
-  ]},
-  { group: 'VIP', module: 'vip', items: [
-    { href: '/commcalc/vip', label: 'VIP Invoices', icon: '🧾', module: 'vip' },
-  ]},
-  { group: 'Accounts', module: 'accounts', items: [
+  { group: 'Finance', module: 'accounts', items: [
     { href: '/accounts', label: 'Dashboard', icon: '💼', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/pl', label: 'P&L Statement', icon: '📈', module: 'accounts', scopes: ['all', 'market'] },
+    { href: '/commcalc/gp', label: 'Gross Profit', icon: '💰', module: 'commissions' },
     { href: '/accounts/balance-sheet', label: 'Balance Sheet', icon: '⚖️', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/inventory', label: 'Inventory Values', icon: '📦', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/recon', label: 'Reconciliation', icon: '🔎', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/journal', label: 'Journal', icon: '📒', module: 'accounts', scopes: ['all'] },
     { href: '/accounts/companies', label: 'Companies', icon: '🏢', module: 'accounts', scopes: ['all'] },
   ]},
-  { group: 'StoreOps', module: 'storeops', items: [
+  { group: 'Assets', module: 'asset', items: [
+    { href: '/commcalc/asset', label: 'Asset Ledger', icon: '📦', module: 'asset' },
+    { href: '/commcalc/asset/dashboard', label: 'Charges Dashboard', icon: '📊', module: 'asset', scopes: ['all', 'market'] },
+    { href: '/commcalc/asset/owed-weekly', label: 'Weekly Owed-to-VIP', icon: '📅', module: 'asset', scopes: ['all', 'market'] },
+    { href: '/commcalc/asset/aging', label: 'Inventory Aging', icon: '⏳', module: 'asset', scopes: ['all', 'market'] },
+    { href: '/commcalc/asset/on-inventory', label: 'On-Inventory by Store', icon: '🏬', module: 'asset', scopes: ['all', 'market'] },
+    { href: '/commcalc/asset/borrowed', label: 'Borrowed / Lending', icon: '🔁', module: 'asset', scopes: ['all', 'market'] },
+    { href: '/commcalc/asset/charges/rma', label: 'RMA', icon: '↩️', module: 'asset', scopes: ['all', 'market'] },
+    { href: '/commcalc/asset/inventory-recon', label: 'Inventory Recon', icon: '🔎', module: 'asset', scopes: ['all', 'market'] },
+    { href: '/commcalc/asset/hotsheet-recon', label: 'Pricing Hotsheet', icon: '🏷️', module: 'commissions', scopes: ['all', 'market'] },
+  ]},
+  { group: 'VIP', module: 'vip', items: [
+    { href: '/commcalc/vip', label: 'VIP Invoices', icon: '🧾', module: 'vip' },
+    { href: '/commcalc/vip/paygo', label: 'PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'] },
+    { href: '/commcalc/vip/sweep', label: 'VIP Sweep', icon: '🧹', module: 'vip', scopes: ['all'] },
+  ]},
+  { group: 'Workforce', module: 'storeops', items: [
     { href: '/storeops', label: 'Dashboard', icon: '🏠', module: 'storeops' },
     { href: '/storeops/schedule', label: 'Schedule', icon: '📅', module: 'storeops' },
-    { href: '/storeops/visits', label: 'Store Visits', icon: '📝', module: 'storeops', scopes: ['all', 'market'] },
-    { href: '/storeops/visits/settings', label: 'Visit Checklist', icon: '🧾', module: 'storeops', scopes: ['all'] },
-    { href: '/storeops/employees', label: 'Employees', icon: '👥', module: 'storeops', scopes: ['all', 'market'] },
-    { href: '/storeops/team', label: 'My Team', icon: '🫂', module: 'storeops', scopes: ['all', 'market', 'store'] },
     { href: '/storeops/timeoff', label: 'Time Off', icon: '🌴', module: 'storeops' },
     { href: '/storeops/swaps', label: 'Shift Swaps', icon: '🔄', module: 'storeops' },
     { href: '/storeops/timeclock', label: 'Time Clock', icon: '⏱️', module: 'storeops', scopes: ['all', 'market'] },
+    { href: '/storeops/employees', label: 'Employees', icon: '👥', module: 'storeops', scopes: ['all', 'market'] },
+    { href: '/storeops/team', label: 'My Team', icon: '🫂', module: 'storeops', scopes: ['all', 'market', 'store'] },
+    { href: '/storeops/visits', label: 'Store Visits', icon: '📝', module: 'storeops', scopes: ['all', 'market'] },
+    { href: '/storeops/visits/settings', label: 'Visit Checklist', icon: '🧾', module: 'storeops', scopes: ['all'] },
     { href: '/storeops/reports', label: 'Reports', icon: '📋', module: 'storeops', scopes: ['all', 'market'] },
-    { href: '/storeops/payroll', label: 'Payroll', icon: '💵', module: 'storeops', scopes: ['all', 'market'] },
-    { href: '/storeops/payroll-tax', label: 'Payroll (Tax)', icon: '🧾', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/admin', label: 'Admin', icon: '🛠️', module: 'storeops', scopes: ['all', 'market'] },
   ]},
-  { group: 'HR', module: 'hr', items: [
+  { group: 'Payroll & HR', module: 'storeops', items: [
+    { href: '/storeops/payroll', label: 'Payroll', icon: '💵', module: 'storeops', scopes: ['all', 'market'] },
+    { href: '/storeops/payroll-tax', label: 'Payroll (Tax)', icon: '🧾', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/hr', label: 'HR · Total Comp', icon: '🧑‍💼', module: 'hr', scopes: ['all', 'market'] },
   ]},
   { group: 'Daily Closing', module: 'closing', items: [
@@ -140,6 +143,25 @@ export const NAV: NavGroup[] = [
     { href: '/closing/recon', label: 'Reconciliation', icon: '🔎', module: 'closing', scopes: ['all', 'market'] },
     { href: '/closing/pickup', label: 'Cash Pickup', icon: '💵', module: 'closing', scopes: ['all', 'market'] },
     { href: '/closing/imports', label: 'Auto-Import', icon: '🔄', module: 'closing', scopes: ['all'] },
+  ]},
+  { group: 'Integrations & Imports', module: 'commissions', items: [
+    { href: '/commcalc/connectors', label: 'Connectors', icon: '🔌', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/onboarding', label: 'Onboarding Wizard', icon: '🚀', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/implementation', label: 'Implementation Wizard', icon: '🧭', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/upload', label: 'Upload Files', icon: '📁', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/upload/wizard', label: 'Upload Wizard', icon: '🧭', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/ftp-imports', label: 'FTP Auto-Import', icon: '🔁', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/email-imports', label: 'Email Imports', icon: '📨', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/epay/sweep', label: 'ePay Sweep', icon: '🧹', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/dlar/sweep', label: 'DLAR Sweep', icon: '🧹', module: 'commissions', scopes: ['all'] },
+  ]},
+  { group: 'Mapping', module: 'commissions', items: [
+    { href: '/commcalc/mapping', label: 'All Mappings', icon: '🗂️', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/store-match', label: 'Store Matching', icon: '🏬', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/carrier-mapping', label: 'Carrier Mapping', icon: '🗺️', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/column-mapping', label: 'Column Mapping', icon: '🧩', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/item-mapping', label: 'Item / Model Mapping', icon: '🧩', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/rep-aliases', label: 'Rep Aliases', icon: '🔗', module: 'commissions', scopes: ['all'] },
   ]},
   { group: 'Notify', module: 'notify', items: [
     { href: '/notify', label: 'Notify', icon: '📤', module: 'notify' },
@@ -151,7 +173,7 @@ export const NAV: NavGroup[] = [
     { href: '/helpdesk/dashboard', label: 'Dashboard', icon: '📊', module: 'helpdesk', scopes: ['all', 'market', 'store'] },
     { href: '/helpdesk/settings', label: 'Settings', icon: '⚙️', module: 'helpdesk', scopes: ['all'] },
   ]},
-  { group: 'Configurations', module: 'admin', items: [
+  { group: 'Configuration', module: 'admin', items: [
     { href: '/configurations', label: 'All Settings', icon: '⚙️', module: 'admin' },
     { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin' },
     { href: '/admin/roles', label: 'Roles & Access', icon: '🔐', module: 'admin' },
