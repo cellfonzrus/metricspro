@@ -232,6 +232,9 @@ function ColumnsStep({ reportKey, targetTable, carrierId, setMsg }: { reportKey:
   const [src, setSrc] = useState<Record<string, string>>({})
   const [headers, setHeaders] = useState<string[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
+  const importRef = useRef<HTMLInputElement>(null)
+  const [period, setPeriod] = useState('')
+  const [importing, setImporting] = useState(false)
 
   const load = useCallback(() => {
     if (!reportKey) return
@@ -253,6 +256,22 @@ function ColumnsStep({ reportKey, targetTable, carrierId, setMsg }: { reportKey:
     for (const f of fields) { const sh = src[f.target_field]?.trim(); if (!sh) continue; try { await api('/api/v1/commcalc/column-mapping', { method: 'POST', body: JSON.stringify({ report_key: reportKey, carrier_id: carrierId || undefined, target_field: f.target_field, source_header: sh, transform: f.transform }) }); n++ } catch { /* keep going */ } }
     setMsg(`✅ Saved ${n} mapping(s).`)
   }
+  // Import the FULL file (not just a sample) into the system using the saved mappings. This is the step
+  // that was missing in onboarding — you could map but not actually upload the commission file here.
+  async function importFile(file: File) {
+    if (!period.trim()) { setMsg('⚠️ Enter the period (e.g. “June 2026”) before importing the full file.'); return }
+    setImporting(true)
+    const fd = new FormData()
+    fd.append('report_key', reportKey)
+    if (carrierId) fd.append('carrier_id', carrierId)
+    if (targetTable) fd.append('target_table', targetTable)
+    fd.append('period', period.trim())
+    fd.append('file', file)
+    try {
+      const r: any = await api('/api/v1/commcalc/upload-mapped', { method: 'POST', body: fd })
+      setMsg(`✅ Imported ${r?.saved ?? 0} row(s) for ${period.trim()} via ${r?.rules_used ?? 0} mapping(s). The reports now compute from this data.`)
+    } catch (e: any) { setMsg('❌ Import failed: ' + (e?.message || e)) } finally { setImporting(false) }
+  }
 
   if (!reportKey) return <div><h3 style={{ marginTop: 0 }}>4. Upload &amp; map columns</h3><p style={{ color: 'var(--text3)' }}>Pick a report in step 3 first.</p></div>
   return (
@@ -263,8 +282,18 @@ function ColumnsStep({ reportKey, targetTable, carrierId, setMsg }: { reportKey:
         <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) detect(f); e.target.value = '' }} />
         <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => fileRef.current?.click()}>📄 Upload sample to auto-detect</button>
         <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={saveAll}>Save mappings</button>
+        <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--border)', margin: '0 2px' }} />
+        <input style={{ ...sel, width: 130 }} placeholder="Period e.g. June 2026" value={period} onChange={e => setPeriod(e.target.value)} />
+        <input ref={importRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) importFile(f); e.target.value = '' }} />
+        <button className="btn" style={{ fontSize: 13, background: '#16a34a', color: '#fff' }} disabled={importing} onClick={() => importRef.current?.click()}>
+          {importing ? '⏳ Importing…' : '⬆️ Import full file → load data'}</button>
         <Link href="/commcalc/column-mapping" style={{ fontSize: 13, alignSelf: 'center' }}>Fine-tune →</Link>
       </div>
+      <p style={{ fontSize: 11, color: 'var(--text3)', margin: '0 0 8px' }}>
+        Map the columns your file has (★ = used by the standard reports, but <b>not required to import</b> — unmapped
+        fields are simply skipped), <b>Save mappings</b>, then set a <b>period</b> and <b>Import the full file</b>.
+        A different carrier&apos;s file doesn&apos;t need every ★ — import what you have.
+      </p>
       {fields.length === 0 && <p style={{ fontSize: 13, color: 'var(--text3)' }}>This is a new report key (no default field registry). Map its columns on the full Column Mapping page.</p>}
       {fields.length > 0 && (
         <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: 640 }}>
@@ -272,7 +301,7 @@ function ColumnsStep({ reportKey, targetTable, carrierId, setMsg }: { reportKey:
           <tbody>
             {fields.map(f => (
               <tr key={f.target_field}>
-                <td style={cell}>{f.label}{f.required && <span style={{ color: '#b42318' }}> *</span>}</td>
+                <td style={cell}>{f.label}{f.required && <span style={{ color: '#b45309' }} title="Used by the standard reports — recommended, but not required to import"> ★</span>}</td>
                 <td style={cell}><input list="ob-headers" style={{ ...sel, width: '100%' }} placeholder="(unmapped)" value={src[f.target_field] || ''} onChange={e => setSrc(p => ({ ...p, [f.target_field]: e.target.value }))} /></td>
               </tr>
             ))}
