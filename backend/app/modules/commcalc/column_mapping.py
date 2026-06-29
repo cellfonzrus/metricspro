@@ -116,7 +116,41 @@ TARGET_FIELDS = {
         ("email", "Email", "text", False, "Email", []),
         ("customer_no", "Customer #", "mdn", False, "Customer #", ["Customer No"]),
     ],
+    # GENERIC carrier commission STATEMENT (Total Wireless / VidaPay, Cricket, …). Defaults match Total's
+    # "MA - Commission Details"; any carrier maps the columns it has — unmapped amount fields stay 0.
+    "carrier_commission": [
+        ("rep_name", "Rep name", "text", True, "User Name", ["Rep Name", "Sales Rep", "User"]),
+        ("rep_user_id", "Rep user id", "text", False, "User Id", ["UserId"]),
+        ("store", "Store / merchant account", "text", False, "MerchantAccountId", ["Merchant Account Id", "BAN", "Account ID"]),
+        ("account_id", "Account id", "text", False, "BAN", ["Account ID", "AccountId"]),
+        ("carrier_name", "Carrier name", "text", False, "Carrier Name", []),
+        ("trans_date", "Date", "date10", False, "Date", ["Transaction Date", "Date of Transaction"]),
+        ("activation_type", "Activation type", "text", False, "Activation Type", ["Activation Type 2", "Order Type"]),
+        ("sub_type", "Sub type", "text", False, "Sub Type", []),
+        ("sku", "SKU", "text", False, "SKU", []),
+        ("imei", "IMEI", "mdn", False, "IMEI", []),
+        ("mdn", "MDN", "mdn", False, "MDN", ["Phone Number"]),
+        ("order_id", "Order id", "text", False, "Activation Order", ["Order Number", "POS Invoice"]),
+        ("device_margin", "Device margin", "number", False, "Device Margin", []),
+        ("consumer_margin", "Consumer margin", "number", False, "Consumer Margin", []),
+        ("rebate", "Rebate", "number", False, "Rebate", []),
+        ("mrc_net_discount", "MRC net discount", "number", False, "MRC Net Discount", []),
+        ("fees_margin", "Fees margin", "number", False, "Fees Margin", ["Fees"]),
+        ("spiff_m1", "1st month spiff", "number", False, "1st Month Spiff", []),
+        ("spiff_m2", "2nd month spiff", "number", False, "2nd Month Spiff", []),
+        ("spiff_m3", "3rd month spiff", "number", False, "3rd Month Spiff", []),
+        ("spiff_m4", "4th month spiff", "number", False, "4th Month Spiff", []),
+        ("spiff_m5", "5th month spiff", "number", False, "5th Month Spiff", []),
+        ("spiff_m6", "6th month spiff", "number", False, "6th Month Spiff", []),
+        ("residual", "Residual", "number", False, "Residual", ["Residual Amount"]),
+        ("other_amount", "Other amount", "number", False, "Other", ["Wallet Funding Amount"]),
+    ],
 }
+
+# Amount fields summed into carrier_commission.total_commission (the rep's statement commission).
+CARRIER_COMMISSION_AMOUNTS = ("device_margin", "consumer_margin", "rebate", "mrc_net_discount",
+                              "fees_margin", "spiff_m1", "spiff_m2", "spiff_m3", "spiff_m4",
+                              "spiff_m5", "spiff_m6", "residual", "other_amount")
 
 # Target table for the seeded report keys. New report keys resolve their target_table from
 # report_definitions (the endpoint passes it in).
@@ -125,6 +159,7 @@ TABLE_MAP = {
     "mi_report": "raw_mi",
     "payment_detail": "raw_payment_detail",
     "sales": "raw_sales",
+    "carrier_commission": "carrier_commission",
 }
 
 

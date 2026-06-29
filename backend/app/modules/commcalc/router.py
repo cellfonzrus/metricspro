@@ -1311,6 +1311,12 @@ async def upload_mapped(
         base.update({"period": period, "period_month": pm["month"], "period_year": pm["year"]})
     mapped = column_mapping.map_records(df.to_dict("records"), rules, base)
 
+    # carrier_commission: roll the mapped component amounts into total_commission (the rep's statement
+    # commission) so the calc can sum per rep. Any carrier maps the columns it has; the rest stay 0.
+    if report_key == 'carrier_commission':
+        for m in mapped:
+            m['total_commission'] = round(sum(safe_float(m.get(a)) for a in column_mapping.CARRIER_COMMISSION_AMOUNTS), 2)
+
     client = sb()
     # GUARD: only clear the period once we actually have rows — an empty/misaligned file never wipes.
     if mapped and period:
@@ -3034,13 +3040,31 @@ def _apply_new_engines(client, org_id, period, comms):
                     plan_by_rep[rn] = {"amount": safe_float(r.get("total_payout")), "plan_name": r.get("plan_name")}
         except Exception:
             plan_by_rep = {}
+        # carrier commission STATEMENT (Total/VidaPay etc.): sum total_commission per rep for the period.
+        stmt_by_rep = {}
+        try:
+            srows, _s, _pg = [], 0, 1000
+            while True:
+                chunk = (client.schema('commcalc').table('carrier_commission')
+                         .select('rep_name,total_commission').eq('org_id', org_id)
+                         .in_('period', _pvariants(period)).range(_s, _s + _pg - 1).execute().data) or []
+                srows.extend(chunk)
+                if len(chunk) < _pg:
+                    break
+                _s += _pg
+            for r in srows:
+                rn = str(r.get('rep_name') or '').strip().upper()
+                if rn:
+                    stmt_by_rep[rn] = round(stmt_by_rep.get(rn, 0.0) + safe_float(r.get('total_commission')), 2)
+        except Exception:
+            stmt_by_rep = {}
 
         # BOOST PATH: nothing configured → comms returned exactly as-is.
-        if not inst_by_rep and not plan_by_rep:
+        if not inst_by_rep and not plan_by_rep and not stmt_by_rep:
             return comms
 
         cols = {}
-        for c in ("residual_installment_comm", "plan_comm", "plan_name"):
+        for c in ("residual_installment_comm", "plan_comm", "plan_name", "carrier_statement_comm"):
             try:
                 client.schema('commcalc').table('rep_commissions').select(c).limit(1).execute()
                 cols[c] = True
@@ -3051,39 +3075,48 @@ def _apply_new_engines(client, org_id, period, comms):
             return {str(row.get("storeops_name") or "").strip().upper(),
                     str(row.get("epay_salesperson") or "").strip().upper()} - {""}
 
-        covered_seen = set()
+        known = set(plan_by_rep) | set(stmt_by_rep)
+        matched = set()
         for row in comms:
             ks = _keys(row)
             inst = next((inst_by_rep[k] for k in ks if k in inst_by_rep), 0.0)
+            stmt = next((stmt_by_rep[k] for k in ks if k in stmt_by_rep), 0.0)
             pv = next((plan_by_rep[k] for k in ks if k in plan_by_rep), None)
+            matched |= (ks & known)
             if cols["residual_installment_comm"]:
                 row["residual_installment_comm"] = inst
+            if cols["carrier_statement_comm"]:
+                row["carrier_statement_comm"] = stmt
             if pv is not None:
-                covered_seen |= (ks & set(plan_by_rep))
                 if cols["plan_comm"]:
                     row["plan_comm"] = pv["amount"]
                 if cols["plan_name"]:
                     row["plan_name"] = pv.get("plan_name")
-                row["total_payout"] = round(safe_float(pv["amount"]) + inst, 2)   # plan replaces spiffs
+                base = safe_float(pv["amount"])                       # a plan REPLACES the spiff subtotal
             else:
-                row["total_payout"] = round(safe_float(row.get("total_payout")) + inst, 2)
+                base = safe_float(row.get("total_payout"))            # keep the standard calc
+            row["total_payout"] = round(base + inst + stmt, 2)         # installments + statement are additive
 
-        # plan-covered reps the standard calc produced no row for → add them
+        # reps the standard calc produced no row for, but a plan or statement pays → add them
         pm = parse_period(period)
-        for rn, pv in plan_by_rep.items():
-            if rn in covered_seen:
-                continue
+        for rn in (known - matched):
+            pv = plan_by_rep.get(rn)
+            inst = inst_by_rep.get(rn, 0.0)
+            stmt = stmt_by_rep.get(rn, 0.0)
+            base = safe_float(pv["amount"]) if pv else 0.0
             newrow = {"org_id": org_id, "period": period,
                       "period_month": pm.get("month"), "period_year": pm.get("year"),
                       "storeops_name": rn.title(), "epay_salesperson": rn,
-                      "subtotal": pv["amount"], "tier": 1,
-                      "total_payout": round(safe_float(pv["amount"]) + inst_by_rep.get(rn, 0.0), 2)}
-            if cols["plan_comm"]:
+                      "subtotal": base, "tier": 1,
+                      "total_payout": round(base + inst + stmt, 2)}
+            if pv and cols["plan_comm"]:
                 newrow["plan_comm"] = pv["amount"]
-            if cols["plan_name"]:
+            if pv and cols["plan_name"]:
                 newrow["plan_name"] = pv.get("plan_name")
             if cols["residual_installment_comm"]:
-                newrow["residual_installment_comm"] = inst_by_rep.get(rn, 0.0)
+                newrow["residual_installment_comm"] = inst
+            if cols["carrier_statement_comm"]:
+                newrow["carrier_statement_comm"] = stmt
             comms.append(newrow)
         return comms
     except Exception as e:
