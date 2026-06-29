@@ -79,7 +79,7 @@ export default function ImplementationWizard() {
       {/* source reports to map */}
       <div className="card" style={{ padding: 16 }}>
         <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>🗂️ Map your source reports</div>
-        <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 0 }}>Each report below feeds the outputs above. Expand one, upload a sample, confirm the column matches, Save.</p>
+        <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 0 }}>Each report below feeds the outputs above. Expand one, upload a sample to auto-detect + Save the mappings, then set a period and Import the full file — the outputs above compute from it.</p>
         {reportKeys.length === 0 && <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div>}
         {reportKeys.map(rk => (
           <ReportMapper key={rk} reportKey={rk} info={reports[rk]} carrierId={carrierId}
@@ -101,6 +101,9 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
   const [editing, setEditing] = useState(false)
   const [nameVal, setNameVal] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  const importRef = useRef<HTMLInputElement>(null)
+  const [importing, setImporting] = useState(false)
+  const [period, setPeriod] = useState('')
   const displayName = info?.label || REPORT_LABELS[reportKey] || reportKey
 
   // Rename / label this report. PATCH the existing definition (safe — touches only the label) or
@@ -147,6 +150,22 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
     }
     setBusy(false); setMsg(`✅ ${reportKey}: saved ${n} mapping(s).`); onSaved()
   }
+  // Load the FULL file into the system using the saved mappings (the step that was missing — the
+  // wizard only ever sampled + saved rules, so mapped files never actually ingested). Feeds GP/comm.
+  async function importFile(file: File) {
+    if (!period.trim()) { setMsg('⚠️ Enter the period (e.g. “June 2026”) for this file before importing.'); return }
+    setImporting(true)
+    const fd = new FormData()
+    fd.append('report_key', reportKey)
+    if (carrierId) fd.append('carrier_id', carrierId)
+    fd.append('period', period.trim())
+    fd.append('file', file)
+    try {
+      const r: any = await apiUpload('/api/v1/commcalc/upload-mapped', fd)
+      setMsg(`✅ ${reportKey}: imported ${r?.saved ?? 0} row(s) for ${period.trim()} via ${r?.rules_used ?? 0} mapping(s). The reports above now compute from this data.`)
+      onSaved()
+    } catch (e: any) { setMsg('❌ Import failed: ' + (e?.message || e)) } finally { setImporting(false) }
+  }
 
   const pct = info?.required ? Math.round(100 * info.required_mapped / info.required) : 0
   return (
@@ -183,7 +202,19 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
             <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) detect(f); e.target.value = '' }} />
             <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={busy} onClick={() => fileRef.current?.click()}>📄 Upload sample to auto-detect</button>
             <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={busy} onClick={saveAll}>Save mappings</button>
+            <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--border)', margin: '0 2px' }} />
+            <input style={{ ...sel, width: 130 }} placeholder="Period e.g. June 2026" value={period} onChange={e => setPeriod(e.target.value)} />
+            <input ref={importRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) importFile(f); e.target.value = '' }} />
+            <button className="btn" style={{ fontSize: 13, background: '#16a34a', color: '#fff' }} disabled={importing || busy}
+              onClick={() => importRef.current?.click()}
+              title="Load the FULL file into the system using the saved mappings — the reports above then compute from it">
+              {importing ? '⏳ Importing…' : '⬆️ Import file → load data'}
+            </button>
           </div>
+          <p style={{ fontSize: 11, color: 'var(--text3)', margin: '0 0 8px' }}>
+            Two steps: (1) upload a sample → confirm the columns → <b>Save mappings</b>; then (2) set the period and
+            <b> Import file → load data</b> to load the full file. {info?.ready ? '' : 'Map the required (*) fields first.'}
+          </p>
           {fields.length === 0
             ? <p style={{ fontSize: 13, color: 'var(--text3)' }}>No default field registry for this report — map it on the full Column Mapping page.</p>
             : <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: 620 }}>
