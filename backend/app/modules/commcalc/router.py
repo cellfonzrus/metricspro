@@ -1356,6 +1356,15 @@ async def upload_mapped(
 # on carrier_commission via the RPC commcalc.add_commission_column (mig 067). All ADDITIVE + BOOST-SAFE:
 # only carrier_commission + the catalog table are touched; the live Boost calc is never involved.
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
+def _read_upload_df(contents: bytes, filename: str):
+    """Read an uploaded sheet into a string DataFrame, honoring .csv/.txt vs Excel by extension
+    (the wizard advertises CSV too — pd.read_excel alone throws on a CSV)."""
+    fname = (filename or "").lower()
+    if fname.endswith((".csv", ".txt")):
+        return pd.read_csv(io.BytesIO(contents), dtype=str).fillna("")
+    return pd.read_excel(io.BytesIO(contents), dtype=str).fillna("")
+
+
 @router.get("/commission-fields")
 def list_commission_fields(report_key: str = "carrier_commission", org_id: str = ORG_ID):
     """The category catalog for a report_key: merged (defaults + tenant catalog) for the wizard dropdown,
@@ -1409,9 +1418,9 @@ async def commission_import_analyze(file: UploadFile = File(...), report_key: st
     require_org(org_id)
     contents = await file.read()
     try:
-        df = pd.read_excel(io.BytesIO(contents), dtype=str).fillna("")
+        df = _read_upload_df(contents, getattr(file, "filename", ""))
     except Exception as e:
-        raise HTTPException(400, f"Could not read Excel file: {e}")
+        raise HTTPException(400, f"Could not read file: {e}")
     headers = [str(h).strip() for h in df.columns if str(h).strip()]
     samples = {}
     for h in headers:
@@ -1497,9 +1506,9 @@ async def commission_import_commit(
     # 3) ingest (mirrors /upload-mapped guards).
     contents = await file.read()
     try:
-        df = pd.read_excel(io.BytesIO(contents), dtype=str).fillna("")
+        df = _read_upload_df(contents, getattr(file, "filename", ""))
     except Exception as e:
-        raise HTTPException(400, f"Could not read Excel file: {e}")
+        raise HTTPException(400, f"Could not read file: {e}")
     pm = parse_period(period) if period else {"month": 0, "year": 0}
     base = {"org_id": org_id}
     if period:
