@@ -32,8 +32,14 @@ def _connect(cfg):
     if not host:
         raise ValueError("IMAP host not configured")
     port = int(cfg.get("imap_port") or (993 if cfg.get("use_ssl", True) else 143))
-    user = cfg.get("username") or ""
+    user = (cfg.get("username") or "").strip()
     pw = cfg.get("password") or ""
+    # Gmail / Yahoo / Outlook / iCloud App Passwords are SHOWN as 4 groups of 4 ("abcd efgh ijkl mnop"),
+    # but IMAP wants the 16 characters with NO spaces — pasting them with the display spaces is the #1
+    # cause of "[AUTHENTICATIONFAILED] Invalid credentials". Strip the spaces when it matches that shape
+    # (16 alphanumerics once spaces are removed); otherwise just trim the ends so a normal password is safe.
+    _nospace = pw.replace(" ", "")
+    pw = _nospace if (" " in pw and len(_nospace) == 16 and _nospace.isalnum()) else pw.strip()
     if cfg.get("use_ssl", True):
         M = imaplib.IMAP4_SSL(host, port)
     else:

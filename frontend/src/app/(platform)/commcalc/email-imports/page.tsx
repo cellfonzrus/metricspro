@@ -13,7 +13,7 @@ const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, display: 'bloc
 // One-click IMAP presets so a user can add a Gmail/Yahoo/Outlook/etc. mailbox without knowing servers.
 const PROVIDERS: Record<string, { label: string; imap_host: string; imap_port: number; use_ssl: boolean; hint?: string }> = {
   custom:  { label: 'Custom / other (enter manually)', imap_host: '', imap_port: 993, use_ssl: true },
-  gmail:   { label: 'Gmail / Google Workspace', imap_host: 'imap.gmail.com', imap_port: 993, use_ssl: true, hint: 'Gmail needs an App Password (Google Account → Security → 2-Step Verification → App passwords) — not your normal password. Also enable IMAP in Gmail settings.' },
+  gmail:   { label: 'Gmail / Google Workspace', imap_host: 'imap.gmail.com', imap_port: 993, use_ssl: true, hint: 'Gmail needs an App Password (Google Account → Security → 2-Step Verification → App passwords) — not your normal password. Paste the 16-character code (the displayed spaces are fine, they’re stripped automatically). Username = the full @gmail address.' },
   outlook: { label: 'Outlook / Hotmail / Live / MSN', imap_host: 'outlook.office365.com', imap_port: 993, use_ssl: true, hint: 'Microsoft accounts with 2FA need an App Password (account.microsoft.com → Security → Advanced security options).' },
   yahoo:   { label: 'Yahoo Mail', imap_host: 'imap.mail.yahoo.com', imap_port: 993, use_ssl: true, hint: 'Yahoo requires an App Password (Account Info → Account Security → Generate app password).' },
   aol:     { label: 'AOL Mail', imap_host: 'imap.aol.com', imap_port: 993, use_ssl: true, hint: 'AOL requires an App Password (Account Security → Generate app password).' },
