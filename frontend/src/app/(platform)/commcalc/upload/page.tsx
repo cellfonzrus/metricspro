@@ -13,8 +13,9 @@ const FILE_TYPES = [
   { id: 'catalog',        label: 'Product Catalog',       icon: '📱', required: false, desc: 'Device catalog with cost prices' },
   { id: 'master_cats',    label: 'Payment Categories',    icon: '🗂️', required: false, desc: 'Payment type → category mapping' },
   { id: 'comp_report',    label: 'Comprehensive Comp Report', icon: '🏦', required: false, desc: 'Carrier store-level rebates & MDF' },
+  { id: 'inventory_aging', label: 'Inventory Aging (POS)',  icon: '📦', required: false, desc: 'b2bsoft / any POS inventory aging — per-store value snapshot' },
 ]
-const PERIODLESS = new Set(['catalog', 'master_cats'])
+const PERIODLESS = new Set(['catalog', 'master_cats', 'inventory_aging'])
 const TYPE_META = Object.fromEntries(FILE_TYPES.map(t => [t.id, t]))
 
 // Auto-import sources + the period granularities the user asked for, per source.

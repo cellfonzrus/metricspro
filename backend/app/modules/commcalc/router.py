@@ -123,7 +123,7 @@ async def upload_file(
     can't be mislabeled into the wrong month — the bug that wiped a month's residual trend."""
     require_org(org_id)
     
-    SUPPORTED = ["sales","daily_sales","payment_detail","mi_report","dlar_rep","dlar_store","catalog","master_cats","comp_report"]
+    SUPPORTED = ["sales","daily_sales","payment_detail","mi_report","dlar_rep","dlar_store","catalog","master_cats","comp_report","inventory_aging"]
     if file_type not in SUPPORTED:
         raise HTTPException(400, f"Unknown file type: {file_type}. Supported: {SUPPORTED}")
     
@@ -170,12 +170,37 @@ async def upload_file(
         )
 
     rows = df.to_dict('records')
-    
+
     pm = parse_period(period) if period else {'month': 0, 'year': 0}
     has_period = file_type not in ['catalog', 'master_cats']
-    
+
     client = sb()
-    
+
+    # Inventory Aging (b2bsoft / any POS): a per-store inventory-value snapshot → commcalc.inventory_value
+    # (upsert per store; manual overrides preserved). This is NOT a period table — handle it here and
+    # return before the period/TABLE_MAP flow. Auto-importable via the email/FTP sweep like the other
+    # reports (the sweep routes a matching attachment to upload_file with this file_type).
+    if file_type == 'inventory_aging':
+        from app.modules.commcalc import b2b_sweep
+        store_values = b2b_sweep.normalize_inventory(rows)
+        as_of = datetime.now(timezone.utc).date().isoformat()
+        for dk in ('As Of', 'AsOf', 'as_of', 'AsOfDate', 'Snapshot Date', 'Date'):
+            v = (rows[0].get(dk) if rows else None)
+            if v:
+                as_of = str(v)[:10]
+                break
+        saved = b2b_sweep.write_inventory_values(client, org_id, store_values, as_of)
+        try:
+            client.schema('commcalc').table('upload_log').insert(
+                {'org_id': org_id, 'file_type': 'inventory_aging', 'period': as_of,
+                 'filename': getattr(file, 'filename', None), 'rows_saved': saved}).execute()
+        except Exception:
+            pass
+        return {'success': True, 'file_type': 'inventory_aging', 'stores': saved,
+                'as_of': as_of, 'rows_read': len(rows),
+                'note': (None if saved else "No per-store inventory value found — check the file has a store "
+                         "column + a value/cost column (or map it on Column Mapping).")}
+
     # Determine target table
     TABLE_MAP = {
         "sales": "raw_sales",
