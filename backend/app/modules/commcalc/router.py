@@ -1307,9 +1307,9 @@ async def upload_mapped(
 
     contents = await file.read()
     try:
-        df = pd.read_excel(io.BytesIO(contents), dtype=str).fillna("")
+        df = _read_upload_df(contents, getattr(file, "filename", ""))
     except Exception as e:
-        raise HTTPException(400, f"Could not read Excel file: {e}")
+        raise HTTPException(400, f"Could not read file: {e}")
 
     pm = parse_period(period) if period else {"month": 0, "year": 0}
     base = {"org_id": org_id}
@@ -1878,21 +1878,58 @@ def update_report_def(rid: str, body: dict, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+# ── Connector sweep registry (B-phase2 de-hardcode) ────────────────────────────────────────────
+# Maps a connector's sweep_kind → its puller so NEITHER dispatch site below hard-codes the vendor
+# list. Built-in pullers resolve via this module's globals (defined later in the file, so order
+# doesn't matter — they're looked up at call time); the closing sweep is wired lazily to dodge a
+# circular import; and any new POS / payment-processor can self-register from its own module via
+# register_sweep(kind, fn) with NO edit here. Behavior-identical to the old inline dicts for the
+# existing kinds (vip/dlar/epay/b2b/google_closing). SaaS goal: adding a provider is data + a
+# puller, never dispatcher surgery.
+_SWEEP_BUILTINS = {'vip': '_do_vip_sweep', 'dlar': '_do_dlar_sweep',
+                   'epay': '_do_epay_sweep', 'b2b': '_do_b2b_sweep'}
+_SWEEP_EXTERNAL: dict = {}  # populated by register_sweep() from other modules / new providers
+
+
+def register_sweep(kind: str, fn):
+    """Register a connector puller under its sweep_kind so it dispatches without editing router.py.
+    Idempotent (last registration wins). Returns fn so it can double as a decorator."""
+    k = (kind or '').strip()
+    if k and callable(fn):
+        _SWEEP_EXTERNAL[k] = fn
+    return fn
+
+
+def _sweep_registry() -> dict:
+    """The full sweep_kind → puller table. Resolves built-ins from module globals (works regardless
+    of definition order), lazily wires the closing sweep, then overlays externally-registered
+    providers. Cheap to rebuild per call (a few dict lookups)."""
+    reg = {}
+    g = globals()
+    for kind, fname in _SWEEP_BUILTINS.items():
+        fn = g.get(fname)
+        if callable(fn):
+            reg[kind] = fn
+    try:
+        from app.modules.closing.router import _do_closing_sweep
+        reg['google_closing'] = _do_closing_sweep
+    except Exception:
+        pass
+    reg.update(_SWEEP_EXTERNAL)
+    return reg
+
+
 @router.post("/connectors/{cid}/run-now")
 def connector_run_now(cid: str, background_tasks: BackgroundTasks, org_id: str = ORG_ID):
-    """Generic run-now: dispatch to the existing sweep by sweep_kind."""
+    """Generic run-now: dispatch to the registered sweep by sweep_kind."""
     require_org(org_id)
     rows = sb().schema('commcalc').table('connector_instances').select('*').eq('org_id', org_id).eq('id', cid).execute().data or []
     if not rows:
         raise HTTPException(404, "connector not found")
     kind = (rows[0].get('sweep_kind') or '').strip()
-    dispatch = {'vip': _do_vip_sweep, 'dlar': _do_dlar_sweep, 'epay': _do_epay_sweep, 'b2b': _do_b2b_sweep}
+    dispatch = _sweep_registry()
     if kind in dispatch:
         background_tasks.add_task(dispatch[kind], org_id)
-        return {"status": "started", "kind": kind}
-    if kind == 'google_closing':
-        from app.modules.closing.router import _do_closing_sweep
-        background_tasks.add_task(_do_closing_sweep, org_id)
         return {"status": "started", "kind": kind}
     raise HTTPException(400, f"'{rows[0].get('vendor_name')}' is manual-only — upload it on the Upload Wizard.")
 
@@ -1947,9 +1984,7 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
-    from app.modules.closing.router import _do_closing_sweep
-    dispatch = {'vip': _do_vip_sweep, 'dlar': _do_dlar_sweep, 'epay': _do_epay_sweep,
-                'b2b': _do_b2b_sweep, 'google_closing': _do_closing_sweep}
+    dispatch = _sweep_registry()
     conns = (client.schema('commcalc').table('connector_instances').select('*')
              .eq('enabled', True).execute().data) or []
     triggered, checked = [], 0
