@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import Link from 'next/link'
+import { api } from '@/lib/client'
 
 // Carrier Commission File → Table. A carrier's commission/comp statement (the "comp_report") arrives in
 // different shapes per carrier. Upload an Excel/CSV here to see it as a clean TABLE (readable by the user)
@@ -17,13 +18,17 @@ export default function CarrierCommFilePage() {
   const [msg, setMsg] = useState('')
 
   async function onFile(file: File) {
-    setMsg(''); setSheets([]); setFileName(file.name)
-    if (/\.pdf$/i.test(file.name)) {
-      setMsg('📄 PDF detected — PDF table extraction needs server-side support (a follow-up). For now, upload an Excel/CSV export of the statement, or paste the table into a sheet.')
-      return
-    }
-    setBusy(true)
+    setMsg(''); setSheets([]); setFileName(file.name); setBusy(true)
     try {
+      if (/\.pdf$/i.test(file.name)) {
+        // PDF tables are extracted server-side (pdfplumber).
+        const fd = new FormData(); fd.append('file', file)
+        const r: any = await api('/api/v1/commcalc/carrier-comm-file/extract', { method: 'POST', body: fd })
+        const out = (r?.sheets || []).filter((s: any) => s.rows?.length)
+        setSheets(out); setActive(0)
+        setMsg(out.length ? `✅ Extracted ${out.length} table(s) from the PDF.` : (r?.note || 'No tables found in the PDF.'))
+        return
+      }
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer(), { cellDates: true })
       const out = wb.SheetNames.map(name => ({

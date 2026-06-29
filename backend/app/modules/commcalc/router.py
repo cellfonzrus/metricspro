@@ -1249,6 +1249,39 @@ async def upload_mapped(
             "rules_used": len(rules), "mapped": len(mapped)}
 
 
+@router.post("/carrier-comm-file/extract")
+async def carrier_comm_file_extract(file: UploadFile = File(...), org_id: str = ORG_ID):
+    """Extract a carrier commission/comp file into tabular rows for preview. PDF → pdfplumber table
+    extraction (per page); Excel/CSV → pandas. Returns {sheets:[{name, rows:[[...]]}], note?}."""
+    contents = await file.read()
+    name = (getattr(file, "filename", "") or "").lower()
+    try:
+        if name.endswith(".pdf"):
+            import pdfplumber
+            sheets = []
+            with pdfplumber.open(io.BytesIO(contents)) as pdf:
+                for pi, page in enumerate(pdf.pages):
+                    tables = page.extract_tables() or []
+                    for ti, tbl in enumerate(tables):
+                        rows = [[("" if c is None else str(c).strip()) for c in r]
+                                for r in tbl if any(c not in (None, "") for c in r)]
+                        if rows:
+                            sheets.append({"name": f"Page {pi + 1}" + (f" · table {ti + 1}" if len(tables) > 1 else ""),
+                                           "rows": rows})
+            if not sheets:
+                return {"sheets": [], "note": "No ruled tables detected — the PDF may be image-based or unruled. "
+                                               "Export the statement to Excel/CSV and upload that instead."}
+            return {"sheets": sheets}
+        if name.endswith(".csv"):
+            df = pd.read_csv(io.BytesIO(contents), header=None, dtype=str).fillna("")
+            return {"sheets": [{"name": "CSV", "rows": df.astype(str).values.tolist()}]}
+        xls = pd.read_excel(io.BytesIO(contents), sheet_name=None, header=None, dtype=str)
+        sheets = [{"name": str(n), "rows": d.fillna("").astype(str).values.tolist()} for n, d in xls.items() if len(d)]
+        return {"sheets": sheets}
+    except Exception as e:
+        raise HTTPException(400, f"Could not read the file: {e}")
+
+
 @router.get("/carrier-category-map")
 def list_category_map(carrier_id: str = "", org_id: str = ORG_ID):
     require_org(org_id)
