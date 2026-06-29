@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
-import { homeFor } from '@/lib/rbac'
+import { safeHomeFor } from '@/lib/rbac'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -17,7 +17,7 @@ export default function LoginPage() {
   useEffect(() => {
     if (loading || !session || !provisioned || !active) return
     if (user?.must_reset_password) router.replace('/account/password')
-    else router.replace(homeFor(permissions))
+    else router.replace(safeHomeFor(permissions))
   }, [loading, session, provisioned, active, permissions, user, router])
 
   // Signed in but no app account / disabled → explain instead of a blank stuck page.

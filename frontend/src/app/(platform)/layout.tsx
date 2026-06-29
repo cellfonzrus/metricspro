@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
-import { NAV, canSeeItem, canAccessPath, homeFor } from '@/lib/rbac'
+import { NAV, canSeeItem, canAccessPath, safeHomeFor } from '@/lib/rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -171,7 +171,10 @@ function Guard({ children }: { children: React.ReactNode }) {
     if (!session) { router.replace('/login'); return }
     if (!provisioned || !active) return
     if (user?.must_reset_password) { router.replace('/account/password'); return }
-    if (!canAccessPath(permissions, pathname)) { router.replace(homeFor(permissions)) }
+    if (!canAccessPath(permissions, pathname)) {
+      const dest = safeHomeFor(permissions)
+      if (dest !== pathname) router.replace(dest)   // guard against redirecting to a gated-off home (loop)
+    }
   }, [enforce, loading, session, provisioned, active, user, permissions, pathname, router])
 
   if (enforce === null) return <Splash text="Loading…" />

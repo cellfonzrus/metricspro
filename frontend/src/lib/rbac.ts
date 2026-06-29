@@ -270,3 +270,19 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
 export function homeFor(perms: Permissions): string {
   return perms.home || '/commcalc'
 }
+
+// A landing the user can actually open. The configured home may be gated off — e.g. it
+// defaults to '/commcalc', which is the report-gated 'commissions' area, so a role without
+// commission-report clearance can't enter it. The (platform) guard would then redirect to that
+// same home forever (infinite "Redirecting…", presenting as "can't log in"). Fall back to the
+// first nav item the user can open, then to the always-allowed password page so we never loop.
+export function safeHomeFor(perms: Permissions): string {
+  const home = homeFor(perms)
+  if (canAccessPath(perms, home)) return home
+  for (const g of NAV) {
+    for (const it of g.items) {
+      if (canSeeItem(perms, it) && canAccessPath(perms, it.href)) return it.href
+    }
+  }
+  return '/account/password'   // canAccessPath() always allows this → guaranteed non-looping
+}
