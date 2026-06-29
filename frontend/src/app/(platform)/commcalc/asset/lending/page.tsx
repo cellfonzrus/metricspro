@@ -17,12 +17,37 @@ export default function AssetLendingPage() {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [yearFilter, setYearFilter] = useState('')
+  // Funding recon: connect these billed weeks to HOW they were paid (own vs borrowed account),
+  // recorded against the consignment distributor (VIP) in commcalc.distributor_payments.
+  const [dist, setDist] = useState<any>(null)
+  const [funds, setFunds] = useState<any>(null)
+  const [form, setForm] = useState<any>({ pay_date: '', period: '', amount: '', funding_source: 'own', account_label: '', ref: '' })
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     setLoading(true)
     api('/api/v1/commcalc/vip/paygo/summary')
       .then(setData).catch(e => setData({ error: e?.message || String(e) })).finally(() => setLoading(false))
   }, [])
+
+  const loadFunds = (id: string) => api(`/api/v1/commcalc/distributor-payments?distributor_id=${id}`).then(setFunds).catch(() => {})
+  useEffect(() => {
+    api('/api/v1/commcalc/distributors').then((r: any) => {
+      const d = (r?.distributors || []).find((x: any) => x.has_asset_lending || x.portal_provider === 'vip' || (x.name || '').toUpperCase() === 'VIP')
+      setDist(d || null)
+      if (d?.id) loadFunds(d.id)
+    }).catch(() => {})
+  }, [])
+
+  async function addFunding() {
+    if (!dist?.id) return
+    setBusy(true)
+    try {
+      await api('/api/v1/commcalc/distributor-payments', { method: 'POST', body: JSON.stringify({ ...form, distributor_id: dist.id, amount: Number(form.amount) || 0 }) })
+      setForm({ pay_date: '', period: '', amount: '', funding_source: 'own', account_label: '', ref: '' })
+      loadFunds(dist.id)
+    } catch { /* ignore */ } finally { setBusy(false) }
+  }
 
   const current: Batch | null = data?.current || null
   const history: Batch[] = data?.history || []
@@ -115,6 +140,56 @@ export default function AssetLendingPage() {
             <Tile label={`Lifetime billed (${totals.weeks || 0} wks)`} value={fmt(totals.lifetime_paid || 0)} accent="#15803d" />
             <Tile label="Devices billed (lifetime)" value={lifetimeDevices.toLocaleString()} />
             <Tile label="Grand total (incl. open week)" value={fmt(grandTotal)} />
+          </div>
+
+          {/* funding recon — how these bills were paid (own vs borrowed account) */}
+          <div className="card" style={{ padding: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>💵 How these bills were funded</div>
+              {dist
+                ? <span style={{ fontSize: 12, color: 'var(--text3)' }}>recorded against distributor <strong>{dist.name}</strong> ({dist.arrangement})</span>
+                : <span style={{ fontSize: 12, color: '#b45309' }}>No consignment distributor found — add one on the Distributors page to track funding.</span>}
+              {funds?.totals && (
+                <span style={{ fontSize: 13, marginLeft: 'auto' }}>
+                  funded so far: <strong style={{ color: '#15803d' }}>own {fmt(funds.totals.own)}</strong> · <strong style={{ color: '#b45309' }}>borrowed {fmt(funds.totals.borrowed)}</strong> · total {fmt(funds.totals.total)}
+                  {' '}<span style={{ color: 'var(--text3)' }}>vs {fmt(totals.lifetime_paid || 0)} billed</span>
+                </span>
+              )}
+            </div>
+            {dist && (
+              <>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+                  <input className="select" style={{ width: 130 }} type="date" value={form.pay_date} onChange={e => setForm({ ...form, pay_date: e.target.value })} />
+                  <input className="select" style={{ width: 110 }} placeholder="Period" value={form.period} onChange={e => setForm({ ...form, period: e.target.value })} />
+                  <input className="select" style={{ width: 100 }} type="number" placeholder="Amount" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
+                  <select className="select" value={form.funding_source} onChange={e => setForm({ ...form, funding_source: e.target.value })}>
+                    <option value="own">Own account</option><option value="borrowed">Borrowed account</option>
+                  </select>
+                  <input className="select" style={{ width: 130 }} placeholder="Account label" value={form.account_label} onChange={e => setForm({ ...form, account_label: e.target.value })} />
+                  <input className="select" style={{ width: 110 }} placeholder="Ref / batch ID" value={form.ref} onChange={e => setForm({ ...form, ref: e.target.value })} />
+                  <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={busy} onClick={addFunding}>Record payment</button>
+                </div>
+                {funds?.payments?.length > 0 && (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
+                      <thead><tr style={{ fontSize: 11, color: 'var(--text2)' }}>{['Date', 'Period', 'Amount', 'Funding', 'Account', 'Ref'].map(h => <th key={h} style={{ textAlign: 'left', padding: '5px 8px' }}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {funds.payments.slice(0, 12).map((p: any) => (
+                          <tr key={p.id} style={{ borderTop: '1px solid var(--border)' }}>
+                            <td style={{ padding: '5px 8px', fontSize: 12 }}>{p.pay_date || '—'}</td>
+                            <td style={{ padding: '5px 8px', fontSize: 12 }}>{p.period || '—'}</td>
+                            <td style={{ padding: '5px 8px', fontSize: 12, fontWeight: 600 }}>{fmt(p.amount)}</td>
+                            <td style={{ padding: '5px 8px', fontSize: 12, color: p.funding_source === 'borrowed' ? '#b45309' : '#15803d' }}>{p.funding_source}</td>
+                            <td style={{ padding: '5px 8px', fontSize: 12 }}>{p.account_label || '—'}</td>
+                            <td style={{ padding: '5px 8px', fontSize: 12 }}>{p.ref || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
