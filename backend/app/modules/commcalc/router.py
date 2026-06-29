@@ -14,6 +14,7 @@ from app.modules.commcalc import targets_engine
 from app.modules.commcalc import vip_sweep
 from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
+from app.modules.commcalc import installment_engine
 from app.modules.commcalc import b2b_sweep
 from app.modules.commcalc import sales_analyzer
 from app.modules.commcalc import sales_recon
@@ -3057,6 +3058,95 @@ async def save_config(period: str, config: dict, org_id: str = "00000000-0000-00
     config.update({'period': period, 'org_id': org_id})
     r = client.schema('commcalc').table('payout_config').upsert(config, on_conflict='org_id,period').execute()
     return r.data[0] if r.data else config
+
+
+# ── Multi-month payout SCHEDULES (migration 057) — generic per-carrier installment payouts ────────
+# A schedule spreads one activation's commission over N months (flat or %MRC), with months 2..N gated
+# on the bill being paid + residual received that month. With no schedule, payouts are single-month
+# (unchanged). The engine is READ-ONLY/PREVIEW here — not yet summed into the live calc (see HANDOFF).
+
+@router.get("/payout-schedule")
+async def list_payout_schedules(org_id: str = ORG_ID):
+    """All schedules + their installment lines. [] (not 500) if migration 057 isn't applied yet."""
+    client = sb()
+    try:
+        scheds = client.schema('commcalc').table('payout_schedule').select('*').eq('org_id', org_id).execute().data or []
+        lines = client.schema('commcalc').table('payout_schedule_line').select('*').eq('org_id', org_id).execute().data or []
+    except Exception:
+        return {"schedules": [], "ready": False, "note": "Run migration 057_multi_month_payout.sql to enable."}
+    by_sched = {}
+    for ln in lines:
+        by_sched.setdefault(ln.get('schedule_id'), []).append(ln)
+    for s in scheds:
+        s['lines'] = sorted(by_sched.get(s['id'], []), key=lambda x: x.get('month_index') or 0)
+    return {"schedules": scheds, "ready": True}
+
+
+@router.post("/payout-schedule")
+async def save_payout_schedule(body: dict, org_id: str = ORG_ID):
+    """Create/replace a schedule + its lines. Body: {id?, company_id?, carrier_id?, activation_type?,
+    num_months, gate_signal?, bypass_tier?, is_active?, lines:[{month_index, payout_kind, flat_amount?,
+    mrc_pct?, mrc_basis?, requires_paid}]}. Replaces the lines for the schedule (delete-then-insert)."""
+    client = sb()
+    head = {
+        "org_id": org_id,
+        "company_id": body.get("company_id") or None,
+        "carrier_id": body.get("carrier_id") or None,
+        "activation_type": (body.get("activation_type") or "*").strip() or "*",
+        "num_months": int(body.get("num_months") or 1),
+        "gate_signal": body.get("gate_signal") or "paid_residual",
+        "bypass_tier": bool(body.get("bypass_tier", True)),
+        "is_active": bool(body.get("is_active", True)),
+    }
+    try:
+        if body.get("id"):
+            client.schema('commcalc').table('payout_schedule').update(head).eq('id', body['id']).eq('org_id', org_id).execute()
+            sid = body['id']
+        else:
+            r = client.schema('commcalc').table('payout_schedule').upsert(
+                head, on_conflict='org_id,company_id,carrier_id,activation_type').execute()
+            sid = (r.data or [{}])[0].get('id')
+        if not sid:
+            raise HTTPException(500, "could not save schedule header")
+        client.schema('commcalc').table('payout_schedule_line').delete().eq('org_id', org_id).eq('schedule_id', sid).execute()
+        lines = []
+        for ln in (body.get("lines") or []):
+            lines.append({
+                "org_id": org_id, "schedule_id": sid,
+                "month_index": int(ln.get("month_index") or 1),
+                "payout_kind": ln.get("payout_kind") or "flat",
+                "flat_amount": safe_float(ln.get("flat_amount")),
+                "mrc_pct": safe_float(ln.get("mrc_pct")),
+                "mrc_basis": ln.get("mrc_basis") or "commissionable_mrc",
+                "requires_paid": bool(ln.get("requires_paid")),
+            })
+        if lines:
+            client.schema('commcalc').table('payout_schedule_line').insert(lines).execute()
+        return {"id": sid, "lines": len(lines)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"save payout-schedule failed (is migration 057 applied?): {e}")
+
+
+@router.delete("/payout-schedule/{schedule_id}")
+async def delete_payout_schedule(schedule_id: str, org_id: str = ORG_ID):
+    client = sb()
+    client.schema('commcalc').table('payout_schedule_line').delete().eq('org_id', org_id).eq('schedule_id', schedule_id).execute()
+    client.schema('commcalc').table('payout_schedule').delete().eq('org_id', org_id).eq('id', schedule_id).execute()
+    return {"deleted": schedule_id}
+
+
+@router.get("/payout-schedule/preview")
+async def preview_payout_installments(period: str, org_id: str = ORG_ID):
+    """READ-ONLY preview: what the configured schedules WOULD pay for `period` (per rep + per-subscriber
+    ledger), computed from raw_mi. Writes nothing and does NOT affect the live commission calc — it's
+    the safe way to validate a schedule before wiring installments into the payout."""
+    require_org(org_id)
+    try:
+        return installment_engine.compute_installments(sb(), org_id, period, persist=False)
+    except Exception as e:
+        raise HTTPException(500, f"payout preview failed: {type(e).__name__}: {e}")
 
 @router.get("/stores")
 async def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
