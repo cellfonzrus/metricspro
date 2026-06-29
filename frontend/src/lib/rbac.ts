@@ -163,6 +163,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/dlar/sweep', label: 'Metrics Rep/Store Sync', icon: '🧹', module: 'commissions', scopes: ['all'] },
   ]},
   { group: 'Mapping', module: 'commissions', items: [
+    { href: '/commcalc/commission-import', label: 'Commission Import Wizard', icon: '🪄', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/mapping', label: 'All Mappings', icon: '🗂️', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/store-match', label: 'Store Matching', icon: '🏬', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/carrier-mapping', label: 'Carrier Mapping', icon: '🗺️', module: 'commissions', scopes: ['all'] },

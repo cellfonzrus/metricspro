@@ -22,6 +22,7 @@ from app.modules.commcalc import sales_recon
 from app.modules.commcalc import comp_trend
 from app.modules.commcalc import carrier_map
 from app.modules.commcalc import column_mapping
+from app.modules.commcalc import commission_catalog
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 import calendar as _calendar
@@ -1130,9 +1131,12 @@ def column_mapping_targets(report_key: str = "", org_id: str = ORG_ID):
     report keys. New report keys (from report_definitions) have no registry → empty fields list,
     and the UI lets the user type target field names freely."""
     require_org(org_id)
+    # merged_target_fields layers the per-tenant catalog (user-created categories) on top of the
+    # hard-coded defaults; degrades to the defaults when migration 066 isn't applied.
+    fields = commission_catalog.merged_target_fields(sb(), org_id, report_key) if report_key else []
     return {"report_keys": column_mapping.known_report_keys(),
             "transforms": column_mapping.TRANSFORM_KEYS,
-            "fields": column_mapping.target_fields(report_key) if report_key else []}
+            "fields": fields}
 
 
 @router.get("/column-mapping")
@@ -1314,10 +1318,13 @@ async def upload_mapped(
     mapped = column_mapping.map_records(df.to_dict("records"), rules, base)
 
     # carrier_commission: roll the mapped component amounts into total_commission (the rep's statement
-    # commission) so the calc can sum per rep. Any carrier maps the columns it has; the rest stay 0.
+    # commission) so the calc can sum per rep. Amount columns come from the per-tenant catalog (so
+    # user-created categories are summed too); falls back to the hard-coded tuple pre-066. Any carrier
+    # maps the columns it has; the rest stay 0.
     if report_key == 'carrier_commission':
+        amt_fields = commission_catalog.amount_fields(sb(), org_id, 'carrier_commission')
         for m in mapped:
-            m['total_commission'] = round(sum(safe_float(m.get(a)) for a in column_mapping.CARRIER_COMMISSION_AMOUNTS), 2)
+            m['total_commission'] = round(sum(safe_float(m.get(a)) for a in amt_fields), 2)
 
     client = sb()
     # GUARD: only clear the period once we actually have rows — an empty/misaligned file never wipes.
@@ -1341,6 +1348,188 @@ async def upload_mapped(
         print(f"WARN upload_log insert failed: {e}")
     return {"saved": saved, "report_key": report_key, "target_table": table, "period": period,
             "rules_used": len(rules), "mapped": len(mapped)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# UNIVERSAL COMMISSION MAPPER (SAP-style, self-extending) — catalog of categories + the import wizard.
+# Categories are DATA (commcalc.commission_field_catalog, mig 066). A new category creates a real column
+# on carrier_commission via the RPC commcalc.add_commission_column (mig 067). All ADDITIVE + BOOST-SAFE:
+# only carrier_commission + the catalog table are touched; the live Boost calc is never involved.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+@router.get("/commission-fields")
+def list_commission_fields(report_key: str = "carrier_commission", org_id: str = ORG_ID):
+    """The category catalog for a report_key: merged (defaults + tenant catalog) for the wizard dropdown,
+    plus the raw catalog rows and whether the self-extend RPC is usable. Degrades pre-066/067."""
+    require_org(org_id)
+    client = sb()
+    merged = commission_catalog.merged_target_fields(client, org_id, report_key)
+    raw = commission_catalog.load_catalog(client, org_id, report_key)
+    return {"report_key": report_key, "fields": merged, "catalog": raw,
+            "kinds": commission_catalog.KINDS, "transforms": column_mapping.TRANSFORM_KEYS,
+            "catalog_ready": bool(raw)}
+
+
+@router.post("/commission-fields")
+def create_commission_field(body: dict, org_id: str = ORG_ID):
+    """Create a NEW commission category → adds the physical column on carrier_commission (via RPC) AND a
+    catalog row. body: {report_key?, label, kind?, data_type?, is_amount?, month_index?, target_field?}.
+    Returns a clear 400 (not a 500) if migration 067 isn't installed yet."""
+    require_org(org_id)
+    label = (body.get("label") or "").strip()
+    if not label and not body.get("target_field"):
+        raise HTTPException(400, "label (or target_field) is required")
+    try:
+        row = commission_catalog.add_field(
+            sb(), org_id, body.get("report_key") or "carrier_commission",
+            label=label, kind=body.get("kind") or "other", data_type=body.get("data_type") or "number",
+            is_amount=body.get("is_amount"), month_index=body.get("month_index"),
+            target_field=body.get("target_field"), sort_order=int(body.get("sort_order") or 100))
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "field": row}
+
+
+@router.delete("/commission-fields")
+def delete_commission_field(target_field: str, report_key: str = "carrier_commission", org_id: str = ORG_ID):
+    """Remove a USER-CREATED category from the catalog (seeded defaults are protected; the physical column
+    is left intact so existing data is never dropped)."""
+    require_org(org_id)
+    removed = commission_catalog.remove_field(sb(), org_id, report_key, target_field)
+    if not removed:
+        raise HTTPException(400, f"'{target_field}' is a seeded default or not found — cannot remove.")
+    return {"ok": True, "removed": target_field}
+
+
+@router.post("/commission-import/analyze")
+async def commission_import_analyze(file: UploadFile = File(...), report_key: str = Form("carrier_commission"),
+                                    carrier_id: str = Form(""), org_id: str = ORG_ID):
+    """Wizard step 1: read the uploaded sheet → return its columns + a few SAMPLE VALUES per column, the
+    catalog categories to map onto, auto-suggested matches, and any already-saved mapping for this
+    (report_key, carrier). The frontend renders one row per source column with a category dropdown."""
+    require_org(org_id)
+    contents = await file.read()
+    try:
+        df = pd.read_excel(io.BytesIO(contents), dtype=str).fillna("")
+    except Exception as e:
+        raise HTTPException(400, f"Could not read Excel file: {e}")
+    headers = [str(h).strip() for h in df.columns if str(h).strip()]
+    samples = {}
+    for h in headers:
+        vals = [str(v).strip() for v in df[h].tolist() if str(v).strip()]
+        samples[h] = vals[:5]
+    client = sb()
+    rules = column_mapping.load_rules(client, org_id, report_key, carrier_id or None)
+    suggestions = column_mapping.suggest(headers, report_key, rules)
+    fields = commission_catalog.merged_target_fields(client, org_id, report_key)
+    saved = {r["target_field"]: r.get("source_header") for r in rules}
+    return {"report_key": report_key, "headers": headers, "row_count": int(len(df)), "samples": samples,
+            "suggestions": suggestions, "fields": fields, "saved_mapping": saved,
+            "kinds": commission_catalog.KINDS, "transforms": column_mapping.TRANSFORM_KEYS}
+
+
+@router.post("/commission-import/commit")
+async def commission_import_commit(
+    file: UploadFile = File(...),
+    report_key: str = Form("carrier_commission"),
+    carrier_id: str = Form(""),
+    period: str = Form(""),
+    new_fields: str = Form("[]"),
+    mappings: str = Form("[]"),
+    save_template: bool = Form(True),
+    org_id: str = ORG_ID,
+):
+    """Wizard step 2 (one shot): (1) create any NEW categories the user defined (column + catalog row),
+    (2) optionally persist the column→category mapping as a reusable per-carrier template, (3) ingest the
+    file into carrier_commission with the dynamic total roll-up. Same safety guards as /upload-mapped
+    (never wipe on empty, batched insert, upload_log). BOOST-SAFE — only carrier_commission is written."""
+    import json
+    require_org(org_id)
+    client = sb()
+    table = (column_mapping.TABLE_MAP.get(report_key) or "").strip()
+    if not table:
+        rd = (client.schema("commcalc").table("report_definitions").select("target_table")
+              .eq("org_id", org_id).eq("report_key", report_key).limit(1).execute().data) or []
+        table = (rd[0].get("target_table") if rd else "") or ""
+    if not table:
+        raise HTTPException(400, f"No target_table for report_key '{report_key}'.")
+
+    try:
+        new_field_list = json.loads(new_fields or "[]")
+        mapping_list = json.loads(mappings or "[]")
+    except Exception as e:
+        raise HTTPException(400, f"Bad new_fields/mappings JSON: {e}")
+
+    # 1) create new categories first (so their columns exist before insert + before mapping persists).
+    created = []
+    for nf in new_field_list:
+        try:
+            row = commission_catalog.add_field(
+                client, org_id, report_key, label=(nf.get("label") or "").strip(),
+                kind=nf.get("kind") or "other", data_type=nf.get("data_type") or "number",
+                is_amount=nf.get("is_amount"), month_index=nf.get("month_index"),
+                target_field=nf.get("target_field"))
+            created.append(row["target_field"])
+        except RuntimeError as e:
+            raise HTTPException(400, str(e))
+
+    # 2) build the effective rules from the wizard's mapping; optionally persist as a template.
+    rules, persisted = [], 0
+    for m in mapping_list:
+        tf = (m.get("target_field") or "").strip()
+        src = (m.get("source_header") or "").strip()
+        if not tf or not src:
+            continue
+        transform = m.get("transform") or "text"
+        rules.append({"target_field": tf, "source_header": src, "transform": transform})
+        if save_template:
+            try:
+                client.schema("commcalc").table("column_mapping").upsert(
+                    {"org_id": org_id, "report_key": report_key, "carrier_id": carrier_id or None,
+                     "target_field": tf, "source_header": src, "transform": transform, "priority": 100,
+                     "is_active": True, "updated_at": column_mapping.now_iso()},
+                    on_conflict="org_id,report_key,carrier_id,target_field").execute()
+                persisted += 1
+            except Exception as e:
+                print(f"WARN column_mapping upsert failed for {tf}: {e}")
+    if not rules:
+        raise HTTPException(400, "No usable column→category mappings provided.")
+
+    # 3) ingest (mirrors /upload-mapped guards).
+    contents = await file.read()
+    try:
+        df = pd.read_excel(io.BytesIO(contents), dtype=str).fillna("")
+    except Exception as e:
+        raise HTTPException(400, f"Could not read Excel file: {e}")
+    pm = parse_period(period) if period else {"month": 0, "year": 0}
+    base = {"org_id": org_id}
+    if period:
+        base.update({"period": period, "period_month": pm["month"], "period_year": pm["year"]})
+    mapped = column_mapping.map_records(df.to_dict("records"), rules, base)
+    if report_key == "carrier_commission":
+        amt_fields = commission_catalog.amount_fields(client, org_id, "carrier_commission")
+        for mrow in mapped:
+            mrow["total_commission"] = round(sum(safe_float(mrow.get(a)) for a in amt_fields), 2)
+
+    if mapped and period:
+        try:
+            client.schema("commcalc").table(table).delete().eq("org_id", org_id).in_("period", _pvariants(period)).execute()
+        except Exception as e:
+            raise HTTPException(500, f"Failed to clear existing {table}/{period}: {e}")
+    saved = 0
+    for i in range(0, len(mapped), 500):
+        try:
+            client.schema("commcalc").table(table).insert(mapped[i:i + 500]).execute()
+            saved += len(mapped[i:i + 500])
+        except Exception as e:
+            raise HTTPException(500, f"Insert into {table} failed at row {i}: {e}")
+    try:
+        client.schema("commcalc").table("upload_log").insert(
+            {"org_id": org_id, "file_type": report_key, "period": period or None,
+             "filename": getattr(file, "filename", None), "rows_saved": saved}).execute()
+    except Exception as e:
+        print(f"WARN upload_log insert failed: {e}")
+    return {"saved": saved, "report_key": report_key, "target_table": table, "period": period,
+            "mapped": len(mapped), "new_categories": created, "template_rows": persisted}
 
 
 @router.post("/carrier-comm-file/extract")
