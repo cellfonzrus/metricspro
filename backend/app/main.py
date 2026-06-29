@@ -13,6 +13,7 @@ from app.modules.storevisit.router import router as storevisit_router
 from app.modules.closing.router import router as closing_router
 from app.modules.helpdesk.router import router as helpdesk_router
 from app.modules.hr.router import router as hr_router
+from app.modules.billing.router import router as billing_router
 
 app = FastAPI(
     title="MetricsPro Platform API",
@@ -48,6 +49,7 @@ app.include_router(storevisit_router, prefix="/api/v1")  # router carries its ow
 app.include_router(closing_router, prefix="/api/v1")     # router carries its own /closing prefix
 app.include_router(helpdesk_router, prefix="/api/v1")    # router carries its own /helpdesk prefix
 app.include_router(hr_router, prefix="/api/v1")          # router carries its own /hr prefix
+app.include_router(billing_router, prefix="/api/v1")     # router carries its own /billing prefix (super-admin)
 
 @app.get("/health")
 def health():
