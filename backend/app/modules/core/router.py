@@ -792,7 +792,7 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
         raise HTTPException(400, "employee_id required")
     client = sb()
     emp = (client.schema("storeops").table("employees").select("*")
-           .eq("employee_id", employee_id).limit(1).execute().data or [])
+           .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data or [])
     if emp:
         emp = emp[0]
     else:
@@ -821,7 +821,7 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
     # per-person overrides applied on top (#1b).
     widgets = {k: True for k in EMP_WIDGETS}
     au = (client.schema("storeops").table("app_users").select("role,widget_overrides")
-          .eq("employee_id", employee_id).limit(1).execute().data or [])
+          .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data or [])
     role_name = au[0].get("role") if au else None
     if role_name:
         rr = (client.schema("storeops").table("roles").select("permissions")
@@ -863,14 +863,14 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
     # Schedule (upcoming 7 days) + hours (current month) from storeops.shifts.
     today = _date.today()
     out["schedule"] = (client.schema("storeops").table("shifts").select("*")
-                       .eq("is_deleted", False).eq("employee_id", employee_id)
+                       .eq("org_id", org_id).eq("is_deleted", False).eq("employee_id", employee_id)
                        .gte("shift_date", today.isoformat())
                        .lte("shift_date", (today + _td(days=7)).isoformat())
                        .order("shift_date").execute().data or [])
     ym = f"{today.year}-{today.month:02d}"
     nxt = f"{today.year + 1}-01-01" if today.month == 12 else f"{today.year}-{today.month + 1:02d}-01"
     msh = (client.schema("storeops").table("shifts").select("scheduled_hours,actual_hours")
-           .eq("is_deleted", False).eq("employee_id", employee_id)
+           .eq("org_id", org_id).eq("is_deleted", False).eq("employee_id", employee_id)
            .gte("shift_date", f"{ym}-01").lt("shift_date", nxt).execute().data or [])
     rate = float(emp.get("pay_rate") or 0)
     sh = sum(float(s.get("scheduled_hours") or 0) for s in msh)
