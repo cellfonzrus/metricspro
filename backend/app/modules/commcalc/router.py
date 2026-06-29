@@ -1624,6 +1624,8 @@ def create_connector(body: dict, org_id: str = ORG_ID):
            'twofa_status': body.get('twofa_status') or 'needs_setup',
            'automatable': body.get('automatable', True) is not False, 'enabled': True,
            'config_table': (body.get('config_table') or '').strip() or None,
+           'account_id': (body.get('account_id') or '').strip() or None,        # e.g. Total Wireless retailer #
+           'login_username': (body.get('login_username') or '').strip() or None,
            'sort_order': int(body.get('sort_order') or 100),
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     r = sb().schema('commcalc').table('connector_instances').upsert(row, on_conflict='org_id,vendor_name').execute()
@@ -1633,7 +1635,8 @@ def create_connector(body: dict, org_id: str = ORG_ID):
 @router.patch("/connectors/{cid}")
 def update_connector(cid: str, body: dict, org_id: str = ORG_ID):
     require_org(org_id)
-    allow = ('label', 'enabled', 'automatable', 'twofa_method', 'twofa_status', 'portal_url', 'sort_order', 'notes')
+    allow = ('label', 'enabled', 'automatable', 'twofa_method', 'twofa_status', 'portal_url', 'sort_order', 'notes',
+             'account_id', 'login_username')
     row = {k: body[k] for k in allow if k in body}
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
     sb().schema('commcalc').table('connector_instances').update(row).eq('org_id', org_id).eq('id', cid).execute()

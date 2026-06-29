@@ -31,7 +31,7 @@ export default function OnboardingWizard() {
   // add-forms
   const [coAdd, setCoAdd] = useState({ name: '', legal_name: '', ein: '' })
   const [carAdd, setCarAdd] = useState({ name: '', code: '' })
-  const [connAdd, setConnAdd] = useState({ vendor_name: '', label: '', sweep_kind: 'manual', portal_url: '' })
+  const [connAdd, setConnAdd] = useState({ vendor_name: '', label: '', sweep_kind: 'manual', portal_url: '', login_username: '', account_id: '' })
   const [repAdd, setRepAdd] = useState({ report_key: '', label: '', target_table: '', source_name: '', upload_endpoint: '', source_url: '', period_mode: 'data' })
 
   const loadCompanies = useCallback(() => api('/api/v1/account/companies').then((d: any) => setCompanies(d?.companies || d || [])).catch(() => {}), [])
@@ -52,7 +52,7 @@ export default function OnboardingWizard() {
   }
   async function addConnector() {
     if (!connAdd.vendor_name.trim()) { setMsg('Vendor name required.'); return }
-    try { const r: any = await api('/api/v1/commcalc/connectors', { method: 'POST', body: JSON.stringify({ ...connAdd, carrier_id: carrierId || undefined }) }); setConnAdd({ vendor_name: '', label: '', sweep_kind: 'manual', portal_url: '' }); await loadConnectors(); if (r?.id) setConnectorId(r.id); setMsg('✅ Connector added.') } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    try { const r: any = await api('/api/v1/commcalc/connectors', { method: 'POST', body: JSON.stringify({ ...connAdd, carrier_id: carrierId || undefined }) }); setConnAdd({ vendor_name: '', label: '', sweep_kind: 'manual', portal_url: '', login_username: '', account_id: '' }); await loadConnectors(); if (r?.id) setConnectorId(r.id); setMsg('✅ Connector added.') } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
   async function addReport() {
     if (!connectorId) { setMsg('Pick or add a connector first.'); return }
@@ -153,6 +153,8 @@ export default function OnboardingWizard() {
               <input style={{ ...sel, width: 140 }} placeholder="label (opt)" value={connAdd.label} onChange={e => setConnAdd({ ...connAdd, label: e.target.value })} />
               <select style={sel} value={connAdd.sweep_kind} onChange={e => setConnAdd({ ...connAdd, sweep_kind: e.target.value })}>{SWEEP_KINDS.map(k => <option key={k} value={k}>{k}</option>)}</select>
               <input style={{ ...sel, width: 170 }} placeholder="portal url (opt)" value={connAdd.portal_url} onChange={e => setConnAdd({ ...connAdd, portal_url: e.target.value })} />
+              <input style={{ ...sel, width: 130 }} placeholder="login username" value={connAdd.login_username} onChange={e => setConnAdd({ ...connAdd, login_username: e.target.value })} />
+              <input style={{ ...sel, width: 150 }} placeholder="account id (Total Wireless retailer #)" value={connAdd.account_id} onChange={e => setConnAdd({ ...connAdd, account_id: e.target.value })} />
               <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={addConnector}>+ Add connector</button>
             </div>
 

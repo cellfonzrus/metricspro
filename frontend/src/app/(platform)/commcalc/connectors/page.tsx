@@ -84,6 +84,11 @@ export default function ConnectorsPage() {
             <input style={fin} placeholder="Vendor name *" value={nc.vendor_name} onChange={e => setNc({ ...nc, vendor_name: e.target.value })} />
             <input style={fin} placeholder="Label" value={nc.label} onChange={e => setNc({ ...nc, label: e.target.value })} />
             <input style={fin} placeholder="Portal URL" value={nc.portal_url} onChange={e => setNc({ ...nc, portal_url: e.target.value })} />
+            <input style={fin} placeholder="Login username" value={nc.login_username || ''} onChange={e => setNc({ ...nc, login_username: e.target.value })} />
+            <input style={fin} placeholder="Account ID (e.g. Total Wireless retailer #)" value={nc.account_id || ''} onChange={e => setNc({ ...nc, account_id: e.target.value })} />
+            <select style={fin} value={nc.twofa_method || 'none'} onChange={e => setNc({ ...nc, twofa_method: e.target.value })} title="2-factor method">
+              {['none', 'sms', 'totp', 'email', 'biometric'].map(k => <option key={k} value={k}>2FA: {k}</option>)}
+            </select>
             <select style={fin} value={nc.sweep_kind} onChange={e => setNc({ ...nc, sweep_kind: e.target.value })} title="run-now dispatch kind">
               {['manual', 'vip', 'dlar', 'epay', 'b2b', 'google_closing'].map(k => <option key={k} value={k}>{k}</option>)}
             </select>
