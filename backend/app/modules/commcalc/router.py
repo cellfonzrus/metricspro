@@ -1718,7 +1718,7 @@ def chargeback_review_dismiss(cb_id: str, payload: dict = {}, org_id: str = ORG_
     client = sb()
     ref = f"cbr-{cb_id}"
     client.schema('commcalc').table('chargeback_items').delete().eq('org_id', org_id).eq('source', 'chargeback_review').eq('source_ref', ref).execute()
-    cur = client.schema('commcalc').table('chargeback_review').select('needs_review').eq('id', cb_id).execute().data or []
+    cur = client.schema('commcalc').table('chargeback_review').select('needs_review').eq('org_id', org_id).eq('id', cb_id).execute().data or []
     body = {'status': 'dismissed', 'assigned_rep': None, 'assigned_at': None,
             'chargeback_item_ref': None, 'reason': (payload or {}).get('reason') or None, 'updated_at': _cb_now()}
     if cur and cur[0].get('needs_review'):
@@ -1867,7 +1867,7 @@ def _guess_item_type(department, category, desc):
 
 def _flag_rules(client, org_id):
     try:
-        rows = client.schema("commcalc").table("flag_rules").select("*").eq("id", 1).limit(1).execute().data or []
+        rows = client.schema("commcalc").table("flag_rules").select("*").eq("org_id", org_id).eq("id", 1).limit(1).execute().data or []
         if rows:
             return rows[0]
     except Exception:
@@ -3514,7 +3514,7 @@ async def update_chargeback(item_id: str, body: dict, org_id: str = "00000000-00
 @router.get("/calc-status/{period}")
 async def get_calc_status(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.schema('commcalc').table('calc_status').select('*').in_('period', _pvariants(period)).limit(1).execute()
+    r = client.schema('commcalc').table('calc_status').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute()
     return r.data[0] if r.data else {'calc_status': 'not_run'}
 
 
@@ -3916,7 +3916,7 @@ def _rep_canon_map(client, org_id=ORG_ID):
     m = {}
     try:
         for n in (client.schema('commcalc').table('name_map')
-                  .select('epay_salesperson,storeops_name').execute().data or []):
+                  .select('epay_salesperson,storeops_name').eq('org_id', org_id).execute().data or []):
             a = (n.get('epay_salesperson') or '').strip().upper()
             c = (n.get('storeops_name') or '').strip()
             if a and c:
@@ -3941,13 +3941,14 @@ def _canon(name, cmap):
     return cmap.get(name.strip().upper(), name)
 
 
-def _fetch_shifts(client, start, end):
+def _fetch_shifts(client, start, end, org_id=ORG_ID):
     rows = (client.schema('storeops').table('shifts')
             .select('employee_name,store_code,shift_date,scheduled_hours,is_deleted')
+            .eq('org_id', org_id)
             .gte('shift_date', start.isoformat())
             .lt('shift_date', end.isoformat())
             .limit(50000).execute().data) or []
-    cmap = _rep_canon_map(client)
+    cmap = _rep_canon_map(client, org_id)
     for r in rows:
         r['employee_name'] = _canon(r.get('employee_name'), cmap)
     return rows
@@ -4002,10 +4003,10 @@ def _fetch_actuals(client, org_id, period):
     return rows
 
 
-def _byod_pct_default(client, period):
+def _byod_pct_default(client, period, org_id=ORG_ID):
     try:
         r = (client.schema('commcalc').table('payout_config')
-             .select('kpi_byod_target').in_('period', _pvariants(period)).limit(1).execute().data) or []
+             .select('kpi_byod_target').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute().data) or []
         if r and r[0].get('kpi_byod_target') is not None:
             return safe_float(r[0]['kpi_byod_target'])
     except Exception:
@@ -4022,10 +4023,11 @@ async def get_targets(period: str, authorization: str = Header(default=""), org_
     rows = (client.schema('commcalc').table('targets')
             .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
     by_code = {str(r.get('store_code', '')).upper(): r for r in rows}
-    byod_def = _byod_pct_default(client, period)
+    byod_def = _byod_pct_default(client, period, org_id)
 
     stores = (client.schema('storeops').table('stores')
               .select('store_code,address,market,monthly_target,is_active')
+              .eq('org_id', org_id)
               .execute().data) or []
     out = []
     for s in stores:
@@ -4099,7 +4101,7 @@ async def get_target_calendar(
     if ks and not in_keyset(ks, store_code):
         raise HTTPException(403, "That store is outside your assigned area.")
     start, end, today = _period_bounds(period, today)
-    byod_def = _byod_pct_default(client, period)
+    byod_def = _byod_pct_default(client, period, org_id)
 
     trow = (client.schema('commcalc').table('targets')
             .select('*').eq('org_id', org_id).in_('period', _pvariants(period))
@@ -4108,12 +4110,12 @@ async def get_target_calendar(
     # Seed accessories from store monthly_target when no explicit row yet.
     if not trow:
         srow = (client.schema('storeops').table('stores')
-                .select('monthly_target').eq('store_code', store_code).limit(1).execute().data) or []
+                .select('monthly_target').eq('org_id', org_id).eq('store_code', store_code).limit(1).execute().data) or []
         if srow:
             target_row = {'accessories_monthly': safe_float(srow[0].get('monthly_target'))}
     monthly = targets_engine.derive_monthly_by_cat(target_row, byod_def)
 
-    shifts = _fetch_shifts(client, start, end)
+    shifts = _fetch_shifts(client, start, end, org_id)
     actuals = _fetch_actuals(client, org_id, period)
     rep_arg = rep if scope == 'rep' and rep else None
 
@@ -4158,14 +4160,14 @@ async def get_targets_summary(period: str, today: str = "", authorization: str =
     enforcement is on, a non-admin manager only sees the stores in their org-unit span (Phase 5)."""
     client = sb()
     start, end, today = _period_bounds(period, today)
-    byod_def = _byod_pct_default(client, period)
+    byod_def = _byod_pct_default(client, period, org_id)
 
     trows = (client.schema('commcalc').table('targets')
              .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
     by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
     stores = (client.schema('storeops').table('stores')
-              .select('store_code,address,market,monthly_target').execute().data) or []
-    shifts = _fetch_shifts(client, start, end)
+              .select('store_code,address,market,monthly_target').eq('org_id', org_id).execute().data) or []
+    shifts = _fetch_shifts(client, start, end, org_id)
     actuals = _fetch_actuals(client, org_id, period)
 
     out = []
@@ -4375,7 +4377,7 @@ async def team_snapshot(period: str, authorization: str = Header(default=""),
         return {"period": period, "is_manager": False, "span_store_codes": [],
                 "stores": [], "reps": [], "totals": {}, "money_on_table": 0.0}
     # store_code <-> address keys so coaching reps (whose 'store' may be an address) still match.
-    stores_meta = sb().schema('storeops').table('stores').select('store_code,address').execute().data or []
+    stores_meta = sb().schema('storeops').table('stores').select('store_code,address').eq('org_id', org_id).execute().data or []
     keys = set(codes_set)
     for s in stores_meta:
         sc = str(s.get('store_code') or '').strip().upper()
@@ -4453,15 +4455,15 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     rep_commissions (tier/KPIs) so 'commission at risk' reconciles with the payroll."""
     client = sb()
     start, end, today = _period_bounds(period, today)
-    byod_def = _byod_pct_default(client, period)
+    byod_def = _byod_pct_default(client, period, org_id)
     month_end = end - _timedelta(days=1)
 
     trows = (client.schema('commcalc').table('targets')
              .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
     by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
     stores = (client.schema('storeops').table('stores')
-              .select('store_code,address,market,monthly_target').execute().data) or []
-    shifts = _fetch_shifts(client, start, end)
+              .select('store_code,address,market,monthly_target').eq('org_id', org_id).execute().data) or []
+    shifts = _fetch_shifts(client, start, end, org_id)
     actuals = _fetch_actuals(client, org_id, period)
     rank = targets_engine.SEV_RANK
 
@@ -4469,7 +4471,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     #    payout forfeited below tier 1.0 = subtotal × (1 − tier)). Empty/graceful if
     #    commissions haven't been run for the period yet.
     cfg_rows = (client.schema('commcalc').table('payout_config')
-                .select('*').in_('period', _pvariants(period)).limit(1).execute().data) or []
+                .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute().data) or []
     cfg = cfg_rows[0] if cfg_rows else {}
     kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in ACTION_KPI_DEFS}
     t100 = int(cfg.get('tier_100_min_kpis') or 7)
@@ -4633,7 +4635,7 @@ async def get_rep_aliases(org_id: str = ORG_ID):
     names = set()
     try:
         for s in (client.schema('storeops').table('shifts').select('employee_name')
-                  .eq('is_deleted', False).limit(50000).execute().data or []):
+                  .eq('org_id', org_id).eq('is_deleted', False).limit(50000).execute().data or []):
             n = (s.get('employee_name') or '').strip()
             if n:
                 names.add(n)
