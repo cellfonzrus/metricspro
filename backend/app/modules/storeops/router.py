@@ -1149,7 +1149,7 @@ def org_assign_store(store_code: str, body: dict, org_id: str = ORG_ID):
 def org_employees(include_inactive: bool = False, org_id: str = ORG_ID):
     """Every employee with the unit they roll up to — a DIRECT employees.org_unit_id wins, else their
     home_store -> stores.org_unit_id. Plus is_manager (assigned to any node). Powers the org chart."""
-    q = sb().table("employees").select("employee_id,name,home_store,role,is_active,org_unit_id").eq("org_id", org_id)
+    q = sb().table("employees").select("id,employee_id,name,home_store,role,is_active,org_unit_id").eq("org_id", org_id)
     if not include_inactive:
         q = q.eq("is_active", True)
     emps = q.order("name").execute().data or []
@@ -1168,6 +1168,7 @@ def org_employees(include_inactive: bool = False, org_id: str = ORG_ID):
     for e in emps:
         hs = str(e.get("home_store") or "").strip().upper()
         out.append({
+            "id": e.get("id"),                                         # stable PK — assign keys on this
             "employee_id": e.get("employee_id"), "name": e.get("name"),
             "home_store": e.get("home_store"), "role": e.get("role"),
             "is_active": e.get("is_active", True),
@@ -1179,11 +1180,16 @@ def org_employees(include_inactive: bool = False, org_id: str = ORG_ID):
     return {"employees": out}
 
 
-@router.put("/org/employees/{employee_id}/unit")
-def org_assign_employee(employee_id: str, body: dict, org_id: str = ORG_ID):
+@router.put("/org/employees/{row_id}/unit")
+def org_assign_employee(row_id: str, body: dict, org_id: str = ORG_ID):
     """Place an employee directly on a unit (overrides the home-store rollup — for managers / roving /
-    overhead staff). unit_id=null clears the override so they fall back to their home store's unit."""
-    sb().table("employees").update({"org_unit_id": body.get("unit_id")}).eq("employee_id", employee_id).execute()
+    overhead staff). unit_id=null clears the override so they fall back to their home store's unit.
+
+    Keys on the employees PRIMARY KEY (id), NOT the optional business employee_id — that field is NULL
+    for some staff, so keying on it made unplaced/no-Emp-ID employees impossible to assign (the update
+    matched no row and silently no-op'd)."""
+    sb().table("employees").update({"org_unit_id": body.get("unit_id")}) \
+        .eq("id", row_id).eq("org_id", org_id).execute()
     return {"ok": True}
 
 

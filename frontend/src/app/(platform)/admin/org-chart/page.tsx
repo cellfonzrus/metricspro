@@ -10,7 +10,7 @@ type Level = { id: number; name: string; rank: number }
 type Manager = { employee_id: string; name: string }
 type Unit = { id: string; parent_id: string | null; level_id: number | null; name: string; managers: Manager[]; store_count: number }
 type Emp = {
-  employee_id: string; name: string; home_store: string | null; role: string | null; is_active: boolean
+  id: string; employee_id: string | null; name: string; home_store: string | null; role: string | null; is_active: boolean
   org_unit_id: string | null; resolved_unit_id: string | null; placed_by: string | null; is_manager: boolean
 }
 
@@ -37,10 +37,10 @@ export default function OrgChartPage() {
   }, [inactive])
   useEffect(() => { reload() }, [reload])
 
-  const assign = (employee_id: string, unit_id: string) =>
+  const assign = (row_id: string, unit_id: string) =>
     (async () => {
       setBusy(true); setErr('')
-      try { await api(`/api/v1/storeops/org/employees/${encodeURIComponent(employee_id)}/unit`, { method: 'PUT', body: JSON.stringify({ unit_id: unit_id || null }) }); await reload() }
+      try { await api(`/api/v1/storeops/org/employees/${encodeURIComponent(row_id)}/unit`, { method: 'PUT', body: JSON.stringify({ unit_id: unit_id || null }) }); await reload() }
       catch (ex: any) { setErr(ex?.message || 'Assign failed') } finally { setBusy(false) }
     })()
 
@@ -59,7 +59,7 @@ export default function OrgChartPage() {
 
   const unitOptions = [...units].sort((a, b) => rankOf(a) - rankOf(b) || a.name.localeCompare(b.name))
   const moveSelect = (e: Emp) => (
-    <select disabled={busy} value={e.org_unit_id || ''} onChange={ev => assign(e.employee_id, ev.target.value)}
+    <select disabled={busy} value={e.org_unit_id || ''} onChange={ev => assign(e.id, ev.target.value)}
       style={{ fontSize: 12, padding: '2px 6px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)' }}>
       <option value="">{e.placed_by === 'home_store' ? 'via home store' : 'unplaced'}</option>
       {unitOptions.map(u => <option key={u.id} value={u.id}>{levelName(u)}: {u.name}</option>)}
@@ -67,7 +67,7 @@ export default function OrgChartPage() {
   )
 
   const empRow = (e: Emp) => (
-    <div key={e.employee_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', flexWrap: 'wrap' }}>
+    <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', flexWrap: 'wrap' }}>
       <span style={{ fontWeight: e.is_manager ? 700 : 500 }}>{e.is_manager ? '★ ' : ''}{e.name}</span>
       {e.role && <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {e.role}</span>}
       {e.home_store && <span style={{ fontSize: 11, color: 'var(--text3)' }}>· 🏬 {e.home_store}</span>}
@@ -132,7 +132,7 @@ export default function OrgChartPage() {
         {unplaced.length === 0
           ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Everyone is placed in the chart. ✅</div>
           : unplaced.map(e => (
-            <div key={e.employee_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+            <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 600 }}>{e.name}</span>
               {e.role && <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {e.role}</span>}
               <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {e.home_store ? `🏬 ${e.home_store} (store not in tree)` : 'no home store'}</span>
