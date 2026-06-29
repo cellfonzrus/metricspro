@@ -3553,6 +3553,18 @@ async def get_comp_residual_trend(months: int = 6, store: str = "", market: str 
         raise HTTPException(500, f"comp-residual-trend failed: {type(e).__name__}: {e}")
 
 
+@router.get("/comp/rep-pay-trend")
+async def get_comp_rep_pay_trend(months: int = 6, store: str = "", org_id: str = ORG_ID):
+    """Per-REP commission trend — the commission WE ACTUALLY PAY each rep (rep_commissions.total_payout)
+    month over month. This is the per-rep number the Total Compensation page was missing (its other
+    view is account-level carrier comp). One row per rep with each kept month's payout + a total."""
+    require_org(org_id)
+    try:
+        return comp_trend.compute_rep_pay_trend(sb(), org_id, months=months, store=store)
+    except Exception as e:
+        raise HTTPException(500, f"comp-rep-pay-trend failed: {type(e).__name__}: {e}")
+
+
 # ── Daily Sales Targets ──────────────────────────────────────
 _MONTH_TOKENS = {
     'january', 'february', 'march', 'april', 'may', 'june', 'july',

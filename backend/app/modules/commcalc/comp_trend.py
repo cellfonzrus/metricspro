@@ -68,6 +68,61 @@ def _mi_atu_by_period(client, org_id, periods):
         return {}  # RPC not created yet — keep the trend fast, residual lights up once it exists
 
 
+def compute_rep_pay_trend(client, org_id, months=6, store=""):
+    """Per-REP commission trend = Σ rep_commissions.total_payout per (rep, period).
+
+    This is the commission WE ACTUALLY PAY the rep (the spiff stack × KPI tier from the calculator),
+    NOT the account-level carrier compensation in compute_residual_trend. It answers "the commission
+    being paid to the sales rep" — the page's account-level comp view never had a rep dimension.
+    Reps are keyed by storeops_name (fallback epay_salesperson)."""
+    sel = "period,storeops_name,epay_salesperson,store,total_payout"
+    rows, start, page = [], 0, 1000
+    while True:
+        resp = (client.schema("commcalc").table("rep_commissions").select(sel)
+                .eq("org_id", org_id).range(start, start + page - 1).execute())
+        chunk = resp.data or []
+        rows.extend(chunk)
+        if len(chunk) < page:
+            break
+        start += page
+
+    store_q = (store or "").strip().lower()
+    periods = sorted({(r.get("period") or "").strip() for r in rows if r.get("period")}, key=_pkey)
+    kept = periods[-months:] if months and months > 0 else periods
+    kept_set = set(kept)
+
+    reps = {}                                  # rep -> {"rep","store","by_period":{p:pay},"total"}
+    totals_by_month = {p: 0.0 for p in kept}
+    for r in rows:
+        p = (r.get("period") or "").strip()
+        if p not in kept_set:
+            continue
+        st = (r.get("store") or "").strip()
+        if store_q and store_q not in st.lower():
+            continue
+        rep = (r.get("storeops_name") or r.get("epay_salesperson") or "").strip() or "(unknown)"
+        pay = safe_float(r.get("total_payout"))
+        d = reps.setdefault(rep, {"rep": rep, "store": st, "by_period": {}, "total": 0.0})
+        if st and not d["store"]:
+            d["store"] = st
+        d["by_period"][p] = d["by_period"].get(p, 0.0) + pay
+        d["total"] += pay
+        totals_by_month[p] += pay
+
+    rep_list = sorted(reps.values(), key=lambda x: -x["total"])
+    for d in rep_list:
+        d["by_period"] = {p: round(v, 2) for p, v in d["by_period"].items()}
+        d["total"] = round(d["total"], 2)
+        d["latest"] = d["by_period"].get(kept[-1], 0.0) if kept else 0.0
+    return {
+        "months": kept,
+        "reps": rep_list,
+        "totals_by_month": [{"period": p, "total_payout": round(totals_by_month[p], 2)} for p in kept],
+        "note": (None if kept else
+                 "No commission data yet — run a commission calculation for a period first."),
+    }
+
+
 def compute_residual_trend(client, org_id, months=6, store="", market="",
                            min_drop_pct=20.0, min_drop_amt=1.0):
     rows = _fetch_comp(client, org_id)
