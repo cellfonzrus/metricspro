@@ -8,7 +8,7 @@ the app. The HR employees / payroll / time-off pages reuse the existing scoped S
 this router adds the one genuinely new thing: per-employee TOTAL COMPENSATION (wages + commission).
 """
 import calendar
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 from app.core.database import get_supabase
 from app.modules.storeops.router import scope_keyset, in_keyset
 
@@ -56,6 +56,99 @@ def _pvariants(period):
         out.add(f"{y}-{mo}")
         out.add(f"{calendar.month_name[int(mo)]} {y}")
     return [p for p in out if p]
+
+
+# ── Employee management (HR is the single front door to create a person) ───────────────────────
+# "Create once → available everywhere." One controller creates the StoreOps roster row (+ a stable
+# employee_id), then — if a role/scope is given — upserts the app_users role assignment, and
+# optionally provisions a login. Scheduling / payroll / org-tree / commissions all key off
+# employee_id, so no extra writes are needed for the person to appear there. Reuses the existing
+# storeops + core helpers (no new business logic) so behavior matches the other create paths.
+
+@router.get("/employees")
+async def hr_list_employees(org_id: str = ORG_ID):
+    """The roster + role/login state (delegates to the same merge core/Roles uses)."""
+    from app.modules.core.router import list_employees
+    return await list_employees(org_id)
+
+
+@router.post("/employees")
+async def hr_create_employee(body: dict, org_id: str = ORG_ID):
+    """Create a person from HR. Body: name (req), email?, phone?, home_store?, job title (role)?,
+    pay_rate?, employee_id?, plus optional app fields: role_name (RBAC role), market?, store_code?,
+    store_codes?[], create_login?. De-dupes by email. Returns the employee + any login temp password."""
+    from app.modules.storeops.router import EMP_FIELDS, _ensure_employee_id
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    so = _so()
+    email = (body.get("email") or "").strip().lower()
+
+    emp = None
+    if email:
+        ex = (so.table("employees").select("*").eq("org_id", org_id)
+              .ilike("email", email).limit(1).execute().data) or []
+        emp = ex[0] if ex else None
+    if not emp:
+        row = {k: body[k] for k in EMP_FIELDS if k in body}
+        row["org_id"] = org_id
+        row["name"] = name
+        if email:
+            row["email"] = email
+        if row.get("is_active") is None:
+            row["is_active"] = True
+        # blank employee_id is TEXT UNIQUE → drop it so it's NULL, then auto-assign E<pk> below.
+        if not str(row.get("employee_id") or "").strip():
+            row.pop("employee_id", None)
+        r = so.table("employees").insert(row).execute()
+        emp = _ensure_employee_id(r.data[0]) if r.data else row
+
+    # Role + scope (optional) — app_users is keyed on email, so a role needs one.
+    role = (body.get("role_name") or body.get("app_role") or "").strip()
+    has_scope = any(body.get(k) for k in ("market", "store_code", "store_codes"))
+    assigned, login = None, None
+    if email and (role or has_scope):
+        from app.modules.core.router import assign_role
+        await assign_role({
+            "email": email, "full_name": name, "role": role or "sales_rep",
+            "market": body.get("market"), "store_code": body.get("store_code"),
+            "store_codes": body.get("store_codes"), "employee_id": emp.get("employee_id"),
+        }, org_id)
+        assigned = role or "sales_rep"
+        if body.get("create_login"):
+            from app.modules.core.router import create_login as core_create_login
+            try:
+                login = await core_create_login({"email": email}, org_id)
+            except Exception as e:
+                login = {"error": str(e)[:200]}
+    elif (role or has_scope) and not email:
+        # surface why the role didn't stick (matches the Roles page rule)
+        assigned = None
+    return {"employee": emp, "assigned_role": assigned, "login": login,
+            "note": (None if email or not (role or has_scope)
+                     else "Role/scope ignored — an email is required to assign a role or create a login.")}
+
+
+@router.patch("/employees/{emp_id}")
+async def hr_update_employee(emp_id: str, body: dict, org_id: str = ORG_ID):
+    """Update a person from HR. Updates the roster row (if roster fields are present) and, when a
+    role/scope + email is given, re-syncs the app_users assignment so the login stays in step."""
+    from app.modules.storeops.router import EMP_FIELDS, update_employee
+    res = None
+    if any(k in body for k in EMP_FIELDS):
+        res = update_employee(emp_id, body)   # sync handler; raises 404 if missing
+    email = (body.get("email") or (res or {}).get("email") or "").strip().lower()
+    role = (body.get("role_name") or body.get("app_role") or "").strip()
+    has_scope = any(k in body for k in ("market", "store_code", "store_codes"))
+    if email and (role or has_scope):
+        from app.modules.core.router import assign_role
+        await assign_role({
+            "email": email, "full_name": body.get("name") or (res or {}).get("name"),
+            "role": role or None, "market": body.get("market"),
+            "store_code": body.get("store_code"), "store_codes": body.get("store_codes"),
+            "employee_id": (res or {}).get("employee_id"),
+        }, org_id)
+    return res or {"ok": True, "id": emp_id}
 
 
 @router.get("/compensation")
