@@ -5411,7 +5411,15 @@ def test_email(body: dict, org_id: str = ORG_ID):
     try:
         msgs = _email.list_messages(cfg)
     except Exception as e:
-        raise HTTPException(400, f"connection failed: {e}")
+        em = str(e)
+        hint = ""
+        if any(s in em.upper() for s in ("AUTHENTICATIONFAILED", "INVALID CREDENTIALS", "LOGIN FAILED", "AUTH")):
+            hint = (" — AUTH FAILED. Check: (1) use a 16-char App Password, not the normal password "
+                    "(Gmail: 2-Step Verification must be ON to create one); (2) the Username is the FULL email "
+                    "address; (3) Gmail IMAP is always on now — there is NO toggle to enable, so that's fine; "
+                    "(4) Google Workspace / Microsoft 365 accounts may have IMAP restricted by the admin or "
+                    "require OAuth (a normal/App password won't work there).")
+        raise HTTPException(400, f"connection failed: {em}{hint}")
     matched = sum(1 for m in msgs for a in m.get("attachments", []) if a.get("matches"))
     return {"messages": msgs, "count": len(msgs), "matched_attachments": matched}
 
