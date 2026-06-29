@@ -10,6 +10,7 @@ import { api, apiUpload, ORG_ID } from '@/lib/client'
 const REPORT_LABELS: Record<string, string> = {
   sales: 'Sales Transactions', payment_detail: 'Commission Payment Detail',
   mi_report: 'MI & ATU Subscriber Detail', comp_report: 'Comprehensive Compensation',
+  carrier_commission: 'Carrier Commission Statement (Total/VidaPay, any carrier)',
 }
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }

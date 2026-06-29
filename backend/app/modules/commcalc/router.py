@@ -1152,6 +1152,8 @@ _DESIRED_OUTPUTS = {
     "Total Compensation":  ["comp_report", "mi_report"],
     "Commissions":         ["sales", "payment_detail", "comp_report"],
     "Gross Profit / P&L":  ["sales", "payment_detail", "mi_report", "comp_report"],
+    # statement-driven carriers (Total/VidaPay, Cricket…) pay from their commission statement
+    "Commissions (statement carrier)": ["carrier_commission"],
 }
 
 
