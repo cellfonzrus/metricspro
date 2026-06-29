@@ -2811,6 +2811,95 @@ async def calculate(
     return {"status": "started", "period": period, "message": "Calculation running in background"}
 
 
+def _apply_new_engines(client, org_id, period, comms):
+    """ADDITIVE layer of the new configurable payout engines on top of the standard (Boost) calc.
+
+    BOOST-SAFE: with no commcalc.payout_schedule and no commcalc.commission_plan, the installment + plan
+    engines both return EMPTY and this returns `comms` BYTE-IDENTICAL (early return before any mutation).
+    Best-effort — any exception keeps the standard result. Only writes optional columns that actually
+    exist on rep_commissions (probed), so an un-applied migration can never break the insert.
+
+      • multi-month installments (installment_engine) → residual_installment_comm, ADDED to total_payout.
+      • commission plans (commission_engine) → for a PLAN-COVERED rep the plan total REPLACES their spiff
+        subtotal (the plan IS their pay structure); plan_comm/plan_name record it. Boost reps have no plan
+        assignment, so they are never covered → never touched.
+    """
+    try:
+        from app.modules.commcalc import installment_engine, commission_engine
+        inst_by_rep = {}
+        try:
+            ir = installment_engine.compute_installments(client, org_id, period, persist=True)
+            for rep, amt in (ir.get("by_rep") or {}).items():
+                if rep:
+                    inst_by_rep[str(rep).strip().upper()] = safe_float(amt)
+        except Exception:
+            inst_by_rep = {}
+        plan_by_rep = {}
+        try:
+            pr = commission_engine.preview(client, org_id, period)
+            for r in (pr.get("by_rep") or []):
+                rn = str(r.get("rep") or "").strip().upper()
+                if rn:
+                    plan_by_rep[rn] = {"amount": safe_float(r.get("total_payout")), "plan_name": r.get("plan_name")}
+        except Exception:
+            plan_by_rep = {}
+
+        # BOOST PATH: nothing configured → comms returned exactly as-is.
+        if not inst_by_rep and not plan_by_rep:
+            return comms
+
+        cols = {}
+        for c in ("residual_installment_comm", "plan_comm", "plan_name"):
+            try:
+                client.schema('commcalc').table('rep_commissions').select(c).limit(1).execute()
+                cols[c] = True
+            except Exception:
+                cols[c] = False
+
+        def _keys(row):
+            return {str(row.get("storeops_name") or "").strip().upper(),
+                    str(row.get("epay_salesperson") or "").strip().upper()} - {""}
+
+        covered_seen = set()
+        for row in comms:
+            ks = _keys(row)
+            inst = next((inst_by_rep[k] for k in ks if k in inst_by_rep), 0.0)
+            pv = next((plan_by_rep[k] for k in ks if k in plan_by_rep), None)
+            if cols["residual_installment_comm"]:
+                row["residual_installment_comm"] = inst
+            if pv is not None:
+                covered_seen |= (ks & set(plan_by_rep))
+                if cols["plan_comm"]:
+                    row["plan_comm"] = pv["amount"]
+                if cols["plan_name"]:
+                    row["plan_name"] = pv.get("plan_name")
+                row["total_payout"] = round(safe_float(pv["amount"]) + inst, 2)   # plan replaces spiffs
+            else:
+                row["total_payout"] = round(safe_float(row.get("total_payout")) + inst, 2)
+
+        # plan-covered reps the standard calc produced no row for → add them
+        pm = parse_period(period)
+        for rn, pv in plan_by_rep.items():
+            if rn in covered_seen:
+                continue
+            newrow = {"org_id": org_id, "period": period,
+                      "period_month": pm.get("month"), "period_year": pm.get("year"),
+                      "storeops_name": rn.title(), "epay_salesperson": rn,
+                      "subtotal": pv["amount"], "tier": 1,
+                      "total_payout": round(safe_float(pv["amount"]) + inst_by_rep.get(rn, 0.0), 2)}
+            if cols["plan_comm"]:
+                newrow["plan_comm"] = pv["amount"]
+            if cols["plan_name"]:
+                newrow["plan_name"] = pv.get("plan_name")
+            if cols["residual_installment_comm"]:
+                newrow["residual_installment_comm"] = inst_by_rep.get(rn, 0.0)
+            comms.append(newrow)
+        return comms
+    except Exception as e:
+        print(f"WARN new-engine wiring skipped (standard calc kept): {e}")
+        return comms
+
+
 async def _run_calculation(period: str, org_id: str):
     """Background calculation task"""
     client = sb()
@@ -2868,6 +2957,9 @@ async def _run_calculation(period: str, org_id: str):
             comms = result['commissions']
             for row in comms:
                 row['org_id'] = org_id
+            # ADDITIVE: layer the new configurable engines (multi-month payout + commission plans) on top.
+            # Boost-safe: with no schedule/plan configured this returns comms byte-identical (see helper).
+            comms = _apply_new_engines(client, org_id, period, comms)
             for i in range(0, len(comms), 500):
                 client.schema('commcalc').table('rep_commissions').insert(comms[i:i+500]).execute()
         except Exception as e:
