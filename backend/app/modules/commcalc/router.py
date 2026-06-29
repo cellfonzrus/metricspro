@@ -123,7 +123,7 @@ async def upload_file(
     can't be mislabeled into the wrong month — the bug that wiped a month's residual trend."""
     require_org(org_id)
     
-    SUPPORTED = ["sales","daily_sales","payment_detail","mi_report","dlar_rep","dlar_store","catalog","master_cats","comp_report","inventory_aging"]
+    SUPPORTED = ["sales","daily_sales","payment_detail","mi_report","dlar_rep","dlar_store","catalog","master_cats","comp_report","inventory_aging","x_report"]
     if file_type not in SUPPORTED:
         raise HTTPException(400, f"Unknown file type: {file_type}. Supported: {SUPPORTED}")
     
@@ -223,13 +223,23 @@ async def upload_file(
             return "other"
         default_date = datetime.now(timezone.utc).date().isoformat()
         agg = {}
+        current_store, current_date = None, None
         for r in rows:
             store, tender, amt = _pick(r, STORE_K), _pick(r, TENDER_K), _pick(r, AMT_K)
-            if store is None or tender is None:
-                continue
             d = _pick(r, DATE_K)
-            d = str(d)[:10] if d else default_date
-            key = (str(store).strip(), d, str(tender).strip())
+            # GROUPED-BY-STORE exports put the store (and sometimes the date) on a section-HEADER row,
+            # with the tender lines beneath carrying no store — forward-fill from the last seen header.
+            if store is not None and str(store).strip():
+                current_store = str(store).strip()
+            if d is not None and str(d).strip():
+                current_date = str(d)[:10]
+            if tender is None or str(amt).strip() in ("", "nan", "none"):
+                continue   # a store/date header row, or a blank/subtotal line with no tender
+            use_store = str(store).strip() if (store is not None and str(store).strip()) else current_store
+            if not use_store:
+                continue
+            use_date = str(d)[:10] if (d is not None and str(d).strip()) else (current_date or default_date)
+            key = (use_store, use_date, str(tender).strip())
             agg[key] = round(agg.get(key, 0.0) + safe_float(amt), 2)
         saved = 0
         for (store, d, tender), amount in agg.items():
