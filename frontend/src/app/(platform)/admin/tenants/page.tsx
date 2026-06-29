@@ -49,7 +49,10 @@ export default function TenantsAdmin() {
   const mtOn = typeof window !== 'undefined' && window.localStorage.getItem('mp_multi_tenant') === '1'
   return (
     <div style={{ padding: 24, maxWidth: 900 }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>🏢 Companies (Tenants)</h1>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>🏢 Companies (Tenants)</h1>
+        <a href="/admin/billing" className="btn btn-sm">💳 Billing &amp; Plans →</a>
+      </div>
       <div className="card" style={{ padding: 12, marginBottom: 14, background: mtOn ? '#fffbeb' : 'var(--surface)', borderColor: mtOn ? '#fde68a' : 'var(--border)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <b style={{ fontSize: 14 }}>Multi-tenant mode (this browser):</b>
