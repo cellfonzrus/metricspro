@@ -115,10 +115,11 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/asset/inventory-recon', label: 'Inventory Recon', icon: '🔎', module: 'asset', scopes: ['all', 'market'] },
     { href: '/commcalc/asset/hotsheet-recon', label: 'Pricing Hotsheet', icon: '🏷️', module: 'commissions', scopes: ['all', 'market'] },
   ]},
-  { group: 'VIP', module: 'vip', items: [
-    { href: '/commcalc/vip', label: 'VIP Invoices', icon: '🧾', module: 'vip' },
-    { href: '/commcalc/vip/paygo', label: 'PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'] },
-    { href: '/commcalc/vip/sweep', label: 'VIP Sweep', icon: '🧹', module: 'vip', scopes: ['all'] },
+  { group: 'Distributors', module: 'vip', items: [
+    { href: '/commcalc/distributors', label: 'Distributors', icon: '🏬', module: 'vip', scopes: ['all', 'market'] },
+    { href: '/commcalc/vip', label: 'VIP · Invoices', icon: '🧾', module: 'vip' },
+    { href: '/commcalc/vip/paygo', label: 'VIP · PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'] },
+    { href: '/commcalc/vip/sweep', label: 'VIP · Sweep', icon: '🧹', module: 'vip', scopes: ['all'] },
   ]},
   { group: 'Workforce', module: 'storeops', items: [
     { href: '/storeops', label: 'Dashboard', icon: '🏠', module: 'storeops' },

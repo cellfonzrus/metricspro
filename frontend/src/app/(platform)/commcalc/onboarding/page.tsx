@@ -11,7 +11,7 @@ import { usePeriod } from '@/lib/period-context'
 
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
-const STEPS = ['Company', 'Carrier', 'Connector & reports', 'Upload & columns', 'Categories', 'Stores', 'Activate']
+const STEPS = ['Company', 'Carrier', 'Connector & reports', 'Upload & columns', 'Categories', 'Stores', 'Distributors', 'Activate']
 const SWEEP_KINDS = ['manual', 'epay', 'vip', 'dlar', 'b2b', 'google_closing']
 
 export default function OnboardingWizard() {
@@ -71,7 +71,7 @@ export default function OnboardingWizard() {
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
 
-  const canNext = [!!companyId, !!carrierId, !!connectorId, true, true, true, true][step]
+  const canNext = [!!companyId, !!carrierId, !!connectorId, true, true, true, true, true][step]
 
   return (
     <div>
@@ -193,10 +193,13 @@ export default function OnboardingWizard() {
         {/* STEP 6 — Stores */}
         {step === 5 && <StoresStep />}
 
-        {/* STEP 7 — Activate */}
-        {step === 6 && (
+        {/* STEP 7 — Distributors */}
+        {step === 6 && <DistributorsStep carrierId={carrierId} setMsg={setMsg} />}
+
+        {/* STEP 8 — Activate */}
+        {step === 7 && (
           <div>
-            <h3 style={{ marginTop: 0 }}>7. Activate</h3>
+            <h3 style={{ marginTop: 0 }}>8. Activate</h3>
             <ul style={{ fontSize: 14, lineHeight: 1.8 }}>
               <li>Company: <b>{companies.find(c => c.id === companyId)?.name || '—'}</b></li>
               <li>Carrier: <b>{carriers.find(c => c.id === carrierId)?.name || '—'}</b></li>
@@ -309,6 +312,68 @@ function StoresStep() {
       <p style={{ fontSize: 13, color: 'var(--text2)' }}>Map the raw store names in this carrier&apos;s feeds to your canonical stores so P&amp;L and reports attribute correctly.</p>
       {n !== null && <p style={{ fontSize: 13 }}>{n > 0 ? <>⚠️ <b>{n}</b> store names are currently unmatched.</> : '✅ No unmatched stores.'}</p>}
       <Link href="/commcalc/store-match" className="btn btn-primary" style={{ fontSize: 13, textDecoration: 'none' }}>Open Store Matching →</Link>
+    </div>
+  )
+}
+
+// ── Step 7: distributors — who supplies devices/inventory + on what ARRANGEMENT ─────────────────
+// Captures the tenant's supplier setup: terms (net credit), consignment (lent devices billed on a
+// cycle = Asset Lending, like VIP), or COD — and the default funding (own vs borrowed account).
+function DistributorsStep({ carrierId, setMsg }: { carrierId: string; setMsg: (s: string) => void }) {
+  const [dists, setDists] = useState<any[]>([])
+  const [d, setD] = useState({ name: '', arrangement: 'terms', terms_days: 30, billing_cycle: 'weekly', has_asset_lending: false, default_funding: 'own' })
+  const load = useCallback(() => api('/api/v1/commcalc/distributors').then((r: any) => setDists(r?.distributors || [])).catch(() => {}), [])
+  useEffect(() => { load() }, [load])
+  async function add() {
+    if (!d.name.trim()) { setMsg('Distributor name required.'); return }
+    try {
+      await api('/api/v1/commcalc/distributors', { method: 'POST', body: JSON.stringify({
+        ...d, carrier_id: carrierId || undefined,
+        has_asset_lending: d.arrangement === 'consignment' ? true : d.has_asset_lending,
+        terms_days: d.arrangement === 'terms' ? Number(d.terms_days) : undefined }) })
+      setD({ name: '', arrangement: 'terms', terms_days: 30, billing_cycle: 'weekly', has_asset_lending: false, default_funding: 'own' })
+      setMsg('✅ Distributor added.'); load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  return (
+    <div>
+      <h3 style={{ marginTop: 0 }}>7. Distributors &amp; payment terms</h3>
+      <p style={{ fontSize: 13, color: 'var(--text2)' }}>
+        Who does this company source devices/inventory from, and on what arrangement? Pick <b>terms</b> (net credit),
+        <b> consignment</b> (lent devices billed on a cycle — like VIP&apos;s Asset Lending), or <b>COD</b>. You can manage
+        these and record payment funding (own vs borrowed account) later on the Distributors page.
+      </p>
+      <div style={{ display: 'grid', gap: 6, maxWidth: 640, marginBottom: 10 }}>
+        {dists.map(x => (
+          <div key={x.id} style={{ fontSize: 13, display: 'flex', gap: 8, alignItems: 'center' }}>
+            <b>{x.name}</b>
+            <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 9, background: 'var(--surface2)' }}>{x.arrangement}{x.arrangement === 'terms' && x.terms_days ? ` · ${x.terms_days}d` : ''}{x.arrangement === 'consignment' ? ` · ${x.billing_cycle}` : ''}</span>
+            {x.has_asset_lending && <span style={{ fontSize: 11, color: '#6d28d9' }}>📲 asset lending</span>}
+          </div>
+        ))}
+        {dists.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>No distributors yet.</span>}
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input style={{ ...sel, width: 150 }} placeholder="Distributor name" value={d.name} onChange={e => setD({ ...d, name: e.target.value })} />
+        <select style={sel} value={d.arrangement} onChange={e => setD({ ...d, arrangement: e.target.value })}>
+          <option value="terms">Terms (net credit)</option><option value="consignment">Consignment</option><option value="cod">COD</option>
+        </select>
+        {d.arrangement === 'terms' && (
+          <select style={sel} value={d.terms_days} onChange={e => setD({ ...d, terms_days: Number(e.target.value) })}>
+            {[14, 21, 30, 45, 60, 90].map(n => <option key={n} value={n}>{n} days</option>)}
+          </select>
+        )}
+        {d.arrangement === 'consignment' && (
+          <select style={sel} value={d.billing_cycle} onChange={e => setD({ ...d, billing_cycle: e.target.value })}>
+            <option value="weekly">Weekly</option><option value="monthly">Monthly</option>
+          </select>
+        )}
+        <select style={sel} value={d.default_funding} onChange={e => setD({ ...d, default_funding: e.target.value })}>
+          <option value="own">Own account</option><option value="borrowed">Borrowed account</option>
+        </select>
+        <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={add}>+ Add distributor</button>
+        <Link href="/commcalc/distributors" style={{ fontSize: 13, alignSelf: 'center' }}>Manage →</Link>
+      </div>
     </div>
   )
 }

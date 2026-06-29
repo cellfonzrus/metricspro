@@ -3148,6 +3148,99 @@ async def preview_payout_installments(period: str, org_id: str = ORG_ID):
     except Exception as e:
         raise HTTPException(500, f"payout preview failed: {type(e).__name__}: {e}")
 
+
+# ── Distributors (suppliers) + universal payment-funding ledger (migration 058) ───────────────────
+# A distributor is who a tenant sources devices/inventory from, on a per-distributor ARRANGEMENT:
+# 'terms' (net credit), 'consignment' (lent devices billed on a cycle = Asset Lending, like VIP), or
+# 'cod'. The payment ledger records HOW each payment was funded — own vs borrowed account — for any
+# company. "VIP" is now just one seeded distributor under the generic Distributors category.
+
+@router.get("/distributors")
+async def list_distributors(org_id: str = ORG_ID):
+    client = sb()
+    try:
+        rows = client.schema('commcalc').table('distributors').select('*').eq('org_id', org_id).order('name').execute().data or []
+    except Exception:
+        return {"distributors": [], "ready": False, "note": "Run migration 058_distributors.sql to enable."}
+    return {"distributors": rows, "ready": True}
+
+
+@router.post("/distributors")
+async def save_distributor(body: dict, org_id: str = ORG_ID):
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    row = {
+        "org_id": org_id, "name": name,
+        "carrier_id": body.get("carrier_id") or None,
+        "arrangement": (body.get("arrangement") or "terms"),
+        "terms_days": int(body.get("terms_days") or 0) or None,
+        "billing_cycle": body.get("billing_cycle") or "net",
+        "has_asset_lending": bool(body.get("has_asset_lending")),
+        "default_funding": body.get("default_funding") or "own",
+        "portal_provider": body.get("portal_provider") or None,
+        "is_active": bool(body.get("is_active", True)),
+        "notes": body.get("notes") or None,
+    }
+    client = sb()
+    try:
+        if body.get("id"):
+            r = client.schema('commcalc').table('distributors').update(row).eq('id', body['id']).eq('org_id', org_id).execute()
+        else:
+            r = client.schema('commcalc').table('distributors').upsert(row, on_conflict='org_id,name').execute()
+        return (r.data or [{}])[0]
+    except Exception as e:
+        raise HTTPException(500, f"save distributor failed (is migration 058 applied?): {e}")
+
+
+@router.delete("/distributors/{distributor_id}")
+async def delete_distributor(distributor_id: str, org_id: str = ORG_ID):
+    client = sb()
+    client.schema('commcalc').table('distributors').delete().eq('org_id', org_id).eq('id', distributor_id).execute()
+    return {"deleted": distributor_id}
+
+
+@router.get("/distributor-payments")
+async def list_distributor_payments(distributor_id: str = "", org_id: str = ORG_ID):
+    """Payment ledger for a distributor (or all), with own-vs-borrowed funding totals."""
+    client = sb()
+    try:
+        q = client.schema('commcalc').table('distributor_payments').select('*').eq('org_id', org_id)
+        if distributor_id:
+            q = q.eq('distributor_id', distributor_id)
+        rows = q.order('pay_date', desc=True).limit(500).execute().data or []
+    except Exception:
+        return {"payments": [], "ready": False}
+    own = sum(safe_float(r.get('amount')) for r in rows if (r.get('funding_source') or 'own') == 'own')
+    borrowed = sum(safe_float(r.get('amount')) for r in rows if r.get('funding_source') == 'borrowed')
+    return {"payments": rows, "ready": True,
+            "totals": {"own": round(own, 2), "borrowed": round(borrowed, 2), "total": round(own + borrowed, 2)}}
+
+
+@router.post("/distributor-payments")
+async def add_distributor_payment(body: dict, org_id: str = ORG_ID):
+    row = {
+        "org_id": org_id, "distributor_id": body.get("distributor_id") or None,
+        "pay_date": body.get("pay_date") or None, "period": body.get("period") or None,
+        "amount": safe_float(body.get("amount")),
+        "funding_source": body.get("funding_source") or "own",
+        "account_label": body.get("account_label") or None,
+        "ref": body.get("ref") or None, "notes": body.get("notes") or None,
+    }
+    client = sb()
+    try:
+        r = client.schema('commcalc').table('distributor_payments').insert(row).execute()
+        return (r.data or [{}])[0]
+    except Exception as e:
+        raise HTTPException(500, f"add payment failed (is migration 058 applied?): {e}")
+
+
+@router.delete("/distributor-payments/{payment_id}")
+async def delete_distributor_payment(payment_id: str, org_id: str = ORG_ID):
+    client = sb()
+    client.schema('commcalc').table('distributor_payments').delete().eq('org_id', org_id).eq('id', payment_id).execute()
+    return {"deleted": payment_id}
+
 @router.get("/stores")
 async def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
