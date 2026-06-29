@@ -10,12 +10,13 @@ const FILE_TYPES = [
   { id: 'dlar_rep',       label: 'Metrics — Rep Report',  icon: '📊', required: true,  desc: 'Rep KPI report (per-carrier portal)' },
   { id: 'dlar_store',     label: 'Metrics — Store Report', icon: '🏪', required: false, desc: 'Store-level KPI data (per-carrier portal)' },
   { id: 'mi_report',      label: 'MI & ATU Report',       icon: '💰', required: false, desc: 'Monthly Incentive + ATU Payout' },
-  { id: 'catalog',        label: 'Product Catalog',       icon: '📱', required: false, desc: 'Device catalog with cost prices' },
+  { id: 'catalog',        label: 'Product Catalog',       icon: '📱', required: false, desc: 'Device catalog + cost (the B2B "Product Update" report)' },
   { id: 'master_cats',    label: 'Payment Categories',    icon: '🗂️', required: false, desc: 'Payment type → category mapping' },
   { id: 'comp_report',    label: 'Comprehensive Comp Report', icon: '🏦', required: false, desc: 'Carrier store-level rebates & MDF' },
   { id: 'inventory_aging', label: 'Inventory Aging (POS)',  icon: '📦', required: false, desc: 'b2bsoft / any POS inventory aging — per-store value snapshot' },
+  { id: 'x_report',       label: 'X Report (POS tenders)', icon: '🧾', required: false, desc: 'POS daily tenders by type — reconciles vs the daily closing sheet' },
 ]
-const PERIODLESS = new Set(['catalog', 'master_cats', 'inventory_aging'])
+const PERIODLESS = new Set(['catalog', 'master_cats', 'inventory_aging', 'x_report'])
 const TYPE_META = Object.fromEntries(FILE_TYPES.map(t => [t.id, t]))
 
 // Auto-import sources + the period granularities the user asked for, per source.

@@ -5,7 +5,7 @@ import { api } from '@/lib/client'
 // Generic FTP-pull sweep (Theme 6). Configure a vendor's FTP (host/creds/folder) and filename →
 // upload-type patterns; the backend pulls new files on a schedule and routes each to the right parser.
 // Nothing hard-coded — works for B2B Soft or any vendor that FTP-pushes report files.
-const UPLOAD_TYPES = ['sales', 'daily_sales', 'payment_detail', 'mi_report', 'dlar_rep', 'dlar_store', 'comp_report', 'catalog', 'inventory_aging']
+const UPLOAD_TYPES = ['sales', 'daily_sales', 'payment_detail', 'mi_report', 'dlar_rep', 'dlar_store', 'comp_report', 'catalog', 'inventory_aging', 'x_report']
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
 const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 2 }

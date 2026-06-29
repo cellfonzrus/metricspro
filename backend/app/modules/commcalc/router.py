@@ -201,6 +201,57 @@ async def upload_file(
                 'note': (None if saved else "No per-store inventory value found — check the file has a store "
                          "column + a value/cost column (or map it on Column Mapping).")}
 
+    # POS "X report": daily takings BY TENDER TYPE per store → commcalc.pos_tender_summary, for the tender
+    # reconciliation against the daily closing sheet. Flexible column detection (any POS). Periodless.
+    if file_type == 'x_report':
+        def _pick(r, cands):
+            for c in cands:
+                if c in r and str(r.get(c)).strip().lower() not in ("", "nan", "none"):
+                    return r.get(c)
+            return None
+        STORE_K = ("store", "Store", "location", "Location", "store_name", "StoreName", "Site", "Register", "register")
+        DATE_K = ("close_date", "Close Date", "date", "Date", "Business Date", "BusinessDate", "trans_date", "Trans Date")
+        TENDER_K = ("tender_type", "Tender Type", "tender", "Tender", "payment_type", "Payment Type", "Payment", "Type", "Media", "media")
+        AMT_K = ("amount", "Amount", "total", "Total", "value", "Value", "net", "Net", "Net Amount", "amt", "Amt")
+
+        def _tclass(t):
+            t = (t or "").lower()
+            if "cash" in t:
+                return "cash"
+            if any(k in t for k in ("credit", "debit", "card", "visa", "master", "amex", "discover", "cc", "chip", "emv")):
+                return "card"
+            return "other"
+        default_date = datetime.now(timezone.utc).date().isoformat()
+        agg = {}
+        for r in rows:
+            store, tender, amt = _pick(r, STORE_K), _pick(r, TENDER_K), _pick(r, AMT_K)
+            if store is None or tender is None:
+                continue
+            d = _pick(r, DATE_K)
+            d = str(d)[:10] if d else default_date
+            key = (str(store).strip(), d, str(tender).strip())
+            agg[key] = round(agg.get(key, 0.0) + safe_float(amt), 2)
+        saved = 0
+        for (store, d, tender), amount in agg.items():
+            try:
+                client.schema('commcalc').table('pos_tender_summary').upsert(
+                    {"org_id": org_id, "close_date": d, "store": store, "tender_type": tender,
+                     "tender_class": _tclass(tender), "amount": amount, "source": "x_report",
+                     "updated_at": datetime.now(timezone.utc).isoformat()},
+                    on_conflict="org_id,close_date,store,tender_type").execute()
+                saved += 1
+            except Exception:
+                pass
+        try:
+            client.schema('commcalc').table('upload_log').insert(
+                {'org_id': org_id, 'file_type': 'x_report', 'period': default_date,
+                 'filename': getattr(file, 'filename', None), 'rows_saved': saved}).execute()
+        except Exception:
+            pass
+        return {'success': True, 'file_type': 'x_report', 'tenders': saved, 'rows_read': len(rows),
+                'note': (None if saved else "No tender rows found — the X report needs a store, a tender/"
+                         "payment-type column, and an amount column (run migration 062 if just added).")}
+
     # Determine target table
     TABLE_MAP = {
         "sales": "raw_sales",
@@ -1305,6 +1356,75 @@ async def carrier_comm_file_extract(file: UploadFile = File(...), org_id: str = 
         return {"sheets": sheets}
     except Exception as e:
         raise HTTPException(400, f"Could not read the file: {e}")
+
+
+@router.get("/x-tender-recon")
+def x_tender_recon(date: str = "", period: str = "", tolerance: float = 1.0, org_id: str = ORG_ID):
+    """Reconcile the POS X-report tenders (pos_tender_summary) vs the daily closing sheet (daily_closing)
+    per store, cash vs card. Pass date='YYYY-MM-DD' for one day, or period ('2026-06' / 'June 2026') for a
+    month. Returns per-store variances + totals. Store keys are matched by exact string (POS store name vs
+    closing address) — use Store Matching if they differ. Degrades to empty if migration 062 isn't applied."""
+    require_org(org_id)
+    client = sb()
+    xq = client.schema('commcalc').table('pos_tender_summary').select('close_date,store,tender_class,amount').eq('org_id', org_id)
+    dq = client.schema('commcalc').table('daily_closing').select(
+        'close_date,store_code,store_name,store_address,store_cash,store_cc,epay_cash,epay_cc').eq('org_id', org_id)
+    if date:
+        xq = xq.eq('close_date', date); dq = dq.eq('close_date', date)
+    elif period:
+        if period[:4].isdigit() and '-' in period:
+            y, m = int(period[:4]), int(period[5:7])
+        else:
+            pm = parse_period(period); y, m = pm['year'], pm['month']
+        start = f"{y}-{m:02d}-01"
+        end = f"{y + 1}-01-01" if m == 12 else f"{y}-{m + 1:02d}-01"
+        xq = xq.gte('close_date', start).lt('close_date', end)
+        dq = dq.gte('close_date', start).lt('close_date', end)
+    try:
+        xrows = xq.execute().data or []
+    except Exception:
+        return {"ready": False, "rows": [], "note": "Run migration 062_pos_tender_summary.sql + import an X report."}
+    drows = dq.execute().data or []
+
+    pos = {}
+    for r in xrows:
+        s = (r.get('store') or '').strip()
+        if not s:
+            continue
+        p = pos.setdefault(s, {'cash': 0.0, 'card': 0.0, 'other': 0.0})
+        cls = (r.get('tender_class') or 'other')
+        p[cls if cls in p else 'other'] += safe_float(r.get('amount'))
+    clo = {}
+    for r in drows:
+        s = (r.get('store_address') or r.get('store_name') or r.get('store_code') or '').strip()
+        if not s:
+            continue
+        c = clo.setdefault(s, {'cash': 0.0, 'card': 0.0})
+        c['cash'] += safe_float(r.get('store_cash')) + safe_float(r.get('epay_cash'))
+        c['card'] += safe_float(r.get('store_cc')) + safe_float(r.get('epay_cc'))
+
+    rows_out, t = [], {'pos_cash': 0.0, 'closing_cash': 0.0, 'pos_card': 0.0, 'closing_card': 0.0}
+    for s in sorted(set(pos) | set(clo)):
+        pc = pos.get(s, {'cash': 0, 'card': 0, 'other': 0})
+        cc = clo.get(s, {'cash': 0, 'card': 0})
+        cash_var = round(pc['cash'] - cc['cash'], 2)
+        card_var = round(pc['card'] - cc['card'], 2)
+        rows_out.append({
+            'store': s,
+            'pos_cash': round(pc['cash'], 2), 'closing_cash': round(cc['cash'], 2), 'cash_variance': cash_var,
+            'pos_card': round(pc['card'], 2), 'closing_card': round(cc['card'], 2), 'card_variance': card_var,
+            'pos_other': round(pc.get('other', 0), 2),
+            'match': abs(cash_var) <= tolerance and abs(card_var) <= tolerance,
+            'in_pos': s in pos, 'in_closing': s in clo,
+        })
+        t['pos_cash'] += pc['cash']; t['closing_cash'] += cc['cash']
+        t['pos_card'] += pc['card']; t['closing_card'] += cc['card']
+    return {"ready": True, "date": date, "period": period, "tolerance": tolerance,
+            "rows": rows_out,
+            "totals": {**{k: round(v, 2) for k, v in t.items()},
+                       "cash_variance": round(t['pos_cash'] - t['closing_cash'], 2),
+                       "card_variance": round(t['pos_card'] - t['closing_card'], 2),
+                       "stores": len(rows_out), "mismatches": sum(1 for r in rows_out if not r['match'])}}
 
 
 @router.get("/carrier-category-map")
