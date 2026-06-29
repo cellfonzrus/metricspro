@@ -255,10 +255,15 @@ def calc_rep_commissions(
         # ACIMA lease spiff — paid PER ACIMA TENDERED. The tender shows up as
         # "ACIMA" / "ACIMA Lease" / "Acima Leasing" in raw_sales.tender_type, never the
         # literal "financing" — the old exact-match made acima_count always 0 ($0 for everyone).
-        acima_count = sum(
-            1 for s in rep['sales']
+        # Count DISTINCT transactions (by trans_id), NOT line items — one ACIMA tender is one
+        # transaction but many raw_sales line rows (this codebase's line-item multiplicity). Summing
+        # rows over-paid: e.g. Ali had 20 acima line items → $500 when it was a handful of real
+        # tenders. Mirrors the prem_set/byod_set/upg_set trans_id dedupe above.
+        acima_count = len({
+            str(s.get('trans_id', '')).replace('.0', '').strip()
+            for s in rep['sales']
             if 'acima' in str(s.get('tender_type', '')).lower()
-        )
+        })
         acima_comm = acima_count * G['acima_spiff']
         
         # Custom spiffs
