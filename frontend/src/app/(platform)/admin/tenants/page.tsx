@@ -14,6 +14,9 @@ export default function TenantsAdmin() {
   const [busy, setBusy] = useState(false)
   const [np, setNp] = useState({ name: '', admin_email: '', admin_name: '', temp_password: '' })
   const [created, setCreated] = useState<any>(null)
+  const [rp, setRp] = useState({ email: '', temp_password: '' })
+  const [reset, setReset] = useState<any>(null)
+  const [rpBusy, setRpBusy] = useState(false)
 
   const load = useCallback(() => {
     api('/api/v1/core/tenants').then((d: any) => setTenants(d.tenants || [])).catch(e => setErr(e?.message || 'Failed to load'))
@@ -27,6 +30,14 @@ export default function TenantsAdmin() {
       const r = await api('/api/v1/core/tenants', { method: 'POST', body: JSON.stringify(np) })
       setCreated(r); setNp({ name: '', admin_email: '', admin_name: '', temp_password: '' }); load()
     } catch (e: any) { setErr(e?.message || 'Could not create company') } finally { setBusy(false) }
+  }
+  async function resetPassword() {
+    if (!rp.email.trim()) { setErr('Enter the user\'s email to reset.'); return }
+    setRpBusy(true); setErr(''); setReset(null)
+    try {
+      const r = await api('/api/v1/core/users/reset-password', { method: 'POST', body: JSON.stringify(rp) })
+      setReset(r); setRp({ email: '', temp_password: '' })
+    } catch (e: any) { setErr(e?.message || 'Could not reset password') } finally { setRpBusy(false) }
   }
   async function rename(t: Tenant) {
     const name = prompt('Rename company:', t.name)
@@ -84,6 +95,25 @@ export default function TenantsAdmin() {
           <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 14 }}>
             ✅ Created <b>{created.name}</b>. Admin login: <b>{created.admin_email}</b> · temp password: <code style={{ background: '#fff', padding: '2px 6px', borderRadius: 4 }}>{created.temp_password}</code>
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Hand this to the company admin — they reset it on first login. {created.auth_error ? `(login note: ${created.auth_error})` : ''}</div>
+          </div>
+        )}
+      </div>
+
+      <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 4 }}>🔑 Reset a user's password</div>
+        <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
+          Works for <b>any tenant's</b> user (Luxelink, etc.) by email. Sets a temp password and forces a change on next login.
+          The account must already have a login (created in Roles &amp; Access).
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input style={{ ...inp, width: 240 }} placeholder="User email *" value={rp.email} onChange={e => setRp(v => ({ ...v, email: e.target.value }))} />
+          <input style={{ ...inp, width: 170 }} placeholder="New temp password (auto)" value={rp.temp_password} onChange={e => setRp(v => ({ ...v, temp_password: e.target.value }))} />
+          <button className="btn btn-primary" disabled={rpBusy} onClick={resetPassword}>{rpBusy ? 'Resetting…' : 'Reset password'}</button>
+        </div>
+        {reset && (
+          <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 14 }}>
+            ✅ Password reset for <b>{reset.email}</b> · temp password: <code style={{ background: '#fff', padding: '2px 6px', borderRadius: 4 }}>{reset.temp_password}</code>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Hand this to the user — they'll be prompted to set a new password on next login.</div>
           </div>
         )}
       </div>

@@ -613,6 +613,34 @@ async def create_login(body: dict, org_id: str = ORG_ID):
     return {"email": email, "created": created, "temp_password": temp_pw, "auth_id": auth_id}
 
 
+@router.post("/users/reset-password")
+async def reset_password(body: dict, authorization: str = Header(default="")):
+    """Super-admin: reset ANY user's password by email, ACROSS ALL TENANTS (not org-scoped, unlike
+    /users/create-login). Uses the admin SDK to (re)set the Supabase Auth password and forces a change
+    on next login wherever the email has an app_users row. Returns the temp password to hand out. Pass
+    {email, temp_password?} — temp_password optional (auto-generated if omitted)."""
+    _require_super_admin(authorization)
+    email = (body.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "email required")
+    admin = get_supabase_admin()
+    existing = _find_auth_user_by_email(admin, email)
+    if not existing:
+        raise HTTPException(404, f"no auth account exists for {email} — create their login first (Roles & Access).")
+    temp_pw = body.get("temp_password") or ("Mp" + secrets.token_urlsafe(6))
+    try:
+        admin.auth.admin.update_user_by_id(existing, {"password": temp_pw})
+    except Exception as e:
+        raise HTTPException(500, f"could not reset password: {str(e)[:200]}")
+    # Force a reset-on-next-login flag wherever this email is provisioned (any org).
+    try:
+        sb().schema("storeops").table("app_users").update(
+            {"must_reset_password": True}).eq("email", email).execute()
+    except Exception:
+        pass
+    return {"ok": True, "email": email, "temp_password": temp_pw, "auth_id": existing}
+
+
 @router.post("/users/bulk-provision")
 async def bulk_provision(body: dict, org_id: str = ORG_ID):
     """Create logins for every assigned core.users row that has an email and no auth_id yet
