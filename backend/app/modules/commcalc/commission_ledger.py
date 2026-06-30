@@ -53,8 +53,9 @@ DEFAULT_RULES = [
 
 # Preconfigured TEMPLATES a new tenant can adopt or fork. The source_report key namespaces a whole
 # rule-set, so a tenant picks "Total" or "Boost" out of the box, or creates their own. Total (ma_daily_tx)
-# ships seeded in 071; Boost is reserved for the follow-up that maps the Boost Description→Category taxonomy
-# (Commission Categories Master File) into these same five canonical buckets.
+# ships seeded in 071; Boost (boost) ships seeded in 072 — the curated Boost Description→Category taxonomy
+# (Commission Categories Master File) mapped onto these same five canonical buckets (exact rules, sign_rule
+# 'any' because Boost commission amounts are POSITIVE, vs MA's negative=payout convention).
 BUILTIN_TEMPLATES = {
     "ma_daily_tx": "Total Wireless (MA Daily Tx)",
     "boost": "Boost (ePay / DLAR)",
