@@ -145,6 +145,21 @@ TARGET_FIELDS = {
         ("residual", "Residual", "number", False, "Residual", ["Residual Amount"]),
         ("other_amount", "Other amount", "number", False, "Other", []),
     ],
+    # CANONICAL commission/payout LEDGER source (Total/MA Daily Tx + any carrier). The single signed
+    # amount (raw_amount) is classified into the five canonical buckets by commission_ledger.classify();
+    # the bucket columns are DERIVED, not mapped. Defaults match the MA Daily Tx headers.
+    "commission_ledger": [
+        ("account_id", "Account id", "text", False, "Account ID", ["AccountId"]),
+        ("account_name", "Account name", "text", False, "Account Name", ["Direct MA Name"]),
+        ("store", "Store / dealer", "text", False, "Direct MA Name", ["Account Name", "Top MA Name"]),
+        ("rep_user", "Rep / user", "text", False, "User", ["Rep", "Salesperson", "User Name"]),
+        ("order_number", "Order number", "text", False, "Order Number", ["Order Id", "Order #"]),
+        ("order_type", "Order type", "text", False, "Order Type", ["Transaction Type", "Type"]),
+        ("product_name", "Product / description", "text", True, "Product Name", ["Description", "Product Desc"]),
+        ("trans_date", "Transaction date", "date10", False, "Date of Transaction", ["Trans Date", "Date"]),
+        ("due_date", "Due date", "date10", False, "Date Due", ["Due Date"]),
+        ("raw_amount", "Amount (signed; negative = payout)", "number", True, "Retail Cost", ["Amount", "Net Amount", "Payout"]),
+    ],
 }
 
 # Amount fields summed into carrier_commission.total_commission (the rep's statement commission).
@@ -160,6 +175,7 @@ TABLE_MAP = {
     "payment_detail": "raw_payment_detail",
     "sales": "raw_sales",
     "carrier_commission": "carrier_commission",
+    "commission_ledger": "commission_ledger",
 }
 
 

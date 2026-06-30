@@ -24,6 +24,7 @@ from app.modules.commcalc import carrier_map
 from app.modules.commcalc import column_mapping
 from app.modules.commcalc import commission_catalog
 from app.modules.commcalc import target_registry
+from app.modules.commcalc import commission_ledger
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 import calendar as _calendar
@@ -1471,6 +1472,210 @@ def delete_target_field(target_field: str, report_key: str, org_id: str = ORG_ID
     if not removed:
         raise HTTPException(400, f"'{target_field}' is a built-in default or not found — cannot remove.")
     return {"ok": True, "removed": target_field}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# CANONICAL COMMISSION/PAYOUT LEDGER (SAP-style) — normalise ANY carrier's commission file into five
+# canonical buckets (Commission / Spiff / Equipment rebate / Residual-monthly / Auto Pay residual) via a
+# per-tenant rule map. A multi-month payout stays one category but keeps its payment_month. Negative =
+# payout; positive = a bill/activation payment (stored, kept out of the buckets). Tables: mig 071.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+def _ledger_source_rules(client, org_id, carrier_id=""):
+    """Header→field rules for the commission_ledger source: saved column_mapping if present, else the
+    built-in MA Daily Tx default layout — so a fresh tenant's MA file imports with zero configuration."""
+    rules = column_mapping.load_rules(client, org_id, "commission_ledger", carrier_id or None)
+    if rules:
+        return rules
+    return [{"target_field": d["target_field"], "source_header": d["source_header"], "transform": d["transform"]}
+            for d in column_mapping.default_mapping("commission_ledger")]
+
+
+@router.post("/commission-ledger/import")
+async def commission_ledger_import(
+    file: UploadFile = File(...),
+    source_report: str = Form("ma_daily_tx"),
+    period: str = Form(""),
+    carrier_id: str = Form(""),
+    org_id: str = ORG_ID,
+):
+    """Upload a commission/tx file → map its headers → CLASSIFY each line into the five canonical buckets
+    (via commission_category_map / DEFAULT_RULES) → persist to commcalc.commission_ledger. Negative amounts
+    are payouts; positives are bill/activation payments (is_payout=false, no bucket). Re-upload for a period
+    replaces it (never wipes on an empty/misaligned file)."""
+    require_org(org_id)
+    contents = await file.read()
+    try:
+        df = _read_upload_df(contents, getattr(file, "filename", ""))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file: {e}")
+    client = sb()
+    hdr_rules = _ledger_source_rules(client, org_id, carrier_id)
+    cat_rules = commission_ledger.load_rules(client, org_id, source_report)
+    base = {"org_id": org_id, "source_report": source_report}
+    if period:
+        base["period"] = period
+    rows = []
+    for r in df.to_dict("records"):
+        src = column_mapping.apply_mapping(r, hdr_rules, {})
+        if not (src.get("product_name") or src.get("raw_amount") or src.get("order_type")):
+            continue
+        rows.append(commission_ledger.build_row(src, base, cat_rules))
+    if not rows:
+        raise HTTPException(400, "No usable rows — check the column mapping for this file.")
+    # GUARD: only clear once we have rows; scope the wipe to this source_report + period.
+    if period:
+        try:
+            client.schema("commcalc").table("commission_ledger").delete() \
+                .eq("org_id", org_id).eq("source_report", source_report).eq("period", period).execute()
+        except Exception as e:
+            raise HTTPException(500, f"Failed to clear existing ledger for {source_report}/{period}: {e}")
+    saved = 0
+    for i in range(0, len(rows), 500):
+        try:
+            client.schema("commcalc").table("commission_ledger").insert(rows[i:i + 500]).execute()
+            saved += len(rows[i:i + 500])
+        except Exception as e:
+            raise HTTPException(500, f"Insert into commission_ledger failed at row {i}: {e} — is migration 071 applied?")
+    try:
+        client.schema("commcalc").table("upload_log").insert(
+            {"org_id": org_id, "file_type": "commission_ledger", "period": period or None,
+             "filename": getattr(file, "filename", None), "rows_saved": saved}).execute()
+    except Exception as e:
+        print(f"WARN upload_log insert failed: {e}")
+    summary = commission_ledger.summarize(rows)
+    return {"saved": saved, "source_report": source_report, "period": period, "summary": summary}
+
+
+@router.get("/commission-ledger/summary")
+def commission_ledger_summary(source_report: str = "ma_daily_tx", period: str = "", org_id: str = ORG_ID):
+    """Per-category totals + counts, a (category × payment_month) matrix, payout/charge/other totals — for
+    the canonical commission report. Empty (not 500) if migration 071 isn't applied yet."""
+    require_org(org_id)
+    try:
+        q = (sb().schema("commcalc").table("commission_ledger").select("*")
+             .eq("org_id", org_id).eq("source_report", source_report))
+        if period:
+            q = q.eq("period", period)
+        rows = q.execute().data or []
+    except Exception:
+        rows = []
+    return {"source_report": source_report, "period": period, **commission_ledger.summarize(rows)}
+
+
+@router.get("/commission-ledger/rows")
+def commission_ledger_rows(source_report: str = "ma_daily_tx", period: str = "", category: str = "",
+                           rep_user: str = "", limit: int = 2000, org_id: str = ORG_ID):
+    """Ledger line items (optionally filtered by category/rep) for the report drill-downs."""
+    require_org(org_id)
+    try:
+        q = (sb().schema("commcalc").table("commission_ledger").select("*")
+             .eq("org_id", org_id).eq("source_report", source_report))
+        if period:
+            q = q.eq("period", period)
+        if category:
+            q = q.eq("category", category)
+        if rep_user:
+            q = q.eq("rep_user", rep_user)
+        rows = q.order("payout_total", desc=True).limit(min(int(limit or 2000), 5000)).execute().data or []
+    except Exception:
+        rows = []
+    return {"rows": rows, "count": len(rows)}
+
+
+@router.get("/commission-ledger/observed-types")
+def commission_ledger_observed_types(source_report: str = "ma_daily_tx", period: str = "", org_id: str = ORG_ID):
+    """Distinct (order_type, product_name) seen in the ledger with line count, summed payout, and the
+    category they CURRENTLY classify to under the active rules — so the user can spot 'other' (unmapped)
+    labels and add a rule. Mirrors the gp-departments pattern for the category-map editor."""
+    require_org(org_id)
+    client = sb()
+    try:
+        q = (client.schema("commcalc").table("commission_ledger")
+             .select("order_type,product_name,category,payout_total,is_payout")
+             .eq("org_id", org_id).eq("source_report", source_report))
+        if period:
+            q = q.eq("period", period)
+        rows = q.limit(20000).execute().data or []
+    except Exception:
+        rows = []
+    agg = {}
+    for r in rows:
+        key = (r.get("order_type") or "", r.get("product_name") or "")
+        a = agg.setdefault(key, {"order_type": key[0], "product_name": key[1], "count": 0,
+                                 "payout_total": 0.0, "category": r.get("category"), "is_payout": r.get("is_payout")})
+        a["count"] += 1
+        a["payout_total"] = round(a["payout_total"] + safe_float(r.get("payout_total")), 2)
+    out = sorted(agg.values(), key=lambda x: (-x["payout_total"], x["product_name"]))
+    return {"types": out, "count": len(out)}
+
+
+@router.get("/commission-ledger/templates")
+def commission_ledger_templates(org_id: str = ORG_ID):
+    """Preconfigured templates (Total/Boost) + any tenant-created rule-sets — a new tenant adopts one or
+    forks their own. Drives the template picker on the report + category-map pages."""
+    require_org(org_id)
+    return {"templates": commission_ledger.list_templates(sb(), org_id),
+            "categories": commission_ledger.CATEGORIES,
+            "category_labels": commission_ledger.CATEGORY_LABELS}
+
+
+@router.get("/commission-category-map")
+def get_commission_category_map(source_report: str = "ma_daily_tx", org_id: str = ORG_ID):
+    """The classification rules for a template (ascending priority = match order), plus the metadata the
+    editor needs (categories, match fields/ops, sign rules). Falls back to DEFAULT_RULES pre-071."""
+    require_org(org_id)
+    client = sb()
+    try:
+        rows = (client.schema("commcalc").table("commission_category_map").select("*")
+                .eq("org_id", org_id).eq("source_report", source_report).order("priority").execute().data) or []
+        ready = True
+    except Exception:
+        rows, ready = [], False
+    return {"source_report": source_report, "rules": rows, "ready": ready,
+            "using_defaults": not rows,
+            "default_rules": [{"match_field": mf, "match_op": op, "pattern": pat, "category": cat,
+                               "sign_rule": sr, "priority": pr} for (mf, op, pat, cat, sr, pr) in commission_ledger.DEFAULT_RULES],
+            "categories": commission_ledger.CATEGORIES, "category_labels": commission_ledger.CATEGORY_LABELS,
+            "match_fields": commission_ledger.MATCH_FIELDS, "match_ops": commission_ledger.MATCH_OPS,
+            "sign_rules": commission_ledger.SIGN_RULES}
+
+
+@router.post("/commission-category-map")
+def upsert_commission_category_map(body: dict, org_id: str = ORG_ID):
+    """Create/update one classification rule. body: {id?, source_report, match_field, match_op, pattern,
+    category, sign_rule?, priority?}. 400 (not 500) if migration 071 isn't applied."""
+    require_org(org_id)
+    sr = (body.get("source_report") or "ma_daily_tx").strip()
+    pattern = (body.get("pattern") or "").strip()
+    category = (body.get("category") or "").strip().lower()
+    if not pattern or not category:
+        raise HTTPException(400, "pattern and category are required")
+    mf = (body.get("match_field") or "product_name").strip()
+    op = (body.get("match_op") or "contains").strip()
+    sign = (body.get("sign_rule") or "negative_only").strip()
+    if mf not in commission_ledger.MATCH_FIELDS or op not in commission_ledger.MATCH_OPS or sign not in commission_ledger.SIGN_RULES:
+        raise HTTPException(400, "invalid match_field / match_op / sign_rule")
+    row = {"org_id": org_id, "source_report": sr, "match_field": mf, "match_op": op, "pattern": pattern,
+           "category": category, "sign_rule": sign, "priority": int(body.get("priority") or 100),
+           "is_seeded": False, "updated_at": column_mapping.now_iso()}
+    client = sb()
+    try:
+        if body.get("id"):
+            client.schema("commcalc").table("commission_category_map").update(row).eq("id", body["id"]).execute()
+            return {"ok": True, "id": body["id"]}
+        r = client.schema("commcalc").table("commission_category_map").upsert(
+            row, on_conflict="org_id,source_report,match_field,match_op,pattern").execute()
+        return {"ok": True, "rule": (r.data[0] if r.data else row)}
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — run migration 071_commission_ledger.sql first. [{e}]")
+
+
+@router.delete("/commission-category-map/{rid}")
+def delete_commission_category_map(rid: str, org_id: str = ORG_ID):
+    """Delete one classification rule by id (seeded defaults can be deleted too — they re-seed only via SQL)."""
+    require_org(org_id)
+    sb().schema("commcalc").table("commission_category_map").delete().eq("org_id", org_id).eq("id", rid).execute()
+    return {"ok": True}
 
 
 @router.post("/commission-import/analyze")
