@@ -9,6 +9,27 @@ from typing import Any
 
 DEVICE_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
 ONDIGO_DEPT = 'Ondigo'
+GP_CATEGORIES = {'device', 'accessory', 'plan', 'other', 'exclude'}
+
+def _dept_classifier(gp_category_map):
+    """Return a fn department_label -> GP category. The map (commcalc.gp_category_map, mig 069) is a set
+    of OVERRIDES layered on the built-in Boost defaults — so an EMPTY/None map reproduces the original
+    hard-coded buckets byte-for-byte (device = Android/IPHONE/TABLET-XP, accessory = Ondigo, blank = plan,
+    everything else = other). A tenant maps only the labels that differ; '' overrides blank-department rows."""
+    overrides = {}
+    for row in (gp_category_map or []):
+        d = str(row.get('department') or '').strip()
+        c = str(row.get('category') or '').strip().lower()
+        if c in GP_CATEGORIES:
+            overrides[d] = c
+    def classify(dept) -> str:
+        d = str(dept or '').strip()
+        if d in overrides:        return overrides[d]
+        if d in DEVICE_DEPTS:     return 'device'
+        if d == ONDIGO_DEPT:      return 'accessory'
+        if d == '':               return 'plan'
+        return 'other'
+    return classify
 
 def safe_float(v) -> float:
     try: return float(v or 0)
@@ -28,10 +49,14 @@ def calc_gp_report(
     store_mapping: list[dict],
     period: str,
     comp_rows: list[dict] = None,
+    gp_category_map: list[dict] = None,
 ) -> dict:
     """
     Returns store_rows (by store) and rep_rows (by rep).
+    gp_category_map (commcalc.gp_category_map): optional per-tenant department→GP-category overrides;
+    None/empty = the built-in Boost buckets (byte-identical to before this was added).
     """
+    classify = _dept_classifier(gp_category_map)
     # ── Catalog cost map ──────────────────────────────────────────
     cat_cost: dict[str, float] = {}
     for c in catalog:
@@ -129,17 +154,13 @@ def calc_gp_report(
         market = str(sm.get('market') or 'Boost').strip()
         store_code = str(sm.get('store_code') or '').strip()
 
-        acc_gp    = sum(safe_float(r.get('gp')) for r in rows if str(r.get('department','')).strip() == ONDIGO_DEPT)
+        acc_gp    = sum(safe_float(r.get('gp')) for r in rows if classify(r.get('department')) == 'accessory')
         setup_gp  = sum(safe_float(r.get('gp')) for r in rows if 'Device Setup Charge' in str(r.get('product_desc','')))
-        phone_sales = sum(safe_float(r.get('ext_price')) for r in rows if str(r.get('department','')).strip() in DEVICE_DEPTS)
-        plan_gp   = sum(safe_float(r.get('gp')) for r in rows
-                        if not str(r.get('department','')).strip()
-                        and str(r.get('department','')).strip() not in DEVICE_DEPTS
-                        and str(r.get('department','')).strip() != ONDIGO_DEPT)
+        phone_sales = sum(safe_float(r.get('ext_price')) for r in rows if classify(r.get('department')) == 'device')
+        plan_gp   = sum(safe_float(r.get('gp')) for r in rows if classify(r.get('department')) == 'plan')
         other_gp  = sum(safe_float(r.get('gp')) for r in rows
-                        if str(r.get('department','')).strip() not in {ONDIGO_DEPT, *DEVICE_DEPTS}
-                        and 'Device Setup Charge' not in str(r.get('product_desc',''))
-                        and str(r.get('department','')).strip() != '')
+                        if classify(r.get('department')) == 'other'
+                        and 'Device Setup Charge' not in str(r.get('product_desc','')))
 
         pay = pay_by_num.get(num, {})
         comm_recv  = pay.get('comm', 0)
@@ -188,12 +209,10 @@ def calc_gp_report(
 
     rep_rows = []
     for rep, rows in by_rep.items():
-        acc_gp   = sum(safe_float(r.get('gp')) for r in rows if str(r.get('department','')).strip() == ONDIGO_DEPT)
+        acc_gp   = sum(safe_float(r.get('gp')) for r in rows if classify(r.get('department')) == 'accessory')
         setup_gp = sum(safe_float(r.get('gp')) for r in rows if 'Device Setup Charge' in str(r.get('product_desc','')))
-        phone_s  = sum(safe_float(r.get('ext_price')) for r in rows if str(r.get('department','')).strip() in DEVICE_DEPTS)
-        plan_gp  = sum(safe_float(r.get('gp')) for r in rows
-                       if not str(r.get('department','')).strip()
-                       and str(r.get('department','')).strip() not in DEVICE_DEPTS)
+        phone_s  = sum(safe_float(r.get('ext_price')) for r in rows if classify(r.get('department')) == 'device')
+        plan_gp  = sum(safe_float(r.get('gp')) for r in rows if classify(r.get('department')) == 'plan')
 
         comm_row = next((c for c in rep_commissions if c.get('epay_salesperson') == rep), {})
 

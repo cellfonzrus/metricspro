@@ -4112,10 +4112,76 @@ async def get_gp_report(period: str, view: str = "store", market: str = "", org_
     for r in pay_detail:
         pt = str(r.get('payment_type', '') or '').strip()
         r['category'] = cat_map.get(pt, 'Unknown')
-    result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period, comp_rows=comp_rows)
+    try:   # per-tenant department→GP-category overrides (mig 069); empty/missing = built-in Boost buckets
+        gp_cat_map = sc.table('gp_category_map').select('department,category').eq('org_id', org_id).execute().data or []
+    except Exception:
+        gp_cat_map = []
+    result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period,
+                            comp_rows=comp_rows, gp_category_map=gp_cat_map)
     if market:
         result['store_rows'] = [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]
     return result
+
+
+# ═══ GP / P&L department → category map (de-hardcode Gross Profit, mig 069) ══════════════════════
+@router.get("/gp-category-map")
+async def get_gp_category_map(org_id: str = ORG_ID):
+    """The tenant's POS department → GP-category overrides. Empty/un-migrated = built-in Boost buckets
+    (device = Android/IPHONE/TABLET-XP at ext_price, accessory = Ondigo, blank = plan, else = other)."""
+    from app.modules.commcalc.gp_report import DEVICE_DEPTS, ONDIGO_DEPT, GP_CATEGORIES
+    try:
+        rows = sb().schema('commcalc').table('gp_category_map').select('*').eq('org_id', org_id).order('department').execute().data or []
+        ready = True
+    except Exception:
+        rows, ready = [], False
+    return {"rows": rows, "ready": ready, "categories": sorted(GP_CATEGORIES),
+            "defaults": {"device": sorted(DEVICE_DEPTS), "accessory": [ONDIGO_DEPT]}}
+
+
+@router.post("/gp-category-map")
+async def set_gp_category_map(body: dict, org_id: str = ORG_ID):
+    """Upsert ONE department→category override. body: {department, category}. An empty category REMOVES
+    the override (reverts to the built-in default). 400 (not 500) if migration 069 isn't applied."""
+    if 'department' not in body:
+        raise HTTPException(400, "department required")
+    dept = str(body.get('department') or '').strip()
+    cat = str(body.get('category') or '').strip().lower()
+    try:
+        if not cat:
+            sb().schema('commcalc').table('gp_category_map').delete() \
+                .eq('org_id', org_id).eq('department', dept).execute()
+            return {"ok": True, "removed": dept}
+        sb().schema('commcalc').table('gp_category_map').upsert(
+            {"org_id": org_id, "department": dept, "category": cat,
+             "updated_at": _datetime.now(_timezone.utc).isoformat()},
+            on_conflict="org_id,department").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — run migration 069_gp_category_map.sql first. [{e}]")
+    return {"ok": True, "department": dept, "category": cat}
+
+
+@router.get("/gp-departments")
+async def get_gp_departments(period: str = "", org_id: str = ORG_ID):
+    """Distinct POS department labels in raw_sales (optionally for a period) with their line count and
+    CURRENT GP category — so the tenant can see + map every real label. Drives the GP Category Map UI."""
+    from collections import Counter
+    from app.modules.commcalc.gp_report import _dept_classifier
+    sc = sb().schema('commcalc')
+    q = sc.table('raw_sales').select('department').eq('org_id', org_id)
+    if period:
+        q = q.in_('period', _pvariants(period))
+    rows = q.limit(50000).execute().data or []
+    cnt = Counter(str(r.get('department') or '').strip() for r in rows)
+    try:
+        omap = (sc.table('gp_category_map').select('department,category').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        omap = []
+    mapped_keys = {str(r.get('department') or '').strip() for r in omap}
+    classify = _dept_classifier(omap)
+    out = [{"department": d, "count": n, "category": classify(d), "mapped": d in mapped_keys}
+           for d, n in sorted(cnt.items(), key=lambda kv: -kv[1])]
+    return {"departments": out}
+
 
 @router.get("/chargebacks/{period}")
 async def get_chargebacks(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
