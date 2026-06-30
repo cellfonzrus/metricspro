@@ -8,7 +8,11 @@ the app. The HR employees / payroll / time-off pages reuse the existing scoped S
 this router adds the one genuinely new thing: per-employee TOTAL COMPENSATION (wages + commission).
 """
 import calendar
-from fastapi import APIRouter, Header, HTTPException
+import re
+import secrets
+import uuid
+from datetime import datetime, timedelta
+from fastapi import APIRouter, Header, HTTPException, UploadFile, File, Form
 from app.core.database import get_supabase
 from app.modules.storeops.router import scope_keyset, in_keyset
 
@@ -228,3 +232,376 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
             "totals": {"base_salary": round(tot_w, 2), "commission": round(tot_c, 2),
                        "chargebacks": round(tot_cb, 2), "total_comp": total_comp,
                        "annualized": round(total_comp * 12, 2), "employees": len(rows)}}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# ONBOARDING CHECKLIST (migration 073) — a configurable, collapsible-by-category checklist HR runs for
+# every new hire. Each item has an OWNER role (employee / HR / DM / Market Manager), an optional live
+# state/federal document LINK, and per-employee status + uploaded document (verified by HR). A pre-start
+# employee (no login yet) reaches their own items through a credential-less QR portal guarded by a
+# DOB / last-4-SSN gate. All storeops.* tables; every endpoint degrades gracefully if 073 isn't run.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+ONBOARD_BUCKET = "onboarding-docs"
+OWNER_ROLES = ["employee", "hr", "dm", "market_manager"]
+OWNER_ROLE_LABELS = {"employee": "Employee", "hr": "HR", "dm": "District Manager", "market_manager": "Market Manager"}
+ONBOARD_STATUSES = ["pending", "submitted", "verified", "na"]
+SEED_STATES = ["NY", "NJ", "DE", "PA", "IL", "CT", "MA", "IN"]
+TASK_FIELDS = ["category_id", "key", "label", "description", "owner_role", "doc_url", "doc_label",
+               "is_fillable", "requires_upload", "applies_state", "sort_order", "is_active"]
+
+
+def _now_iso():
+    return datetime.utcnow().isoformat()
+
+
+def _slug(s):
+    return re.sub(r"[^a-z0-9]+", "_", (s or "").strip().lower()).strip("_")[:60] or "item"
+
+
+def _ensure_onboard_bucket():
+    c = get_supabase()
+    try:
+        c.storage.get_bucket(ONBOARD_BUCKET)
+    except Exception:
+        try:
+            c.storage.create_bucket(ONBOARD_BUCKET)   # private by default
+        except Exception:
+            pass
+    return c
+
+
+# ── Template: categories (collapsible) + tasks ─────────────────────────────────────────────────────
+@router.get("/onboarding/template")
+def onboarding_template(include_inactive: bool = False, org_id: str = ORG_ID):
+    """The checklist DEFINITION: categories (collapsible) each carrying their tasks. ready:false if 073
+    isn't applied — the UI then shows a 'run migration 073' hint instead of erroring."""
+    so = _so()
+    try:
+        cats = (so.table("onboarding_category").select("*").eq("org_id", org_id)
+                .order("sort_order").execute().data) or []
+        tasks = (so.table("onboarding_task").select("*").eq("org_id", org_id)
+                 .order("sort_order").execute().data) or []
+    except Exception:
+        return {"ready": False, "categories": [], "owner_roles": OWNER_ROLES,
+                "owner_labels": OWNER_ROLE_LABELS, "states": SEED_STATES}
+    if not include_inactive:
+        cats = [c for c in cats if c.get("is_active", True)]
+        tasks = [t for t in tasks if t.get("is_active", True)]
+    by_cat = {}
+    for t in tasks:
+        by_cat.setdefault(t.get("category_id"), []).append(t)
+    out = [{**c, "tasks": by_cat.get(c["id"], [])} for c in cats]
+    return {"ready": True, "categories": out, "owner_roles": OWNER_ROLES,
+            "owner_labels": OWNER_ROLE_LABELS, "states": SEED_STATES}
+
+
+@router.post("/onboarding/categories")
+def onboarding_save_category(body: dict, org_id: str = ORG_ID):
+    label = (body.get("label") or "").strip()
+    if not label:
+        raise HTTPException(400, "label required")
+    row = {"org_id": org_id, "key": (body.get("key") or _slug(label)).strip(),
+           "label": label, "sort_order": int(body.get("sort_order") or 100)}
+    try:
+        r = so_upsert("onboarding_category", row, "org_id,key")
+    except Exception as e:
+        raise HTTPException(400, f"Could not save category — is migration 073 applied? {e}")
+    return (r or [row])[0]
+
+
+@router.patch("/onboarding/categories/{cat_id}")
+def onboarding_update_category(cat_id: str, body: dict, org_id: str = ORG_ID):
+    upd = {k: body[k] for k in ("label", "sort_order", "is_active") if k in body}
+    r = _so().table("onboarding_category").update(upd).eq("org_id", org_id).eq("id", cat_id).execute()
+    return (r.data or [{}])[0]
+
+
+@router.delete("/onboarding/categories/{cat_id}")
+def onboarding_delete_category(cat_id: str, org_id: str = ORG_ID):
+    _so().table("onboarding_category").delete().eq("org_id", org_id).eq("id", cat_id).execute()
+    return {"ok": True}
+
+
+@router.post("/onboarding/tasks")
+def onboarding_save_task(body: dict, org_id: str = ORG_ID):
+    label = (body.get("label") or "").strip()
+    if not label:
+        raise HTTPException(400, "label required")
+    row = {k: body[k] for k in TASK_FIELDS if k in body}
+    row.update({"org_id": org_id, "label": label})
+    row.setdefault("key", _slug(label))
+    row.setdefault("owner_role", "employee")
+    if (row.get("applies_state") or "").strip() == "":
+        row["applies_state"] = None
+    elif row.get("applies_state"):
+        row["applies_state"] = row["applies_state"].strip().upper()
+    try:
+        r = so_upsert("onboarding_task", row, "org_id,key")
+    except Exception as e:
+        raise HTTPException(400, f"Could not save task — is migration 073 applied? {e}")
+    return (r or [row])[0]
+
+
+@router.patch("/onboarding/tasks/{task_id}")
+def onboarding_update_task(task_id: str, body: dict, org_id: str = ORG_ID):
+    upd = {k: body[k] for k in TASK_FIELDS if k in body}
+    if "applies_state" in upd:
+        upd["applies_state"] = (upd["applies_state"] or "").strip().upper() or None
+    r = _so().table("onboarding_task").update(upd).eq("org_id", org_id).eq("id", task_id).execute()
+    return (r.data or [{}])[0]
+
+
+@router.delete("/onboarding/tasks/{task_id}")
+def onboarding_delete_task(task_id: str, org_id: str = ORG_ID):
+    _so().table("onboarding_task").delete().eq("org_id", org_id).eq("id", task_id).execute()
+    return {"ok": True}
+
+
+def so_upsert(table, row, on_conflict):
+    return _so().table(table).upsert(row, on_conflict=on_conflict).execute().data
+
+
+# ── Per-employee checklist ─────────────────────────────────────────────────────────────────────────
+def _get_profile(so, org_id, employee_id):
+    rows = (so.table("employee_onboarding_profile").select("*").eq("org_id", org_id)
+            .eq("employee_id", employee_id).limit(1).execute().data) or []
+    return rows[0] if rows else None
+
+
+def _public_profile(prof):
+    if not prof:
+        return None
+    return {"work_state": prof.get("work_state"), "has_token": bool(prof.get("access_token")),
+            "token_active": prof.get("token_active"), "verify_kind": prof.get("verify_kind"),
+            "token_expires_at": prof.get("token_expires_at")}
+
+
+@router.get("/onboarding/employee/{employee_id}")
+def onboarding_for_employee(employee_id: str, org_id: str = ORG_ID):
+    """The new hire's checklist: every active task merged with their status / uploaded doc / verification.
+    State-specific tax forms appear only once the employee's work_state is set (and matches)."""
+    so = _so()
+    tmpl = onboarding_template(org_id=org_id)
+    if not tmpl.get("ready"):
+        return {"ready": False, "employee_id": employee_id, "categories": []}
+    prof = _get_profile(so, org_id, employee_id)
+    work_state = (prof or {}).get("work_state")
+    st = {r["task_id"]: r for r in ((so.table("employee_onboarding").select("*")
+          .eq("org_id", org_id).eq("employee_id", employee_id).execute().data) or [])}
+    cats, total, done, has_state_tasks = [], 0, 0, False
+    for c in tmpl["categories"]:
+        tasks = []
+        for t in c["tasks"]:
+            ast = t.get("applies_state")
+            if ast:
+                has_state_tasks = True
+                if not work_state or ast != work_state:
+                    continue   # other-state (or unset) — hide until the work state is chosen
+            rec = st.get(t["id"]) or {}
+            status = rec.get("status") or "pending"
+            tasks.append({**t, "status": status, "note": rec.get("note"),
+                          "document_name": rec.get("document_name"), "has_document": bool(rec.get("document_path")),
+                          "verified_by": rec.get("verified_by"), "verified_at": rec.get("verified_at"),
+                          "submitted_at": rec.get("submitted_at")})
+            total += 1
+            if status in ("verified", "na"):
+                done += 1
+        if tasks:
+            cats.append({**{k: c[k] for k in c if k != "tasks"}, "tasks": tasks})
+    emp = (so.table("employees").select("name,home_store").eq("org_id", org_id)
+           .eq("employee_id", employee_id).limit(1).execute().data) or [{}]
+    return {"ready": True, "employee_id": employee_id, "employee_name": emp[0].get("name"),
+            "work_state": work_state, "profile": _public_profile(prof),
+            "needs_work_state": bool(has_state_tasks and not work_state),
+            "categories": cats, "progress": {"total": total, "done": done},
+            "owner_labels": OWNER_ROLE_LABELS, "states": SEED_STATES}
+
+
+@router.patch("/onboarding/employee/{employee_id}")
+def onboarding_set_profile(employee_id: str, body: dict, org_id: str = ORG_ID):
+    """Set the employee's work_state (drives which state tax form shows)."""
+    upd = {"org_id": org_id, "employee_id": employee_id}
+    if "work_state" in body:
+        upd["work_state"] = (body.get("work_state") or "").strip().upper() or None
+    try:
+        _so().table("employee_onboarding_profile").upsert(upd, on_conflict="org_id,employee_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — is migration 073 applied? {e}")
+    return {"ok": True, "work_state": upd.get("work_state")}
+
+
+@router.post("/onboarding/employee/{employee_id}/task/{task_id}")
+def onboarding_update_status(employee_id: str, task_id: str, body: dict, org_id: str = ORG_ID):
+    """HR/DM/MM marks a task verified / not-applicable, or adds a note. status=verified stamps who+when."""
+    status = (body.get("status") or "").strip()
+    if status and status not in ONBOARD_STATUSES:
+        raise HTTPException(400, f"bad status '{status}'")
+    row = {"org_id": org_id, "employee_id": employee_id, "task_id": task_id, "updated_at": _now_iso()}
+    if status:
+        row["status"] = status
+        if status == "verified":
+            row["verified_by"] = (body.get("verified_by") or "").strip() or None
+            row["verified_at"] = _now_iso()
+    if "note" in body:
+        row["note"] = body.get("note")
+    try:
+        _so().table("employee_onboarding").upsert(row, on_conflict="org_id,employee_id,task_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not update — is migration 073 applied? {e}")
+    return {"ok": True}
+
+
+async def _do_onboard_upload(org_id, employee_id, task_id, file, who):
+    data = await file.read()
+    safe = (file.filename or "file").replace("/", "_")
+    path = f"{org_id}/{employee_id}/{uuid.uuid4().hex}_{safe}"
+    c = _ensure_onboard_bucket()
+    try:
+        c.storage.from_(ONBOARD_BUCKET).upload(path, data, {"content-type": file.content_type or "application/octet-stream"})
+    except Exception as e:
+        raise HTTPException(500, f"upload failed: {e}")
+    row = {"org_id": org_id, "employee_id": employee_id, "task_id": task_id, "status": "submitted",
+           "document_path": path, "document_name": safe, "submitted_at": _now_iso(), "updated_at": _now_iso(),
+           "note": (f"uploaded by {who}" if who else None)}
+    try:
+        _so().table("employee_onboarding").upsert(row, on_conflict="org_id,employee_id,task_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not record upload — is migration 073 applied? {e}")
+    return {"ok": True, "document_name": safe}
+
+
+@router.post("/onboarding/employee/{employee_id}/upload")
+async def onboarding_upload(employee_id: str, task_id: str = Form(...), file: UploadFile = File(...),
+                            uploader: str = Form(""), org_id: str = ORG_ID):
+    """HR uploads a completed document on the employee's behalf (status → submitted)."""
+    return await _do_onboard_upload(org_id, employee_id, task_id, file, uploader or "HR")
+
+
+@router.get("/onboarding/employee/{employee_id}/task/{task_id}/doc")
+def onboarding_doc_url(employee_id: str, task_id: str, org_id: str = ORG_ID):
+    """A 1-hour signed URL so HR can view/verify the uploaded document."""
+    rows = (_so().table("employee_onboarding").select("document_path").eq("org_id", org_id)
+            .eq("employee_id", employee_id).eq("task_id", task_id).limit(1).execute().data) or []
+    if not rows or not rows[0].get("document_path"):
+        raise HTTPException(404, "no document")
+    try:
+        res = get_supabase().storage.from_(ONBOARD_BUCKET).create_signed_url(rows[0]["document_path"], 3600)
+        url = (res.get("signedURL") or res.get("signed_url") or res.get("signedUrl")) if isinstance(res, dict) else res
+        return {"url": url}
+    except Exception as e:
+        raise HTTPException(500, f"could not sign url: {e}")
+
+
+# ── Credential-less QR access (token + DOB/last-4 gate) ─────────────────────────────────────────────
+@router.post("/onboarding/employee/{employee_id}/token")
+def onboarding_mint_token(employee_id: str, body: dict, org_id: str = ORG_ID):
+    """Issue (or rotate) the QR access token + identity gate. Body: verify_kind ('dob'|'ssn4'),
+    verify_value, expires_days? Returns the token + the portal path the QR should encode."""
+    kind = (body.get("verify_kind") or "dob").strip()
+    val = (body.get("verify_value") or "").strip()
+    if kind not in ("dob", "ssn4"):
+        raise HTTPException(400, "verify_kind must be 'dob' or 'ssn4'")
+    if not val:
+        raise HTTPException(400, "verify_value required (the employee's DOB or last-4 SSN)")
+    token = secrets.token_urlsafe(24)
+    row = {"org_id": org_id, "employee_id": employee_id, "access_token": token, "verify_kind": kind,
+           "token_active": True, "verify_dob": None, "verify_ssn4": None, "token_expires_at": None}
+    if kind == "dob":
+        row["verify_dob"] = val[:10]
+    else:
+        row["verify_ssn4"] = re.sub(r"\D", "", val)[-4:]
+    days = body.get("expires_days")
+    if days:
+        try:
+            row["token_expires_at"] = (datetime.utcnow() + timedelta(days=int(days))).isoformat()
+        except Exception:
+            pass
+    try:
+        _so().table("employee_onboarding_profile").upsert(row, on_conflict="org_id,employee_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not mint token — is migration 073 applied? {e}")
+    return {"ok": True, "token": token, "portal_path": f"/onboard/{token}",
+            "verify_kind": kind, "token_expires_at": row.get("token_expires_at")}
+
+
+@router.delete("/onboarding/employee/{employee_id}/token")
+def onboarding_revoke_token(employee_id: str, org_id: str = ORG_ID):
+    _so().table("employee_onboarding_profile").update({"token_active": False}) \
+        .eq("org_id", org_id).eq("employee_id", employee_id).execute()
+    return {"ok": True}
+
+
+# ── PUBLIC portal (no auth — guarded only by the opaque token + the DOB/last-4 gate) ────────────────
+def _profile_by_token(token):
+    rows = (get_supabase().schema("storeops").table("employee_onboarding_profile")
+            .select("*").eq("access_token", token).limit(1).execute().data) or []
+    return rows[0] if rows else None
+
+
+def _token_valid(prof):
+    if not prof or not prof.get("token_active"):
+        return False
+    exp = prof.get("token_expires_at")
+    if exp:
+        try:
+            if datetime.fromisoformat(str(exp).replace("Z", "").split("+")[0].split(".")[0]) < datetime.utcnow():
+                return False
+        except Exception:
+            pass
+    return True
+
+
+def _check_gate(prof, value):
+    value = (value or "").strip()
+    if not value:
+        return False
+    if prof.get("verify_kind") == "ssn4":
+        return re.sub(r"\D", "", value)[-4:] == (prof.get("verify_ssn4") or "")
+    return value[:10] == str(prof.get("verify_dob") or "")[:10]
+
+
+@router.get("/public/onboarding/{token}")
+def public_onboarding_meta(token: str):
+    """Step 1 (credential-less): returns ONLY which identity gate to show — no employee data yet."""
+    prof = _profile_by_token(token)
+    if not _token_valid(prof):
+        raise HTTPException(404, "This onboarding link is invalid or has expired. Ask HR for a new QR code.")
+    return {"ok": True, "verify_kind": prof.get("verify_kind") or "dob"}
+
+
+@router.post("/public/onboarding/{token}")
+def public_onboarding_view(token: str, body: dict):
+    """Step 2: gate check → the employee's first name + their own checklist items (links + uploads)."""
+    prof = _profile_by_token(token)
+    if not _token_valid(prof):
+        raise HTTPException(404, "This onboarding link is invalid or has expired.")
+    if not _check_gate(prof, body.get("value")):
+        raise HTTPException(403, "That didn't match our records. Please check and try again.")
+    data = onboarding_for_employee(prof["employee_id"], org_id=prof["org_id"])
+    first = (str(data.get("employee_name") or "").split() or [""])[0]
+    cats = []
+    for c in data.get("categories", []):
+        tasks = [{"id": t["id"], "label": t["label"], "description": t.get("description"),
+                  "doc_url": t.get("doc_url"), "doc_label": t.get("doc_label"),
+                  "is_fillable": t.get("is_fillable"), "requires_upload": t.get("requires_upload"),
+                  "status": t.get("status"), "has_document": t.get("has_document")}
+                 for t in c.get("tasks", []) if t.get("owner_role") == "employee"]
+        if tasks:
+            cats.append({"key": c["key"], "label": c["label"], "tasks": tasks})
+    return {"ok": True, "first_name": first, "categories": cats, "progress": data.get("progress")}
+
+
+@router.post("/public/onboarding/{token}/upload")
+async def public_onboarding_upload(token: str, value: str = Form(...), task_id: str = Form(...),
+                                   file: UploadFile = File(...)):
+    """Step 3: the employee uploads a completed/signed form. Re-checks the gate on every call."""
+    prof = _profile_by_token(token)
+    if not _token_valid(prof):
+        raise HTTPException(404, "This onboarding link is invalid or has expired.")
+    if not _check_gate(prof, value):
+        raise HTTPException(403, "Identity check failed.")
+    tk = (get_supabase().schema("storeops").table("onboarding_task").select("owner_role")
+          .eq("org_id", prof["org_id"]).eq("id", task_id).limit(1).execute().data) or []
+    if not tk or tk[0].get("owner_role") != "employee":
+        raise HTTPException(403, "That item can't be uploaded from this portal.")
+    return await _do_onboard_upload(prof["org_id"], prof["employee_id"], task_id, file, "employee")
