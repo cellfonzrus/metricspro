@@ -23,6 +23,7 @@ from app.modules.commcalc import comp_trend
 from app.modules.commcalc import carrier_map
 from app.modules.commcalc import column_mapping
 from app.modules.commcalc import commission_catalog
+from app.modules.commcalc import target_registry
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 import calendar as _calendar
@@ -1133,8 +1134,9 @@ def column_mapping_targets(report_key: str = "", org_id: str = ORG_ID):
     require_org(org_id)
     # merged_target_fields layers the per-tenant catalog (user-created categories) on top of the
     # hard-coded defaults; degrades to the defaults when migration 066 isn't applied.
-    fields = commission_catalog.merged_target_fields(sb(), org_id, report_key) if report_key else []
-    return {"report_keys": column_mapping.known_report_keys(),
+    client = sb()
+    fields = commission_catalog.merged_target_fields(client, org_id, report_key) if report_key else []
+    return {"report_keys": column_mapping.known_report_keys(client, org_id),
             "transforms": column_mapping.TRANSFORM_KEYS,
             "fields": fields}
 
@@ -1167,7 +1169,8 @@ def column_mapping_readiness(carrier_id: str = "", org_id: str = ORG_ID):
     how many of its REQUIRED fields are mapped + is it ready; and for each DESIRED OUTPUT report,
     whether all the source reports it needs are ready. Drives /commcalc/implementation."""
     require_org(org_id)
-    rules = (sb().schema("commcalc").table("column_mapping")
+    client = sb()
+    rules = (client.schema("commcalc").table("column_mapping")
              .select("report_key,target_field,source_header,carrier_id").eq("org_id", org_id).execute().data) or []
     by_report: dict = {}
     for r in rules:
@@ -1177,8 +1180,8 @@ def column_mapping_readiness(carrier_id: str = "", org_id: str = ORG_ID):
         if r.get("source_header"):
             by_report.setdefault(r["report_key"], set()).add(r["target_field"])
     reports = {}
-    for rk in column_mapping.known_report_keys():
-        flds = column_mapping.target_fields(rk)
+    for rk in column_mapping.known_report_keys(client, org_id):
+        flds = column_mapping.target_fields(rk, client, org_id)
         req = [f["target_field"] for f in flds if f.get("required")]
         mapped = by_report.get(rk, set())
         req_mapped = [t for t in req if t in mapped]
@@ -1239,10 +1242,10 @@ def seed_column_mapping(report_key: str, carrier_id: str = "", overwrite: bool =
     start from the default and only change the headers that differ. Skips fields already mapped
     unless overwrite=true."""
     require_org(org_id)
-    defaults = column_mapping.default_mapping(report_key)
+    client = sb()
+    defaults = column_mapping.default_mapping(report_key, client, org_id)
     if not defaults:
         raise HTTPException(400, f"No default layout known for report_key '{report_key}'")
-    client = sb()
     existing = {r["target_field"] for r in (client.schema("commcalc").table("column_mapping").select("target_field")
                 .eq("org_id", org_id).eq("report_key", report_key)
                 .eq("carrier_id", carrier_id) if carrier_id else
@@ -1274,8 +1277,9 @@ async def detect_column_mapping(report_key: str = Form(...), carrier_id: str = F
     except Exception as e:
         raise HTTPException(400, f"Could not read Excel file: {e}")
     headers = [str(c).strip() for c in df.columns]
-    rules = column_mapping.load_rules(sb(), org_id, report_key, carrier_id or None)
-    return {"headers": headers, "suggestions": column_mapping.suggest(headers, report_key, rules)}
+    client = sb()
+    rules = column_mapping.load_rules(client, org_id, report_key, carrier_id or None)
+    return {"headers": headers, "suggestions": column_mapping.suggest(headers, report_key, rules, client, org_id)}
 
 
 @router.post("/upload-mapped")
@@ -1406,6 +1410,66 @@ def delete_commission_field(target_field: str, report_key: str = "carrier_commis
     removed = commission_catalog.remove_field(sb(), org_id, report_key, target_field)
     if not removed:
         raise HTTPException(400, f"'{target_field}' is a seeded default or not found — cannot remove.")
+    return {"ok": True, "removed": target_field}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# GENERIC TARGET FIELD REGISTRY (C-Phase2) — per-tenant canonical fields for ANY report_key, merged on
+# top of the hard-coded column_mapping.TARGET_FIELDS. Generalises the commission catalog (066) to every
+# report type, with NO commission semantics and NO schema DDL (commcalc.target_field_registry, mig 070).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+@router.get("/target-fields")
+def list_target_fields(report_key: str = "", org_id: str = ORG_ID):
+    """The canonical target fields for a report_key (defaults + per-tenant registry merged), each tagged
+    default|custom, plus the raw registry rows and the known report keys. Degrades to defaults pre-070."""
+    require_org(org_id)
+    client = sb()
+    fields = column_mapping.target_fields(report_key, client, org_id) if report_key else []
+    raw = target_registry.load_registry(client, org_id, report_key) if report_key else []
+    custom = {r.get("target_field") for r in raw}
+    for f in fields:
+        f["source"] = "custom" if f["target_field"] in custom else "default"
+    return {"report_key": report_key,
+            "report_keys": column_mapping.known_report_keys(client, org_id),
+            "fields": fields, "registry": raw,
+            "transforms": column_mapping.TRANSFORM_KEYS,
+            "registry_ready": target_registry.table_ready(client)}
+
+
+@router.post("/target-fields")
+def create_target_field(body: dict, org_id: str = ORG_ID):
+    """Create/update a per-tenant target field for ANY report_key. body: {report_key, label, transform?,
+    required?, default_source?, aliases?(list|comma-string), sort_order?, target_field?}. NO DDL — this is
+    purely the mappable field list. Returns a clear 400 (not a 500) if migration 070 isn't applied."""
+    require_org(org_id)
+    rk = (body.get("report_key") or "").strip()
+    label = (body.get("label") or "").strip()
+    if not rk:
+        raise HTTPException(400, "report_key is required")
+    if not label and not body.get("target_field"):
+        raise HTTPException(400, "label (or target_field) is required")
+    transform = (body.get("transform") or "text").strip()
+    if transform not in column_mapping.TRANSFORMS:
+        raise HTTPException(400, "transform must be one of " + "|".join(column_mapping.TRANSFORM_KEYS))
+    try:
+        row = target_registry.add_field(
+            sb(), org_id, rk, label=label, transform=transform,
+            required=bool(body.get("required")), default_source=body.get("default_source") or "",
+            aliases=body.get("aliases"), sort_order=int(body.get("sort_order") or 100),
+            target_field=body.get("target_field"))
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — run migration 070_target_field_registry.sql first. [{e}]")
+    return {"ok": True, "field": row}
+
+
+@router.delete("/target-fields")
+def delete_target_field(target_field: str, report_key: str, org_id: str = ORG_ID):
+    """Remove a USER-CREATED registry field (built-in defaults are protected — they live in code, not the
+    registry, so they can never be deleted here)."""
+    require_org(org_id)
+    removed = target_registry.remove_field(sb(), org_id, report_key, target_field)
+    if not removed:
+        raise HTTPException(400, f"'{target_field}' is a built-in default or not found — cannot remove.")
     return {"ok": True, "removed": target_field}
 
 

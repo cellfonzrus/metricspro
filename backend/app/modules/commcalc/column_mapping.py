@@ -163,23 +163,60 @@ TABLE_MAP = {
 }
 
 
-def known_report_keys():
-    return list(TARGET_FIELDS.keys())
+def _registry_overlay(report_key, client=None, org_id=None):
+    """Hard-coded field tuples for report_key, with the per-tenant target_field_registry (migration 070)
+    overlaid: a registry row OVERRIDES a default with the same target_field (relabel/alias/transform), and
+    registry-only fields are APPENDED. Pure defaults when no client/org_id or the table is absent — so
+    every caller below degrades byte-for-byte to today's behaviour. The merge mirrors
+    commission_catalog.merged_target_fields but generalised to ANY report_key (C-Phase2)."""
+    base = list(TARGET_FIELDS.get(report_key, []))
+    if client is None or not org_id:
+        return base
+    try:
+        from app.modules.commcalc import target_registry
+        reg = target_registry.registry_tuples(client, org_id, report_key)
+    except Exception:
+        return base
+    if not reg:
+        return base
+    by_tf = {t[0]: t for t in base}
+    order = [t[0] for t in base]
+    for t in reg:
+        if t[0] not in by_tf:
+            order.append(t[0])
+        by_tf[t[0]] = t
+    return [by_tf[tf] for tf in order]
 
 
-def target_fields(report_key):
-    """The canonical field registry for a report_key, as a list of dicts for the UI."""
+def known_report_keys(client=None, org_id=None):
+    """The seeded report keys, plus any report_key a tenant introduced via the registry (so a brand-new
+    report type appears in the mapping picker + readiness matrix). Pure list when no client/org_id."""
+    keys = list(TARGET_FIELDS.keys())
+    if client is not None and org_id:
+        try:
+            from app.modules.commcalc import target_registry
+            for k in target_registry.registry_report_keys(client, org_id):
+                if k not in keys:
+                    keys.append(k)
+        except Exception:
+            pass
+    return keys
+
+
+def target_fields(report_key, client=None, org_id=None):
+    """The canonical field registry for a report_key, as a list of dicts for the UI. When (client, org_id)
+    are passed, the per-tenant registry is merged on top of the hard-coded defaults."""
     out = []
-    for (tf, label, transform, required, default_src, aliases) in TARGET_FIELDS.get(report_key, []):
+    for (tf, label, transform, required, default_src, aliases) in _registry_overlay(report_key, client, org_id):
         out.append({"target_field": tf, "label": label, "transform": transform,
                     "required": required, "default_source": default_src, "aliases": aliases})
     return out
 
 
-def default_mapping(report_key):
-    """Seed rows (target_field -> default source header) from the known Boost layout."""
+def default_mapping(report_key, client=None, org_id=None):
+    """Seed rows (target_field -> default source header) from the known layout, registry merged in."""
     return [{"target_field": tf, "source_header": default_src, "transform": transform, "priority": 100}
-            for (tf, label, transform, required, default_src, aliases) in TARGET_FIELDS.get(report_key, [])]
+            for (tf, label, transform, required, default_src, aliases) in _registry_overlay(report_key, client, org_id)]
 
 
 # ── rule loading + application ────────────────────────────────────────────────────────────────
@@ -226,13 +263,14 @@ def map_records(records, rules, base):
 
 
 # ── auto-suggest from an uploaded sample's headers ────────────────────────────────────────────
-def suggest(headers, report_key, existing_rules=None):
+def suggest(headers, report_key, existing_rules=None, client=None, org_id=None):
     """For each canonical target field, suggest the best-matching header from the uploaded file.
-    Confidence: 'mapped' (already configured) > 'exact' > 'alias' > 'fuzzy' > '' (no match)."""
+    Confidence: 'mapped' (already configured) > 'exact' > 'alias' > 'fuzzy' > '' (no match).
+    (client, org_id) merge the per-tenant registry so user-added fields are auto-suggested too."""
     existing = {r["target_field"]: r for r in (existing_rules or [])}
     hmap = {str(h).strip().lower(): str(h).strip() for h in headers if str(h).strip()}
     out = []
-    for (tf, label, transform, required, default_src, aliases) in TARGET_FIELDS.get(report_key, []):
+    for (tf, label, transform, required, default_src, aliases) in _registry_overlay(report_key, client, org_id):
         suggested, conf = "", ""
         if tf in existing and str(existing[tf].get("source_header") or "").strip().lower() in hmap:
             suggested, conf = hmap[str(existing[tf]["source_header"]).strip().lower()], "mapped"

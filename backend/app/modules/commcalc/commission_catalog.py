@@ -68,7 +68,9 @@ def merged_target_fields(client, org_id, report_key):
     relabel a default. Returns the same shape as column_mapping.target_fields() + catalog metadata
     (kind, is_amount, month_index, source). Used by the wizard + the mapping UI so new categories appear."""
     base = {}
-    for f in column_mapping.target_fields(report_key):
+    # pass (client, org_id) so the generic target_field_registry (070, C-Phase2) is merged UNDER the
+    # commission catalog too — registry relabels/added fields show in the wizard, catalog rows overlay on top.
+    for f in column_mapping.target_fields(report_key, client, org_id):
         amt = f["target_field"] in column_mapping.CARRIER_COMMISSION_AMOUNTS if report_key == "carrier_commission" else False
         base[f["target_field"]] = {**f, "kind": "other", "is_amount": amt, "month_index": None,
                                    "sort_order": 100, "source": "default"}
