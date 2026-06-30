@@ -1652,6 +1652,64 @@ def commission_ledger_observed_types(source_report: str = "ma_daily_tx", period:
     return {"types": out, "count": len(out)}
 
 
+@router.get("/commission-ledger/by-rep")
+def commission_ledger_by_rep(source_report: str = "ma_daily_tx", period: str = "", org_id: str = ORG_ID):
+    """Per-REP rollup of the canonical commission ledger: each rep's five-bucket payout totals from
+    commcalc.commission_ledger, joined to what the LIVE calc actually pays them (rep_commissions.total_payout)
+    for the same period, keyed on the canonical rep name. This is the 'unified rep payout view' — the ledger
+    sits ALONGSIDE the existing payout, it does not replace it. READ-ONLY: never writes rep_commissions and
+    never touches the live calc. Empty (not 500) if migration 071 isn't applied yet."""
+    require_org(org_id)
+    client = sb()
+    CATS = commission_ledger.CATEGORIES
+    # 1. ledger payouts for this template/period, grouped by canonical rep
+    try:
+        q = (client.schema("commcalc").table("commission_ledger")
+             .select("rep_user,payout_total," + ",".join(CATS))
+             .eq("org_id", org_id).eq("source_report", source_report))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        lrows = q.limit(100000).execute().data or []
+    except Exception:
+        lrows = []
+    cmap = _rep_canon_map(client, org_id)
+    reps = {}
+    for r in lrows:
+        rep = _canon((r.get("rep_user") or "").strip(), cmap) or "(unattributed)"
+        a = reps.setdefault(rep, {"rep": rep, "lines": 0, "ledger_payout": 0.0, **{c: 0.0 for c in CATS}})
+        a["lines"] += 1
+        a["ledger_payout"] = round(a["ledger_payout"] + safe_float(r.get("payout_total")), 2)
+        for c in CATS:
+            a[c] = round(a[c] + safe_float(r.get(c)), 2)
+    # 2. live rep_commissions payout for the same period, keyed by the same canonical name
+    live = {}
+    if period:
+        try:
+            rc = (client.schema("commcalc").table("rep_commissions")
+                  .select("epay_salesperson,storeops_name,total_payout")
+                  .eq("org_id", org_id).in_("period", _pvariants(period)).execute().data) or []
+            for cr in rc:
+                for nm in (cr.get("storeops_name"), cr.get("epay_salesperson")):
+                    k = _canon((nm or "").strip(), cmap)
+                    if k:
+                        live[k] = round(live.get(k, 0.0) + safe_float(cr.get("total_payout")), 2)
+                        break  # credit each rep_commissions row once
+        except Exception:
+            pass
+    out = []
+    for rep, a in reps.items():
+        a["live_payout"] = live.get(rep)            # None when the rep has no live rep_commissions row
+        a["matched"] = rep in live
+        out.append(a)
+    out.sort(key=lambda x: -x["ledger_payout"])
+    totals = {"ledger_payout": round(sum(a["ledger_payout"] for a in out), 2),
+              "live_payout": round(sum((a.get("live_payout") or 0.0) for a in out), 2),
+              **{c: round(sum(a[c] for a in out), 2) for c in CATS}}
+    return {"source_report": source_report, "period": period, "reps": out, "totals": totals,
+            "categories": CATS, "category_labels": commission_ledger.CATEGORY_LABELS,
+            "matched_count": sum(1 for a in out if a["matched"]), "rep_count": len(out)}
+
+
 @router.get("/commission-ledger/templates")
 def commission_ledger_templates(org_id: str = ORG_ID):
     """Preconfigured templates (Total/Boost) + any tenant-created rule-sets — a new tenant adopts one or

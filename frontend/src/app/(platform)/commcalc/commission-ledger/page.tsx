@@ -16,6 +16,8 @@ type Summ = {
   category_labels: Record<string, string>; by_month: Record<string, number>
 }
 type Tmpl = { key: string; label: string; builtin: boolean; rule_count: number }
+type RepRow = { rep: string; lines: number; ledger_payout: number; live_payout: number | null; matched: boolean } & Record<string, number>
+type ByRep = { reps: RepRow[]; totals: Record<string, number>; matched_count: number; rep_count: number; category_labels: Record<string, string> }
 const CATS = ['commission', 'spiff', 'equipment_rebate', 'residual_monthly', 'autopay_residual']
 const money = (n: number) => (n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -30,6 +32,8 @@ export default function CommissionLedgerPage() {
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const [drill, setDrill] = useState<{ cat: string; rows: any[] } | null>(null)
+  const [view, setView] = useState<'cat' | 'rep'>('cat')
+  const [byRep, setByRep] = useState<ByRep | null>(null)
 
   async function loadTemplates() {
     try {
@@ -45,8 +49,15 @@ export default function CommissionLedgerPage() {
       setSumm(d); setLabels(d?.category_labels || labels)
     } catch (e: any) { setMsg(e?.message || 'Load failed') }
   }
+  async function loadByRep() {
+    try {
+      const qs = `?source_report=${encodeURIComponent(src)}${period ? '&period=' + encodeURIComponent(period) : ''}`
+      setByRep(await api('/commcalc/commission-ledger/by-rep' + qs))
+    } catch (e: any) { setMsg(e?.message || 'Load failed') }
+  }
   useEffect(() => { loadTemplates() }, [])            // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadSummary(); setDrill(null) }, [src, period])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (view === 'rep') loadByRep() }, [view, src, period])  // eslint-disable-line react-hooks/exhaustive-deps
 
   function flash(m: string) { setMsg(m); setTimeout(() => setMsg(''), 4000) }
 
@@ -115,6 +126,16 @@ export default function CommissionLedgerPage() {
               ⚠️ {summ.other_count} payout line(s) totaling {money(summ.other_total)} are <b>unmapped</b> — add a rule on the Category Map so they land in a bucket.
             </div>
           )}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+            {(['cat', 'rep'] as const).map(v => (
+              <button key={v} onClick={() => setView(v)} style={{ ...inp, cursor: 'pointer', fontWeight: view === v ? 700 : 400,
+                background: view === v ? 'var(--accent,#2563eb)' : 'var(--surface)', color: view === v ? '#fff' : 'inherit' }}>
+                {v === 'cat' ? 'By category' : 'By rep'}
+              </button>
+            ))}
+          </div>
+
+          {view === 'cat' && (<>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
             {CATS.map(c => (
               <div key={c} style={{ ...tile, cursor: 'pointer' }} onClick={() => openDrill(c)} title="Click to drill">
@@ -178,6 +199,48 @@ export default function CommissionLedgerPage() {
                 </tbody>
               </table>
             </div>
+          )}
+          </>)}
+
+          {view === 'rep' && (
+            !byRep ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div> :
+            byRep.reps.length === 0 ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>No rep-attributed ledger payouts for this template/period.</div> : (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
+                Each rep&apos;s canonical-ledger payout, with what the live calc actually pays them
+                (<a href={`/commcalc/commissions/${encodeURIComponent(period)}`} style={{ color: 'var(--accent,#2563eb)' }}>rep commissions</a>) alongside.
+                {' '}{byRep.matched_count}/{byRep.rep_count} reps matched to a live payout{period ? '' : ' — enter a period to join the live payout'}.
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 11 }}>
+                    <th style={{ textAlign: 'left', padding: '6px 8px' }}>Rep</th>
+                    {CATS.map(c => <th key={c} style={{ padding: '6px 8px' }}>{(byRep.category_labels?.[c] || c).split(' / ')[0]}</th>)}
+                    <th style={{ padding: '6px 8px' }}>Ledger payout</th>
+                    <th style={{ padding: '6px 8px' }}>Live payout</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {byRep.reps.map((r, i) => (
+                    <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                      <td style={{ padding: '6px 8px', fontWeight: 600 }}>{r.rep}</td>
+                      {CATS.map(c => <td key={c} style={{ padding: '6px 8px', textAlign: 'right', color: r[c] ? 'inherit' : 'var(--text3)' }}>{r[c] ? money(r[c]) : '·'}</td>)}
+                      <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{money(r.ledger_payout)}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right' }}
+                          title={r.matched ? 'from rep_commissions.total_payout' : 'no matching live rep payout for this period'}>
+                        {r.live_payout == null ? <span style={{ color: 'var(--text3)' }}>—</span> : money(r.live_payout)}
+                      </td>
+                    </tr>
+                  ))}
+                  <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}>
+                    <td style={{ padding: '6px 8px' }}>Total</td>
+                    {CATS.map(c => <td key={c} style={{ padding: '6px 8px', textAlign: 'right' }}>{money(byRep.totals[c] || 0)}</td>)}
+                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>{money(byRep.totals.ledger_payout || 0)}</td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>{money(byRep.totals.live_payout || 0)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </>)
           )}
         </>
       )}
