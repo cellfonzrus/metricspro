@@ -1546,6 +1546,49 @@ async def commission_ledger_import(
     return {"saved": saved, "source_report": source_report, "period": period, "summary": summary}
 
 
+@router.post("/commission-ledger/analyze")
+async def commission_ledger_analyze(
+    file: UploadFile = File(...),
+    source_report: str = Form("ma_daily_tx"),
+    carrier_id: str = Form(""),
+    org_id: str = ORG_ID,
+):
+    """READ-ONLY preview for the setup wizard — reads the uploaded file, shows which columns it detected
+    (header → field), and PREVIEWS how every line would classify into the five buckets, WITHOUT saving
+    anything. Surfaces any unmapped ('other') labels so the user can add a rule before importing for real."""
+    require_org(org_id)
+    contents = await file.read()
+    try:
+        df = _read_upload_df(contents, getattr(file, "filename", ""))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file: {e}")
+    client = sb()
+    headers = [str(h).strip() for h in df.columns if str(h).strip()]
+    saved = column_mapping.load_rules(client, org_id, "commission_ledger", carrier_id or None)
+    suggestions = column_mapping.suggest(headers, "commission_ledger", saved, client, org_id)
+    hdr_rules = _ledger_source_rules(client, org_id, carrier_id)
+    cat_rules = commission_ledger.load_rules(client, org_id, source_report)
+    rows = []
+    for r in df.to_dict("records"):
+        src = column_mapping.apply_mapping(r, hdr_rules, {})
+        if not (src.get("product_name") or src.get("raw_amount") or src.get("order_type")):
+            continue
+        rows.append(commission_ledger.build_row(src, {"org_id": org_id, "source_report": source_report}, cat_rules))
+    agg = {}
+    for r in rows:
+        key = (r.get("order_type") or "", r.get("product_name") or "")
+        a = agg.setdefault(key, {"order_type": key[0], "product_name": key[1], "count": 0,
+                                 "payout_total": 0.0, "category": r.get("category")})
+        a["count"] += 1
+        a["payout_total"] = round(a["payout_total"] + safe_float(r.get("payout_total")), 2)
+    observed = sorted(agg.values(), key=lambda x: (-x["payout_total"], x["product_name"]))
+    amount_src = next((s["suggested_source"] for s in suggestions if s["target_field"] == "raw_amount"), "")
+    return {"headers": headers, "row_count": int(len(df)), "usable_rows": len(rows),
+            "suggestions": suggestions, "amount_source": amount_src,
+            "summary": commission_ledger.summarize(rows), "observed": observed,
+            "categories": commission_ledger.CATEGORIES, "category_labels": commission_ledger.CATEGORY_LABELS}
+
+
 @router.get("/commission-ledger/summary")
 def commission_ledger_summary(source_report: str = "ma_daily_tx", period: str = "", org_id: str = ORG_ID):
     """Per-category totals + counts, a (category × payment_month) matrix, payout/charge/other totals — for

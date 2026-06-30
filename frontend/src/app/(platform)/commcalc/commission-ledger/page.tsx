@@ -78,7 +78,17 @@ export default function CommissionLedgerPage() {
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🧾 Commission Ledger</h1>
       <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 10 }}>
         Any carrier's commission file → five canonical buckets, classified once and displayed as it's paid.
-        Pick a <b>template</b> (Total / Boost / your own), set a period, and import. Edit how labels map on{' '}
+      </p>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12,
+        background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px' }}>
+        <b style={{ fontSize: 13 }}>First time?</b>
+        <span style={{ fontSize: 13, color: 'var(--text2)' }}>
+          1. Pick your carrier → 2. Upload the file → 3. Check the preview → 4. Import.
+        </span>
+        <a href="/commcalc/commission-ledger/setup" style={{ marginLeft: 'auto', padding: '7px 14px', borderRadius: 8, background: 'var(--accent,#2563eb)', color: '#fff', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>🧭 Open setup wizard</a>
+      </div>
+      <p style={{ color: 'var(--text3)', fontSize: 12, marginBottom: 10 }}>
+        Already set up? Pick a template + period below and import directly. Adjust the rules on{' '}
         <a href="/commcalc/commission-category-map" style={{ color: 'var(--accent,#2563eb)' }}>Commission Category Map →</a>
       </p>
 
