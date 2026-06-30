@@ -37,7 +37,7 @@ export default function CommissionLedgerPage() {
 
   async function loadTemplates() {
     try {
-      const d = await api('/commcalc/commission-ledger/templates')
+      const d = await api('/api/v1/commcalc/commission-ledger/templates')
       setTmpls(d?.templates || [])
       setLabels(d?.category_labels || {})
     } catch (e: any) { setMsg(e?.message || 'Load failed') }
@@ -45,14 +45,14 @@ export default function CommissionLedgerPage() {
   async function loadSummary() {
     try {
       const qs = `?source_report=${encodeURIComponent(src)}${period ? '&period=' + encodeURIComponent(period) : ''}`
-      const d = await api('/commcalc/commission-ledger/summary' + qs)
+      const d = await api('/api/v1/commcalc/commission-ledger/summary' + qs)
       setSumm(d); setLabels(d?.category_labels || labels)
     } catch (e: any) { setMsg(e?.message || 'Load failed') }
   }
   async function loadByRep() {
     try {
       const qs = `?source_report=${encodeURIComponent(src)}${period ? '&period=' + encodeURIComponent(period) : ''}`
-      setByRep(await api('/commcalc/commission-ledger/by-rep' + qs))
+      setByRep(await api('/api/v1/commcalc/commission-ledger/by-rep' + qs))
     } catch (e: any) { setMsg(e?.message || 'Load failed') }
   }
   useEffect(() => { loadTemplates() }, [])            // eslint-disable-line react-hooks/exhaustive-deps
@@ -66,7 +66,7 @@ export default function CommissionLedgerPage() {
     try {
       const fd = new FormData()
       fd.append('file', file); fd.append('source_report', src); fd.append('period', period)
-      const r = await apiUpload('/commcalc/commission-ledger/import', fd)
+      const r = await apiUpload('/api/v1/commcalc/commission-ledger/import', fd)
       flash(`Imported ${r?.saved} lines — payouts ${money(r?.summary?.payout_total)}${r?.summary?.other_count ? `, ${r.summary.other_count} unmapped` : ''}`)
       loadSummary()
     } catch (e: any) { flash(e?.message || 'Import failed — is migration 071 applied?') }
@@ -75,7 +75,7 @@ export default function CommissionLedgerPage() {
   async function openDrill(cat: string) {
     try {
       const qs = `?source_report=${encodeURIComponent(src)}${period ? '&period=' + encodeURIComponent(period) : ''}&category=${cat}&limit=500`
-      const d = await api('/commcalc/commission-ledger/rows' + qs)
+      const d = await api('/api/v1/commcalc/commission-ledger/rows' + qs)
       setDrill({ cat, rows: d?.rows || [] })
     } catch (e: any) { flash(e?.message || 'Drill failed') }
   }

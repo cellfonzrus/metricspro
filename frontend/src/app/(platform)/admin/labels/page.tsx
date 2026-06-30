@@ -17,7 +17,7 @@ export default function DisplayLabelsPage() {
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
-    api('/commcalc/nav-config')
+    api('/api/v1/commcalc/nav-config')
       .then(c => { const l = (c?.labels as Record<string, string>) || {}; setOver(l); setDraft(l) })
       .catch(() => {})
       .finally(() => setLoaded(true))
@@ -27,7 +27,7 @@ export default function DisplayLabelsPage() {
     const label = (draft[key] || '').trim()
     if (label === (over[key] || '')) return   // unchanged
     try {
-      await api('/commcalc/nav-labels', { method: 'POST', body: JSON.stringify({ scope, key: scope === 'group' ? key.replace(/^group:/, '') : key, label }) })
+      await api('/api/v1/commcalc/nav-labels', { method: 'POST', body: JSON.stringify({ scope, key: scope === 'group' ? key.replace(/^group:/, '') : key, label }) })
       setOver(p => { const n = { ...p }; if (label) n[key] = label; else delete n[key]; return n })
       setMsg(label ? `Saved "${label}"` : 'Reverted to default')
     } catch (e: any) {

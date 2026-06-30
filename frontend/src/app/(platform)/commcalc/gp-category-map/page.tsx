@@ -27,7 +27,7 @@ export default function GpCategoryMapPage() {
   async function load() {
     setLoading(true)
     try {
-      const [cfg, dd] = await Promise.all([api('/commcalc/gp-category-map'), api('/commcalc/gp-departments')])
+      const [cfg, dd] = await Promise.all([api('/api/v1/commcalc/gp-category-map'), api('/api/v1/commcalc/gp-departments')])
       setCats(cfg?.categories || cats)
       setReady(cfg?.ready !== false)
       setDepts(dd?.departments || [])
@@ -40,7 +40,7 @@ export default function GpCategoryMapPage() {
     // empty category string = revert to built-in default (DELETE on the backend)
     setDepts(p => p.map(d => d.department === department ? { ...d, category: category || d.category, mapped: !!category } : d))
     try {
-      await api('/commcalc/gp-category-map', { method: 'POST', body: JSON.stringify({ department, category }) })
+      await api('/api/v1/commcalc/gp-category-map', { method: 'POST', body: JSON.stringify({ department, category }) })
       setMsg(category ? `"${department || '(blank)'}" → ${category}` : `"${department || '(blank)'}" reverted to default`)
       load()  // re-pull so the computed default shows after a revert
     } catch (e: any) {

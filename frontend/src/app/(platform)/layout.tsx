@@ -41,7 +41,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   // navCfg empty, so built-in labels show and every item stays visible (today's behavior). Never blocks.
   useEffect(() => {
     let alive = true
-    api('/commcalc/nav-config').then(c => { if (alive && c) setNavCfg(c) }).catch(() => {})
+    api('/api/v1/commcalc/nav-config').then(c => { if (alive && c) setNavCfg(c) }).catch(() => {})
     return () => { alive = false }
   }, [])
   const caps = navCfg.capabilities || {}

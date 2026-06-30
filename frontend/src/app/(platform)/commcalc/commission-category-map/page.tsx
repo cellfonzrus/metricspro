@@ -29,11 +29,11 @@ export default function CommissionCategoryMapPage() {
   const [nr, setNr] = useState<Rule>({ source_report: 'ma_daily_tx', match_field: 'product_name', match_op: 'contains', pattern: '', category: 'commission', sign_rule: 'negative_only', priority: 100 })
 
   async function loadTemplates() {
-    try { const d = await api('/commcalc/commission-ledger/templates'); setTmpls(d?.templates || []) } catch { /* noop */ }
+    try { const d = await api('/api/v1/commcalc/commission-ledger/templates'); setTmpls(d?.templates || []) } catch { /* noop */ }
   }
   async function loadMap(s: string) {
     try {
-      const d = await api('/commcalc/commission-category-map?source_report=' + encodeURIComponent(s))
+      const d = await api('/api/v1/commcalc/commission-category-map?source_report=' + encodeURIComponent(s))
       setRules(d?.rules?.length ? d.rules : (d?.default_rules || []))
       setUsingDefaults(!!d?.using_defaults); setReady(d?.ready !== false)
       setCats(d?.categories || []); setLabels(d?.category_labels || {})
@@ -42,7 +42,7 @@ export default function CommissionCategoryMapPage() {
     } catch (e: any) { setMsg(e?.message || 'Load failed') }
   }
   async function loadObserved(s: string) {
-    try { const d = await api('/commcalc/commission-ledger/observed-types?source_report=' + encodeURIComponent(s)); setObs(d?.types || []) } catch { setObs([]) }
+    try { const d = await api('/api/v1/commcalc/commission-ledger/observed-types?source_report=' + encodeURIComponent(s)); setObs(d?.types || []) } catch { setObs([]) }
   }
   useEffect(() => { loadTemplates() }, [])         // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadMap(src); loadObserved(src) }, [src])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -51,7 +51,7 @@ export default function CommissionCategoryMapPage() {
 
   async function save(rule: Rule) {
     try {
-      await api('/commcalc/commission-category-map', { method: 'POST', body: JSON.stringify({ ...rule, source_report: src }) })
+      await api('/api/v1/commcalc/commission-category-map', { method: 'POST', body: JSON.stringify({ ...rule, source_report: src }) })
       flash('Saved'); loadMap(src); loadObserved(src)
     } catch (e: any) { flash(e?.message || 'Save failed — is migration 071 applied?') }
   }
@@ -62,7 +62,7 @@ export default function CommissionCategoryMapPage() {
   }
   async function del(rule: Rule) {
     if (!rule.id) { flash('Built-in default — edit the rules after migration 071 to override'); return }
-    try { await api('/commcalc/commission-category-map/' + rule.id, { method: 'DELETE' }); flash('Removed'); loadMap(src); loadObserved(src) }
+    try { await api('/api/v1/commcalc/commission-category-map/' + rule.id, { method: 'DELETE' }); flash('Removed'); loadMap(src); loadObserved(src) }
     catch (e: any) { flash(e?.message || 'Delete failed') }
   }
   function newTemplate() {

@@ -26,7 +26,7 @@ export default function TargetFieldsPage() {
 
   async function loadKeys() {
     try {
-      const d = await api('/commcalc/target-fields')
+      const d = await api('/api/v1/commcalc/target-fields')
       const keys: string[] = d?.report_keys || []
       setReportKeys(keys)
       setReady(d?.registry_ready !== false)
@@ -37,7 +37,7 @@ export default function TargetFieldsPage() {
     if (!rk) return
     setLoading(true)
     try {
-      const d = await api('/commcalc/target-fields?report_key=' + encodeURIComponent(rk))
+      const d = await api('/api/v1/commcalc/target-fields?report_key=' + encodeURIComponent(rk))
       setFields(d?.fields || [])
       setReady(d?.registry_ready !== false)
     } catch (e: any) { setMsg(e?.message || 'Load failed') }
@@ -53,7 +53,7 @@ export default function TargetFieldsPage() {
     if (!reportKey) { flash('Pick a report first'); return }
     if (!label) { flash('Field label is required'); return }
     try {
-      await api('/commcalc/target-fields', { method: 'POST', body: JSON.stringify({
+      await api('/api/v1/commcalc/target-fields', { method: 'POST', body: JSON.stringify({
         report_key: reportKey, label, transform: nf.transform, required: nf.required,
         default_source: nf.default_source.trim(), aliases: nf.aliases, sort_order: Number(nf.sort_order) || 100,
       }) })
@@ -64,7 +64,7 @@ export default function TargetFieldsPage() {
   }
   async function removeField(tf: string) {
     try {
-      await api(`/commcalc/target-fields?report_key=${encodeURIComponent(reportKey)}&target_field=${encodeURIComponent(tf)}`, { method: 'DELETE' })
+      await api(`/api/v1/commcalc/target-fields?report_key=${encodeURIComponent(reportKey)}&target_field=${encodeURIComponent(tf)}`, { method: 'DELETE' })
       flash(`Removed "${tf}"`)
       loadFields(reportKey)
     } catch (e: any) { flash(e?.message || 'Remove failed') }

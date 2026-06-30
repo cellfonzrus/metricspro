@@ -42,14 +42,14 @@ export default function CommissionLedgerSetupPage() {
   const [result, setResult] = useState<any>(null)
   const [msg, setMsg] = useState('')
 
-  useEffect(() => { api('/commcalc/commission-ledger/templates').then(d => setTmpls(d?.templates || [])).catch(() => {}) }, [])
+  useEffect(() => { api('/api/v1/commcalc/commission-ledger/templates').then(d => setTmpls(d?.templates || [])).catch(() => {}) }, [])
   function flash(m: string) { setMsg(m); setTimeout(() => setMsg(''), 4500) }
 
   async function analyze(f: File) {
     setBusy(true); setMsg('')
     try {
       const fd = new FormData(); fd.append('file', f); fd.append('source_report', src)
-      const a: Analysis = await apiUpload('/commcalc/commission-ledger/analyze', fd)
+      const a: Analysis = await apiUpload('/api/v1/commcalc/commission-ledger/analyze', fd)
       setAnalysis(a)
       const fm: Record<string, string> = {}
       a.suggestions?.forEach(s => { fm[s.target_field] = s.suggested_source })
@@ -65,10 +65,10 @@ export default function CommissionLedgerSetupPage() {
       // save the key field mappings the user chose, then re-preview
       for (const k of KEY_FIELDS) {
         const sh = fieldMap[k.tf]
-        if (sh) await api('/commcalc/column-mapping', { method: 'POST', body: JSON.stringify({ report_key: 'commission_ledger', target_field: k.tf, source_header: sh, transform: k.transform }) })
+        if (sh) await api('/api/v1/commcalc/column-mapping', { method: 'POST', body: JSON.stringify({ report_key: 'commission_ledger', target_field: k.tf, source_header: sh, transform: k.transform }) })
       }
       const fd = new FormData(); fd.append('file', file); fd.append('source_report', src)
-      const a: Analysis = await apiUpload('/commcalc/commission-ledger/analyze', fd)
+      const a: Analysis = await apiUpload('/api/v1/commcalc/commission-ledger/analyze', fd)
       setAnalysis(a); flash('Updated the preview with your column choices')
     } catch (e: any) { flash(e?.message || 'Re-check failed') }
     setBusy(false)
@@ -79,7 +79,7 @@ export default function CommissionLedgerSetupPage() {
     setBusy(true)
     try {
       const fd = new FormData(); fd.append('file', file); fd.append('source_report', src); fd.append('period', period)
-      const r = await apiUpload('/commcalc/commission-ledger/import', fd)
+      const r = await apiUpload('/api/v1/commcalc/commission-ledger/import', fd)
       setResult(r); setStep(3)
     } catch (e: any) { flash(e?.message || 'Import failed — is migration 071 applied?') }
     setBusy(false)
