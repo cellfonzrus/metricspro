@@ -37,32 +37,10 @@ BEGIN
   VALUES (p_org, 'Default Company', 'Default Company')
   ON CONFLICT (org_id, name) DO NOTHING;
 
-  -- commissions (038): default Boost carrier + canonical compensation-category taxonomy
-  INSERT INTO commcalc.carrier (org_id, name, code, is_default)
-  VALUES (p_org, 'Boost', 'BOOST', true)
-  ON CONFLICT (org_id, name) DO NOTHING;
-
-  INSERT INTO commcalc.carrier_category_map (org_id, carrier_id, raw_category, match_type, component, subtype, priority)
-  SELECT c.org_id, c.id, v.raw, v.mt, v.comp, v.sub, v.pri
-  FROM commcalc.carrier c
-  CROSS JOIN (VALUES
-    ('MI',            'exact',    'RESIDUAL',      'base',    10),
-    ('ATU',           'exact',    'RESIDUAL',      'base',    10),
-    ('Residual',      'contains', 'RESIDUAL',      'base',    15),
-    ('Bounty',        'contains', 'SPIFF',         'bounty',  20),
-    ('SPIFF',         'contains', 'SPIFF',         'bounty',  20),
-    ('Accelerator',   'contains', 'SPIFF',         'bonus',   20),
-    ('Reimbursement', 'contains', 'REIMBURSEMENT', 'subsidy', 30),
-    ('Ramp Up',       'contains', 'REIMBURSEMENT', 'subsidy', 30),
-    ('Subsidy',       'contains', 'REIMBURSEMENT', 'subsidy', 30),
-    ('Promo',         'contains', 'COMMISSION',    'promo',   40),
-    ('Offer',         'contains', 'COMMISSION',    'promo',   40),
-    ('Activation',    'contains', 'COMMISSION',    'promo',   45),
-    ('Upgrade',       'contains', 'COMMISSION',    'promo',   45),
-    ('Port',          'contains', 'COMMISSION',    'promo',   45)
-  ) AS v(raw, mt, comp, sub, pri)
-  WHERE c.org_id = p_org AND c.name = 'Boost'
-  ON CONFLICT (org_id, carrier_id, raw_category, match_type) DO NOTHING;
+  -- NOTE: intentionally NO default carrier here (product-owner decision, carrier-neutral seed).
+  -- Seeding a 'Boost' carrier + taxonomy for every tenant gives non-Boost tenants (e.g. Total
+  -- Wireless) a wrong is_default carrier they'd have to delete. Each tenant adds its own carrier on
+  -- Mapping → Carriers. The house org keeps the Boost carrier it already got from mig 038.
 
   -- storeops (027): store-visit inspection checklist
   INSERT INTO storeops.checklist_items (org_id, item_key, label, category, input_type, sort_order) VALUES

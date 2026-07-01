@@ -8,9 +8,9 @@ including every module that ships in the future. Only a tenant on an explicit pa
 Two layers, both reconciled by sync_tenant():
   1. ENTITLEMENT — storeops.tenant_modules rows are upserted to match effective_modules().
   2. CONTENT — the SQL function commcalc.seed_tenant_defaults(org_id) (migration 076) seeds all
-     tenant-safe default template content (HR onboarding, carrier taxonomy, store-visit checklist,
+     tenant-safe, CARRIER-NEUTRAL default template content (HR onboarding, store-visit checklist,
      default company, ticket counter). It is the single source of truth for default content and is
-     idempotent (ON CONFLICT DO NOTHING).
+     idempotent (ON CONFLICT DO NOTHING). It deliberately seeds NO default carrier.
 
 HOW NEW FEATURES AUTO-PROPAGATE: bump SEED_VERSION whenever the default module set or
 seed_tenant_defaults() changes. /core/me compares the tenant's storeops.tenants.seed_version to

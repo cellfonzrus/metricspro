@@ -218,7 +218,8 @@ def _provision_tenant(client, name, admin_email, admin_name=None, password=None,
     client.schema("storeops").table("roles").insert(
         [{"org_id": new_org, "name": n, "display_name": d, "permissions": p} for (n, d, p) in _BASE_ROLES]).execute()
     # Entitlement + tenant-safe default content in one shot: enables modules per the (all-access
-    # default) plan and seeds HR onboarding / carrier taxonomy / store-visit checklist / etc.
+    # default) plan and seeds HR onboarding / store-visit checklist / default company / etc.
+    # (carrier-neutral — the tenant adds its own carrier on Mapping → Carriers).
     try:
         sync_tenant(client, new_org)
     except Exception:
