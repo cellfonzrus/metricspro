@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { api } from '@/lib/client'
+import { api, apiUpload } from '@/lib/client'
 
 // HR · Onboarding Checklist (admin) — the CONFIGURABLE template every new hire is onboarded against.
 // Items group under collapsible CATEGORIES; each item has an OWNER role (Employee / HR / DM / Market
@@ -12,6 +12,7 @@ type Task = {
   id: string; category_id: string; key?: string; label: string; description?: string; owner_role: string
   doc_url?: string; doc_label?: string; is_fillable?: boolean; requires_upload?: boolean
   applies_state?: string | null; sort_order?: number; is_active?: boolean
+  template_name?: string | null
 }
 type Cat = { id: string; key: string; label: string; sort_order?: number; is_active?: boolean; tasks: Task[] }
 type IField = { id?: string; key?: string; label: string; section?: string; field_type?: string; options?: string[] | null; required?: boolean; propagate_to?: string | null; sensitive?: boolean; help_text?: string; sort_order?: number; is_active?: boolean }
@@ -96,6 +97,20 @@ export default function OnboardingAdminPage() {
     try { await api(`/api/v1/hr/onboarding/tasks/${t.id}`, { method: 'DELETE' }); load() }
     catch (e: any) { flash(e?.message || 'Delete failed') }
   }
+  async function uploadTemplate(t: Task, file: File) {
+    const fd = new FormData(); fd.append('file', file)
+    try { const r = await apiUpload(`/api/v1/hr/onboarding/tasks/${t.id}/template`, fd); flash(`📎 Template "${r.template_name}" attached to "${t.label}"`); load() }
+    catch (e: any) { flash(e?.message || 'Upload failed — is migration 080 applied?') }
+  }
+  async function downloadTemplate(t: Task) {
+    try { const r = await api(`/api/v1/hr/onboarding/tasks/${t.id}/template`); if (r?.url) window.open(r.url, '_blank') }
+    catch (e: any) { flash(e?.message || 'Could not open template') }
+  }
+  async function removeTemplate(t: Task) {
+    if (!window.confirm(`Remove the template document from "${t.label}"?`)) return
+    try { await api(`/api/v1/hr/onboarding/tasks/${t.id}/template`, { method: 'DELETE' }); load() }
+    catch (e: any) { flash(e?.message || 'Remove failed') }
+  }
   const upd = (patch: Partial<Task>) => setEditing(v => ({ ...v, ...patch }))
 
   return (
@@ -103,7 +118,7 @@ export default function OnboardingAdminPage() {
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🧩 Onboarding Checklist</h1>
       <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
         The template HR runs for every new hire. Group items into collapsible categories and assign each to whoever owns it
-        (Employee, HR, the DM, or the Market Manager). Add a live form link so the employee can fill it before they start.
+        (Employee, HR, the DM, or the Market Manager). Add a live form link — or 📎 upload a default template document (a blank W-4, a policy PDF, the handbook) that every new hire downloads from their onboarding portal.
         Open a person&apos;s checklist from <a href="/hr/people" style={{ color: 'var(--accent,#2563eb)' }}>HR · People</a>.
       </p>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>{msg}</div>}
@@ -144,7 +159,20 @@ export default function OnboardingAdminPage() {
                         {t.is_fillable && <span style={{ fontSize: 11, color: 'var(--text3)' }}>✎ fillable</span>}
                       </div>
                       {t.description && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{t.description}</div>}
-                      {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--accent,#2563eb)' }}>🔗 {t.doc_label || 'Document link'}</a>}
+                      {t.doc_url && <div><a href={t.doc_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--accent,#2563eb)' }}>🔗 {t.doc_label || 'Document link'}</a></div>}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                        {t.template_name ? (
+                          <>
+                            <button onClick={() => downloadTemplate(t)} style={{ fontSize: 12, color: 'var(--accent,#2563eb)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>📎 {t.template_name}</button>
+                            <label style={{ fontSize: 11, color: 'var(--text3)', cursor: 'pointer', textDecoration: 'underline' }}>replace
+                              <input type="file" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadTemplate(t, f); e.currentTarget.value = '' }} /></label>
+                            <button onClick={() => removeTemplate(t)} style={{ fontSize: 11, color: '#b91c1c', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>remove</button>
+                          </>
+                        ) : (
+                          <label style={{ fontSize: 12, color: 'var(--text3)', cursor: 'pointer' }}>📎 Upload template document
+                            <input type="file" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadTemplate(t, f); e.currentTarget.value = '' }} /></label>
+                        )}
+                      </div>
                     </div>
                     <div style={{ display: 'flex', gap: 6 }}>
                       <button style={{ ...btn, fontSize: 11, padding: '4px 8px' }} onClick={() => setEditing(t)}>Edit</button>

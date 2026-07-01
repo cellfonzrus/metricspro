@@ -285,6 +285,20 @@ def _ensure_onboard_bucket():
     return c
 
 
+def _sign_onboard_path(path, expires=3600):
+    """A time-limited signed URL for a private onboarding-docs object (uploads + item templates).
+    Returns None on any error / empty path so callers can degrade to 'no link'."""
+    if not path:
+        return None
+    try:
+        res = get_supabase().storage.from_(ONBOARD_BUCKET).create_signed_url(path, expires)
+        if isinstance(res, dict):
+            return res.get("signedURL") or res.get("signed_url") or res.get("signedUrl")
+        return res
+    except Exception:
+        return None
+
+
 # ── Template: categories (collapsible) + tasks ─────────────────────────────────────────────────────
 @router.get("/onboarding/template")
 def onboarding_template(include_inactive: bool = False, org_id: str = ORG_ID):
@@ -369,6 +383,66 @@ def onboarding_update_task(task_id: str, body: dict, org_id: str = ORG_ID):
 @router.delete("/onboarding/tasks/{task_id}")
 def onboarding_delete_task(task_id: str, org_id: str = ORG_ID):
     _so().table("onboarding_task").delete().eq("org_id", org_id).eq("id", task_id).execute()
+    return {"ok": True}
+
+
+# ── Per-item DEFAULT TEMPLATE document (migration 080) ──────────────────────────────────────────────
+# HR uploads the blank/standard file for an item once; every hire downloads it from their portal. Stored
+# in the private onboarding-docs bucket under templates/{org}/{task}/…; onboarding_task.template_path/name
+# point at it. Separate from the per-employee UPLOAD (employee_onboarding.document_path) of the completed doc.
+@router.post("/onboarding/tasks/{task_id}/template")
+async def onboarding_upload_template(task_id: str, file: UploadFile = File(...), org_id: str = ORG_ID):
+    """Attach (or replace) the default template document HR sends to every hire for this item."""
+    data = await file.read()
+    safe = (file.filename or "template").replace("/", "_")
+    path = f"templates/{org_id}/{task_id}/{uuid.uuid4().hex}_{safe}"
+    c = _ensure_onboard_bucket()
+    try:
+        c.storage.from_(ONBOARD_BUCKET).upload(path, data, {"content-type": file.content_type or "application/octet-stream"})
+    except Exception as e:
+        raise HTTPException(500, f"upload failed: {e}")
+    try:
+        r = (_so().table("onboarding_task").update({"template_path": path, "template_name": safe})
+             .eq("org_id", org_id).eq("id", task_id).execute())
+    except Exception as e:
+        raise HTTPException(400, f"Could not attach template — is migration 080 applied? {str(e)[:140]}")
+    if not (r.data or []):
+        raise HTTPException(404, "task not found")
+    return {"ok": True, "template_name": safe, "template_url": _sign_onboard_path(path)}
+
+
+@router.get("/onboarding/tasks/{task_id}/template")
+def onboarding_get_template(task_id: str, org_id: str = ORG_ID):
+    """A 1-hour signed URL to view/download an item's default template document."""
+    try:
+        rows = (_so().table("onboarding_task").select("template_path,template_name")
+                .eq("org_id", org_id).eq("id", task_id).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    if not rows or not rows[0].get("template_path"):
+        raise HTTPException(404, "no template")
+    url = _sign_onboard_path(rows[0]["template_path"])
+    if not url:
+        raise HTTPException(500, "could not sign url")
+    return {"url": url, "template_name": rows[0].get("template_name")}
+
+
+@router.delete("/onboarding/tasks/{task_id}/template")
+def onboarding_delete_template(task_id: str, org_id: str = ORG_ID):
+    """Detach an item's default template (clears the pointer + best-effort deletes the stored object)."""
+    rows = (_so().table("onboarding_task").select("template_path")
+            .eq("org_id", org_id).eq("id", task_id).limit(1).execute().data) or []
+    path = rows[0].get("template_path") if rows else None
+    try:
+        _so().table("onboarding_task").update({"template_path": None, "template_name": None}) \
+            .eq("org_id", org_id).eq("id", task_id).execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not remove template: {str(e)[:140]}")
+    if path:
+        try:
+            get_supabase().storage.from_(ONBOARD_BUCKET).remove([path])
+        except Exception:
+            pass
     return {"ok": True}
 
 
@@ -1132,7 +1206,9 @@ def _onboarding_bundle(org_id, employee_id):
         tasks = [{"id": t["id"], "label": t["label"], "description": t.get("description"),
                   "doc_url": t.get("doc_url"), "doc_label": t.get("doc_label"),
                   "requires_upload": t.get("requires_upload"), "status": t.get("status"),
-                  "has_document": t.get("has_document"), "document_name": t.get("document_name")}
+                  "has_document": t.get("has_document"), "document_name": t.get("document_name"),
+                  "template_name": t.get("template_name"),
+                  "template_url": _sign_onboard_path(t.get("template_path"))}
                  for t in c.get("tasks", []) if t.get("owner_role") == "employee"]
         if tasks:
             emp_cats.append({"key": c["key"], "label": c["label"], "tasks": tasks})

@@ -13,7 +13,7 @@ const inp: React.CSSProperties = { padding: '10px 12px', borderRadius: 8, border
 const btnP: React.CSSProperties = { padding: '10px 16px', borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' }
 const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: '#334155', display: 'block', margin: '0 0 4px' }
 
-type Task = { id: string; label: string; description?: string; doc_url?: string; doc_label?: string; requires_upload?: boolean; status: string; has_document?: boolean; document_name?: string }
+type Task = { id: string; label: string; description?: string; doc_url?: string; doc_label?: string; requires_upload?: boolean; status: string; has_document?: boolean; document_name?: string; template_url?: string | null; template_name?: string | null }
 type Cat = { key: string; label: string; tasks: Task[] }
 type Field = { key: string; label: string; section: string; field_type: string; options?: string[]; required?: boolean; sensitive?: boolean; help_text?: string }
 const SECTION_LABEL: Record<string, string> = { personal: 'Your details', address: 'Home address', emergency: 'Emergency contact', work_eligibility: 'Work eligibility (I-9)', tax: 'Tax withholding (W-4)', direct_deposit: 'Direct deposit', policies: 'Policy acknowledgements', custom: 'Additional info' }
@@ -177,6 +177,7 @@ export default function PublicOnboardPage() {
                   {t.description && <div style={{ fontSize: 13, color: '#64748b', margin: '2px 0 0 23px' }}>{t.description}</div>}
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '8px 0 0 23px' }}>
                     {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📄 Open {t.doc_label || 'form'}</a>}
+                    {t.template_url && <a href={t.template_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📎 {t.template_name || 'Download template'}</a>}
                     {t.requires_upload && <label style={{ padding: '7px 12px', borderRadius: 8, background: t.has_document ? '#f8fafc' : '#2563eb', color: t.has_document ? '#334155' : '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', border: t.has_document ? '1px solid #cbd5e1' : 'none' }}>
                       {t.has_document ? '↻ Replace upload' : '⬆ Upload completed form'}
                       <input type="file" style={{ display: 'none' }} disabled={busy} onChange={e => { const f = e.target.files?.[0]; if (f) upload(t, f); e.currentTarget.value = '' }} />
