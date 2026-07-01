@@ -134,7 +134,16 @@ async def upload_file(
     fname = (getattr(file, "filename", "") or "").lower()
     try:
         if fname.endswith((".csv", ".txt")):
-            df = pd.read_csv(io.BytesIO(contents), dtype=str)
+            # b2bsoft (and most Windows POS) export CSVs as Windows-1252, not UTF-8 — byte 0x96 (en-dash)
+            # makes the default read_csv fail. Try UTF-8, then cp1252, then latin-1 (maps all 256 bytes so
+            # it never raises) — so a non-UTF-8 export imports instead of erroring on one stray character.
+            df = None
+            for enc in ("utf-8-sig", "cp1252", "latin-1"):
+                try:
+                    df = pd.read_csv(io.BytesIO(contents), dtype=str, encoding=enc)
+                    break
+                except UnicodeDecodeError:
+                    continue
         else:
             df = pd.read_excel(io.BytesIO(contents), dtype=str)
     except Exception as e:
