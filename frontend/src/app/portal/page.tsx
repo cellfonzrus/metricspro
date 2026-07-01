@@ -122,7 +122,7 @@ export default function PortalPage() {
   // full store list for the "which store are you at?" picker (so a floater/visiting rep can choose)
   useEffect(() => {
     if (!empId) { setAllStores([]); return }
-    api('/api/v1/storeops/stores').then((r: any) => setAllStores(
+    api('/api/v1/storeops/timeclock/stores').then((r: any) => setAllStores(
       (r || []).filter((s: any) => s.store_code).map((s: any) => ({
         code: String(s.store_code).toUpperCase(),
         label: `${s.store_code}${s.address ? ' — ' + String(s.address).slice(0, 24) : ''}`,

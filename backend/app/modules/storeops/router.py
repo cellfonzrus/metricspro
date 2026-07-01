@@ -28,6 +28,14 @@ def get_stores(authorization: str = Header(default=""), org_id: str = "00000000-
         rows = [s for s in rows if in_keyset(ks, s.get("store_code"), s.get("address"))]
     return rows
 
+@router.get("/timeclock/stores")
+def timeclock_stores(org_id: str = ORG_ID):
+    """FULL active store list for the kiosk clock-in picker — deliberately UNSCOPED (no RBAC span
+    filter, unlike GET /stores) so a visiting/floater rep can pick the store they're physically at
+    and reach the manager-override path, instead of being silently forced into their home store."""
+    rows = sb().table("stores").select("store_code,address,market").eq("org_id", org_id).order("address").execute().data or []
+    return [s for s in rows if s.get("store_code")]
+
 @router.get("/employees")
 def get_employees(include_inactive: bool = False, all_company: bool = False, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
     """Employees in the caller's span. all_company=true returns the WHOLE org roster (still
