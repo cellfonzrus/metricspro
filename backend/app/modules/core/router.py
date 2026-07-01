@@ -17,6 +17,10 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Header
 from app.core.database import get_supabase, get_supabase_admin
+from app.core.config import settings
+from app.modules.core.entitlements import (
+    MODULE_CATALOG, sync_tenant, sync_all_tenants, needs_sync,
+)
 
 router = APIRouter(prefix="/core", tags=["Core / RBAC"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -123,6 +127,16 @@ async def whoami(authorization: str = Header(default="")):
             {"last_login": datetime.now(timezone.utc).isoformat()}).eq("id", u["id"]).execute()
     except Exception:
         pass
+    # Self-provision on login: if this tenant is behind the current SEED_VERSION, reconcile its
+    # module entitlement + seed any newly-shipped default content. This is how a NEW feature
+    # auto-propagates to every existing tenant (no per-feature migration needed). Cheap no-op once
+    # the tenant is up to date (a single indexed lookup).
+    try:
+        org = u.get("org_id") or ORG_ID
+        if needs_sync(client, org):
+            sync_tenant(client, org)
+    except Exception:
+        pass
     return {"provisioned": True, "user": u, "permissions": perms,
             "active": bool(u.get("is_active", True))}
 
@@ -161,7 +175,7 @@ def _require_super_admin(authorization: str):
 
 
 def _mods(**on):
-    base = {k: False for k in ("commissions", "targets", "asset", "vip", "storeops", "notify", "helpdesk", "admin")}
+    base = {k: False for k in ("commissions", "targets", "asset", "vip", "storeops", "notify", "helpdesk", "hr", "admin")}
     base.update(on)
     return base
 
@@ -169,12 +183,11 @@ def _mods(**on):
 # the role set seeded into every new tenant (mirror of migration 015 + helpdesk); the tenant admin
 # edits them afterward on their own Roles & Access.
 _BASE_ROLES = [
-    ("admin", "Admin", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True, helpdesk=True, admin=True), "scope": "all", "home": "/commcalc"}),
-    ("market_manager", "Market Manager", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True, helpdesk=True), "scope": "market", "home": "/commcalc/targets"}),
+    ("admin", "Admin", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True, helpdesk=True, hr=True, admin=True), "scope": "all", "home": "/commcalc"}),
+    ("market_manager", "Market Manager", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True, helpdesk=True, hr=True), "scope": "market", "home": "/commcalc/targets"}),
     ("store_manager", "Store Manager", {"modules": _mods(commissions=True, targets=True, asset=True, storeops=True, helpdesk=True), "scope": "store", "home": "/commcalc/targets"}),
     ("sales_rep", "Sales Rep", {"modules": _mods(targets=True, helpdesk=True), "scope": "self", "home": "/commcalc/targets/my"}),
 ]
-_DEFAULT_TENANT_MODULES = ["commissions", "targets", "asset", "storeops", "closing", "notify", "helpdesk"]
 
 
 @router.get("/tenants")
@@ -204,11 +217,12 @@ def _provision_tenant(client, name, admin_email, admin_name=None, password=None,
     client.schema("storeops").table("tenants").insert({"org_id": new_org, "name": name, "slug": slug}).execute()
     client.schema("storeops").table("roles").insert(
         [{"org_id": new_org, "name": n, "display_name": d, "permissions": p} for (n, d, p) in _BASE_ROLES]).execute()
+    # Entitlement + tenant-safe default content in one shot: enables modules per the (all-access
+    # default) plan and seeds HR onboarding / carrier taxonomy / store-visit checklist / etc.
     try:
-        client.schema("storeops").table("tenant_modules").insert(
-            [{"org_id": new_org, "module_key": m, "is_enabled": True} for m in _DEFAULT_TENANT_MODULES]).execute()
+        sync_tenant(client, new_org)
     except Exception:
-        pass  # tenant_modules (mig 053) may be absent in some envs — non-fatal
+        pass  # entitlement engine (mig 053/076) may be absent in some envs — non-fatal
     pw = password or ("Mp" + secrets.token_urlsafe(6))
     auth_id, created, err = _create_or_link_auth(get_supabase_admin(), admin_email, pw)
     client.schema("storeops").table("app_users").insert({
@@ -230,6 +244,30 @@ async def create_tenant(body: dict, authorization: str = Header(default="")):
         raise HTTPException(400, "name and admin_email required")
     return _provision_tenant(sb(), name, admin_email, body.get("admin_name"),
                              password=body.get("temp_password"), slug=body.get("slug"), must_reset=True)
+
+
+@router.get("/modules")
+async def list_modules():
+    """PUBLIC: the canonical module registry (module_key → label). Drives the billing plan
+    editor's per-module picker and the tenant entitlement view."""
+    return {"modules": [{"key": k, "label": v} for k, v in MODULE_CATALOG.items()]}
+
+
+@router.post("/tenants/sync")
+async def sync_tenants_endpoint(authorization: str = Header(default=""), x_notify_secret: str = Header(default="")):
+    """Reconcile EVERY tenant — module entitlement (all-access default) + tenant-safe default
+    content — bringing tenants created before a feature shipped up to date. Auth: super-admin,
+    OR the NOTIFY_RUN_SECRET header (so a post-deploy / cron backfill can run without a UI token)."""
+    if not (settings.NOTIFY_RUN_SECRET and x_notify_secret == settings.NOTIFY_RUN_SECRET):
+        _require_super_admin(authorization)
+    return sync_all_tenants(sb())
+
+
+@router.post("/tenants/{org_id}/sync")
+async def sync_one_tenant_endpoint(org_id: str, authorization: str = Header(default="")):
+    """Super-admin: reconcile a SINGLE tenant's entitlement + default content."""
+    _require_super_admin(authorization)
+    return sync_tenant(sb(), org_id)
 
 
 def _signups_open() -> bool:
