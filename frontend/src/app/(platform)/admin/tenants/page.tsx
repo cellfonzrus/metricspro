@@ -17,6 +17,9 @@ export default function TenantsAdmin() {
   const [rp, setRp] = useState({ email: '', temp_password: '' })
   const [reset, setReset] = useState<any>(null)
   const [rpBusy, setRpBusy] = useState(false)
+  const [taBusy, setTaBusy] = useState('')          // org_id currently resetting
+  const [taReset, setTaReset] = useState<any>(null)  // last admin-reset result
+  const [taPick, setTaPick] = useState<any>(null)    // {org_id, name, admins[]} when a tenant has >1 admin login
 
   const load = useCallback(() => {
     api('/api/v1/core/tenants').then((d: any) => setTenants(d.tenants || [])).catch(e => setErr(e?.message || 'Failed to load'))
@@ -38,6 +41,16 @@ export default function TenantsAdmin() {
       const r = await api('/api/v1/core/users/reset-password', { method: 'POST', body: JSON.stringify(rp) })
       setReset(r); setRp({ email: '', temp_password: '' })
     } catch (e: any) { setErr(e?.message || 'Could not reset password') } finally { setRpBusy(false) }
+  }
+  async function resetTenantAdmin(t: Tenant, email?: string) {
+    setTaBusy(t.org_id); setErr(''); setTaReset(null)
+    try {
+      const r = await api(`/api/v1/core/tenants/${t.org_id}/reset-admin-password`, {
+        method: 'POST', body: JSON.stringify(email ? { email } : {}) })
+      if (r?.needs_email) { setTaPick(r); return }   // >1 admin login — ask which
+      setTaPick(null); setTaReset(r)
+    } catch (e: any) { setErr(e?.message || 'Could not reset the tenant admin password') }
+    finally { setTaBusy('') }
   }
   async function rename(t: Tenant) {
     const name = prompt('Rename company:', t.name)
@@ -127,9 +140,32 @@ export default function TenantsAdmin() {
               <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text3)' }}>{t.org_id.slice(0, 8)}…</span>
               <button className="btn btn-sm" onClick={() => rename(t)}>Rename</button>
               <button className="btn btn-sm" onClick={() => toggleActive(t)}>{t.is_active ? 'Deactivate' : 'Activate'}</button>
+              <button className="btn btn-sm" disabled={taBusy === t.org_id} title="Reset this company's admin login password"
+                onClick={() => { if (confirm(`Reset the admin login password for ${t.name}? This locks out their current password immediately.`)) resetTenantAdmin(t) }}>
+                {taBusy === t.org_id ? 'Resetting…' : '🔑 Reset admin'}</button>
             </div>
           ))}
       </div>
+
+      {taPick && (
+        <div className="card" style={{ padding: 16, marginTop: 14, borderColor: '#fde68a', background: '#fffbeb' }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>{taPick.tenant} has more than one admin login — pick which to reset:</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {(taPick.admins || []).map((a: any) => (
+              <button key={a.email} className="btn btn-sm"
+                onClick={() => resetTenantAdmin({ org_id: taPick.org_id, name: taPick.tenant } as Tenant, a.email)}>
+                {a.full_name ? `${a.full_name} · ` : ''}{a.email}</button>
+            ))}
+            <button className="btn btn-sm" onClick={() => setTaPick(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {taReset?.ok && (
+        <div className="card" style={{ marginTop: 14, padding: 12, borderRadius: 8, background: '#f0fdf4', borderColor: '#bbf7d0', fontSize: 14 }}>
+          ✅ Admin login reset for <b>{taReset.tenant}</b> ({taReset.email}) · temp password: <code style={{ background: '#fff', padding: '2px 6px', borderRadius: 4 }}>{taReset.temp_password}</code>
+          <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Hand this to the company admin who requested it — they'll be prompted to set a new password on next login.</div>
+        </div>
+      )}
     </div>
   )
 }

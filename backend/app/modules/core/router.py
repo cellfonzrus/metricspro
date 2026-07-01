@@ -733,6 +733,57 @@ async def reset_password(body: dict, authorization: str = Header(default="")):
     return {"ok": True, "email": email, "temp_password": temp_pw, "auth_id": existing}
 
 
+@router.post("/tenants/{org_id}/reset-admin-password")
+async def reset_tenant_admin_password(org_id: str, body: dict = None, authorization: str = Header(default="")):
+    """Super-admin: reset a TENANT's admin login password (on request from that tenant's admin who
+    is locked out). Finds the tenant's admin app_users row(s) that have a provisioned login — the
+    common case is exactly one, which is reset directly. If a tenant has MORE than one admin login,
+    returns {needs_email, admins:[…]} so the caller re-submits with {email} to pick which. Sets a
+    temp password + forces a change on next login. Returns the temp password to hand back. Body is
+    optional: {email? (disambiguate), temp_password? (auto-generated if omitted)}."""
+    _require_super_admin(authorization)
+    body = body or {}
+    client = sb()
+    ten = (client.schema("storeops").table("tenants").select("org_id,name")
+           .eq("org_id", org_id).limit(1).execute().data) or []
+    if not ten:
+        raise HTTPException(404, "no such tenant")
+    admins = (client.schema("storeops").table("app_users").select("*")
+              .eq("org_id", org_id).eq("role", "admin").execute().data) or []
+    logins = [a for a in admins if a.get("auth_id") and a.get("email")]
+    if not logins:
+        raise HTTPException(404, "this tenant has no admin login yet — create the tenant admin first (＋ Add a company, or Roles & Access).")
+    email = (body.get("email") or "").strip().lower()
+    if email:
+        target = next((a for a in logins if (a.get("email") or "").lower() == email), None)
+        if not target:
+            raise HTTPException(404, f"{email} is not an admin login for this tenant")
+    elif len(logins) == 1:
+        target = logins[0]
+    else:
+        # more than one admin login — let the caller choose which to reset
+        return {"ok": False, "needs_email": True, "tenant": ten[0].get("name"), "org_id": org_id,
+                "admins": [{"email": a.get("email"), "full_name": a.get("full_name")} for a in logins]}
+    target_email = (target.get("email") or "").strip().lower()
+    admin = get_supabase_admin()
+    existing = _find_auth_user_by_email(admin, target_email)
+    if not existing:
+        raise HTTPException(404, f"no auth account exists for {target_email} — create their login first (Roles & Access).")
+    temp_pw = body.get("temp_password") or ("Mp" + secrets.token_urlsafe(6))
+    try:
+        admin.auth.admin.update_user_by_id(existing, {"password": temp_pw})
+    except Exception as e:
+        raise HTTPException(500, f"could not reset password: {str(e)[:200]}")
+    # force reset-on-next-login for THIS tenant's admin row (scoped to org + email)
+    try:
+        client.schema("storeops").table("app_users").update({"must_reset_password": True}) \
+            .eq("org_id", org_id).eq("email", target_email).execute()
+    except Exception:
+        pass
+    return {"ok": True, "tenant": ten[0].get("name"), "org_id": org_id,
+            "email": target_email, "temp_password": temp_pw, "auth_id": existing}
+
+
 @router.post("/users/bulk-provision")
 async def bulk_provision(body: dict, org_id: str = ORG_ID):
     """Create logins for every assigned core.users row that has an email and no auth_id yet
