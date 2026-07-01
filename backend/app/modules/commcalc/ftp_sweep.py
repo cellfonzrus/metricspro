@@ -65,10 +65,13 @@ def list_files(cfg):
 
 
 def match_upload_type(filename, patterns):
-    """Return the upload_type whose glob matches this filename (first match wins), else None."""
+    """Return the upload_type whose glob matches this filename (first match wins), else None.
+    Case-INSENSITIVE: fnmatch is case-sensitive on Linux, so '*Inventory*Aging*' would silently miss
+    'inventory aging.csv' — the exact 'attachment is there but never imports' failure. Lowercase both."""
+    fn = (filename or "").lower()
     for p in patterns or []:
-        pat = (p.get("pattern") or "").strip()
-        if pat and fnmatch.fnmatch(filename, pat):
+        pat = (p.get("pattern") or "").strip().lower()
+        if pat and fnmatch.fnmatch(fn, pat):
             return p.get("upload_type")
     return None
 
