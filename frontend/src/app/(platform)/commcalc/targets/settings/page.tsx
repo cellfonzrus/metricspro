@@ -13,6 +13,8 @@ interface TargetRow {
   byod_pct: number | null
   notes?: string | null
   _seeded?: boolean
+  _seed_basis?: Record<string, string>   // per-category: 'stretch' | 'carry' | 'new'
+  _prior_period?: string
 }
 
 export default function TargetSettingsPage() {
@@ -28,6 +30,8 @@ export default function TargetSettingsPage() {
   const [bulk, setBulk] = useState<any>({ activations_monthly: '', upgrades_monthly: '', accessories_monthly: '', byod_pct: '' })
   const [savingAll, setSavingAll] = useState(false)
   const [bulkMsg, setBulkMsg] = useState('')
+  const [rolling, setRolling] = useState(false)
+  const [rollMsg, setRollMsg] = useState('')
 
   useEffect(() => { load() }, [period])
 
@@ -69,6 +73,21 @@ export default function TargetSettingsPage() {
       setTimeout(() => setSavedCode(null), 3000)
     } catch (e: any) { alert(e.message) }
     setSavingCode(null)
+  }
+
+  // Persist the month-over-month carry-forward for this period: prior target carried forward, or
+  // +10% where last month's target was hit. overwrite=false → only fills stores with no row yet.
+  async function rollForward(overwrite: boolean) {
+    if (overwrite && !confirm('Overwrite EVERY store for this month with last month’s carry-forward — including targets you edited by hand?')) return
+    setRolling(true); setRollMsg('')
+    try {
+      const d = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/roll-forward?org_id=${ORG_ID}`, {
+        method: 'POST', body: JSON.stringify({ overwrite }),
+      })
+      setRollMsg(`Rolled forward from ${d.prior_period}: saved ${d.written} store(s)${d.skipped ? `, skipped ${d.skipped}` : ''}.`)
+      await load()
+    } catch (e: any) { setRollMsg(e.message || 'Roll-forward failed') }
+    setRolling(false)
   }
 
   function toggleSel(code: string) {
@@ -132,6 +151,22 @@ export default function TargetSettingsPage() {
         <strong> BYOD %</strong> = share of activations expected to be BYOD (blank = KPI default {byodDefault}%).
       </div>
 
+      {/* Month-over-month carry-forward */}
+      <div className="card" style={{ padding: '12px 16px', marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 260, fontSize: 13, color: 'var(--text2)' }}>
+          🔁 <strong>Carry forward month over month.</strong> Stores without a target for {period} are pre-filled from
+          last month — a category the store <strong>hit</strong> becomes <strong>+10% (stretch)</strong>, one it missed
+          carries the same number forward. Click below to save these for all stores.
+        </div>
+        <button className="btn btn-primary" onClick={() => rollForward(false)} disabled={rolling}>
+          {rolling ? 'Rolling…' : '🔁 Roll forward from last month'}
+        </button>
+        <button className="btn" onClick={() => rollForward(true)} disabled={rolling} title="Overwrites every store, including hand-edited targets">
+          Overwrite all
+        </button>
+        {rollMsg && <span style={{ fontSize: 12, color: 'var(--text2)', flexBasis: '100%' }}>{rollMsg}</span>}
+      </div>
+
       {/* Store filter + bulk apply */}
       {!loading && rows.length > 0 && (
         <div className="card" style={{ padding: 14, marginBottom: 16 }}>
@@ -184,6 +219,13 @@ export default function TargetSettingsPage() {
                     <div style={{ fontSize: 11, color: 'var(--text3)' }}>
                       {r.store_code}{r.market ? ` · ${r.market}` : ''}
                       {r._seeded && <span style={{ color: '#b45309', marginLeft: 6 }}>· not yet saved</span>}
+                      {r._seeded && r._seed_basis && (
+                        Object.values(r._seed_basis).includes('stretch')
+                          ? <span style={{ color: 'var(--green)', marginLeft: 6 }}>· 🔼 +10% stretch (hit {r._prior_period})</span>
+                          : Object.values(r._seed_basis).includes('carry')
+                            ? <span style={{ color: 'var(--text3)', marginLeft: 6 }}>· ↔ carried from {r._prior_period}</span>
+                            : null
+                      )}
                     </div>
                   </td>
                   <td style={td}>

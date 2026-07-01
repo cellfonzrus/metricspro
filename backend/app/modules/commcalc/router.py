@@ -5167,10 +5167,69 @@ def _byod_pct_default(client, period, org_id=ORG_ID):
     return 35.0
 
 
+# ── Month-over-month target carry-forward + stretch ──────────────────────────────────────────────
+# The prior month's target carries forward automatically; a store that HIT a category's target last
+# month gets a 110% STRETCH on it, one that missed carries the same number forward. Evaluated per
+# category (activations / upgrades / accessories). Powers the Target Settings seed preview + the
+# "Roll forward from last month" action (which persists).
+_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December']
+STRETCH_FACTOR = 1.10
+
+
+def _prior_period(period: str) -> str:
+    """The 'Month YYYY' label one month before `period`."""
+    pm = parse_period(period)
+    m, y = pm['month'] - 1, pm['year']
+    if m < 1:
+        m, y = 12, y - 1
+    return f"{_MONTH_NAMES[m - 1]} {y}"
+
+
+def _carry_forward_map(client, org_id, period, stores):
+    """Per store_code (UPPER): the suggested next-month target derived from the prior period —
+    carry each category forward, or ×1.10 when the store achieved that category's prior target.
+    basis[cat] ∈ 'stretch' | 'carry' | 'new' (no prior target to work from)."""
+    prior = _prior_period(period)
+    prows = (client.schema('commcalc').table('targets')
+             .select('*').eq('org_id', org_id).in_('period', _pvariants(prior)).execute().data) or []
+    prior_by_code = {str(r.get('store_code', '')).upper(): r for r in prows}
+    byod_prior = _byod_pct_default(client, prior, org_id)
+    p_actuals = _fetch_actuals(client, org_id, prior)
+    out = {}
+    for s in stores:
+        code = str(s.get('store_code', '') or '').strip()
+        if not code:
+            continue
+        cu = code.upper()
+        ptrow = prior_by_code.get(cu)
+        p_monthly = targets_engine.derive_monthly_by_cat(
+            ptrow if ptrow else {'accessories_monthly': safe_float(s.get('monthly_target'))}, byod_prior)
+        achieved = targets_engine.scope_achieved_mtd(p_actuals, code, None, None)  # whole prior month
+        res, basis = {}, {}
+        for cat, col in (('activations', 'activations_monthly'), ('upgrades', 'upgrades_monthly'),
+                         ('accessories', 'accessories_monthly')):
+            tgt = safe_float(p_monthly.get(cat))
+            got = safe_float(achieved.get(cat))
+            if tgt > 0 and got >= tgt:
+                val, basis[cat] = tgt * STRETCH_FACTOR, 'stretch'
+            elif tgt > 0:
+                val, basis[cat] = tgt, 'carry'
+            else:
+                val, basis[cat] = tgt, 'new'
+            res[col] = round(val) if cat != 'accessories' else round(val, 2)
+        res['byod_pct'] = ptrow.get('byod_pct') if ptrow else None
+        res['basis'] = basis
+        out[cu] = res
+    return {'prior_period': prior, 'by_code': out}
+
+
 @router.get("/targets/{period}")
 async def get_targets(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """List per-store monthly target config, seeding defaults for stores without a row.
-    Accessories seed from storeops.stores.monthly_target; byod_pct from KPI config."""
+    """List per-store monthly target config. Stores without a row are SEEDED from the prior month —
+    each category carried forward, or +10% stretched when last month's target was met (see
+    _carry_forward_map). Accessories still fall back to storeops.stores.monthly_target when there's
+    no prior; byod_pct from KPI config."""
     client = sb()
     pm = parse_period(period)
     rows = (client.schema('commcalc').table('targets')
@@ -5182,6 +5241,11 @@ async def get_targets(period: str, authorization: str = Header(default=""), org_
               .select('store_code,address,market,monthly_target,is_active')
               .eq('org_id', org_id)
               .execute().data) or []
+    # Only pull last month's actuals for the carry-forward when at least one store still needs seeding.
+    need_seed = any((str(s.get('store_code', '') or '').strip().upper() or None) not in by_code
+                    for s in stores if str(s.get('store_code', '') or '').strip())
+    cf = (_carry_forward_map(client, org_id, period, stores) if need_seed
+          else {'by_code': {}, 'prior_period': _prior_period(period)})
     out = []
     for s in stores:
         code = str(s.get('store_code', '') or '').strip()
@@ -5194,14 +5258,17 @@ async def get_targets(period: str, authorization: str = Header(default=""), org_
             row['market'] = s.get('market')
             row['_seeded'] = False
         else:
+            cfrow = cf['by_code'].get(code.upper(), {})
+            acc = cfrow.get('accessories_monthly')
             row = {
                 'org_id': org_id, 'store_code': code, 'period': period,
                 'period_month': pm['month'], 'period_year': pm['year'],
-                'activations_monthly': 0, 'upgrades_monthly': 0,
-                'accessories_monthly': safe_float(s.get('monthly_target')),
-                'byod_pct': byod_def, 'notes': None,
+                'activations_monthly': cfrow.get('activations_monthly', 0),
+                'upgrades_monthly': cfrow.get('upgrades_monthly', 0),
+                'accessories_monthly': acc if acc is not None else safe_float(s.get('monthly_target')),
+                'byod_pct': cfrow.get('byod_pct') or byod_def, 'notes': None,
                 'address': s.get('address'), 'market': s.get('market'),
-                '_seeded': True,
+                '_seeded': True, '_seed_basis': cfrow.get('basis'), '_prior_period': cf['prior_period'],
             }
         out.append(row)
     out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
@@ -5236,6 +5303,54 @@ async def save_target(period: str, body: dict, org_id: str = ORG_ID):
     r = (client.schema('commcalc').table('targets')
          .upsert(row, on_conflict='org_id,store_code,period').execute())
     return r.data[0] if r.data else row
+
+
+@router.post("/targets/{period}/roll-forward")
+async def roll_forward_targets(period: str, body: dict = None, org_id: str = ORG_ID):
+    """Persist the month-over-month carry-forward into `period`: each store's prior-month target
+    carried forward, or +10% where last month's target was met (see _carry_forward_map). By default
+    only stores WITHOUT a target row for this period are written (never overwrites a hand-set target);
+    pass {overwrite:true} to refresh them all. Stores with nothing to carry (all-zero) are skipped."""
+    client = sb()
+    pm = parse_period(period)
+    overwrite = bool((body or {}).get('overwrite'))
+    existing = {str(r.get('store_code', '')).upper()
+                for r in ((client.schema('commcalc').table('targets')
+                           .select('store_code').eq('org_id', org_id)
+                           .in_('period', _pvariants(period)).execute().data) or [])}
+    stores = (client.schema('storeops').table('stores')
+              .select('store_code,address,market,monthly_target,is_active')
+              .eq('org_id', org_id).execute().data) or []
+    cf = _carry_forward_map(client, org_id, period, stores)
+    prior = cf['prior_period']
+    written, skipped = [], 0
+    for s in stores:
+        code = str(s.get('store_code', '') or '').strip()
+        if not code:
+            continue
+        cu = code.upper()
+        if cu in existing and not overwrite:
+            skipped += 1
+            continue
+        cfrow = cf['by_code'].get(cu, {})
+        acc = cfrow.get('accessories_monthly')
+        acc = acc if acc is not None else safe_float(s.get('monthly_target'))
+        act = safe_float(cfrow.get('activations_monthly'))
+        upg = safe_float(cfrow.get('upgrades_monthly'))
+        if act <= 0 and upg <= 0 and acc <= 0:   # nothing to carry — don't create an empty row
+            skipped += 1
+            continue
+        row = {
+            'org_id': org_id, 'store_code': code, 'period': period,
+            'period_month': pm['month'], 'period_year': pm['year'],
+            'activations_monthly': act, 'upgrades_monthly': upg, 'accessories_monthly': acc,
+            'byod_pct': cfrow.get('byod_pct'),
+            'notes': f'Rolled forward from {prior}', 'updated_by': 'roll-forward',
+        }
+        client.schema('commcalc').table('targets').upsert(row, on_conflict='org_id,store_code,period').execute()
+        written.append({'store_code': code, 'basis': cfrow.get('basis')})
+    return {'period': period, 'prior_period': prior, 'written': len(written),
+            'skipped': skipped, 'overwrite': overwrite, 'stores': written}
 
 
 @router.get("/targets/{period}/calendar")
