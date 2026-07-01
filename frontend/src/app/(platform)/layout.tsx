@@ -32,6 +32,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   const { period, setPeriod, periods } = usePeriod()
   const { user, permissions, signOut } = useAuth()
   const [collapsed, setCollapsed] = useState(false)
+  const [openGroup, setOpenGroup] = useState<string | null>(null)  // accordion: only one group's items shown at a time
   const [menuOpen, setMenuOpen] = useState(false)
   const [navCfg, setNavCfg] = useState<{ labels?: Record<string, string>; capabilities?: Record<string, boolean | null> }>({})
   const pathname = usePathname()
@@ -54,6 +55,12 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   const groups = (open ? NAV : NAV.map(g => ({ ...g, items: g.items.filter(it => canSeeItem(permissions, it)) })))
     .map(g => ({ ...g, items: g.items.filter(capOK) }))
     .filter(g => g.items.length > 0)
+
+  // Accordion: keep every module group collapsed and open only the one holding the current page
+  // (so the user is never lost) — clicking another header opens that one and closes the rest.
+  const activeGroup = groups.find(g => g.items.some(it =>
+    pathname === it.href || pathname.startsWith(it.href + '/')))?.group || null
+  useEffect(() => { if (activeGroup) setOpenGroup(activeGroup) }, [activeGroup])
 
   const initials = (user?.full_name || user?.email || '?').split(/[\s@.]+/).filter(Boolean)
     .slice(0, 2).map(s => s[0]?.toUpperCase()).join('') || 'U'
@@ -88,13 +95,24 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
         )}
 
         <nav style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
-          {groups.map(({ group, items }) => (
+          {groups.map(({ group, items }) => {
+            // In the icon rail (collapsed) every item shows as an icon (no headers); in the full
+            // sidebar only the open group's items render.
+            const isOpen = collapsed || openGroup === group
+            return (
             <div key={group}>
               {!collapsed && (
-                <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, textTransform: 'uppercase',
-                  letterSpacing: '0.08em', padding: '12px 16px 4px', fontWeight: 600 }}>{labelOf('group:' + group, group)}</div>
+                <button onClick={() => setOpenGroup(g => (g === group ? null : group))}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: 'rgba(255,255,255,0.35)', fontSize: 10, textTransform: 'uppercase',
+                    letterSpacing: '0.08em', padding: '12px 16px 4px', fontWeight: 600 }}>
+                  <span>{labelOf('group:' + group, group)}</span>
+                  <span style={{ fontSize: 9, display: 'inline-block', transition: 'transform 0.15s',
+                    transform: isOpen ? 'rotate(90deg)' : 'none' }}>▸</span>
+                </button>
               )}
-              {items.map(({ href, label, icon }) => {
+              {isOpen && items.map(({ href, label, icon }) => {
                 const active = pathname === href || pathname.startsWith(href + '/')
                 return (
                   <Link key={href} href={href} style={{ display: 'flex', alignItems: 'center', gap: 10,
@@ -109,7 +127,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                 )
               })}
             </div>
-          ))}
+          )})}
         </nav>
 
         {!collapsed && (
