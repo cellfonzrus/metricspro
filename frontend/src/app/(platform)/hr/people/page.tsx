@@ -21,6 +21,8 @@ export default function HRPeoplePage() {
   const [tempPw, setTempPw] = useState('')
   const [busy, setBusy] = useState(false)
   const [bulkMsg, setBulkMsg] = useState('')
+  const [mode, setMode] = useState<'new' | 'existing'>('new')                 // new hire vs invite existing
+  const [ex, setEx] = useState({ employee_id: '', method: 'link', dob: '' })  // existing-employee invite
   const [f, setF] = useState<any>({ name: '', email: '', phone: '', home_store: '', role_title: '',
     pay_rate: '', role_name: '', market: '', store_codes: [] as string[], create_login: false,
     dob: '', send_invite: true, invite_method: 'link' })
@@ -66,6 +68,19 @@ export default function HRPeoplePage() {
     } catch (err: any) { setMsg('❌ ' + (err?.message || err)) } finally { setBusy(false) }
   }
 
+  async function sendExistingInvite() {
+    if (!ex.employee_id) { setMsg('Pick an employee.'); return }
+    setBusy(true); setMsg(''); setTempPw('')
+    try {
+      const body: any = { method: ex.method, send_email: true }
+      if (ex.method === 'link') body.dob = ex.dob || null
+      const r = await api(`/api/v1/hr/onboarding/employee/${ex.employee_id}/invite`, { method: 'POST', body: JSON.stringify(body) })
+      setMsg(r.emailed ? `✅ Invite emailed to ${r.email || 'employee'}` : `✅ Invite ready${r.email_note ? ' — ' + r.email_note : ''}`)
+      if (r.temp_password) setTempPw(`${r.email} → ${r.temp_password} (portal login)`)
+      setEx({ employee_id: '', method: 'link', dob: '' }); loadAll()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+  }
+
   async function bulkInvite(employee_ids?: string[]) {
     const n = employee_ids ? employee_ids.length : 'all incomplete'
     if (!confirm(`Send a portal-login onboarding invite to ${n} employee(s)? Each gets an email with a temp password.`)) return
@@ -90,7 +105,17 @@ export default function HRPeoplePage() {
       </div>
 
       <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>➕ Add a person</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+          {(['new', 'existing'] as const).map(m => (
+            <button key={m} onClick={() => { setMode(m); setMsg('') }} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: mode === m ? 'var(--accent)' : 'var(--surface)', color: mode === m ? '#fff' : 'var(--text2)' }}>
+              {m === 'new' ? '➕ New employee' : '✉️ Existing employee'}
+            </button>
+          ))}
+          <span style={{ fontSize: 12, color: 'var(--text3)' }}>{mode === 'new'
+            ? 'Create a person + optionally send their onboarding invite.'
+            : 'Invite someone already on the roster to fill in / update their info.'}</span>
+        </div>
+        {mode === 'new' ? (<>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 12 }}>
           <label style={lbl}>Full name *<input style={sel} value={f.name} onChange={e => set({ name: e.target.value })} /></label>
           <label style={lbl}>Email<input style={sel} type="email" value={f.email} placeholder="for role / login" onChange={e => set({ email: e.target.value })} /></label>
@@ -144,6 +169,25 @@ export default function HRPeoplePage() {
           <button className="btn btn-primary" disabled={busy} onClick={create}>{busy ? 'Saving…' : '➕ Add person'}</button>
           {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
         </div>
+        </>) : (
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <label style={lbl}>Existing employee
+              <select style={{ ...sel, minWidth: 230 }} value={ex.employee_id} onChange={e => setEx(v => ({ ...v, employee_id: e.target.value }))}>
+                <option value="">— pick a person —</option>
+                {people.filter((p: any) => p.employee_id).map((p: any) => <option key={p.employee_id} value={p.employee_id}>{p.name}{p.email ? ` · ${p.email}` : ''}</option>)}
+              </select>
+            </label>
+            <label style={lbl}>Invite method
+              <select style={sel} value={ex.method} onChange={e => setEx(v => ({ ...v, method: e.target.value }))}>
+                <option value="link">Email a no-login link (DOB gate)</option>
+                <option value="login">Create/refresh portal login + email password</option>
+              </select>
+            </label>
+            {ex.method === 'link' && <label style={lbl}>Date of birth<input style={sel} type="date" value={ex.dob} onChange={e => setEx(v => ({ ...v, dob: e.target.value }))} /></label>}
+            <button className="btn btn-primary" disabled={busy} onClick={sendExistingInvite}>{busy ? 'Sending…' : '✉️ Send invite'}</button>
+            {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
+          </div>
+        )}
         {tempPw && (
           <div style={{ marginTop: 10, padding: 10, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontFamily: 'monospace', fontSize: 12 }}>
             🔑 Temp password (hand out; user resets on first sign-in): <strong>{tempPw}</strong>

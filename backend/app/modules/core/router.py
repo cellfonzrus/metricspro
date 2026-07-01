@@ -616,17 +616,47 @@ async def bulk_assign(body: dict, org_id: str = ORG_ID):
 
 
 def _find_auth_user_by_email(admin, email):
-    """Best-effort lookup of an existing Supabase Auth user id by email."""
-    try:
-        resp = admin.auth.admin.list_users()
-        users = resp if isinstance(resp, list) else getattr(resp, "users", []) or []
+    """Look up an existing Supabase Auth user id by email. PAGINATES — GoTrue's list_users() returns
+    only ONE page (~50 users), so an unpaginated scan missed anyone beyond page 1 once the org had
+    >50 logins, breaking relink/reset/provision with 'already registered'. Robust to server per_page
+    caps: it treats a short page (fewer rows than page 1) as the last page."""
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+
+    def _match(users):
         for u in users:
             ue = getattr(u, "email", None) or (u.get("email") if isinstance(u, dict) else None)
-            if ue and ue.lower() == email.lower():
+            if ue and ue.lower() == email:
                 return getattr(u, "id", None) or (u.get("id") if isinstance(u, dict) else None)
+        return None
+
+    try:
+        page, size = 1, None
+        while page <= 200:                       # up to 200 pages of headroom
+            resp = admin.auth.admin.list_users(page=page, per_page=1000)
+            users = resp if isinstance(resp, list) else (getattr(resp, "users", None) or [])
+            if not users:
+                break
+            hit = _match(users)
+            if hit:
+                return hit
+            if size is None:
+                size = len(users)                # server's effective page size (may cap below 1000)
+            if len(users) < size:                # short page ⇒ last page
+                break
+            page += 1
+        return None
+    except TypeError:
+        # older client without page/per_page kwargs → single page only (pre-existing behavior)
+        try:
+            resp = admin.auth.admin.list_users()
+            users = resp if isinstance(resp, list) else (getattr(resp, "users", None) or [])
+            return _match(users)
+        except Exception:
+            return None
     except Exception:
-        pass
-    return None
+        return None
 
 
 def _create_or_link_auth(admin, email, temp_pw):
