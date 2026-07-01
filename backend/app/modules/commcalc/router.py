@@ -6115,27 +6115,61 @@ async def ftp_run_due(x_notify_secret: str = Header(default="")):
 from app.modules.commcalc import email_sweep as _email
 
 
-def _email_cfg(client, org_id):
-    rows = client.schema('commcalc').table('email_sweep_config').select('*').eq('org_id', org_id).limit(1).execute().data or []
+def _email_cfg(client, org_id, account='default'):
+    """One mailbox config for (org, account). Tolerant of pre-075 schema (no 'account' column) so the
+    single-mailbox setup keeps working before the migration is applied."""
+    try:
+        rows = (client.schema('commcalc').table('email_sweep_config').select('*')
+                .eq('org_id', org_id).eq('account', account).limit(1).execute().data) or []
+    except Exception:
+        rows = (client.schema('commcalc').table('email_sweep_config').select('*')
+                .eq('org_id', org_id).limit(1).execute().data) or []
     return rows[0] if rows else None
 
 
-async def _run_email_sweep(org_id):
-    """Connect to the IMAP mailbox, download every NEW attachment matching a configured pattern, route
-    each through the existing upload pipeline, and record what was processed (dedup by message_id+name)."""
+def _email_accounts(client, org_id):
+    """Every mailbox configured for a tenant (multi-mailbox, mig 075). Pre-075 this returns the single
+    row. Each row is a distinct inbox with its own creds + patterns + schedule."""
+    try:
+        rows = (client.schema('commcalc').table('email_sweep_config').select('*')
+                .eq('org_id', org_id).order('account').execute().data) or []
+    except Exception:
+        rows = (client.schema('commcalc').table('email_sweep_config').select('*')
+                .eq('org_id', org_id).limit(1).execute().data) or []
+    return rows
+
+
+def _email_status_update(client, org_id, account, upd):
+    """Patch one mailbox's status columns, scoped to its account. Falls back to org-only pre-075
+    (no 'account' column) so the single-mailbox setup still updates. Best-effort."""
+    try:
+        client.schema('commcalc').table('email_sweep_config').update(upd) \
+            .eq('org_id', org_id).eq('account', account).execute()
+    except Exception:
+        try:
+            client.schema('commcalc').table('email_sweep_config').update(upd).eq('org_id', org_id).execute()
+        except Exception:
+            pass
+
+
+async def _run_email_sweep(org_id, account='default'):
+    """Connect to ONE tenant mailbox (org, account), download every NEW attachment matching a configured
+    pattern, route each through the existing upload pipeline, and record what was processed (dedup by
+    account+message_id+name)."""
     from starlette.datastructures import UploadFile as _UF
     client = sb()
-    cfg = _email_cfg(client, org_id)
+    cfg = _email_cfg(client, org_id, account)
+    account = (cfg or {}).get('account') or account
     if not cfg or not (cfg.get('imap_host') or '').strip():
-        return {"ok": False, "error": "Email/IMAP not configured"}
+        return {"ok": False, "error": "Email/IMAP not configured", "account": account}
     seen = client.schema('commcalc').table('email_processed').select('message_id,filename').eq('org_id', org_id).limit(100000).execute().data or []
     already = {(r.get('message_id'), r.get('filename')) for r in seen}
     try:
         files = _email.fetch_new_attachments(cfg, already)
     except Exception as e:
-        client.schema('commcalc').table('email_sweep_config').update(
-            {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': f"connect error: {e}"}).eq('org_id', org_id).execute()
-        return {"ok": False, "error": str(e)}
+        _email_status_update(client, org_id, account,
+            {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': f"connect error: {e}"})
+        return {"ok": False, "error": str(e), "account": account}
     results = []
     for f in files:
         name, size, ut, mid = f['name'], f['size'], f.get('upload_type'), f.get('message_id')
@@ -6151,17 +6185,17 @@ async def _run_email_sweep(org_id):
             status, detail = "error", str(e)[:300]
         try:
             client.schema('commcalc').table('email_processed').upsert(
-                {'org_id': org_id, 'message_id': mid, 'filename': name, 'file_size': size, 'upload_type': ut,
-                 'rows_saved': rows_saved, 'status': status, 'detail': detail,
+                {'org_id': org_id, 'account': account, 'message_id': mid, 'filename': name, 'file_size': size,
+                 'upload_type': ut, 'rows_saved': rows_saved, 'status': status, 'detail': detail,
                  'processed_at': _datetime.now(_timezone.utc).isoformat()},
-                on_conflict='org_id,message_id,filename').execute()
+                on_conflict='org_id,account,message_id,filename').execute()
         except Exception:
             pass
         results.append({"file": name, "upload_type": ut, "status": status, "rows_saved": rows_saved, "detail": detail})
     ok = sum(1 for r in results if r['status'] == 'ok')
-    client.schema('commcalc').table('email_sweep_config').update(
+    _email_status_update(client, org_id, account,
         {'last_run_at': _datetime.now(_timezone.utc).isoformat(),
-         'last_status': f"{ok}/{len(results)} attachments ingested"}).eq('org_id', org_id).execute()
+         'last_status': f"{ok}/{len(results)} attachments ingested"})
     # Auto-derive the monthly commission basis (raw_sales) from the feed when 'sales' is set to auto
     # on the Connectors page — best-effort + guarded, never breaks the sweep. This is what lets the
     # user stop uploading the monthly Sales file by hand. OFF until 'sales' auto is enabled.
@@ -6171,7 +6205,21 @@ async def _run_email_sweep(org_id):
             _promote_feed_to_raw_sales(client, org_id, _ftp_current_period())
     except Exception as e:
         print(f"WARN auto-promote feed->raw_sales failed: {e}")
-    return {"ok": True, "ingested": ok, "files": results}
+    return {"ok": True, "account": account, "ingested": ok, "files": results}
+
+
+async def _run_email_sweep_all(org_id):
+    """Run EVERY configured mailbox for a tenant (used by run-now with no account). Returns a per-account
+    roll-up. Runs each account even if others fail."""
+    accounts = [a.get('account') or 'default' for a in _email_accounts(sb(), org_id)] or ['default']
+    out = []
+    for acct in accounts:
+        try:
+            out.append(await _run_email_sweep(org_id, acct))
+        except Exception as e:
+            out.append({"ok": False, "account": acct, "error": str(e)})
+    return {"ok": True, "accounts": len(out), "runs": out,
+            "ingested": sum((r.get('ingested') or 0) for r in out)}
 
 
 def _promote_feed_to_raw_sales(client, org_id, period, dry_run=False, force=False, retain=0.85):
@@ -6252,21 +6300,37 @@ def promote_feed(period: str, org_id: str = ORG_ID, dry_run: bool = True, force:
     return _promote_feed_to_raw_sales(sb(), org_id, period, dry_run=dry_run, force=force)
 
 
-@router.get("/email-sweep/config")
-def get_email_config(org_id: str = ORG_ID):
-    """Config WITHOUT the password (presence only)."""
-    require_org(org_id)
-    cfg = _email_cfg(sb(), org_id) or {"org_id": org_id, "patterns": [], "imap_port": 993, "use_ssl": True, "mailbox": "INBOX"}
+def _strip_pw(cfg):
     cfg = dict(cfg)
     cfg['has_password'] = bool(cfg.pop('password', None))
     return cfg
 
 
+@router.get("/email-sweep/accounts")
+def list_email_accounts(org_id: str = ORG_ID):
+    """Every mailbox configured for this tenant (passwords stripped). Multi-mailbox = one row per
+    report source (e.g. B2B feed + Total Wireless). [] if none configured yet."""
+    require_org(org_id)
+    return {"accounts": [_strip_pw(a) for a in _email_accounts(sb(), org_id)]}
+
+
+@router.get("/email-sweep/config")
+def get_email_config(org_id: str = ORG_ID, account: str = "default"):
+    """One mailbox's config WITHOUT the password (presence only)."""
+    require_org(org_id)
+    cfg = _email_cfg(sb(), org_id, account) or {"org_id": org_id, "account": account, "patterns": [],
+                                                "imap_port": 993, "use_ssl": True, "mailbox": "INBOX"}
+    return _strip_pw(cfg)
+
+
 @router.put("/email-sweep/config")
 def put_email_config(body: dict, org_id: str = ORG_ID):
-    """Save config. Password only updated when a non-empty value is supplied (so it isn't wiped)."""
+    """Save one mailbox. `account` keys which mailbox (default 'default'); pass a distinct key + label to
+    add another (e.g. account='total', label='Total Wireless'). Password only updated when supplied."""
     require_org(org_id)
-    row = {"org_id": org_id, "imap_host": (body.get("imap_host") or "").strip() or None,
+    account = (body.get("account") or "default").strip() or "default"
+    row = {"org_id": org_id, "account": account, "label": (body.get("label") or "").strip() or None,
+           "imap_host": (body.get("imap_host") or "").strip() or None,
            "imap_port": int(body.get("imap_port") or 993), "username": (body.get("username") or "").strip() or None,
            "use_ssl": body.get("use_ssl", True) is not False, "mailbox": (body.get("mailbox") or "INBOX").strip(),
            "from_filter": (body.get("from_filter") or "").strip() or None,
@@ -6278,8 +6342,27 @@ def put_email_config(body: dict, org_id: str = ORG_ID):
         row["password"] = body["password"]
     if body.get("enabled"):
         row["next_run_at"] = _vip_next_run(row["frequency"], None, None, row["hour"], "America/New_York")
-    sb().schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id").execute()
-    return {"ok": True}
+    try:
+        sb().schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id,account").execute()
+    except Exception:
+        # pre-075 fallback: no 'account' column yet → save the single mailbox on org_id
+        row.pop("account", None); row.pop("label", None)
+        sb().schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id").execute()
+    return {"ok": True, "account": account}
+
+
+@router.delete("/email-sweep/account/{account}")
+def delete_email_account(account: str, org_id: str = ORG_ID):
+    """Remove a mailbox and its processed history. Won't delete the last 'default' row silently — any
+    named account is fair game."""
+    require_org(org_id)
+    client = sb()
+    try:
+        client.schema("commcalc").table("email_processed").delete().eq("org_id", org_id).eq("account", account).execute()
+    except Exception:
+        pass
+    client.schema("commcalc").table("email_sweep_config").delete().eq("org_id", org_id).eq("account", account).execute()
+    return {"deleted": account}
 
 
 @router.post("/email-sweep/test")
@@ -6287,7 +6370,7 @@ def test_email(body: dict, org_id: str = ORG_ID):
     """Connect to the mailbox (merging any unsaved overrides) and list recent messages + their
     attachments and which match a pattern. Used by the 'Test connection' button before saving creds."""
     require_org(org_id)
-    cfg = dict(_email_cfg(sb(), org_id) or {})
+    cfg = dict(_email_cfg(sb(), org_id, (body.get("account") or "default").strip() or "default") or {})
     for k in ("imap_host", "imap_port", "username", "password", "use_ssl", "mailbox", "from_filter", "since_days", "patterns"):
         if k in body and body[k] not in (None, ""):
             cfg[k] = body[k]
@@ -6308,9 +6391,12 @@ def test_email(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/email-sweep/run-now")
-async def email_run_now(org_id: str = ORG_ID):
+async def email_run_now(org_id: str = ORG_ID, account: str = ""):
+    """Run one mailbox (?account=total) or ALL of the tenant's mailboxes (omit account)."""
     require_org(org_id)
-    return await _run_email_sweep(org_id)
+    if account.strip():
+        return await _run_email_sweep(org_id, account.strip())
+    return await _run_email_sweep_all(org_id)
 
 
 @router.get("/email-sweep/processed")
@@ -6332,8 +6418,9 @@ async def email_run_due(x_notify_secret: str = Header(default="")):
     ran = []
     for cfg in due:
         oid = cfg.get('org_id') or ORG_ID
-        res = await _run_email_sweep(oid)
+        acct = cfg.get('account') or 'default'
+        res = await _run_email_sweep(oid, acct)
         nxt = _vip_next_run(cfg.get('frequency') or 'daily', None, None, cfg.get('hour'), 'America/New_York')
-        client.schema('commcalc').table('email_sweep_config').update({'next_run_at': nxt}).eq('org_id', oid).execute()
-        ran.append({"org_id": oid, "result": res})
+        _email_status_update(client, oid, acct, {'next_run_at': nxt})
+        ran.append({"org_id": oid, "account": acct, "result": res})
     return {"ran": len(ran), "detail": ran}

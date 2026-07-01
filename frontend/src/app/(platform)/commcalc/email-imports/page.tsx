@@ -25,18 +25,31 @@ const providerOf = (host: string) =>
   Object.keys(PROVIDERS).find(k => PROVIDERS[k].imap_host && PROVIDERS[k].imap_host === (host || '')) || 'custom'
 
 export default function EmailImportsPage() {
-  const [cfg, setCfg] = useState<any>({ imap_port: 993, use_ssl: true, mailbox: 'INBOX', since_days: 14, patterns: [], frequency: 'daily', hour: 7 })
+  const BLANK = { imap_port: 993, use_ssl: true, mailbox: 'INBOX', since_days: 14, patterns: [] as any[], frequency: 'daily', hour: 7 }
+  const [cfg, setCfg] = useState<any>({ account: 'default', ...BLANK })
+  const [accounts, setAccounts] = useState<any[]>([])
   const [pwd, setPwd] = useState('')
   const [test, setTest] = useState<any>(null)
   const [processed, setProcessed] = useState<any[]>([])
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
 
-  const load = useCallback(() => {
-    api('/api/v1/commcalc/email-sweep/config').then((c: any) => setCfg({ ...c, patterns: c.patterns || [] })).catch(() => {})
+  // Load all of the tenant's mailboxes (multi-mailbox = mig 075); keep or select one in the editor.
+  const refresh = useCallback((keepAccount?: string) => {
+    api('/api/v1/commcalc/email-sweep/accounts').then((r: any) => {
+      const list: any[] = r.accounts || []
+      setAccounts(list)
+      setCfg((cur: any) => {
+        const want = keepAccount ?? cur?.account
+        const found = list.find(a => a.account === want) || list[0]
+        return found ? { ...found, patterns: found.patterns || [] } : cur
+      })
+    }).catch(() => {
+      api('/api/v1/commcalc/email-sweep/config').then((c: any) => setCfg({ ...c, patterns: c.patterns || [] })).catch(() => {})
+    })
     api('/api/v1/commcalc/email-sweep/processed').then((p: any) => setProcessed(p || [])).catch(() => {})
   }, [])
-  useEffect(() => { load() }, [load])
+  useEffect(() => { refresh() }, [refresh])
 
   const set = (patch: any) => setCfg((c: any) => ({ ...c, ...patch }))
   const setPat = (i: number, patch: any) => setCfg((c: any) => ({ ...c, patterns: c.patterns.map((p: any, j: number) => j === i ? { ...p, ...patch } : p) }))
@@ -45,9 +58,27 @@ export default function EmailImportsPage() {
 
   const body = () => ({ ...cfg, password: pwd || undefined })
 
+  function pickAccount(acct: string) {
+    const a = accounts.find(x => x.account === acct)
+    if (a) { setCfg({ ...a, patterns: a.patterns || [] }); setPwd(''); setTest(null); setMsg('') }
+  }
+  function addMailbox() {
+    const key = (prompt('Short key for the new mailbox (letters/numbers, e.g. "total"):', '') || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '')
+    if (!key) return
+    if (accounts.some(a => a.account === key)) { setMsg('That mailbox key already exists — pick it from the list.'); return }
+    setPwd(''); setTest(null); setMsg('New mailbox — fill in the details and Save.')
+    setCfg({ account: key, label: '', ...BLANK, enabled: false })
+  }
+  async function delMailbox() {
+    if (!cfg.account || cfg.account === 'default') return
+    if (!confirm(`Delete mailbox "${cfg.label || cfg.account}" and its import history?`)) return
+    try { await api(`/api/v1/commcalc/email-sweep/account/${encodeURIComponent(cfg.account)}`, { method: 'DELETE' }); setMsg('🗑️ Deleted.'); refresh('default') }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+
   async function save() {
     setBusy('save')
-    try { await api('/api/v1/commcalc/email-sweep/config', { method: 'PUT', body: JSON.stringify(body()) }); setPwd(''); setMsg('✅ Saved.'); load() }
+    try { const r: any = await api('/api/v1/commcalc/email-sweep/config', { method: 'PUT', body: JSON.stringify(body()) }); setPwd(''); setMsg('✅ Saved.'); refresh(r.account || cfg.account) }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
   }
   async function testConn() {
@@ -57,7 +88,7 @@ export default function EmailImportsPage() {
   }
   async function runNow() {
     setBusy('run')
-    try { const r: any = await api('/api/v1/commcalc/email-sweep/run-now', { method: 'POST', body: '{}' }); setMsg(r.ok ? `✅ Ingested ${r.ingested} attachment(s).` : `❌ ${r.error}`); load() }
+    try { const r: any = await api(`/api/v1/commcalc/email-sweep/run-now?account=${encodeURIComponent(cfg.account || 'default')}`, { method: 'POST', body: '{}' }); setMsg(r.ok ? `✅ Ingested ${r.ingested} attachment(s).` : `❌ ${r.error}`); refresh(cfg.account) }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
   }
 
@@ -66,12 +97,26 @@ export default function EmailImportsPage() {
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📧 Email Auto-Import</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Poll a mailbox a vendor (e.g. B2B Soft) emails reports to, and route each attachment to its upload parser. Alternative to the FTP sweep — all configured here.
+          Poll a mailbox a vendor (e.g. B2B Soft) emails reports to, and route each attachment to its upload parser.
+          Add <strong>more than one mailbox</strong> when reports arrive in different inboxes (e.g. the B2B feed at one
+          address, Total Wireless at another) — each has its own creds, patterns and schedule.
         </p>
       </div>
 
       <div className="card" style={{ padding: 16, marginBottom: 14 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
+          <label style={{ ...lbl, marginBottom: 0 }}>Mailbox</label>
+          <select style={sel} value={cfg.account || 'default'} onChange={e => pickAccount(e.target.value)}>
+            {accounts.length === 0 && <option value={cfg.account || 'default'}>{cfg.label || cfg.account || 'default'}</option>}
+            {accounts.map(a => <option key={a.account} value={a.account}>{(a.label || a.account)}{a.username ? ` — ${a.username}` : ''}{a.enabled ? '' : ' (off)'}</option>)}
+            {cfg.account && !accounts.some(a => a.account === cfg.account) && <option value={cfg.account}>{(cfg.label || cfg.account)} — new (unsaved)</option>}
+          </select>
+          <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={addMailbox}>＋ Add mailbox</button>
+          {cfg.account && cfg.account !== 'default' && <button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={delMailbox}>Delete this mailbox</button>}
+          <span style={{ fontSize: 11, color: 'var(--text3)' }}>key: <code>{cfg.account || 'default'}</code></span>
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 }}>
+          <div><label style={lbl}>Label (friendly name)</label><input style={{ ...sel, width: '100%' }} placeholder="Total Wireless" value={cfg.label || ''} onChange={e => set({ label: e.target.value })} /></div>
           <div style={{ gridColumn: '1 / -1' }}>
             <label style={lbl}>Email provider</label>
             <select style={{ ...sel, width: '100%', maxWidth: 340 }} value={providerOf(cfg.imap_host)}
@@ -154,12 +199,13 @@ export default function EmailImportsPage() {
             {processed.map(p => (
               <tr key={p.id}>
                 <td style={cell}>{p.filename}</td>
+                <td style={{ ...cell, fontSize: 11, color: 'var(--text3)' }}>{p.account && p.account !== 'default' ? p.account : ''}</td>
                 <td style={{ ...cell, fontSize: 12 }}>{p.upload_type}</td>
                 <td style={cell}>{p.status === 'ok' ? <span style={{ color: '#16794a' }}>✓ {p.rows_saved} rows</span> : <span style={{ color: '#dc2626' }}>✕ {p.detail}</span>}</td>
                 <td style={{ ...cell, fontSize: 11, color: 'var(--text3)' }}>{p.processed_at ? new Date(p.processed_at).toLocaleString() : ''}</td>
               </tr>
             ))}
-            {processed.length === 0 && <tr><td style={{ ...cell, color: 'var(--text3)', textAlign: 'center', padding: 24 }} colSpan={4}>Nothing imported yet.</td></tr>}
+            {processed.length === 0 && <tr><td style={{ ...cell, color: 'var(--text3)', textAlign: 'center', padding: 24 }} colSpan={5}>Nothing imported yet.</td></tr>}
           </tbody>
         </table>
       </div>
