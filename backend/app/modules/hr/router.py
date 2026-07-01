@@ -675,11 +675,11 @@ def intake_fields_list(include_inactive: bool = False, org_id: str = ORG_ID):
         rows = (_so().table("onboarding_intake_field").select("*").eq("org_id", org_id)
                 .order("sort_order").execute().data)
     except Exception:
-        return {"ready": False, "fields": [], "sections": ["personal", "address", "emergency", "direct_deposit", "custom"]}
+        return {"ready": False, "fields": [], "sections": ["personal", "address", "emergency", "work_eligibility", "tax", "direct_deposit", "policies", "custom"]}
     if not include_inactive:
         rows = [r for r in (rows or []) if r.get("is_active", True)]
     return {"ready": True, "fields": rows or [],
-            "sections": ["personal", "address", "emergency", "direct_deposit", "custom"],
+            "sections": ["personal", "address", "emergency", "work_eligibility", "tax", "direct_deposit", "policies", "custom"],
             "propagatable": sorted(_PROPAGATABLE)}
 
 

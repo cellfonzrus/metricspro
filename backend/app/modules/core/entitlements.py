@@ -21,8 +21,9 @@ from app.core.database import get_supabase
 
 # Bump whenever ALL_MODULES changes OR commcalc.seed_tenant_defaults() gains new content, so every
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
-# folded the configurable HR intake-capture form into seed_tenant_defaults().)
-SEED_VERSION = 2
+# folded the configurable HR intake-capture form into seed_tenant_defaults(); 3 = mig 079 expanded
+# seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
+SEED_VERSION = 3
 
 # Canonical module registry. tenant_modules + billing_plan.modules key off these module_keys.
 MODULE_CATALOG = {

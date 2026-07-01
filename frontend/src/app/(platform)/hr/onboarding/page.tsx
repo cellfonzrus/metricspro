@@ -15,7 +15,7 @@ type Task = {
 }
 type Cat = { id: string; key: string; label: string; sort_order?: number; is_active?: boolean; tasks: Task[] }
 type IField = { id?: string; key?: string; label: string; section?: string; field_type?: string; options?: string[] | null; required?: boolean; propagate_to?: string | null; sensitive?: boolean; help_text?: string; sort_order?: number; is_active?: boolean }
-const SECTIONS = ['personal', 'address', 'emergency', 'direct_deposit', 'custom']
+const SECTIONS = ['personal', 'address', 'emergency', 'work_eligibility', 'tax', 'direct_deposit', 'policies', 'custom']
 const FIELD_TYPES = ['text', 'date', 'tel', 'email', 'number', 'select']
 
 const ROLE_LABELS: Record<string, string> = { employee: 'Employee', hr: 'HR', dm: 'District Manager', market_manager: 'Market Manager' }
