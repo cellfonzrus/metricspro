@@ -2,6 +2,17 @@
 import { useState, useEffect, Fragment } from 'react'
 import { api } from '@/lib/client'
 import { REPORT_AREAS, NAV, reportAreaForPath } from '@/lib/rbac'
+import { ExportButtons } from '@/lib/export'
+
+// One-click templates for the roles most tenants need but the base 4 don't include.
+const ROLE_TEMPLATES: { name: string; display: string; permissions: any }[] = [
+  { name: 'district_manager', display: 'District Manager', permissions: {
+    modules: { commissions: true, targets: true, asset: true, storeops: true, notify: true, helpdesk: true, hr: true },
+    scope: 'market', home: '/commcalc/targets' } },
+  { name: 'hr', display: 'HR', permissions: {
+    modules: { hr: true, storeops: true, helpdesk: true, notify: true },
+    scope: 'all', home: '/hr/people' } },
+]
 
 const MODULES: { key: string; label: string }[] = [
   { key: 'commissions', label: 'Commissions' },
@@ -58,6 +69,7 @@ export default function RolesAdminPage() {
   const [editEmp, setEditEmp] = useState<number | null>(null)      // row with the edit/remove editor open
   const [markets, setMarkets] = useState<string[]>([])             // distinct markets → checkbox picker
   const [stores, setStores] = useState<{ code: string; label: string }[]>([])  // store dropdown source
+  const [newRole, setNewRole] = useState({ name: '', display: '' })            // add-a-role form
 
   async function loadAll() {
     setLoading(true)
@@ -124,6 +136,23 @@ export default function RolesAdminPage() {
       await api(`/api/v1/core/roles/${r.id}`, { method: 'PUT', body: JSON.stringify({ display_name: r.display_name, permissions: r.permissions }) })
       setMsg(`Saved ${r.display_name}`)
     } catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) }
+  }
+  async function addRole(name: string, display_name: string, permissions: any) {
+    const n = name.trim(); if (!n) { setMsg('Enter a role name.'); return }
+    if (roles.some(r => r.name === n.toLowerCase().replace(/\s+/g, '_'))) { setMsg(`Role "${n}" already exists.`); return }
+    setMsg('')
+    try {
+      await api('/api/v1/core/roles', { method: 'POST', body: JSON.stringify({ name: n, display_name: display_name || undefined, permissions: permissions || { scope: 'store', modules: {} } }) })
+      setNewRole({ name: '', display: '' }); setTab('roles')
+      await loadAll()
+      setMsg(`Added role "${display_name || n}" — set its permissions below, then Save.`)
+    } catch (e: any) { setMsg('Add role failed: ' + (e?.message || e)) }
+  }
+  async function deleteRole(r: Role) {
+    if (!confirm(`Delete the "${r.display_name}" role? (You can't delete a role that's still assigned to someone.)`)) return
+    setMsg('')
+    try { await api(`/api/v1/core/roles/${r.id}`, { method: 'DELETE' }); await loadAll(); setMsg(`Deleted ${r.display_name}`) }
+    catch (e: any) { setMsg('Delete failed: ' + (e?.message || e)) }
   }
 
   // ---- people editing ----
@@ -367,14 +396,40 @@ export default function RolesAdminPage() {
 
       {loading ? <div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div> : tab === 'roles' ? (
         <div style={{ display: 'grid', gap: 16 }}>
+          {/* Add a role */}
+          <div className="card" style={{ padding: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>➕ Add a role</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <input style={{ ...sel, width: 170 }} placeholder="Role name (e.g. district_manager)" value={newRole.name}
+                onChange={e => setNewRole(v => ({ ...v, name: e.target.value }))} />
+              <input style={{ ...sel, width: 170 }} placeholder="Display name (e.g. District Manager)" value={newRole.display}
+                onChange={e => setNewRole(v => ({ ...v, display: e.target.value }))} />
+              <button className="btn btn-primary" onClick={() => addRole(newRole.name, newRole.display, { scope: 'store', modules: {} })}>Add custom role</button>
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>then set its permissions below</span>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Quick add:</span>
+              {ROLE_TEMPLATES.filter(t => !roles.some(r => r.name === t.name)).map(t => (
+                <button key={t.name} className="btn" style={{ fontSize: 12 }} onClick={() => addRole(t.name, t.display, t.permissions)}>＋ {t.display}</button>
+              ))}
+              {ROLE_TEMPLATES.every(t => roles.some(r => r.name === t.name)) && <span style={{ fontSize: 12, color: 'var(--text3)' }}>DM &amp; HR already exist ✓</span>}
+            </div>
+          </div>
           {roles.map(r => {
             const p = r.permissions || {}
             const mods = p.modules || {}
             return (
               <div key={r.id} className="card" style={{ padding: 18 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                  <div style={{ fontWeight: 700, fontSize: 15 }}>{r.display_name} <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 12 }}>({r.name})</span></div>
-                  <button className="btn btn-primary" onClick={() => saveRole(r)}>💾 Save</button>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>
+                    <input value={r.display_name} onChange={e => setRoles(rs => rs.map(x => x.id === r.id ? { ...x, display_name: e.target.value } : x))}
+                      style={{ ...sel, fontWeight: 700, fontSize: 15, width: 200 }} />
+                    <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 12, marginLeft: 6 }}>({r.name})</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {r.name !== 'admin' && <button className="btn btn-secondary" style={{ color: '#dc2626' }} onClick={() => deleteRole(r)}>🗑 Delete</button>}
+                    <button className="btn btn-primary" onClick={() => saveRole(r)}>💾 Save</button>
+                  </div>
                 </div>
                 <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
                   <div>
@@ -467,6 +522,22 @@ export default function RolesAdminPage() {
               style={{ ...sel, width: 260 }} />
             <span style={{ fontSize: 13, color: 'var(--text3)' }}>{emps.length} employees · {withEmail} with email</span>
             <div style={{ flex: 1 }} />
+            <ExportButtons compact payload={() => ({
+              title: 'Employees — Roles & Access', subtitle: `${filtered.length} employees`, filename: 'employees',
+              sheets: [{ name: 'Employees', rows: filtered, columns: [
+                { header: 'Name', get: (e: Emp) => e.name },
+                { header: 'Employee ID', get: (e: Emp) => e.employee_id || '' },
+                { header: 'Email', get: (e: Emp) => e.email || '' },
+                { header: 'Home store', get: (e: Emp) => e.home_store || '' },
+                { header: 'Job title', get: (e: Emp) => e.role || '' },
+                { header: 'Pay $/hr', get: (e: Emp) => e.pay_rate ?? '', money: true },
+                { header: 'App role', get: (e: Emp) => e.app_role || '' },
+                { header: 'Market', get: (e: Emp) => e.app_market || '' },
+                { header: 'Store(s)', get: (e: Emp) => (e.app_store_codes && e.app_store_codes.length ? e.app_store_codes.join(', ') : (e.app_store || '')) },
+                { header: 'Login', get: (e: Emp) => e.has_login ? 'Yes' : 'No' },
+                { header: 'Active', get: (e: Emp) => e.is_active ? 'Yes' : 'No' },
+              ] }],
+            })} />
             <button className="btn btn-primary" onClick={provisionAll}>⚡ Provision all assigned</button>
           </div>
 

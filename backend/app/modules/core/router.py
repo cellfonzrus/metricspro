@@ -403,6 +403,29 @@ async def update_role(role_id: int, body: dict):
     return res.data[0]
 
 
+@router.delete("/roles/{role_id}")
+async def delete_role(role_id: int, org_id: str = ORG_ID):
+    """Delete a custom role. Refuses to delete 'admin' (lock-out guard) and blocks deletion while any
+    user is still assigned it (reassign them first) so nobody is silently orphaned."""
+    client = sb()
+    rows = (client.schema("storeops").table("roles").select("id,name")
+            .eq("org_id", org_id).eq("id", role_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "role not found")
+    name = rows[0].get("name")
+    if name == "admin":
+        raise HTTPException(400, "The admin role can't be deleted.")
+    try:
+        used = (client.schema("storeops").table("app_users").select("id")
+                .eq("org_id", org_id).eq("role", name).limit(1).execute().data) or []
+    except Exception:
+        used = []
+    if used:
+        raise HTTPException(400, f"'{name}' is still assigned to at least one user — reassign them first.")
+    client.schema("storeops").table("roles").delete().eq("org_id", org_id).eq("id", role_id).execute()
+    return {"ok": True, "deleted": name}
+
+
 # ── Users (app accounts) + provisioning ────────────────────────────────────────────────
 @router.get("/users")
 async def list_users(org_id: str = ORG_ID):
