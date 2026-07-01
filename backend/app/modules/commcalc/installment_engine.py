@@ -194,7 +194,7 @@ def compute_installments(client, org_id, pay_period, persist=False):
             sched = _resolve_schedule(scheds, carrier_id, None, "*")
             if not sched:
                 continue
-            num_months = min(3, sched.get("num_months") or 1)
+            num_months = min(12, sched.get("num_months") or 1)  # honor the schedule's full horizon (was min(3) — inconsistent with the 12-period lookback above; only multi-month schedules like Total Wireless are affected, single-month carriers stay 1)
             if month_index > num_months:
                 continue
             line = next((l for l in lines_by.get(sched.get("id"), [])
