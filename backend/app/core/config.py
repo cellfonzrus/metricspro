@@ -6,6 +6,11 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_KEY: str = ""
     APP_ENV: str = "development"
 
+    # Business timezone — time-clock punches are stored in UTC but DISPLAYED (kiosk + reports) and
+    # date-stamped (work_date) in this zone so an evening ET shift doesn't roll to the next UTC day
+    # and the kiosk time matches the report. (Per-store tz can override this later.)
+    BUSINESS_TZ: str = "America/New_York"
+
     # ── Notify / subscribe (report delivery) ──────────────────────────────────
     # Public base URL of the frontend, used to build "view live report" links.
     APP_PUBLIC_URL: str = "https://metricspro-five.vercel.app"

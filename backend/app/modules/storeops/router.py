@@ -3,6 +3,13 @@ import base64
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Header
 from app.core.database import get_supabase
+from app.core.config import settings
+
+try:
+    from zoneinfo import ZoneInfo
+    _BIZ_TZ = ZoneInfo(settings.BUSINESS_TZ or "America/New_York")
+except Exception:                       # zoneinfo/tzdata unavailable → fall back to UTC (no crash)
+    _BIZ_TZ = timezone.utc
 
 router = APIRouter(prefix="/storeops", tags=["StoreOps"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -605,10 +612,71 @@ def _emp_name(org_id, employee_id):
 
 
 def _fmt_time(iso):
+    # Display in the BUSINESS timezone (not the server's) so the kiosk time matches the reports and
+    # doesn't drift with wherever Railway happens to run.
     try:
-        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone().strftime("%I:%M %p").lstrip("0")
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(_BIZ_TZ).strftime("%I:%M %p").lstrip("0")
     except Exception:
         return iso
+
+
+def _norm_store(x):
+    return str(x or "").strip().upper()
+
+
+def _allowed_clock_stores(org_id, employee_id, home_store, work_date_local):
+    """The stores this employee may clock in at TODAY, without a manager override:
+    their home store + any store they're SCHEDULED at today + any store they float to
+    (app_users.store_codes[]). Returns a set of normalized (UPPER) store codes."""
+    codes = set()
+    if home_store:
+        codes.add(_norm_store(home_store))
+    try:
+        sh = (sb().table("shifts").select("store_code").eq("org_id", org_id)
+              .eq("employee_id", employee_id).eq("shift_date", work_date_local)
+              .eq("is_deleted", False).execute().data) or []
+        for s in sh:
+            if s.get("store_code"):
+                codes.add(_norm_store(s["store_code"]))
+    except Exception:
+        pass
+    try:
+        au = (sb().table("app_users").select("store_codes").eq("org_id", org_id)
+              .eq("employee_id", employee_id).limit(1).execute().data) or []
+        for c in ((au[0].get("store_codes") if au else None) or []):
+            if c:
+                codes.add(_norm_store(c))
+    except Exception:
+        pass
+    return codes
+
+
+def _require_manager(authorization, org_id):
+    """Resolve the signed-in caller and confirm they're a manager (not a plain rep) so they can
+    authorize a clock-in override. Returns the manager's app_user row; raises 401/403 otherwise."""
+    from app.modules.core.router import _uid_from_token
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "A manager must sign in to approve this override.")
+    rows = (sb().table("app_users").select("email,role,employee_id").eq("org_id", org_id)
+            .eq("auth_id", uid).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(403, "That login isn't recognized.")
+    u = rows[0]
+    role = (u.get("role") or "").lower()
+    MGR_ROLES = {"admin", "market_manager", "store_manager", "district_manager",
+                 "regional_manager", "director", "executive"}
+    if role in MGR_ROLES:
+        return u
+    try:  # otherwise allow any role whose scope isn't 'self' (a configured custom manager role)
+        rr = (sb().table("roles").select("permissions").eq("org_id", org_id)
+              .eq("name", u.get("role")).limit(1).execute().data) or []
+        scope = ((rr[0].get("permissions") if rr else {}) or {}).get("scope")
+        if scope and scope != "self":
+            return u
+    except Exception:
+        pass
+    raise HTTPException(403, "That login isn't a manager — ask a manager to approve.")
 
 
 def _caller_employee_id(authorization: str, org_id: str = ORG_ID) -> str:
@@ -654,16 +722,80 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
         raise HTTPException(409, "Already clocked in — clock out first.")
     name, home_store = _emp_name(org_id, employee_id)
     now = datetime.now(timezone.utc)
+    work_date = now.astimezone(_BIZ_TZ).date().isoformat()   # business-local date (not UTC)
+    # Which store is this punch for? The kiosk sends the selected store; fall back to home store.
+    req_store = (body.get("store_code") or "").strip() or home_store
+    # Gate: home OR scheduled-today OR floater store. Anything else needs a manager override.
+    if req_store:
+        allowed = _allowed_clock_stores(org_id, employee_id, home_store, work_date)
+        if allowed and _norm_store(req_store) not in allowed:
+            return {"success": False, "needs_override": True, "store_code": req_store,
+                    "allowed_stores": sorted(allowed), "home_store": home_store,
+                    "message": f"You're not scheduled at {req_store} today. A manager can approve it."}
     selfie_path = _upload_selfie(org_id, employee_id, body.get("selfie"))
     row = {"org_id": org_id, "employee_id": employee_id, "employee_name": name,
-           "store_code": body.get("store_code") or home_store,
-           "clock_in": now.isoformat(), "work_date": now.date().isoformat(),
+           "store_code": req_store,
+           "clock_in": now.isoformat(), "work_date": work_date,
            "device": body.get("device"), "selfie_path": selfie_path,
            "gps_lat": body.get("gps_lat"), "gps_lng": body.get("gps_lng"),
            "gps_accuracy_m": body.get("gps_accuracy_m"), "face_match_pct": body.get("face_match_pct")}
     r = sb().table("timelog").insert(row).execute()
     saved = r.data[0] if r.data else row
-    return {"success": True, "data": {"time": _fmt_time(saved.get("clock_in")), "entry_id": saved.get("id")}}
+    return {"success": True, "data": {"time": _fmt_time(saved.get("clock_in")), "entry_id": saved.get("id"),
+                                      "store_code": req_store}}
+
+
+@router.get("/timeclock/allowed-stores")
+def timeclock_allowed_stores(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The stores the signed-in employee can clock in at today (home + scheduled + floater), so the
+    kiosk can show a picker instead of forcing the home store."""
+    employee_id = _caller_employee_id(authorization)
+    name, home_store = _emp_name(org_id, employee_id)
+    work_date = datetime.now(timezone.utc).astimezone(_BIZ_TZ).date().isoformat()
+    allowed = sorted(_allowed_clock_stores(org_id, employee_id, home_store, work_date))
+    return {"home_store": home_store, "work_date": work_date,
+            "stores": allowed or ([_norm_store(home_store)] if home_store else [])}
+
+
+@router.post("/timeclock/override")
+def clock_in_override(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """MANAGER override: a manager (their own token in Authorization) authorizes clocking an employee
+    in at a store they're not scheduled for, and ADDS the shift to today's schedule so it's on record
+    (exactly what the user asked: 'manager override + update their schedule'). Body: {employee_id,
+    store_code, selfie?, gps_lat?, gps_lng?, gps_accuracy_m?, face_match_pct?, device?}."""
+    mgr = _require_manager(authorization, org_id)
+    employee_id = (body.get("employee_id") or "").strip()
+    store_code = (body.get("store_code") or "").strip()
+    if not employee_id or not store_code:
+        raise HTTPException(400, "employee_id and store_code are required")
+    open_rows = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
+                 .is_("clock_out", "null").limit(1).execute().data) or []
+    if open_rows:
+        raise HTTPException(409, "That employee is already clocked in — clock out first.")
+    name, _home = _emp_name(org_id, employee_id)
+    now = datetime.now(timezone.utc)
+    work_date = now.astimezone(_BIZ_TZ).date().isoformat()
+    # update the schedule so the store is on record for today (idempotent-ish: skip if already there)
+    try:
+        exists = (sb().table("shifts").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
+                  .eq("shift_date", work_date).eq("store_code", store_code).eq("is_deleted", False)
+                  .limit(1).execute().data) or []
+        if not exists:
+            sb().table("shifts").insert({"org_id": org_id, "employee_id": employee_id, "employee_name": name,
+                "store_code": store_code, "shift_date": work_date, "status": "scheduled", "is_deleted": False,
+                "notes": f"added via clock-in override by {mgr.get('email')}"}).execute()
+    except Exception:
+        pass
+    selfie_path = _upload_selfie(org_id, employee_id, body.get("selfie"))
+    row = {"org_id": org_id, "employee_id": employee_id, "employee_name": name, "store_code": store_code,
+           "clock_in": now.isoformat(), "work_date": work_date, "device": body.get("device") or "kiosk-override",
+           "selfie_path": selfie_path, "gps_lat": body.get("gps_lat"), "gps_lng": body.get("gps_lng"),
+           "gps_accuracy_m": body.get("gps_accuracy_m"), "face_match_pct": body.get("face_match_pct"),
+           "notes": f"manager override: {mgr.get('email')}"}
+    r = sb().table("timelog").insert(row).execute()
+    saved = r.data[0] if r.data else row
+    return {"success": True, "override_by": mgr.get("email"),
+            "data": {"time": _fmt_time(saved.get("clock_in")), "entry_id": saved.get("id"), "store_code": store_code}}
 
 
 @router.post("/timeclock/clock-out")

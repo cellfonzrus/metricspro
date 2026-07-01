@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { createClient } from '@supabase/supabase-js'
 import { api, ORG_ID, localToday, supabase } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import EmployeeWidgets from '@/components/EmployeeWidgets'
@@ -17,6 +18,7 @@ import PortalOnboarding from '@/components/PortalOnboarding'
 const MODELS = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights'
 const FACEAPI_SRC = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js'
 const MATCH_THRESHOLD = 0.55
+const PORTAL_TZ = 'America/New_York'   // business tz — keep punch times consistent with reports
 
 const shell: React.CSSProperties = { maxWidth: 900, margin: '0 auto', padding: 16, fontFamily: 'system-ui, -apple-system, sans-serif' }
 const box: React.CSSProperties = { maxWidth: 460, margin: '0 auto' }
@@ -35,6 +37,11 @@ export default function PortalPage() {
   const [loginErr, setLoginErr] = useState('')
 
   // clock state
+  const [stores, setStores] = useState<string[]>([])     // stores this employee may clock in at today (no override)
+  const [allStores, setAllStores] = useState<{ code: string; label: string }[]>([])  // every store (for the picker)
+  const [selStore, setSelStore] = useState('')           // the store they're clocking in at
+  const [ovr, setOvr] = useState<{ store_code: string; selfie: string; g: any } | null>(null)  // pending override
+  const [mgr, setMgr] = useState({ email: '', pw: '', busy: false, err: '' })
   const [status, setStatus] = useState<any>(null)        // {clockedIn, entry}
   const [registered, setRegistered] = useState<boolean | null>(null)
   const [modelsReady, setModelsReady] = useState(false)
@@ -101,6 +108,49 @@ export default function PortalPage() {
     authed('/api/v1/storeops/timeclock/face').then((r: any) => setRegistered(!!r?.registered)).catch(() => setRegistered(null))
   }, [empId, token, authed])
   useEffect(() => { refreshStatus() }, [refreshStatus])
+
+  // which stores can this employee clock in at today (home + scheduled + floater)?
+  useEffect(() => {
+    if (!empId || !token) { setStores([]); return }
+    authed('/api/v1/storeops/timeclock/allowed-stores').then((r: any) => {
+      const list: string[] = r?.stores || []
+      setStores(list)
+      setSelStore(prev => prev || (r?.home_store ? String(r.home_store).toUpperCase() : '') || list[0] || '')
+    }).catch(() => setStores([]))
+  }, [empId, token, authed])
+
+  // full store list for the "which store are you at?" picker (so a floater/visiting rep can choose)
+  useEffect(() => {
+    if (!empId) { setAllStores([]); return }
+    api('/api/v1/storeops/stores').then((r: any) => setAllStores(
+      (r || []).filter((s: any) => s.store_code).map((s: any) => ({
+        code: String(s.store_code).toUpperCase(),
+        label: `${s.store_code}${s.address ? ' — ' + String(s.address).slice(0, 24) : ''}`,
+      })))).catch(() => setAllStores([]))
+  }, [empId])
+
+  // manager override: verify the manager's password on a THROWAWAY client (so it doesn't replace the
+  // employee's kiosk session), then authorize the override with the manager's token.
+  async function submitOverride() {
+    if (!ovr) return
+    setMgr(m => ({ ...m, busy: true, err: '' }))
+    try {
+      const tmp = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        { auth: { persistSession: false, autoRefreshToken: false, storageKey: 'mp-mgr-override' } })
+      const { data, error } = await tmp.auth.signInWithPassword({ email: mgr.email.trim(), password: mgr.pw })
+      if (error || !data?.session?.access_token) throw new Error(error?.message || 'Manager sign-in failed')
+      const mtoken = data.session.access_token
+      const res: any = await api('/api/v1/storeops/timeclock/override', {
+        method: 'POST', headers: { Authorization: `Bearer ${mtoken}` },
+        body: JSON.stringify({ employee_id: empId, store_code: ovr.store_code, selfie: ovr.selfie,
+          device: 'kiosk-override', gps_lat: ovr.g?.lat, gps_lng: ovr.g?.lng, gps_accuracy_m: ovr.g?.acc }) })
+      try { await tmp.auth.signOut() } catch { /* throwaway */ }
+      setMsg(`✅ Clocked in at ${res?.data?.time || ''} (approved by ${res?.override_by || 'manager'}).`)
+      setOvr(null); setMgr({ email: '', pw: '', busy: false, err: '' }); refreshStatus()
+    } catch (e: any) {
+      setMgr(m => ({ ...m, busy: false, err: e?.message || 'Override failed' }))
+    }
+  }
 
   // load their widgets (scoped to the signed-in employee)
   useEffect(() => {
@@ -227,9 +277,15 @@ export default function PortalPage() {
       const selfie = captureSelfie()
       const g = gpsRef.current
       const res: any = await authed('/api/v1/storeops/timeclock/clock-in', { method: 'POST', body: JSON.stringify({
-        selfie, device: 'kiosk', face_match_pct: matchPct,
+        selfie, device: 'kiosk', face_match_pct: matchPct, store_code: selStore || undefined,
         gps_lat: g.lat, gps_lng: g.lng, gps_accuracy_m: g.acc }) })
-      setMsg(`✅ Clocked in at ${res?.data?.time || ''}.`)
+      if (res?.needs_override) {
+        // not home/scheduled/floater → hold the punch for a manager to approve (keeps the selfie/GPS)
+        setOvr({ store_code: res.store_code || selStore, selfie, g })
+        setMsg(res.message || `You're not scheduled at ${res.store_code || selStore} today — manager approval needed.`)
+      } else {
+        setMsg(`✅ Clocked in at ${res?.data?.time || ''}${res?.data?.store_code ? ` · ${res.data.store_code}` : ''}.`)
+      }
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     finally { setBusy(false); closeCamera(); refreshStatus() }
   }
@@ -334,12 +390,24 @@ export default function PortalPage() {
           clockedIn ? (
             <>
               <div style={{ textAlign: 'center', marginBottom: 10, fontSize: 14, color: '#16794a' }}>
-                ● On the clock since {status?.entry?.clock_in ? new Date(status.entry.clock_in).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''}
+                ● On the clock since {status?.entry?.clock_in ? new Date(status.entry.clock_in).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: PORTAL_TZ }) : ''}{status?.entry?.store_code ? ` · ${status.entry.store_code}` : ''}
               </div>
               <button disabled={busy} onClick={clockOut} style={{ ...bigBtn, background: '#dc2626', color: '#fff' }}>{busy ? '…' : 'CLOCK OUT'}</button>
             </>
           ) : (
             <>
+              {allStores.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 5 }}>Which store are you at?</div>
+                  <select value={selStore} onChange={e => setSelStore(e.target.value)} style={{ ...inp, marginTop: 0 }}>
+                    {!selStore && <option value="">Select store…</option>}
+                    {allStores.map(s => <option key={s.code} value={s.code}>{s.label}{stores.includes(s.code) ? '  ✓' : ''}</option>)}
+                  </select>
+                  {selStore && !stores.includes(selStore) && (
+                    <div style={{ fontSize: 12, color: '#b45309', marginTop: 5 }}>⚠️ You&apos;re not scheduled here — a manager will need to approve after the photo.</div>
+                  )}
+                </div>
+              )}
               <button disabled={busy || (!modelsReady && !faceError)} onClick={faceError ? clockInNoFace : startClockIn}
                 style={{ ...bigBtn, background: '#f5a623', color: '#1E3A5F', opacity: (!modelsReady && !faceError) ? 0.5 : 1 }}>
                 {busy ? '…' : 'CLOCK IN'}
@@ -359,6 +427,27 @@ export default function PortalPage() {
           {gpsRef.current.lat ? 'GPS ✓' : 'GPS off'} · {modelsReady ? 'face ✓' : faceError ? 'face ✗' : 'face …'}
         </div>
       </div>
+
+      {/* manager override — the employee is at a store they're not scheduled for */}
+      {ovr && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 16 }}>
+          <div style={{ background: '#fff', borderRadius: 14, padding: 22, width: '100%', maxWidth: 380 }}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: '#1E3A5F' }}>Manager approval</div>
+            <div style={{ fontSize: 13, color: '#475569', margin: '6px 0 14px' }}>
+              {empName || 'This employee'} isn&apos;t scheduled at <b>{ovr.store_code}</b> today. A manager can approve — this also adds today&apos;s shift there.
+            </div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Manager email</label>
+            <input type="email" value={mgr.email} onChange={e => setMgr(m => ({ ...m, email: e.target.value }))} style={inp} placeholder="manager@…" autoFocus />
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#475569', marginTop: 12, display: 'block' }}>Manager password</label>
+            <input type="password" value={mgr.pw} onChange={e => setMgr(m => ({ ...m, pw: e.target.value }))} style={inp} placeholder="••••••••" />
+            {mgr.err && <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>{mgr.err}</div>}
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <button disabled={mgr.busy} onClick={submitOverride} style={{ ...bigBtn, padding: '12px 0', fontSize: 15, background: '#059669', color: '#fff', opacity: mgr.busy ? 0.7 : 1 }}>{mgr.busy ? 'Approving…' : 'Approve & clock in'}</button>
+              <button onClick={() => { setOvr(null); setMgr({ email: '', pw: '', busy: false, err: '' }); setMsg('') }} style={{ ...bigBtn, padding: '12px 0', fontSize: 15, background: '#eee', color: '#333', flex: '0 0 90px' }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* tabs */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>

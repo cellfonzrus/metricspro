@@ -7,7 +7,10 @@ import { api } from '@/lib/client'
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '8px', borderTop: '1px solid var(--border)', fontSize: 13 }
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-const fmtTime = (t: string | null) => { if (!t) return '—'; try { return new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) } catch { return t } }
+// Format punch times in the BUSINESS timezone so the report matches the kiosk (both ET) regardless of
+// the viewer's browser timezone. (Keep in sync with backend _BIZ_TZ / settings.BUSINESS_TZ.)
+const BUSINESS_TZ = 'America/New_York'
+const fmtTime = (t: string | null) => { if (!t) return '—'; try { return new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: BUSINESS_TZ }) } catch { return t } }
 
 export default function TimeClockAdminPage() {
   const today = new Date()
