@@ -124,9 +124,12 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
         <header style={{ background: 'white', borderBottom: '1px solid var(--border)', padding: '0 24px',
           height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           position: 'sticky', top: 0, zIndex: 10 }}>
-          <div style={{ fontSize: 14, color: 'var(--text2)' }}>
-            <span style={{ color: 'var(--text3)' }}>Period: </span>
-            <span style={{ fontWeight: 600, color: 'var(--accent)' }}>{period}</span>
+          <div style={{ fontSize: 14, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 16 }}>
+            <span><span style={{ color: 'var(--text3)' }}>Period: </span><span style={{ fontWeight: 600, color: 'var(--accent)' }}>{period}</span></span>
+            <Link href="/portal" title="Open the employee kiosk to clock in / out"
+              style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', textDecoration: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '5px 10px' }}>
+              🕐 Clock in
+            </Link>
           </div>
           {open ? (
             <span style={{ fontSize: 12, color: 'var(--text3)' }}>🔓 Login not enforced</span>

@@ -20,8 +20,10 @@ export default function HRPeoplePage() {
   const [msg, setMsg] = useState('')
   const [tempPw, setTempPw] = useState('')
   const [busy, setBusy] = useState(false)
+  const [bulkMsg, setBulkMsg] = useState('')
   const [f, setF] = useState<any>({ name: '', email: '', phone: '', home_store: '', role_title: '',
-    pay_rate: '', role_name: '', market: '', store_codes: [] as string[], create_login: false })
+    pay_rate: '', role_name: '', market: '', store_codes: [] as string[], create_login: false,
+    dob: '', send_invite: true, invite_method: 'link' })
 
   const markets = Array.from(new Set(stores.map(s => (s.market || '').trim()).filter(Boolean))).sort()
 
@@ -50,12 +52,31 @@ export default function HRPeoplePage() {
         store_codes: f.store_codes.length ? f.store_codes : null,
         store_code: f.store_codes[0] || f.home_store || null,
         create_login: !!f.create_login,
+        send_invite: !!f.send_invite,
+        invite_method: f.invite_method,
+        dob: f.dob || null,
       }) })
-      setMsg(`✅ Saved ${f.name}${r.assigned_role ? ` → ${r.assigned_role}` : ''}${r.note ? ` — ${r.note}` : ''}`)
+      const inv = r.invite
+      const invMsg = inv ? (inv.ok ? (inv.emailed ? ' · onboarding invite emailed ✉️' : ` · invite ready (${inv.email_note || 'send manually'})`) : ` · invite issue: ${inv.error || 'failed'}`) : ''
+      setMsg(`✅ Saved ${f.name}${r.assigned_role ? ` → ${r.assigned_role}` : ''}${invMsg}${r.note ? ` — ${r.note}` : ''}`)
       if (r.login?.temp_password) setTempPw(`${f.email.trim()} → ${r.login.temp_password}`)
-      setF({ name: '', email: '', phone: '', home_store: '', role_title: '', pay_rate: '', role_name: '', market: '', store_codes: [], create_login: false })
+      else if (inv?.temp_password) setTempPw(`${inv.email} → ${inv.temp_password} (portal login)`)
+      setF({ name: '', email: '', phone: '', home_store: '', role_title: '', pay_rate: '', role_name: '', market: '', store_codes: [], create_login: false, dob: '', send_invite: true, invite_method: 'link' })
       loadAll()
     } catch (err: any) { setMsg('❌ ' + (err?.message || err)) } finally { setBusy(false) }
+  }
+
+  async function bulkInvite(employee_ids?: string[]) {
+    const n = employee_ids ? employee_ids.length : 'all incomplete'
+    if (!confirm(`Send a portal-login onboarding invite to ${n} employee(s)? Each gets an email with a temp password.`)) return
+    setBulkMsg('Sending…')
+    try {
+      const body: any = { method: 'login', send_email: true }
+      if (employee_ids) body.employee_ids = employee_ids; else body.all_incomplete = true
+      const r = await api('/api/v1/hr/onboarding/invite-bulk', { method: 'POST', body: JSON.stringify(body) })
+      setBulkMsg(`✅ Invited ${r.invited}/${r.total} · emailed ${r.emailed}${r.emailed < r.invited ? ' (some emails not configured — see per-employee tracker for links)' : ''}`)
+      loadAll()
+    } catch (e: any) { setBulkMsg('❌ ' + (e?.message || e)) }
   }
 
   return (
@@ -74,6 +95,7 @@ export default function HRPeoplePage() {
           <label style={lbl}>Full name *<input style={sel} value={f.name} onChange={e => set({ name: e.target.value })} /></label>
           <label style={lbl}>Email<input style={sel} type="email" value={f.email} placeholder="for role / login" onChange={e => set({ email: e.target.value })} /></label>
           <label style={lbl}>Phone<input style={sel} value={f.phone} onChange={e => set({ phone: e.target.value })} /></label>
+          <label style={lbl}>Date of birth<input style={sel} type="date" value={f.dob} onChange={e => set({ dob: e.target.value })} /><span style={{ fontWeight: 400, fontSize: 11, color: 'var(--text3)' }}>gates the emailed link</span></label>
           <label style={lbl}>Home store
             <select style={sel} value={f.home_store} onChange={e => set({ home_store: e.target.value })}>
               <option value="">—</option>
@@ -108,7 +130,16 @@ export default function HRPeoplePage() {
         </div>
         <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginTop: 14, flexWrap: 'wrap' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-            <input type="checkbox" checked={f.create_login} onChange={e => set({ create_login: e.target.checked })} /> Create login now (needs email + role)
+            <input type="checkbox" checked={f.send_invite} onChange={e => set({ send_invite: e.target.checked })} /> Send onboarding invite
+          </label>
+          {f.send_invite && (
+            <select style={sel} value={f.invite_method} onChange={e => set({ invite_method: e.target.value })}>
+              <option value="link">Email a no-login link (DOB gate)</option>
+              <option value="login">Create a portal login + email password</option>
+            </select>
+          )}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+            <input type="checkbox" checked={f.create_login} onChange={e => set({ create_login: e.target.checked })} /> Full login now (skips invite)
           </label>
           <button className="btn btn-primary" disabled={busy} onClick={create}>{busy ? 'Saving…' : '➕ Add person'}</button>
           {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
@@ -121,11 +152,16 @@ export default function HRPeoplePage() {
       </div>
 
       <div className="card" style={{ padding: 0 }}>
-        <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>People ({people.length})</div>
+        <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12, borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 700, fontSize: 13 }}>People ({people.length})</span>
+          <div style={{ flex: 1 }} />
+          {bulkMsg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{bulkMsg}</span>}
+          <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => bulkInvite()} title="Email a portal login + password to every employee who hasn't finished onboarding">📨 Invite all for onboarding</button>
+        </div>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 700 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>
-              {['Name', 'Email', 'Store', 'App role', 'Login'].map(h => <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
+              {['Name', 'Email', 'Store', 'App role', 'Login', 'Onboarding'].map(h => <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
             </tr></thead>
             <tbody>
               {people.map((p: any, i: number) => (
@@ -135,9 +171,12 @@ export default function HRPeoplePage() {
                   <td style={{ padding: '7px 12px', fontSize: 12 }}>{p.app_store || p.home_store || '—'}</td>
                   <td style={{ padding: '7px 12px', fontSize: 12 }}>{p.app_role || '—'}</td>
                   <td style={{ padding: '7px 12px', fontSize: 12 }}>{p.has_login ? '✓' : '—'}</td>
+                  <td style={{ padding: '7px 12px', fontSize: 12 }}>{p.employee_id
+                    ? <a href={`/hr/onboarding/${p.employee_id}`} style={{ color: 'var(--accent,#2563eb)' }}>Open →</a>
+                    : '—'}</td>
                 </tr>
               ))}
-              {people.length === 0 && <tr><td colSpan={5} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No people yet.</td></tr>}
+              {people.length === 0 && <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No people yet.</td></tr>}
             </tbody>
           </table>
         </div>

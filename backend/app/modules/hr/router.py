@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Header, HTTPException, UploadFile, File, Form
 from app.core.database import get_supabase
+from app.core.config import settings
 from app.modules.storeops.router import scope_keyset, in_keyset
 
 router = APIRouter(prefix="/hr", tags=["HR"])
@@ -128,7 +129,21 @@ async def hr_create_employee(body: dict, org_id: str = ORG_ID):
     elif (role or has_scope) and not email:
         # surface why the role didn't stick (matches the Roles page rule)
         assigned = None
-    return {"employee": emp, "assigned_role": assigned, "login": login,
+
+    # Auto-send the onboarding invite (product-owner default). Way 1 = a no-login token LINK when a
+    # DOB gate is supplied; otherwise a temp portal LOGIN (way 2). Skip with send_invite=false, or
+    # when the caller already provisioned a full login above.
+    invite = None
+    if email and body.get("send_invite", True) and emp.get("employee_id") and not login:
+        method = (body.get("invite_method") or ("link" if (body.get("dob") or "").strip() else "login")).strip()
+        try:
+            invite = await _send_invite(org_id, emp, method,
+                                        dob=(body.get("dob") or "").strip() or None,
+                                        ssn4=(body.get("ssn4") or "").strip() or None,
+                                        role_name=role or None, send_email_flag=True, actor="HR")
+        except Exception as e:
+            invite = {"ok": False, "error": str(e)[:200]}
+    return {"employee": emp, "assigned_role": assigned, "login": login, "invite": invite,
             "note": (None if email or not (role or has_scope)
                      else "Role/scope ignored — an email is required to assign a role or create a login.")}
 
@@ -410,9 +425,20 @@ def onboarding_for_employee(employee_id: str, org_id: str = ORG_ID):
             cats.append({**{k: c[k] for k in c if k != "tasks"}, "tasks": tasks})
     emp = (so.table("employees").select("name,home_store").eq("org_id", org_id)
            .eq("employee_id", employee_id).limit(1).execute().data) or [{}]
+    wf = (prof or {}).get("workflow_status") or "invited"
+    stored = dict((prof or {}).get("intake_data") or {})
+    pub_fields = _public_intake_fields(org_id)
+    intake_values = {f["key"]: stored.get(f["key"], "") for f in pub_fields if not f["sensitive"]}
+    sensitive_on_file = [f["label"] for f in pub_fields if f["sensitive"] and str(stored.get(f["key"], "")).strip()]
     return {"ready": True, "employee_id": employee_id, "employee_name": emp[0].get("name"),
             "work_state": work_state, "profile": _public_profile(prof),
             "needs_work_state": bool(has_state_tasks and not work_state),
+            "workflow_status": wf, "workflow_label": STATUS_LABELS.get(wf, wf),
+            "workflow_statuses": [{"key": s, "label": STATUS_LABELS[s]} for s in WORKFLOW_STATUSES],
+            "invite_method": (prof or {}).get("invite_method"),
+            "intake_submitted": bool((prof or {}).get("intake_submitted_at")),
+            "intake_fields": pub_fields, "intake_values": intake_values,
+            "sensitive_on_file": sensitive_on_file,
             "categories": cats, "progress": {"total": total, "done": done},
             "owner_labels": OWNER_ROLE_LABELS, "states": SEED_STATES}
 
@@ -577,18 +603,9 @@ def public_onboarding_view(token: str, body: dict):
         raise HTTPException(404, "This onboarding link is invalid or has expired.")
     if not _check_gate(prof, body.get("value")):
         raise HTTPException(403, "That didn't match our records. Please check and try again.")
-    data = onboarding_for_employee(prof["employee_id"], org_id=prof["org_id"])
-    first = (str(data.get("employee_name") or "").split() or [""])[0]
-    cats = []
-    for c in data.get("categories", []):
-        tasks = [{"id": t["id"], "label": t["label"], "description": t.get("description"),
-                  "doc_url": t.get("doc_url"), "doc_label": t.get("doc_label"),
-                  "is_fillable": t.get("is_fillable"), "requires_upload": t.get("requires_upload"),
-                  "status": t.get("status"), "has_document": t.get("has_document")}
-                 for t in c.get("tasks", []) if t.get("owner_role") == "employee"]
-        if tasks:
-            cats.append({"key": c["key"], "label": c["label"], "tasks": tasks})
-    return {"ok": True, "first_name": first, "categories": cats, "progress": data.get("progress")}
+    bundle = _onboarding_bundle(prof["org_id"], prof["employee_id"])
+    bundle.pop("employee_id", None)   # don't leak the internal id to a credential-less caller
+    return bundle
 
 
 @router.post("/public/onboarding/{token}/upload")
@@ -604,4 +621,581 @@ async def public_onboarding_upload(token: str, value: str = Form(...), task_id: 
           .eq("org_id", prof["org_id"]).eq("id", task_id).limit(1).execute().data) or []
     if not tk or tk[0].get("owner_role") != "employee":
         raise HTTPException(403, "That item can't be uploaded from this portal.")
-    return await _do_onboard_upload(prof["org_id"], prof["employee_id"], task_id, file, "employee")
+    res = await _do_onboard_upload(prof["org_id"], prof["employee_id"], task_id, file, "employee")
+    _recompute_status(_so(), prof["org_id"], prof["employee_id"], actor="employee")
+    return res
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# ONBOARDING WORKFLOW (migration 077) — connects the checklist to the employee portal.
+#   • A per-hire STATE MACHINE (invited → in_progress → docs_submitted → docs_verified → provisioned
+#     → active) with an append-only audit trail (onboarding_event); any step is HR-overridable.
+#   • Two invite paths: a no-login token LINK (DOB/last-4 gate) OR a temp portal LOGIN (way 2).
+#   • STRUCTURED intake capture (configurable onboarding_intake_field) → stored as intake_data AND
+#     propagated onto storeops.employees; "which state are you in?" drives the tax-form filter.
+#   • Auto-provisioning (create login + assign role + email credentials), gated on docs_verified.
+# All storeops.*; every endpoint degrades gracefully (clear 400, never 500) if 077 isn't applied.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+WORKFLOW_STATUSES = ["invited", "in_progress", "docs_submitted", "docs_verified", "provisioned", "active"]
+STATUS_ORDER = {s: i for i, s in enumerate(WORKFLOW_STATUSES)}
+STATUS_LABELS = {
+    "invited": "Invited", "in_progress": "In progress", "docs_submitted": "Docs submitted",
+    "docs_verified": "Docs verified", "provisioned": "Provisioned", "active": "Active",
+}
+INTAKE_FIELD_COLS = ["key", "label", "section", "field_type", "options", "required",
+                     "propagate_to", "sensitive", "help_text", "sort_order", "is_active"]
+# storeops.employees columns an intake field is allowed to propagate into (allow-list — a config
+# row can never write an arbitrary column).
+_PROPAGATABLE = {"legal_name", "address_line1", "address_line2", "city", "state", "zip",
+                 "date_of_birth", "phone", "emergency_name", "emergency_phone", "emergency_relation"}
+
+
+# ── Intake-field config (the tenant-customizable capture form) ───────────────────────────────────
+def _intake_fields(org_id, active_only=True):
+    try:
+        rows = (_so().table("onboarding_intake_field").select("*").eq("org_id", org_id)
+                .order("sort_order").execute().data) or []
+    except Exception:
+        return []
+    return [r for r in rows if r.get("is_active", True)] if active_only else rows
+
+
+def _public_intake_fields(org_id):
+    """Field definitions safe to render in a portal (no internal flags)."""
+    return [{"key": f["key"], "label": f["label"], "section": f.get("section") or "personal",
+             "field_type": f.get("field_type") or "text", "options": f.get("options"),
+             "required": bool(f.get("required")), "sensitive": bool(f.get("sensitive")),
+             "help_text": f.get("help_text")} for f in _intake_fields(org_id)]
+
+
+@router.get("/onboarding/intake-fields")
+def intake_fields_list(include_inactive: bool = False, org_id: str = ORG_ID):
+    """The configurable employee-intake capture form. ready:false if 077 not applied."""
+    try:
+        rows = (_so().table("onboarding_intake_field").select("*").eq("org_id", org_id)
+                .order("sort_order").execute().data)
+    except Exception:
+        return {"ready": False, "fields": [], "sections": ["personal", "address", "emergency", "direct_deposit", "custom"]}
+    if not include_inactive:
+        rows = [r for r in (rows or []) if r.get("is_active", True)]
+    return {"ready": True, "fields": rows or [],
+            "sections": ["personal", "address", "emergency", "direct_deposit", "custom"],
+            "propagatable": sorted(_PROPAGATABLE)}
+
+
+@router.post("/onboarding/intake-fields")
+def intake_field_save(body: dict, org_id: str = ORG_ID):
+    label = (body.get("label") or "").strip()
+    if not label:
+        raise HTTPException(400, "label required")
+    row = {k: body[k] for k in INTAKE_FIELD_COLS if k in body}
+    row.update({"org_id": org_id, "label": label})
+    row.setdefault("key", _slug(label))
+    row["key"] = _slug(row["key"])
+    prop = (row.get("propagate_to") or "").strip() or None
+    if prop and prop not in _PROPAGATABLE:
+        raise HTTPException(400, f"propagate_to must be one of {sorted(_PROPAGATABLE)} (or blank)")
+    row["propagate_to"] = prop
+    try:
+        r = so_upsert("onboarding_intake_field", row, "org_id,key")
+    except Exception as e:
+        raise HTTPException(400, f"Could not save field — is migration 077 applied? {e}")
+    return (r or [row])[0]
+
+
+@router.patch("/onboarding/intake-fields/{field_id}")
+def intake_field_update(field_id: str, body: dict, org_id: str = ORG_ID):
+    upd = {k: body[k] for k in INTAKE_FIELD_COLS if k in body}
+    if "propagate_to" in upd:
+        prop = (upd.get("propagate_to") or "").strip() or None
+        if prop and prop not in _PROPAGATABLE:
+            raise HTTPException(400, f"propagate_to must be one of {sorted(_PROPAGATABLE)} (or blank)")
+        upd["propagate_to"] = prop
+    r = _so().table("onboarding_intake_field").update(upd).eq("org_id", org_id).eq("id", field_id).execute()
+    return (r.data or [{}])[0]
+
+
+@router.delete("/onboarding/intake-fields/{field_id}")
+def intake_field_delete(field_id: str, org_id: str = ORG_ID):
+    _so().table("onboarding_intake_field").delete().eq("org_id", org_id).eq("id", field_id).execute()
+    return {"ok": True}
+
+
+# ── Workflow status + audit trail ────────────────────────────────────────────────────────────────
+def _log_event(org_id, employee_id, event_type, *, from_status=None, to_status=None,
+               actor=None, reason=None, is_override=False, detail=None):
+    try:
+        _so().table("onboarding_event").insert({
+            "org_id": org_id, "employee_id": employee_id, "event_type": event_type,
+            "from_status": from_status, "to_status": to_status, "actor": actor,
+            "reason": reason, "is_override": is_override, "detail": detail}).execute()
+    except Exception:
+        pass  # audit is best-effort; never block the operation
+
+
+def _set_status(so, org_id, employee_id, to_status, *, actor=None, reason=None, is_override=False):
+    prof = _get_profile(so, org_id, employee_id)
+    frm = (prof or {}).get("workflow_status") or "invited"
+    if to_status == frm:
+        return frm
+    upd = {"org_id": org_id, "employee_id": employee_id, "workflow_status": to_status}
+    if to_status == "provisioned":
+        upd["provisioned_at"] = _now_iso()
+    try:
+        so.table("employee_onboarding_profile").upsert(upd, on_conflict="org_id,employee_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not update status — is migration 077 applied? {e}")
+    _log_event(org_id, employee_id, "override" if is_override else "status_change",
+               from_status=frm, to_status=to_status, actor=actor, reason=reason, is_override=is_override)
+    return to_status
+
+
+def _employee_tasks(org_id, employee_id):
+    """The employee-owned, state-applicable tasks (with merged per-employee status)."""
+    data = onboarding_for_employee(employee_id, org_id=org_id)
+    return [t for c in data.get("categories", []) for t in c.get("tasks", [])
+            if t.get("owner_role") == "employee"]
+
+
+def _recompute_status(so, org_id, employee_id, actor="system"):
+    """Derive forward progress from task + intake state. Never auto-advances past docs_verified
+    (provisioning is explicit) and never moves a provisioned/active hire backward."""
+    prof = _get_profile(so, org_id, employee_id)
+    if not prof:
+        return None
+    cur = prof.get("workflow_status") or "invited"
+    if STATUS_ORDER.get(cur, 0) >= STATUS_ORDER["provisioned"]:
+        return cur
+    tasks = _employee_tasks(org_id, employee_id)
+    intake_required = bool(_intake_fields(org_id))
+    intake_done = bool(prof.get("intake_submitted_at")) or not intake_required
+    touched = lambda t: t.get("status") in ("submitted", "verified", "na")
+    ok = lambda t: t.get("status") in ("verified", "na")
+    any_touched = bool(prof.get("intake_submitted_at")) or any(touched(t) for t in tasks)
+    all_touched = intake_done and (all(touched(t) for t in tasks) if tasks else True)
+    all_verified = intake_done and (all(ok(t) for t in tasks) if tasks else True)
+    has_work = bool(tasks) or intake_required
+    if all_verified and has_work:
+        target = "docs_verified"
+    elif all_touched and has_work and (tasks or prof.get("intake_submitted_at")):
+        target = "docs_submitted"
+    elif any_touched:
+        target = "in_progress"
+    else:
+        target = cur
+    if STATUS_ORDER.get(target, 0) > STATUS_ORDER.get(cur, 0):
+        return _set_status(so, org_id, employee_id, target, actor=actor)
+    return cur
+
+
+# ── Structured intake capture + propagation ──────────────────────────────────────────────────────
+def _apply_intake(org_id, employee_id, data: dict, actor="employee"):
+    """Validate submitted values against the active field config, merge into intake_data, propagate
+    the mapped operational fields onto storeops.employees, sync work_state, mark the personal-info
+    task submitted, and advance the workflow. Returns {ok, propagated:[...]}."""
+    so = _so()
+    fields = _intake_fields(org_id)
+    if not fields:
+        raise HTTPException(400, "No intake form is configured — run migration 077 (or add fields in HR → Onboarding).")
+    by_key = {f["key"]: f for f in fields}
+    missing = [f["label"] for f in fields if f.get("required")
+               and not str(data.get(f["key"], "")).strip()]
+    if missing:
+        raise HTTPException(400, "Please fill in: " + ", ".join(missing))
+    prof = _get_profile(so, org_id, employee_id) or {}
+    stored = dict(prof.get("intake_data") or {})
+    emp_upd, propagated = {}, []
+    for k, v in (data.items() if isinstance(data, dict) else []):
+        f = by_key.get(k)
+        if not f:
+            continue
+        val = (str(v).strip() if v is not None else "")
+        stored[k] = val
+        col = f.get("propagate_to")
+        if col and col in _PROPAGATABLE and val != "":
+            emp_upd[col] = val.upper() if col == "state" else val
+            propagated.append(col)
+    # persist intake_data + timestamp
+    pupd = {"org_id": org_id, "employee_id": employee_id, "intake_data": stored,
+            "intake_submitted_at": _now_iso()}
+    # "which state are you in?" also drives the tax-form filter (work_state)
+    state_val = (data.get("state") or data.get("work_state") or "").strip().upper()
+    if state_val:
+        pupd["work_state"] = state_val
+    try:
+        so.table("employee_onboarding_profile").upsert(pupd, on_conflict="org_id,employee_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save your information — is migration 077 applied? {e}")
+    if emp_upd:
+        try:
+            so.table("employees").update(emp_upd).eq("org_id", org_id).eq("employee_id", employee_id).execute()
+        except Exception:
+            pass  # propagation is best-effort; intake_data still holds the source of truth
+    # mark the personal-info checklist task as submitted (data captured in-app, no PDF needed)
+    try:
+        pi = (so.table("onboarding_task").select("id").eq("org_id", org_id)
+              .eq("key", "personal_info").limit(1).execute().data) or []
+        if pi:
+            so.table("employee_onboarding").upsert(
+                {"org_id": org_id, "employee_id": employee_id, "task_id": pi[0]["id"],
+                 "status": "submitted", "submitted_at": _now_iso(), "updated_at": _now_iso(),
+                 "note": "captured via intake form"}, on_conflict="org_id,employee_id,task_id").execute()
+    except Exception:
+        pass
+    _log_event(org_id, employee_id, "intake_submitted", actor=actor,
+               detail={"fields": list(stored.keys()), "propagated": propagated})
+    _recompute_status(so, org_id, employee_id, actor=actor)
+    return {"ok": True, "propagated": propagated, "work_state": pupd.get("work_state")}
+
+
+def _set_work_state(org_id, employee_id, state, actor="employee"):
+    st = (state or "").strip().upper() or None
+    _so().table("employee_onboarding_profile").upsert(
+        {"org_id": org_id, "employee_id": employee_id, "work_state": st},
+        on_conflict="org_id,employee_id").execute()
+    _log_event(org_id, employee_id, "state_set", actor=actor, detail={"work_state": st})
+    return st
+
+
+# ── Invite engine (way 1 = token link · way 2 = temp portal login) ───────────────────────────────
+def _invite_email_html(first_name, method, url, email=None, temp_pw=None, task_labels=None):
+    greet = f"Hi {first_name}," if first_name else "Hi,"
+    docs = ""
+    if task_labels:
+        items = "".join(f"<li>{t}</li>" for t in task_labels[:30])
+        docs = ("<p style='margin:16px 0 6px'><b>What you'll complete:</b></p>"
+                f"<ul style='margin:0 0 8px 18px;padding:0'>{items}</ul>")
+    if method == "login":
+        creds = (f"<p style='margin:12px 0'>Sign in with:<br><b>Email:</b> {email}<br>"
+                 f"<b>Temporary password:</b> {temp_pw}</p>"
+                 "<p style='font-size:13px;color:#555'>You'll be asked to set your own password on first sign-in.</p>")
+        cta = f"<a href='{url}' style='display:inline-block;background:#111;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none'>Open the employee portal</a>"
+    else:
+        creds = "<p style='font-size:13px;color:#555'>You'll verify your identity (date of birth) to open your checklist — no password needed.</p>"
+        cta = f"<a href='{url}' style='display:inline-block;background:#111;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none'>Start onboarding</a>"
+    return (f"<div style='font-family:system-ui,Arial,sans-serif;max-width:560px;margin:auto;color:#111'>"
+            f"<p>{greet}</p><p>Welcome aboard! Please complete your new-hire onboarding — fill in your "
+            f"personal information and upload your signed forms.</p>{docs}{creds}<p style='margin:18px 0'>{cta}</p>"
+            f"<p style='font-size:12px;color:#888'>If the button doesn't work, copy this link:<br>{url}</p></div>")
+
+
+async def _send_invite(org_id, employee, method="link", *, dob=None, ssn4=None, role_name=None,
+                       expires_days=30, actor="HR", send_email_flag=True):
+    """Prepare + (optionally) email an onboarding invite. Returns a per-employee result dict.
+    method='link' → mint a token portal (needs a DOB or last-4 gate).
+    method='login' → ensure an app_users role + a Supabase login, email the temp credentials."""
+    so = _so()
+    email = (employee.get("email") or "").strip().lower()
+    employee_id = employee.get("employee_id")
+    first = (str(employee.get("name") or "").split() or [""])[0]
+    if not employee_id:
+        return {"employee_id": None, "ok": False, "error": "no employee_id"}
+    # seed a profile row + stamp invite metadata / status
+    base = {"org_id": org_id, "employee_id": employee_id, "invite_method": method,
+            "invited_at": _now_iso()}
+    result = {"employee_id": employee_id, "name": employee.get("name"), "email": email, "method": method}
+
+    if method == "login":
+        if not email:
+            return {**result, "ok": False, "error": "email required for a login invite"}
+        try:
+            from app.modules.core.router import assign_role, create_login as core_create_login
+            # ensure an app_users row exists so create_login can attach the auth account
+            await assign_role({"email": email, "full_name": employee.get("name"),
+                               "role": (role_name or "sales_rep"), "employee_id": employee_id}, org_id)
+            login = await core_create_login({"email": email}, org_id)
+        except Exception as e:
+            return {**result, "ok": False, "error": str(e)[:200]}
+        url = f"{settings.APP_PUBLIC_URL}/portal"
+        try:
+            so.table("employee_onboarding_profile").upsert(base, on_conflict="org_id,employee_id").execute()
+        except Exception as e:
+            return {**result, "ok": False, "error": f"profile save failed (migration 077?): {str(e)[:120]}"}
+        result["temp_password"] = login.get("temp_password")
+        result["portal_url"] = url
+    else:  # link
+        gate_kind = "dob" if dob else ("ssn4" if ssn4 else None)
+        gate_val = dob or ssn4
+        if not gate_kind:
+            return {**result, "ok": False,
+                    "error": "a date of birth (or last-4 SSN) is required for a link invite — use the login method instead"}
+        token = secrets.token_urlsafe(24)
+        row = {**base, "access_token": token, "verify_kind": gate_kind, "token_active": True,
+               "verify_dob": None, "verify_ssn4": None, "token_expires_at": None}
+        if gate_kind == "dob":
+            row["verify_dob"] = str(gate_val)[:10]
+        else:
+            row["verify_ssn4"] = re.sub(r"\D", "", str(gate_val))[-4:]
+        if expires_days:
+            try:
+                row["token_expires_at"] = (datetime.utcnow() + timedelta(days=int(expires_days))).isoformat()
+            except Exception:
+                pass
+        try:
+            so.table("employee_onboarding_profile").upsert(row, on_conflict="org_id,employee_id").execute()
+        except Exception as e:
+            return {**result, "ok": False, "error": f"token mint failed (migration 077?): {str(e)[:120]}"}
+        url = f"{settings.APP_PUBLIC_URL}/onboard/{token}"
+        result["token"] = token
+        result["portal_url"] = url
+
+    # ensure the hire is at least 'invited'
+    try:
+        cur = _get_profile(so, org_id, employee_id) or {}
+        if not cur.get("workflow_status") or cur.get("workflow_status") == "invited":
+            _set_status(so, org_id, employee_id, "invited", actor=actor)
+        _log_event(org_id, employee_id, "invited", actor=actor,
+                   detail={"method": method, "sent_to": email})
+    except Exception:
+        pass
+
+    result["ok"] = True
+    result["emailed"] = False
+    if send_email_flag and email:
+        try:
+            labels = [t.get("label") for t in _employee_tasks(org_id, employee_id)][:12]
+        except Exception:
+            labels = None
+        try:
+            from app.modules.notify.channels.email_resend import send_email, is_configured
+            if is_configured():
+                await send_email(email, "Complete your onboarding",
+                                 _invite_email_html(first, method, result["portal_url"], email,
+                                                    result.get("temp_password"), labels))
+                result["emailed"] = True
+            else:
+                result["email_note"] = "email not configured (RESEND_API_KEY unset) — hand the link/credentials over manually"
+        except Exception as e:
+            result["email_note"] = f"send failed: {str(e)[:160]}"
+    return result
+
+
+@router.post("/onboarding/employee/{employee_id}/invite")
+async def onboarding_invite_one(employee_id: str, body: dict, org_id: str = ORG_ID):
+    """Invite/re-invite ONE hire. Body: method('link'|'login'), dob?/ssn4? (link gate), role_name?,
+    expires_days?, send_email? (default true). Returns the link or temp credentials."""
+    so = _so()
+    emp = (so.table("employees").select("employee_id,name,email")
+           .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data) or []
+    if not emp:
+        raise HTTPException(404, "employee not found")
+    res = await _send_invite(org_id, emp[0], (body.get("method") or "link").strip(),
+                             dob=(body.get("dob") or "").strip() or None,
+                             ssn4=(body.get("ssn4") or "").strip() or None,
+                             role_name=(body.get("role_name") or "").strip() or None,
+                             expires_days=body.get("expires_days", 30),
+                             actor=(body.get("actor") or "HR"),
+                             send_email_flag=body.get("send_email", True))
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error") or "invite failed")
+    return res
+
+
+@router.post("/onboarding/invite-bulk")
+async def onboarding_invite_bulk(body: dict, org_id: str = ORG_ID):
+    """Invite MANY hires in one action (for a roster of existing staff). Body:
+    method('link'|'login', default 'login' — link needs a per-person DOB we usually don't have),
+    employee_ids?[] (omit + all_incomplete=true → everyone without a completed onboarding),
+    all_incomplete?, send_email? (default true). Returns a per-employee result summary."""
+    so = _so()
+    method = (body.get("method") or "login").strip()
+    ids = [str(i).strip() for i in (body.get("employee_ids") or []) if str(i).strip()]
+    emps = (so.table("employees").select("employee_id,name,email")
+            .eq("org_id", org_id).eq("is_active", True).execute().data) or []
+    if ids:
+        emps = [e for e in emps if e.get("employee_id") in set(ids)]
+    elif body.get("all_incomplete"):
+        try:
+            done = {p["employee_id"] for p in ((so.table("employee_onboarding_profile")
+                    .select("employee_id,workflow_status").eq("org_id", org_id).execute().data) or [])
+                    if p.get("workflow_status") in ("provisioned", "active")}
+        except Exception:
+            done = set()
+        emps = [e for e in emps if e.get("employee_id") and e.get("employee_id") not in done]
+    else:
+        raise HTTPException(400, "pass employee_ids[] or all_incomplete=true")
+    if method == "link":
+        raise HTTPException(400, "bulk link invites need a per-person DOB gate — use method 'login' for a roster, "
+                                 "or invite link-gated hires one at a time.")
+    results = []
+    for e in emps:
+        results.append(await _send_invite(org_id, e, "login",
+                                          role_name=(body.get("role_name") or "").strip() or None,
+                                          send_email_flag=body.get("send_email", True), actor=body.get("actor") or "HR"))
+    ok = sum(1 for r in results if r.get("ok"))
+    emailed = sum(1 for r in results if r.get("emailed"))
+    return {"invited": ok, "emailed": emailed, "total": len(results), "results": results}
+
+
+# ── Workflow transitions + provisioning ──────────────────────────────────────────────────────────
+@router.post("/onboarding/employee/{employee_id}/advance")
+def onboarding_advance(employee_id: str, body: dict, org_id: str = ORG_ID):
+    """HR moves the workflow to a specific status. An out-of-order move is recorded as an OVERRIDE
+    (with reason) but always allowed — the flow stays in the system, HR stays in control."""
+    to = (body.get("to_status") or "").strip()
+    if to not in WORKFLOW_STATUSES:
+        raise HTTPException(400, f"to_status must be one of {WORKFLOW_STATUSES}")
+    so = _so()
+    prof = _get_profile(so, org_id, employee_id) or {}
+    cur = prof.get("workflow_status") or "invited"
+    is_override = STATUS_ORDER.get(to, 0) != STATUS_ORDER.get(cur, 0) + 1
+    st = _set_status(so, org_id, employee_id, to, actor=(body.get("actor") or "HR"),
+                     reason=(body.get("reason") or None), is_override=is_override)
+    return {"ok": True, "workflow_status": st, "was_override": is_override}
+
+
+@router.post("/onboarding/employee/{employee_id}/provision")
+async def onboarding_provision(employee_id: str, body: dict, org_id: str = ORG_ID):
+    """Auto-provision the hire: create their login, assign their role/scope, email the credentials,
+    and move to 'provisioned'. Gated on docs_verified UNLESS body.override=true (with a reason —
+    the override is recorded). Body: role_name?, market?/store_code?/store_codes?, override?, reason?,
+    send_email? (default true)."""
+    so = _so()
+    emp = (so.table("employees").select("employee_id,name,email")
+           .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data) or []
+    if not emp:
+        raise HTTPException(404, "employee not found")
+    email = (emp[0].get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "this employee has no email — add one before provisioning a login")
+    prof = _get_profile(so, org_id, employee_id) or {}
+    cur = prof.get("workflow_status") or "invited"
+    override = bool(body.get("override"))
+    if STATUS_ORDER.get(cur, 0) < STATUS_ORDER["docs_verified"] and not override:
+        raise HTTPException(400, {"code": "docs_incomplete",
+                                  "message": f"Documents aren't verified yet (status: {STATUS_LABELS.get(cur, cur)}). "
+                                             "Verify the checklist first, or override with a reason."})
+    from app.modules.core.router import assign_role, create_login as core_create_login
+    role = (body.get("role_name") or "sales_rep").strip()
+    await assign_role({"email": email, "full_name": emp[0].get("name"), "role": role,
+                       "market": body.get("market"), "store_code": body.get("store_code"),
+                       "store_codes": body.get("store_codes"), "employee_id": employee_id}, org_id)
+    try:
+        login = await core_create_login({"email": email}, org_id)
+    except Exception as e:
+        raise HTTPException(400, f"could not create login: {str(e)[:200]}")
+    _set_status(so, org_id, employee_id, "provisioned",
+                actor=(body.get("actor") or "HR"), reason=(body.get("reason") or None), is_override=override)
+    _log_event(org_id, employee_id, "provisioned", actor=(body.get("actor") or "HR"),
+               reason=(body.get("reason") or None), is_override=override,
+               detail={"role": role, "email": email})
+    emailed = False
+    if body.get("send_email", True):
+        try:
+            from app.modules.notify.channels.email_resend import send_email, is_configured
+            if is_configured():
+                first = (str(emp[0].get("name") or "").split() or [""])[0]
+                await send_email(email, "Your MetricsPro account is ready",
+                                 _invite_email_html(first, "login", f"{settings.APP_PUBLIC_URL}/portal",
+                                                    email, login.get("temp_password"), None))
+                emailed = True
+        except Exception:
+            pass
+    return {"ok": True, "workflow_status": "provisioned", "role": role,
+            "temp_password": login.get("temp_password"), "emailed": emailed, "was_override": override}
+
+
+@router.get("/onboarding/employee/{employee_id}/events")
+def onboarding_events(employee_id: str, org_id: str = ORG_ID):
+    """The workflow audit trail (newest first)."""
+    try:
+        rows = (_so().table("onboarding_event").select("*").eq("org_id", org_id)
+                .eq("employee_id", employee_id).order("created_at", desc=True).limit(200).execute().data) or []
+    except Exception:
+        rows = []
+    return {"events": rows, "status_labels": STATUS_LABELS}
+
+
+# ── Self-service portal (way 2: the logged-in employee completes their own onboarding) ───────────
+def _me_from_token(authorization):
+    from app.modules.core.router import _uid_from_token
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    rows = (get_supabase().schema("storeops").table("app_users")
+            .select("org_id,employee_id,email,full_name,role").eq("auth_id", uid).limit(1).execute().data) or []
+    if not rows or not rows[0].get("employee_id"):
+        raise HTTPException(403, "no employee record is linked to this login")
+    return rows[0]
+
+
+def _onboarding_bundle(org_id, employee_id):
+    """The employee-facing checklist + intake form + current (non-sensitive) intake values."""
+    data = onboarding_for_employee(employee_id, org_id=org_id)
+    prof = _get_profile(_so(), org_id, employee_id) or {}
+    stored = dict(prof.get("intake_data") or {})
+    fields = _public_intake_fields(org_id)
+    # never echo sensitive values (bank/routing) back to the client
+    values = {f["key"]: stored.get(f["key"], "") for f in fields if not f["sensitive"]}
+    emp_cats = []
+    for c in data.get("categories", []):
+        tasks = [{"id": t["id"], "label": t["label"], "description": t.get("description"),
+                  "doc_url": t.get("doc_url"), "doc_label": t.get("doc_label"),
+                  "requires_upload": t.get("requires_upload"), "status": t.get("status"),
+                  "has_document": t.get("has_document"), "document_name": t.get("document_name")}
+                 for t in c.get("tasks", []) if t.get("owner_role") == "employee"]
+        if tasks:
+            emp_cats.append({"key": c["key"], "label": c["label"], "tasks": tasks})
+    return {"ok": True, "ready": data.get("ready", False), "employee_id": employee_id,
+            "has_profile": bool(prof), "invite_method": prof.get("invite_method"),
+            "first_name": (str(data.get("employee_name") or "").split() or [""])[0],
+            "work_state": data.get("work_state"), "needs_work_state": data.get("needs_work_state"),
+            "workflow_status": prof.get("workflow_status") or "invited",
+            "intake_fields": fields, "intake_values": values,
+            "intake_submitted": bool(prof.get("intake_submitted_at")),
+            "categories": emp_cats, "progress": data.get("progress"), "states": SEED_STATES}
+
+
+@router.get("/onboarding/me")
+def onboarding_me(authorization: str = Header(default="")):
+    me = _me_from_token(authorization)
+    return _onboarding_bundle(me["org_id"], me["employee_id"])
+
+
+@router.post("/onboarding/me/state")
+def onboarding_me_state(body: dict, authorization: str = Header(default="")):
+    me = _me_from_token(authorization)
+    st = _set_work_state(me["org_id"], me["employee_id"], body.get("work_state") or body.get("state"), actor="employee")
+    return {"ok": True, "work_state": st}
+
+
+@router.post("/onboarding/me/intake")
+def onboarding_me_intake(body: dict, authorization: str = Header(default="")):
+    me = _me_from_token(authorization)
+    return _apply_intake(me["org_id"], me["employee_id"], body or {}, actor="employee")
+
+
+@router.post("/onboarding/me/upload")
+async def onboarding_me_upload(task_id: str = Form(...), file: UploadFile = File(...),
+                               authorization: str = Header(default="")):
+    me = _me_from_token(authorization)
+    tk = (get_supabase().schema("storeops").table("onboarding_task").select("owner_role")
+          .eq("org_id", me["org_id"]).eq("id", task_id).limit(1).execute().data) or []
+    if not tk or tk[0].get("owner_role") != "employee":
+        raise HTTPException(403, "That item can't be uploaded here.")
+    res = await _do_onboard_upload(me["org_id"], me["employee_id"], task_id, file, "employee")
+    _recompute_status(_so(), me["org_id"], me["employee_id"], actor="employee")
+    return res
+
+
+# ── Public (token) intake + state, mirroring the self endpoints ──────────────────────────────────
+@router.post("/public/onboarding/{token}/state")
+def public_onboarding_state(token: str, body: dict):
+    prof = _profile_by_token(token)
+    if not _token_valid(prof):
+        raise HTTPException(404, "This onboarding link is invalid or has expired.")
+    if not _check_gate(prof, body.get("value")):
+        raise HTTPException(403, "Identity check failed.")
+    st = _set_work_state(prof["org_id"], prof["employee_id"], body.get("work_state") or body.get("state"), actor="employee")
+    return {"ok": True, "work_state": st}
+
+
+@router.post("/public/onboarding/{token}/intake")
+def public_onboarding_intake(token: str, body: dict):
+    prof = _profile_by_token(token)
+    if not _token_valid(prof):
+        raise HTTPException(404, "This onboarding link is invalid or has expired.")
+    if not _check_gate(prof, (body or {}).get("value")):
+        raise HTTPException(403, "Identity check failed.")
+    payload = {k: v for k, v in (body or {}).items() if k != "value"}
+    return _apply_intake(prof["org_id"], prof["employee_id"], payload, actor="employee")

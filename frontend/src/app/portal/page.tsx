@@ -7,6 +7,7 @@ import ClosingSubmitForm from '@/components/ClosingSubmitForm'
 import TeamSnapshot from '@/components/TeamSnapshot'
 import PortalReports from '@/components/PortalReports'
 import PortalHelpdesk from '@/components/PortalHelpdesk'
+import PortalOnboarding from '@/components/PortalOnboarding'
 
 // Employee kiosk (Part B / B4 + B2): mobile-first, standalone (no platform chrome). Now GUARDED by a
 // real login — an employee signs in with their email + password, so a punch is locked to the
@@ -51,9 +52,10 @@ export default function PortalPage() {
   const [repTargets, setRepTargets] = useState<any>(null)
 
   // tabs + manager span (the "My Team" tab only shows if this employee manages an org unit)
-  const [tab, setTab] = useState<'dashboard' | 'closing' | 'team' | 'reports' | 'helpdesk'>('dashboard')
+  const [tab, setTab] = useState<'dashboard' | 'closing' | 'team' | 'reports' | 'helpdesk' | 'onboarding'>('dashboard')
   const [span, setSpan] = useState<any>(null)
   const [hdOpen, setHdOpen] = useState(0)   // employee's open helpdesk tickets (tab badge)
+  const [onbLeft, setOnbLeft] = useState<number | null>(null)   // remaining onboarding items (tab badge)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -128,6 +130,18 @@ export default function PortalPage() {
       .then((d: any) => setHdOpen(Array.isArray(d) ? d.filter((t: any) => t.status?.stage !== 'done').length : 0))
       .catch(() => setHdOpen(0))
   }, [user?.email])
+
+  // onboarding tab: only for a hire HR has actually invited (has a profile) with items still left.
+  useEffect(() => {
+    if (!empId || !token) { setOnbLeft(null); return }
+    api('/api/v1/hr/onboarding/me')
+      .then((r: any) => {
+        if (!r?.ready || !r?.has_profile) { setOnbLeft(null); return }
+        const left = Math.max(0, (r.progress?.total || 0) - (r.progress?.done || 0)) + (r.intake_submitted ? 0 : (r.intake_fields?.length ? 1 : 0))
+        setOnbLeft(left)
+      })
+      .catch(() => setOnbLeft(null))
+  }, [empId, token])
 
   // ── camera helpers ──────────────────────────────────────────────────────────────────────────
   async function openCamera() {
@@ -348,6 +362,7 @@ export default function PortalPage() {
 
       {/* tabs */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        {onbLeft !== null && <TabBtn k="onboarding" label="📝 My Onboarding" tab={tab} setTab={setTab} badge={onbLeft} />}
         <TabBtn k="dashboard" label="📊 My Dashboard" tab={tab} setTab={setTab} />
         <TabBtn k="closing" label="🧾 Daily Closing" tab={tab} setTab={setTab} />
         {span?.is_manager && <TabBtn k="team" label="🫂 My Team" tab={tab} setTab={setTab} />}
@@ -368,12 +383,14 @@ export default function PortalPage() {
       {tab === 'reports' && <PortalReports />}
 
       {tab === 'helpdesk' && <PortalHelpdesk email={user?.email || ''} name={empName || dash?.employee?.name || ''} empId={empId} onOpenCount={setHdOpen} />}
+
+      {tab === 'onboarding' && <PortalOnboarding onCount={setOnbLeft} />}
     </div>
   )
 }
 
 function TabBtn({ k, label, tab, setTab, badge }:
-  { k: 'dashboard' | 'closing' | 'team' | 'reports' | 'helpdesk'; label: string; tab: string; setTab: (t: any) => void; badge?: number }) {
+  { k: 'dashboard' | 'closing' | 'team' | 'reports' | 'helpdesk' | 'onboarding'; label: string; tab: string; setTab: (t: any) => void; badge?: number }) {
   const active = tab === k
   return (
     <button onClick={() => setTab(k)} style={{

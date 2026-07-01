@@ -2,18 +2,21 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 
-// PUBLIC onboarding portal — reached by scanning the QR HR generated. NO login: the opaque token in the
-// URL + a date-of-birth / last-4-SSN gate are the only credentials, so a pre-start employee can read and
-// upload their own forms before they have an account. Talks ONLY to the token-guarded /hr/public/onboarding
-// endpoints (which never expose internal data). Lives outside the (platform) RBAC group on purpose.
+// PUBLIC onboarding portal — reached by scanning the QR / clicking the emailed link HR generated. NO
+// login: the opaque token in the URL + a date-of-birth / last-4-SSN gate are the only credentials, so a
+// pre-start employee can read + fill + upload their own forms before they have an account. Talks ONLY to
+// the token-guarded /hr/public/onboarding endpoints. Lives outside the (platform) RBAC group on purpose.
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const card: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 20, maxWidth: 560, margin: '0 auto' }
 const inp: React.CSSProperties = { padding: '10px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 15, width: '100%', boxSizing: 'border-box' }
 const btnP: React.CSSProperties = { padding: '10px 16px', borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' }
+const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: '#334155', display: 'block', margin: '0 0 4px' }
 
-type Task = { id: string; label: string; description?: string; doc_url?: string; doc_label?: string; is_fillable?: boolean; requires_upload?: boolean; status: string; has_document?: boolean }
+type Task = { id: string; label: string; description?: string; doc_url?: string; doc_label?: string; requires_upload?: boolean; status: string; has_document?: boolean; document_name?: string }
 type Cat = { key: string; label: string; tasks: Task[] }
+type Field = { key: string; label: string; section: string; field_type: string; options?: string[]; required?: boolean; sensitive?: boolean; help_text?: string }
+const SECTION_LABEL: Record<string, string> = { personal: 'Your details', address: 'Home address', emergency: 'Emergency contact', direct_deposit: 'Direct deposit', custom: 'Additional info' }
 
 export default function PublicOnboardPage() {
   const { token } = useParams<{ token: string }>()
@@ -23,6 +26,12 @@ export default function PublicOnboardPage() {
   const [first, setFirst] = useState('')
   const [cats, setCats] = useState<Cat[]>([])
   const [progress, setProgress] = useState<{ total: number; done: number } | null>(null)
+  const [fields, setFields] = useState<Field[]>([])
+  const [vals, setVals] = useState<Record<string, string>>({})
+  const [intakeDone, setIntakeDone] = useState(false)
+  const [workState, setWorkState] = useState('')
+  const [needsState, setNeedsState] = useState(false)
+  const [states, setStates] = useState<string[]>([])
   const [err, setErr] = useState('')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -34,6 +43,12 @@ export default function PublicOnboardPage() {
       .catch(j => setErr(j?.detail || 'This onboarding link is invalid or has expired. Ask HR for a new QR code.'))
   }, [token])
 
+  function absorb(d: any) {
+    setFirst(d.first_name || ''); setCats(d.categories || []); setProgress(d.progress || null)
+    setFields(d.intake_fields || []); setIntakeDone(!!d.intake_submitted)
+    setWorkState(d.work_state || ''); setNeedsState(!!d.needs_work_state); setStates(d.states || [])
+    setVals(v => ({ ...(d.intake_values || {}), ...v }))
+  }
   async function loadChecklist() {
     setErr(''); setBusy(true)
     try {
@@ -41,8 +56,29 @@ export default function PublicOnboardPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }) })
       const d = await r.json()
       if (!r.ok) throw new Error(d?.detail || 'That didn’t match. Please try again.')
-      setVerified(true); setFirst(d.first_name || ''); setCats(d.categories || []); setProgress(d.progress || null)
+      setVerified(true); absorb(d)
     } catch (e: any) { setErr(e?.message || 'Verification failed') }
+    setBusy(false)
+  }
+  async function saveState(st: string) {
+    setBusy(true); setNote('')
+    try {
+      const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/state`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, work_state: st }) })
+      if (!r.ok) throw new Error((await r.json())?.detail || 'Could not save')
+      await loadChecklist()
+    } catch (e: any) { setNote(e?.message || 'Could not save state') }
+    setBusy(false)
+  }
+  async function saveIntake() {
+    setBusy(true); setNote('')
+    try {
+      const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/intake`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, ...vals }) })
+      const d = await r.json()
+      if (!r.ok) throw new Error(typeof d?.detail === 'string' ? d.detail : 'Could not save your information')
+      setNote('✓ Your information was saved'); await loadChecklist()
+    } catch (e: any) { setNote(e?.message || 'Could not save') }
     setBusy(false)
   }
   async function upload(t: Task, file: File) {
@@ -57,11 +93,13 @@ export default function PublicOnboardPage() {
     setBusy(false)
   }
 
+  const sections = Array.from(new Set(fields.map(f => f.section || 'personal')))
+
   return (
     <div style={{ minHeight: '100vh', background: '#f1f5f9', padding: '32px 16px', fontFamily: 'system-ui, sans-serif' }}>
       <div style={{ maxWidth: 560, margin: '0 auto 16px', textAlign: 'center' }}>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#0f172a', margin: 0 }}>Welcome aboard{first ? `, ${first}` : ''} 👋</h1>
-        <p style={{ color: '#475569', fontSize: 14 }}>Complete your new-hire forms below — fill each one, then upload it here.</p>
+        <p style={{ color: '#475569', fontSize: 14 }}>Tell us about yourself, then fill and upload your new-hire forms.</p>
       </div>
 
       {err && <div style={{ ...card, borderColor: '#fca5a5', background: '#fef2f2', color: '#991b1b', fontSize: 14, marginBottom: 12 }}>{err}</div>}
@@ -82,6 +120,51 @@ export default function PublicOnboardPage() {
             <span style={{ fontSize: 13, color: '#475569' }}>{progress.done}/{progress.total} done</span>
           </div>}
           {note && <div style={{ ...card, padding: 12, background: '#ecfdf5', borderColor: '#a7f3d0', color: '#065f46', fontSize: 14 }}>{note}</div>}
+
+          {/* Step 1 — which state do you work in? (drives which tax forms you get) */}
+          <div style={{ ...card, borderColor: needsState ? '#fca5a5' : '#e5e7eb' }}>
+            <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 6px' }}>Which state will you work in?</h2>
+            <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 8px' }}>We&apos;ll show you only the tax forms for that state.</p>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <select style={{ ...inp, width: 'auto', minWidth: 140 }} value={workState} onChange={e => saveState(e.target.value)} disabled={busy}>
+                <option value="">Select state…</option>
+                {states.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              {workState && <span style={{ alignSelf: 'center', fontSize: 13, color: '#059669' }}>✓ {workState}</span>}
+            </div>
+          </div>
+
+          {/* Step 2 — structured intake form (configurable) */}
+          {fields.length > 0 && (
+            <div style={card}>
+              <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 4px' }}>Your information {intakeDone && <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>· saved ✓</span>}</h2>
+              <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 12px' }}>This fills your employee record automatically — no PDF needed for these.</p>
+              {sections.map(sec => (
+                <div key={sec} style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4, margin: '0 0 8px' }}>{SECTION_LABEL[sec] || sec}</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    {fields.filter(f => (f.section || 'personal') === sec).map(f => (
+                      <div key={f.key} style={{ gridColumn: f.field_type === 'select' || f.key === 'address_line1' ? 'span 2' : 'auto' }}>
+                        <label style={lbl}>{f.label}{f.required && <span style={{ color: '#ef4444' }}> *</span>}{f.sensitive && <span style={{ color: '#94a3b8', fontWeight: 400 }}> · private</span>}</label>
+                        {f.field_type === 'select'
+                          ? <select style={inp} value={vals[f.key] || ''} onChange={e => setVals(v => ({ ...v, [f.key]: e.target.value }))}>
+                              <option value="">Select…</option>
+                              {(f.options || []).map(o => <option key={o} value={o}>{o}</option>)}
+                            </select>
+                          : <input style={inp} type={f.field_type === 'date' ? 'date' : f.field_type === 'number' ? 'number' : 'text'}
+                              inputMode={f.field_type === 'tel' ? 'tel' : undefined}
+                              value={vals[f.key] || ''} onChange={e => setVals(v => ({ ...v, [f.key]: e.target.value }))}
+                              placeholder={f.help_text || ''} />}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <button style={{ ...btnP, marginTop: 4, opacity: busy ? 0.6 : 1 }} disabled={busy} onClick={saveIntake}>{busy ? 'Saving…' : (intakeDone ? 'Update my information' : 'Save my information')}</button>
+            </div>
+          )}
+
+          {/* Step 3 — documents to fill + upload */}
           {cats.map(c => (
             <div key={c.key} style={card}>
               <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 10px' }}>{c.label}</h2>
@@ -93,7 +176,7 @@ export default function PublicOnboardPage() {
                   </div>
                   {t.description && <div style={{ fontSize: 13, color: '#64748b', margin: '2px 0 0 23px' }}>{t.description}</div>}
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '8px 0 0 23px' }}>
-                    {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📄 {t.is_fillable ? 'Open & fill' : 'Open'} {t.doc_label || 'form'}</a>}
+                    {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📄 Open {t.doc_label || 'form'}</a>}
                     {t.requires_upload && <label style={{ padding: '7px 12px', borderRadius: 8, background: t.has_document ? '#f8fafc' : '#2563eb', color: t.has_document ? '#334155' : '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', border: t.has_document ? '1px solid #cbd5e1' : 'none' }}>
                       {t.has_document ? '↻ Replace upload' : '⬆ Upload completed form'}
                       <input type="file" style={{ display: 'none' }} disabled={busy} onChange={e => { const f = e.target.files?.[0]; if (f) upload(t, f); e.currentTarget.value = '' }} />
@@ -104,8 +187,8 @@ export default function PublicOnboardPage() {
               ))}
             </div>
           ))}
-          {cats.length === 0 && <div style={card}>No documents are assigned to you yet. Check back later or ask HR.</div>}
-          <p style={{ textAlign: 'center', fontSize: 12, color: '#94a3b8' }}>Your uploads go straight to HR. You can close this page and return with the same link anytime.</p>
+          {cats.length === 0 && fields.length === 0 && <div style={card}>Nothing is assigned to you yet. Check back later or ask HR.</div>}
+          <p style={{ textAlign: 'center', fontSize: 12, color: '#94a3b8' }}>Your information goes straight to HR. You can close this page and return with the same link anytime.</p>
         </div>
       )}
     </div>

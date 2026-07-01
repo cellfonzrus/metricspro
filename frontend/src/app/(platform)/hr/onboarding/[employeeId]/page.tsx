@@ -15,12 +15,17 @@ type Task = {
   status: string; note?: string; document_name?: string; has_document?: boolean; verified_by?: string; verified_at?: string
 }
 type Cat = { id: string; key: string; label: string; tasks: Task[] }
+type Field = { key: string; label: string; sensitive?: boolean }
 type Data = {
   ready: boolean; employee_id: string; employee_name?: string; work_state?: string | null
   needs_work_state?: boolean; categories: Cat[]; progress?: { total: number; done: number }
   profile?: { has_token?: boolean; token_active?: boolean; verify_kind?: string; token_expires_at?: string | null }
   states?: string[]
+  workflow_status?: string; workflow_label?: string; workflow_statuses?: { key: string; label: string }[]
+  invite_method?: string | null; intake_submitted?: boolean
+  intake_fields?: Field[]; intake_values?: Record<string, string>; sensitive_on_file?: string[]
 }
+const WF_COLOR: Record<string, string> = { invited: '#64748b', in_progress: '#d97706', docs_submitted: '#2563eb', docs_verified: '#7c3aed', provisioned: '#059669', active: '#059669' }
 const ROLE_LABELS: Record<string, string> = { employee: 'Employee', hr: 'HR', dm: 'District Manager', market_manager: 'Market Manager' }
 const ROLE_COLOR: Record<string, string> = { employee: '#2563eb', hr: '#7c3aed', dm: '#059669', market_manager: '#d97706' }
 const ST_COLOR: Record<string, string> = { pending: '#64748b', submitted: '#d97706', verified: '#059669', na: '#94a3b8' }
@@ -37,14 +42,46 @@ export default function EmployeeOnboardingPage() {
   const [msg, setMsg] = useState('')
   const [qr, setQr] = useState<{ url: string; expires?: string | null } | null>(null)
   const [gen, setGen] = useState<{ kind: string; value: string; expires_days: string }>({ kind: 'dob', value: '', expires_days: '' })
+  const [events, setEvents] = useState<any[]>([])
+  const [prov, setProv] = useState<{ role_name: string; override: boolean; reason: string } | null>(null)
+  const [inviteRes, setInviteRes] = useState<any>(null)
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
 
   async function load() {
     try { setD(await api(`/api/v1/hr/onboarding/employee/${employeeId}`)) }
     catch (e: any) { setMsg(e?.message || 'Load failed') }
+    try { const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/events`); setEvents(r?.events || []) } catch { /* audit optional */ }
   }
   useEffect(() => { load() }, [employeeId])  // eslint-disable-line react-hooks/exhaustive-deps
   function flash(m: string) { setMsg(m); setTimeout(() => setMsg(''), 4000) }
+
+  async function sendInvite(method: 'link' | 'login') {
+    setInviteRes(null)
+    if (method === 'link' && !gen.value.trim()) { flash('Enter the date of birth (or last-4 SSN) above first — a link invite needs an identity gate.'); return }
+    try {
+      const body: any = { method, send_email: true }
+      if (method === 'link') { if (gen.kind === 'dob') body.dob = gen.value; else body.ssn4 = gen.value; if (gen.expires_days) body.expires_days = Number(gen.expires_days) }
+      const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/invite`, { method: 'POST', body: JSON.stringify(body) })
+      setInviteRes(r); if (r.token) setQr({ url: r.portal_url, expires: r.token_expires_at })
+      flash(r.emailed ? 'Invite emailed ✓' : (r.email_note || 'Invite prepared')); load()
+    } catch (e: any) { flash(e?.message || 'Invite failed') }
+  }
+  async function advance(to_status: string) {
+    try { await api(`/api/v1/hr/onboarding/employee/${employeeId}/advance`, { method: 'POST', body: JSON.stringify({ to_status, actor: user?.full_name || user?.email || 'HR' }) }); load() }
+    catch (e: any) { flash(e?.message || 'Update failed') }
+  }
+  async function doProvision() {
+    if (!prov) return
+    try {
+      const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/provision`, { method: 'POST',
+        body: JSON.stringify({ role_name: prov.role_name || undefined, override: prov.override, reason: prov.reason || undefined, actor: user?.full_name || user?.email || 'HR', send_email: true }) })
+      setProv(null); setInviteRes(r)
+      flash(r.emailed ? `Provisioned + credentials emailed ✓ (temp pw: ${r.temp_password})` : `Provisioned ✓ — temp password: ${r.temp_password}`); load()
+    } catch (e: any) {
+      const m = e?.message || 'Provision failed'
+      flash(m.includes('docs_incomplete') || m.includes("aren't verified") ? 'Documents aren’t verified yet — tick the override box with a reason to provision anyway.' : m)
+    }
+  }
 
   async function setState(work_state: string) {
     try { await api(`/api/v1/hr/onboarding/employee/${employeeId}`, { method: 'PATCH', body: JSON.stringify({ work_state }) }); load() }
@@ -101,6 +138,60 @@ export default function EmployeeOnboardingPage() {
           <span style={{ fontSize: 12, color: 'var(--text2)' }}>{d.progress?.done}/{d.progress?.total} complete</span>
         </div>
 
+        {/* workflow status + provisioning */}
+        <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Workflow</span>
+            <span style={{ fontSize: 12, fontWeight: 700, padding: '3px 10px', borderRadius: 20, color: '#fff', background: WF_COLOR[d.workflow_status || 'invited'] || '#64748b' }}>{d.workflow_label || d.workflow_status || 'Invited'}</span>
+            {d.invite_method && <span style={{ fontSize: 11, color: 'var(--text3)' }}>invited via {d.invite_method === 'login' ? 'portal login' : 'link'}</span>}
+            <div style={{ flex: 1 }} />
+            {(d.workflow_status !== 'provisioned' && d.workflow_status !== 'active')
+              ? <button style={{ ...btnP, background: '#059669' }} onClick={() => setProv({ role_name: '', override: false, reason: '' })}>🚀 Provision login</button>
+              : <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>✓ Login provisioned</span>}
+          </div>
+          {/* stepper */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+            {(d.workflow_statuses || []).map(s => {
+              const active = s.key === d.workflow_status
+              return <button key={s.key} onClick={() => advance(s.key)} title="Move the workflow to this step (out-of-order = recorded as an override)"
+                style={{ ...btn, fontSize: 11, background: active ? WF_COLOR[s.key] : 'var(--surface)', color: active ? '#fff' : 'var(--text2)', border: active ? 'none' : '1px solid var(--border)' }}>{s.label}</button>
+            })}
+          </div>
+          {prov && (
+            <div style={{ marginTop: 12, padding: 12, border: '1px dashed var(--border)', borderRadius: 8, background: 'var(--surface)' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Create this hire&apos;s login + assign their role</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input style={inp} placeholder="RBAC role (e.g. sales_rep)" value={prov.role_name} onChange={e => setProv(p => p && { ...p, role_name: e.target.value })} />
+                <label style={{ fontSize: 12, display: 'flex', gap: 5, alignItems: 'center' }}>
+                  <input type="checkbox" checked={prov.override} onChange={e => setProv(p => p && { ...p, override: e.target.checked })} /> Override (docs not verified)
+                </label>
+              </div>
+              {prov.override && <input style={{ ...inp, marginTop: 8, width: '100%' }} placeholder="Reason for overriding (recorded in the audit trail)" value={prov.reason} onChange={e => setProv(p => p && { ...p, reason: e.target.value })} />}
+              <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                <button style={{ ...btnP, background: '#059669' }} onClick={doProvision}>Provision & email credentials</button>
+                <button style={btn} onClick={() => setProv(null)}>Cancel</button>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>Creates the Supabase login, assigns the role, emails a temp password, and marks the hire Provisioned.</div>
+            </div>
+          )}
+          {inviteRes?.temp_password && <div style={{ marginTop: 10, fontSize: 12, background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', borderRadius: 8, padding: '8px 10px' }}>
+            Temp password for <b>{inviteRes.email}</b>: <code>{inviteRes.temp_password}</code>{inviteRes.emailed ? ' (emailed)' : ' — hand it over manually'}
+          </div>}
+        </div>
+
+        {/* captured info (from the intake form) */}
+        {(d.intake_submitted || (d.sensitive_on_file && d.sensitive_on_file.length > 0)) && (
+          <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Captured information {d.intake_submitted && <span style={{ color: '#059669' }}>· submitted</span>}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 8 }}>
+              {(d.intake_fields || []).filter(f => !f.sensitive && (d.intake_values || {})[f.key]).map(f => (
+                <div key={f.key} style={{ fontSize: 12 }}><span style={{ color: 'var(--text3)' }}>{f.label}: </span><b>{(d.intake_values || {})[f.key]}</b></div>
+              ))}
+            </div>
+            {d.sensitive_on_file && d.sensitive_on_file.length > 0 && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>🔒 On file (hidden): {d.sensitive_on_file.join(', ')}</div>}
+          </div>
+        )}
+
         {/* work state + QR access */}
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
           <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, flex: 1, minWidth: 260 }}>
@@ -140,6 +231,11 @@ export default function EmployeeOnboardingPage() {
                   <span style={{ fontSize: 12, color: 'var(--text3)' }}>expiry (optional)</span>
                   <button style={btnP} onClick={mintToken}>Generate QR</button>
                 </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', borderTop: '1px dashed var(--border)', paddingTop: 8 }}>
+                  <button style={btn} onClick={() => sendInvite('link')}>✉️ Email onboarding link</button>
+                  <button style={btn} onClick={() => sendInvite('login')}>🔑 Create portal login &amp; email</button>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text3)' }}>Email link = no password (DOB/last-4 gate). Portal login = temp password to sign into the app.</div>
                 {d.profile?.has_token && d.profile?.token_active && <div style={{ fontSize: 12, color: 'var(--text3)' }}>An active link already exists — generating a new one replaces it.</div>}
               </div>
             )}
@@ -182,6 +278,23 @@ export default function EmployeeOnboardingPage() {
             </div>
           )
         })}
+
+        {/* audit trail — the workflow stays in the system */}
+        {events.length > 0 && (
+          <div style={{ border: '1px solid var(--border)', borderRadius: 10, marginTop: 6 }}>
+            <div style={{ padding: '10px 14px', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>History</div>
+            {events.map((e, i) => (
+              <div key={e.id || i} style={{ padding: '8px 14px', borderTop: '1px solid var(--border)', fontSize: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text3)', minWidth: 128 }}>{String(e.created_at || '').replace('T', ' ').slice(0, 16)}</span>
+                <b>{(e.event_type || '').replace(/_/g, ' ')}</b>
+                {e.from_status && <span style={{ color: 'var(--text3)' }}>{e.from_status} → {e.to_status}</span>}
+                {e.is_override && <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 10, background: '#fef3c7', color: '#92400e' }}>OVERRIDE</span>}
+                {e.actor && <span style={{ color: 'var(--text3)' }}>by {e.actor}</span>}
+                {e.reason && <span style={{ color: 'var(--text2)' }}>— {e.reason}</span>}
+              </div>
+            ))}
+          </div>
+        )}
       </>}
     </div>
   )
