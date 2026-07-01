@@ -65,6 +65,58 @@ def _load_schedules(client, org_id):
     return scheds, by_sched
 
 
+def _load_product_mrc(client, org_id):
+    """Per-product MRC catalog (migration 074). [] if the table is absent. Sorted by priority asc so a
+    specific plan rule is consulted before a catch-all."""
+    try:
+        rows = (client.schema("commcalc").table("product_mrc").select("*")
+                .eq("org_id", org_id).eq("is_active", True).execute().data) or []
+    except Exception:
+        return []
+    return sorted(rows, key=lambda r: (r.get("priority") if r.get("priority") is not None else 100))
+
+
+def _catalog_mrc(catalog, carrier_id, customer_plan):
+    """MRC for a subscriber's plan from the catalog, or None if no rule matches. A NULL-carrier rule
+    matches any carrier; priority order (specific first) breaks ties. Match is case-insensitive."""
+    plan = str(customer_plan or "").strip().lower()
+    if not plan:
+        return None
+    for r in catalog:
+        cr = r.get("carrier_id")
+        if cr and cr != carrier_id:
+            continue
+        pat = str(r.get("plan_pattern") or "").strip().lower()
+        if not pat:
+            continue
+        op = r.get("match_op") or "equals"
+        hit = (plan == pat) if op == "equals" else (pat in plan)
+        if hit:
+            return safe_float(r.get("mrc"))
+    return None
+
+
+def _resolve_mrc(row, basis, catalog, carrier_id):
+    """Resolve the MRC used for one %-of-MRC installment. Returns (mrc, source) where source ∈
+    'commissionable_mrc' | 'base_mrc' | 'product_catalog' | 'none'.
+
+    - basis == 'product_catalog' → look up the per-product catalog by customer_plan (primary source).
+    - otherwise read the mapped raw_mi column; if that is <= 0, FALL BACK to the catalog so a carrier whose
+      statement carries no MRC (e.g. Total Wireless) still computes a real amount. Boost keeps its real
+      commissionable_mrc untouched (column > 0 → catalog never consulted)."""
+    plan = row.get("customer_plan")
+    if basis == "product_catalog":
+        m = _catalog_mrc(catalog, carrier_id, plan)
+        return (safe_float(m), "product_catalog") if m is not None else (0.0, "none")
+    col = safe_float(row.get(basis))
+    if col > 0:
+        return col, basis
+    m = _catalog_mrc(catalog, carrier_id, plan)
+    if m is not None:
+        return safe_float(m), "product_catalog"
+    return 0.0, "none"
+
+
 def _resolve_schedule(scheds, carrier_id, company_id, activation_type):
     """Most-specific (company+carrier+type) wins; falls back to NULL company / NULL carrier / '*'."""
     best, best_score = None, -1
@@ -101,6 +153,7 @@ def compute_installments(client, org_id, pay_period, persist=False):
     """Installments that LAND in `pay_period`. Read-only unless persist=True.
     Returns {pay_period, by_rep:{rep:amount}, ledger:[...], totals, schedules, note}."""
     scheds, lines_by = _load_schedules(client, org_id)
+    catalog = _load_product_mrc(client, org_id)
     if not scheds:
         return {"pay_period": pay_period, "by_rep": {}, "ledger": [], "schedules": 0,
                 "totals": {"amount": 0.0, "paid": 0, "withheld": 0, "pending": 0, "reps": 0},
@@ -149,7 +202,7 @@ def compute_installments(client, org_id, pay_period, persist=False):
             if not line:
                 continue
             basis = line.get("mrc_basis") or "commissionable_mrc"
-            mrc = safe_float((pay_row or anchor_row).get(basis))
+            mrc, mrc_source = _resolve_mrc(pay_row or anchor_row, basis, catalog, carrier_id)
 
             requires_paid = bool(line.get("requires_paid")) and month_index > 1
             status, gate_met = "paid", True
@@ -189,6 +242,7 @@ def compute_installments(client, org_id, pay_period, persist=False):
                 "activation_period": _shift_period(pay_period, -(month_index - 1)),
                 "pay_period": pay_period, "month_index": month_index,
                 "payout_kind": line.get("payout_kind"), "mrc_at_pay": round(mrc, 2),
+                "mrc_source": mrc_source, "customer_plan": (pay_row or anchor_row).get("customer_plan"),
                 "amount": amount, "paid_gate_met": gate_met, "status": status,
                 "carrier_id": carrier_id, "schedule_id": sched.get("id"),
             })

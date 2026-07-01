@@ -4076,6 +4076,93 @@ async def preview_payout_installments(period: str, org_id: str = ORG_ID):
         raise HTTPException(500, f"payout preview failed: {type(e).__name__}: {e}")
 
 
+# ── Per-product MRC catalog (migration 074) — resolves the MRC for %-of-MRC installments when a carrier's
+# statement carries no per-subscriber MRC (e.g. Total Wireless). Keyed on raw_mi.customer_plan. Additive:
+# with no rows, the installment engine reads the raw_mi MRC column exactly as before (Boost unaffected).
+@router.get("/product-mrc")
+async def list_product_mrc(org_id: str = ORG_ID):
+    """All catalog entries (specific-first). [] (not 500) if migration 074 isn't applied yet."""
+    client = sb()
+    try:
+        rows = (client.schema('commcalc').table('product_mrc').select('*')
+                .eq('org_id', org_id).order('priority').execute().data) or []
+    except Exception:
+        return {"items": [], "ready": False, "note": "Run migration 074_product_mrc.sql to enable."}
+    return {"items": rows, "ready": True}
+
+
+@router.post("/product-mrc")
+async def save_product_mrc(body: dict, org_id: str = ORG_ID):
+    """Create/update one catalog entry. Body: {id?, carrier_id?, plan_pattern, match_op?, mrc, priority?,
+    is_active?, note?}. plan_pattern is matched (case-insensitive) against raw_mi.customer_plan."""
+    client = sb()
+    plan = (body.get("plan_pattern") or "").strip()
+    if not plan:
+        raise HTTPException(400, "plan_pattern is required")
+    op = (body.get("match_op") or "equals").strip()
+    if op not in ("equals", "contains"):
+        raise HTTPException(400, "match_op must be 'equals' or 'contains'")
+    rec = {
+        "org_id": org_id,
+        "carrier_id": body.get("carrier_id") or None,
+        "plan_pattern": plan,
+        "match_op": op,
+        "mrc": safe_float(body.get("mrc")),
+        "priority": int(body.get("priority") or 100),
+        "is_active": bool(body.get("is_active", True)),
+        "note": (body.get("note") or "").strip() or None,
+    }
+    try:
+        if body.get("id"):
+            client.schema('commcalc').table('product_mrc').update(rec).eq('id', body['id']).eq('org_id', org_id).execute()
+            return {"id": body["id"]}
+        r = client.schema('commcalc').table('product_mrc').insert(rec).execute()
+        return {"id": (r.data or [{}])[0].get("id")}
+    except Exception as e:
+        raise HTTPException(500, f"save product-mrc failed (is migration 074 applied?): {e}")
+
+
+@router.delete("/product-mrc/{item_id}")
+async def delete_product_mrc(item_id: str, org_id: str = ORG_ID):
+    sb().schema('commcalc').table('product_mrc').delete().eq('id', item_id).eq('org_id', org_id).execute()
+    return {"deleted": item_id}
+
+
+@router.get("/product-mrc/coverage")
+async def product_mrc_coverage(period: str = "", org_id: str = ORG_ID):
+    """Distinct raw_mi.customer_plan values (optionally for one period) with row counts + whether the
+    catalog resolves an MRC for each — so the user can see which plans still need one. Read-only.
+    Unmatched plans sort first, then by count desc."""
+    client = sb()
+    catalog = installment_engine._load_product_mrc(client, org_id)
+    plans, start, page = {}, 0, 1000
+    try:
+        while True:
+            q = (client.schema('commcalc').table('raw_mi').select('customer_plan,carrier_id')
+                 .eq('org_id', org_id))
+            if period.strip():
+                q = q.in_('period', _pvariants(period.strip()))
+            rows = q.range(start, start + page - 1).execute().data or []
+            for r in rows:
+                plan = str(r.get('customer_plan') or '').strip()
+                if not plan:
+                    continue
+                key = (plan, r.get('carrier_id'))
+                plans[key] = plans.get(key, 0) + 1
+            if len(rows) < page:
+                break
+            start += page
+    except Exception as e:
+        return {"plans": [], "ready": False, "note": f"raw_mi read failed: {e}"}
+    out = []
+    for (plan, carrier_id), cnt in plans.items():
+        mrc = installment_engine._catalog_mrc(catalog, carrier_id, plan)
+        out.append({"customer_plan": plan, "carrier_id": carrier_id, "subscribers": cnt,
+                    "mrc": mrc, "matched": mrc is not None})
+    out.sort(key=lambda x: (x["matched"], -x["subscribers"]))
+    return {"plans": out, "catalog_size": len(catalog), "period": period, "ready": True}
+
+
 # ── Distributors (suppliers) + universal payment-funding ledger (migration 058) ───────────────────
 # A distributor is who a tenant sources devices/inventory from, on a per-distributor ARRANGEMENT:
 # 'terms' (net credit), 'consignment' (lent devices billed on a cycle = Asset Lending, like VIP), or

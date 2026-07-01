@@ -18,6 +18,7 @@ const GATES = [
 ]
 const blankLine = (i: number): Line => ({ month_index: i, payout_kind: i === 1 ? 'flat' : 'pct_mrc', flat_amount: '', mrc_pct: '', mrc_basis: 'commissionable_mrc', requires_paid: i > 1 })
 const blankSched = (): Sched => ({ carrier_id: '', activation_type: '*', num_months: 3, gate_signal: 'paid_residual', bypass_tier: true, is_active: true, lines: [blankLine(1), blankLine(2), blankLine(3)] })
+const blankMrc = () => ({ plan_pattern: '', match_op: 'equals', mrc: '', carrier_id: '', priority: 100, is_active: true })
 
 export default function PayoutSchedulesPage() {
   const [carriers, setCarriers] = useState<any[]>([])
@@ -28,6 +29,11 @@ export default function PayoutSchedulesPage() {
   const [period, setPeriod] = useState('')
   const [preview, setPreview] = useState<any>(null)
   const [busy, setBusy] = useState(false)
+  const [mrcItems, setMrcItems] = useState<any[]>([])
+  const [mrcReady, setMrcReady] = useState(true)
+  const [mrcDraft, setMrcDraft] = useState<any>(blankMrc())
+  const [coverage, setCoverage] = useState<any>(null)
+  const [covPeriod, setCovPeriod] = useState('')
 
   async function load() {
     try {
@@ -37,7 +43,29 @@ export default function PayoutSchedulesPage() {
       if (r.ready === false) setMsg(r.note || 'Run migration 057 to enable.')
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
   }
-  useEffect(() => { load() }, [])
+  async function loadMrc() {
+    try { const r = await api('/api/v1/commcalc/product-mrc'); setMrcItems(r.items || []); setMrcReady(r.ready !== false) }
+    catch { setMrcItems([]) }
+  }
+  useEffect(() => { load(); loadMrc() }, [])
+
+  async function saveMrc() {
+    if (!String(mrcDraft.plan_pattern || '').trim()) { setMsg('Enter a plan name.'); return }
+    try {
+      await api('/api/v1/commcalc/product-mrc', { method: 'POST', body: JSON.stringify({
+        ...mrcDraft, carrier_id: mrcDraft.carrier_id || null,
+        mrc: Number(mrcDraft.mrc) || 0, priority: Number(mrcDraft.priority) || 100 }) })
+      setMrcDraft(blankMrc()); loadMrc()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function delMrc(id: string) {
+    if (!confirm('Delete this MRC entry?')) return
+    try { await api(`/api/v1/commcalc/product-mrc/${id}`, { method: 'DELETE' }); loadMrc() } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function runCoverage() {
+    try { setCoverage(await api(`/api/v1/commcalc/product-mrc/coverage${covPeriod.trim() ? `?period=${encodeURIComponent(covPeriod.trim())}` : ''}`)) }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
 
   function setNum(n: number) {
     const lines = Array.from({ length: n }, (_, i) => draft.lines?.[i] || blankLine(i + 1))
@@ -128,7 +156,7 @@ export default function PayoutSchedulesPage() {
                 </td>
                 <td style={{ padding: '6px 8px' }}>
                   {l.payout_kind === 'pct_mrc'
-                    ? <select style={sel} value={l.mrc_basis} onChange={e => setLine(i, { mrc_basis: e.target.value })}><option value="commissionable_mrc">Commissionable MRC</option><option value="base_mrc">Base MRC</option></select>
+                    ? <select style={sel} value={l.mrc_basis} onChange={e => setLine(i, { mrc_basis: e.target.value })}><option value="commissionable_mrc">Commissionable MRC</option><option value="base_mrc">Base MRC</option><option value="product_catalog">Per-product MRC (catalog)</option></select>
                     : <span style={{ fontSize: 12, color: 'var(--text3)' }}>—</span>}
                 </td>
                 <td style={{ padding: '6px 8px' }}>
@@ -163,6 +191,92 @@ export default function PayoutSchedulesPage() {
         </div>
       )}
 
+      {/* per-product MRC catalog */}
+      <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>🏷️ Per-product MRC catalog</div>
+        <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 12px' }}>
+          Maps a subscriber&apos;s plan (the raw_mi <strong>Customer Plan</strong>) → its monthly recurring charge.
+          A <strong>% of MRC</strong> line uses this directly when its basis is <strong>Per-product MRC</strong>, and as
+          a fallback whenever the carrier statement reports $0 MRC (e.g. Total Wireless) — so residual installments
+          compute real amounts instead of $0. Carriers that report a real MRC (Boost) are unaffected.
+        </p>
+        {!mrcReady && <div style={{ padding: 12, marginBottom: 12, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13 }}>⚠️ Run migration 074_product_mrc.sql in Supabase to enable this catalog.</div>}
+
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Plan name<br />
+            <input style={{ ...sel, marginTop: 4, width: 220 }} placeholder="e.g. Total Unlimited $60" value={mrcDraft.plan_pattern} onChange={e => setMrcDraft({ ...mrcDraft, plan_pattern: e.target.value })} />
+          </label>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Match<br />
+            <select style={{ ...sel, marginTop: 4 }} value={mrcDraft.match_op} onChange={e => setMrcDraft({ ...mrcDraft, match_op: e.target.value })}>
+              <option value="equals">Exact</option><option value="contains">Contains</option>
+            </select>
+          </label>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>MRC $<br />
+            <input style={{ ...sel, marginTop: 4, width: 90 }} type="number" step="0.01" placeholder="60.00" value={mrcDraft.mrc} onChange={e => setMrcDraft({ ...mrcDraft, mrc: e.target.value })} />
+          </label>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Carrier<br />
+            <select style={{ ...sel, marginTop: 4 }} value={mrcDraft.carrier_id || ''} onChange={e => setMrcDraft({ ...mrcDraft, carrier_id: e.target.value })}>
+              <option value="">Any carrier</option>
+              {carriers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </label>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Priority<br />
+            <input style={{ ...sel, marginTop: 4, width: 70 }} type="number" value={mrcDraft.priority} onChange={e => setMrcDraft({ ...mrcDraft, priority: e.target.value })} />
+          </label>
+          <button className="btn btn-primary" onClick={saveMrc}>{mrcDraft.id ? '💾 Update' : '➕ Add'}</button>
+          {mrcDraft.id && <button className="btn btn-secondary" onClick={() => setMrcDraft(blankMrc())}>Cancel</button>}
+        </div>
+
+        {mrcItems.length > 0 && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: 760, marginBottom: 6 }}>
+            <thead><tr style={{ background: 'var(--surface2)' }}>{['Plan', 'Match', 'MRC', 'Carrier', 'Prio', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {mrcItems.map(m => (
+                <tr key={m.id} style={{ borderTop: '1px solid var(--border)', fontSize: 13 }}>
+                  <td style={{ padding: '6px 8px', fontWeight: 600 }}>{m.plan_pattern}{!m.is_active && <span style={{ fontSize: 11, color: '#b45309' }}> (inactive)</span>}</td>
+                  <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{m.match_op}</td>
+                  <td style={{ padding: '6px 8px', fontWeight: 600 }}>{fmt(m.mrc)}</td>
+                  <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{carrierName(m.carrier_id)}</td>
+                  <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{m.priority}</td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setMrcDraft({ ...m, carrier_id: m.carrier_id || '' })}>Edit</button>{' '}
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => delMrc(m.id)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {/* coverage helper — which plans in raw_mi still need an MRC */}
+        <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>Plan coverage</div>
+            <input style={{ ...sel, width: 150 }} placeholder="Period (optional)" value={covPeriod} onChange={e => setCovPeriod(e.target.value)} />
+            <button className="btn btn-secondary" onClick={runCoverage}>Check plans</button>
+            {coverage?.plans && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{coverage.plans.filter((p: any) => !p.matched).length} unmatched of {coverage.plans.length} plans</span>}
+          </div>
+          {coverage?.plans?.length > 0 && (
+            <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: 760, marginTop: 8 }}>
+              <thead><tr style={{ background: 'var(--surface2)' }}>{['Customer Plan', 'Subs', 'MRC', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {coverage.plans.slice(0, 100).map((p: any, i: number) => (
+                  <tr key={i} style={{ borderTop: '1px solid var(--border)', fontSize: 12, background: p.matched ? 'transparent' : '#fef2f2' }}>
+                    <td style={{ padding: '5px 8px' }}>{p.customer_plan}</td>
+                    <td style={{ padding: '5px 8px' }}>{p.subscribers}</td>
+                    <td style={{ padding: '5px 8px', fontWeight: 600 }}>{p.matched ? fmt(p.mrc) : <span style={{ color: '#b91c1c' }}>none</span>}</td>
+                    <td style={{ padding: '5px 8px', textAlign: 'right' }}>
+                      {!p.matched && <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => setMrcDraft({ ...blankMrc(), plan_pattern: p.customer_plan, carrier_id: p.carrier_id || '' })}>＋ Add MRC</button>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {coverage?.plans?.length > 100 && <div style={{ fontSize: 12, color: 'var(--text3)', padding: 6 }}>Showing first 100.</div>}
+        </div>
+      </div>
+
       {/* preview */}
       <div className="card" style={{ padding: 16 }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
@@ -183,7 +297,7 @@ export default function PayoutSchedulesPage() {
                     <td style={{ padding: '5px 8px', fontSize: 12 }}>{d.rep || '—'}</td>
                     <td style={{ padding: '5px 8px', fontSize: 12 }}>{d.store || '—'}</td>
                     <td style={{ padding: '5px 8px', fontSize: 12 }}>{d.month_index}</td>
-                    <td style={{ padding: '5px 8px', fontSize: 12 }}>{fmt(d.mrc_at_pay)}</td>
+                    <td style={{ padding: '5px 8px', fontSize: 12 }}>{fmt(d.mrc_at_pay)}{d.mrc_source === 'product_catalog' && <span title="from per-product MRC catalog" style={{ marginLeft: 4, fontSize: 10, color: '#2563eb' }}>catalog</span>}{d.mrc_source === 'none' && d.payout_kind === 'pct_mrc' && <span title="no MRC found — add one to the catalog" style={{ marginLeft: 4, fontSize: 10, color: '#b91c1c' }}>no MRC</span>}</td>
                     <td style={{ padding: '5px 8px', fontSize: 12, fontWeight: 600 }}>{fmt(d.amount)}</td>
                     <td style={{ padding: '5px 8px', fontSize: 12, color: d.status === 'paid' ? '#15803d' : d.status === 'withheld_unpaid' ? '#b91c1c' : '#b45309' }}>{d.status}</td>
                   </tr>
