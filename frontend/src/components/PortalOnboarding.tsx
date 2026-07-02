@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
 import { api, apiUpload } from '@/lib/client'
+import OnboardSignModal from '@/components/OnboardSignModal'
 
 // Employee self-service onboarding (way 2): a logged-in new hire completes their own onboarding from
 // the /portal kiosk — picks their work state, fills the structured intake form (which propagates into
@@ -13,7 +14,7 @@ const btnP: React.CSSProperties = { padding: '10px 16px', borderRadius: 8, borde
 const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: '#334155', display: 'block', margin: '0 0 4px' }
 const SECTION_LABEL: Record<string, string> = { personal: 'Your details', address: 'Home address', emergency: 'Emergency contact', work_eligibility: 'Work eligibility (I-9)', tax: 'Tax withholding (W-4)', direct_deposit: 'Direct deposit', policies: 'Policy acknowledgements', custom: 'Additional info' }
 
-type Task = { id: string; label: string; description?: string; doc_url?: string; doc_label?: string; requires_upload?: boolean; status: string; has_document?: boolean; document_name?: string; template_url?: string | null; template_name?: string | null }
+type Task = { id: string; label: string; description?: string; doc_url?: string; doc_label?: string; requires_upload?: boolean; status: string; has_document?: boolean; document_name?: string; template_url?: string | null; template_name?: string | null; requires_signature?: boolean; form_fields?: { key?: string; label?: string; required?: boolean }[] | null; missing_fields?: string[] | null; returned_reason?: string | null; signed_at?: string | null }
 type Cat = { key: string; label: string; tasks: Task[] }
 type Field = { key: string; label: string; section: string; field_type: string; options?: string[]; required?: boolean; sensitive?: boolean; help_text?: string }
 
@@ -23,6 +24,7 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
   const [err, setErr] = useState('')
+  const [signing, setSigning] = useState<Task | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -48,9 +50,21 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
   }
   async function upload(t: Task, file: File) {
     setBusy(true); setNote('')
-    try { const fd = new FormData(); fd.append('task_id', t.id); fd.append('file', file); await apiUpload('/api/v1/hr/onboarding/me/upload', fd); setNote(`✓ Uploaded ${file.name}`); await load() }
+    try {
+      const fd = new FormData(); fd.append('task_id', t.id); fd.append('file', file)
+      const r = await apiUpload('/api/v1/hr/onboarding/me/upload', fd)
+      setNote(r?.status === 'returned'
+        ? `⚠️ ${file.name} came back incomplete — missing: ${(r.missing || []).join(', ')}. Please fix and re-upload (we also emailed you the list).`
+        : `✓ Uploaded ${file.name}${r?.note ? ` — ${r.note}` : ''}`)
+      await load()
+    }
     catch (e: any) { setNote(e?.message || 'Upload failed') }
     setBusy(false)
+  }
+  async function signOnline(payload: { form_data: Record<string, string>; signature: string; signed_name: string }) {
+    if (!signing) return
+    await api('/api/v1/hr/onboarding/me/sign', { method: 'POST', body: JSON.stringify({ task_id: signing.id, ...payload }) })
+    setSigning(null); setNote('✓ Signed and submitted — thank you!'); await load()
   }
 
   if (err) return <div style={{ ...card, color: '#991b1b' }}>{err}</div>
@@ -115,23 +129,33 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
           {c.tasks.map(t => (
             <div key={t.id} style={{ padding: '10px 0', borderTop: '1px solid #f1f5f9' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 15 }}>{t.has_document || t.status === 'verified' ? '✅' : '⬜'}</span>
+                <span style={{ fontSize: 15 }}>{t.status === 'returned' ? '⚠️' : (t.has_document || t.status === 'verified' ? '✅' : '⬜')}</span>
                 <span style={{ fontSize: 15, fontWeight: 600 }}>{t.label}</span>
               </div>
               {t.description && <div style={{ fontSize: 13, color: 'var(--text2)', margin: '2px 0 0 23px' }}>{t.description}</div>}
+              {t.status === 'returned' && (
+                <div style={{ margin: '6px 0 0 23px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 10px', fontSize: 13, color: '#991b1b' }}>
+                  ↩ <b>Returned — please fix and resubmit.</b>
+                  {(t.missing_fields || []).length > 0 && <div style={{ marginTop: 2 }}>Missing: <b>{(t.missing_fields || []).join(', ')}</b></div>}
+                  {t.returned_reason && <div style={{ fontSize: 12, marginTop: 2 }}>{t.returned_reason}</div>}
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '8px 0 0 23px' }}>
                 {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📄 Open {t.doc_label || 'form'}</a>}
                 {t.template_url && <a href={t.template_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📎 {t.template_name || 'Download template'}</a>}
+                <button onClick={() => setSigning(t)} disabled={busy} style={{ padding: '7px 12px', borderRadius: 8, border: 'none', background: '#059669', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>✍️ Fill &amp; sign online</button>
                 {t.requires_upload && <label style={{ padding: '7px 12px', borderRadius: 8, background: t.has_document ? '#f8fafc' : '#2563eb', color: t.has_document ? '#334155' : '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', border: t.has_document ? '1px solid #cbd5e1' : 'none' }}>
-                  {t.has_document ? '↻ Replace upload' : '⬆ Upload completed form'}
+                  {t.has_document ? '↻ Replace upload' : '⬆ Upload signed copy'}
                   <input type="file" style={{ display: 'none' }} disabled={busy} onChange={e => { const f = e.target.files?.[0]; if (f) upload(t, f); e.currentTarget.value = '' }} />
                 </label>}
-                {t.has_document && <span style={{ fontSize: 12, color: '#059669' }}>received</span>}
+                {t.signed_at && <span style={{ fontSize: 12, color: '#059669' }}>✍️ signed online</span>}
+                {t.has_document && !t.signed_at && <span style={{ fontSize: 12, color: '#059669' }}>received</span>}
               </div>
             </div>
           ))}
         </div>
       ))}
+      {signing && <OnboardSignModal task={signing} onCancel={() => setSigning(null)} onSubmit={signOnline} />}
     </div>
   )
 }

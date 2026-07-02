@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
+import OnboardSignModal from '@/components/OnboardSignModal'
 
 // PUBLIC onboarding portal — reached by scanning the QR / clicking the emailed link HR generated. NO
 // login: the opaque token in the URL + a date-of-birth / last-4-SSN gate are the only credentials, so a
@@ -13,7 +14,7 @@ const inp: React.CSSProperties = { padding: '10px 12px', borderRadius: 8, border
 const btnP: React.CSSProperties = { padding: '10px 16px', borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' }
 const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: '#334155', display: 'block', margin: '0 0 4px' }
 
-type Task = { id: string; label: string; description?: string; doc_url?: string; doc_label?: string; requires_upload?: boolean; status: string; has_document?: boolean; document_name?: string; template_url?: string | null; template_name?: string | null }
+type Task = { id: string; label: string; description?: string; doc_url?: string; doc_label?: string; requires_upload?: boolean; status: string; has_document?: boolean; document_name?: string; template_url?: string | null; template_name?: string | null; requires_signature?: boolean; form_fields?: { key?: string; label?: string; required?: boolean }[] | null; missing_fields?: string[] | null; returned_reason?: string | null; signed_at?: string | null }
 type Cat = { key: string; label: string; tasks: Task[] }
 type Field = { key: string; label: string; section: string; field_type: string; options?: string[]; required?: boolean; sensitive?: boolean; help_text?: string }
 const SECTION_LABEL: Record<string, string> = { personal: 'Your details', address: 'Home address', emergency: 'Emergency contact', work_eligibility: 'Work eligibility (I-9)', tax: 'Tax withholding (W-4)', direct_deposit: 'Direct deposit', policies: 'Policy acknowledgements', custom: 'Additional info' }
@@ -35,6 +36,7 @@ export default function PublicOnboardPage() {
   const [err, setErr] = useState('')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  const [signing, setSigning] = useState<Task | null>(null)
 
   useEffect(() => {
     fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}`)
@@ -81,6 +83,15 @@ export default function PublicOnboardPage() {
     } catch (e: any) { setNote(e?.message || 'Could not save') }
     setBusy(false)
   }
+  async function signOnline(payload: { form_data: Record<string, string>; signature: string; signed_name: string }) {
+    if (!signing) return
+    const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/sign`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value, task_id: signing.id, ...payload }) })
+    const d = await r.json()
+    if (!r.ok) throw new Error(typeof d?.detail === 'string' ? d.detail : 'Could not submit')
+    setSigning(null); setNote('✓ Signed and submitted — thank you!'); loadChecklist()
+  }
   async function upload(t: Task, file: File) {
     setNote(''); setBusy(true)
     try {
@@ -88,7 +99,10 @@ export default function PublicOnboardPage() {
       const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/upload`, { method: 'POST', body: fd })
       const d = await r.json()
       if (!r.ok) throw new Error(d?.detail || 'Upload failed')
-      setNote(`✓ Uploaded ${file.name}`); loadChecklist()
+      setNote(d?.status === 'returned'
+        ? `⚠️ ${file.name} came back incomplete — missing: ${(d.missing || []).join(', ')}. Please fix and re-upload (we also emailed you the list).`
+        : `✓ Uploaded ${file.name}${d?.note ? ` — ${d.note}` : ''}`)
+      loadChecklist()
     } catch (e: any) { setNote(e?.message || 'Upload failed') }
     setBusy(false)
   }
@@ -171,18 +185,27 @@ export default function PublicOnboardPage() {
               {c.tasks.map(t => (
                 <div key={t.id} style={{ padding: '10px 0', borderTop: '1px solid #f1f5f9' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 15 }}>{t.has_document || t.status === 'verified' ? '✅' : '⬜'}</span>
+                    <span style={{ fontSize: 15 }}>{t.status === 'returned' ? '⚠️' : (t.has_document || t.status === 'verified' ? '✅' : '⬜')}</span>
                     <span style={{ fontSize: 15, fontWeight: 600, color: '#0f172a' }}>{t.label}</span>
                   </div>
                   {t.description && <div style={{ fontSize: 13, color: '#64748b', margin: '2px 0 0 23px' }}>{t.description}</div>}
+                  {t.status === 'returned' && (
+                    <div style={{ margin: '6px 0 0 23px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 10px', fontSize: 13, color: '#991b1b' }}>
+                      ↩ <b>Returned — please fix and resubmit.</b>
+                      {(t.missing_fields || []).length > 0 && <div style={{ marginTop: 2 }}>Missing: <b>{(t.missing_fields || []).join(', ')}</b></div>}
+                      {t.returned_reason && <div style={{ fontSize: 12, marginTop: 2 }}>{t.returned_reason}</div>}
+                    </div>
+                  )}
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '8px 0 0 23px' }}>
                     {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📄 Open {t.doc_label || 'form'}</a>}
                     {t.template_url && <a href={t.template_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📎 {t.template_name || 'Download template'}</a>}
+                    <button onClick={() => setSigning(t)} disabled={busy} style={{ padding: '7px 12px', borderRadius: 8, border: 'none', background: '#059669', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>✍️ Fill &amp; sign online</button>
                     {t.requires_upload && <label style={{ padding: '7px 12px', borderRadius: 8, background: t.has_document ? '#f8fafc' : '#2563eb', color: t.has_document ? '#334155' : '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', border: t.has_document ? '1px solid #cbd5e1' : 'none' }}>
-                      {t.has_document ? '↻ Replace upload' : '⬆ Upload completed form'}
+                      {t.has_document ? '↻ Replace upload' : '⬆ Upload signed copy'}
                       <input type="file" style={{ display: 'none' }} disabled={busy} onChange={e => { const f = e.target.files?.[0]; if (f) upload(t, f); e.currentTarget.value = '' }} />
                     </label>}
-                    {t.has_document && <span style={{ fontSize: 12, color: '#059669' }}>received</span>}
+                    {t.signed_at && <span style={{ fontSize: 12, color: '#059669' }}>✍️ signed online</span>}
+                    {t.has_document && !t.signed_at && <span style={{ fontSize: 12, color: '#059669' }}>received</span>}
                   </div>
                 </div>
               ))}
@@ -190,6 +213,7 @@ export default function PublicOnboardPage() {
           ))}
           {cats.length === 0 && fields.length === 0 && <div style={card}>Nothing is assigned to you yet. Check back later or ask HR.</div>}
           <p style={{ textAlign: 'center', fontSize: 12, color: '#94a3b8' }}>Your information goes straight to HR. You can close this page and return with the same link anytime.</p>
+          {signing && <OnboardSignModal task={signing} onCancel={() => setSigning(null)} onSubmit={signOnline} />}
         </div>
       )}
     </div>

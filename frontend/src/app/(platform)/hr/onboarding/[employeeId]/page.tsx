@@ -13,6 +13,9 @@ type Task = {
   id: string; label: string; description?: string; owner_role: string; doc_url?: string; doc_label?: string
   is_fillable?: boolean; requires_upload?: boolean; applies_state?: string | null
   status: string; note?: string; document_name?: string; has_document?: boolean; verified_by?: string; verified_at?: string
+  missing_fields?: string[] | null; returned_reason?: string | null; returned_by?: string | null
+  signed_at?: string | null; signed_name?: string | null; has_signature?: boolean
+  form_data?: Record<string, string> | null; validation?: { checkable?: boolean; missing?: string[]; empty?: string[]; filled?: number; fields?: number; signed?: boolean | null; online?: boolean } | null
 }
 type Cat = { id: string; key: string; label: string; tasks: Task[] }
 type Field = { key: string; label: string; sensitive?: boolean }
@@ -28,8 +31,8 @@ type Data = {
 const WF_COLOR: Record<string, string> = { invited: '#64748b', in_progress: '#d97706', docs_submitted: '#2563eb', docs_verified: '#7c3aed', provisioned: '#059669', active: '#059669' }
 const ROLE_LABELS: Record<string, string> = { employee: 'Employee', hr: 'HR', dm: 'District Manager', market_manager: 'Market Manager' }
 const ROLE_COLOR: Record<string, string> = { employee: '#2563eb', hr: '#7c3aed', dm: '#059669', market_manager: '#d97706' }
-const ST_COLOR: Record<string, string> = { pending: '#64748b', submitted: '#d97706', verified: '#059669', na: '#94a3b8' }
-const ST_LABEL: Record<string, string> = { pending: 'Pending', submitted: 'Submitted', verified: 'Verified', na: 'N/A' }
+const ST_COLOR: Record<string, string> = { pending: '#64748b', submitted: '#d97706', verified: '#059669', na: '#94a3b8', returned: '#dc2626' }
+const ST_LABEL: Record<string, string> = { pending: 'Pending', submitted: 'Submitted', verified: 'Verified', na: 'N/A', returned: 'Returned' }
 const inp: React.CSSProperties = { padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const btn: React.CSSProperties = { padding: '5px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, cursor: 'pointer', background: 'var(--surface)' }
 const btnP: React.CSSProperties = { ...btn, background: 'var(--accent,#2563eb)', color: '#fff', border: 'none', fontWeight: 600 }
@@ -99,6 +102,21 @@ export default function EmployeeOnboardingPage() {
       const fd = new FormData(); fd.append('file', file); fd.append('task_id', t.id); fd.append('uploader', user?.full_name || user?.email || 'HR')
       await apiUpload(`/api/v1/hr/onboarding/employee/${employeeId}/upload`, fd); flash(`Uploaded ${file.name}`); load()
     } catch (e: any) { flash(e?.message || 'Upload failed') }
+  }
+  async function returnTask(t: Task) {
+    const prefill = (t.validation?.empty || t.validation?.missing || []).slice(0, 8).join(', ')
+    const missing = window.prompt('What is missing or wrong? (comma-separated — the employee sees this list in the portal AND by email)', prefill)
+    if (missing === null) return
+    const reason = window.prompt('Optional note to the employee:') || ''
+    try {
+      const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/task/${t.id}/return`, { method: 'POST',
+        body: JSON.stringify({ missing_fields: missing.split(',').map(s => s.trim()).filter(Boolean), reason, actor: user?.full_name || user?.email || 'HR' }) })
+      flash(r.emailed ? '↩ Returned to the employee + emailed the list ✓' : '↩ Returned (no email on file — tell them to check the portal)'); load()
+    } catch (e: any) { flash(e?.message || 'Return failed — is migration 082 applied?') }
+  }
+  async function viewSignature(t: Task) {
+    try { const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/task/${t.id}/signature`); if (r?.url) window.open(r.url, '_blank') }
+    catch (e: any) { flash(e?.message || 'No signature on file') }
   }
   async function viewDoc(t: Task) {
     try { const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/task/${t.id}/doc`); if (r?.url) window.open(r.url, '_blank') }
@@ -262,13 +280,33 @@ export default function EmployeeOnboardingPage() {
                     {t.applies_state && <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: 'var(--border)', color: 'var(--text2)' }}>{t.applies_state}</span>}
                   </div>
                   {t.description && <div style={{ fontSize: 12, color: 'var(--text3)', margin: '3px 0' }}>{t.description}</div>}
+                  {t.status === 'returned' && (
+                    <div style={{ margin: '4px 0', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '6px 10px', fontSize: 12, color: '#991b1b' }}>
+                      ↩ Returned{t.returned_by ? ` by ${t.returned_by}` : ''}{(t.missing_fields || []).length > 0 && <> — missing: <b>{(t.missing_fields || []).join(', ')}</b></>}
+                      {t.returned_reason && <div style={{ marginTop: 2 }}>{t.returned_reason}</div>}
+                    </div>
+                  )}
+                  {t.status === 'submitted' && t.validation && !t.validation.online && (
+                    <div style={{ margin: '4px 0', fontSize: 12, color: t.validation.checkable ? '#92400e' : 'var(--text3)' }}>
+                      {t.validation.checkable
+                        ? `🔎 Auto-check: ${t.validation.filled}/${t.validation.fields} fields filled${(t.validation.empty || []).length ? ` · ${(t.validation.empty || []).length} empty` : ''}${t.validation.signed === null ? ' · signature not machine-checkable' : t.validation.signed ? ' · signed ✓' : ''}`
+                        : '🔎 Not machine-checkable (scan/photo) — review the signature by eye.'}
+                    </div>
+                  )}
+                  {t.signed_at && (
+                    <div style={{ margin: '4px 0', fontSize: 12, color: '#059669' }}>✍️ Signed online {String(t.signed_at).slice(0, 10)}{t.signed_name ? ` as “${t.signed_name}”` : ''}
+                      {t.form_data && Object.keys(t.form_data).length > 0 && <span style={{ color: 'var(--text2)' }}> — {Object.entries(t.form_data).map(([k, v]) => `${k}: ${v}`).join(' · ')}</span>}
+                    </div>
+                  )}
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
                     {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ ...btn, color: 'var(--accent,#2563eb)', textDecoration: 'none' }}>🔗 {t.doc_label || 'Open form'}</a>}
                     {t.has_document
                       ? <button style={btn} onClick={() => viewDoc(t)}>📄 View {t.document_name ? `(${t.document_name})` : 'upload'}</button>
                       : <span style={{ fontSize: 12, color: 'var(--text3)' }}>{t.requires_upload ? 'no document yet' : ''}</span>}
+                    {t.has_signature && <button style={btn} onClick={() => viewSignature(t)}>✍️ View signature</button>}
                     <label style={{ ...btn }}>⬆ Upload<input type="file" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadDoc(t, f); e.currentTarget.value = '' }} /></label>
                     {t.status !== 'verified' && <button style={{ ...btn, color: '#059669' }} onClick={() => setStatus(t, 'verified')}>✓ Verify</button>}
+                    {(t.status === 'submitted' || t.status === 'verified') && <button style={{ ...btn, color: '#dc2626' }} onClick={() => returnTask(t)}>↩ Return for fixes</button>}
                     {t.status !== 'na' && <button style={btn} onClick={() => setStatus(t, 'na')}>N/A</button>}
                     {(t.status === 'verified' || t.status === 'na') && <button style={btn} onClick={() => setStatus(t, 'pending')}>↺ Reset</button>}
                     {t.verified_by && t.status === 'verified' && <span style={{ fontSize: 11, color: 'var(--text3)' }}>by {t.verified_by}{t.verified_at ? ` · ${String(t.verified_at).slice(0, 10)}` : ''}</span>}

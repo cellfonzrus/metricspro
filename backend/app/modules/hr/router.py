@@ -7,6 +7,7 @@ span (reusing the StoreOps span helpers), so HR figures respect the same boundar
 the app. The HR employees / payroll / time-off pages reuse the existing scoped StoreOps endpoints;
 this router adds the one genuinely new thing: per-employee TOTAL COMPENSATION (wages + commission).
 """
+import base64
 import calendar
 import re
 import secrets
@@ -259,10 +260,11 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
 ONBOARD_BUCKET = "onboarding-docs"
 OWNER_ROLES = ["employee", "hr", "dm", "market_manager"]
 OWNER_ROLE_LABELS = {"employee": "Employee", "hr": "HR", "dm": "District Manager", "market_manager": "Market Manager"}
-ONBOARD_STATUSES = ["pending", "submitted", "verified", "na"]
+ONBOARD_STATUSES = ["pending", "submitted", "verified", "na", "returned"]
 SEED_STATES = ["NY", "NJ", "DE", "PA", "IL", "CT", "MA", "IN"]
 TASK_FIELDS = ["category_id", "key", "label", "description", "owner_role", "doc_url", "doc_label",
-               "is_fillable", "requires_upload", "applies_state", "sort_order", "is_active"]
+               "is_fillable", "requires_upload", "applies_state", "sort_order", "is_active",
+               "requires_signature", "form_fields"]
 
 
 def _now_iso():
@@ -491,7 +493,13 @@ def onboarding_for_employee(employee_id: str, org_id: str = ORG_ID):
             tasks.append({**t, "status": status, "note": rec.get("note"),
                           "document_name": rec.get("document_name"), "has_document": bool(rec.get("document_path")),
                           "verified_by": rec.get("verified_by"), "verified_at": rec.get("verified_at"),
-                          "submitted_at": rec.get("submitted_at")})
+                          "submitted_at": rec.get("submitted_at"),
+                          # mig 082 doc flow (None-safe on a pre-082 database)
+                          "missing_fields": rec.get("missing_fields"), "returned_reason": rec.get("returned_reason"),
+                          "returned_at": rec.get("returned_at"), "returned_by": rec.get("returned_by"),
+                          "signed_at": rec.get("signed_at"), "signed_name": rec.get("signed_name"),
+                          "has_signature": bool(rec.get("signature_path")),
+                          "form_data": rec.get("form_data"), "validation": rec.get("validation")})
             total += 1
             if status in ("verified", "na"):
                 done += 1
@@ -560,14 +568,47 @@ async def _do_onboard_upload(org_id, employee_id, task_id, file, who):
         c.storage.from_(ONBOARD_BUCKET).upload(path, data, {"content-type": file.content_type or "application/octet-stream"})
     except Exception as e:
         raise HTTPException(500, f"upload failed: {e}")
+    # Completeness + signature check (mig 082). Only FILLABLE PDFs are machine-checkable; flat scans
+    # and images pass through as 'submitted' for HR to eyeball (HR can still Return them manually).
+    task = _task_row(org_id, task_id)
+    check = _pdf_form_check(data) if safe.lower().endswith(".pdf") else {"checkable": False, "reason": "not a PDF"}
+    missing = list(check.get("missing") or [])
+    if check.get("checkable"):
+        if (check.get("fields") or 0) > 0 and (check.get("filled") or 0) == 0:
+            missing.insert(0, "The form came back blank — please fill it out")
+        if task.get("requires_signature", True) and check.get("signed") is False:
+            missing.append("Signature")
     row = {"org_id": org_id, "employee_id": employee_id, "task_id": task_id, "status": "submitted",
            "document_path": path, "document_name": safe, "submitted_at": _now_iso(), "updated_at": _now_iso(),
-           "note": (f"uploaded by {who}" if who else None)}
+           "note": (f"uploaded by {who}" if who else None),
+           "validation": {**check, "missing": missing},
+           "missing_fields": None, "returned_reason": None, "returned_at": None, "returned_by": None}
+    if missing:
+        row.update({"status": "returned", "missing_fields": missing,
+                    "returned_reason": "Automatic check: the document came back incomplete.",
+                    "returned_at": _now_iso(), "returned_by": "system"})
     try:
         _so().table("employee_onboarding").upsert(row, on_conflict="org_id,employee_id,task_id").execute()
-    except Exception as e:
-        raise HTTPException(400, f"Could not record upload — is migration 073 applied? {e}")
-    return {"ok": True, "document_name": safe}
+    except Exception:
+        # pre-082 database — fall back to the legacy row shape so uploads never break
+        legacy = {k: row[k] for k in ("org_id", "employee_id", "task_id", "document_path",
+                                      "document_name", "submitted_at", "updated_at", "note")}
+        legacy["status"] = "submitted"
+        try:
+            _so().table("employee_onboarding").upsert(legacy, on_conflict="org_id,employee_id,task_id").execute()
+        except Exception as e:
+            raise HTTPException(400, f"Could not record upload — is migration 073 applied? {e}")
+        return {"ok": True, "document_name": safe, "status": "submitted"}
+    if missing:
+        _log_event(org_id, employee_id, "doc_returned", actor="system",
+                   detail={"task": task.get("label"), "missing": missing, "auto": True})
+        emailed = await _notify_return(org_id, employee_id, task, missing, row["returned_reason"])
+        return {"ok": True, "document_name": safe, "status": "returned", "missing": missing, "emailed": emailed,
+                "note": "This document looks incomplete — it was returned with the missing items listed."}
+    return {"ok": True, "document_name": safe, "status": "submitted",
+            "checked": bool(check.get("checkable")),
+            "note": None if check.get("checkable") else
+            "Not machine-checkable (scan/photo or flat PDF) — HR will review the signature by eye."}
 
 
 @router.post("/onboarding/employee/{employee_id}/upload")
@@ -1208,7 +1249,12 @@ def _onboarding_bundle(org_id, employee_id):
                   "requires_upload": t.get("requires_upload"), "status": t.get("status"),
                   "has_document": t.get("has_document"), "document_name": t.get("document_name"),
                   "template_name": t.get("template_name"),
-                  "template_url": _sign_onboard_path(t.get("template_path"))}
+                  "template_url": _sign_onboard_path(t.get("template_path")),
+                  # mig 082: online fill & sign + returned-for-corrections (None-safe pre-082)
+                  "requires_signature": t.get("requires_signature", True),
+                  "form_fields": t.get("form_fields"),
+                  "missing_fields": t.get("missing_fields"), "returned_reason": t.get("returned_reason"),
+                  "signed_at": t.get("signed_at")}
                  for t in c.get("tasks", []) if t.get("owner_role") == "employee"]
         if tasks:
             emp_cats.append({"key": c["key"], "label": c["label"], "tasks": tasks})
@@ -1275,3 +1321,355 @@ def public_onboarding_intake(token: str, body: dict):
         raise HTTPException(403, "Identity check failed.")
     payload = {k: v for k, v in (body or {}).items() if k != "value"}
     return _apply_intake(prof["org_id"], prof["employee_id"], payload, actor="employee")
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# DOCUMENT SEND/RETURN FLOW (migration 082) — the HR "Documents" board (who was SENT the packet,
+# what came BACK), online FILL & SIGN (form fields + a drawn signature stored in the private
+# bucket), and the returned-for-corrections loop: online submissions are field-checked
+# deterministically before they're accepted; uploaded FILLABLE PDFs get an AcroForm completeness +
+# signature check; flat scans route to HR review. Anything incomplete is RETURNED to the employee
+# (status 'returned') with the exact missing fields listed, in the portal AND by email.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+
+def _task_row(org_id, task_id):
+    rows = (_so().table("onboarding_task").select("*").eq("org_id", org_id)
+            .eq("id", task_id).limit(1).execute().data) or []
+    return rows[0] if rows else {}
+
+
+def _employee_row(org_id, employee_id):
+    rows = (_so().table("employees").select("employee_id,name,email").eq("org_id", org_id)
+            .eq("employee_id", employee_id).limit(1).execute().data) or []
+    return rows[0] if rows else {}
+
+
+def _pdf_form_check(data):
+    """Best-effort completeness/signature check on an uploaded PDF. FILLABLE (AcroForm) PDFs are
+    checkable; flat/scanned PDFs return checkable:False and go to HR for a by-eye review. Reports:
+      missing — empty fields the form itself marks REQUIRED (auto-return material)
+      empty   — every other empty text/choice field (real forms leave optional steps blank, so
+                these DON'T auto-return; HR sees them for a one-click manual return)
+      filled  — how many fields carry a value (0 on a form with fields = came back blank)
+      signed  — True/False when the form has a signature(-labeled) field, None when it has none
+    Labels prefer the human tooltip (/TU) over internal names; UTF-16 names are decoded."""
+    try:
+        import io as _io
+        from pdfminer.pdfparser import PDFParser
+        from pdfminer.pdfdocument import PDFDocument
+        from pdfminer.pdftypes import resolve1
+        from pdfminer.psparser import PSLiteral
+        doc = PDFDocument(PDFParser(_io.BytesIO(data)))
+        root = resolve1(doc.catalog) or {}
+        acro = resolve1(root.get("AcroForm")) if root.get("AcroForm") else None
+        field_refs = resolve1(acro.get("Fields")) if acro else None
+        if not field_refs:
+            return {"checkable": False, "reason": "no fillable form fields (flat/scanned PDF)"}
+        missing, empty = [], []
+        n = filled = sig_fields = sig_signed = 0
+
+        def _txt(v):
+            if isinstance(v, PSLiteral):
+                v = v.name
+            if isinstance(v, bytes):
+                try:
+                    if v[:2] in (b"\xfe\xff", b"\xff\xfe") or b"\x00" in v[:8]:
+                        return v.decode("utf-16", "ignore").lstrip("\ufeff")
+                    return v.decode("utf-8", "ignore")
+                except Exception:
+                    return v.decode("latin-1", "ignore")
+            return "" if v is None else str(v)
+
+        def walk(refs, prefix=""):
+            nonlocal n, filled, sig_fields, sig_signed
+            for ref in (refs or []):
+                try:
+                    f = resolve1(ref) or {}
+                except Exception:
+                    continue
+                name = ((prefix + ".") if prefix else "") + _txt(f.get("T")).strip()
+                # human label: tooltip if the form carries one, else the field path minus the
+                # boilerplate wrapper segments ("topmostSubform[0].Page1[0].Step1a[0].f1_01[0]"
+                # -> "Page1.Step1a.f1_01")
+                pretty = ".".join(p for p in (re.sub(r"\[\d+\]$", "", s) for s in name.split("."))
+                                  if p and p.lower() not in ("topmostsubform", "form1"))
+                label = _txt(f.get("TU")).strip() or pretty or "unnamed field"
+                ft = str(f.get("FT") or "")
+                kids = f.get("Kids")
+                if kids and not ft:      # a pure container node — recurse
+                    try:
+                        walk(resolve1(kids), name)
+                    except Exception:
+                        pass
+                    continue
+                n += 1
+                try:
+                    val = resolve1(f.get("V"))
+                except Exception:
+                    val = f.get("V")
+                sval = _txt(val).strip()
+                has_val = val is not None and sval not in ("", "Off")
+                if has_val:
+                    filled += 1
+                try:
+                    required = bool(int(resolve1(f.get("Ff")) or 0) & 2)
+                except Exception:
+                    required = False
+                if "Sig" in ft or "sign" in name.lower() or "signature" in label.lower():
+                    sig_fields += 1
+                    sig_signed += 1 if has_val else 0
+                elif ("Tx" in ft or "Ch" in ft) and not has_val:
+                    (missing if required else empty).append(label)
+
+        walk(field_refs)
+        signed = (sig_signed > 0) if sig_fields else None
+        return {"checkable": True, "fields": n, "filled": filled,
+                "missing": missing[:40], "empty": empty[:40], "signed": signed}
+    except Exception as e:
+        return {"checkable": False, "reason": f"could not inspect PDF: {str(e)[:120]}"}
+
+
+def _portal_link(org_id, employee_id):
+    prof = _get_profile(_so(), org_id, employee_id) or {}
+    if prof.get("access_token") and prof.get("token_active"):
+        return f"{settings.APP_PUBLIC_URL}/onboard/{prof['access_token']}"
+    return f"{settings.APP_PUBLIC_URL}/portal"
+
+
+async def _notify_return(org_id, employee_id, task, missing, reason):
+    """Email the employee that a document came back incomplete, listing exactly what to fix."""
+    emp = _employee_row(org_id, employee_id)
+    email = (emp.get("email") or "").strip()
+    if not email:
+        return False
+    first = (str(emp.get("name") or "").split() or [""])[0]
+    url = _portal_link(org_id, employee_id)
+    items = "".join(f"<li>{m}</li>" for m in (missing or [])[:30]) or "<li>see the note from HR</li>"
+    html = (f"<div style='font-family:system-ui,Arial,sans-serif;max-width:560px;margin:auto;color:#111'>"
+            f"<p>Hi {first or 'there'},</p>"
+            f"<p>Your <b>{task.get('label') or 'onboarding document'}</b> needs another look before we can accept it:</p>"
+            f"<ul style='margin:0 0 12px 18px'>{items}</ul>"
+            + (f"<p style='font-size:13px;color:#555'>{reason}</p>" if reason else "") +
+            f"<p style='margin:18px 0'><a href='{url}' style='display:inline-block;background:#111;color:#fff;"
+            f"padding:11px 20px;border-radius:8px;text-decoration:none'>Fix and resubmit</a></p>"
+            f"<p style='font-size:12px;color:#888'>If the button doesn't work, copy this link:<br>{url}</p></div>")
+    try:
+        from app.modules.notify.channels.email_resend import send_email, is_configured
+        if is_configured():
+            await send_email(email, f"Action needed: {task.get('label') or 'onboarding document'}", html)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+async def _do_onboard_sign(org_id, employee_id, task_id, form_data, signature, signed_name, who="employee"):
+    """Online FILL & SIGN: validate the task's configured fields, store the drawn signature as a
+    PNG in the private bucket, mark the item submitted. Deterministic — a missing field 400s with
+    the exact list, so an incomplete online submission is bounced BEFORE it enters the system."""
+    task = _task_row(org_id, task_id)
+    if not task:
+        raise HTTPException(404, "unknown onboarding item")
+    form_data = form_data if isinstance(form_data, dict) else {}
+    fields = [f for f in (task.get("form_fields") or []) if isinstance(f, dict)]
+    missing = [f.get("label") or f.get("key") for f in fields
+               if f.get("required", True) and not str(form_data.get(f.get("key") or f.get("label") or "", "")).strip()]
+    if task.get("requires_signature", True) and not (signature or "").strip():
+        missing.append("Signature")
+    if missing:
+        raise HTTPException(400, "Please complete: " + ", ".join(str(m) for m in missing))
+    sig_path = None
+    if (signature or "").strip():
+        try:
+            png = base64.b64decode(signature.split(",", 1)[1] if "," in signature else signature)
+        except Exception:
+            raise HTTPException(400, "The signature image could not be read — please sign again.")
+        sig_path = f"{org_id}/{employee_id}/sig_{uuid.uuid4().hex}.png"
+        try:
+            _ensure_onboard_bucket().storage.from_(ONBOARD_BUCKET).upload(sig_path, png, {"content-type": "image/png"})
+        except Exception as e:
+            raise HTTPException(500, f"could not store the signature: {e}")
+    row = {"org_id": org_id, "employee_id": employee_id, "task_id": task_id, "status": "submitted",
+           "form_data": form_data or None, "signature_path": sig_path,
+           "signed_name": (signed_name or "").strip() or None, "signed_at": _now_iso(),
+           "submitted_at": _now_iso(), "updated_at": _now_iso(),
+           "document_name": "Signed online", "note": f"filled & signed online by {who}",
+           "missing_fields": None, "returned_reason": None, "returned_at": None, "returned_by": None,
+           "validation": {"checkable": True, "missing": [], "signed": bool(sig_path), "online": True}}
+    try:
+        _so().table("employee_onboarding").upsert(row, on_conflict="org_id,employee_id,task_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — is migration 082 applied? {e}")
+    _log_event(org_id, employee_id, "doc_signed_online", actor=who,
+               detail={"task": task.get("label"), "fields": sorted(form_data.keys())})
+    _recompute_status(_so(), org_id, employee_id, actor=who)
+    return {"ok": True, "status": "submitted", "signed": bool(sig_path)}
+
+
+@router.post("/public/onboarding/{token}/sign")
+async def public_onboarding_sign(token: str, body: dict):
+    """Credential-less portal: fill & sign an item online (gate re-checked on every call)."""
+    prof = _profile_by_token(token)
+    if not _token_valid(prof):
+        raise HTTPException(404, "This onboarding link is invalid or has expired.")
+    if not _check_gate(prof, (body or {}).get("value")):
+        raise HTTPException(403, "Identity check failed.")
+    task = _task_row(prof["org_id"], str((body or {}).get("task_id") or ""))
+    if not task or task.get("owner_role") != "employee":
+        raise HTTPException(403, "That item can't be signed from this portal.")
+    return await _do_onboard_sign(prof["org_id"], prof["employee_id"], task["id"],
+                                  (body or {}).get("form_data"), (body or {}).get("signature") or "",
+                                  (body or {}).get("signed_name") or "")
+
+
+@router.post("/onboarding/me/sign")
+async def onboarding_me_sign(body: dict, authorization: str = Header(default="")):
+    """Logged-in portal: fill & sign an item online."""
+    me = _me_from_token(authorization)
+    task = _task_row(me["org_id"], str((body or {}).get("task_id") or ""))
+    if not task or task.get("owner_role") != "employee":
+        raise HTTPException(403, "That item can't be signed here.")
+    return await _do_onboard_sign(me["org_id"], me["employee_id"], task["id"],
+                                  (body or {}).get("form_data"), (body or {}).get("signature") or "",
+                                  (body or {}).get("signed_name") or "")
+
+
+@router.post("/onboarding/employee/{employee_id}/task/{task_id}/return")
+async def onboarding_return_task(employee_id: str, task_id: str, body: dict, org_id: str = ORG_ID):
+    """HR sends a submitted document BACK for corrections (a scan the auto-check can't read, a
+    missed signature, the wrong form…), listing what's missing. The employee sees the item flagged
+    in their portal and gets an email with the exact list."""
+    task = _task_row(org_id, task_id)
+    if not task:
+        raise HTTPException(404, "unknown onboarding item")
+    missing = [str(m).strip() for m in (body.get("missing_fields") or []) if str(m).strip()]
+    reason = (body.get("reason") or "").strip() or None
+    if not missing and not reason:
+        raise HTTPException(400, "List the missing fields (or give a reason) so the employee knows what to fix.")
+    row = {"org_id": org_id, "employee_id": employee_id, "task_id": task_id, "status": "returned",
+           "missing_fields": missing or None, "returned_reason": reason,
+           "returned_at": _now_iso(), "returned_by": (body.get("actor") or "HR"), "updated_at": _now_iso()}
+    try:
+        _so().table("employee_onboarding").upsert(row, on_conflict="org_id,employee_id,task_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not return — is migration 082 applied? {e}")
+    _log_event(org_id, employee_id, "doc_returned", actor=body.get("actor") or "HR",
+               detail={"task": task.get("label"), "missing": missing, "reason": reason})
+    emailed = await _notify_return(org_id, employee_id, task, missing, reason)
+    return {"ok": True, "emailed": emailed}
+
+
+@router.get("/onboarding/employee/{employee_id}/task/{task_id}/signature")
+def onboarding_signature_url(employee_id: str, task_id: str, org_id: str = ORG_ID):
+    """A 1-hour signed URL for the online-drawn signature image (HR verification view)."""
+    rows = (_so().table("employee_onboarding").select("signature_path").eq("org_id", org_id)
+            .eq("employee_id", employee_id).eq("task_id", task_id).limit(1).execute().data) or []
+    if not rows or not rows[0].get("signature_path"):
+        raise HTTPException(404, "no signature on file")
+    url = _sign_onboard_path(rows[0]["signature_path"])
+    if not url:
+        raise HTTPException(500, "could not sign the url")
+    return {"url": url}
+
+
+@router.get("/onboarding/doc-status")
+def onboarding_doc_status(org_id: str = ORG_ID):
+    """The HR Documents board: one row per active roster employee — whether the onboarding packet
+    was SENT (docs_sent_at / invited_at), and what came BACK per item (pending / submitted /
+    returned / verified counts + labels) — so HR can checkbox-select who still needs the packet and
+    chase exactly what's missing. Three queries total, applicability computed in Python."""
+    so = _so()
+    tmpl = onboarding_template(org_id=org_id)
+    if not tmpl.get("ready"):
+        return {"ready": False, "employees": []}
+    tasks = [t for c in tmpl["categories"] for t in c["tasks"] if t.get("owner_role") == "employee"]
+    emps = (so.table("employees").select("employee_id,name,email,is_active").eq("org_id", org_id)
+            .eq("is_active", True).order("name").execute().data) or []
+    profs = {p.get("employee_id"): p for p in ((so.table("employee_onboarding_profile").select("*")
+             .eq("org_id", org_id).execute().data) or [])}
+    recs = {}
+    try:
+        rows = (so.table("employee_onboarding")
+                .select("employee_id,task_id,status,submitted_at,returned_at,updated_at")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows = []
+    for r in rows:
+        recs.setdefault(r.get("employee_id"), {})[r.get("task_id")] = r
+    out = []
+    for e in emps:
+        eid = e.get("employee_id")
+        if not eid:
+            continue
+        prof = profs.get(eid) or {}
+        ws = prof.get("work_state")
+        mine = [t for t in tasks if not t.get("applies_state") or t.get("applies_state") == ws]
+        st = recs.get(eid, {})
+        counts = {"total": len(mine), "pending": 0, "submitted": 0, "returned": 0, "verified": 0}
+        pending_labels, returned_labels, last = [], [], None
+        for t in mine:
+            r = st.get(t["id"]) or {}
+            s = r.get("status") or "pending"
+            bucket = s if s in ("pending", "submitted", "returned", "verified") else ("verified" if s == "na" else "pending")
+            counts[bucket] += 1
+            if bucket == "pending":
+                pending_labels.append(t.get("label"))
+            elif bucket == "returned":
+                returned_labels.append(t.get("label"))
+            ts = r.get("updated_at") or r.get("submitted_at")
+            if ts and (not last or ts > last):
+                last = ts
+        out.append({"employee_id": eid, "name": e.get("name"), "email": e.get("email"),
+                    "workflow_status": prof.get("workflow_status"),
+                    "invited_at": prof.get("invited_at"), "docs_sent_at": prof.get("docs_sent_at"),
+                    "invite_method": prof.get("invite_method"),
+                    "intake_submitted": bool(prof.get("intake_submitted_at")),
+                    "sent": bool(prof.get("docs_sent_at") or prof.get("invited_at")),
+                    **counts,
+                    "pending_labels": pending_labels[:12], "returned_labels": returned_labels[:12],
+                    "last_activity": last})
+    return {"ready": True, "employees": out}
+
+
+@router.post("/onboarding/send-documents")
+async def onboarding_send_documents(body: dict, org_id: str = ORG_ID):
+    """The Documents-board checkbox action: (re)send the onboarding packet to the selected people.
+    Per person: an existing identity gate (DOB / last-4) re-issues their token LINK; otherwise a
+    portal LOGIN invite goes to the roster email. Stamps docs_sent_at so the board shows who's been
+    sent. Body: employee_ids[], send_email? (default true), actor?"""
+    ids = [str(i).strip() for i in (body.get("employee_ids") or []) if str(i).strip()]
+    if not ids:
+        raise HTTPException(400, "pass employee_ids[]")
+    so = _so()
+    results = []
+    for eid in ids:
+        emp = _employee_row(org_id, eid)
+        if not emp:
+            results.append({"employee_id": eid, "ok": False, "error": "not on the roster"})
+            continue
+        prof = _get_profile(so, org_id, eid) or {}
+        method, dob, ssn4 = "login", None, None
+        if prof.get("verify_dob"):
+            method, dob = "link", str(prof.get("verify_dob"))[:10]
+        elif prof.get("verify_ssn4"):
+            method, ssn4 = "link", prof.get("verify_ssn4")
+        elif not (emp.get("email") or "").strip():
+            results.append({"employee_id": eid, "name": emp.get("name"), "ok": False,
+                            "error": "no email on file and no identity gate — add an email, or invite them one-on-one with a DOB"})
+            continue
+        res = await _send_invite(org_id, emp, method, dob=dob, ssn4=ssn4,
+                                 send_email_flag=body.get("send_email", True),
+                                 actor=body.get("actor") or "HR")
+        if res.get("ok"):
+            try:
+                so.table("employee_onboarding_profile").upsert(
+                    {"org_id": org_id, "employee_id": eid, "docs_sent_at": _now_iso()},
+                    on_conflict="org_id,employee_id").execute()
+            except Exception:
+                pass  # pre-082 — invited_at still marks them as sent
+            _log_event(org_id, eid, "docs_sent", actor=body.get("actor") or "HR",
+                       detail={"method": method, "sent_to": res.get("email")})
+        results.append(res)
+    ok = sum(1 for r in results if r.get("ok"))
+    emailed = sum(1 for r in results if r.get("emailed"))
+    return {"sent": ok, "emailed": emailed, "total": len(results), "results": results}
