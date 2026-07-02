@@ -127,7 +127,8 @@ async def upload_file(
     can't be mislabeled into the wrong month — the bug that wiped a month's residual trend."""
     require_org(org_id)
     
-    SUPPORTED = ["sales","daily_sales","payment_detail","mi_report","dlar_rep","dlar_store","catalog","master_cats","comp_report","inventory_aging","x_report"]
+    SUPPORTED = ["sales","daily_sales","payment_detail","mi_report","dlar_rep","dlar_store","catalog","master_cats","comp_report","inventory_aging","x_report",
+                 "ma_commission","ma_daily_tx","ma_fulfillment"]  # Total/VidaPay Master-Agent reports (mig 083)
     if file_type not in SUPPORTED:
         raise HTTPException(400, f"Unknown file type: {file_type}. Supported: {SUPPORTED}")
     
@@ -170,6 +171,10 @@ async def upload_file(
         'catalog':        ['Product ID', 'Cost'],
         'master_cats':    ['description'],
         'comp_report':    ['Compensation Type', 'Payment Amount'],
+        # Total / VidaPay Master-Agent portal exports (mig 083)
+        'ma_commission':  ['MerchantAccountId', 'Activation Type'],
+        'ma_daily_tx':    ['Order Number', 'Retail Cost'],
+        'ma_fulfillment': ['TSPID', 'Tracking Number'],
     }
     cols = set(str(col).strip() for col in df.columns)
     expected = SIGNATURES.get(file_type, [])
@@ -288,6 +293,10 @@ async def upload_file(
         # daily B2B feed lands in its OWN table so the monthly 'sales' period-replace never wipes it;
         # the two are reconciled at trans_id grain (GET /commcalc/sales-recon). See migration 047.
         "daily_sales": "daily_sales_feed",
+        # Total / VidaPay Master-Agent reports (mig 083) — the Total-side MI/ATU equivalents
+        "ma_commission": "raw_ma_commission",
+        "ma_daily_tx": "raw_ma_daily_tx",
+        "ma_fulfillment": "raw_ma_fulfillment",
     }
     # Try schema-qualified first, fall back to public prefix
     table = TABLE_MAP[file_type]
@@ -440,27 +449,145 @@ async def upload_file(
                 'cost': safe_float(r.get('Cost')),
                 'sku': r.get('SKU',''),
             }
+        elif file_type in ("ma_commission", "ma_daily_tx", "ma_fulfillment"):
+            # Total / VidaPay Master-Agent exports. Date-grain reports: derive period per ROW (like
+            # daily_sales) so no period selection is needed and hourly email re-pulls stay idempotent.
+            def _d10(v):
+                s = str(v or "").strip()
+                if not s or s.lower() in ("nan", "none", "nat"):
+                    return None
+                try:
+                    ts = pd.to_datetime(float(s), origin="1899-12-30", unit="D")  # Excel serial
+                except (ValueError, TypeError):
+                    ts = pd.to_datetime(s, errors="coerce")
+                return None if pd.isna(ts) else ts.strftime("%Y-%m-%d")
+
+            date_key = {"ma_commission": "Date", "ma_daily_tx": "Date of Transaction",
+                        "ma_fulfillment": "Date Ordered"}[file_type]
+            d10 = _d10(r.get(date_key))
+            base = {"org_id": org_id}
+            if d10 and file_type != "ma_fulfillment":
+                td = pd.to_datetime(d10)
+                base.update({"period": td.strftime("%B %Y"), "period_month": td.month, "period_year": td.year})
+            if file_type == "ma_commission":
+                row = {**base, "tx_date": d10, "tx_time": str(r.get("Time", "")).strip() or None,
+                    "carrier_name": str(r.get("Carrier Name", "")).strip() or None,
+                    "activation_order": str(r.get("Activation Order", "")).strip() or None,
+                    "merchant_account_id": str(r.get("MerchantAccountId", "")).replace(".0", "").strip() or None,
+                    "imei": str(r.get("IMEI", "")).replace(".0", "").strip() or None,
+                    "sim": str(r.get("SIM", "")).replace(".0", "").strip() or None,
+                    "sku": str(r.get("SKU", "")).strip() or None,
+                    "activation_type": str(r.get("Activation Type", "")).strip() or None,
+                    "activation_type2": str(r.get("Activation Type 2", "")).strip() or None,
+                    "sub_type": str(r.get("Sub Type", "")).strip() or None,
+                    "device_margin": safe_float(r.get("Device Margin")),
+                    "consumer_margin": safe_float(r.get("Consumer Margin")),
+                    "consumer_financing": safe_float(r.get("Consumer Financing")),
+                    "rebate": safe_float(r.get("Rebate")),
+                    "perfect_sale": str(r.get("Perfect Sale", "")).strip() or None,
+                    "wallet_funding": safe_float(r.get("Wallet Funding Amount")),
+                    "mrc_net_discount": safe_float(r.get("MRC Net Discount")),
+                    "fees": safe_float(r.get("Fees")), "fees_margin": safe_float(r.get("Fees Margin")),
+                    "spiff_m1": safe_float(r.get("1st Month Spiff")), "spiff_m2": safe_float(r.get("2nd Month Spiff")),
+                    "spiff_m3": safe_float(r.get("3rd Month Spiff")), "spiff_m4": safe_float(r.get("4th Month Spiff")),
+                    "spiff_m5": safe_float(r.get("5th Month Spiff")), "spiff_m6": safe_float(r.get("6th Month Spiff")),
+                    "port_status": str(r.get("Port Status", "")).strip() or None,
+                    "id_verification": str(r.get("ID Verification", "")).strip() or None,
+                    "is_financed": str(r.get("Is Financed", "")).strip() or None,
+                    "user_id": str(r.get("User Id", "")).replace(".0", "").strip() or None,
+                    "user_name": str(r.get("User Name", "")).strip() or None,
+                    "ban": str(r.get("BAN", "")).replace(".0", "").strip() or None,
+                    "bin": str(r.get("BIN", "")).replace(".0", "").strip() or None,
+                    "pos_invoice": str(r.get("POS Invoice", "")).strip() or None,
+                    "line_status": str(r.get("Line Status", "")).strip() or None,
+                    "status_change_date": str(r.get("Status Change Date", "")).strip() or None,
+                    "suspension_reason": str(r.get("Suspension Reason", "")).strip() or None,
+                    "consumer_value": safe_float(r.get("Consumer Value")),
+                    "platform": str(r.get("Platform", "")).strip() or None,
+                    "platform_tx_id": str(r.get("Platform Transaction Id", "")).strip() or None,
+                    "external_ref": str(r.get("External Reference Id", "")).strip() or None}
+            elif file_type == "ma_daily_tx":
+                row = {**base, "tx_date": d10, "due_date": _d10(r.get("Date Due")),
+                    "account_id": str(r.get("Account ID", "")).replace(".0", "").strip() or None,
+                    "account_name": str(r.get("Account Name", "")).strip() or None,
+                    "direct_ma_id": str(r.get("Direct MA ID", "")).replace(".0", "").strip() or None,
+                    "direct_ma_name": str(r.get("Direct MA Name", "")).strip() or None,
+                    "top_ma_id": str(r.get("Top MA ID", "")).replace(".0", "").strip() or None,
+                    "top_ma_name": str(r.get("Top MA Name", "")).strip() or None,
+                    "order_number": str(r.get("Order Number", "")).replace(".0", "").strip() or None,
+                    "user_name": str(r.get("User", "")).strip() or None,
+                    "order_type": str(r.get("Order Type", "")).strip() or None,
+                    "product_name": str(r.get("Product Name", "")).strip() or None,
+                    "retail_cost": safe_float(r.get("Retail Cost")),
+                    "merchant_discount": safe_float(r.get("Merchant Discount")),
+                    "merchant_invoice": safe_float(r.get("Merchant Invoice"))}
+            else:  # ma_fulfillment
+                row = {**base, "date_ordered": d10, "date_filled": _d10(r.get("Date Filled")),
+                    "date_shipped": _d10(r.get("Date Shipped")),
+                    "order_number": str(r.get("Order Number", "")).replace(".0", "").strip() or None,
+                    "order_status": str(r.get("Order Status", "")).strip() or None,
+                    "order_type": str(r.get("Order Type", "")).strip() or None,
+                    "tspid": str(r.get("TSPID", "")).replace(".0", "").strip() or None,
+                    "business_name": str(r.get("Business Name", "")).strip() or None,
+                    "business_address": str(r.get("Business Address", "")).strip() or None,
+                    "city": str(r.get("City", "")).strip() or None,
+                    "state": str(r.get("State", "")).strip() or None,
+                    "zip": str(r.get("Zip", "")).replace(".0", "").strip() or None,
+                    "product_name": str(r.get("Product Name", "")).strip() or None,
+                    "number_ordered": safe_float(r.get("Number Ordered")),
+                    "price": safe_float(r.get("Price")),
+                    "tracking_number": str(r.get("Tracking Number", "")).strip() or None}
         else:
             row = {**base}
         
         if any(v for v in row.values() if v and v != org_id):
             mapped.append(row)
 
+    # ma_commission: resolve carrier_id from the file's own Carrier Name ('Total by Verizon' →
+    # the tenant's Total carrier) — carrier-neutral lookup, NULL when the tenant has no match.
+    if file_type == 'ma_commission' and mapped:
+        try:
+            _carr = (client.schema('commcalc').table('carrier').select('id,name,code')
+                     .eq('org_id', org_id).execute().data) or []
+        except Exception:
+            _carr = []
+        _ccache = {}
+        def _carrier_for(nm):
+            nl = (nm or '').strip().lower()
+            if not nl:
+                return None
+            if nl not in _ccache:
+                hit = None
+                for c in _carr:
+                    cn = str(c.get('name') or '').strip().lower()
+                    cc = str(c.get('code') or '').strip().lower()
+                    if (cn and (cn in nl or nl in cn)) or (cc and cc in nl):
+                        hit = c.get('id')
+                        break
+                _ccache[nl] = hit
+            return _ccache[nl]
+        for m in mapped:
+            m['carrier_id'] = _carrier_for(m.get('carrier_name'))
+
     # GUARD: only NOW (rows successfully mapped) do we clear the existing data, and only if the
     # upload actually produced rows — so a file that parsed to nothing can never wipe a populated
     # period. catalog/master_cats replace the whole table.
+    DATE_KEYED = {'daily_sales': 'trans_date', 'ma_commission': 'tx_date',
+                  'ma_daily_tx': 'tx_date', 'ma_fulfillment': 'date_ordered'}
     if mapped:
-        if file_type == 'daily_sales':
-            # The daily feed is keyed by day, not month. Make a re-pull of the same day(s) idempotent
-            # by clearing only the trans_dates this file covers (never the whole month — other days'
-            # feed rows survive). Rows with no parseable date can't be deduped, so they just append.
-            feed_dates = sorted({m.get('trans_date') for m in mapped if m.get('trans_date')})
+        if file_type in DATE_KEYED:
+            # Date-grain feeds are keyed by DAY, not month. Make a re-pull of the same day(s)
+            # idempotent by clearing only the dates this file covers (never the whole month — other
+            # days' rows survive). Rows with no parseable date can't be deduped, so they just append.
+            dk = DATE_KEYED[file_type]
+            feed_dates = sorted({m.get(dk) for m in mapped if m.get(dk)})
             if feed_dates:
                 try:
                     client.schema('commcalc').table(table).delete()\
-                        .eq('org_id', org_id).in_('trans_date', feed_dates).execute()
+                        .eq('org_id', org_id).in_(dk, feed_dates).execute()
                 except Exception as e:
-                    raise HTTPException(500, f"Failed to clear existing daily feed: {e}. Run migration 047.")
+                    mig = 'migration 047' if file_type == 'daily_sales' else 'migration 083'
+                    raise HTTPException(500, f"Failed to clear existing {file_type} rows: {e}. Run {mig}.")
         elif has_period and period:
             try:
                 client.schema('commcalc').table(table).delete().eq('org_id', org_id).in_('period', _pvariants(period)).execute()
@@ -491,7 +618,7 @@ async def upload_file(
     # when), surviving page reloads. daily_sales derives its period per-row, so
     # log the distinct period(s) actually touched. Best-effort: a logging
     # failure (e.g. 007_upload_log.sql not run yet) must never break an upload.
-    if file_type == 'daily_sales':
+    if file_type in ('daily_sales', 'ma_commission', 'ma_daily_tx'):
         _log_periods = sorted({m.get('period') for m in mapped if m.get('period')})
         log_period = ', '.join(_log_periods) if _log_periods else (period or None)
     else:
@@ -6412,7 +6539,7 @@ async def _run_email_sweep(org_id, account='default'):
     results = []
     for f in files:
         name, size, ut, mid = f['name'], f['size'], f.get('upload_type'), f.get('message_id')
-        period = "" if ut == "daily_sales" else _ftp_current_period()
+        period = "" if ut in ("daily_sales", "ma_commission", "ma_daily_tx", "ma_fulfillment") else _ftp_current_period()
         status, detail, rows_saved = "ok", None, 0
         try:
             uf = _UF(io.BytesIO(f['bytes']), filename=name)
@@ -6663,3 +6790,110 @@ async def email_run_due(x_notify_secret: str = Header(default="")):
         _email_status_update(client, oid, acct, {'next_run_at': nxt})
         ran.append({"org_id": oid, "account": acct, "result": res})
     return {"ran": len(ran), "detail": ran}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# DATA SOURCES (migration 083) — the multi-processor registry. Real-world shape it models: one
+# company → N distributors → N payment processors per distributor → N LOGINS per processor (all
+# stores for one carrier usually live under one login). One commcalc.data_source row per LOGIN.
+# Everything a source pulls lands in the shared raw tables stamped with source_id, so multiple
+# sources COMBINE into one database. Portal scraping is dispatched per processor below — processors
+# without a wired scraper still ingest via the email sweep or manual upload (ma_* upload types).
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_SOURCE_FIELDS = ["distributor_id", "carrier_id", "processor", "label", "portal_url", "username",
+                  "password", "enabled", "frequency", "hour", "notes"]
+# processor key → scraper callable (org_id, source_row) -> result dict. Wire VidaPay/Total Access
+# here once a login is available to test against (see epay_sweep for the Boost/ePay pattern).
+_SOURCE_SCRAPERS = {}
+
+
+def _strip_source_pw(row):
+    row = dict(row)
+    row["has_password"] = bool(row.pop("password", None))
+    return row
+
+
+@router.get("/data-sources")
+def list_data_sources(org_id: str = ORG_ID):
+    """All of the tenant's payment-processor logins (passwords stripped). ready:false pre-083."""
+    require_org(org_id)
+    try:
+        rows = (sb().schema("commcalc").table("data_source").select("*")
+                .eq("org_id", org_id).order("created_at").execute().data) or []
+    except Exception:
+        return {"ready": False, "sources": [], "note": "Run migration 083_total_processor_sources.sql to enable."}
+    return {"ready": True, "sources": [_strip_source_pw(r) for r in rows],
+            "scrapers_wired": sorted(_SOURCE_SCRAPERS.keys())}
+
+
+@router.put("/data-sources")
+def save_data_source(body: dict, org_id: str = ORG_ID):
+    """Create/update one login. Omitting password on an update KEEPS the stored one."""
+    require_org(org_id)
+    row = {k: body[k] for k in _SOURCE_FIELDS if k in body}
+    if not (row.get("processor") or "").strip() and not body.get("id"):
+        raise HTTPException(400, "processor is required (e.g. vidapay, total_access, epay)")
+    for k in ("distributor_id", "carrier_id"):
+        if k in row and not (row[k] or "").strip():
+            row[k] = None
+    if "password" in row and not (row.get("password") or "").strip():
+        row.pop("password")   # blank password on the form = keep the saved one
+    client = sb()
+    try:
+        if body.get("id"):
+            client.schema("commcalc").table("data_source").update(row)\
+                .eq("id", body["id"]).eq("org_id", org_id).execute()
+            return {"ok": True, "id": body["id"]}
+        row["org_id"] = org_id
+        r = client.schema("commcalc").table("data_source").insert(row).execute()
+        return {"ok": True, "id": (r.data or [{}])[0].get("id")}
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — is migration 083 applied? {e}")
+
+
+@router.delete("/data-sources/{sid}")
+def delete_data_source(sid: str, org_id: str = ORG_ID):
+    require_org(org_id)
+    sb().schema("commcalc").table("data_source").delete().eq("id", sid).eq("org_id", org_id).execute()
+    return {"ok": True}
+
+
+@router.post("/data-sources/{sid}/run")
+async def run_data_source(sid: str, org_id: str = ORG_ID):
+    """Pull now from this login. Dispatches to the processor's scraper when one is wired; until
+    then the row records an honest status and the data path is the email sweep / manual upload."""
+    require_org(org_id)
+    client = sb()
+    rows = (client.schema("commcalc").table("data_source").select("*")
+            .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "unknown data source")
+    src_row = rows[0]
+    proc = (src_row.get("processor") or "").strip().lower()
+    handler = _SOURCE_SCRAPERS.get(proc)
+    if not handler:
+        status = (f"scraper for '{proc}' not wired yet — reports ingest via the email sweep or the "
+                  f"Data Imports upload (ma_commission / ma_daily_tx / ma_fulfillment) today")
+        try:
+            client.schema("commcalc").table("data_source").update(
+                {"last_run_at": datetime.now(timezone.utc).isoformat(), "last_status": status})\
+                .eq("id", sid).eq("org_id", org_id).execute()
+        except Exception:
+            pass
+        return {"ok": False, "error": status}
+    try:
+        res = await handler(org_id, src_row)
+        client.schema("commcalc").table("data_source").update(
+            {"last_run_at": datetime.now(timezone.utc).isoformat(),
+             "last_status": str((res or {}).get("status") or "ok")})\
+            .eq("id", sid).eq("org_id", org_id).execute()
+        return {"ok": True, **(res or {})}
+    except Exception as e:
+        try:
+            client.schema("commcalc").table("data_source").update(
+                {"last_run_at": datetime.now(timezone.utc).isoformat(),
+                 "last_status": f"error: {str(e)[:180]}"})\
+                .eq("id", sid).eq("org_id", org_id).execute()
+        except Exception:
+            pass
+        raise HTTPException(500, f"pull failed: {e}")

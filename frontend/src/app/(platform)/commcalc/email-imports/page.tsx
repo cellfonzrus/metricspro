@@ -39,6 +39,12 @@ export default function EmailImportsPage() {
   const [processed, setProcessed] = useState<any[]>([])
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
+  const [sources, setSources] = useState<any[]>([])
+  const [srcReady, setSrcReady] = useState(true)
+  const [srcDraft, setSrcDraft] = useState<any>(null)   // add/edit form for a data-source login
+  const [srcMsg, setSrcMsg] = useState('')
+  const [carriers, setCarriers] = useState<any[]>([])
+  const [distributors, setDistributors] = useState<any[]>([])
 
   // Load all of the tenant's mailboxes (multi-mailbox = mig 075); keep or select one in the editor.
   const refresh = useCallback((keepAccount?: string) => {
@@ -54,6 +60,9 @@ export default function EmailImportsPage() {
       api('/api/v1/commcalc/email-sweep/config').then((c: any) => setCfg({ ...c, patterns: c.patterns || [] })).catch(() => {})
     })
     api('/api/v1/commcalc/email-sweep/processed').then((p: any) => setProcessed(p || [])).catch(() => {})
+    api('/api/v1/commcalc/data-sources').then((r: any) => { setSources(r.sources || []); setSrcReady(r.ready !== false) }).catch(() => {})
+    api('/api/v1/commcalc/carriers').then((r: any) => setCarriers(r || [])).catch(() => {})
+    api('/api/v1/commcalc/distributors').then((r: any) => setDistributors(Array.isArray(r) ? r : (r?.distributors || []))).catch(() => {})
   }, [])
   useEffect(() => { refresh() }, [refresh])
 
@@ -109,6 +118,27 @@ export default function EmailImportsPage() {
       refresh(cfg.account)
     }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
+  }
+
+  async function saveSource() {
+    if (!srcDraft) return
+    setSrcMsg('')
+    try {
+      await api('/api/v1/commcalc/data-sources', { method: 'PUT', body: JSON.stringify(srcDraft) })
+      setSrcDraft(null); setSrcMsg('✅ Saved.')
+      const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || [])
+    } catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)) }
+  }
+  async function delSource(s: any) {
+    if (!confirm(`Delete login "${s.label || s.username || s.processor}"?`)) return
+    try { await api(`/api/v1/commcalc/data-sources/${s.id}`, { method: 'DELETE' }); const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) }
+    catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)) }
+  }
+  async function runSource(s: any) {
+    setSrcMsg('⏳ Pulling…')
+    try { const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/run`, { method: 'POST', body: '{}' }); setSrcMsg(r.ok ? '✅ Pulled.' : `ℹ️ ${r.error}`) }
+    catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)) }
+    try { const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) } catch { /* keep list */ }
   }
 
   return (
@@ -227,6 +257,82 @@ export default function EmailImportsPage() {
             {processed.length === 0 && <tr><td style={{ ...cell, color: 'var(--text3)', textAlign: 'center', padding: 24 }} colSpan={5}>Nothing imported yet.</td></tr>}
           </tbody>
         </table>
+      </div>
+      {/* ── Payment-processor sources (mig 083): distributor → processor → LOGINS registry ── */}
+      <div className="card" style={{ padding: 16, marginTop: 16 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>📡 Payment-processor sources</div>
+          <div style={{ flex: 1 }} />
+          <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: 'vidapay', enabled: false })}>＋ Add login</button>
+        </div>
+        <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 10px' }}>
+          Every portal login your commission data comes from — a company can have several distributors, two
+          processors per distributor, and two logins per processor (all stores for one carrier usually sit under one
+          login). Add each login here; everything pulled lands combined in one database, stamped with its source.
+          Until a processor&apos;s portal scraper is wired, its reports still import automatically via the mailbox rules
+          above (MA Commission Details / MA Daily Tx / MA Fulfillment) or the Data Imports page.
+        </p>
+        {!srcReady && <div style={{ padding: 10, marginBottom: 10, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13 }}>⚠️ Run migration <b>083_total_processor_sources.sql</b> in Supabase to enable this registry.</div>}
+        {srcMsg && <div style={{ fontSize: 13, marginBottom: 8 }}>{srcMsg}</div>}
+
+        {sources.length > 0 && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 10 }}>
+            <thead><tr style={{ background: 'var(--surface2)' }}>{['Label', 'Processor', 'Distributor', 'Carrier', 'Login', 'Status', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {sources.map((s: any) => (
+                <tr key={s.id} style={{ borderTop: '1px solid var(--border)', fontSize: 13 }}>
+                  <td style={{ padding: '6px 8px', fontWeight: 600 }}>{s.label || '—'}{!s.enabled && <span style={{ fontSize: 11, color: '#b45309' }}> (off)</span>}</td>
+                  <td style={{ padding: '6px 8px' }}>{s.processor}</td>
+                  <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{distributors.find((d: any) => d.id === s.distributor_id)?.name || '—'}</td>
+                  <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{carriers.find((c: any) => c.id === s.carrier_id)?.name || '—'}</td>
+                  <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.username || '—'}{s.has_password ? ' 🔑' : ''}</td>
+                  <td style={{ padding: '6px 8px', fontSize: 12, color: 'var(--text3)' }}>{s.last_status ? `${s.last_status}` : 'never run'}</td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => runSource(s)}>▶ Pull now</button>{' '}
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setSrcDraft({ ...s, password: '' })}>Edit</button>{' '}
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => delSource(s)}>✕</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {sources.length === 0 && srcReady && <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 8 }}>No processor logins yet — add the VidaPay / Total Access login(s) for Total, one row per login.</div>}
+
+        {srcDraft && (
+          <div style={{ border: '1px dashed var(--border)', borderRadius: 8, padding: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10, marginBottom: 10 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Label<br />
+                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="VidaPay — login 1 (NY stores)" value={srcDraft.label || ''} onChange={e => setSrcDraft({ ...srcDraft, label: e.target.value })} /></label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Processor<br />
+                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} list="processors" value={srcDraft.processor || ''} onChange={e => setSrcDraft({ ...srcDraft, processor: e.target.value })} />
+                <datalist id="processors"><option value="vidapay" /><option value="total_access" /><option value="epay" /><option value="other" /></datalist></label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Distributor<br />
+                <select style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.distributor_id || ''} onChange={e => setSrcDraft({ ...srcDraft, distributor_id: e.target.value })}>
+                  <option value="">—</option>
+                  {distributors.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select></label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Carrier<br />
+                <select style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.carrier_id || ''} onChange={e => setSrcDraft({ ...srcDraft, carrier_id: e.target.value })}>
+                  <option value="">—</option>
+                  {carriers.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select></label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Portal URL<br />
+                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="https://…" value={srcDraft.portal_url || ''} onChange={e => setSrcDraft({ ...srcDraft, portal_url: e.target.value })} /></label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Username<br />
+                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.username || ''} onChange={e => setSrcDraft({ ...srcDraft, username: e.target.value })} /></label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Password{srcDraft.id ? ' (blank = keep saved)' : ''}<br />
+                <input type="password" style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.password || ''} onChange={e => setSrcDraft({ ...srcDraft, password: e.target.value })} /></label>
+            </div>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input type="checkbox" checked={!!srcDraft.enabled} onChange={e => setSrcDraft({ ...srcDraft, enabled: e.target.checked })} /> Enabled (auto-pull once the scraper is wired)</label>
+              <div style={{ flex: 1 }} />
+              <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft(null)}>Cancel</button>
+              <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={saveSource}>💾 Save login</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

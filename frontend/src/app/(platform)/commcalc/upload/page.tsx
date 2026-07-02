@@ -15,8 +15,13 @@ const FILE_TYPES = [
   { id: 'comp_report',    label: 'Comprehensive Comp Report', icon: '🏦', required: false, desc: 'Carrier store-level rebates & MDF' },
   { id: 'inventory_aging', label: 'Inventory Aging (POS)',  icon: '📦', required: false, desc: 'b2bsoft / any POS inventory aging — per-store value snapshot' },
   { id: 'x_report',       label: 'X Report (POS tenders)', icon: '🧾', required: false, desc: 'POS daily tenders by type — reconciles vs the daily closing sheet' },
+  // Total / VidaPay Master-Agent portal exports (mig 083) — the Total-side MI/ATU equivalents.
+  // Date-grain: the period derives per ROW, so no period selection; re-uploads are day-idempotent.
+  { id: 'ma_commission',  label: 'MA Commission Details (Total)', icon: '🧾', required: false, desc: 'Total/VidaPay per-activation commission detail — spiffs M1–M6, rebates, MRC Net Discount' },
+  { id: 'ma_daily_tx',    label: 'MA Daily Tx (Total airtime)', icon: '📆', required: false, desc: 'Total/VidaPay daily airtime/top-up transactions — merchant discount = your margin' },
+  { id: 'ma_fulfillment', label: 'MA Handset Fulfillment (Total)', icon: '🚚', required: false, desc: 'Total/VidaPay marketplace handset fulfillment orders' },
 ]
-const PERIODLESS = new Set(['catalog', 'master_cats', 'inventory_aging', 'x_report'])
+const PERIODLESS = new Set(['catalog', 'master_cats', 'inventory_aging', 'x_report', 'ma_commission', 'ma_daily_tx', 'ma_fulfillment'])
 const TYPE_META = Object.fromEntries(FILE_TYPES.map(t => [t.id, t]))
 
 // Auto-import sources + the period granularities the user asked for, per source.
@@ -116,12 +121,13 @@ export default function UploadPage() {
   }
 
   async function handleUpload(fileType: string, file: File) {
-    if (!period.trim() && fileType !== 'daily_sales') { alert('Enter the period this data is for first'); return }
+    const rowDated = fileType === 'daily_sales' || fileType.startsWith('ma_')
+    if (!period.trim() && !rowDated && !PERIODLESS.has(fileType)) { alert('Enter the period this data is for first'); return }
     setUploading(fileType); setStatuses(s => ({ ...s, [fileType]: 'uploading' }))
     const form = new FormData(); form.append('file', file)
     try {
       const data = await apiUpload(
-        `/api/v1/commcalc/upload/${fileType}?${fileType !== 'daily_sales' ? 'period=' + encodeURIComponent(period) + '&' : ''}org_id=${ORG_ID}`,
+        `/api/v1/commcalc/upload/${fileType}?${!rowDated ? 'period=' + encodeURIComponent(period) + '&' : ''}org_id=${ORG_ID}`,
         form)
       setStatuses(s => ({ ...s, [fileType]: 'done' }))
       setMessages(m => ({ ...m, [fileType]: `✅ ${data.saved} rows saved` }))
