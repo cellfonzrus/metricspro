@@ -6393,6 +6393,14 @@ async def _run_email_sweep(org_id, account='default'):
     account = (cfg or {}).get('account') or account
     if not cfg or not (cfg.get('imap_host') or '').strip():
         return {"ok": False, "error": "Email/IMAP not configured", "account": account}
+    # An empty rules list matches NOTHING — fail loudly instead of a silent "0/0 ingested" while
+    # reports sit in the inbox (bit the Total/luxelink mailbox setup 2026-07-02).
+    if not any((p.get('pattern') or '').strip() for p in (cfg.get('patterns') or []) if isinstance(p, dict)):
+        _email_status_update(client, org_id, account,
+            {'last_run_at': _datetime.now(_timezone.utc).isoformat(),
+             'last_status': "no filename rules configured — add patterns, nothing can match"})
+        return {"ok": False, "account": account,
+                "error": "This mailbox has no filename rules — add a rule (e.g. *Sales*Transaction*Details* → daily sales) and Save."}
     seen = client.schema('commcalc').table('email_processed').select('message_id,filename').eq('org_id', org_id).limit(100000).execute().data or []
     already = {(r.get('message_id'), r.get('filename')) for r in seen}
     try:

@@ -25,7 +25,13 @@ const providerOf = (host: string) =>
   Object.keys(PROVIDERS).find(k => PROVIDERS[k].imap_host && PROVIDERS[k].imap_host === (host || '')) || 'custom'
 
 export default function EmailImportsPage() {
-  const BLANK = { imap_port: 993, use_ssl: true, mailbox: 'INBOX', since_days: 14, patterns: [] as any[], frequency: 'daily', hour: 7 }
+  // A brand-new mailbox starts with the standard b2bsoft rules — an empty rules list silently
+  // matches NOTHING ("0/0 ingested" with reports sitting in the inbox), which bit the Total setup.
+  const DEFAULT_RULES = [
+    { pattern: '*Sales*Transaction*Details*', upload_type: 'daily_sales', note: 'daily B2B sales export' },
+    { pattern: '*Inventory*Aging*', upload_type: 'inventory_aging', note: 'b2bsoft inventory aging' },
+  ]
+  const BLANK = { imap_port: 993, use_ssl: true, mailbox: 'INBOX', since_days: 14, patterns: DEFAULT_RULES as any[], frequency: 'daily', hour: 7 }
   const [cfg, setCfg] = useState<any>({ account: 'default', ...BLANK })
   const [accounts, setAccounts] = useState<any[]>([])
   const [pwd, setPwd] = useState('')
@@ -83,12 +89,25 @@ export default function EmailImportsPage() {
   }
   async function testConn() {
     setBusy('test'); setTest(null)
-    try { const r: any = await api('/api/v1/commcalc/email-sweep/test', { method: 'POST', body: JSON.stringify(body()) }); setTest(r); setMsg(`✅ Connected — ${r.count} recent message(s), ${r.matched_attachments} matching attachment(s).`) }
+    try {
+      const r: any = await api('/api/v1/commcalc/email-sweep/test', { method: 'POST', body: JSON.stringify(body()) }); setTest(r)
+      if (!(cfg.patterns || []).some((p: any) => (p.pattern || '').trim())) setMsg(`⚠️ Connected (${r.count} message(s)) — but NO filename rules are configured below, so nothing will ever import. Add a rule like *Sales*Transaction*Details* → daily sales, then Save.`)
+      else if (r.count > 0 && r.matched_attachments === 0) setMsg(`⚠️ Connected — ${r.count} message(s) found but 0 attachments match your rules. Check the attachment names listed below and adjust the rule patterns.`)
+      else setMsg(`✅ Connected — ${r.count} recent message(s), ${r.matched_attachments} matching attachment(s).`)
+    }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
   }
   async function runNow() {
     setBusy('run')
-    try { const r: any = await api(`/api/v1/commcalc/email-sweep/run-now?account=${encodeURIComponent(cfg.account || 'default')}`, { method: 'POST', body: '{}' }); setMsg(r.ok ? `✅ Ingested ${r.ingested} attachment(s).` : `❌ ${r.error}`); refresh(cfg.account) }
+    try {
+      const r: any = await api(`/api/v1/commcalc/email-sweep/run-now?account=${encodeURIComponent(cfg.account || 'default')}`, { method: 'POST', body: '{}' })
+      setMsg(!r.ok ? `❌ ${r.error}`
+        : r.ingested > 0 ? `✅ Ingested ${r.ingested} attachment(s).`
+        : !(cfg.patterns || []).some((p: any) => (p.pattern || '').trim())
+          ? '⚠️ 0 ingested — this mailbox has NO filename rules, so nothing can match. Add the rules below and Save.'
+          : '⚠️ 0 ingested — no NEW attachments matched your rules (already-imported files are skipped; use Test connection to see the attachment names in the box).')
+      refresh(cfg.account)
+    }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
   }
 
