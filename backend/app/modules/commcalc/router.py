@@ -1292,6 +1292,16 @@ async def detect_column_mapping(report_key: str = Form(...), carrier_id: str = F
     return {"headers": headers, "suggestions": column_mapping.suggest(headers, report_key, rules, client, org_id)}
 
 
+def _table_has_column(client, table, col):
+    """Cheap probe: True if commcalc.<table> has <col>. Lets the config-driven ingest stamp OPTIONAL
+    columns (e.g. carrier_id pre/post migration 081) without ever failing an upload on 42703."""
+    try:
+        client.schema("commcalc").table(table).select(col).limit(1).execute()
+        return True
+    except Exception:
+        return False
+
+
 @router.post("/upload-mapped")
 async def upload_mapped(
     report_key: str = Form(...),
@@ -1329,6 +1339,12 @@ async def upload_mapped(
     base = {"org_id": org_id}
     if period:
         base.update({"period": period, "period_month": pm["month"], "period_year": pm["year"]})
+    # Stamp the statement's carrier on every row when the caller names one AND the target table has
+    # the column (probe = pre-081 tolerant). The installment engine resolves carrier-SCOPED payout
+    # schedules (Total Wireless, mig 078) from row.carrier_id — unstamped rows can never match one.
+    # Boost is unaffected: its ePay/legacy paths don't come through here and stay NULL.
+    if (carrier_id or "").strip() and _table_has_column(sb(), table, "carrier_id"):
+        base["carrier_id"] = carrier_id.strip()
     mapped = column_mapping.map_records(df.to_dict("records"), rules, base)
 
     # carrier_commission: roll the mapped component amounts into total_commission (the rep's statement
@@ -1892,6 +1908,9 @@ async def commission_import_commit(
     base = {"org_id": org_id}
     if period:
         base.update({"period": period, "period_month": pm["month"], "period_year": pm["year"]})
+    # Same carrier stamp as /upload-mapped (see comment there) — wizard commits carry carrier_id too.
+    if (carrier_id or "").strip() and _table_has_column(client, table, "carrier_id"):
+        base["carrier_id"] = carrier_id.strip()
     mapped = column_mapping.map_records(df.to_dict("records"), rules, base)
     if report_key == "carrier_commission":
         amt_fields = commission_catalog.amount_fields(client, org_id, "carrier_commission")
@@ -4144,10 +4163,17 @@ async def product_mrc_coverage(period: str = "", org_id: str = ORG_ID):
     Unmatched plans sort first, then by count desc."""
     client = sb()
     catalog = installment_engine._load_product_mrc(client, org_id)
+    # raw_mi.carrier_id arrives with migration 081 — probe once and degrade to plan-only so this
+    # helper keeps working on a pre-081 database (rows then key under carrier None).
+    cols = 'customer_plan,carrier_id'
+    try:
+        client.schema('commcalc').table('raw_mi').select(cols).limit(1).execute()
+    except Exception:
+        cols = 'customer_plan'
     plans, start, page = {}, 0, 1000
     try:
         while True:
-            q = (client.schema('commcalc').table('raw_mi').select('customer_plan,carrier_id')
+            q = (client.schema('commcalc').table('raw_mi').select(cols)
                  .eq('org_id', org_id))
             if period.strip():
                 q = q.in_('period', _pvariants(period.strip()))
