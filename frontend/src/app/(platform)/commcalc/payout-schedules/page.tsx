@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { api, fmt } from '@/lib/client'
+import { api, apiUpload, fmt } from '@/lib/client'
 
 // Multi-month payout schedules (migration 057). A schedule spreads one activation's commission over
 // N months (flat or %MRC); months 2..N pay only if the bill was paid + residual received that month.
@@ -34,6 +34,8 @@ export default function PayoutSchedulesPage() {
   const [mrcDraft, setMrcDraft] = useState<any>(blankMrc())
   const [coverage, setCoverage] = useState<any>(null)
   const [covPeriod, setCovPeriod] = useState('')
+  const [imp, setImp] = useState<any>(null)       // price-sheet import: {file, headers, plan_col, mrc_col, rows, total, carrier_id}
+  const [impBusy, setImpBusy] = useState(false)
 
   async function load() {
     try {
@@ -66,6 +68,33 @@ export default function PayoutSchedulesPage() {
     try { setCoverage(await api(`/api/v1/commcalc/product-mrc/coverage${covPeriod.trim() ? `?period=${encodeURIComponent(covPeriod.trim())}` : ''}`)) }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
+  async function impPreview(file: File, planCol = '', mrcCol = '') {
+    setImpBusy(true); setMsg('')
+    try {
+      const fd = new FormData()
+      fd.append('file', file); fd.append('dry_run', 'true')
+      if (planCol) fd.append('plan_col', planCol)
+      if (mrcCol) fd.append('mrc_col', mrcCol)
+      const r = await apiUpload('/api/v1/commcalc/product-mrc/import', fd)
+      setImp({ ...r, file, carrier_id: imp?.carrier_id || '' })
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    setImpBusy(false)
+  }
+  async function impCommit() {
+    if (!imp?.file || !imp.plan_col || !imp.mrc_col) { setMsg('Pick the plan and MRC columns first.'); return }
+    setImpBusy(true); setMsg('')
+    try {
+      const fd = new FormData()
+      fd.append('file', imp.file); fd.append('plan_col', imp.plan_col); fd.append('mrc_col', imp.mrc_col)
+      if (imp.carrier_id) fd.append('carrier_id', imp.carrier_id)
+      const r = await apiUpload('/api/v1/commcalc/product-mrc/import', fd)
+      setMsg(`✅ Imported ${r.saved} new + ${r.updated} updated plan MRCs (${r.skipped} rows skipped).`)
+      setImp(null); loadMrc(); if (coverage) runCoverage()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    setImpBusy(false)
+  }
+  // plans already seen on statements (from the coverage check) — feeds the plan-name dropdown
+  const seenPlans: string[] = Array.from(new Set(((coverage?.plans || []) as any[]).map(p => p.customer_plan))).sort()
 
   function setNum(n: number) {
     const lines = Array.from({ length: n }, (_, i) => draft.lines?.[i] || blankLine(i + 1))
@@ -204,7 +233,9 @@ export default function PayoutSchedulesPage() {
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12 }}>
           <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Plan name<br />
-            <input style={{ ...sel, marginTop: 4, width: 220 }} placeholder="e.g. Total Unlimited $60" value={mrcDraft.plan_pattern} onChange={e => setMrcDraft({ ...mrcDraft, plan_pattern: e.target.value })} />
+            <input style={{ ...sel, marginTop: 4, width: 220 }} list="seen-plans" placeholder={seenPlans.length ? 'pick or type a plan…' : 'e.g. Total Unlimited $60'} value={mrcDraft.plan_pattern} onChange={e => setMrcDraft({ ...mrcDraft, plan_pattern: e.target.value })} />
+            <datalist id="seen-plans">{seenPlans.map(p => <option key={p} value={p} />)}</datalist>
+            {!seenPlans.length && <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text3)', display: 'block' }}>Tip: run “Check plans” below to fill this dropdown with the plans on your statements.</span>}
           </label>
           <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Match<br />
             <select style={{ ...sel, marginTop: 4 }} value={mrcDraft.match_op} onChange={e => setMrcDraft({ ...mrcDraft, match_op: e.target.value })}>
@@ -225,6 +256,57 @@ export default function PayoutSchedulesPage() {
           </label>
           <button className="btn btn-primary" onClick={saveMrc}>{mrcDraft.id ? '💾 Update' : '➕ Add'}</button>
           {mrcDraft.id && <button className="btn btn-secondary" onClick={() => setMrcDraft(blankMrc())}>Cancel</button>}
+        </div>
+
+        {/* bulk import from a carrier price sheet — no more typing every plan by hand */}
+        <div style={{ border: '1px dashed var(--border)', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 600, fontSize: 13 }}>📄 Import a price sheet</span>
+            <label className="btn btn-secondary" style={{ fontSize: 12, cursor: 'pointer' }}>
+              {imp?.file ? `↻ ${imp.file.name}` : 'Choose Excel/CSV…'}
+              <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={impBusy}
+                onChange={e => { const f = e.target.files?.[0]; if (f) impPreview(f); e.currentTarget.value = '' }} />
+            </label>
+            <span style={{ fontSize: 12, color: 'var(--text3)' }}>Any sheet with a plan-name column and a price column — we&apos;ll detect them, you confirm.</span>
+          </div>
+          {imp && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 8 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Plan column<br />
+                  <select style={{ ...sel, marginTop: 4 }} value={imp.plan_col || ''} onChange={e => impPreview(imp.file, e.target.value, imp.mrc_col || '')}>
+                    <option value="">— pick —</option>
+                    {(imp.headers || []).map((h: string) => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                </label>
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>MRC / price column<br />
+                  <select style={{ ...sel, marginTop: 4 }} value={imp.mrc_col || ''} onChange={e => impPreview(imp.file, imp.plan_col || '', e.target.value)}>
+                    <option value="">— pick —</option>
+                    {(imp.headers || []).map((h: string) => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                </label>
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Carrier<br />
+                  <select style={{ ...sel, marginTop: 4 }} value={imp.carrier_id || ''} onChange={e => setImp({ ...imp, carrier_id: e.target.value })}>
+                    <option value="">Any carrier</option>
+                    {carriers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </label>
+                <button className="btn btn-primary" disabled={impBusy || !imp.total} onClick={impCommit}>{impBusy ? '…' : `⬇ Import ${imp.total || 0} plans`}</button>
+                <button className="btn btn-secondary" onClick={() => setImp(null)}>Cancel</button>
+              </div>
+              {imp.note && <div style={{ fontSize: 12, color: '#b45309', marginBottom: 6 }}>{imp.note}</div>}
+              {(imp.rows || []).length > 0 && (
+                <table style={{ borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead><tr style={{ background: 'var(--surface2)' }}><th style={{ textAlign: 'left', padding: '4px 10px' }}>Plan</th><th style={{ textAlign: 'left', padding: '4px 10px' }}>MRC</th></tr></thead>
+                  <tbody>
+                    {imp.rows.map((r: any, i: number) => (
+                      <tr key={i} style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '3px 10px' }}>{r.plan}</td><td style={{ padding: '3px 10px', fontWeight: 600 }}>{fmt(r.mrc)}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {imp.total > (imp.rows || []).length && <div style={{ fontSize: 11, color: 'var(--text3)', padding: 4 }}>…and {imp.total - (imp.rows || []).length} more.</div>}
+            </div>
+          )}
         </div>
 
         {mrcItems.length > 0 && (

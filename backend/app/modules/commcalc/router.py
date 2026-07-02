@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Background
 from fastapi.responses import JSONResponse
 import pandas as pd
 import io
+import re
 from app.core.database import get_supabase
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float
 from app.modules.commcalc.gp_report import calc_gp_report
@@ -4154,6 +4155,95 @@ async def save_product_mrc(body: dict, org_id: str = ORG_ID):
 async def delete_product_mrc(item_id: str, org_id: str = ORG_ID):
     sb().schema('commcalc').table('product_mrc').delete().eq('id', item_id).eq('org_id', org_id).execute()
     return {"deleted": item_id}
+
+
+def _detect_mrc_columns(headers):
+    """Best-guess which uploaded columns hold the plan name and its monthly price."""
+    plan_col = mrc_col = ""
+    for h in headers:
+        hl = str(h).lower()
+        if not plan_col and re.search(r"plan|product|offer|description|name", hl):
+            plan_col = h
+    for h in headers:
+        hl = str(h).lower()
+        if h != plan_col and not mrc_col and re.search(r"mrc|price|rate|monthly|charge|amount|cost", hl):
+            mrc_col = h
+    return plan_col, mrc_col
+
+
+@router.post("/product-mrc/import")
+async def import_product_mrc(
+    file: UploadFile = File(...),
+    carrier_id: str = Form(""),
+    plan_col: str = Form(""),
+    mrc_col: str = Form(""),
+    match_op: str = Form("equals"),
+    dry_run: bool = Form(False),
+    org_id: str = ORG_ID,
+):
+    """Bulk-load the per-product MRC catalog from a carrier price sheet (Excel/CSV) so nobody has
+    to remember/type every plan name. dry_run=true returns the headers, the auto-detected plan/MRC
+    columns and a parsed preview — the UI lets the user re-pick columns from dropdowns, then
+    commits. Existing entries (same carrier + plan + match) are UPDATED, new ones inserted."""
+    require_org(org_id)
+    if match_op not in ("equals", "contains"):
+        raise HTTPException(400, "match_op must be 'equals' or 'contains'")
+    contents = await file.read()
+    try:
+        df = _read_upload_df(contents, getattr(file, "filename", ""))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file: {e}")
+    headers = [str(h).strip() for h in df.columns if str(h).strip()]
+    auto_plan, auto_mrc = _detect_mrc_columns(headers)
+    use_plan = (plan_col or "").strip() or auto_plan
+    use_mrc = (mrc_col or "").strip() or auto_mrc
+
+    parsed, skipped = [], 0
+    if use_plan and use_mrc and use_plan in headers and use_mrc in headers:
+        seen = set()
+        for r in df.to_dict("records"):
+            plan = str(r.get(use_plan) or "").strip()
+            mrc = safe_float(re.sub(r"[$,\s]", "", str(r.get(use_mrc) or "")))
+            if not plan or plan.lower() in seen or mrc <= 0:
+                skipped += 1
+                continue
+            seen.add(plan.lower())
+            parsed.append({"plan": plan, "mrc": round(mrc, 2)})
+
+    if dry_run:
+        return {"headers": headers, "plan_col": use_plan, "mrc_col": use_mrc,
+                "rows": parsed[:15], "total": len(parsed), "skipped": skipped,
+                "note": None if (use_plan and use_mrc) else
+                "Could not auto-detect the plan/price columns — pick them from the dropdowns."}
+    if not parsed:
+        raise HTTPException(400, "No usable rows — pick the plan and MRC columns (dry_run shows the headers).")
+
+    client = sb()
+    try:
+        existing = (client.schema('commcalc').table('product_mrc')
+                    .select('id,carrier_id,plan_pattern,match_op').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        raise HTTPException(400, "Run migration 074_product_mrc.sql first.")
+    cid = (carrier_id or "").strip() or None
+    by_key = {((e.get('carrier_id') or ''), str(e.get('plan_pattern') or '').lower(), e.get('match_op')): e['id']
+              for e in existing}
+    saved = updated = 0
+    inserts = []
+    for p in parsed:
+        key = ((cid or ''), p['plan'].lower(), match_op)
+        if key in by_key:
+            client.schema('commcalc').table('product_mrc').update(
+                {"mrc": p['mrc'], "is_active": True}).eq('id', by_key[key]).eq('org_id', org_id).execute()
+            updated += 1
+        else:
+            inserts.append({"org_id": org_id, "carrier_id": cid, "plan_pattern": p['plan'],
+                            "match_op": match_op, "mrc": p['mrc'], "priority": 100, "is_active": True,
+                            "note": f"imported from {getattr(file, 'filename', 'sheet')}"})
+    for i in range(0, len(inserts), 200):
+        client.schema('commcalc').table('product_mrc').insert(inserts[i:i + 200]).execute()
+        saved += len(inserts[i:i + 200])
+    return {"saved": saved, "updated": updated, "skipped": skipped, "total": len(parsed),
+            "plan_col": use_plan, "mrc_col": use_mrc}
 
 
 @router.get("/product-mrc/coverage")
