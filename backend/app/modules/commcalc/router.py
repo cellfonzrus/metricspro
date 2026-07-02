@@ -6897,3 +6897,126 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
         except Exception:
             pass
         raise HTTPException(500, f"pull failed: {e}")
+
+
+_MA_COMPONENTS = ["device_margin", "consumer_margin", "consumer_financing", "rebate",
+                  "wallet_funding", "fees_margin",
+                  "spiff_m1", "spiff_m2", "spiff_m3", "spiff_m4", "spiff_m5", "spiff_m6"]
+
+
+def _read_ma(client, org_id, table, period, cols):
+    out, start, page = [], 0, 1000
+    while True:
+        q = client.schema("commcalc").table(table).select(cols).eq("org_id", org_id)
+        if period:
+            q = q.in_("period", _pvariants(period))
+        rows = q.range(start, start + page - 1).execute().data or []
+        out.extend(rows)
+        if len(rows) < page:
+            break
+        start += page
+    return out
+
+
+@router.get("/ma-commission/summary")
+def ma_commission_summary(period: str = "", org_id: str = ORG_ID):
+    """The Total-processor commission roll-up (raw_ma_commission + raw_ma_daily_tx, mig 083).
+    Sign convention on the Commission Details export: NEGATIVE = paid TO the dealer, so payable
+    figures here are sign-FLIPPED (positive = money the dealer receives). Org-scoped — computes
+    against whatever org the MA reports were uploaded into. Read-only."""
+    require_org(org_id)
+    client = sb()
+    try:
+        comm = _read_ma(client, org_id, "raw_ma_commission", period.strip(),
+                        "tx_date,period,merchant_account_id,user_name,platform,activation_type,"
+                        "activation_type2,sub_type,mrc_net_discount," + ",".join(_MA_COMPONENTS))
+    except Exception:
+        return {"ready": False, "note": "Run migration 083_total_processor_sources.sql, then upload the "
+                                        "MA reports on Data Imports (or add mailbox rules)."}
+    try:
+        tx = _read_ma(client, org_id, "raw_ma_daily_tx", period.strip(),
+                      "tx_date,period,account_id,account_name,retail_cost,merchant_discount")
+    except Exception:
+        tx = []
+
+    comps = {k: 0.0 for k in _MA_COMPONENTS}
+    acts = {"total": 0, "new": 0, "add": 0, "branded": 0, "byop": 0}
+    by_store, by_rep, by_platform = {}, {}, {}
+    dates = [r.get("tx_date") for r in comm if r.get("tx_date")]
+    for r in comm:
+        pay = -sum(safe_float(r.get(k)) for k in _MA_COMPONENTS)   # flip: positive = dealer receives
+        spiffs = -sum(safe_float(r.get(f"spiff_m{i}")) for i in range(1, 7))
+        for k in _MA_COMPONENTS:
+            comps[k] += safe_float(r.get(k))
+        acts["total"] += 1
+        at = (r.get("activation_type") or "").strip().lower()
+        at2 = (r.get("activation_type2") or "").strip().lower()
+        if at == "new":
+            acts["new"] += 1
+        elif at == "add":
+            acts["add"] += 1
+        if at2 in ("branded", "byop"):
+            acts[at2] += 1
+        sk = (r.get("merchant_account_id") or "?").strip() or "?"
+        st = by_store.setdefault(sk, {"account_id": sk, "activations": 0, "payable": 0.0,
+                                      "spiffs": 0.0, "rebates": 0.0, "airtime_margin": 0.0, "name": None})
+        st["activations"] += 1
+        st["payable"] += pay
+        st["spiffs"] += spiffs
+        st["rebates"] += -safe_float(r.get("rebate"))
+        rk = (r.get("user_name") or "?").strip() or "?"
+        rp = by_rep.setdefault(rk, {"rep": rk, "activations": 0, "payable": 0.0, "spiffs": 0.0,
+                                    "rebates": 0.0, "avg_mrc": 0.0, "_mrc_n": 0, "_mrc_sum": 0.0})
+        rp["activations"] += 1
+        rp["payable"] += pay
+        rp["spiffs"] += spiffs
+        rp["rebates"] += -safe_float(r.get("rebate"))
+        mrc = safe_float(r.get("mrc_net_discount"))
+        if mrc > 0:
+            rp["_mrc_n"] += 1
+            rp["_mrc_sum"] += mrc
+        pk = (r.get("platform") or "?").strip() or "?"
+        pl = by_platform.setdefault(pk, {"platform": pk, "activations": 0, "payable": 0.0})
+        pl["activations"] += 1
+        pl["payable"] += pay
+
+    airtime = {"orders": len(tx), "retail": 0.0, "margin": 0.0}
+    for r in tx:
+        airtime["retail"] += safe_float(r.get("retail_cost"))
+        margin = safe_float(r.get("merchant_discount"))
+        airtime["margin"] += margin
+        sk = (r.get("account_id") or "?").strip() or "?"
+        st = by_store.setdefault(sk, {"account_id": sk, "activations": 0, "payable": 0.0,
+                                      "spiffs": 0.0, "rebates": 0.0, "airtime_margin": 0.0, "name": None})
+        st["airtime_margin"] += margin
+        if r.get("account_name") and not st.get("name"):
+            st["name"] = r.get("account_name")
+        dates.append(r.get("tx_date"))
+
+    for rp in by_rep.values():
+        rp["avg_mrc"] = round(rp.pop("_mrc_sum") / rp["_mrc_n"], 2) if rp["_mrc_n"] else None
+        rp.pop("_mrc_n", None)
+    rnd = lambda d: {k: (round(v, 2) if isinstance(v, float) else v) for k, v in d.items()}
+    total_payable = -sum(comps.values())
+    spiff_by_month = {f"m{i}": round(-comps[f"spiff_m{i}"], 2) for i in range(1, 7)}
+    dates = [d for d in dates if d]
+    return {"ready": True, "period": period or "all",
+            "rows": len(comm), "date_range": ([min(dates), max(dates)] if dates else None),
+            "activations": acts,
+            "total_payable": round(total_payable, 2),
+            "components": {"device_margin": round(-comps["device_margin"], 2),
+                           "consumer_margin": round(-comps["consumer_margin"], 2),
+                           "consumer_financing": round(-comps["consumer_financing"], 2),
+                           "rebates": round(-comps["rebate"], 2),
+                           "wallet_funding": round(-comps["wallet_funding"], 2),
+                           "fees_margin": round(-comps["fees_margin"], 2),
+                           "spiffs_total": round(-sum(comps[f"spiff_m{i}"] for i in range(1, 7)), 2)},
+            "spiff_by_month": spiff_by_month,
+            "airtime": rnd(airtime),
+            "by_store": sorted((rnd(s) for s in by_store.values()),
+                               key=lambda s: -(s["payable"] + s["airtime_margin"])),
+            "by_rep": sorted((rnd(r) for r in by_rep.values()), key=lambda r: -r["payable"]),
+            "by_platform": sorted((rnd(p) for p in by_platform.values()), key=lambda p: -p["payable"]),
+            "note": None if comm or tx else
+            "No MA rows for this period yet — upload the MA reports on Data Imports (no period needed) "
+            "or add mailbox rules (*Commission*Details* → MA Commission Details)."}

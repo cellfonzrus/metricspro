@@ -1,0 +1,136 @@
+'use client'
+import { useEffect, useState } from 'react'
+import { api, fmt } from '@/lib/client'
+
+// Total Processor (VidaPay / Total Access) commission report — the MA Commission Details + MA Daily
+// Tx roll-up (mig 083). Sign-flipped: positive = money the dealer RECEIVES. Org-scoped: shows the
+// data uploaded into THIS tenant (Data Imports → MA cards, or the mailbox rules). Read-only.
+
+const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
+const tile: React.CSSProperties = { flex: 1, minWidth: 150, border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px' }
+const th: React.CSSProperties = { textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }
+const td: React.CSSProperties = { padding: '5px 8px', fontSize: 13 }
+
+function currentPeriod() {
+  const d = new Date()
+  return d.toLocaleString('en-US', { month: 'long', year: 'numeric' })
+}
+
+export default function MaCommissionPage() {
+  const [period, setPeriod] = useState(currentPeriod())
+  const [d, setD] = useState<any>(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  async function load(p = period) {
+    setBusy(true); setMsg('')
+    try { setD(await api(`/api/v1/commcalc/ma-commission/summary?period=${encodeURIComponent(p.trim())}`)) }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    setBusy(false)
+  }
+  useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div style={{ maxWidth: 1020 }}>
+      <div style={{ marginBottom: 14 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📡 Total Processor Commissions</h1>
+        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          What the payment processor (VidaPay / Total Access) owes you — activations with rebates &amp; month 1–6
+          spiffs from <b>MA Commission Details</b>, plus airtime margin from <b>MA Daily Tx</b>. Positive = money you
+          receive. Upload the reports on <a href="/commcalc/upload" style={{ color: 'var(--accent,#2563eb)' }}>Data Imports</a> (no
+          period needed) or auto-import them with a mailbox rule.
+        </p>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
+        <input style={{ ...sel, width: 160 }} placeholder="e.g. June 2026 (blank = all)" value={period} onChange={e => setPeriod(e.target.value)} />
+        <button className="btn btn-primary" disabled={busy} onClick={() => load()}>{busy ? '…' : 'Load'}</button>
+        {d?.date_range && <span style={{ fontSize: 12, color: 'var(--text3)' }}>data {d.date_range[0]} → {d.date_range[1]} · {d.rows} activation rows</span>}
+      </div>
+      {msg && <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
+      {d && d.ready === false && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {d.note}</div>}
+      {d?.ready && d.note && <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13, color: 'var(--text2)' }}>{d.note}</div>}
+
+      {d?.ready && !d.note && <>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+          <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Total payable</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#059669' }}>{fmt(d.total_payable)}</div></div>
+          <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Activations</div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>{d.activations.total}</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)' }}>{d.activations.new} new · {d.activations.add} add · {d.activations.byop} BYOP</div></div>
+          <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Rebates</div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(d.components.rebates)}</div></div>
+          <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Spiffs (M1–M6)</div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(d.components.spiffs_total)}</div></div>
+          <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Airtime margin</div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(d.airtime.margin)}</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)' }}>{d.airtime.orders} top-ups · {fmt(d.airtime.retail)} retail</div></div>
+        </div>
+
+        <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Residual spiffs by month-in-life</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {Object.entries(d.spiff_by_month || {}).map(([m, v]: any) => (
+              <div key={m} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 14px', textAlign: 'center' }}>
+                <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700 }}>{m.toUpperCase()}</div>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>{fmt(v)}</div>
+              </div>
+            ))}
+            <div style={{ alignSelf: 'center', fontSize: 12, color: 'var(--text3)', maxWidth: 320 }}>
+              The processor pre-computes each activation&apos;s month 1–6 residual spiffs — compare against the Payout Schedules expectation.
+            </div>
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: 0, marginBottom: 14 }}>
+          <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>By store ({d.by_store.length})</div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr style={{ background: 'var(--surface2)' }}>{['Store / account', 'Activations', 'Rebates', 'Spiffs', 'Airtime margin', 'Total payable'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {d.by_store.map((s: any) => (
+                <tr key={s.account_id} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={{ ...td, fontWeight: 600 }}>{s.name || s.account_id}{s.name && <span style={{ fontSize: 11, color: 'var(--text3)' }}> · {s.account_id}</span>}</td>
+                  <td style={td}>{s.activations}</td>
+                  <td style={td}>{fmt(s.rebates)}</td>
+                  <td style={td}>{fmt(s.spiffs)}</td>
+                  <td style={td}>{fmt(s.airtime_margin)}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>{fmt(s.payable + s.airtime_margin)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="card" style={{ padding: 0, marginBottom: 14 }}>
+          <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>By rep ({d.by_rep.length})</div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr style={{ background: 'var(--surface2)' }}>{['Rep (processor login)', 'Activations', 'Rebates', 'Spiffs', 'Avg MRC', 'Payable'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {d.by_rep.map((r: any) => (
+                <tr key={r.rep} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={{ ...td, fontWeight: 600 }}>{r.rep}</td>
+                  <td style={td}>{r.activations}</td>
+                  <td style={td}>{fmt(r.rebates)}</td>
+                  <td style={td}>{fmt(r.spiffs)}</td>
+                  <td style={td}>{r.avg_mrc != null ? fmt(r.avg_mrc) : '—'}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>{fmt(r.payable)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {d.by_platform.length > 1 && (
+          <div className="card" style={{ padding: 14 }}>
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>By platform</div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {d.by_platform.map((p: any) => (
+                <div key={p.platform} style={{ fontSize: 13 }}><b>{p.platform}</b>: {p.activations} activations · {fmt(p.payable)}</div>
+              ))}
+            </div>
+          </div>
+        )}
+      </>}
+    </div>
+  )
+}
