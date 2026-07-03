@@ -76,6 +76,10 @@ def create_shift(shift: dict, org_id: str = ORG_ID):
         if conflict:
             who = shift.get("employee_name") or "This employee"
             raise HTTPException(409, f"{who} has approved time off on {sdate} — cannot schedule.")
+    # Hours-budget guard (mig 087): block scheduling past the store's weekly budget unless a DM
+    # approved an override for that store+week. Only enforced when a budget is set for the store;
+    # any lookup failure degrades to "allow" so scheduling never breaks on a config/migration gap.
+    _enforce_hours_budget(shift.get("org_id") or org_id, shift, exclude_id=None)
     # Stamp org_id so the row survives the org-scoped read filter on GET /shifts.
     # (shifts.org_id has NO column default → an unstamped insert lands NULL and vanishes.)
     shift = {**shift, "org_id": shift.get("org_id") or org_id}
@@ -1203,6 +1207,218 @@ def decide_shift_extension(ext_id: str, body: dict, authorization: str = Header(
            "decided_at": datetime.now(timezone.utc).isoformat(),
            "decision_note": body.get("note")}
     sb().table("shift_extension").update(upd).eq("id", ext_id).eq("org_id", org_id).execute()
+    return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# PER-STORE WEEKLY HOURS BUDGET + DM-approved overrides (migration 087)
+# A store manager can't schedule past the store's weekly budget; exceeding it needs a District
+# Manager's in-app approval for that store+week (the tick IS the approval, recorded with who+when).
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _hours_between(start, end):
+    """Duration in hours between two 'HH:MM' strings (0 if malformed / end<=start)."""
+    try:
+        sh, sm = [int(x) for x in str(start).split(":")[:2]]
+        eh, em = [int(x) for x in str(end).split(":")[:2]]
+        return max(0.0, ((eh * 60 + em) - (sh * 60 + sm)) / 60.0)
+    except Exception:
+        return 0.0
+
+
+def _work_week_bounds(org_id, date_str):
+    """(week_start_iso, week_end_iso) for the 7-day work-week containing date_str, per the tenant's
+    work_week_start_dow (mig 085; default Monday=0)."""
+    from datetime import date as _d
+    dow = 0
+    try:
+        t = (sb().table("tenants").select("work_week_start_dow").eq("org_id", org_id).limit(1).execute().data) or []
+        if t and t[0].get("work_week_start_dow") is not None:
+            dow = int(t[0]["work_week_start_dow"]) % 7
+    except Exception:
+        pass
+    d = _d.fromisoformat(str(date_str)[:10])
+    ws = d - timedelta(days=(d.weekday() - dow) % 7)
+    return ws.isoformat(), (ws + timedelta(days=6)).isoformat()
+
+
+def _store_week_hours(org_id, store_code, ws, we, exclude_id=None):
+    """Total scheduled hours at a store across the work-week [ws, we]."""
+    rows = (sb().table("shifts").select("id,scheduled_hours,start_time,end_time")
+            .eq("org_id", org_id).eq("store_code", store_code).eq("is_deleted", False)
+            .gte("shift_date", ws).lte("shift_date", we).execute().data) or []
+    total = 0.0
+    for r in rows:
+        if exclude_id and str(r.get("id")) == str(exclude_id):
+            continue
+        h = r.get("scheduled_hours")
+        if h is None:
+            h = _hours_between(r.get("start_time"), r.get("end_time"))
+        total += float(h or 0)
+    return total
+
+
+def _store_budget(org_id, store_code):
+    try:
+        rows = (sb().table("hours_budget").select("weekly_hours").eq("org_id", org_id)
+                .eq("store_code", store_code).limit(1).execute().data) or []
+        if rows and rows[0].get("weekly_hours") is not None:
+            return float(rows[0]["weekly_hours"])
+    except Exception:
+        pass
+    return None
+
+
+def _budget_override_ok(org_id, store_code, ws):
+    try:
+        rows = (sb().table("budget_override").select("id").eq("org_id", org_id)
+                .eq("store_code", store_code).eq("week_start", ws).eq("status", "approved")
+                .limit(1).execute().data) or []
+        return bool(rows)
+    except Exception:
+        return False
+
+
+def _enforce_hours_budget(org_id, shift, exclude_id=None):
+    """Raise 409 if adding `shift` would push its store's work-week over budget (and no DM override
+    exists). No-op when the store has no budget set or on any lookup error (never blocks on a gap)."""
+    try:
+        store = (shift.get("store_code") or "").strip()
+        sdate = (shift.get("shift_date") or "").strip()
+        if not (store and sdate):
+            return
+        budget = _store_budget(org_id, store)
+        if budget is None:
+            return
+        ws, we = _work_week_bounds(org_id, sdate)
+        new_h = shift.get("scheduled_hours")
+        if new_h is None:
+            new_h = _hours_between(shift.get("start_time"), shift.get("end_time"))
+        projected = _store_week_hours(org_id, store, ws, we, exclude_id=exclude_id) + float(new_h or 0)
+        if projected > budget + 1e-6 and not _budget_override_ok(org_id, store, ws):
+            raise HTTPException(409, f"Over the weekly hours budget for {store}: this would schedule "
+                                     f"{projected:.1f}h vs the {budget:.0f}h budget for the week of {ws}. "
+                                     f"Request District Manager approval to exceed it.")
+    except HTTPException:
+        raise
+    except Exception:
+        return  # config/migration gap → don't block scheduling
+
+
+@router.get("/hours-budgets")
+def list_hours_budgets(week: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Every store's weekly budget + this-week usage (usage for the work-week containing `week`, or
+    today). Powers the budget admin + the over-budget alert."""
+    try:
+        org_id, _ = _caller_identity(authorization)
+    except Exception:
+        pass
+    ref = (week or datetime.now(timezone.utc).astimezone(_BIZ_TZ).date().isoformat())
+    ws, we = _work_week_bounds(org_id, ref)
+    budgets = {b["store_code"]: float(b.get("weekly_hours") or 0)
+               for b in (sb().table("hours_budget").select("store_code,weekly_hours").eq("org_id", org_id).execute().data or [])}
+    stores = (sb().table("stores").select("store_code,address").eq("org_id", org_id).execute().data) or []
+    out = []
+    for s in stores:
+        sc = s.get("store_code")
+        if not sc:
+            continue
+        used = _store_week_hours(org_id, sc, ws, we)
+        bud = budgets.get(sc)
+        out.append({"store_code": sc, "address": s.get("address"), "weekly_hours": bud,
+                    "used_hours": round(used, 1), "over": (bud is not None and used > bud + 1e-6),
+                    "override": _budget_override_ok(org_id, sc, ws)})
+    return {"week_start": ws, "week_end": we, "budgets": out}
+
+
+@router.put("/hours-budgets")
+def set_hours_budget(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Set (or clear) a store's standing weekly hours budget. Manager/admin only."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    store = (body.get("store_code") or "").strip()
+    if not store:
+        raise HTTPException(400, "store_code required")
+    if body.get("weekly_hours") in (None, "", "null"):
+        sb().table("hours_budget").delete().eq("org_id", org_id).eq("store_code", store).execute()
+        return {"ok": True, "cleared": True}
+    row = {"org_id": org_id, "store_code": store, "weekly_hours": float(body.get("weekly_hours") or 0),
+           "updated_by": mgr.get("email"), "updated_at": datetime.now(timezone.utc).isoformat()}
+    sb().table("hours_budget").upsert(row, on_conflict="org_id,store_code").execute()
+    return {"ok": True, "store_code": store, "weekly_hours": row["weekly_hours"]}
+
+
+@router.post("/budget-overrides")
+async def request_budget_override(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """A manager requests DM approval to exceed a store's weekly budget. Resolves the DM, saves it
+    'pending', emails the DM an FYI. Body: {store_code, week_start, approved_hours?, reason?}."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    store = (body.get("store_code") or "").strip()
+    week_start = (body.get("week_start") or "").strip()[:10]
+    if not (store and week_start):
+        raise HTTPException(400, "store_code and week_start are required")
+    dm_eid, dm_email, dm_name = _dm_for_store(org_id, store)
+    row = {"org_id": org_id, "store_code": store, "week_start": week_start,
+           "approved_hours": body.get("approved_hours"), "reason": body.get("reason"),
+           "status": "pending", "requested_by": mgr.get("email"), "requested_by_name": mgr.get("email"),
+           "dm_employee_id": dm_eid, "dm_email": dm_email}
+    try:
+        r = sb().table("budget_override").insert(row).execute()
+        oid = (r.data or [{}])[0].get("id")
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — is migration 087 applied? {e}")
+    emailed = False
+    if dm_email:
+        try:
+            from app.modules.notify.channels import email_resend
+            if email_resend.is_configured():
+                await email_resend.send_email(
+                    to=dm_email,
+                    subject=f"Hours-budget override needed — {store} (week of {week_start})",
+                    html=(f"<p>{mgr.get('email')} requested to schedule <b>{store}</b> past its weekly "
+                          f"hours budget for the week of <b>{week_start}</b>.</p>"
+                          f"<p>Reason: {body.get('reason') or '—'}</p>"
+                          f"<p>Approve or deny it in MetricsPro → Workforce → Hours Budget.</p>"))
+                emailed = True
+        except Exception:
+            pass
+    return {"ok": True, "id": oid, "status": "pending",
+            "dm": {"employee_id": dm_eid, "name": dm_name, "email": dm_email, "emailed": emailed},
+            "note": None if dm_eid else "No District Manager configured for this store — an admin or DM can still approve."}
+
+
+@router.get("/budget-overrides")
+def list_budget_overrides(status: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    try:
+        org_id, _ = _caller_identity(authorization)
+    except Exception:
+        pass
+    q = sb().table("budget_override").select("*").eq("org_id", org_id)
+    if status:
+        q = q.eq("status", status)
+    rows = q.order("requested_at", desc=True).limit(200).execute().data or []
+    return {"overrides": rows}
+
+
+@router.post("/budget-overrides/{ov_id}/decision")
+def decide_budget_override(ov_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The DM (or admin) approves/denies in-app — the tick is the approval, recorded with who+when.
+    Approving unlocks scheduling past budget for that store+week. Body: {decision, note?}."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    decision = (body.get("decision") or "").strip().lower()
+    if decision not in ("approve", "deny"):
+        raise HTTPException(400, "decision must be 'approve' or 'deny'")
+    rows = (sb().table("budget_override").select("status").eq("id", ov_id).eq("org_id", org_id)
+            .limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "unknown request")
+    if rows[0].get("status") != "pending":
+        raise HTTPException(409, f"already {rows[0].get('status')}")
+    upd = {"status": "approved" if decision == "approve" else "denied",
+           "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
+           "decided_at": datetime.now(timezone.utc).isoformat(), "decision_note": body.get("note")}
+    sb().table("budget_override").update(upd).eq("id", ov_id).eq("org_id", org_id).execute()
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
 
 
