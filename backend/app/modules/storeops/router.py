@@ -659,18 +659,21 @@ def _allowed_clock_stores(org_id, employee_id, home_store, work_date_local):
     return codes
 
 
-def _require_manager(authorization, org_id):
+def _require_manager(authorization, org_id=ORG_ID):
     """Resolve the signed-in caller and confirm they're a manager (not a plain rep) so they can
-    authorize a clock-in override. Returns the manager's app_user row; raises 401/403 otherwise."""
+    authorize a clock-in override. Resolves the manager's OWN tenant from their token (auth_id is
+    globally unique), so a manager in ANY tenant — not just the house org — can approve; the returned
+    row carries org_id, which the caller uses for the employee lookup + punch. 401/403 otherwise."""
     from app.modules.core.router import _uid_from_token
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "A manager must sign in to approve this override.")
-    rows = (sb().table("app_users").select("email,role,employee_id").eq("org_id", org_id)
+    rows = (sb().table("app_users").select("org_id,email,role,employee_id")
             .eq("auth_id", uid).limit(1).execute().data) or []
     if not rows:
         raise HTTPException(403, "That login isn't recognized.")
     u = rows[0]
+    org_id = (u.get("org_id") or "").strip() or org_id
     role = (u.get("role") or "").lower()
     MGR_ROLES = {"admin", "market_manager", "store_manager", "district_manager",
                  "regional_manager", "director", "executive"}
@@ -705,10 +708,36 @@ def _caller_employee_id(authorization: str, org_id: str = ORG_ID) -> str:
     return eid
 
 
+def _caller_identity(authorization: str):
+    """Resolve the caller's OWN (org_id, employee_id) from their Supabase JWT ALONE — no org filter.
+    auth_id is globally unique, so it maps to exactly ONE app_users row, in whatever tenant that user
+    belongs to. That tenant is authoritative for self-service time-clock, so a punch always lands in
+    the employee's OWN tenant regardless of any org_id query param (the kiosk sends none). This is
+    what lets one person hold a separate login per tenant with fully isolated clock-in/out.
+
+    Fixes the cross-tenant clock-in breakage: the old path pinned the lookup to the house org
+    (org_id default = ...0001), so an employee moved to another tenant (their app_users.org_id
+    re-pointed) matched nothing here and got a 403 'login isn't linked to an employee record'.
+    401 if not signed in; 403 if the login isn't linked to an employee record."""
+    from app.modules.core.router import _uid_from_token  # local import avoids a circular import
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "Sign in to use the time clock.")
+    rows = (sb().table("app_users").select("org_id,employee_id")
+            .eq("auth_id", uid).limit(1).execute().data) or []
+    row = rows[0] if rows else {}
+    org = (row.get("org_id") or "").strip() or ORG_ID
+    eid = ((row.get("employee_id") or "")).strip()
+    if not eid:
+        raise HTTPException(403, "Your login isn't linked to an employee record. "
+                                 "Ask an admin to set your Employee ID in Roles & Access.")
+    return org, eid
+
+
 @router.get("/timeclock/status")
 def timeclock_status(authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Is the SIGNED-IN employee currently clocked in? Identity comes from the auth token."""
-    employee_id = _caller_employee_id(authorization)
+    """Is the SIGNED-IN employee currently clocked in? Identity AND tenant come from the auth token."""
+    org_id, employee_id = _caller_identity(authorization)
     rows = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
             .is_("clock_out", "null").order("clock_in", desc=True).limit(1).execute().data) or []
     if rows:
@@ -722,7 +751,7 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
     """Record a clock-in (one row). Identity is the SIGNED-IN employee (from the auth token) — a
     body employee_id is ignored, so you can only punch yourself. Selfie (base64) + GPS + face-match%
     are still stored for audit (defense in depth)."""
-    employee_id = _caller_employee_id(authorization)
+    org_id, employee_id = _caller_identity(authorization)
     # guard: don't open a second concurrent entry
     open_rows = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
                  .is_("clock_out", "null").limit(1).execute().data) or []
@@ -757,7 +786,7 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
 def timeclock_allowed_stores(authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The stores the signed-in employee can clock in at today (home + scheduled + floater), so the
     kiosk can show a picker instead of forcing the home store."""
-    employee_id = _caller_employee_id(authorization)
+    org_id, employee_id = _caller_identity(authorization)
     name, home_store = _emp_name(org_id, employee_id)
     work_date = datetime.now(timezone.utc).astimezone(_BIZ_TZ).date().isoformat()
     allowed = sorted(_allowed_clock_stores(org_id, employee_id, home_store, work_date))
@@ -772,6 +801,7 @@ def clock_in_override(body: dict, authorization: str = Header(default=""), org_i
     (exactly what the user asked: 'manager override + update their schedule'). Body: {employee_id,
     store_code, selfie?, gps_lat?, gps_lng?, gps_accuracy_m?, face_match_pct?, device?}."""
     mgr = _require_manager(authorization, org_id)
+    org_id = (mgr.get("org_id") or org_id)   # the manager's own tenant is authoritative
     employee_id = (body.get("employee_id") or "").strip()
     store_code = (body.get("store_code") or "").strip()
     if not employee_id or not store_code:
@@ -810,7 +840,7 @@ def clock_in_override(body: dict, authorization: str = Header(default=""), org_i
 def clock_out(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Close the SIGNED-IN employee's open entry (updates the SAME row) and compute hours. Always
     scoped to the caller's own employee_id so one employee can't close another's punch."""
-    employee_id = _caller_employee_id(authorization)
+    org_id, employee_id = _caller_identity(authorization)
     entry_id = body.get("entry_id")
     q = (sb().table("timelog").select("*").eq("org_id", org_id).is_("clock_out", "null")
          .eq("employee_id", employee_id))
@@ -855,7 +885,7 @@ def timeclock_list(start: str = "", end: str = "", employee_id: str = "", author
 def get_face(authorization: str = Header(default=""), action: str = "", org_id: str = ORG_ID):
     """Registration status (and the descriptor itself when action=descriptor, for verify) for the
     SIGNED-IN employee — identity comes from the auth token."""
-    employee_id = _caller_employee_id(authorization)
+    org_id, employee_id = _caller_identity(authorization)
     rows = (sb().table("face_descriptors").select("*").eq("org_id", org_id)
             .eq("employee_id", employee_id).limit(1).execute().data) or []
     if not rows:
@@ -869,7 +899,7 @@ def get_face(authorization: str = Header(default=""), action: str = "", org_id: 
 def save_face(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Save (or re-register) an averaged 128-float descriptor for the SIGNED-IN employee — identity
     comes from the auth token, so you can only enroll your own face."""
-    employee_id = _caller_employee_id(authorization)
+    org_id, employee_id = _caller_identity(authorization)
     descriptor = body.get("descriptor")
     if not isinstance(descriptor, list) or len(descriptor) != 128:
         raise HTTPException(400, "a 128-float descriptor is required")
