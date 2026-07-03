@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     ACCOUNT_ENGINE_MODEL: str = "claude-opus-4-8"
 
+    # ── Sensitive-field encryption (employee PII: SSN/bank/A-Number) ──────────────
+    # Fernet key(s) for app-level encryption of sensitive onboarding fields (app/core/crypto.py).
+    # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Unset = graceful passthrough (values stay plaintext; the UI warns). ROTATION: set
+    # FIELD_ENCRYPTION_KEYS = "newkey,oldkey" (newest first). ⚠️ Losing the key makes ciphertext
+    # unrecoverable — store it in a secrets manager and back it up.
+    FIELD_ENCRYPTION_KEY: str = ""
+    FIELD_ENCRYPTION_KEYS: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

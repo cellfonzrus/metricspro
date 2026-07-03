@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Header, HTTPException, UploadFile, File, Form
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core import crypto
 from app.modules.storeops.router import scope_keyset, in_keyset
 
 router = APIRouter(prefix="/hr", tags=["HR"])
@@ -538,6 +539,120 @@ def onboarding_set_profile(employee_id: str, body: dict, org_id: str = ORG_ID):
     return {"ok": True, "work_state": upd.get("work_state")}
 
 
+# ── Sensitive PII: encrypted at rest, revealed only to HR / admins (audited) ───────────────────
+def _rbac_enforced() -> bool:
+    try:
+        rows = get_supabase().schema("storeops").table("app_config").select("rbac_enabled") \
+            .eq("id", 1).limit(1).execute().data or []
+        return bool(rows and rows[0].get("rbac_enabled"))
+    except Exception:
+        return False
+
+
+def _require_hr_or_admin(authorization: str):
+    """Resolve the caller from their token and confirm they may see sensitive employee PII (admin,
+    super-admin, or an HR-titled role). Returns (org_id, email, role). Resolves the caller's OWN
+    tenant from auth_id (globally unique) so a reveal only ever exposes that tenant's data. When
+    login enforcement is OFF (open app) an unauthenticated caller is allowed for parity with the
+    rest of the app, but the access is still audited."""
+    from app.modules.core.router import _uid_from_token
+    uid = _uid_from_token(authorization)
+    if not uid:
+        if _rbac_enforced():
+            raise HTTPException(401, "Sign in as HR or an admin to view sensitive information.")
+        return (ORG_ID, "(open-app)", "open")
+    rows = (get_supabase().schema("storeops").table("app_users")
+            .select("org_id,email,role,super_admin").eq("auth_id", uid).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(403, "Your login isn't recognized.")
+    u = rows[0]
+    role = (u.get("role") or "").lower()
+    ok = bool(u.get("super_admin")) or role in ("admin",) or "hr" in role
+    if not ok:
+        # allow a custom role explicitly scoped to HR management (permissions.hr == true)
+        try:
+            rr = (get_supabase().schema("storeops").table("roles").select("permissions")
+                  .eq("org_id", u.get("org_id") or ORG_ID).eq("name", u.get("role")).limit(1).execute().data) or []
+            if ((rr[0].get("permissions") if rr else {}) or {}).get("hr"):
+                ok = True
+        except Exception:
+            pass
+    if not ok:
+        raise HTTPException(403, "Only HR managers and admins can view sensitive employee information.")
+    return (u.get("org_id") or ORG_ID, u.get("email"), role)
+
+
+@router.get("/onboarding/employee/{employee_id}/sensitive")
+def onboarding_reveal_sensitive(employee_id: str, authorization: str = Header(default="")):
+    """Decrypted sensitive intake values (bank / SSN / A-Number) for an authorized HR manager or
+    admin — the ONLY path that returns these values; everyone else sees just 'on file' labels. The
+    access is written to the onboarding_event audit trail (who viewed which fields, when)."""
+    org_id, email, role = _require_hr_or_admin(authorization)
+    so = _so()
+    prof = _get_profile(so, org_id, employee_id) or {}
+    stored = dict(prof.get("intake_data") or {})
+    out = {}
+    for f in _public_intake_fields(org_id):
+        if not f.get("sensitive"):
+            continue
+        raw = stored.get(f["key"], "")
+        if not str(raw).strip():
+            continue
+        val = crypto.decrypt(raw)
+        out[f["key"]] = {
+            "label": f["label"],
+            "value": ("(unavailable — encryption key rotated/lost)" if val is None else val),
+            "encrypted": crypto.is_encrypted(raw)}
+    _log_event(org_id, employee_id, "sensitive_viewed", actor=email,
+               detail={"by": email, "role": role, "fields": sorted(out.keys())})
+    return {"employee_id": employee_id, "values": out,
+            "encryption_enabled": crypto.is_enabled()}
+
+
+@router.get("/security-status")
+def hr_security_status(authorization: str = Header(default="")):
+    """Whether sensitive-field encryption is active (a key is configured). Admins/HR read it so the
+    UI can warn that PII is stored in the clear until FIELD_ENCRYPTION_KEY is set."""
+    _require_hr_or_admin(authorization)
+    return {"encryption_enabled": crypto.is_enabled()}
+
+
+@router.post("/onboarding/encrypt-existing")
+def onboarding_encrypt_existing(authorization: str = Header(default="")):
+    """One-time (idempotent) backfill: encrypt any sensitive intake values still stored as plaintext,
+    for every employee in the caller's tenant. Admin/HR only. No-op per value if already encrypted or
+    if no key is configured. Safe to run repeatedly."""
+    org_id, email, role = _require_hr_or_admin(authorization)
+    if not crypto.is_enabled():
+        raise HTTPException(400, "Set FIELD_ENCRYPTION_KEY on the backend first, then run this.")
+    so = _so()
+    sens_keys = [f["key"] for f in _public_intake_fields(org_id) if f.get("sensitive")]
+    if not sens_keys:
+        return {"ok": True, "profiles_scanned": 0, "values_encrypted": 0, "note": "no sensitive fields configured"}
+    profiles = (so.table("employee_onboarding_profile").select("employee_id,intake_data")
+                .eq("org_id", org_id).execute().data) or []
+    scanned, enc_count = 0, 0
+    for p in profiles:
+        data = dict(p.get("intake_data") or {})
+        changed = False
+        for k in sens_keys:
+            v = data.get(k)
+            if v and str(v).strip() and not crypto.is_encrypted(v):
+                data[k] = crypto.encrypt(v)
+                changed = True
+                enc_count += 1
+        scanned += 1
+        if changed:
+            try:
+                so.table("employee_onboarding_profile").update({"intake_data": data}) \
+                    .eq("org_id", org_id).eq("employee_id", p["employee_id"]).execute()
+            except Exception:
+                pass
+    _log_event(org_id, None, "sensitive_backfill_encrypted", actor=email,
+               detail={"by": email, "profiles": scanned, "encrypted": enc_count})
+    return {"ok": True, "profiles_scanned": scanned, "values_encrypted": enc_count}
+
+
 @router.post("/onboarding/employee/{employee_id}/task/{task_id}")
 def onboarding_update_status(employee_id: str, task_id: str, body: dict, org_id: str = ORG_ID):
     """HR/DM/MM marks a task verified / not-applicable, or adds a note. status=verified stamps who+when."""
@@ -925,6 +1040,11 @@ def _apply_intake(org_id, employee_id, data: dict, actor="employee"):
         if not f:
             continue
         val = (str(v).strip() if v is not None else "")
+        if f.get("sensitive"):
+            # Sensitive PII (SSN/bank/A-Number): store ENCRYPTED, and never propagate it onto the
+            # employees table (it stays only in intake_data, as ciphertext). Blank stays blank.
+            stored[k] = crypto.encrypt(val) if val else val
+            continue
         stored[k] = val
         col = f.get("propagate_to")
         if col and col in _PROPAGATABLE and val != "":

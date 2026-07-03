@@ -46,6 +46,8 @@ export default function EmployeeOnboardingPage() {
   const [qr, setQr] = useState<{ url: string; expires?: string | null } | null>(null)
   const [gen, setGen] = useState<{ kind: string; value: string; expires_days: string }>({ kind: 'dob', value: '', expires_days: '' })
   const [events, setEvents] = useState<any[]>([])
+  const [revealed, setRevealed] = useState<Record<string, { label: string; value: string; encrypted?: boolean }> | null>(null)
+  const [revealMsg, setRevealMsg] = useState('')
   const [prov, setProv] = useState<{ role_name: string; override: boolean; reason: string } | null>(null)
   const [inviteRes, setInviteRes] = useState<any>(null)
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
@@ -84,6 +86,15 @@ export default function EmployeeOnboardingPage() {
       const m = e?.message || 'Provision failed'
       flash(m.includes('docs_incomplete') || m.includes("aren't verified") ? 'Documents aren’t verified yet — tick the override box with a reason to provision anyway.' : m)
     }
+  }
+
+  async function revealSensitive() {
+    setRevealMsg('Revealing…')
+    try {
+      const r: any = await api(`/api/v1/hr/onboarding/employee/${employeeId}/sensitive`)
+      setRevealed(r.values || {})
+      setRevealMsg(r.encryption_enabled ? '' : '⚠️ Encryption key not set — these were stored in the clear.')
+    } catch (e: any) { setRevealMsg('❌ ' + (e?.message || e)) }
   }
 
   async function setState(work_state: string) {
@@ -206,7 +217,27 @@ export default function EmployeeOnboardingPage() {
                 <div key={f.key} style={{ fontSize: 12 }}><span style={{ color: 'var(--text3)' }}>{f.label}: </span><b>{(d.intake_values || {})[f.key]}</b></div>
               ))}
             </div>
-            {d.sensitive_on_file && d.sensitive_on_file.length > 0 && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>🔒 On file (hidden): {d.sensitive_on_file.join(', ')}</div>}
+            {d.sensitive_on_file && d.sensitive_on_file.length > 0 && (
+              <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+                {!revealed ? (
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 12, color: 'var(--text3)' }}>🔒 Encrypted & on file: {d.sensitive_on_file.join(', ')}</span>
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 10px' }} onClick={revealSensitive}>🔓 Reveal (HR/admin · audited)</button>
+                    {revealMsg && <span style={{ fontSize: 12 }}>{revealMsg}</span>}
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ fontSize: 12, color: '#92400e', marginBottom: 6 }}>🔓 Revealed — this view was recorded in the audit log.{revealMsg && <> {revealMsg}</>}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 8 }}>
+                      {Object.entries(revealed).map(([k, v]) => (
+                        <div key={k} style={{ fontSize: 12 }}><span style={{ color: 'var(--text3)' }}>{v.label}: </span><b style={{ fontFamily: 'monospace' }}>{v.value}</b></div>
+                      ))}
+                    </div>
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 10px', marginTop: 8 }} onClick={() => { setRevealed(null); setRevealMsg('') }}>Hide</button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
