@@ -25,7 +25,10 @@ const tile: React.CSSProperties = { border: '1px solid var(--border)', borderRad
 
 export default function CommissionLedgerPage() {
   const [tmpls, setTmpls] = useState<Tmpl[]>([])
-  const [src, setSrc] = useState('ma_daily_tx')
+  // Default to the Boost template (the house/1st-tenant carrier). The page opened on the Total
+  // ('ma_daily_tx') template, which made the Boost side show Total's numbers — Total belongs to
+  // its own tenant. Switch templates from the picker for other carriers.
+  const [src, setSrc] = useState('boost')
   const [period, setPeriod] = useState('')
   const [summ, setSumm] = useState<Summ | null>(null)
   const [labels, setLabels] = useState<Record<string, string>>({})
