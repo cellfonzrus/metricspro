@@ -115,6 +115,56 @@ def _flatten_grouped_sales(df):
     return pd.DataFrame(rows) if rows else df
 
 
+# ── POS X-Report parser (multi-sheet: one SHEET PER STORE, tender matrix) ────────────────────────
+_XR_TENDERS = {"cash", "check", "credit card", "gift card", "store account",
+               "debit card", "credit", "debit", "card"}
+
+
+def _parse_xreport(contents: bytes, filename: str):
+    """Parse the POS 'X-Report' workbook, which is ONE SHEET PER STORE (sheet name = store address),
+    each holding a 'Tendered Amounts' matrix (Tender Types rows × Sales..Net columns). Returns
+    [(store, date_iso, tender_type, net_amount)]. The date is the filename range
+    X-Report_MMDDYYYY-MMDDYYYY (single day when start==end); falls back to the business-local date.
+    Returns [] if the workbook isn't this format (caller then tries the generic flat parser)."""
+    import re as _re
+    m = _re.search(r'(\d{2})(\d{2})(\d{4})\s*-\s*(\d{2})(\d{2})(\d{4})', filename or "")
+    if m:
+        date_iso = f"{m.group(6)}-{m.group(4)}-{m.group(5)}"   # END of the range = the day it covers
+    else:
+        try:
+            from zoneinfo import ZoneInfo
+            date_iso = datetime.now(timezone.utc).astimezone(
+                ZoneInfo(settings.BUSINESS_TZ or "America/New_York")).date().isoformat()
+        except Exception:
+            date_iso = datetime.now(timezone.utc).date().isoformat()
+    try:
+        sheets = pd.read_excel(io.BytesIO(contents), sheet_name=None, header=None, dtype=str)
+    except Exception:
+        return []
+    out = []
+    for sheet_name, df in sheets.items():
+        store = str(sheet_name).strip()
+        rows = df.fillna('').values.tolist()
+        hdr_idx, net_col = None, None
+        for i, r in enumerate(rows):
+            low = [str(c).strip().lower() for c in r]
+            # the DETAILED tender header (not the super-header) carries 'refunds'/'sub net' + 'net'
+            if "tender types" in low and "net" in low and ("refunds" in low or "sub net" in low):
+                hdr_idx = i
+                net_col = max(j for j, c in enumerate(low) if c == "net")
+                break
+        if hdr_idx is None:
+            continue
+        for r in rows[hdr_idx + 1:]:
+            cells = [str(c).strip() for c in r]
+            label = (cells[0].lower() if cells else "")
+            if not label or label == "0" or label not in _XR_TENDERS:
+                break   # blank row / next section ends the tender block
+            amt = safe_float(cells[net_col]) if net_col < len(cells) else 0.0
+            out.append((store, date_iso, cells[0], amt))
+    return out
+
+
 # ── Upload endpoints ─────────────────────────────────────────
 @router.post("/upload/{file_type}")
 async def upload_file(
@@ -226,6 +276,34 @@ async def upload_file(
     # POS "X report": daily takings BY TENDER TYPE per store → commcalc.pos_tender_summary, for the tender
     # reconciliation against the daily closing sheet. Flexible column detection (any POS). Periodless.
     if file_type == 'x_report':
+        # First try the real B2B Soft X-Report: a MULTI-SHEET workbook (one sheet per store, tender
+        # matrix), which the generic flat parser below can't read. Falls through if not that shape.
+        xr = _parse_xreport(contents, fname)
+        if xr:
+            saved = 0
+            for (store, d, tender) , amount in {(s, dd, t): a for (s, dd, t, a) in xr}.items():
+                try:
+                    client.schema('commcalc').table('pos_tender_summary').upsert(
+                        {"org_id": org_id, "close_date": d, "store": store, "tender_type": tender,
+                         "tender_class": ("cash" if "cash" in tender.lower() else
+                                          ("card" if any(k in tender.lower() for k in
+                                           ("credit", "debit", "card", "visa", "master", "amex", "discover")) else "other")),
+                         "amount": amount, "source": "x_report",
+                         "updated_at": datetime.now(timezone.utc).isoformat()},
+                        on_conflict="org_id,close_date,store,tender_type").execute()
+                    saved += 1
+                except Exception:
+                    pass
+            try:
+                client.schema('commcalc').table('upload_log').insert(
+                    {'org_id': org_id, 'file_type': 'x_report',
+                     'period': (xr[0][1] if xr else None), 'filename': getattr(file, 'filename', None),
+                     'rows_saved': saved}).execute()
+            except Exception:
+                pass
+            return {'success': True, 'file_type': 'x_report', 'tenders': saved,
+                    'stores': len({s for (s, _d, _t, _a) in xr}), 'date': (xr[0][1] if xr else None),
+                    'format': 'multi-sheet'}
         def _pick(r, cands):
             for c in cands:
                 if c in r and str(r.get(c)).strip().lower() not in ("", "nan", "none"):
