@@ -13,6 +13,11 @@ export type AppUser = {
   super_admin?: boolean; org_id?: string | null
 }
 
+export type TenantInfo = {
+  org_id?: string; name?: string; setup_complete: boolean
+  pay_period?: { work_week_start_dow: number; pay_period_type: string; payday_dow: number; payday_weeks_after: number }
+}
+
 type AuthState = {
   loading: boolean
   session: any | null
@@ -20,6 +25,7 @@ type AuthState = {
   permissions: Permissions
   provisioned: boolean
   active: boolean
+  tenant: TenantInfo | null
   token: string | null
   signOut: () => Promise<void>
   refresh: () => Promise<void>
@@ -27,7 +33,7 @@ type AuthState = {
 
 const Ctx = createContext<AuthState>({
   loading: true, session: null, user: null, permissions: {}, provisioned: false,
-  active: false, token: null, signOut: async () => {}, refresh: async () => {},
+  active: false, tenant: null, token: null, signOut: async () => {}, refresh: async () => {},
 })
 
 export const useAuth = () => useContext(Ctx)
@@ -39,10 +45,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [permissions, setPermissions] = useState<Permissions>({})
   const [provisioned, setProvisioned] = useState(false)
   const [active, setActive] = useState(false)
+  const [tenant, setTenant] = useState<TenantInfo | null>(null)
 
   const loadProfile = useCallback(async (sess: any | null) => {
     if (!sess?.access_token) {
-      setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setSessionOrgId(null)
+      setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setTenant(null); setSessionOrgId(null)
       return
     }
     try {
@@ -56,8 +63,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setPermissions(d.permissions || {})
       setProvisioned(!!d.provisioned)
       setActive(d.active !== false)
+      setTenant(d.tenant || null)
     } catch {
-      setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setSessionOrgId(null)
+      setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setTenant(null); setSessionOrgId(null)
     }
   }, [])
 
@@ -80,7 +88,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
-    setSession(null); setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setSessionOrgId(null)
+    setSession(null); setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setTenant(null); setSessionOrgId(null)
   }, [])
 
   const refresh = useCallback(async () => {
@@ -91,7 +99,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <Ctx.Provider value={{
-      loading, session, user, permissions, provisioned, active,
+      loading, session, user, permissions, provisioned, active, tenant,
       token: session?.access_token || null, signOut, refresh,
     }}>
       {children}

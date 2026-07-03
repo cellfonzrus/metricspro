@@ -13,7 +13,7 @@ import os
 import re
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, HTTPException, Header
 from app.core.database import get_supabase, get_supabase_admin
@@ -137,8 +137,19 @@ async def whoami(authorization: str = Header(default="")):
             sync_tenant(client, org)
     except Exception:
         pass
+    # Tenant pay-period + onboarding-setup status (mig 085) — powers the "finish setup" banner
+    # (banner only, nothing blocked) and lets the schedule/payroll derive the tenant's work-week.
+    tenant = None
+    try:
+        t = _tenant_row(client, u.get("org_id") or ORG_ID)
+        if t:
+            tenant = {"org_id": t.get("org_id"), "name": t.get("name"),
+                      "setup_complete": bool(t.get("setup_complete")),
+                      "pay_period": _pp_settings(t)}
+    except Exception:
+        pass
     return {"provisioned": True, "user": u, "permissions": perms,
-            "active": bool(u.get("is_active", True))}
+            "active": bool(u.get("is_active", True)), "tenant": tenant}
 
 
 @router.post("/me/password-changed")
@@ -315,6 +326,135 @@ async def update_tenant(org_id: str, body: dict, authorization: str = Header(def
         raise HTTPException(400, "nothing to update")
     sb().schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
     return {"ok": True}
+
+
+# ── Per-tenant pay period / work-week (migration 085) ────────────────────────────────────────
+# DOW convention throughout: 0=Mon .. 6=Sun (matches Python date.weekday()).
+_PP_FIELDS = ("work_week_start_dow", "pay_period_type", "payday_dow", "payday_weeks_after",
+              "biweekly_anchor", "timezone")
+_PP_DEFAULTS = {"work_week_start_dow": 0, "pay_period_type": "weekly", "payday_dow": 4,
+                "payday_weeks_after": 1, "biweekly_anchor": None, "timezone": None}
+
+
+def _pp_settings(t: dict) -> dict:
+    """Normalize a tenants row into pay-period settings with safe defaults (Monday week today)."""
+    def _int(v, d):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return d
+    return {
+        "work_week_start_dow": _int(t.get("work_week_start_dow"), 0) % 7,
+        "pay_period_type": (t.get("pay_period_type") or "weekly"),
+        "payday_dow": _int(t.get("payday_dow"), 4) % 7,
+        "payday_weeks_after": max(1, _int(t.get("payday_weeks_after"), 1)),
+        "biweekly_anchor": t.get("biweekly_anchor"),
+        "timezone": t.get("timezone"),
+        "setup_complete": bool(t.get("setup_complete")),
+    }
+
+
+def pay_period_for(s: dict, ref):
+    """The pay period CONTAINING date `ref` (a datetime.date): {start, end, payday} as ISO strings.
+    period = length days starting on the most recent work_week_start_dow on/before ref; payday =
+    the first payday_dow on/after the period end, advanced by (payday_weeks_after-1) weeks."""
+    from datetime import date as _d
+    length = 14 if (s.get("pay_period_type") == "biweekly") else 7
+    delta = (ref.weekday() - s["work_week_start_dow"]) % 7
+    start = ref - timedelta(days=delta)
+    if length == 14 and s.get("biweekly_anchor"):
+        try:
+            a = _d.fromisoformat(str(s["biweekly_anchor"])[:10])
+            off = (start - a).days % 14
+            if off:
+                start = start - timedelta(days=off)
+        except Exception:
+            pass
+    end = start + timedelta(days=length - 1)
+    pd_delta = (s["payday_dow"] - end.weekday()) % 7
+    payday = end + timedelta(days=pd_delta) + timedelta(weeks=max(0, s["payday_weeks_after"] - 1))
+    return {"start": start.isoformat(), "end": end.isoformat(), "payday": payday.isoformat()}
+
+
+def _next_periods(s: dict, n: int = 4):
+    """The current + next n-1 pay periods, for the settings UI to show a worked example."""
+    from datetime import date as _d
+    today = _d.fromisoformat(datetime.now(timezone.utc).astimezone().date().isoformat())
+    out, cur = [], pay_period_for(s, today)
+    out.append(cur)
+    length = 14 if (s.get("pay_period_type") == "biweekly") else 7
+    for _ in range(max(0, n - 1)):
+        nxt_start = _d.fromisoformat(cur["end"]) + timedelta(days=1)
+        cur = pay_period_for(s, nxt_start)
+        out.append(cur)
+    return out
+
+
+def _tenant_row(client, org_id):
+    r = (client.schema("storeops").table("tenants").select("*").eq("org_id", org_id)
+         .limit(1).execute().data) or []
+    return r[0] if r else None
+
+
+@router.get("/tenant-settings")
+async def get_tenant_settings(authorization: str = Header(default="")):
+    """The signed-in user's OWN tenant pay-period settings + a worked example of upcoming periods.
+    Any signed-in user may read; only an admin may write (PUT)."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    urow = (client.schema("storeops").table("app_users").select("org_id,role")
+            .eq("auth_id", uid).limit(1).execute().data) or []
+    if not urow:
+        raise HTTPException(403, "no tenant for this login")
+    org_id = urow[0].get("org_id") or ORG_ID
+    t = _tenant_row(client, org_id) or {}
+    s = _pp_settings(t)
+    return {"org_id": org_id, "name": t.get("name"), "settings": s,
+            "setup_complete": bool(t.get("setup_complete")),
+            "can_edit": (urow[0].get("role") or "").lower() == "admin",
+            "preview": _next_periods(s)}
+
+
+@router.put("/tenant-settings")
+async def put_tenant_settings(body: dict, authorization: str = Header(default="")):
+    """The tenant ADMIN defines/updates the pay period (captured at onboarding). Saving a complete,
+    valid definition marks the tenant setup_complete (clears the setup banner). Super-admins may pass
+    org_id to set it for any tenant; otherwise it targets the caller's own tenant."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    urow = (client.schema("storeops").table("app_users").select("org_id,role,super_admin")
+            .eq("auth_id", uid).limit(1).execute().data) or []
+    if not urow:
+        raise HTTPException(403, "no tenant for this login")
+    caller = urow[0]
+    org_id = (body.get("org_id") if caller.get("super_admin") else None) or caller.get("org_id") or ORG_ID
+    if not (caller.get("super_admin") or (caller.get("role") or "").lower() == "admin"):
+        raise HTTPException(403, "only a tenant admin can change pay-period settings")
+    upd = {}
+    for k in _PP_FIELDS:
+        if k in body:
+            v = body[k]
+            if k in ("work_week_start_dow", "payday_dow", "payday_weeks_after"):
+                try:
+                    v = int(v)
+                except (TypeError, ValueError):
+                    raise HTTPException(400, f"{k} must be a number")
+            if k == "biweekly_anchor" and not (v or "").strip():
+                v = None
+            upd[k] = v
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    # A weekly/biweekly type + a start dow is enough to be 'complete'.
+    merged = _pp_settings({**(_tenant_row(client, org_id) or {}), **upd})
+    if merged["pay_period_type"] in ("weekly", "biweekly"):
+        upd["setup_complete"] = True
+        upd["setup_completed_at"] = datetime.now(timezone.utc).isoformat()
+    client.schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
+    return {"ok": True, "settings": merged, "preview": _next_periods(merged)}
 
 
 # ── Roles ────────────────────────────────────────────────────────────────────────────

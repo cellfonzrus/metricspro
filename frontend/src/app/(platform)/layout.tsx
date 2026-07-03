@@ -28,6 +28,27 @@ function Notice({ title, body, onSignOut }: { title: string; body: string; onSig
   )
 }
 
+// Banner-only onboarding gate (mig 085): prompt a tenant admin to define the pay period / work-week
+// when the tenant hasn't been set up. Nothing is blocked — the admin decides when to proceed.
+function SetupBanner() {
+  const { tenant, user } = useAuth()
+  const pathname = usePathname()
+  if (!tenant || tenant.setup_complete) return null
+  if ((user?.role || '').toLowerCase() !== 'admin') return null
+  if (pathname?.startsWith('/admin/tenant-settings')) return null
+  return (
+    <div style={{ background: '#fffbeb', borderBottom: '1px solid #fde68a', padding: '10px 24px',
+      display: 'flex', alignItems: 'center', gap: 12, fontSize: 13, color: '#92400e' }}>
+      <span style={{ fontWeight: 700 }}>⚙️ Finish setup:</span>
+      <span>Define {tenant.name ? <b>{tenant.name}</b> : 'your company'}&apos;s pay period &amp; work-week so schedules and payroll line up.</span>
+      <Link href="/admin/tenant-settings" style={{ marginLeft: 'auto', fontWeight: 700, color: '#92400e',
+        border: '1px solid #fbbf24', borderRadius: 8, padding: '5px 12px', textDecoration: 'none', whiteSpace: 'nowrap' }}>
+        Set pay period →
+      </Link>
+    </div>
+  )
+}
+
 function PlatformShell({ children, open }: { children: React.ReactNode; open: boolean }) {
   const { period, setPeriod, periods } = usePeriod()
   const { user, permissions, signOut } = useAuth()
@@ -181,6 +202,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
           </div>
           )}
         </header>
+        <SetupBanner />
         <div style={{ flex: 1, padding: 24, minWidth: 0 }}>{children}</div>
       </main>
     </div>
