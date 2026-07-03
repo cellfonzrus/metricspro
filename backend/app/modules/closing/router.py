@@ -359,6 +359,14 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
     except Exception as e:
         print("closing B2B money recon failed:", e)
         b2b_money = {}
+    # Authoritative cash/card split comes from the POS X-REPORT (pos_tender_summary), NOT the sales
+    # feed (which omits Tender Type). When the X-report is imported for the day, it overrides the
+    # feed tenders in the money recon below.
+    try:
+        xreport_tenders = _xreport_tenders_by_store(client, org_id, date)
+    except Exception as e:
+        print("closing X-report tender load failed:", e)
+        xreport_tenders = {}
 
     # Verifications for that day.
     vers = (client.schema("commcalc").table("daily_closing_verification").select("*")
@@ -421,24 +429,42 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
             closing_credit = round(totals["store_cc"] + totals["epay_cc"], 2)      # credit declared
             closing_epay = round(totals["epay_cash"] + totals["epay_cc"], 2)       # total epay declared
 
-            def _cmp(closing_v, b2b_v):
+            def _cmp(closing_v, b2b_v, available=True):
+                if not available:
+                    # Source can't supply this split → recon-pending, NOT a flag (don't compare vs $0).
+                    return {"closing": round(closing_v, 2), "b2b": None, "var": None,
+                            "shortage": False, "overage": False, "flag": False, "pending": True}
                 var = round(closing_v - b2b_v, 2)
                 return {"closing": round(closing_v, 2), "b2b": round(b2b_v, 2), "var": var,
                         "shortage": var < -tolerance, "overage": var > tolerance,
                         "flag": abs(var) > tolerance}
 
+            # Cash/card come from the X-REPORT when available (authoritative), else the sales feed
+            # (which usually lacks a tender split → pending, not flagged).
+            xt = xreport_tenders.get(code) if code else None
+            if xt:
+                tender_cash, tender_card, tender_src, tenders_ok = xt["cash"], xt["card"], "x_report", True
+            else:
+                tender_cash, tender_card, tender_src = bm["cash"], bm["card"], "sales_feed"
+                tenders_ok = bm.get("tenders_available", True)
+            dept_ok = bm.get("dept_available", True)
             money_recon = {
                 "tolerance": tolerance,
-                "accessory": _cmp(totals["acc_sale"], bm["acc_gross"]),  # gross vs gross
-                "cash": _cmp(closing_cash, bm["cash"]),
-                "credit": _cmp(closing_credit, bm["card"]),
+                "accessory": _cmp(totals["acc_sale"], bm["acc_gross"], dept_ok),  # gross vs gross
+                "cash": _cmp(closing_cash, tender_cash, tenders_ok),
+                "credit": _cmp(closing_credit, tender_card, tenders_ok),
                 "epay": {"declared": closing_epay, "portal": None, "portal_pending": True,
                          "fee": None, "other": None, "var": None,
                          "note": "ePay Daily Transactions Report sweep not yet wired"},
                 "b2b_total": bm["total"], "b2b_tenders": bm["tenders"],
+                "tender_source": tender_src, "tenders_available": tenders_ok, "dept_available": dept_ok,
             }
-            money_recon["any_flag"] = any(money_recon[k]["flag"]
-                                          for k in ("accessory", "cash", "credit"))
+            if not tenders_ok:
+                money_recon["note"] = ("No POS X-report tender data for this day (and the sales feed has no "
+                                       "Tender Type), so cash & credit can't be reconciled yet — make sure the "
+                                       "daily X-report is emailed to the mailbox and imported. Shown as pending, "
+                                       "not flagged.")
+            money_recon["any_flag"] = any(money_recon[k].get("flag") for k in ("accessory", "cash", "credit"))
 
         out.append({
             "store_code": code, "store_name": (reps[0].get("store_name") or code or "—"),
@@ -777,6 +803,285 @@ async def _notify_pickup(client, org_id, dm_name, date, items, total) -> list:
     return results
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# CASH-MANAGEMENT ALERT FOUNDATION (migration 089) — auto-DM + named extras, email/WhatsApp, deduped
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _alert_recipients(client, org_id, scope, store_code=None):
+    """Resolve recipients for an alert scope: the configured NAMED EXTRAS (storeops.alert_recipient
+    for this scope or 'all') + the store's auto-resolved District Manager when include_dm is set.
+    Returns a list of {name, email, whatsapp, via_email, via_whatsapp}."""
+    out = []
+    try:
+        rows = (client.schema("storeops").table("alert_recipient").select("*")
+                .eq("org_id", org_id).in_("scope", [scope, "all"]).execute().data) or []
+    except Exception:
+        rows = []
+    want_dm = False
+    for r in rows:
+        want_dm = want_dm or bool(r.get("include_dm"))
+        if (r.get("email") or r.get("whatsapp")):
+            out.append({"name": r.get("name"), "email": (r.get("email") or "").strip(),
+                        "whatsapp": (r.get("whatsapp") or "").strip(),
+                        "via_email": r.get("via_email", True), "via_whatsapp": bool(r.get("via_whatsapp"))})
+    if (want_dm or not rows) and store_code:
+        try:
+            from app.modules.storeops.router import _dm_for_store
+            deid, demail, dname = _dm_for_store(org_id, store_code)
+            if demail or deid:
+                out.append({"name": dname or "District Manager", "email": (demail or "").strip(),
+                            "whatsapp": "", "via_email": True, "via_whatsapp": False, "is_dm": True})
+        except Exception:
+            pass
+    return out
+
+
+async def _send_alert(client, org_id, scope, subject, text, ref_key, store_code=None, force=False):
+    """Send an alert to the scope's recipients via email + WhatsApp, DEDUPED by (scope, ref_key) via
+    storeops.alert_log so a cron doesn't re-alert every tick. Best-effort; returns a summary dict."""
+    if not force:
+        try:
+            seen = (client.schema("storeops").table("alert_log").select("id")
+                    .eq("org_id", org_id).eq("scope", scope).eq("ref_key", ref_key).limit(1).execute().data) or []
+            if seen:
+                return {"skipped": "already alerted", "ref_key": ref_key}
+        except Exception:
+            pass
+    recips = _alert_recipients(client, org_id, scope, store_code)
+    if not recips:
+        return {"sent": 0, "detail": "no recipients configured for scope " + scope}
+    html = "<p>" + text.replace("\n", "<br>") + "</p>"
+    sent, tos = 0, []
+    for r in recips:
+        em = (r.get("email") or "").strip()
+        if r.get("via_email", True) and em:
+            try:
+                from app.modules.notify.channels import email_resend
+                if email_resend.is_configured():
+                    await email_resend.send_email(em, subject, html)
+                    sent += 1; tos.append(em)
+            except Exception:
+                pass
+        wa = (r.get("whatsapp") or "").strip()
+        if r.get("via_whatsapp") and wa:
+            try:
+                from app.modules.notify.channels import whatsapp_meta
+                if whatsapp_meta.is_configured():
+                    await whatsapp_meta.send_document(wa, b"", "text/plain", "alert.txt", text)
+                    sent += 1; tos.append(wa)
+            except Exception:
+                pass
+    try:
+        client.schema("storeops").table("alert_log").insert(
+            {"org_id": org_id, "scope": scope, "ref_key": ref_key,
+             "recipients": ", ".join(tos), "detail": {"subject": subject, "count": sent}}).execute()
+    except Exception:
+        pass
+    return {"sent": sent, "recipients": tos, "ref_key": ref_key}
+
+
+# ── Cash-management config: closing gate + assigned closers + alert recipients ──────────────────
+@router.get("/cash-config")
+def get_cash_config(org_id: str = ORG_ID):
+    """Closing-gate + cash-aging settings (from storeops.tenants) + assigned closers + alert recipients."""
+    c = sb()
+    t = (c.schema("storeops").table("tenants").select("closing_deadline,closing_gate_enabled,cash_alert_after_days")
+         .eq("org_id", org_id).limit(1).execute().data or [{}])
+    tenant = t[0] if t else {}
+    try:
+        closers = (c.schema("storeops").table("store_closer").select("*").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        closers = []
+    try:
+        recips = (c.schema("storeops").table("alert_recipient").select("*").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        recips = []
+    return {"closing_deadline": tenant.get("closing_deadline"),
+            "closing_gate_enabled": bool(tenant.get("closing_gate_enabled")),
+            "cash_alert_after_days": tenant.get("cash_alert_after_days"),
+            "closers": closers, "recipients": recips}
+
+
+@router.put("/cash-config")
+def put_cash_config(body: dict, org_id: str = ORG_ID):
+    """Update the closing-gate + cash-aging settings (defined at onboarding). Admin/manager only in the UI."""
+    upd = {}
+    for k in ("closing_deadline", "closing_gate_enabled", "cash_alert_after_days"):
+        if k in body:
+            v = body[k]
+            if k == "closing_gate_enabled":
+                v = bool(v)
+            elif k == "cash_alert_after_days":
+                try:
+                    v = int(v)
+                except (TypeError, ValueError):
+                    v = None
+            upd[k] = v
+    if upd:
+        sb().schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
+    return get_cash_config(org_id)
+
+
+@router.put("/cash-config/closer")
+def set_store_closer(body: dict, org_id: str = ORG_ID):
+    """Assign (or clear) the closer for a store. Body: {store_code, employee_id?, employee_name?}."""
+    store = (body.get("store_code") or "").strip()
+    if not store:
+        raise HTTPException(400, "store_code required")
+    if not (body.get("employee_id") or body.get("employee_name")):
+        sb().schema("storeops").table("store_closer").delete().eq("org_id", org_id).eq("store_code", store).execute()
+        return {"ok": True, "cleared": True}
+    row = {"org_id": org_id, "store_code": store, "employee_id": body.get("employee_id"),
+           "employee_name": body.get("employee_name"), "updated_at": _now()}
+    sb().schema("storeops").table("store_closer").upsert(row, on_conflict="org_id,store_code").execute()
+    return {"ok": True, "store_code": store}
+
+
+@router.put("/cash-config/recipient")
+def upsert_alert_recipient(body: dict, org_id: str = ORG_ID):
+    """Add/update an alert recipient. Body: {id?, scope, name?, email?, whatsapp?, via_email?, via_whatsapp?, include_dm?}."""
+    scope = (body.get("scope") or "all").strip()
+    row = {"org_id": org_id, "scope": scope, "name": body.get("name"),
+           "email": (body.get("email") or "").strip() or None, "whatsapp": (body.get("whatsapp") or "").strip() or None,
+           "via_email": body.get("via_email", True), "via_whatsapp": bool(body.get("via_whatsapp")),
+           "include_dm": body.get("include_dm", True)}
+    c = sb()
+    if body.get("id"):
+        c.schema("storeops").table("alert_recipient").update(row).eq("id", body["id"]).eq("org_id", org_id).execute()
+        return {"ok": True, "id": body["id"]}
+    r = c.schema("storeops").table("alert_recipient").insert(row).execute()
+    return {"ok": True, "id": (r.data or [{}])[0].get("id")}
+
+
+@router.delete("/cash-config/recipient/{rid}")
+def delete_alert_recipient(rid: str, org_id: str = ORG_ID):
+    sb().schema("storeops").table("alert_recipient").delete().eq("id", rid).eq("org_id", org_id).execute()
+    return {"ok": True}
+
+
+# ── Alert crons (pg_cron → run-due, NOTIFY_RUN_SECRET-guarded) ──────────────────────────────────
+def _biz_today_iso():
+    from datetime import datetime as _dt, timezone as _tz
+    try:
+        from zoneinfo import ZoneInfo
+        return _dt.now(_tz.utc).astimezone(ZoneInfo(settings.BUSINESS_TZ or "America/New_York")).date().isoformat()
+    except Exception:
+        return _dt.now(_tz.utc).date().isoformat()
+
+
+async def _run_closing_missing_alerts(org_id=None):
+    """For each tenant with the gate on + a deadline that has passed today, alert (DM + extras) about
+    every store that has NO daily closing submitted for today. Deduped per store+date."""
+    from datetime import datetime as _dt, timezone as _tz
+    c = sb()
+    tens = (c.schema("storeops").table("tenants")
+            .select("org_id,closing_deadline,closing_gate_enabled").eq("closing_gate_enabled", True).execute().data) or []
+    if org_id:
+        tens = [t for t in tens if t.get("org_id") == org_id]
+    today = _biz_today_iso()
+    results = []
+    for t in tens:
+        oid = t.get("org_id")
+        dl = (t.get("closing_deadline") or "").strip()
+        if not dl:
+            continue
+        # only after the deadline (business-local)
+        try:
+            now_biz = _biz_now_hhmm()
+            if now_biz < dl:
+                continue
+        except Exception:
+            pass
+        stores = (c.schema("storeops").table("stores").select("store_code,address").eq("org_id", oid).execute().data) or []
+        closed = {(r.get("store_code") or "") for r in
+                  ((c.schema("commcalc").table("daily_closing").select("store_code")
+                    .eq("org_id", oid).eq("close_date", today).execute().data) or [])}
+        for s in stores:
+            sc = s.get("store_code")
+            if not sc or sc in closed:
+                continue
+            res = await _send_alert(
+                c, oid, "closing_missing",
+                subject=f"Daily closing NOT submitted — {sc} ({today})",
+                text=(f"The daily closing for {s.get('address') or sc} was not submitted by the "
+                      f"{dl} deadline on {today}. The closing must be submitted before the store closes."),
+                ref_key=f"{sc}|{today}", store_code=sc)
+            results.append({"org_id": oid, "store": sc, **res})
+    return {"checked": len(tens), "alerts": [r for r in results if r.get("sent")]}
+
+
+async def _run_cash_unpicked_alerts(org_id=None):
+    """Alert when store cash hasn't been picked up within cash_alert_after_days — one alert per store+date."""
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    c = sb()
+    tens = (c.schema("storeops").table("tenants").select("org_id,cash_alert_after_days").execute().data) or []
+    if org_id:
+        tens = [t for t in tens if t.get("org_id") == org_id]
+    today = _dt.fromisoformat(_biz_today_iso())
+    results = []
+    for t in tens:
+        oid = t.get("org_id")
+        days = t.get("cash_alert_after_days")
+        if days in (None, "", 0):
+            continue
+        try:
+            days = int(days)
+        except (TypeError, ValueError):
+            continue
+        cutoff = (today - _td(days=days)).isoformat()
+        # closings older than the cutoff whose cash hasn't been marked picked up
+        closings = (c.schema("commcalc").table("daily_closing").select("store_code,close_date,store_cash,epay_cash")
+                    .eq("org_id", oid).lte("close_date", cutoff).gte("close_date", (today - _td(days=days + 14)).isoformat())
+                    .execute().data) or []
+        picks = {(p.get("store_code") or "", str(p.get("close_date"))) for p in
+                 ((c.schema("commcalc").table("cash_pickup").select("store_code,close_date,picked_up")
+                   .eq("org_id", oid).eq("picked_up", True).execute().data) or [])}
+        by_store = {}
+        for cl in closings:
+            sc, cd = cl.get("store_code") or "", str(cl.get("close_date"))
+            if not sc or (sc, cd) in picks:
+                continue
+            by_store.setdefault(sc, {"n": 0, "oldest": cd})
+            by_store[sc]["n"] += 1
+            by_store[sc]["oldest"] = min(by_store[sc]["oldest"], cd)
+        for sc, info in by_store.items():
+            res = await _send_alert(
+                c, oid, "cash_unpicked",
+                subject=f"Cash not picked up — {sc} ({info['n']} day(s), oldest {info['oldest']})",
+                text=(f"Store {sc} has cash that hasn't been picked up for {days}+ days "
+                      f"(oldest uncollected: {info['oldest']}). Please arrange collection."),
+                ref_key=f"{sc}|{info['oldest']}", store_code=sc)
+            results.append({"org_id": oid, "store": sc, **res})
+    return {"checked": len(tens), "alerts": [r for r in results if r.get("sent")]}
+
+
+def _biz_now_hhmm():
+    from datetime import datetime as _dt, timezone as _tz
+    try:
+        from zoneinfo import ZoneInfo
+        return _dt.now(_tz.utc).astimezone(ZoneInfo(settings.BUSINESS_TZ or "America/New_York")).strftime("%H:%M")
+    except Exception:
+        return _dt.now(_tz.utc).strftime("%H:%M")
+
+
+@router.post("/alerts/run-due")
+async def cash_alerts_run_due(x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint (NOTIFY_RUN_SECRET) — run both the missing-closing and cash-unpicked alert
+    sweeps across all tenants. Schedule hourly. Deduped, so re-running is safe."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    missing = await _run_closing_missing_alerts()
+    unpicked = await _run_cash_unpicked_alerts()
+    return {"closing_missing": missing, "cash_unpicked": unpicked}
+
+
+@router.post("/alerts/run")
+async def cash_alerts_run_now(org_id: str = ORG_ID):
+    """Manual trigger for one tenant (testing)."""
+    missing = await _run_closing_missing_alerts(org_id)
+    unpicked = await _run_cash_unpicked_alerts(org_id)
+    return {"closing_missing": missing, "cash_unpicked": unpicked}
+
+
 @router.get("/pickups")
 def closing_pickups(date: str, market: str = None, org_id: str = ORG_ID):
     """Cash envelopes for a day + their pickup status. An envelope = a rep's closing row with cash
@@ -1082,6 +1387,68 @@ def _b2b_sales_rows(client, org_id: str, date: str, cols: str) -> list:
     return rows
 
 
+def _addr_resolver(client, org_id):
+    """A store-name/address → store_code resolver (exact lowercased address, then unambiguous leading
+    street-number), shared by the B2B and X-report tender aggregations."""
+    addr_to_code, num_to_code, num_counts = {}, {}, {}
+    sm = (client.schema("commcalc").table("store_mapping")
+          .select("store_code,store_address").eq("org_id", org_id).execute().data) or []
+    for r in sm:
+        code = (r.get("store_code") or "").strip()
+        addr = (r.get("store_address") or "").strip()
+        if not (code and addr):
+            continue
+        addr_to_code[addr.lower()] = code
+        nk = _num_key(addr)
+        if nk:
+            num_counts[nk] = num_counts.get(nk, 0) + 1
+            num_to_code.setdefault(nk, code)
+
+    def resolve(store_str):
+        s = (store_str or "").strip()
+        if not s:
+            return None
+        c = addr_to_code.get(s.lower())
+        if c:
+            return c
+        nk = _num_key(s)
+        if nk and num_counts.get(nk, 0) == 1:
+            return num_to_code.get(nk)
+        return None
+    return resolve
+
+
+def _xreport_tenders_by_store(client, org_id: str, date: str) -> dict:
+    """Cash/card/other per store_code from the POS X-REPORT (commcalc.pos_tender_summary) for `date`
+    — the AUTHORITATIVE tender split (the daily sales feed omits Tender Type). Returns {} when no
+    X-report has been imported for that day (then the recon falls back to the feed / shows pending)."""
+    try:
+        rows = (client.schema("commcalc").table("pos_tender_summary")
+                .select("store,tender_class,amount").eq("org_id", org_id)
+                .eq("close_date", date).execute().data) or []
+    except Exception:
+        rows = []
+    if not rows:
+        return {}
+    resolve = _addr_resolver(client, org_id)
+    out = {}
+    for r in rows:
+        code = resolve(r.get("store"))
+        if not code:
+            continue
+        cls = (r.get("tender_class") or "other").lower()
+        if cls not in ("cash", "card", "other"):
+            cls = "other"
+        agg = out.setdefault(code, {"cash": 0.0, "card": 0.0, "other": 0.0, "total": 0.0})
+        amt = _f(r.get("amount"))
+        agg[cls] += amt
+        agg["total"] += amt
+    for a in out.values():
+        for k in list(a):
+            a[k] = round(a[k], 2)
+    return out
+
+
 def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
     """Aggregate that day's B2B sales per store_code: accessory GROSS (ext_price, dept Ondigo),
     cash vs card totals (by tender_type), plus the raw tender breakdown for transparency. Source is
@@ -1124,15 +1491,23 @@ def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
             continue
         ext = _f(r.get("ext_price"))
         agg = out.setdefault(code, {"acc_gross": 0.0, "cash": 0.0, "card": 0.0,
-                                    "other": 0.0, "total": 0.0, "tenders": {}})
+                                    "other": 0.0, "total": 0.0, "tenders": {}, "_dept_seen": False})
         agg["total"] += ext
         agg[_tender_class(r.get("tender_type"))] += ext
-        if (r.get("department") or "").strip() == "Ondigo":
+        dept = (r.get("department") or "").strip()
+        if dept:
+            agg["_dept_seen"] = True
+        if dept == "Ondigo":
             agg["acc_gross"] += ext
         tname = (r.get("tender_type") or "—").strip() or "—"
         agg["tenders"][tname] = round(agg["tenders"].get(tname, 0.0) + ext, 2)
 
     for a in out.values():
+        # tenders_available: the source actually split cash vs card. The Legacy daily feed omits the
+        # Tender Type column, so everything lands in 'other' (cash=card=0) — then declared money must
+        # NOT be compared against a fabricated $0 (that flags every rep). total<=0 = nothing to recon.
+        a["tenders_available"] = bool(a["total"] <= 0 or (a["cash"] + a["card"]) > 0)
+        a["dept_available"] = bool(a.pop("_dept_seen", False))  # Department present → accessory recon valid
         for k in ("acc_gross", "cash", "card", "other", "total"):
             a[k] = round(a[k], 2)
     return out
@@ -1195,6 +1570,12 @@ def _b2b_day(client, org_id: str, date: str) -> dict:
         rp["total"] += ext
         if (r.get("department") or "").strip() == "Ondigo":
             rp["acc_gross"] += ext
+
+    # Flag stores/reps whose feed rows carry NO tender split (all in 'other') so the gate treats
+    # them as recon-pending instead of blocking on a fabricated $0 cash/card.
+    for d in (by_store, by_rep):
+        for v in d.values():
+            v["tenders_available"] = bool(v["total"] <= 0 or (v["cash"] + v["card"]) > 0)
 
     counts = {}
     try:
@@ -1259,6 +1640,10 @@ def _gate_row(client, org_id, store_code, date, emp_name, declared_cash, declare
     repb = _rep_b2b(day, store_code, emp_name)
     if repb is None:
         return {"status": "recon_pending", "block_reasons": [], "flags": [], "b2b": None}
+    if not repb.get("tenders_available", True):
+        # The daily feed has no cash/card split for this rep → don't block on a fabricated $0.
+        return {"status": "recon_pending", "block_reasons": [], "flags": [], "b2b": None,
+                "note": "B2B tender split not in the daily feed"}
     issues = _money_issues(declared_cash, declared_credit, repb["cash"], repb["card"], tol)
     blocks = [i["reason"] for i in issues if i["severity"] == "block"]
     flags = [i["reason"] for i in issues if i["severity"] == "flag"]

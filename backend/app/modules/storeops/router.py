@@ -864,6 +864,36 @@ def clock_in_override(body: dict, authorization: str = Header(default=""), org_i
             "data": {"time": _fmt_time(saved.get("clock_in")), "entry_id": saved.get("id"), "store_code": store_code}}
 
 
+def _closing_gate_block(org_id, employee_id, store_code):
+    """Return a block message if this employee is the ASSIGNED CLOSER for `store_code`, the tenant's
+    closing gate is ON, and the store's daily closing for today is NOT yet submitted — else None.
+    Cross-module: closings live in commcalc.daily_closing. Any lookup gap → no block (never trap a
+    rep on a config/migration miss)."""
+    try:
+        store = (store_code or "").strip()
+        if not store:
+            return None
+        t = (sb().table("tenants").select("closing_gate_enabled").eq("org_id", org_id).limit(1).execute().data) or []
+        if not (t and t[0].get("closing_gate_enabled")):
+            return None
+        closer = (sb().table("store_closer").select("employee_id")
+                  .eq("org_id", org_id).eq("store_code", store).limit(1).execute().data) or []
+        if not closer:
+            return None
+        ids, _ = _emp_id_variants(org_id, employee_id)
+        if str(closer[0].get("employee_id") or "") not in ids:
+            return None  # not the assigned closer → not gated
+        today = datetime.now(timezone.utc).astimezone(_BIZ_TZ).date().isoformat()
+        done = (get_supabase().schema("commcalc").table("daily_closing").select("id")
+                .eq("org_id", org_id).eq("store_code", store).eq("close_date", today).limit(1).execute().data) or []
+        if done:
+            return None
+        return (f"The daily closing for {store} must be submitted before you clock out. "
+                f"Complete the store closing, then clock out.")
+    except Exception:
+        return None
+
+
 @router.post("/timeclock/clock-out")
 def clock_out(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Close the SIGNED-IN employee's open entry (updates the SAME row) and compute hours. Always
@@ -878,6 +908,12 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
     if not rows:
         raise HTTPException(404, "No open clock-in found.")
     entry = rows[0]
+    # Closing gate (mig 089): the store's ASSIGNED CLOSER can't clock out until the store's daily
+    # closing is submitted. Only the assigned closer is gated (per the product decision); other reps
+    # clock out normally. Returns needs_closing (no punch change) rather than closing the entry.
+    block = _closing_gate_block(org_id, employee_id, entry.get("store_code"))
+    if block and not body.get("override"):
+        return {"success": False, "needs_closing": True, "message": block}
     now = datetime.now(timezone.utc)
     try:
         ci = datetime.fromisoformat(str(entry["clock_in"]).replace("Z", "+00:00"))
