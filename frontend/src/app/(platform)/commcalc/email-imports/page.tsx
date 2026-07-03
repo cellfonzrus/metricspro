@@ -45,6 +45,9 @@ export default function EmailImportsPage() {
   const [srcMsg, setSrcMsg] = useState('')
   const [carriers, setCarriers] = useState<any[]>([])
   const [distributors, setDistributors] = useState<any[]>([])
+  const [twoFa, setTwoFa] = useState<any>(null)     // { source, hint } while a 2FA code is needed
+  const [code, setCode] = useState('')
+  const [authBusy, setAuthBusy] = useState('')
 
   // Load all of the tenant's mailboxes (multi-mailbox = mig 075); keep or select one in the editor.
   const refresh = useCallback((keepAccount?: string) => {
@@ -136,9 +139,49 @@ export default function EmailImportsPage() {
   }
   async function runSource(s: any) {
     setSrcMsg('⏳ Pulling…')
-    try { const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/run`, { method: 'POST', body: '{}' }); setSrcMsg(r.ok ? '✅ Pulled.' : `ℹ️ ${r.error}`) }
-    catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)) }
+    try {
+      const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/run`, { method: 'POST', body: '{}' })
+      if (r.needs_2fa) { setSrcMsg(`🔒 ${r.error}`); setTwoFa({ source: s, hint: null }) }
+      else setSrcMsg(r.ok ? `✅ ${r.status || 'Pulled.'}` : `ℹ️ ${r.error}`)
+    } catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)) }
     try { const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) } catch { /* keep list */ }
+  }
+  // Interactive portal login: submit the stored 3 creds → land on the 2FA challenge → the operator
+  // enters the code from their email/SMS → the authenticated session is saved for scheduled pulls.
+  async function startLogin(s: any) {
+    setAuthBusy(s.id); setSrcMsg('🔐 Signing in…'); setCode('')
+    try {
+      const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/login/start`, { method: 'POST', body: '{}' })
+      if (r.status === 'authenticated') { setSrcMsg('✅ ' + r.message); setTwoFa(null) }
+      else { setSrcMsg('📩 ' + r.message); setTwoFa({ source: s, hint: r.two_fa_hint }) }
+    } catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)); setTwoFa(null) }
+    finally { setAuthBusy(''); try { const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) } catch { /* keep */ } }
+  }
+  async function verify2fa() {
+    if (!twoFa || !code.trim()) return
+    setAuthBusy('verify'); setSrcMsg('🔐 Verifying code…')
+    try {
+      const r: any = await api(`/api/v1/commcalc/data-sources/${twoFa.source.id}/login/verify`, { method: 'POST', body: JSON.stringify({ code: code.trim() }) })
+      setSrcMsg('✅ ' + r.message); setTwoFa(null); setCode('')
+    } catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)) }
+    finally { setAuthBusy(''); try { const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) } catch { /* keep */ } }
+  }
+  function authBadge(s: any) {
+    const st = s.auth_status || 'unconfigured'
+    const map: Record<string, { t: string; c: string; b: string }> = {
+      authenticated: { t: '✅ Connected', c: '#166534', b: '#dcfce7' },
+      needs_2fa: { t: '🔒 Needs 2FA', c: '#9a3412', b: '#ffedd5' },
+      error: { t: '⚠️ Login error', c: '#991b1b', b: '#fee2e2' },
+      unconfigured: { t: '○ Not connected', c: 'var(--text3)', b: 'var(--surface2)' },
+    }
+    const m = map[st] || map.unconfigured
+    const exp = s.session_expires_at ? new Date(s.session_expires_at) : null
+    return (
+      <span>
+        <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: m.c, background: m.b }}>{m.t}</span>
+        {st === 'authenticated' && exp && <span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 6 }}>until {exp.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
+      </span>
+    )
   }
 
   return (
@@ -285,9 +328,13 @@ export default function EmailImportsPage() {
                   <td style={{ padding: '6px 8px' }}>{s.processor}</td>
                   <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{distributors.find((d: any) => d.id === s.distributor_id)?.name || '—'}</td>
                   <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{carriers.find((c: any) => c.id === s.carrier_id)?.name || '—'}</td>
-                  <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.username || '—'}{s.has_password ? ' 🔑' : ''}</td>
-                  <td style={{ padding: '6px 8px', fontSize: 12, color: 'var(--text3)' }}>{s.last_status ? `${s.last_status}` : 'never run'}</td>
+                  <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.account_id ? `${s.account_id} / ` : ''}{s.username || '—'}{s.has_password ? ' 🔑' : ''}</td>
+                  <td style={{ padding: '6px 8px', fontSize: 12 }}>
+                    {authBadge(s)}
+                    {s.last_status && <div style={{ color: 'var(--text3)', fontSize: 11, marginTop: 2, maxWidth: 240, whiteSpace: 'normal' }}>{s.last_status}</div>}
+                  </td>
                   <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} disabled={authBusy === s.id} onClick={() => startLogin(s)}>{authBusy === s.id ? '…' : (s.auth_status === 'authenticated' ? '🔁 Re-auth' : '🔐 Log in')}</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => runSource(s)}>▶ Pull now</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setSrcDraft({ ...s, password: '' })}>Edit</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => delSource(s)}>✕</button>
@@ -319,7 +366,9 @@ export default function EmailImportsPage() {
                 </select></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Portal URL<br />
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="https://…" value={srcDraft.portal_url || ''} onChange={e => setSrcDraft({ ...srcDraft, portal_url: e.target.value })} /></label>
-              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Username<br />
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Account ID<br />
+                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="VidaPay Account ID" value={srcDraft.account_id || ''} onChange={e => setSrcDraft({ ...srcDraft, account_id: e.target.value })} /></label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>User ID<br />
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.username || ''} onChange={e => setSrcDraft({ ...srcDraft, username: e.target.value })} /></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Password{srcDraft.id ? ' (blank = keep saved)' : ''}<br />
                 <input type="password" style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.password || ''} onChange={e => setSrcDraft({ ...srcDraft, password: e.target.value })} /></label>
@@ -331,9 +380,37 @@ export default function EmailImportsPage() {
               <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft(null)}>Cancel</button>
               <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={saveSource}>💾 Save login</button>
             </div>
+            <p style={{ fontSize: 12, color: 'var(--text3)', margin: '8px 0 0' }}>
+              For VidaPay / Total Access: fill Account ID + User ID + Password, Save, then click <b>🔐 Log in</b> in the
+              table above. The portal will text/email a 2-factor code — enter it when prompted. The signed-in session
+              is saved and reused for scheduled pulls; when it expires the status shows <b>🔒 Needs 2FA</b> and you just
+              log in again. Credentials are never hard-coded — they live only in this form.
+            </p>
           </div>
         )}
       </div>
+
+      {/* ── 2FA challenge modal: entered after 🔐 Log in reaches the verification step ── */}
+      {twoFa && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }} onClick={() => { if (!authBusy) { setTwoFa(null); setCode('') } }}>
+          <div className="card" style={{ padding: 22, width: 380, maxWidth: '92vw' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>🔒 Two-factor verification</div>
+            <p style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 12px' }}>
+              Enter the verification code the portal just sent{twoFa.hint ? <> to <b>{twoFa.hint}</b></> : ' to you'} for
+              login <b>{twoFa.source?.label || twoFa.source?.username || twoFa.source?.processor}</b>.
+            </p>
+            <input autoFocus inputMode="numeric" value={code} onChange={e => setCode(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') verify2fa() }}
+              placeholder="123456" style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 18, letterSpacing: 3, textAlign: 'center', marginBottom: 12 }} />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
+              <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={authBusy === 'verify'} onClick={() => startLogin(twoFa.source)}>↻ Resend</button>
+              <div style={{ flex: 1 }} />
+              <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={!!authBusy} onClick={() => { setTwoFa(null); setCode('') }}>Cancel</button>
+              <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={authBusy === 'verify' || !code.trim()} onClick={verify2fa}>{authBusy === 'verify' ? 'Verifying…' : 'Verify'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

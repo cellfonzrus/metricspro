@@ -28,6 +28,10 @@ from app.modules.commcalc import target_registry
 from app.modules.commcalc import commission_ledger
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
+# Plain names too: 45+ call sites across this router use bare datetime/timezone/timedelta (all the
+# classes — datetime.now/.fromisoformat, timezone.utc, timedelta(...)); without this they NameError
+# when their branch executes (most sat in swallowed try/except, so it went unnoticed).
+from datetime import datetime, timezone, timedelta
 import calendar as _calendar
 
 
@@ -6801,15 +6805,34 @@ async def email_run_due(x_notify_secret: str = Header(default="")):
 # without a wired scraper still ingest via the email sweep or manual upload (ma_* upload types).
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _SOURCE_FIELDS = ["distributor_id", "carrier_id", "processor", "label", "portal_url", "username",
-                  "password", "enabled", "frequency", "hour", "notes"]
-# processor key → scraper callable (org_id, source_row) -> result dict. Wire VidaPay/Total Access
-# here once a login is available to test against (see epay_sweep for the Boost/ePay pattern).
-_SOURCE_SCRAPERS = {}
+                  "account_id", "password", "enabled", "frequency", "hour", "notes"]
+# Columns that never leave the backend (credentials + serialized browser sessions).
+_SOURCE_SECRETS = ("password", "session_state", "pending_state")
+
+
+async def _vidapay_scraper(org_id, src_row):
+    """_SOURCE_SCRAPERS handler for the VidaPay / Total Access portal. Uses the AUTHENTICATED
+    session stored by the login/2FA flow; a missing/expired session raises VidaPayAuthError, which
+    run_data_source turns into an auth_status=needs_2fa prompt rather than a hard error."""
+    from app.modules.commcalc import vidapay_sweep as vp
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(
+        vp.run_vidapay_sweep, sb(), org_id, src_row.get("portal_url"),
+        src_row.get("session_state"), src_row.get("id"), src_row.get("carrier_id"))
+
+
+# processor key → scraper callable (org_id, source_row) -> result dict. VidaPay + Total Access
+# share the same "Master Agent" portal family (vidapaycrm.com); both route through _vidapay_scraper.
+_SOURCE_SCRAPERS = {"vidapay": _vidapay_scraper, "total_access": _vidapay_scraper}
 
 
 def _strip_source_pw(row):
+    """Public view of a data_source row — drops every secret, exposes only booleans/status."""
     row = dict(row)
-    row["has_password"] = bool(row.pop("password", None))
+    row["has_password"] = bool(row.get("password"))
+    row["has_session"] = bool(row.get("session_state"))
+    for k in _SOURCE_SECRETS:
+        row.pop(k, None)
     return row
 
 
@@ -6881,13 +6904,26 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
         except Exception:
             pass
         return {"ok": False, "error": status}
+    from app.modules.commcalc.vidapay_sweep import VidaPayAuthError
     try:
         res = await handler(org_id, src_row)
         client.schema("commcalc").table("data_source").update(
             {"last_run_at": datetime.now(timezone.utc).isoformat(),
-             "last_status": str((res or {}).get("status") or "ok")})\
+             "last_status": str((res or {}).get("status") or "ok"),
+             "auth_status": "authenticated"})\
             .eq("id", sid).eq("org_id", org_id).execute()
         return {"ok": True, **(res or {})}
+    except VidaPayAuthError as e:
+        # Session expired / never authenticated — not a hard failure; prompt the operator to log in.
+        try:
+            client.schema("commcalc").table("data_source").update(
+                {"last_run_at": datetime.now(timezone.utc).isoformat(),
+                 "last_status": f"needs login: {str(e)[:160]}",
+                 "auth_status": "needs_2fa", "auth_message": str(e)[:300], "session_state": None})\
+                .eq("id", sid).eq("org_id", org_id).execute()
+        except Exception:
+            pass
+        return {"ok": False, "needs_2fa": True, "error": str(e)}
     except Exception as e:
         try:
             client.schema("commcalc").table("data_source").update(
@@ -6897,6 +6933,101 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
         except Exception:
             pass
         raise HTTPException(500, f"pull failed: {e}")
+
+
+@router.post("/data-sources/{sid}/login/start")
+async def data_source_login_start(sid: str, org_id: str = ORG_ID):
+    """Phase 1 of the interactive portal login: submit the stored Account ID + User ID + Password
+    and drive to the 2FA challenge. Persists the half-authenticated browser session (pending_state)
+    and flips auth_status to needs_2fa. Returns {status, message, two_fa_hint}. A portal that skips
+    2FA (remembered device) promotes straight to authenticated."""
+    require_org(org_id)
+    from app.modules.commcalc import vidapay_sweep as vp
+    from fastapi.concurrency import run_in_threadpool
+    client = sb()
+    rows = (client.schema("commcalc").table("data_source").select("*")
+            .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "unknown data source")
+    s = rows[0]
+    if not (s.get("password") and (s.get("username") or s.get("account_id"))):
+        raise HTTPException(400, "Enter the Account ID, User ID and Password on this login first, then Log in.")
+    try:
+        res = await run_in_threadpool(vp.begin_login, s.get("portal_url"),
+                                      s.get("account_id"), s.get("username"), s.get("password"))
+    except vp.VidaPayLoginError as e:
+        client.schema("commcalc").table("data_source").update(
+            {"auth_status": "error", "auth_message": str(e)[:400],
+             "last_run_at": datetime.now(timezone.utc).isoformat()})\
+            .eq("id", sid).eq("org_id", org_id).execute()
+        raise HTTPException(400, str(e))
+    status = res.get("status")
+    now = datetime.now(timezone.utc)
+    if status == "authenticated":
+        client.schema("commcalc").table("data_source").update(
+            {"auth_status": "authenticated", "auth_message": "Logged in (no 2FA prompt).",
+             "session_state": res.get("storage_state"), "pending_state": None,
+             "session_expires_at": (now + timedelta(hours=vp.SESSION_TTL_HOURS)).isoformat(),
+             "last_run_at": now.isoformat()})\
+            .eq("id", sid).eq("org_id", org_id).execute()
+        return {"ok": True, "status": "authenticated",
+                "message": "Logged in — no 2FA required. The session is saved."}
+    hint = res.get("two_fa_hint")
+    client.schema("commcalc").table("data_source").update(
+        {"auth_status": "needs_2fa", "two_fa_hint": hint, "pending_state": res.get("storage_state"),
+         "pending_started_at": now.isoformat(),
+         "auth_message": "Enter the 2FA code sent to you." + (f" ({hint})" if hint else ""),
+         "last_run_at": now.isoformat()})\
+        .eq("id", sid).eq("org_id", org_id).execute()
+    return {"ok": True, "status": "needs_2fa", "two_fa_hint": hint,
+            "message": "A verification code was requested. Enter the code to finish signing in."
+                       + (f" Sent to: {hint}" if hint else "")}
+
+
+@router.post("/data-sources/{sid}/login/verify")
+async def data_source_login_verify(sid: str, body: dict, org_id: str = ORG_ID):
+    """Phase 2: submit the 2FA code against the pending session and, on success, store the durable
+    authenticated session so scheduled/manual pulls reuse it until the portal invalidates it."""
+    require_org(org_id)
+    from app.modules.commcalc import vidapay_sweep as vp
+    from fastapi.concurrency import run_in_threadpool
+    code = str((body or {}).get("code") or "").strip()
+    if not code:
+        raise HTTPException(400, "Enter the verification code.")
+    client = sb()
+    rows = (client.schema("commcalc").table("data_source").select("*")
+            .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "unknown data source")
+    s = rows[0]
+    if not s.get("pending_state"):
+        raise HTTPException(400, "No login in progress — click Log in again to request a new code.")
+    started = s.get("pending_started_at")
+    if started:
+        try:
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(str(started).replace("Z", "+00:00"))
+            if age > timedelta(minutes=vp.PENDING_TTL_MINUTES):
+                raise HTTPException(400, "This login attempt expired — click Log in again for a fresh code.")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+    try:
+        res = await run_in_threadpool(vp.complete_2fa, s.get("portal_url"), s.get("pending_state"), code)
+    except vp.VidaPayAuthError as e:
+        client.schema("commcalc").table("data_source").update(
+            {"auth_status": "needs_2fa", "auth_message": str(e)[:400]})\
+            .eq("id", sid).eq("org_id", org_id).execute()
+        raise HTTPException(400, str(e))
+    now = datetime.now(timezone.utc)
+    client.schema("commcalc").table("data_source").update(
+        {"auth_status": "authenticated", "auth_message": "Signed in — session saved.",
+         "session_state": res.get("storage_state"), "pending_state": None, "pending_started_at": None,
+         "session_expires_at": (now + timedelta(hours=vp.SESSION_TTL_HOURS)).isoformat(),
+         "last_run_at": now.isoformat()})\
+        .eq("id", sid).eq("org_id", org_id).execute()
+    return {"ok": True, "status": "authenticated",
+            "message": "Signed in — the session is saved and will be reused until it expires."}
 
 
 _MA_COMPONENTS = ["device_margin", "consumer_margin", "consumer_financing", "rebate",
