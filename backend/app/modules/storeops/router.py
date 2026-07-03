@@ -635,15 +635,39 @@ def _norm_store(x):
 def _allowed_clock_stores(org_id, employee_id, home_store, work_date_local):
     """The stores this employee may clock in at TODAY, without a manager override:
     their home store + any store they're SCHEDULED at today + any store they float to
-    (app_users.store_codes[]). Returns a set of normalized (UPPER) store codes."""
+    (app_users.store_codes[]). Returns a set of normalized (UPPER) store codes.
+
+    ID RECONCILIATION: the schedule stores shifts.employee_id as the employees NUMERIC row id
+    (employees.id, e.g. '42' — see the schedule page's `emp.id.toString()`), while clock-in
+    identifies the caller by their BUSINESS id (app_users.employee_id = employees.employee_id,
+    e.g. 'E039'). Those never match, so a rep scheduled at a non-home store could not clock in
+    there (only their home store). We therefore match a shift by EITHER id — plus the employee
+    name as a last-resort fallback — so a scheduled store is honored regardless of which id the
+    shift was written with."""
     codes = set()
     if home_store:
         codes.add(_norm_store(home_store))
+    # Build the set of identifiers a shift for THIS employee might carry (business id + numeric id).
+    ids = {str(employee_id)}
+    emp_name = None
     try:
-        sh = (sb().table("shifts").select("store_code").eq("org_id", org_id)
-              .eq("employee_id", employee_id).eq("shift_date", work_date_local)
-              .eq("is_deleted", False).execute().data) or []
-        for s in sh:
+        er = (sb().table("employees").select("id,name").eq("org_id", org_id)
+              .eq("employee_id", employee_id).limit(1).execute().data) or []
+        if er:
+            if er[0].get("id") is not None:
+                ids.add(str(er[0]["id"]))
+            emp_name = er[0].get("name")
+    except Exception:
+        pass
+    try:
+        base = (sb().table("shifts").select("store_code")
+                .eq("org_id", org_id).eq("shift_date", work_date_local).eq("is_deleted", False))
+        matched = (base.in_("employee_id", list(ids)).execute().data) or []
+        if emp_name:  # last-resort fallback: a shift written with a mismatched/blank id but our name
+            matched += ((sb().table("shifts").select("store_code")
+                         .eq("org_id", org_id).eq("shift_date", work_date_local)
+                         .eq("is_deleted", False).eq("employee_name", emp_name).execute().data) or [])
+        for s in matched:
             if s.get("store_code"):
                 codes.add(_norm_store(s["store_code"]))
     except Exception:
