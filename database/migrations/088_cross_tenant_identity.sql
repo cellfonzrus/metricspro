@@ -22,8 +22,8 @@ BEGIN
     JOIN pg_class t ON t.oid = c.conrelid
     JOIN pg_namespace n ON n.oid = t.relnamespace
     WHERE n.nspname = 'storeops' AND t.relname = 'employees' AND c.contype = 'u'
-      AND (SELECT array_agg(a.attname) FROM unnest(c.conkey) k JOIN pg_attribute a
-             ON a.attrelid = c.conrelid AND a.attnum = k) = ARRAY['employee_id']
+      AND (SELECT array_agg(a.attname::text) FROM unnest(c.conkey) k JOIN pg_attribute a
+             ON a.attrelid = c.conrelid AND a.attnum = k) = ARRAY['employee_id']::text[]
   LOOP
     EXECUTE format('ALTER TABLE storeops.employees DROP CONSTRAINT %I', r.conname);
   END LOOP;
