@@ -6805,7 +6805,7 @@ async def email_run_due(x_notify_secret: str = Header(default="")):
 # without a wired scraper still ingest via the email sweep or manual upload (ma_* upload types).
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _SOURCE_FIELDS = ["distributor_id", "carrier_id", "processor", "label", "portal_url", "username",
-                  "account_id", "password", "enabled", "frequency", "hour", "notes"]
+                  "account_id", "password", "proxy_url", "enabled", "frequency", "hour", "notes"]
 # Columns that never leave the backend (credentials + serialized browser sessions).
 _SOURCE_SECRETS = ("password", "session_state", "pending_state")
 
@@ -6818,7 +6818,8 @@ async def _vidapay_scraper(org_id, src_row):
     from fastapi.concurrency import run_in_threadpool
     return await run_in_threadpool(
         vp.run_vidapay_sweep, sb(), org_id, src_row.get("portal_url"),
-        src_row.get("session_state"), src_row.get("id"), src_row.get("carrier_id"))
+        src_row.get("session_state"), src_row.get("id"), src_row.get("carrier_id"),
+        src_row.get("proxy_url"))
 
 
 # processor key → scraper callable (org_id, source_row) -> result dict. VidaPay + Total Access
@@ -6954,7 +6955,8 @@ async def data_source_login_start(sid: str, org_id: str = ORG_ID):
         raise HTTPException(400, "Enter the Account ID, User ID and Password on this login first, then Log in.")
     try:
         res = await run_in_threadpool(vp.begin_login, s.get("portal_url"),
-                                      s.get("account_id"), s.get("username"), s.get("password"))
+                                      s.get("account_id"), s.get("username"), s.get("password"),
+                                      s.get("proxy_url"))
     except vp.VidaPayLoginError as e:
         client.schema("commcalc").table("data_source").update(
             {"auth_status": "error", "auth_message": str(e)[:400],
@@ -7013,7 +7015,8 @@ async def data_source_login_verify(sid: str, body: dict, org_id: str = ORG_ID):
         except Exception:
             pass
     try:
-        res = await run_in_threadpool(vp.complete_2fa, s.get("portal_url"), s.get("pending_state"), code)
+        res = await run_in_threadpool(vp.complete_2fa, s.get("portal_url"), s.get("pending_state"),
+                                      code, s.get("proxy_url"))
     except vp.VidaPayAuthError as e:
         client.schema("commcalc").table("data_source").update(
             {"auth_status": "needs_2fa", "auth_message": str(e)[:400]})\

@@ -71,13 +71,42 @@ class VidaPayPortalError(Exception):
     """Logged in fine, but a later step (report navigation/download/parse) failed."""
 
 
-def _new_context(browser, storage_state=None):
-    """A desktop-Chrome context with the anti-automation shims applied before any page script runs."""
+def _proxy_arg(proxy_url):
+    """Parse a proxy URL (e.g. http://user:pass@host:port or socks5://host:port) into Playwright's
+    proxy dict {server, username?, password?}. Datacenter IPs get walled by VidaPay's bot-management,
+    so an operator can route the login + pull through a residential/allow-listed proxy."""
+    u = (proxy_url or "").strip()
+    if not u:
+        return None
+    try:
+        from urllib.parse import urlparse
+        if "://" not in u:
+            u = "http://" + u
+        p = urlparse(u)
+        host = p.hostname or ""
+        if not host:
+            return None
+        server = f"{p.scheme}://{host}" + (f":{p.port}" if p.port else "")
+        arg = {"server": server}
+        if p.username:
+            arg["username"] = p.username
+        if p.password:
+            arg["password"] = p.password
+        return arg
+    except Exception:
+        return None
+
+
+def _new_context(browser, storage_state=None, proxy=None):
+    """A desktop-Chrome context with the anti-automation shims applied before any page script runs.
+    `proxy` is a Playwright proxy dict (see _proxy_arg) routing the session through a given egress."""
     kw = dict(user_agent=UA, accept_downloads=True, locale="en-US",
               timezone_id="America/New_York", viewport={"width": 1366, "height": 900},
               extra_http_headers={"Accept-Language": "en-US,en;q=0.9"})
     if storage_state:
         kw["storage_state"] = storage_state
+    if proxy:
+        kw["proxy"] = proxy
     ctx = browser.new_context(**kw)
     try:
         ctx.add_init_script(_STEALTH_JS)
@@ -300,7 +329,7 @@ def _goto_login(page, base_url):
 
 
 # ── phase 1: start login ───────────────────────────────────────────────────────────────────────
-def begin_login(url, account_id, user, pw):
+def begin_login(url, account_id, user, pw, proxy_url=None):
     """Launch headless Chromium, submit Account ID + User ID + Password, report where we land.
     Returns {"status": "needs_2fa"|"authenticated", "storage_state": {...}, ...}.
     Raises VidaPayLoginError on bot-wall/Cloudflare block, missing Chromium, or rejected creds."""
@@ -311,9 +340,10 @@ def begin_login(url, account_id, user, pw):
             "Playwright/Chromium is not available in the backend image. Add "
             "`RUN playwright install --with-deps chromium` to backend/Dockerfile.")
     base_url = (url or DEFAULT_URL).strip() or DEFAULT_URL
+    proxy = _proxy_arg(proxy_url)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
-        ctx = _new_context(browser)
+        ctx = _new_context(browser, proxy=proxy)
         page = ctx.new_page()
         try:
             _goto_login(page, base_url)
@@ -373,7 +403,7 @@ def begin_login(url, account_id, user, pw):
 
 
 # ── phase 2: submit the 2FA code ─────────────────────────────────────────────────────────────
-def complete_2fa(url, pending_state, code):
+def complete_2fa(url, pending_state, code, proxy_url=None):
     """Restore the mid-2FA session, submit the code, return the durable authenticated session."""
     try:
         from playwright.sync_api import sync_playwright
@@ -384,7 +414,7 @@ def complete_2fa(url, pending_state, code):
     base_url = (url or DEFAULT_URL).strip() or DEFAULT_URL
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
-        ctx = _new_context(browser, storage_state=pending_state)
+        ctx = _new_context(browser, storage_state=pending_state, proxy=_proxy_arg(proxy_url))
         page = ctx.new_page()
         try:
             page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
@@ -435,7 +465,7 @@ def complete_2fa(url, pending_state, code):
 
 
 # ── session health check + report pull ─────────────────────────────────────────────────────────
-def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrier_id=None):
+def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrier_id=None, proxy_url=None):
     """Restore the authenticated session and verify it's still alive (login + 2FA + persistence —
     the hard part), reporting what the authenticated portal exposes so report auto-download can be
     pinned in one calibration pass. Raises VidaPayAuthError if the session is missing/expired."""
@@ -448,7 +478,7 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
     base_url = (url or DEFAULT_URL).strip() or DEFAULT_URL
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
-        ctx = _new_context(browser, storage_state=session_state)
+        ctx = _new_context(browser, storage_state=session_state, proxy=_proxy_arg(proxy_url))
         page = ctx.new_page()
         try:
             page.goto(base_url, timeout=60000, wait_until="domcontentloaded")

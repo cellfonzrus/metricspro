@@ -26,7 +26,11 @@ ALTER TABLE commcalc.data_source
   ADD COLUMN IF NOT EXISTS session_state      JSONB,         -- durable authenticated storage_state (cookies)
   ADD COLUMN IF NOT EXISTS session_expires_at TIMESTAMPTZ,   -- best-effort; expiry is also detected on use
   ADD COLUMN IF NOT EXISTS pending_state      JSONB,         -- transient mid-2FA storage_state
-  ADD COLUMN IF NOT EXISTS pending_started_at TIMESTAMPTZ;   -- when login/start captured pending_state
+  ADD COLUMN IF NOT EXISTS pending_started_at TIMESTAMPTZ,   -- when login/start captured pending_state
+  ADD COLUMN IF NOT EXISTS proxy_url          TEXT;          -- optional egress proxy (residential/allow-listed IP)
+
+COMMENT ON COLUMN commcalc.data_source.proxy_url IS
+  'Optional HTTP(S)/SOCKS proxy the login + pull route through, e.g. http://user:pass@host:port. Portals like VidaPay (Cloudflare bot-management) block datacenter IPs with a "Something doesn''t look right" wall; a residential/allow-listed proxy is the reliable fix (same WAF caveat as ePay).';
 
 COMMENT ON COLUMN commcalc.data_source.session_state IS
   'Playwright storage_state (cookies/localStorage) for the AUTHENTICATED portal session. Backend-only; stripped from API reads. Reused by scheduled pulls until the portal invalidates it, at which point auth_status flips back to needs_2fa.';

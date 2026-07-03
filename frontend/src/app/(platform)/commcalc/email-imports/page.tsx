@@ -372,7 +372,14 @@ export default function EmailImportsPage() {
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.username || ''} onChange={e => setSrcDraft({ ...srcDraft, username: e.target.value })} /></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Password{srcDraft.id ? ' (blank = keep saved)' : ''}<br />
                 <input type="password" style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.password || ''} onChange={e => setSrcDraft({ ...srcDraft, password: e.target.value })} /></label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Egress proxy (optional)<br />
+                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="http://user:pass@host:port" value={srcDraft.proxy_url || ''} onChange={e => setSrcDraft({ ...srcDraft, proxy_url: e.target.value })} /></label>
             </div>
+            <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 8px' }}>
+              💡 If Log in returns “Something doesn&apos;t look right” / an anti-bot page, the portal is blocking the
+              server&apos;s datacenter IP. Enter a <b>residential / allow-listed proxy</b> above to route the login
+              through it (leave blank otherwise).
+            </p>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input type="checkbox" checked={!!srcDraft.enabled} onChange={e => setSrcDraft({ ...srcDraft, enabled: e.target.checked })} /> Enabled (auto-pull once the scraper is wired)</label>
