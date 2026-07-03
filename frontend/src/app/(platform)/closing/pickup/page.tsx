@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import { ExportButtons, ExportPayload } from '@/lib/export'
 
 // DM cash pickup — see the day's cash envelopes, check off the ones collected with a note, confirm.
 // On confirm, the assigned recipient gets an email + WhatsApp summary.
@@ -26,6 +27,48 @@ export default function CashPickupPage() {
   const [cfg, setCfg] = useState<any>(null)
   const [cfgOpen, setCfgOpen] = useState(false)
   const [cfgMsg, setCfgMsg] = useState('')
+  const [dep, setDep] = useState<any>(null)   // { e, disposition, deposit_amount, handed_to, slip } when depositing
+  const [depBusy, setDepBusy] = useState(false)
+
+  function fileToDataUrl(f: File): Promise<string> {
+    return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(f) })
+  }
+  async function recordDeposit() {
+    if (!dep) return
+    setDepBusy(true)
+    try {
+      const r: any = await api('/api/v1/closing/pickup/deposit', { method: 'POST', body: JSON.stringify({
+        store_code: dep.e.store_code, close_date: dep.e.close_date || date, employee_name: dep.e.employee_name,
+        disposition: dep.disposition, deposit_amount: dep.deposit_amount || undefined, handed_to: dep.handed_to || undefined,
+        declared_amount: dep.e.cash, deposit_slip: dep.slip || undefined,
+      }) })
+      setMsg(dep.disposition === 'deposited'
+        ? (r.flagged ? `⚠️ Deposit ${fmt(r.deposit_amount)} vs declared ${fmt(r.declared_amount)} — flagged for review.` : `✅ Deposit recorded${r.matched ? ' — matches declared cash.' : '.'}`)
+        : '✅ Marked handed to management.')
+      setDep(null); load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    finally { setDepBusy(false) }
+  }
+
+  function exportPayload(): ExportPayload {
+    return {
+      title: `Cash pickup — ${date}`, filename: `cash-pickup-${date}`,
+      sheets: [{
+        name: 'Cash Pickup',
+        columns: [
+          { header: 'Store', get: (r: any) => r.store_name || r.store_code },
+          { header: 'Rep', get: (r: any) => r.employee_name },
+          { header: 'Cash', get: (r: any) => r.cash, money: true },
+          { header: 'Picked up', get: (r: any) => (r.picked_up ? 'Yes' : 'No') },
+          { header: 'By (DM)', get: (r: any) => r.picked_up_by || '' },
+          { header: 'Disposition', get: (r: any) => r.disposition || '' },
+          { header: 'Deposit', get: (r: any) => r.deposit_amount ?? '', money: true },
+          { header: 'Status', get: (r: any) => (r.deposit_flagged ? 'FLAGGED' : (r.deposit_matched ? 'matched' : '')) },
+        ],
+        rows: data?.envelopes || [],
+      }],
+    }
+  }
 
   useEffect(() => { if (user?.market && permissions?.scope === 'market') setMarket(user.market) }, [user, permissions])
   useEffect(() => { api('/api/v1/closing/pickup-config').then(setCfg).catch(() => setCfg({})) }, [])
@@ -108,7 +151,10 @@ export default function CashPickupPage() {
         {(fStore || fEmp || fDm) && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 9px' }} onClick={() => { setFStore(''); setFEmp(''); setFDm('') }}>Clear</button>}
         {market && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Market: {market}</span>}
         {data && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{data.ready} ready · {data.collected} collected{data.flagged ? ` · ${data.flagged} ⚠ flagged` : ''}</span>}
-        <Link href="/closing/cash-config" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>⚙️ Setup</Link>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          {(data?.envelopes || []).length > 0 && <ExportButtons payload={exportPayload} compact />}
+          <Link href="/closing/cash-config" style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>⚙️ Setup</Link>
+        </div>
       </div>
 
       {loading ? (
@@ -120,7 +166,7 @@ export default function CashPickupPage() {
           <div className="card table-wrapper" style={{ padding: 0 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['', 'Store', 'Rep', 'Cash', 'Envelope', 'Note / status'].map((h, i) =>
+                {['', 'Store', 'Rep', 'Cash', 'Envelope', 'Note / status', 'Deposit'].map((h, i) =>
                   <th key={i} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -138,6 +184,17 @@ export default function CashPickupPage() {
                           ? <span style={{ fontSize: 12, color: 'var(--text3)' }}>by {e.picked_up_by} · {e.picked_up_at ? new Date(e.picked_up_at).toLocaleString() : ''}{e.note ? ` · ${e.note}` : ''}</span>
                           : <input style={{ ...inp, minWidth: 200 }} placeholder="Note (optional)" value={notes[k] || ''} onChange={ev => setNotes(n => ({ ...n, [k]: ev.target.value }))} />}
                       </td>
+                      <td style={cell}>
+                        {done && (e.disposition
+                          ? <span style={{ fontSize: 12 }}>
+                              {e.disposition === 'deposited' ? '🏦 Deposited' : '🤝 To mgmt'}
+                              {e.deposit_flagged && <span style={{ color: '#dc2626', fontWeight: 700 }}> · ⚠ {fmt(e.deposit_amount)} vs {fmt(e.cash)}</span>}
+                              {e.deposit_matched && <span style={{ color: '#166534' }}> · ✓ matched</span>}
+                              {e.deposit_url && <> · <a href={e.deposit_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>slip</a></>}
+                            </span>
+                          : <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setDep({ e, disposition: 'deposited', deposit_amount: '' })}>💰 Record deposit</button>)}
+                        {!done && <span style={{ fontSize: 11, color: 'var(--text3)' }}>—</span>}
+                      </td>
                     </tr>
                   )
                 })}
@@ -152,6 +209,36 @@ export default function CashPickupPage() {
             {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
           </div>
         </>
+      )}
+
+      {dep && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }} onClick={() => !depBusy && setDep(null)}>
+          <div className="card" style={{ padding: 22, width: 420, maxWidth: '92vw' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>Record cash disposition</div>
+            <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 12 }}>{dep.e.store_name || dep.e.store_code} · {dep.e.employee_name} · declared {fmt(dep.e.cash)}</div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              {['deposited', 'handed_to_mgmt'].map(d => (
+                <button key={d} className={dep.disposition === d ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 13 }} onClick={() => setDep({ ...dep, disposition: d })}>
+                  {d === 'deposited' ? '🏦 Deposited' : '🤝 Handed to mgmt'}</button>
+              ))}
+            </div>
+            {dep.disposition === 'deposited' ? (
+              <>
+                <label style={{ fontSize: 12, fontWeight: 600 }}>Deposit slip photo (OCR reads the amount)<br />
+                  <input type="file" accept="image/*" style={{ marginTop: 4, fontSize: 12 }} onChange={async e => { const f = e.target.files?.[0]; if (f) setDep({ ...dep, slip: await fileToDataUrl(f) }) }} /></label>
+                <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginTop: 10 }}>Deposit amount {dep.slip ? '(leave blank to auto-read)' : '(enter manually)'}<br />
+                  <input type="number" style={{ ...inp, marginTop: 4 }} placeholder={String(dep.e.cash)} value={dep.deposit_amount} onChange={e => setDep({ ...dep, deposit_amount: e.target.value })} /></label>
+              </>
+            ) : (
+              <label style={{ fontSize: 12, fontWeight: 600 }}>Handed to<br />
+                <input style={{ ...inp, marginTop: 4 }} placeholder="Manager name" value={dep.handed_to || ''} onChange={e => setDep({ ...dep, handed_to: e.target.value })} /></label>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={depBusy} onClick={() => setDep(null)}>Cancel</button>
+              <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={depBusy} onClick={recordDeposit}>{depBusy ? 'Saving…' : 'Save'}</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
