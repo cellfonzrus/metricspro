@@ -123,7 +123,7 @@ export default function CashPickupPage() {
                       <td style={cell}>{e.store_name || e.store_code || '—'}</td>
                       <td style={cell}>{e.employee_name || '—'}</td>
                       <td style={{ ...cell, fontWeight: 600 }}>{fmt(e.cash)}</td>
-                      <td style={cell}>{e.envelope_picture ? <a href={e.envelope_picture} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>📷 view</a> : '—'}</td>
+                      <td style={cell}>{(e.envelope_url || e.envelope_picture) ? <a href={e.envelope_url || e.envelope_picture} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>📷 view</a> : '—'}</td>
                       <td style={cell}>
                         {done
                           ? <span style={{ fontSize: 12, color: 'var(--text3)' }}>by {e.picked_up_by} · {e.picked_up_at ? new Date(e.picked_up_at).toLocaleString() : ''}{e.note ? ` · ${e.note}` : ''}</span>

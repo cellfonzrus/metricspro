@@ -204,7 +204,7 @@ export default function DailyClosingVerify() {
                         <td style={cell}>{r.upgrade_count}</td>
                         <td style={cell}>{r.new_line_count}</td>
                         <td style={cell}>{r.postpaid_count}</td>
-                        <td style={cell}>{r.envelope_picture ? <a href={r.envelope_picture} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>📷</a> : '—'}</td>
+                        <td style={cell}>{(r.envelope_url || r.envelope_picture) ? <a href={r.envelope_url || r.envelope_picture} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>📷</a> : '—'}</td>
                       </tr>
                     ))}
                   </tbody>

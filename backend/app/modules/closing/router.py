@@ -443,7 +443,9 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
         out.append({
             "store_code": code, "store_name": (reps[0].get("store_name") or code or "—"),
             "store_address": meta.get("address") or reps[0].get("store_address"),
-            "market": mkt, "reps": reps, "totals": totals,
+            # Sign each rep's private-bucket envelope path (raw path 404s as a relative href).
+            "market": mkt, "reps": [{**rp, "envelope_url": _signed_envelope(rp.get("envelope_picture"))} for rp in reps],
+            "totals": totals,
             "scheduled_count": len(scheduled), "missing_reps": missing,
             "verification": ver_by_store.get(code), "recon": recon, "money_recon": money_recon,
         })
@@ -809,6 +811,8 @@ def closing_pickups(date: str, market: str = None, org_id: str = ORG_ID):
             "store_name": meta.get("address") or r.get("store_address") or r.get("store_name"),
             "market": mk, "employee_name": r.get("employee_name"), "cash": round(cash, 2),
             "envelope_picture": r.get("envelope_picture"),
+            # Sign the private-bucket path at request time (raw path 404s as a relative href).
+            "envelope_url": _signed_envelope(r.get("envelope_picture")),
             "picked_up": bool(p and p.get("picked_up")),
             "picked_up_by": p.get("picked_up_by") if p else None,
             "picked_up_at": p.get("picked_up_at") if p else None, "note": p.get("note") if p else None,
