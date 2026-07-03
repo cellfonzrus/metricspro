@@ -243,7 +243,14 @@ async def upload_file(
             if any(k in t for k in ("credit", "debit", "card", "visa", "master", "amex", "discover", "cc", "chip", "emv")):
                 return "card"
             return "other"
-        default_date = datetime.now(timezone.utc).date().isoformat()
+        # Stamp the BUSINESS-local date (not UTC): the X report is swept in the evening (~6:50 PM ET),
+        # which is already the next UTC day part of the year — a UTC stamp would file it under tomorrow.
+        try:
+            from zoneinfo import ZoneInfo
+            default_date = datetime.now(timezone.utc).astimezone(
+                ZoneInfo(settings.BUSINESS_TZ or "America/New_York")).date().isoformat()
+        except Exception:
+            default_date = datetime.now(timezone.utc).date().isoformat()
         agg = {}
         current_store, current_date = None, None
         for r in rows:
