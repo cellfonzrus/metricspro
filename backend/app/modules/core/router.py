@@ -823,10 +823,52 @@ def _create_or_link_auth(admin, email, temp_pw):
         return None, False, str(e)[:200]
 
 
+def _alias_email(email: str, slug: str, n: int = 0) -> str:
+    """A tenant-distinct login alias via plus-addressing: local+slug@domain (reaches the same inbox,
+    but is a SEPARATE login/auth account). n>0 disambiguates a collision."""
+    local, _, domain = (email or "").partition("@")
+    tag = re.sub(r"[^a-z0-9]+", "", (slug or "t").lower())[:20] or "t"
+    return f"{local}+{tag if n == 0 else f'{tag}{n}'}@{domain}"
+
+
+def _provision_login(client, admin, cur_row, org_id, email, temp_pw):
+    """Bind an auth login to this tenant's app_users row. If the person ALREADY has a login in a
+    DIFFERENT tenant (app_users.auth_id is UNIQUE = one login per person per tenant), auto-mint a
+    tenant-aliased login (local+slug@domain) so they get a SEPARATE login for THIS tenant — never
+    reusing the credential they used elsewhere. Returns (login_email, auth_id, created, aliased)."""
+    auth_id, created, err = _create_or_link_auth(admin, email, temp_pw)
+    if not auth_id:
+        raise HTTPException(500, f"could not create login: {err}")
+    clash = (client.schema("storeops").table("app_users").select("id").eq("auth_id", auth_id)
+             .neq("org_id", org_id).limit(1).execute().data) or []
+    if not clash:
+        client.schema("storeops").table("app_users").update(
+            {"auth_id": auth_id, "must_reset_password": True}).eq("id", cur_row["id"]).execute()
+        return email, auth_id, created, False
+    # Already a login in another tenant → mint a distinct aliased login for this one.
+    ten = (client.schema("storeops").table("tenants").select("slug,name").eq("org_id", org_id)
+           .limit(1).execute().data) or [{}]
+    slug = (ten[0].get("slug") or ten[0].get("name") or "t")
+    for n in range(0, 25):
+        alias = _alias_email(email, slug, n)
+        a_id, a_created, a_err = _create_or_link_auth(admin, alias, temp_pw)
+        if not a_id:
+            continue
+        other = (client.schema("storeops").table("app_users").select("id").eq("auth_id", a_id)
+                 .neq("org_id", org_id).limit(1).execute().data) or []
+        if other:
+            continue  # alias already belongs to yet another org — try the next suffix
+        client.schema("storeops").table("app_users").update(
+            {"email": alias, "auth_id": a_id, "must_reset_password": True}).eq("id", cur_row["id"]).execute()
+        return alias, a_id, a_created, True
+    raise HTTPException(409, "could not mint a distinct login for this tenant — try a different email")
+
+
 @router.post("/users/create-login")
 async def create_login(body: dict, org_id: str = ORG_ID):
     """Create (or relink) the Supabase Auth account for ONE assigned user and store auth_id.
-    Returns the temp password so the admin can hand it out (user resets on first login)."""
+    Returns the temp password so the admin can hand it out (user resets on first login). If the
+    person is already a login in ANOTHER tenant, a distinct tenant-aliased login is auto-minted."""
     email = (body.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
@@ -837,12 +879,12 @@ async def create_login(body: dict, org_id: str = ORG_ID):
         raise HTTPException(400, "assign a role to this email first (/users/assign)")
     admin = get_supabase_admin()
     temp_pw = body.get("temp_password") or ("Mp" + secrets.token_urlsafe(6))
-    auth_id, created, err = _create_or_link_auth(admin, email, temp_pw)
-    if not auth_id:
-        raise HTTPException(500, f"could not create login: {err}")
-    client.schema("storeops").table("app_users").update(
-        {"auth_id": auth_id, "must_reset_password": True}).eq("id", cur[0]["id"]).execute()
-    return {"email": email, "created": created, "temp_password": temp_pw, "auth_id": auth_id}
+    login_email, auth_id, created, aliased = _provision_login(client, admin, cur[0], org_id, email, temp_pw)
+    return {"email": login_email, "created": created, "temp_password": temp_pw, "auth_id": auth_id,
+            "aliased": aliased,
+            "note": (f"This person already has a login in another company, so a separate login "
+                     f"“{login_email}” was created for this tenant (it reaches the same inbox)."
+                     if aliased else None)}
 
 
 @router.post("/users/reset-password")
