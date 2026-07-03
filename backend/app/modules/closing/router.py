@@ -1062,11 +1062,31 @@ def _num_key(s: str) -> str:
     return _re.sub(r"\D", "", m.group(1)) if m else ""
 
 
+def _b2b_sales_rows(client, org_id: str, date: str, cols: str) -> list:
+    """The day's B2B sales rows for recon. Prefers raw_sales (the monthly upload the detectors have
+    always read) but FALLS BACK to daily_sales_feed (the emailed daily feed) when raw_sales has no
+    rows for that day — so cash/credit reconciliation works off the daily email import even when the
+    monthly file hasn't been uploaded and the feed→raw_sales promotion is off (the Boost case: the
+    emailed transactions land in daily_sales_feed, raw_sales stays empty). Same schema + keys either
+    way; either/or per day, so no double counting."""
+    def _q(table):
+        return (client.schema("commcalc").table(table).select(cols)
+                .eq("org_id", org_id).in_("period", [_period_label(date), date[:7]])
+                .eq("trans_date", date).limit(100000).execute().data) or []
+    rows = _q("raw_sales")
+    if not rows:
+        try:
+            rows = _q("daily_sales_feed")
+        except Exception:
+            pass
+    return rows
+
+
 def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
-    """Aggregate that day's B2B sales (raw_sales) per store_code: accessory GROSS (ext_price,
-    dept Ondigo), cash vs card totals (by tender_type), plus the raw tender breakdown for
-    transparency. raw_sales.store is matched to store_code by exact address then by an
-    unambiguous leading street-number."""
+    """Aggregate that day's B2B sales per store_code: accessory GROSS (ext_price, dept Ondigo),
+    cash vs card totals (by tender_type), plus the raw tender breakdown for transparency. Source is
+    raw_sales, falling back to the daily feed (see _b2b_sales_rows). store is matched to store_code
+    by exact address then by an unambiguous leading street-number."""
     addr_to_code, num_to_code, num_counts = {}, {}, {}
     sm = (client.schema("commcalc").table("store_mapping")
           .select("store_code,store_address").eq("org_id", org_id).execute().data) or []
@@ -1093,10 +1113,7 @@ def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
             return num_to_code.get(nk)
         return None
 
-    rows = (client.schema("commcalc").table("raw_sales")
-            .select("store,department,tender_type,ext_price,voided")
-            .eq("org_id", org_id).in_("period", [_period_label(date), date[:7]]).eq("trans_date", date)
-            .limit(100000).execute().data) or []
+    rows = _b2b_sales_rows(client, org_id, date, "store,department,tender_type,ext_price,voided")
 
     out = {}
     for r in rows:
@@ -1156,10 +1173,7 @@ def _b2b_day(client, org_id: str, date: str) -> dict:
             return num_to_code.get(nk)
         return None
 
-    rows = (client.schema("commcalc").table("raw_sales")
-            .select("store,salesperson,department,tender_type,ext_price,voided")
-            .eq("org_id", org_id).in_("period", [_period_label(date), date[:7]]).eq("trans_date", date)
-            .limit(100000).execute().data) or []
+    rows = _b2b_sales_rows(client, org_id, date, "store,salesperson,department,tender_type,ext_price,voided")
     by_store, by_rep = {}, {}
     for r in rows:
         if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
