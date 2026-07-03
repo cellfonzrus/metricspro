@@ -941,6 +941,271 @@ def save_face(body: dict, authorization: str = Header(default=""), org_id: str =
     return {"ok": True, "employee_id": employee_id}
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# FORCED CLOCK-OUT AT SCHEDULED END + SHIFT-EXTENSION (DM approval) WORKFLOW (migration 086)
+# At a shift's scheduled end an open punch is auto-closed (stamped at the scheduled end, so paid
+# hours match the schedule) UNLESS an extension was APPROVED ahead of time by the District Manager.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+FORCE_CLOCKOUT_GRACE_MIN = 15
+
+
+def _emp_id_variants(org_id, employee_id):
+    """The set of ids a shift/extension for this employee might carry — the schedule stores the
+    NUMERIC employees.id while the punch carries the BUSINESS employee_id (same mismatch the clock-in
+    gate reconciles). Returns ({id-strings}, name)."""
+    ids = {str(employee_id)}
+    name = None
+    try:
+        er = (sb().table("employees").select("id,name").eq("org_id", org_id)
+              .eq("employee_id", employee_id).limit(1).execute().data) or []
+        if er:
+            if er[0].get("id") is not None:
+                ids.add(str(er[0]["id"]))
+            name = er[0].get("name")
+    except Exception:
+        pass
+    return ids, name
+
+
+def _biz_dt_utc(date_str, hhmm):
+    """Combine a 'YYYY-MM-DD' + 'HH:MM' (business-local) into an aware UTC datetime, or None."""
+    try:
+        parts = str(hhmm).strip().split(":")
+        h, m = int(parts[0]), int(parts[1])
+        naive = datetime.fromisoformat(str(date_str)[:10] + f"T{h:02d}:{m:02d}:00")
+        return naive.replace(tzinfo=_BIZ_TZ).astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _approved_extension_end(org_id, id_variants, work_date):
+    """The latest APPROVED extension end ('HH:MM') for this employee/day, or None."""
+    try:
+        rows = (sb().table("shift_extension").select("requested_end")
+                .eq("org_id", org_id).eq("shift_date", str(work_date)[:10]).eq("status", "approved")
+                .in_("employee_id", list(id_variants)).execute().data) or []
+        ends = [r.get("requested_end") for r in rows if r.get("requested_end")]
+        return max(ends) if ends else None
+    except Exception:
+        return None
+
+
+def _scheduled_end_for_punch(org_id, punch):
+    """The aware-UTC datetime an open punch should be auto-closed at: the matching shift's end_time
+    (honoring an approved extension). None when the punch has no scheduled shift (leave it open)."""
+    eid = punch.get("employee_id")
+    wdate = punch.get("work_date")
+    if not (eid and wdate):
+        return None
+    ids, _ = _emp_id_variants(org_id, eid)
+    try:
+        shifts = (sb().table("shifts").select("store_code,end_time")
+                  .eq("org_id", org_id).eq("shift_date", str(wdate)[:10]).eq("is_deleted", False)
+                  .in_("employee_id", list(ids)).execute().data) or []
+    except Exception:
+        shifts = []
+    if not shifts:
+        return None
+    store = punch.get("store_code")
+    same = [s for s in shifts if _norm_store(s.get("store_code")) == _norm_store(store)] or shifts
+    s = max(same, key=lambda x: (x.get("end_time") or ""))
+    end_hhmm = _approved_extension_end(org_id, ids, wdate) or s.get("end_time")
+    if not end_hhmm:
+        return None
+    return _biz_dt_utc(wdate, end_hhmm)
+
+
+def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN):
+    """Close every open punch whose scheduled shift end (+ grace) has passed, stamping the clock-out
+    at the SCHEDULED END (paid hours = scheduled). Punches with no scheduled shift are left open."""
+    client = sb()
+    q = client.table("timelog").select("*").is_("clock_out", "null")
+    if org_id:
+        q = q.eq("org_id", org_id)
+    open_punches = q.execute().data or []
+    now = datetime.now(timezone.utc)
+    closed = []
+    for p in open_punches:
+        oid = p.get("org_id") or ORG_ID
+        end_dt = _scheduled_end_for_punch(oid, p)
+        if not end_dt:
+            continue
+        if now < end_dt + timedelta(minutes=grace_min):
+            continue  # still within the shift + grace
+        try:
+            ci = datetime.fromisoformat(str(p["clock_in"]).replace("Z", "+00:00"))
+            hours = round((end_dt - ci).total_seconds() / 3600.0, 2)
+            if hours < 0:
+                hours = 0.0
+        except Exception:
+            hours = None
+        note = ((p.get("notes") or "") + " | auto clock-out at scheduled end (system)").strip(" |")
+        try:
+            client.table("timelog").update(
+                {"clock_out": end_dt.isoformat(), "hours": hours, "notes": note}
+            ).eq("id", p["id"]).execute()
+            closed.append({"employee_id": p.get("employee_id"), "store_code": p.get("store_code"),
+                           "clock_out": end_dt.isoformat(), "hours": hours})
+        except Exception:
+            pass
+    return {"closed": len(closed), "detail": closed}
+
+
+@router.post("/timeclock/force-clockout/run-due")
+def force_clockout_run_due(x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint (guarded by NOTIFY_RUN_SECRET) — auto-close overdue open punches across ALL
+    tenants. Schedule it every ~15 min. Idempotent: a punch is closed at most once."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    return _do_force_clockout(org_id=None)
+
+
+@router.post("/timeclock/force-clockout/run")
+def force_clockout_run_now(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manual trigger for the caller's tenant (admin/manager) — same logic as the cron, for testing
+    or an ad-hoc sweep."""
+    mgr = _require_manager(authorization, org_id)
+    return _do_force_clockout(org_id=(mgr.get("org_id") or org_id))
+
+
+# ── Shift-extension request → DM approval workflow ─────────────────────────────────────────────
+def _dm_for_store(org_id, store_code):
+    """Resolve the District Manager for a store: walk the org tree up from the store's org_unit to a
+    District-level node (fallback: match a District unit by market), then read org_managers. Returns
+    (employee_id, email, name) or (None, None, None) when the org tree isn't configured."""
+    c = sb()
+    unit_id, market = None, None
+    try:
+        st = (c.table("stores").select("org_unit_id,market").eq("org_id", org_id)
+              .eq("store_code", store_code).limit(1).execute().data) or []
+        if st:
+            unit_id, market = st[0].get("org_unit_id"), st[0].get("market")
+    except Exception:
+        pass
+    try:
+        levels = {l["id"]: (l.get("name") or "") for l in
+                  (c.table("org_levels").select("id,name").eq("org_id", org_id).execute().data or [])}
+        units = {u["id"]: u for u in
+                 (c.table("org_units").select("id,name,level_id,parent_id,code").eq("org_id", org_id).execute().data or [])}
+    except Exception:
+        levels, units = {}, {}
+    district = None
+    cur = units.get(unit_id) if unit_id else None
+    guard = 0
+    while cur and guard < 20:
+        if "district" in (levels.get(cur.get("level_id")) or "").lower():
+            district = cur
+            break
+        cur = units.get(cur.get("parent_id"))
+        guard += 1
+    if not district and market:
+        mk = str(market).strip().lower()
+        for u in units.values():
+            if "district" in (levels.get(u.get("level_id")) or "").lower() and (
+                    mk and (mk in (u.get("name") or "").lower() or (u.get("code") or "").lower() == f"district:{mk}")):
+                district = u
+                break
+    if not district:
+        return (None, None, None)
+    try:
+        mg = (c.table("org_managers").select("employee_id").eq("org_id", org_id)
+              .eq("unit_id", district["id"]).limit(1).execute().data) or []
+        if not mg:
+            return (None, None, None)
+        deid = mg[0]["employee_id"]
+        emp = (c.table("employees").select("name,email").eq("org_id", org_id)
+               .eq("employee_id", deid).limit(1).execute().data) or []
+        return (deid, (emp[0].get("email") if emp else None), (emp[0].get("name") if emp else None))
+    except Exception:
+        return (None, None, None)
+
+
+@router.post("/shift-extensions")
+async def request_shift_extension(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """A manager files a request to extend an employee's shift past its scheduled end. Resolves the
+    District Manager, saves it 'pending', and emails the DM an FYI (the approval itself is the DM's
+    in-app tick). Body: {employee_id, employee_name?, store_code, shift_date, requested_end, reason?,
+    shift_id?, original_end?}."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    employee_id = (body.get("employee_id") or "").strip()
+    store_code = (body.get("store_code") or "").strip()
+    shift_date = (body.get("shift_date") or "").strip()[:10]
+    requested_end = (body.get("requested_end") or "").strip()
+    if not (employee_id and shift_date and requested_end):
+        raise HTTPException(400, "employee_id, shift_date and requested_end are required")
+    dm_eid, dm_email, dm_name = _dm_for_store(org_id, store_code)
+    _ids, emp_name = _emp_id_variants(org_id, employee_id)
+    row = {"org_id": org_id, "employee_id": employee_id,
+           "employee_name": body.get("employee_name") or emp_name,
+           "store_code": store_code, "shift_id": body.get("shift_id"), "shift_date": shift_date,
+           "original_end": body.get("original_end"), "requested_end": requested_end,
+           "reason": body.get("reason"), "status": "pending",
+           "requested_by": mgr.get("email"), "requested_by_name": mgr.get("email"),
+           "dm_employee_id": dm_eid, "dm_email": dm_email}
+    try:
+        r = sb().table("shift_extension").insert(row).execute()
+        ext_id = (r.data or [{}])[0].get("id")
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — is migration 086 applied? {e}")
+    # FYI email to the DM (best-effort; the approval is the in-app tick, not this email)
+    emailed = False
+    if dm_email:
+        try:
+            from app.modules.notify.channels import email_resend
+            if email_resend.is_configured():
+                await email_resend.send_email(
+                    to=dm_email,
+                    subject=f"Shift-extension approval needed — {row['employee_name'] or employee_id}",
+                    html=(f"<p>{mgr.get('email')} requested to extend "
+                          f"<b>{row['employee_name'] or employee_id}</b>'s shift at "
+                          f"<b>{store_code or '—'}</b> on <b>{shift_date}</b> to <b>{requested_end}</b>.</p>"
+                          f"<p>Reason: {body.get('reason') or '—'}</p>"
+                          f"<p>Approve or deny it in MetricsPro → Workforce → Shift Extensions.</p>"))
+                emailed = True
+        except Exception:
+            pass
+    return {"ok": True, "id": ext_id, "status": "pending",
+            "dm": {"employee_id": dm_eid, "name": dm_name, "email": dm_email, "emailed": emailed},
+            "note": None if dm_eid else "No District Manager is configured for this store — an admin or DM can still approve it."}
+
+
+@router.get("/shift-extensions")
+def list_shift_extensions(status: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Extension requests for the caller's tenant (optionally filtered by status), newest first —
+    powers the DM/admin approval queue and the manager's history."""
+    org_id, _eid = _caller_identity(authorization) if authorization else (org_id, None)
+    q = sb().table("shift_extension").select("*").eq("org_id", org_id)
+    if status:
+        q = q.eq("status", status)
+    rows = q.order("requested_at", desc=True).limit(200).execute().data or []
+    return {"extensions": rows}
+
+
+@router.post("/shift-extensions/{ext_id}/decision")
+def decide_shift_extension(ext_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The DM (or an admin) approves/denies a request IN-APP — the tick is the approval, recorded with
+    who + when. Body: {decision: 'approve'|'deny', note?}. Once approved, the forced-clockout job
+    honors the extended end for that employee/day."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    decision = (body.get("decision") or "").strip().lower()
+    if decision not in ("approve", "deny"):
+        raise HTTPException(400, "decision must be 'approve' or 'deny'")
+    rows = (sb().table("shift_extension").select("*").eq("id", ext_id).eq("org_id", org_id)
+            .limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "unknown request")
+    if rows[0].get("status") != "pending":
+        raise HTTPException(409, f"already {rows[0].get('status')}")
+    upd = {"status": "approved" if decision == "approve" else "denied",
+           "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
+           "decided_at": datetime.now(timezone.utc).isoformat(),
+           "decision_note": body.get("note")}
+    sb().table("shift_extension").update(upd).eq("id", ext_id).eq("org_id", org_id).execute()
+    return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
+
+
 # ── payroll settings (W-4 / state) + manual hours ──────────────────────────────────────────────
 @router.get("/payroll-settings/{employee_id}")
 def get_payroll_settings(employee_id: str, org_id: str = ORG_ID):

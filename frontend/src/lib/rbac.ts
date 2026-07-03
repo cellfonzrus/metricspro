@@ -132,6 +132,7 @@ export const NAV: NavGroup[] = [
     { href: '/storeops/schedule', label: 'Schedule', icon: '📅', module: 'storeops' },
     { href: '/storeops/timeoff', label: 'Time Off', icon: '🌴', module: 'storeops' },
     { href: '/storeops/swaps', label: 'Shift Swaps', icon: '🔄', module: 'storeops' },
+    { href: '/storeops/shift-extensions', label: 'Shift Extensions', icon: '⏱️', module: 'storeops', scopes: ['all', 'market', 'store'] },
     { href: '/storeops/timeclock', label: 'Time Clock', icon: '⏱️', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/employees', label: 'Employees', icon: '👥', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/team', label: 'My Team', icon: '🫂', module: 'storeops', scopes: ['all', 'market', 'store'] },
