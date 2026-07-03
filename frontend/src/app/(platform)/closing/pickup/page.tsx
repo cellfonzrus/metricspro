@@ -14,6 +14,9 @@ export default function CashPickupPage() {
   const { user, permissions } = useAuth()
   const [date, setDate] = useState(localToday())
   const [market, setMarket] = useState('')
+  const [fStore, setFStore] = useState('')
+  const [fEmp, setFEmp] = useState('')
+  const [fDm, setFDm] = useState('')
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [sel_, setSel] = useState<Record<string, boolean>>({})
@@ -30,9 +33,10 @@ export default function CashPickupPage() {
   const load = useCallback(() => {
     if (!date) return
     setLoading(true); setSel({}); setNotes({})
-    api(`/api/v1/closing/pickups?date=${date}${market ? `&market=${encodeURIComponent(market)}` : ''}`)
-      .then(setData).catch(console.error).finally(() => setLoading(false))
-  }, [date, market])
+    const qs = [`date=${date}`, market && `market=${encodeURIComponent(market)}`, fStore && `store=${encodeURIComponent(fStore)}`,
+      fEmp && `employee=${encodeURIComponent(fEmp)}`, fDm && `dm=${encodeURIComponent(fDm)}`].filter(Boolean).join('&')
+    api(`/api/v1/closing/pickups?${qs}`).then(setData).catch(console.error).finally(() => setLoading(false))
+  }, [date, market, fStore, fEmp, fDm])
   useEffect(() => { load() }, [load])
 
   const envelopes: any[] = data?.envelopes || []
@@ -98,8 +102,13 @@ export default function CashPickupPage() {
       {/* Filters */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <input type="date" style={sel} value={date} onChange={e => setDate(e.target.value)} />
+        <input style={{ ...sel, width: 110 }} placeholder="Store" value={fStore} onChange={e => setFStore(e.target.value)} />
+        <input style={{ ...sel, width: 140 }} placeholder="Sales rep" value={fEmp} onChange={e => setFEmp(e.target.value)} />
+        <input style={{ ...sel, width: 140 }} placeholder="DM (picked up by)" value={fDm} onChange={e => setFDm(e.target.value)} />
+        {(fStore || fEmp || fDm) && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 9px' }} onClick={() => { setFStore(''); setFEmp(''); setFDm('') }}>Clear</button>}
         {market && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Market: {market}</span>}
-        {data && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{data.ready} ready · {data.collected} collected</span>}
+        {data && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{data.ready} ready · {data.collected} collected{data.flagged ? ` · ${data.flagged} ⚠ flagged` : ''}</span>}
+        <Link href="/closing/cash-config" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>⚙️ Setup</Link>
       </div>
 
       {loading ? (

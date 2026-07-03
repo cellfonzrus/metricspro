@@ -1083,22 +1083,27 @@ async def cash_alerts_run_now(org_id: str = ORG_ID):
 
 
 @router.get("/pickups")
-def closing_pickups(date: str, market: str = None, org_id: str = ORG_ID):
-    """Cash envelopes for a day + their pickup status. An envelope = a rep's closing row with cash
-    to collect (store_cash + epay_cash > 0) or an envelope photo."""
-    if not date:
-        raise HTTPException(400, "date required (YYYY-MM-DD)")
+def closing_pickups(date: str = "", start: str = "", end: str = "", market: str = None,
+                    store: str = "", employee: str = "", dm: str = "", org_id: str = ORG_ID):
+    """Cash envelopes + their pickup/deposit status, FILTERABLE by date (or start..end range), store,
+    sales rep (employee), and the DM who collected. An envelope = a rep's closing row with cash to
+    collect (store_cash + epay_cash > 0) or an envelope photo."""
+    if not (date or (start and end)):
+        raise HTTPException(400, "date, or start+end, required (YYYY-MM-DD)")
     client = sb()
-    rows = (client.schema("commcalc").table("daily_closing").select("*")
-            .eq("org_id", org_id).eq("close_date", date).execute().data) or []
+    q = client.schema("commcalc").table("daily_closing").select("*").eq("org_id", org_id)
+    q = q.eq("close_date", date) if date else q.gte("close_date", start).lte("close_date", end)
+    rows = q.execute().data or []
     stores = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
     smeta = {s.get("store_code"): s for s in stores if s.get("store_code")}
+    pq = client.schema("commcalc").table("cash_pickup").select("*").eq("org_id", org_id)
+    pq = pq.eq("close_date", date) if date else pq.gte("close_date", start).lte("close_date", end)
     try:
-        picks = (client.schema("commcalc").table("cash_pickup").select("*")
-                 .eq("org_id", org_id).eq("close_date", date).execute().data) or []
+        picks = pq.execute().data or []
     except Exception:
         picks = []
-    pick_by = {((p.get("store_code") or ""), (p.get("employee_name") or "")): p for p in picks}
+    pick_by = {((p.get("store_code") or ""), (p.get("employee_name") or ""), str(p.get("close_date"))): p for p in picks}
+    store_f, emp_f, dm_f = store.strip().upper(), employee.strip().lower(), dm.strip().lower()
 
     out = []
     for r in rows:
@@ -1110,22 +1115,120 @@ def closing_pickups(date: str, market: str = None, org_id: str = ORG_ID):
         mk = meta.get("market") or ""
         if market and mk != market:
             continue
-        p = pick_by.get((code, (r.get("employee_name") or "")))
+        if store_f and (code or "").upper() != store_f:
+            continue
+        if emp_f and emp_f not in (r.get("employee_name") or "").lower():
+            continue
+        p = pick_by.get((code, (r.get("employee_name") or ""), str(r.get("close_date"))))
+        if dm_f and dm_f not in ((p or {}).get("picked_up_by") or "").lower():
+            continue
         out.append({
+            "close_date": str(r.get("close_date")),
             "store_code": r.get("store_code"),
             "store_name": meta.get("address") or r.get("store_address") or r.get("store_name"),
             "market": mk, "employee_name": r.get("employee_name"), "cash": round(cash, 2),
             "envelope_picture": r.get("envelope_picture"),
-            # Sign the private-bucket path at request time (raw path 404s as a relative href).
+            # Sign the private-bucket paths at request time (raw path 404s as a relative href).
             "envelope_url": _signed_envelope(r.get("envelope_picture")),
             "picked_up": bool(p and p.get("picked_up")),
             "picked_up_by": p.get("picked_up_by") if p else None,
             "picked_up_at": p.get("picked_up_at") if p else None, "note": p.get("note") if p else None,
+            # deposit tracking (mig 089)
+            "disposition": p.get("disposition") if p else None,
+            "deposit_amount": p.get("deposit_amount") if p else None,
+            "deposit_matched": p.get("deposit_matched") if p else None,
+            "deposit_flagged": bool(p.get("deposit_flagged")) if p else False,
+            "deposit_url": _signed_envelope(p.get("deposit_slip_path")) if p and p.get("deposit_slip_path") else None,
+            "pickup_id": p.get("id") if p else None,
         })
-    out.sort(key=lambda e: (e["picked_up"], str(e.get("store_name") or "")))
-    return {"date": date, "envelopes": out,
+    out.sort(key=lambda e: (e["picked_up"], str(e.get("close_date") or ""), str(e.get("store_name") or "")))
+    return {"date": date, "start": start, "end": end, "envelopes": out,
             "ready": sum(1 for e in out if not e["picked_up"]),
-            "collected": sum(1 for e in out if e["picked_up"])}
+            "collected": sum(1 for e in out if e["picked_up"]),
+            "flagged": sum(1 for e in out if e["deposit_flagged"])}
+
+
+def _ocr_deposit_amount(raw: bytes, ext: str):
+    """Read the deposited amount off a bank deposit-slip image with Claude vision. Returns
+    (amount_float_or_None, raw_json). Graceful no-op ({} , None) when ANTHROPIC_API_KEY is unset."""
+    if not settings.ANTHROPIC_API_KEY or not raw:
+        return None, {"skipped": "ANTHROPIC_API_KEY not set — enter the deposit amount manually"}
+    try:
+        import json as _json
+        from anthropic import Anthropic
+        cli = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        media = "image/png" if ext == "png" else "image/jpeg"
+        b64 = base64.b64encode(raw).decode("ascii")
+        msg = cli.messages.create(
+            model=settings.ACCOUNT_ENGINE_MODEL, max_tokens=300,
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}},
+                {"type": "text", "text": "This is a bank deposit slip. Return ONLY compact JSON: "
+                 '{"total_deposit": <number>, "cash": <number|null>, "date": "<YYYY-MM-DD|null>"}. '
+                 "total_deposit is the total amount deposited (no $ or commas). If unreadable, use null."}]}])
+        text = "".join(getattr(b, "text", "") for b in msg.content) if msg.content else ""
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.strip("`").split("\n", 1)[-1]
+        data = _json.loads(text[text.find("{"): text.rfind("}") + 1])
+        amt = data.get("total_deposit")
+        return (float(amt) if amt is not None else None), data
+    except Exception as e:
+        return None, {"error": str(e)[:200]}
+
+
+@router.post("/pickup/deposit")
+def record_deposit(payload: dict, org_id: str = ORG_ID):
+    """Record what happened to picked-up cash: DEPOSITED (upload the slip → OCR the amount → match
+    against the system's declared cash → flag any mismatch for review) or HANDED to management.
+    Body: {store_code, close_date, employee_name, disposition:'deposited'|'handed_to_mgmt',
+    deposit_slip?(data_url), deposit_amount?(manual override), declared_amount?, handed_to?, note?}."""
+    client = sb()
+    store = (payload.get("store_code") or "").strip()
+    cdate = _date(payload.get("close_date") or payload.get("date"))
+    emp = (payload.get("employee_name") or "").strip()
+    disp = (payload.get("disposition") or "").strip().lower()
+    if not (store and cdate) or disp not in ("deposited", "handed_to_mgmt"):
+        raise HTTPException(400, "store_code, close_date and disposition (deposited|handed_to_mgmt) required")
+    upd = {"org_id": org_id, "close_date": cdate, "store_code": store, "employee_name": emp,
+           "disposition": disp, "deposit_note": payload.get("note"), "deposited_at": _now()}
+    ocr = None
+    if disp == "handed_to_mgmt":
+        upd["handed_to"] = payload.get("handed_to")
+    else:
+        # declared = the system's cash for this envelope (epay cash + store cash)
+        declared = payload.get("declared_amount")
+        if declared is None:
+            dc = (client.schema("commcalc").table("daily_closing").select("store_cash,epay_cash")
+                  .eq("org_id", org_id).eq("close_date", cdate).eq("store_code", store)
+                  .eq("employee_name", emp).limit(1).execute().data) or []
+            declared = (_f(dc[0].get("store_cash")) + _f(dc[0].get("epay_cash"))) if dc else None
+        slip = payload.get("deposit_slip")
+        amount = payload.get("deposit_amount")
+        if slip and "," in str(slip):
+            path = _upload_envelope(org_id, slip)   # reuse the private closing-envelopes bucket
+            upd["deposit_slip_path"] = path
+            if amount in (None, ""):
+                try:
+                    header, b64 = str(slip).split(",", 1)
+                    amount, ocr = _ocr_deposit_amount(base64.b64decode(b64), "png" if "png" in header else "jpg")
+                except Exception:
+                    amount = None
+        upd["deposit_amount"] = (float(amount) if amount not in (None, "") else None)
+        upd["declared_amount"] = (round(_f(declared), 2) if declared is not None else None)
+        upd["deposit_ocr"] = ocr
+        if upd["deposit_amount"] is not None and upd["declared_amount"] is not None:
+            matched = abs(upd["deposit_amount"] - upd["declared_amount"]) <= 1.0
+            upd["deposit_matched"] = matched
+            upd["deposit_flagged"] = not matched
+        else:
+            upd["deposit_matched"] = None
+            upd["deposit_flagged"] = False
+    client.schema("commcalc").table("cash_pickup").upsert(
+        upd, on_conflict="org_id,close_date,store_code,employee_name").execute()
+    return {"ok": True, "disposition": disp, "deposit_amount": upd.get("deposit_amount"),
+            "declared_amount": upd.get("declared_amount"), "matched": upd.get("deposit_matched"),
+            "flagged": upd.get("deposit_flagged"), "ocr": ocr}
 
 
 @router.post("/pickup")
