@@ -506,3 +506,55 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
             }
         finally:
             browser.close()
+
+
+# ── b2bsoft (wsreports.b2bsoft.com) — SAME interactive-2FA + session + proxy machinery as VidaPay ──
+# The login/2FA endpoints already use the generic begin_login/complete_2fa above, so b2bsoft's
+# interactive 2FA works for a data_source with processor='b2bsoft'; this is the report-pull handler.
+B2BSOFT_URL = "https://wsreports.b2bsoft.com"
+
+
+def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrier_id=None, proxy_url=None):
+    """Restore the authenticated b2bsoft session (established via the interactive Log in + 2FA flow and
+    persisted as storage_state — optionally routed through a residential proxy to clear b2bsoft's
+    datacenter-IP wall) and verify it's alive, reporting the sales-report links it exposes so the Sales
+    Transaction Details auto-download can be pinned in one live calibration pass. Raises VidaPayAuthError
+    (reused) if the session is missing/expired so the router prompts a re-login."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        raise VidaPayLoginError("Playwright/Chromium is not available in the backend image.")
+    if not session_state:
+        raise VidaPayAuthError("Not authenticated yet — click “Log in” and complete 2FA first.")
+    base_url = (url or B2BSOFT_URL).strip() or B2BSOFT_URL
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+        ctx = _new_context(browser, storage_state=session_state, proxy=_proxy_arg(proxy_url))
+        page = ctx.new_page()
+        try:
+            page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+            _wait_settle(page)
+            page.wait_for_timeout(2500)
+            state = _classify(page)
+            if state in ("login", "twofa", "botwall"):
+                raise VidaPayAuthError(
+                    "The b2bsoft session has expired (or the datacenter IP was walled) — please re-"
+                    "authenticate (Log in + 2FA). If it keeps walling, set a residential proxy on the source.")
+            diag = _snapshot(page)
+            links = []
+            for fr in _frames(page):
+                try:
+                    links += fr.evaluate(
+                        """() => Array.from(document.querySelectorAll('a,button,span,li,option'))
+                                 .map(e => (e.innerText||e.textContent||'').trim())
+                                 .filter(t => /sales|transaction|report|inventory|aging|daily|export|download/i.test(t))
+                                 .filter((v,i,a)=>a.indexOf(v)===i).slice(0,30)""")
+                except Exception:
+                    continue
+            return {
+                "status": "session verified — logged in to b2bsoft OK; Sales Transaction Details auto-"
+                          "download pending one live calibration (the email feed keeps ingesting meanwhile)",
+                "authenticated": True, "report_links_seen": links[:30], "diag": diag,
+            }
+        finally:
+            browser.close()

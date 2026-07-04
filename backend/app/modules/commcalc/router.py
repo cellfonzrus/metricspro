@@ -6999,9 +6999,25 @@ async def _vidapay_scraper(org_id, src_row):
         src_row.get("proxy_url"))
 
 
+async def _b2bsoft_scraper(org_id, src_row):
+    """_SOURCE_SCRAPERS handler for b2bsoft (wsreports.b2bsoft.com — the daily Sales Transaction
+    Details source). Reuses the SAME interactive-2FA + persisted-session + residential-proxy machinery
+    as VidaPay (the login/start + login/verify endpoints already call the generic begin_login/
+    complete_2fa), so a data_source with processor='b2bsoft' logs in with 2FA entered in the UI and the
+    session is kept alive for ~90 days. A missing/expired session raises VidaPayAuthError → needs_2fa."""
+    from app.modules.commcalc import vidapay_sweep as vp
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(
+        vp.run_b2bsoft_sweep, sb(), org_id, src_row.get("portal_url"),
+        src_row.get("session_state"), src_row.get("id"), src_row.get("carrier_id"),
+        src_row.get("proxy_url"))
+
+
 # processor key → scraper callable (org_id, source_row) -> result dict. VidaPay + Total Access
 # share the same "Master Agent" portal family (vidapaycrm.com); both route through _vidapay_scraper.
-_SOURCE_SCRAPERS = {"vidapay": _vidapay_scraper, "total_access": _vidapay_scraper}
+# b2bsoft (wsreports) reuses the identical Playwright session/2FA/proxy path via _b2bsoft_scraper.
+_SOURCE_SCRAPERS = {"vidapay": _vidapay_scraper, "total_access": _vidapay_scraper,
+                    "b2bsoft": _b2bsoft_scraper, "b2b": _b2bsoft_scraper}
 
 
 def _strip_source_pw(row):
