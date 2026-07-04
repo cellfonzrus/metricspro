@@ -10,7 +10,7 @@ type Plan = {
   org_id: string; basis: string; unit_price: number; cycle: string; currency: string
   modules: string[] | null; is_active: boolean; notes: string | null
 }
-type Drivers = { per_store: number; per_user: number; per_entity: number; per_module: number; flat: number }
+type Drivers = { per_store: number; per_user: number; per_entity: number; per_module: number; per_carrier: number; flat: number }
 type PlanRow = { org_id: string; name: string; is_active_tenant: boolean; plan: Plan | null; drivers: Drivers }
 type Invoice = {
   id: string; org_id: string; period_start: string; period_end: string; basis: string
@@ -26,13 +26,13 @@ type Connector = {
 }
 type Provider = { key: string; label: string; live: boolean; hint: string }
 
-const BASES = ['flat', 'per_store', 'per_entity', 'per_user', 'per_module']
+const BASES = ['flat', 'per_store', 'per_entity', 'per_user', 'per_module', 'per_carrier']
 const CYCLES = ['monthly', 'annual']
 const basisDriverKey: Record<string, keyof Drivers> = {
-  flat: 'flat', per_store: 'per_store', per_entity: 'per_entity', per_user: 'per_user', per_module: 'per_module',
+  flat: 'flat', per_store: 'per_store', per_entity: 'per_entity', per_user: 'per_user', per_module: 'per_module', per_carrier: 'per_carrier',
 }
 const basisLabel: Record<string, string> = {
-  flat: 'Flat', per_store: 'Per store', per_entity: 'Per entity', per_user: 'Per user', per_module: 'Per module',
+  flat: 'Flat', per_store: 'Per store', per_entity: 'Per entity', per_user: 'Per user', per_module: 'Per module', per_carrier: 'Per carrier',
 }
 
 export default function BillingAdmin() {
@@ -215,7 +215,7 @@ export default function BillingAdmin() {
                   : <span style={{ color: 'var(--text3)' }}>— no plan —</span>}
               </span>
               <span style={{ flex: 1.6, minWidth: 200, fontSize: 12, color: 'var(--text3)' }}>
-                {row.drivers.per_store} stores · {row.drivers.per_user} users · {row.drivers.per_entity} entities · {row.drivers.per_module} modules
+                {row.drivers.per_store} stores · {row.drivers.per_user} users · {row.drivers.per_entity} entities · {row.drivers.per_module} modules · {row.drivers.per_carrier} carriers
               </span>
               <span style={{ width: 110, textAlign: 'right', fontWeight: 600, fontSize: 13 }}>{row.plan ? fmt(planAmount(row)) : '—'}</span>
               <span style={{ width: 210, display: 'flex', gap: 6, justifyContent: 'flex-end' }}>

@@ -30,7 +30,7 @@ from app.modules.core.router import _require_super_admin
 router = APIRouter(prefix="/billing", tags=["Billing (Tenants)"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
-VALID_BASIS = {"flat", "per_store", "per_entity", "per_user", "per_module"}
+VALID_BASIS = {"flat", "per_store", "per_entity", "per_user", "per_module", "per_carrier"}
 VALID_CYCLE = {"monthly", "annual"}
 VALID_STATUS = {"draft", "sent", "paid", "void"}
 
@@ -65,8 +65,10 @@ def _quantity_drivers(org_id: str) -> dict:
                         .select("id", count="exact").eq("org_id", org_id))
     per_module = _count(client.schema("storeops").table("tenant_modules")
                         .select("module_key", count="exact").eq("org_id", org_id).eq("is_enabled", True))
-    return {"per_store": per_store, "per_user": per_user,
-            "per_entity": per_entity, "per_module": per_module, "flat": 1}
+    per_carrier = _count(client.schema("commcalc").table("carrier")
+                         .select("id", count="exact").eq("org_id", org_id))
+    return {"per_store": per_store, "per_user": per_user, "per_entity": per_entity,
+            "per_module": per_module, "per_carrier": per_carrier, "flat": 1}
 
 
 def _quantity_for_basis(org_id: str, basis: str) -> int:
