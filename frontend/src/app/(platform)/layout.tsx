@@ -169,6 +169,12 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
               style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', textDecoration: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '5px 10px' }}>
               🕐 Clock in
             </Link>
+            {(permissions?.modules?.admin || permissions?.scope === 'all') && (
+              <Link href="/configurations" title="All settings & configuration in one place"
+                style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', textDecoration: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '5px 10px' }}>
+                ⚙️ Settings
+              </Link>
+            )}
           </div>
           {open ? (
             <span style={{ fontSize: 12, color: 'var(--text3)' }}>🔓 Login not enforced</span>
