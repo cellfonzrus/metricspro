@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
 
+from app.core.config import settings
 from app.core.database import get_supabase
 
 router = APIRouter(prefix="/helpdesk", tags=["Helpdesk"])
@@ -31,15 +32,15 @@ def _now():
 
 
 # ── Module entitlement ────────────────────────────────────────────────────────────────────────
-def _module_enabled(org_id: str) -> bool:
+def _module_enabled(org_id: str, key: str = "helpdesk") -> bool:
     rows = (db("tenant_modules").select("is_enabled")
-            .eq("org_id", org_id).eq("module_key", "helpdesk").limit(1).execute().data or [])
+            .eq("org_id", org_id).eq("module_key", key).limit(1).execute().data or [])
     return bool(rows and rows[0].get("is_enabled"))
 
 
-def _require_module(org_id: str):
-    if not _module_enabled(org_id):
-        raise HTTPException(403, "Helpdesk module not enabled for this tenant")
+def _require_module(org_id: str, key: str = "helpdesk"):
+    if not _module_enabled(org_id, key):
+        raise HTTPException(403, f"{key} not enabled for this tenant")
 
 
 # ── Defaults (seeded on first bootstrap so a freshly-enabled org is usable immediately) ─────────
@@ -492,6 +493,111 @@ def dashboard(org_id: str = ORG_ID):
     avg_res = round(sum(res_hours) / len(res_hours), 1) if res_hours else None
     return {"total": len(tickets), "open": open_count, "by_stage": by_stage,
             "avg_resolution_hours": avg_res, "aging": aging}
+
+
+# ── AI support assistant (Phase 2) — tenant-scoped, READ-ONLY ───────────────────────────────────
+_AI_SUPPORT_SYSTEM = """You are the in-app support assistant for MetricsPro, a multi-tenant SaaS for
+cellular-retail commission and store operations. You are helping a user at the tenant "{tenant_name}".
+Enabled modules for this tenant: {modules}.
+
+SCOPE & ISOLATION
+- Only ever discuss THIS tenant ("{tenant_name}"). Never reference or imply another company's data.
+- You do NOT have live database access. Answer from product knowledge and what the user tells you; when a
+  specific number is needed, tell them exactly which page or report shows it.
+
+WHAT METRICSPRO DOES (use this model to frame answers)
+A store sells a phone at a carrier-defined discount on a new activation or an upgrade; the carrier pays the
+store back the discount plus commission per its commission addendum. The app then reconciles expected vs
+paid, bills the phones and other purchases, reconciles that, and characterizes expenses into the P&L.
+Commission rules are configured per tenant/carrier in the onboarding and mapping menus — never hard-coded.
+
+COMMON QUESTIONS — answer specifically
+- Upload sales: use Data Imports with the 78-column "Sales Transaction Details" export (it has Contract
+  Type). The old 25-column daily format produces $0 commissions.
+- Commissions $0 / no reps: usually the wrong sales file (missing Contract Type), dates stored as Excel
+  serial numbers instead of real dates, or — for a Total/VidaPay carrier — commissions live on the Total
+  Processor page, not the Boost commissions dashboard.
+- Discrepancy or commission report is empty: check the selected period (not a future month with no data)
+  and that the month's data was uploaded, then run/recompute.
+- Cash recon flags everything: the tender (cash vs card) split comes from the POS X-Report, not the sales
+  feed — make sure the X-Report is being ingested for that store and day.
+- Payout looks wrong: point to the commissions/payout page for the period; if a rule itself looks wrong,
+  that is an admin configuration question (Mapping / commission plans).
+
+GUARDRAILS
+- You are READ-ONLY: you cannot change data, run uploads, edit records, or move money. When asked to DO
+  such a thing, explain the exact screen where the user does it themselves, or offer to help them raise a
+  support ticket for a person.
+- Never assert a specific dollar figure (owed, payout, correction) as fact — say where to see it and who
+  can change it.
+- If you don't know, say so and suggest raising a ticket. Never invent features, prices, or numbers.
+
+STYLE: concise, friendly, practical. Lead with the answer, then the exact page or steps. A few sentences
+is usually enough."""
+
+
+def _tenant_ai_context(org_id: str) -> dict:
+    name = "your company"
+    try:
+        t = db("tenants").select("name").eq("org_id", org_id).limit(1).execute().data or []
+        if t and t[0].get("name"):
+            name = t[0]["name"]
+    except Exception:
+        pass
+    mods = []
+    try:
+        rows = db("tenant_modules").select("module_key,is_enabled").eq("org_id", org_id).execute().data or []
+        mods = sorted(r["module_key"] for r in rows if r.get("is_enabled") and r.get("module_key"))
+    except Exception:
+        pass
+    return {"tenant_name": name, "modules": ", ".join(mods) or "the core modules"}
+
+
+@router.get("/ai-assist/status")
+def ai_assist_status(org_id: str = ORG_ID):
+    """Whether the AI assistant is usable for this tenant (module enabled + API key configured)."""
+    return {"module_enabled": _module_enabled(org_id, "ai_assistant"),
+            "configured": bool(settings.ANTHROPIC_API_KEY),
+            "model": settings.ACCOUNT_ENGINE_MODEL}
+
+
+@router.post("/ai-assist")
+async def ai_assist(body: dict, org_id: str = ORG_ID):
+    """Tenant-scoped AI support assistant (Phase 2). Answers product / how-to / 'why is X empty' questions
+    grounded in THIS tenant's context. READ-ONLY by construction — no data-mutation path, and the model is
+    told it may only speak about the caller's tenant. Multi-tenant safe: org_id is the caller's tenant
+    (enforcement rewrites it from the JWT). Body: {message, history?: [{role, content}]}."""
+    _require_module(org_id, "ai_assistant")
+    question = (body.get("message") or body.get("question") or "").strip()
+    if not question:
+        raise HTTPException(400, "message required")
+    question = question[:4000]
+    if not settings.ANTHROPIC_API_KEY:
+        return {"reply": "The AI assistant isn't configured yet. Ask an admin to set the API key, or raise "
+                         "a ticket and a person will help.", "configured": False}
+    ctx = _tenant_ai_context(org_id)
+    system = _AI_SUPPORT_SYSTEM.replace("{tenant_name}", ctx["tenant_name"]).replace("{modules}", ctx["modules"])
+    msgs = []
+    for h in (body.get("history") or [])[-10:]:
+        role = (h.get("role") or "").lower()
+        content = (h.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            msgs.append({"role": role, "content": content[:4000]})
+    msgs.append({"role": "user", "content": question})
+    try:
+        from anthropic import Anthropic
+        cli = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        resp = cli.messages.create(
+            model=settings.ACCOUNT_ENGINE_MODEL, max_tokens=1024,
+            system=system, messages=msgs,
+        )
+        reply = "".join(getattr(b, "text", "") for b in resp.content
+                        if getattr(b, "type", None) == "text").strip()
+        return {"reply": reply or "I couldn't produce an answer — try rephrasing, or raise a ticket.",
+                "configured": True}
+    except Exception as e:
+        return {"reply": "The assistant hit an error. You can raise a ticket and a person will help.",
+                "configured": True, "error": str(e)[:200]}
 
 
 # ── Notify (best-effort; never blocks ticket creation) ─────────────────────────────────────────

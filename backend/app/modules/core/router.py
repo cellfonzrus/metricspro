@@ -186,7 +186,7 @@ def _require_super_admin(authorization: str):
 
 
 def _mods(**on):
-    base = {k: False for k in ("commissions", "targets", "asset", "vip", "storeops", "notify", "helpdesk", "hr", "admin")}
+    base = {k: False for k in ("commissions", "targets", "asset", "vip", "storeops", "notify", "helpdesk", "hr", "admin", "ai_assistant")}
     base.update(on)
     return base
 
@@ -194,9 +194,9 @@ def _mods(**on):
 # the role set seeded into every new tenant (mirror of migration 015 + helpdesk); the tenant admin
 # edits them afterward on their own Roles & Access.
 _BASE_ROLES = [
-    ("admin", "Admin", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True, helpdesk=True, hr=True, admin=True), "scope": "all", "home": "/commcalc"}),
-    ("market_manager", "Market Manager", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True, helpdesk=True, hr=True), "scope": "market", "home": "/commcalc/targets"}),
-    ("store_manager", "Store Manager", {"modules": _mods(commissions=True, targets=True, asset=True, storeops=True, helpdesk=True), "scope": "store", "home": "/commcalc/targets"}),
+    ("admin", "Admin", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True, helpdesk=True, hr=True, ai_assistant=True, admin=True), "scope": "all", "home": "/commcalc"}),
+    ("market_manager", "Market Manager", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True, helpdesk=True, hr=True, ai_assistant=True), "scope": "market", "home": "/commcalc/targets"}),
+    ("store_manager", "Store Manager", {"modules": _mods(commissions=True, targets=True, asset=True, storeops=True, helpdesk=True, ai_assistant=True), "scope": "store", "home": "/commcalc/targets"}),
     ("sales_rep", "Sales Rep", {"modules": _mods(targets=True, helpdesk=True), "scope": "self", "home": "/commcalc/targets/my"}),
 ]
 

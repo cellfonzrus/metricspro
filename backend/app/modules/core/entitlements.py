@@ -23,7 +23,7 @@ from app.core.database import get_supabase
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
 # folded the configurable HR intake-capture form into seed_tenant_defaults(); 3 = mig 079 expanded
 # seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
-SEED_VERSION = 3
+SEED_VERSION = 4   # bumped: added "ai_assistant" capability (auto-provisions to every tenant on next login)
 
 # Canonical module registry. tenant_modules + billing_plan.modules key off these module_keys.
 MODULE_CATALOG = {
@@ -37,6 +37,7 @@ MODULE_CATALOG = {
     "helpdesk": "Helpdesk",
     "hr": "HR / People",
     "account": "Accounting",
+    "ai_assistant": "AI Assistant",
 }
 ALL_MODULES = list(MODULE_CATALOG.keys())
 
