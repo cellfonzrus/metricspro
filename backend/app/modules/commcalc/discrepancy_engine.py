@@ -103,7 +103,7 @@ def _parse_mrc_from_plan(product_desc):
     return plan_amts[0] if plan_amts else 0.0
 
 
-def run_discrepancy(period):
+def run_discrepancy(period, org_id=ORG_ID):
     client = get_supabase()
     year, month = int(period[:4]), int(period[5:7])
     period_start = date(year, month, 1)
@@ -112,13 +112,13 @@ def run_discrepancy(period):
 
     # ── Reference rates ──────────────────────────────────────────────
     rates = (client.schema("commcalc").table("comp_rates")
-             .select("*").eq("org_id", ORG_ID).execute().data) or []
+             .select("*").eq("org_id", org_id).execute().data) or []
 
     # ── MI lines for this period: index by phone_number and device_serial ──
     mi_rows = (client.schema("commcalc").table("raw_mi")
                .select("device_serial,phone_number,customer_plan,base_mrc,"
                        "mi_activation_date,subscriber_status,rep_username")
-               .eq("org_id", ORG_ID).eq("period", plabel).execute().data) or []
+               .eq("org_id", org_id).eq("period", plabel).execute().data) or []
     mi_by_mdn, mi_by_imei = {}, {}
     for m in mi_rows:
         mdn = (m.get("phone_number") or "").strip()
@@ -132,13 +132,13 @@ def run_discrepancy(period):
     sales = (client.schema("commcalc").table("raw_sales")
              .select("serial_1,store,salesperson,contract_type,mdn,product_desc,"
                      "ext_price,trans_date,tender_type")
-             .eq("org_id", ORG_ID).eq("period", plabel)
+             .eq("org_id", org_id).eq("period", plabel)
              .neq("contract_type", "").execute().data) or []
 
     # ── Payments for this period: index by (mdn|imei, comp_type, month) ──
     pays = (client.schema("commcalc").table("raw_payment_detail")
             .select("imei,payment_type,amount,mdn,period_month,period_year")
-            .eq("org_id", ORG_ID).eq("period_month", month)
+            .eq("org_id", org_id).eq("period_month", month)
             .eq("period_year", year).execute().data) or []
     pay_mdn, pay_imei = {}, {}
     for p in pays:
@@ -172,7 +172,7 @@ def run_discrepancy(period):
 
     # Clear previous results
     client.schema("commcalc").table("discrepancy_results")\
-        .delete().eq("org_id", ORG_ID).eq("period", period).execute()
+        .delete().eq("org_id", org_id).eq("period", period).execute()
 
     results = []
     total_gap = 0.0
@@ -225,7 +225,7 @@ def run_discrepancy(period):
             else:
                 status = "ok"
             results.append({
-                "org_id": ORG_ID, "period": period, "imei": imei or "(byod)",
+                "org_id": org_id, "period": period, "imei": imei or "(byod)",
                 "mdn": mdn, "store": store, "rep_username": rep,
                 "activation_date": act_date.isoformat(), "activation_type": act_raw,
                 "device_model": (s.get("product_desc") or "")[:200], "customer_plan": plan[:200],

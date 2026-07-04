@@ -26,7 +26,10 @@ def _enabled() -> bool:
 
 
 def _org_for_token(token: str):
-    """Verify the Supabase JWT and resolve the caller's org_id (cached). Blocking — call via to_thread."""
+    """Verify the Supabase JWT and resolve the caller's org_id (cached). Returns None when the caller is
+    a SUPER-ADMIN — the middleware then leaves the client-supplied org_id intact, so cross-tenant
+    management (list_users/list_employees/roles/assign for another tenant via ?org_id=…) keeps working.
+    Blocking — call via to_thread."""
     now = time.time()
     hit = _cache.get(token)
     if hit and hit[1] > now:
@@ -39,8 +42,10 @@ def _org_for_token(token: str):
         org = None
         if uid:
             rows = (get_supabase().schema("storeops").table("app_users")
-                    .select("org_id").eq("auth_id", uid).limit(1).execute().data) or []
-            org = rows[0].get("org_id") if rows else None
+                    .select("org_id,super_admin").eq("auth_id", uid).limit(1).execute().data) or []
+            if rows and not rows[0].get("super_admin"):
+                org = rows[0].get("org_id")
+            # super-admin (or no app_users row) → org stays None ⇒ no rewrite (query org_id honored)
         _cache[token] = (org, now + _TTL)
         return org
     except Exception:

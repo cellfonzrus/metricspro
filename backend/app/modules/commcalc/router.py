@@ -919,7 +919,8 @@ async def upload_vip_invoices(file: UploadFile = File(...), org_id: str = ORG_ID
     SENTINEL = '00000000-0000-0000-0000-000000000000'
     for tbl in ('vip_invoices', 'vip_invoice_lines', 'vip_invoice_devices'):
         try:
-            client.schema('commcalc').table(tbl).delete().neq('id', SENTINEL).execute()
+            # scope the wipe to THIS tenant — a bare delete-all would nuke every tenant's VIP invoices
+            client.schema('commcalc').table(tbl).delete().eq('org_id', org_id).neq('id', SENTINEL).execute()
         except Exception as e:
             raise HTTPException(500, f"Failed clearing {tbl}: {e}. Did you run 008_vip_invoices.sql?")
 
@@ -3987,7 +3988,10 @@ async def _run_calculation(period: str, org_id: str):
     try:
         # Load all data
         def fetch(table, filters={}):
-            q = client.schema('commcalc').table(table).select('*')
+            # Org-scope EVERY read so a calc runs over ONLY the caller's tenant. Without this the engine
+            # folded every tenant's raw sales/MI/payments/employees into the caller's snapshot (multi-tenant
+            # leak). All tables fetched here carry org_id.
+            q = client.schema('commcalc').table(table).select('*').eq('org_id', org_id)
             for k, v in filters.items():
                 q = q.eq(k, v)
             try:
@@ -4032,7 +4036,7 @@ async def _run_calculation(period: str, org_id: str):
         
         # Save commissions
         try:
-            client.schema('commcalc').table('rep_commissions').delete().in_('period', _pvariants(period)).execute()
+            client.schema('commcalc').table('rep_commissions').delete().eq('org_id', org_id).in_('period', _pvariants(period)).execute()
             comms = result['commissions']
             for row in comms:
                 row['org_id'] = org_id
@@ -4074,7 +4078,7 @@ async def _run_calculation(period: str, org_id: str):
             except Exception as pe:
                 save_errors.append(f'portout: {pe}')
 
-            client.schema('commcalc').table('flags').delete().in_('period', _pvariants(period)).execute()
+            client.schema('commcalc').table('flags').delete().eq('org_id', org_id).in_('period', _pvariants(period)).execute()
             if flag_list:
                 for row in flag_list:
                     row['org_id'] = org_id
@@ -4085,7 +4089,7 @@ async def _run_calculation(period: str, org_id: str):
 
         # ── Detect potential chargebacks per rep ─────────────────
         try:
-            existing = client.schema('commcalc').table('chargeback_items').select('source,source_ref,deduct').in_('period', _pvariants(period)).execute().data or []
+            existing = client.schema('commcalc').table('chargeback_items').select('source,source_ref,deduct').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data or []
             decided = {(e['source'], e['source_ref']): e['deduct'] for e in existing}
             cb_items = []
             prem_rate = float(cfg.get('premium_flat') or 5)
@@ -4146,7 +4150,7 @@ async def _run_calculation(period: str, org_id: str):
             # preserve manually-assigned chargebacks from the review bucket (recalc only manages
             # the auto-detected ones); otherwise an assigned VIP/fraud chargeback vanishes on recalc.
             (client.schema('commcalc').table('chargeback_items').delete()
-             .in_('period', _pvariants(period)).neq('source', 'chargeback_review').execute())
+             .eq('org_id', org_id).in_('period', _pvariants(period)).neq('source', 'chargeback_review').execute())
             if cb_items:
                 for i in range(0, len(cb_items), 500):
                     client.schema('commcalc').table('chargeback_items').insert(cb_items[i:i+500]).execute()
@@ -5011,7 +5015,7 @@ async def get_calc_status(period: str, org_id: str = "00000000-0000-0000-0000-00
 async def upload_hotsheet(
     file: UploadFile = File(...),
     effective_date: str = Form(...),
-    org_id: str = Form(default=ORG_ID),
+    org_id: str = ORG_ID,   # query param (NOT Form) so tenant middleware can rewrite it; Form fields are unreachable to it
 ):
     """Upload a pricing hotsheet CSV/Excel. effective_date = YYYY-MM-DD"""
     from datetime import date as date_type
@@ -5126,7 +5130,7 @@ async def sales_recon_sync_flags(period: str = "", notify: bool = False,
     if not period:
         raise HTTPException(400, "period required")
     try:
-        result = sales_recon.sync_recon_flags(period, include_mismatch=include_mismatch)
+        result = sales_recon.sync_recon_flags(period, include_mismatch=include_mismatch, org_id=org_id)
     except Exception as e:
         raise HTTPException(500, f"Sales recon flag sync failed: {e} (run migration 047?)")
     if notify and result.get("missing_in_monthly", 0) > 0:
@@ -5147,13 +5151,13 @@ async def sales_recon_sync_flags(period: str = "", notify: bool = False,
 # ─────────────────────────────────────────────
 
 @router.post("/discrepancy/run")
-async def run_discrepancy_check(payload: dict):
+async def run_discrepancy_check(payload: dict, org_id: str = ORG_ID):
     """Trigger discrepancy detection. Send: { "period": "2026-04" }"""
     period = payload.get("period")
     if not period or len(period) != 7:
         raise HTTPException(status_code=400, detail="period must be YYYY-MM")
     try:
-        result = run_discrepancy(period)
+        result = run_discrepancy(period, org_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return result

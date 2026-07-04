@@ -234,12 +234,12 @@ def _ensure_employee_id(rec: dict) -> dict:
 
 
 @router.post("/employees")
-def create_employee(emp: dict):
+def create_employee(emp: dict, org_id: str = ORG_ID):
     """Create an employee (StoreOps Admin)."""
     row = {k: emp[k] for k in EMP_FIELDS if k in emp}
     if not (row.get("name") or "").strip():
         raise HTTPException(400, "name required")
-    row["org_id"] = ORG_ID
+    row["org_id"] = org_id
     if row.get("is_active") is None:
         row["is_active"] = True
     # employee_id is TEXT UNIQUE: a blank '' collides on the 2nd person with no ID.
@@ -392,12 +392,12 @@ def bulk_create_stores(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/stores")
-def create_store(store: dict):
+def create_store(store: dict, org_id: str = ORG_ID):
     """Create a store (StoreOps Admin)."""
     row = {k: store[k] for k in STORE_FIELDS if k in store}
     if not (row.get("store_code") or "").strip():
         raise HTTPException(400, "store_code required")
-    row["org_id"] = ORG_ID
+    row["org_id"] = org_id
     if row.get("is_active") is None:
         row["is_active"] = True
     r = sb().table("stores").insert(row).execute()
@@ -531,13 +531,13 @@ def get_shift_swaps(status: str = None, authorization: str = Header(default=""),
 
 
 @router.post("/shift-swaps")
-def create_shift_swap(req: dict):
+def create_shift_swap(req: dict, org_id: str = ORG_ID):
     """Create a swap request. Body: requester_id, target_id?, shift_id?, target_shift_id?, notes?"""
     if not req.get("requester_id"):
         raise HTTPException(400, "requester_id required")
     row = {k: req.get(k) for k in ("requester_id", "target_id", "shift_id", "target_shift_id", "notes")}
     row["status"] = "pending"
-    row["org_id"] = ORG_ID
+    row["org_id"] = org_id
     r = sb().table("shift_swap_requests").insert(row).execute()
     return r.data[0] if r.data else row
 
