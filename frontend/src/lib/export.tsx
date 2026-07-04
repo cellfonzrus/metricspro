@@ -10,6 +10,10 @@ export type ExportColumn = {
   get: (row: any) => string | number | null | undefined
   money?: boolean
   align?: 'left' | 'right'
+  // Optional hints used by <ReportShell> for filtering/grouping (ignored by export itself):
+  field?: string                                   // stable identity (defaults to header)
+  type?: 'text' | 'money' | 'number' | 'date'      // filter/sort semantics (money implies type=money)
+  role?: 'rep' | 'store' | 'date' | 'month'        // force a quick-filter role (else auto-detected)
 }
 export type ExportSheet = { name: string; columns: ExportColumn[]; rows: any[] }
 export type ExportPayload = {
@@ -37,7 +41,7 @@ function hasRows(p: ExportPayload) {
 }
 
 // ---- Excel (.xlsx) ----
-export async function exportToExcel(p: ExportPayload) {
+async function buildWorkbook(p: ExportPayload) {
   const XLSX = await import('xlsx')
   const wb = XLSX.utils.book_new()
   for (const sheet of p.sheets) {
@@ -57,22 +61,33 @@ export async function exportToExcel(p: ExportPayload) {
     const safe = sheet.name.replace(/[\\/?*[\]:]/g, ' ').slice(0, 31) || 'Sheet'
     XLSX.utils.book_append_sheet(wb, ws, safe)
   }
+  return { XLSX, wb }
+}
+export async function exportToExcel(p: ExportPayload) {
+  const { XLSX, wb } = await buildWorkbook(p)
   XLSX.writeFile(wb, `${p.filename}.xlsx`)
+}
+// Same workbook, returned as base64 for server-side delivery (Send to rep).
+export async function renderExcelBase64(p: ExportPayload) {
+  const { XLSX, wb } = await buildWorkbook(p)
+  return {
+    filename: `${p.filename}.xlsx`,
+    mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    content_b64: XLSX.write(wb, { type: 'base64', bookType: 'xlsx' }) as string,
+  }
 }
 
 // ---- PDF ----
-export async function exportToPDF(p: ExportPayload) {
+async function buildPdfDoc(p: ExportPayload) {
   const { jsPDF } = await import('jspdf')
   const autoTable = (await import('jspdf-autotable')).default
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' })
   const pageW = doc.internal.pageSize.getWidth()
-
   doc.setFontSize(14); doc.setTextColor(15, 23, 42)
   doc.text(p.title, 40, 42)
   if (p.subtitle) { doc.setFontSize(9); doc.setTextColor(100, 116, 139); doc.text(p.subtitle, 40, 58) }
   doc.setFontSize(8); doc.setTextColor(150, 163, 175)
   doc.text(new Date().toLocaleString(), pageW - 40, 42, { align: 'right' })
-
   let startY = p.subtitle ? 74 : 62
   for (const sheet of p.sheets) {
     if (p.sheets.length > 1) {
@@ -96,6 +111,16 @@ export async function exportToPDF(p: ExportPayload) {
     })
     startY = (doc as any).lastAutoTable.finalY + 26
   }
+  return doc
+}
+export async function renderPdfBase64(p: ExportPayload) {
+  const doc = await buildPdfDoc(p)
+  // jsPDF 'datauristring' → "data:application/pdf;filename=...;base64,XXXX"; keep only the base64.
+  const uri = doc.output('datauristring')
+  return { filename: `${p.filename}.pdf`, mime: 'application/pdf', content_b64: uri.slice(uri.indexOf(',') + 1) }
+}
+export async function exportToPDF(p: ExportPayload) {
+  const doc = await buildPdfDoc(p)
   doc.save(`${p.filename}.pdf`)
 }
 

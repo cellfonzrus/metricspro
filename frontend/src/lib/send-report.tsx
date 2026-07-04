@@ -4,6 +4,7 @@
 // passes report_key + the page's current filters; it never builds an ExportPayload.
 import { useState, useEffect, useCallback } from 'react'
 import { api, ORG_ID } from '@/lib/client'
+import { renderExcelBase64, renderPdfBase64, type ExportPayload } from '@/lib/export'
 
 type Emp = { name: string; email: string | null; phone: string | null; store: string | null }
 type Saved = { id: string; name: string | null; email: string | null; phone: string | null }
@@ -18,10 +19,12 @@ const modal: React.CSSProperties = {
 }
 const chk: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }
 
-export function SendReportButton({ reportKey, filters, compact }: {
-  reportKey: string
-  filters: Record<string, any>
+export function SendReportButton({ reportKey, filters, compact, exportPayload, title }: {
+  reportKey?: string                       // server-rendered path (report must be in report_registry)
+  filters?: Record<string, any>
   compact?: boolean
+  exportPayload?: () => ExportPayload       // universal path: render the file in-browser + POST /notify/send-file
+  title?: string
 }) {
   const [open, setOpen] = useState(false)
   const [employees, setEmployees] = useState<Emp[]>([])
@@ -77,10 +80,25 @@ export function SendReportButton({ reportKey, filters, compact }: {
     if (chWhatsapp && !phones.length) { setResult('WhatsApp selected but no phone recipients.'); return }
     setBusy(true); setResult('')
     try {
-      const res = await api(`/api/v1/notify/send?org_id=${ORG_ID}`, {
-        method: 'POST',
-        body: JSON.stringify({ report_key: reportKey, filters, channels, formats, emails, phones, message }),
-      })
+      let res: any
+      if (exportPayload) {
+        // Universal path: render the file(s) in the browser and deliver via /notify/send-file (no
+        // server-side report registration needed — works for ANY report/dashboard).
+        const p = exportPayload()
+        const files = (await Promise.all([
+          fmtXlsx ? renderExcelBase64(p) : null,
+          fmtPdf ? renderPdfBase64(p) : null,
+        ])).filter(Boolean)
+        res = await api(`/api/v1/notify/send-file?org_id=${ORG_ID}`, {
+          method: 'POST',
+          body: JSON.stringify({ title: title || p.title, message, channels, emails, phones, files }),
+        })
+      } else {
+        res = await api(`/api/v1/notify/send?org_id=${ORG_ID}`, {
+          method: 'POST',
+          body: JSON.stringify({ report_key: reportKey, filters, channels, formats, emails, phones, message }),
+        })
+      }
       setResult(`✓ Sent: ${res.sent} ok, ${res.failed} failed.`)
     } catch (e: any) {
       setResult('Send failed: ' + (e?.message || e))

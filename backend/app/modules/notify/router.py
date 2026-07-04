@@ -248,6 +248,72 @@ async def _dispatch(org_id, report_key, filters, channels, formats, emails, phon
             "formats": formats, "channels": channels}
 
 
+@router.post("/send-file")
+async def send_file(body: dict, org_id: str = ORG_ID):
+    """Deliver an ALREADY-RENDERED report file (built in the browser by <ReportShell> / lib/export)
+    to reps by email + WhatsApp — the universal path so EVERY report can be sent without registering
+    it server-side in report_registry. Body: {title?, message?, channels[], recipient_ids[], emails[],
+    phones[], files:[{filename, mime, content_b64}]}. Reuses the same recipient resolution + delivery
+    helpers + send_log as /send."""
+    import base64
+    files_in = body.get("files") or []
+    if not files_in:
+        raise HTTPException(400, "no files (provide files:[{filename, mime, content_b64}])")
+    files = []
+    for f in files_in:
+        try:
+            data = base64.b64decode(f.get("content_b64") or "")
+        except Exception:
+            raise HTTPException(400, f"bad base64 for {f.get('filename')}")
+        if not data:
+            continue
+        files.append((data, (f.get("filename") or "report"), (f.get("mime") or "application/octet-stream")))
+    if not files:
+        raise HTTPException(400, "all files were empty")
+
+    emails, phones = _resolve_targets(sb(), org_id, body)
+    if not emails and not phones:
+        raise HTTPException(400, "no recipients (provide emails, phones, or recipient_ids)")
+    channels = body.get("channels") or ((["email"] if emails else []) + (["whatsapp"] if phones else []))
+    title = (body.get("title") or "Report").strip()
+    message = body.get("message") or ""
+    link = settings.APP_PUBLIC_URL.rstrip("/") + "/"
+    sent = failed = 0
+    log_rows = []
+
+    def _log(channel, target, status, err="", mid=""):
+        nonlocal sent, failed
+        sent += status == "sent"
+        failed += status == "failed"
+        log_rows.append({"org_id": org_id, "report_key": "(client-export)", "channel": channel,
+                         "target": target, "status": status, "provider_message_id": mid or None,
+                         "error": (err or None), "triggered_by": "manual"})
+
+    if "email" in channels and emails:
+        attachments = [(fn, data, mime) for (data, fn, mime) in files]
+        html = f"<p>{(message or 'Please find the attached report.')}</p><p style='color:#64748b;font-size:12px'>{title}</p>"
+        for addr in emails:
+            try:
+                mid = await email_resend.send_email(addr, title, html, attachments)
+                _log("email", addr, "sent", mid=mid)
+            except Exception as e:
+                _log("email", addr, "failed", err=str(e))
+    if "whatsapp" in channels and phones:
+        for ph in phones:
+            for (data, fn, mime) in files:
+                try:
+                    mid = await whatsapp_meta.send_document(ph, data, mime, fn, f"{title} — {link}")
+                    _log("whatsapp", ph, "sent", mid=mid)
+                except Exception as e:
+                    _log("whatsapp", ph, "failed", err=str(e))
+    if log_rows:
+        try:
+            sb().table("send_log").insert(log_rows).execute()
+        except Exception:
+            pass
+    return {"sent": sent, "failed": failed, "targets": {"emails": emails, "phones": phones}, "channels": channels}
+
+
 @router.post("/send")
 async def send_now(body: dict, org_id: str = ORG_ID):
     """On-demand send. Body: report_key, filters, channels[], formats[],
