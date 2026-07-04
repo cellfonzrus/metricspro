@@ -5095,6 +5095,99 @@ async def delete_comp_rate(comp_rate_id: int, org_id: str = ORG_ID):
 
 
 # ─────────────────────────────────────────────
+# SALES REPORT — the actual sales done, all stores, from the imported Sales Transaction Details
+# ─────────────────────────────────────────────
+@router.get("/sales-report")
+async def sales_report(period: str = "", org_id: str = ORG_ID):
+    """Sales actually done, per (store, rep, day), from the imported Sales Transaction Details.
+    Reads raw_sales (the authoritative monthly upload) for `period`, FALLING BACK to daily_sales_feed
+    (the emailed daily feed) when raw_sales has no rows for that period — so the report works even
+    before the feed→raw_sales promotion is turned on (the current Boost case). One aggregated row per
+    store + salesperson + date; the frontend's ReportShell adds the rep/store/date/month filters,
+    group-by, export and send. `period` accepts 'June 2026' or '2026-06'; blank = current month."""
+    client = sb()
+    if not period:
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+    cols = "trans_id,trans_date,store,salesperson,department,contract_type,ext_price,gp,voided"
+
+    def _q(table):
+        return (client.schema("commcalc").table(table).select(cols)
+                .eq("org_id", org_id).in_("period", _pvariants(period))
+                .limit(200000).execute().data) or []
+    rows = _q("raw_sales")
+    source = "raw_sales"
+    if not rows:
+        try:
+            rows = _q("daily_sales_feed"); source = "daily_sales_feed"
+        except Exception:
+            rows = []
+
+    # Distinct periods available (both tables) so the UI can offer a month picker.
+    periods = set()
+    for t in ("raw_sales", "daily_sales_feed"):
+        try:
+            for r in (client.schema("commcalc").table(t).select("period")
+                      .eq("org_id", org_id).limit(100000).execute().data) or []:
+                if r.get("period"):
+                    periods.add(str(r["period"]))
+        except Exception:
+            pass
+
+    agg = {}
+    for r in rows:
+        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+            continue
+        store = (r.get("store") or "—").strip() or "—"
+        rep = (r.get("salesperson") or "—").strip() or "—"
+        date = str(r.get("trans_date") or "")[:10]
+        ct = (r.get("contract_type") or "").strip().lower()
+        dept = (r.get("department") or "").strip()
+        try:
+            ext = float(r.get("ext_price") or 0)
+        except (TypeError, ValueError):
+            ext = 0.0
+        try:
+            gp = float(r.get("gp") or 0)
+        except (TypeError, ValueError):
+            gp = 0.0
+        k = (store, rep, date)
+        a = agg.get(k)
+        if not a:
+            a = agg[k] = {"store": store, "salesperson": rep, "trans_date": date, "_txn": set(),
+                          "lines": 0, "activations": 0, "upgrades": 0, "accessory_rev": 0.0,
+                          "revenue": 0.0, "gp": 0.0}
+        if r.get("trans_id"):
+            a["_txn"].add(r["trans_id"])
+        a["lines"] += 1
+        a["revenue"] += ext
+        a["gp"] += gp
+        if dept == "Ondigo":
+            a["accessory_rev"] += ext
+        if ct:                                  # a contract-typed line is a phone line
+            if "upgrade" in ct:
+                a["upgrades"] += 1
+            else:
+                a["activations"] += 1
+
+    out = []
+    for a in agg.values():
+        a["txns"] = len(a.pop("_txn"))
+        for key in ("accessory_rev", "revenue", "gp"):
+            a[key] = round(a[key], 2)
+        out.append(a)
+    out.sort(key=lambda r: (r["store"], r["trans_date"], r["salesperson"]))
+    totals = {
+        "txns": sum(r["txns"] for r in out), "lines": sum(r["lines"] for r in out),
+        "activations": sum(r["activations"] for r in out), "upgrades": sum(r["upgrades"] for r in out),
+        "accessory_rev": round(sum(r["accessory_rev"] for r in out), 2),
+        "revenue": round(sum(r["revenue"] for r in out), 2), "gp": round(sum(r["gp"] for r in out), 2),
+    }
+    return {"period": period, "source": source, "rows": out, "totals": totals,
+            "periods": sorted(periods, reverse=True)}
+
+
+# ─────────────────────────────────────────────
 # SALES FEED RECON (Theme 5) — monthly authoritative vs daily B2B feed, trans_id grain
 # ─────────────────────────────────────────────
 
