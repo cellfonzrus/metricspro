@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
+import { ExportButtons, ExportPayload } from '@/lib/export'
 
 function toApiPeriod(label: string): string {
   const months = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -149,6 +150,41 @@ export default function DiscrepancyPage() {
   const filterStores = isPhantom ? phantomStores : stores
   const filterTypes = isPhantom ? phantomTypes : compTypes
 
+  function buildPayload(): ExportPayload {
+    if (isPhantom) {
+      return {
+        title: 'Pay Discrepancy — Phantom Payments', subtitle: `${period} · paid by carrier, no matching sale`,
+        filename: `discrepancy-phantom-${apiPeriod}`,
+        sheets: [{ name: 'Phantom', rows: phantomRows, columns: [
+          { header: 'Store Address', get: (r: PhantomRow) => r.business_address },
+          { header: 'Payment Type', get: (r: PhantomRow) => r.payment_type },
+          { header: 'IMEI', get: (r: PhantomRow) => r.imei },
+          { header: 'MDN', get: (r: PhantomRow) => r.mdn },
+          { header: 'Date', get: (r: PhantomRow) => r.payment_date },
+          { header: 'Amount', get: (r: PhantomRow) => r.amount, money: true },
+        ] }],
+      }
+    }
+    return {
+      title: 'Pay Discrepancy', subtitle: `${period} · ${STATUS_TABS.find(t => t.key === statusTab)?.label || statusTab}`,
+      filename: `discrepancy-${statusTab}-${apiPeriod}`,
+      sheets: [{ name: statusTab, rows: filteredRows, columns: [
+        { header: 'Store', get: (r: Row) => r.store },
+        { header: 'Rep', get: (r: Row) => r.rep_username },
+        { header: 'Type', get: (r: Row) => r.comp_type },
+        { header: 'Month', get: (r: Row) => r.bounty_month, align: 'right' },
+        { header: 'IMEI', get: (r: Row) => r.imei },
+        { header: 'MDN', get: (r: Row) => r.mdn },
+        { header: 'Device', get: (r: Row) => r.device_model },
+        { header: 'Plan', get: (r: Row) => r.customer_plan },
+        { header: 'MRC', get: (r: Row) => r.commissionable_mrc, money: true },
+        { header: 'Expected', get: (r: Row) => r.expected_amount, money: true },
+        { header: 'Received', get: (r: Row) => r.received_amount, money: true },
+        { header: 'Gap', get: (r: Row) => r.gap, money: true },
+      ] }],
+    }
+  }
+
   return (
     <div style={{ padding: 24, maxWidth: 1400, margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -165,6 +201,7 @@ export default function DiscrepancyPage() {
             style={{ background: running ? '#9ca3af' : '#111827', color: 'white', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, cursor: running ? 'default' : 'pointer', fontSize: 14 }}>
             {running ? 'Running…' : 'Run Detection'}
           </button>
+          {(isPhantom ? phantomRows.length : filteredRows.length) > 0 && <ExportButtons payload={buildPayload} />}
           <SendReportButton reportKey="discrepancy" filters={{ period }} />
         </div>
       </div>
