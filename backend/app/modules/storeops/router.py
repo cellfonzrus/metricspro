@@ -664,9 +664,14 @@ def _allowed_clock_stores(org_id, employee_id, home_store, work_date_local):
     except Exception:
         pass
     try:
-        base = (sb().table("shifts").select("store_code")
-                .eq("org_id", org_id).eq("shift_date", work_date_local).eq("is_deleted", False))
-        matched = (base.in_("employee_id", list(ids)).execute().data) or []
+        # Match the scheduled shift by the employee's id(s) WITHOUT an org filter. shifts.employee_id is
+        # the globally-unique employees.id (the schedule grid writes emp.id) or the business id, so a
+        # legacy/house/NULL-org shift row would otherwise be silently dropped once multi-tenant enforcement
+        # binds the rep's REAL tenant — blocking clock-in at a scheduled store (the bug). Matching the
+        # rep's own id(s) + today's date IS the isolation. (Name fallback stays org-scoped — name is weak.)
+        matched = ((sb().table("shifts").select("store_code")
+                    .eq("shift_date", work_date_local).eq("is_deleted", False)
+                    .in_("employee_id", list(ids)).execute().data) or [])
         if emp_name:  # last-resort fallback: a shift written with a mismatched/blank id but our name
             matched += ((sb().table("shifts").select("store_code")
                          .eq("org_id", org_id).eq("shift_date", work_date_local)

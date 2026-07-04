@@ -5483,7 +5483,10 @@ def _fetch_actuals(client, org_id, period):
     # (re-uploaded periodically) while the daily B2B feed is current, so prefer the feed per day. Closed
     # months stay monthly-authoritative (the THEME 5 design decision). Graceful: if the sibling feed RPC
     # isn't deployed (migration 048) or returns nothing, behavior is identical to before.
-    if _is_open_month(period):
+    # ...and for a CLOSED month whose monthly file was never uploaded (raw_sales empty for the period), FALL
+    # BACK to the feed so "achieved" isn't silently 0 (the June-shows-0 bug). Monthly stays authoritative
+    # whenever it actually has rows — this only fills the gap when it doesn't.
+    if _is_open_month(period) or not rows:
         try:
             feed = (client.schema('commcalc')
                     .rpc('daily_sales_feed_actuals', {'p_org_id': org_id, 'p_period': period})
@@ -5491,7 +5494,7 @@ def _fetch_actuals(client, org_id, period):
         except Exception:
             feed = []
         if feed:
-            rows = _merge_actuals(rows, feed)
+            rows = _merge_actuals(rows, feed) if rows else feed
     cmap = _rep_canon_map(client, org_id)
     for r in rows:
         if r.get('rep_name'):
