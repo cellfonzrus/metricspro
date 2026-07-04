@@ -334,6 +334,21 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
         if sc and nm:
             sched_by_store.setdefault(sc, set()).add(nm)
 
+    # Who ACTUALLY worked each store (clock-in ∪ B2B sales-by-rep) — the closing checks reality, not
+    # the roster. Plus the tenant closing_mode (per_rep = every worker owes a closing; one_closing =
+    # only the assigned closer does, and tallies the store's cash) + the assigned closers.
+    who = _who_worked_by_store(client, org_id, date)
+    tcfg = (client.schema("storeops").table("tenants").select("closing_mode")
+            .eq("org_id", org_id).limit(1).execute().data or [{}])
+    closing_mode = (tcfg[0].get("closing_mode") if tcfg else None) or "per_rep"
+    try:
+        closer_rows = (client.schema("storeops").table("store_closer")
+                       .select("store_code,employee_name").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        closer_rows = []
+    closer_by_store = {c.get("store_code"): (c.get("employee_name") or "").strip()
+                       for c in closer_rows if c.get("store_code")}
+
     # B2B actual daily sales for that period → that day, per store.
     b2b = {}
     try:
@@ -399,9 +414,43 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
             "rep_count": len(reps),
         }
         submitted_names = {(r.get("employee_name") or "").strip().lower() for r in reps}
+        submitted_set = {sn for sn in submitted_names if sn}
         scheduled = sched_by_store.get(code, set()) if code else set()
-        missing = [nm for nm in scheduled
-                   if not any(_name_match(nm, sn) for sn in submitted_names if sn)]
+
+        # Who actually worked = clocked-in ∪ sold-in-B2B ∪ submitted-a-closing (submitting implies work).
+        ww = who.get(code, {}) if code else {}
+        clocked = set(ww.get("clocked_in", set()))
+        sold = set(ww.get("sold", set()))
+        submitted_display = {(r.get("employee_name") or "").strip() for r in reps if (r.get("employee_name") or "").strip()}
+        worked = {n for n in (clocked | sold | submitted_display) if n}
+
+        def _submitted(nm):
+            return any(_name_match(nm, sn) for sn in submitted_set)
+
+        # missing_reps = who OWES a closing but hasn't submitted. In per_rep mode that's every worker;
+        # in one_closing mode only the assigned closer owes it (they tally the whole store's cash).
+        if closing_mode == "one_closing":
+            closer = closer_by_store.get(code) if code else None
+            owes = {closer} if closer else worked
+        else:
+            owes = worked
+        missing = sorted({nm for nm in owes if nm and not _submitted(nm)})
+
+        # Scheduled but didn't work (roster no-show, e.g. someone marked on the schedule who never
+        # showed) — surfaced separately so it's visible WITHOUT dunning them for a missing closing.
+        scheduled_no_show = sorted({nm for nm in scheduled
+                                    if not any(_name_match(nm, w) for w in worked) and not _submitted(nm)})
+        # Worked but not on the roster.
+        worked_unscheduled = sorted({nm for nm in worked
+                                     if not any(_name_match(nm, s) for s in scheduled)})
+        # Cross-login: rang B2B sales but never clocked in here → likely worked under another login.
+        # Attach the login(s) each such name transacted under (from the B2B report) for the recon.
+        logins = ww.get("logins", {})
+        cross_login = []
+        for nm in sold:
+            if not any(_name_match(nm, c) for c in clocked):
+                cross_login.append({"salesperson": nm, "logins": sorted(logins.get(nm, set()))})
+        cross_login.sort(key=lambda x: x["salesperson"])
 
         bb = b2b.get(code, {}) if code else {}
         closing_acts = totals["new_line_count"] + totals["postpaid_count"]
@@ -473,7 +522,47 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
             "market": mkt, "reps": [{**rp, "envelope_url": _signed_envelope(rp.get("envelope_picture"))} for rp in reps],
             "totals": totals,
             "scheduled_count": len(scheduled), "missing_reps": missing,
+            "worked_reps": sorted(worked), "worked_count": len(worked),
+            "scheduled_no_show": scheduled_no_show, "worked_unscheduled": worked_unscheduled,
+            "cross_login": cross_login, "closing_mode": closing_mode,
+            "closer": closer_by_store.get(code) if code else None,
             "verification": ver_by_store.get(code), "recon": recon, "money_recon": money_recon,
+        })
+
+    # Stores where reps WORKED (clocked in / sold) but NOBODY submitted a closing never appear in
+    # `groups` (which is built from submitted rows) — surface them so a store that failed to close is
+    # visible instead of silently absent. Everyone who worked (or the closer, in one_closing mode) owes it.
+    closed_codes = {s["store_code"] for s in out if s.get("store_code")}
+    for code, ww in who.items():
+        if not code or code in closed_codes:
+            continue
+        meta = store_meta.get(code, {})
+        mkt = meta.get("market") or ""
+        if market and mkt != market:
+            continue
+        clocked = set(ww.get("clocked_in", set()))
+        sold = set(ww.get("sold", set()))
+        worked = {n for n in (clocked | sold) if n}
+        if not worked:
+            continue
+        scheduled = sched_by_store.get(code, set())
+        closer = closer_by_store.get(code)
+        owes = ({closer} if closer else worked) if closing_mode == "one_closing" else worked
+        logins = ww.get("logins", {})
+        cross_login = sorted(
+            [{"salesperson": nm, "logins": sorted(logins.get(nm, set()))}
+             for nm in sold if not any(_name_match(nm, c) for c in clocked)],
+            key=lambda x: x["salesperson"])
+        out.append({
+            "store_code": code, "store_name": meta.get("address") or code, "store_address": meta.get("address"),
+            "market": mkt, "reps": [], "totals": None,
+            "scheduled_count": len(scheduled), "missing_reps": sorted({n for n in owes if n}),
+            "worked_reps": sorted(worked), "worked_count": len(worked),
+            "scheduled_no_show": sorted({nm for nm in scheduled if not any(_name_match(nm, w) for w in worked)}),
+            "worked_unscheduled": sorted({nm for nm in worked if not any(_name_match(nm, s) for s in scheduled)}),
+            "cross_login": cross_login, "closing_mode": closing_mode, "closer": closer,
+            "no_closing_submitted": True,
+            "verification": ver_by_store.get(code), "recon": None, "money_recon": None,
         })
 
     out.sort(key=lambda s: str(s.get("store_address") or s.get("store_name") or ""))
@@ -884,7 +973,7 @@ async def _send_alert(client, org_id, scope, subject, text, ref_key, store_code=
 def get_cash_config(org_id: str = ORG_ID):
     """Closing-gate + cash-aging settings (from storeops.tenants) + assigned closers + alert recipients."""
     c = sb()
-    t = (c.schema("storeops").table("tenants").select("closing_deadline,closing_gate_enabled,cash_alert_after_days")
+    t = (c.schema("storeops").table("tenants").select("closing_deadline,closing_gate_enabled,cash_alert_after_days,closing_mode")
          .eq("org_id", org_id).limit(1).execute().data or [{}])
     tenant = t[0] if t else {}
     try:
@@ -898,6 +987,7 @@ def get_cash_config(org_id: str = ORG_ID):
     return {"closing_deadline": tenant.get("closing_deadline"),
             "closing_gate_enabled": bool(tenant.get("closing_gate_enabled")),
             "cash_alert_after_days": tenant.get("cash_alert_after_days"),
+            "closing_mode": (tenant.get("closing_mode") or "per_rep"),
             "closers": closers, "recipients": recips}
 
 
@@ -905,7 +995,7 @@ def get_cash_config(org_id: str = ORG_ID):
 def put_cash_config(body: dict, org_id: str = ORG_ID):
     """Update the closing-gate + cash-aging settings (defined at onboarding). Admin/manager only in the UI."""
     upd = {}
-    for k in ("closing_deadline", "closing_gate_enabled", "cash_alert_after_days"):
+    for k in ("closing_deadline", "closing_gate_enabled", "cash_alert_after_days", "closing_mode"):
         if k in body:
             v = body[k]
             if k == "closing_gate_enabled":
@@ -915,6 +1005,8 @@ def put_cash_config(body: dict, org_id: str = ORG_ID):
                     v = int(v)
                 except (TypeError, ValueError):
                     v = None
+            elif k == "closing_mode":
+                v = "one_closing" if str(v) == "one_closing" else "per_rep"
             upd[k] = v
     if upd:
         sb().schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
@@ -1710,6 +1802,55 @@ def _rep_b2b(day: dict, store_code: str, emp_name: str):
         for k in agg:
             agg[k] += m.get(k, 0.0)
     return agg
+
+
+def _who_worked_by_store(client, org_id: str, date: str) -> dict:
+    """Who ACTUALLY worked each store on `date`, so the closing checks reality instead of the roster
+    (a scheduled rep who never showed shouldn't be dunned for a closing; a rep who sold but wasn't
+    scheduled should be). Two independent signals, unioned per store_code:
+      • clocked_in — storeops.timelog punches for the day (store_code straight off the punch).
+      • sold        — distinct salespeople on that store's B2B sales rows (raw_sales / daily feed),
+                      plus the set of user_logins each name transacted under, so a rep who rang
+                      sales under a DIFFERENT login than they clocked in on is surfaced for recon.
+    Returns {store_code: {"clocked_in": set, "sold": set, "logins": {salesperson: set(user_login)}}}."""
+    out = {}
+
+    def _bucket(code):
+        return out.setdefault(code, {"clocked_in": set(), "sold": set(), "logins": {}})
+
+    # 1) Clock-ins — authoritative store_code, independent of whether B2B is loaded.
+    try:
+        tl = (client.schema("storeops").table("timelog")
+              .select("employee_name,store_code").eq("org_id", org_id)
+              .eq("work_date", date).execute().data) or []
+        for t in tl:
+            code = (t.get("store_code") or "").strip()
+            nm = (t.get("employee_name") or "").strip()
+            if code and nm:
+                _bucket(code)["clocked_in"].add(nm)
+    except Exception as e:
+        print("who-worked timelog load failed:", e)
+
+    # 2) B2B sales-by-rep — resolve the raw store string → store_code the same way the money recon does.
+    try:
+        resolve = _addr_resolver(client, org_id)
+        rows = _b2b_sales_rows(client, org_id, date, "store,salesperson,user_login,voided")
+        for r in rows:
+            if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+                continue
+            code = resolve(r.get("store"))
+            sp = (r.get("salesperson") or "").strip()
+            if not (code and sp):
+                continue
+            b = _bucket(code)
+            b["sold"].add(sp)
+            login = (r.get("user_login") or "").strip()
+            if login:
+                b["logins"].setdefault(sp, set()).add(login)
+    except Exception as e:
+        print("who-worked B2B load failed:", e)
+
+    return out
 
 
 def _money_issues(declared_cash, declared_credit, b2b_cash, b2b_card, tol=1.0) -> list:
