@@ -55,6 +55,7 @@ export default function BillingAdmin() {
   const [pcEdit, setPcEdit] = useState<Partial<Connector> | null>(null)
   const [pcBusy, setPcBusy] = useState(false)
   const [pcMsg, setPcMsg] = useState('')
+  const [moduleCatalog, setModuleCatalog] = useState<{ key: string; label: string }[]>([])
 
   const load = useCallback(() => {
     api('/api/v1/billing/plans')
@@ -73,6 +74,7 @@ export default function BillingAdmin() {
     api('/api/v1/billing/platform-providers').then((d: any) => setProviders(d.providers || [])).catch(() => {})
   }, [])
   useEffect(() => { if (isSuper) loadCosts() }, [isSuper, loadCosts])
+  useEffect(() => { api('/api/v1/core/modules').then((d: any) => setModuleCatalog(d.modules || [])).catch(() => {}) }, [])
 
   async function refreshCosts() {
     setPcBusy(true); setPcMsg('')
@@ -287,10 +289,28 @@ export default function BillingAdmin() {
                 <input style={{ ...inp, width: '100%' }} value={draft.currency || 'USD'} onChange={e => setDraft(d => ({ ...d, currency: e.target.value }))} />
               </div>
             </div>
-            <label style={{ fontSize: 12, color: 'var(--text3)' }}>Modules covered (comma-separated, blank = all)</label>
-            <input style={{ ...inp, width: '100%', marginBottom: 10 }} placeholder="e.g. commissions, asset"
-              value={(draft.modules || []).join(', ')}
-              onChange={e => setDraft(d => ({ ...d, modules: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }))} />
+            <label style={{ fontSize: 12, color: 'var(--text3)' }}>Modules assigned to this company (what they get)</label>
+            {(() => {
+              const allKeys = moduleCatalog.map(m => m.key)
+              const sel = (draft.modules && draft.modules.length) ? new Set(draft.modules) : new Set(allKeys)
+              const toggle = (k: string) => {
+                const next = new Set(sel); next.has(k) ? next.delete(k) : next.add(k)
+                const arr = allKeys.filter(x => next.has(x))
+                setDraft(d => ({ ...d, modules: arr.length === allKeys.length ? [] : arr }))
+              }
+              return (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 4, margin: '6px 0 4px' }}>
+                  {moduleCatalog.map(m => (
+                    <label key={m.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                      <input type="checkbox" checked={sel.has(m.key)} onChange={() => toggle(m.key)} /> {m.label}
+                    </label>
+                  ))}
+                </div>
+              )
+            })()}
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
+              All checked = full access. Uncheck to restrict — the customer will only see the checked modules (applied on save).
+            </div>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 10 }}>
               <input type="checkbox" checked={draft.is_active ?? true} onChange={e => setDraft(d => ({ ...d, is_active: e.target.checked }))} /> Plan active (counts toward MRR)
             </label>

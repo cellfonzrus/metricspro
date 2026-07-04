@@ -146,7 +146,15 @@ async def upsert_plan(body: dict, authorization: str = Header(default="")):
         sb().schema("storeops").table("billing_plan").upsert(row, on_conflict="org_id").execute()
     except Exception as e:
         raise HTTPException(500, f"save failed — run migration 064 first: {e}")
-    return {"ok": True, "org_id": org_id}
+    # Picking modules ASSIGNS them: reconcile the tenant's entitlement now so the customer gets
+    # exactly the picked modules (empty/blank = all-access). Non-fatal if the engine isn't present.
+    entitled = None
+    try:
+        from app.modules.core.entitlements import sync_tenant
+        entitled = sync_tenant(sb(), org_id).get("enabled_modules")
+    except Exception:
+        pass
+    return {"ok": True, "org_id": org_id, "enabled_modules": entitled}
 
 
 @router.delete("/plan")
