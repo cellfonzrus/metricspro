@@ -69,6 +69,20 @@ export default function CashConfigPage() {
           <label style={{ fontSize: 13 }}>Alert if cash not picked up after (days)<br />
             <input type="number" style={{ ...inp, marginTop: 4, width: 90 }} defaultValue={cfg.cash_alert_after_days ?? ''} onBlur={e => saveCfg({ cash_alert_after_days: e.target.value })} /></label>
         </div>
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Who closes the store each day?</div>
+          <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>
+            <input type="radio" name="closing_mode" checked={(cfg.closing_mode || 'per_rep') === 'per_rep'} onChange={() => saveCfg({ closing_mode: 'per_rep' })} style={{ marginRight: 6 }} />
+            <b>One closing per rep</b> — every rep who worked the store tallies their own envelope.
+          </label>
+          <label style={{ fontSize: 13, display: 'block' }}>
+            <input type="radio" name="closing_mode" checked={cfg.closing_mode === 'one_closing'} onChange={() => saveCfg({ closing_mode: 'one_closing' })} style={{ marginRight: 6 }} />
+            <b>One closing per store</b> — only the assigned closer submits; they tally the whole store&apos;s cash (the onus is on the closer).
+          </label>
+          <p style={{ fontSize: 11, color: 'var(--text3)', margin: '6px 0 0' }}>
+            The DM verify view checks who <i>actually worked</i> (clock-in ∪ B2B sales), so a scheduled rep who never showed isn&apos;t dunned, and a rep who sold under someone else&apos;s login is flagged.
+          </p>
+        </div>
       </div>
 
       <div className="card" style={card}>

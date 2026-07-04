@@ -144,16 +144,36 @@ export default function DailyClosingVerify() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>{s.store_address || s.store_name}</div>
-                <div style={{ fontSize: 12, color: 'var(--text3)' }}>{s.market || '—'} · {t.rep_count} rep submission{t.rep_count === 1 ? '' : 's'}{s.scheduled_count ? ` of ${s.scheduled_count} scheduled` : ''}</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)' }}>{s.market || '—'} · {t.rep_count || 0} rep submission{(t.rep_count || 0) === 1 ? '' : 's'}{typeof s.worked_count === 'number' ? ` · ${s.worked_count} actually worked` : ''}{s.closer ? ` · closer: ${s.closer}` : ''}{s.closing_mode === 'one_closing' ? ' (one closing/store)' : ''}</div>
               </div>
               {ver
                 ? <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--green, #16794a)' }}>✅ Verified by {s.verification.verified_by}</span>
                 : <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)' }}>Unverified</span>}
             </div>
 
-            {s.missing_reps?.length > 0 && (
+            {s.no_closing_submitted && (
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: '#b42318', background: '#fde8e8', padding: '6px 10px', borderRadius: 8 }}>
+                🚫 No closing submitted for this store — but {s.worked_reps?.join(', ') || 'reps'} worked here today.
+              </div>
+            )}
+            {s.missing_reps?.length > 0 && !s.no_closing_submitted && (
               <div style={{ marginTop: 8, fontSize: 12, color: 'var(--amber, #b45309)' }}>
-                ⚠️ Scheduled but no closing submitted: {s.missing_reps.join(', ')}
+                ⚠️ Worked but no closing submitted: {s.missing_reps.join(', ')}
+              </div>
+            )}
+            {s.cross_login?.length > 0 && (
+              <div style={{ marginTop: 6, fontSize: 12, color: '#9a3412', background: '#ffedd5', padding: '6px 10px', borderRadius: 8 }}>
+                🔐 Sold under a different login than clock-in: {s.cross_login.map((c: any) => c.logins?.length ? `${c.salesperson} (as ${c.logins.join(', ')})` : c.salesperson).join('; ')}
+              </div>
+            )}
+            {s.scheduled_no_show?.length > 0 && (
+              <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text3)' }}>
+                Scheduled but didn&apos;t work (not dunned): {s.scheduled_no_show.join(', ')}
+              </div>
+            )}
+            {s.worked_unscheduled?.length > 0 && (
+              <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text3)' }}>
+                Worked but not on the schedule: {s.worked_unscheduled.join(', ')}
               </div>
             )}
 
@@ -181,10 +201,10 @@ export default function DailyClosingVerify() {
             )}
 
             {/* Reps */}
-            <button className="btn btn-secondary" style={{ fontSize: 12, marginTop: 12 }} onClick={() => setOpen(o => ({ ...o, [k]: !o[k] }))}>
-              {open[k] ? '▾' : '▸'} {t.rep_count} rep row{t.rep_count === 1 ? '' : 's'}
-            </button>
-            {open[k] && (
+            {(s.reps?.length || 0) > 0 && <button className="btn btn-secondary" style={{ fontSize: 12, marginTop: 12 }} onClick={() => setOpen(o => ({ ...o, [k]: !o[k] }))}>
+              {open[k] ? '▾' : '▸'} {s.reps.length} rep row{s.reps.length === 1 ? '' : 's'}
+            </button>}
+            {open[k] && (s.reps?.length || 0) > 0 && (
               <div className="table-wrapper" style={{ marginTop: 8 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead><tr style={{ background: 'var(--surface2)' }}>
