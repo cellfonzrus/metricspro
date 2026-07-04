@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { api, ORG_ID } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import AiAssistant from '@/components/AiAssistant'
 
 const enc = encodeURIComponent
 type Ticket = {
@@ -64,6 +65,8 @@ export default function HelpdeskInbox() {
       <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
         {isAgent ? 'All tickets in your organization. Assign, prioritize, and resolve.' : 'Your tickets. Raise a new one anytime — a manager will pick it up.'}
       </p>
+
+      {(permissions?.modules?.ai_assistant || permissions?.scope === 'all') && <AiAssistant />}
 
       <div className="card" style={{ padding: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
         {isAgent && (['all', 'mine', 'unassigned'] as const).map(v => (
