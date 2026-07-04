@@ -56,7 +56,7 @@ def _anthropic_cost(cred: str) -> dict:
     start = _month_start(now)
     headers = {"x-api-key": cred, "anthropic-version": "2023-06-01"}
     params = {"starting_at": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-              "ending_at": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
+              "ending_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "limit": "31"}
     url = "https://api.anthropic.com/v1/organizations/cost_report"
     total, currency, seen = 0.0, "USD", False
     with httpx.Client(timeout=30) as c:
@@ -81,7 +81,7 @@ def _anthropic_cost(cred: str) -> dict:
                     if res.get("currency"):
                         currency = res["currency"]
             if body.get("has_more") and body.get("next_page"):
-                params = {"page": body["next_page"]}
+                params = {**params, "page": body["next_page"]}
             else:
                 break
     if not seen:
