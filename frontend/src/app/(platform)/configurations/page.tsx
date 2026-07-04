@@ -21,11 +21,20 @@ const GROUPS: Group[] = [
     ],
   },
   {
-    title: 'Access & Notifications',
-    desc: 'Logins, roles, employees and report delivery.',
+    title: 'Access & Roles',
+    desc: 'Logins, roles and employees.',
     items: [
       { href: '/admin/roles', icon: '🔐', label: 'Roles & Access', desc: 'Roles, per-module permissions (incl. AI Assistant), employee add/edit, logins, login enforcement.' },
-      { href: '/notify', icon: '📤', label: 'Notify', desc: 'Recipients, recurring report subscriptions, delivery history.' },
+    ],
+  },
+  {
+    title: 'Communications',
+    desc: 'Every channel and who receives what — email (Resend) & WhatsApp (Meta, live). Configure all platform messaging here.',
+    items: [
+      { href: '/notify', icon: '📣', label: 'Notify & Channels', desc: 'Email + WhatsApp channel status, report recipients, recurring subscriptions, on-demand send, delivery history.' },
+      { href: '/notify/report-recipients', icon: '📬', label: 'Report Recipients', desc: 'Route each report to specific people and channels (email / WhatsApp).' },
+      { href: '/closing/cash-config', icon: '🔔', label: 'Cash & Closing Alerts', desc: 'Who gets the daily cash-pickup + missing-closing alerts, and on which channel.' },
+      { href: '/helpdesk/settings', icon: '🎫', label: 'Helpdesk Notifications', desc: 'Per-category ticket notifications (new ticket, updates) — also under Helpdesk.' },
     ],
   },
   {
