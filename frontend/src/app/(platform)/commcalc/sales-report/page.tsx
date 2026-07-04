@@ -51,6 +51,7 @@ export default function SalesReportPage() {
     { header: 'Date', get: r => r.trans_date, type: 'date' },
     { header: 'Txns', get: r => r.txns, align: 'right' },
     { header: 'Activations', get: r => r.activations, align: 'right' },
+    { header: 'BYOD', get: r => r.byod, align: 'right' },
     { header: 'Upgrades', get: r => r.upgrades, align: 'right' },
     { header: 'Accessory $', get: r => r.accessory_rev, money: true },
     { header: 'Revenue $', get: r => r.revenue, money: true },
@@ -93,6 +94,7 @@ export default function SalesReportPage() {
         <Tile label="Accessory $" value={fmt(t.accessory_rev || 0)} />
         <Tile label="Transactions" value={String(t.txns || 0)} />
         <Tile label="Activations" value={String(t.activations || 0)} />
+        <Tile label="BYOD" value={String(t.byod || 0)} />
         <Tile label="Upgrades" value={String(t.upgrades || 0)} />
       </div>
 

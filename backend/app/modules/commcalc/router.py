@@ -5109,7 +5109,7 @@ async def sales_report(period: str = "", org_id: str = ORG_ID):
     if not period:
         n = datetime.now(timezone.utc)
         period = f"{n.year}-{n.month:02d}"
-    cols = "trans_id,trans_date,store,salesperson,department,contract_type,ext_price,gp,voided"
+    cols = "trans_id,trans_date,store,salesperson,department,contract_type,ext_price,gp,voided,trans_type"
 
     def _q(table):
         return (client.schema("commcalc").table(table).select(cols)
@@ -5134,15 +5134,23 @@ async def sales_report(period: str = "", org_id: str = ORG_ID):
         except Exception:
             pass
 
+    # SAME classification the Action Plan uses (_compute_feed_actuals_py) so the two reports AGREE:
+    # skip voided / Returns / the 'admin' pseudo-rep; count DISTINCT trans_id per category, splitting
+    # BYOD out; any other non-empty Contract Type = an activation (tolerant of label drift).
     agg = {}
     for r in rows:
         if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
             continue
+        if str(r.get("trans_type") or "").strip() == "Return":
+            continue
+        rep = (r.get("salesperson") or "").strip()
+        if not rep or rep.lower() == "admin":
+            continue
         store = (r.get("store") or "—").strip() or "—"
-        rep = (r.get("salesperson") or "—").strip() or "—"
         date = str(r.get("trans_date") or "")[:10]
         ct = (r.get("contract_type") or "").strip().lower()
         dept = (r.get("department") or "").strip()
+        tid = str(r.get("trans_id") or "").strip()
         try:
             ext = float(r.get("ext_price") or 0)
         except (TypeError, ValueError):
@@ -5155,31 +5163,37 @@ async def sales_report(period: str = "", org_id: str = ORG_ID):
         a = agg.get(k)
         if not a:
             a = agg[k] = {"store": store, "salesperson": rep, "trans_date": date, "_txn": set(),
-                          "lines": 0, "activations": 0, "upgrades": 0, "accessory_rev": 0.0,
-                          "revenue": 0.0, "gp": 0.0}
-        if r.get("trans_id"):
-            a["_txn"].add(r["trans_id"])
+                          "_act": set(), "_byod": set(), "_upg": set(), "lines": 0,
+                          "accessory_rev": 0.0, "revenue": 0.0, "gp": 0.0}
+        if tid:
+            a["_txn"].add(tid)
         a["lines"] += 1
         a["revenue"] += ext
         a["gp"] += gp
         if dept == "Ondigo":
             a["accessory_rev"] += ext
-        if ct:                                  # a contract-typed line is a phone line
-            if "upgrade" in ct:
-                a["upgrades"] += 1
+        if tid and ct:                          # a contract-typed line is a phone line
+            if "byod" in ct:
+                a["_byod"].add(tid)
+            elif "upgrade" in ct:
+                a["_upg"].add(tid)
             else:
-                a["activations"] += 1
+                a["_act"].add(tid)
 
     out = []
     for a in agg.values():
         a["txns"] = len(a.pop("_txn"))
+        a["activations"] = len(a.pop("_act"))
+        a["byod"] = len(a.pop("_byod"))
+        a["upgrades"] = len(a.pop("_upg"))
         for key in ("accessory_rev", "revenue", "gp"):
             a[key] = round(a[key], 2)
         out.append(a)
     out.sort(key=lambda r: (r["store"], r["trans_date"], r["salesperson"]))
     totals = {
         "txns": sum(r["txns"] for r in out), "lines": sum(r["lines"] for r in out),
-        "activations": sum(r["activations"] for r in out), "upgrades": sum(r["upgrades"] for r in out),
+        "activations": sum(r["activations"] for r in out), "byod": sum(r["byod"] for r in out),
+        "upgrades": sum(r["upgrades"] for r in out),
         "accessory_rev": round(sum(r["accessory_rev"] for r in out), 2),
         "revenue": round(sum(r["revenue"] for r in out), 2), "gp": round(sum(r["gp"] for r in out), 2),
     }
