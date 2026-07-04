@@ -148,8 +148,18 @@ async def whoami(authorization: str = Header(default="")):
                       "pay_period": _pp_settings(t)}
     except Exception:
         pass
+    # Tenant carriers (mig 038) — drive carrier-scoped nav gating (a Boost tenant shouldn't see Total
+    # pages, and vice-versa). Empty list = no carrier chosen yet → the frontend hides nothing.
+    carriers = []
+    try:
+        cr = (client.schema("commcalc").table("carrier").select("name,code,is_default")
+              .eq("org_id", u.get("org_id") or ORG_ID).execute().data) or []
+        carriers = [{"name": c.get("name"), "code": c.get("code"), "is_default": c.get("is_default")}
+                    for c in cr if c.get("name")]
+    except Exception:
+        pass
     return {"provisioned": True, "user": u, "permissions": perms,
-            "active": bool(u.get("is_active", True)), "tenant": tenant}
+            "active": bool(u.get("is_active", True)), "tenant": tenant, "carriers": carriers}
 
 
 @router.post("/me/password-changed")

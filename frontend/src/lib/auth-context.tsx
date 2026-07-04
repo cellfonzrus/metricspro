@@ -1,7 +1,7 @@
 'use client'
 import { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import { supabase, setSessionOrgId } from './client'
-import type { Permissions } from './rbac'
+import type { Permissions, CarrierRef } from './rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -23,6 +23,7 @@ type AuthState = {
   session: any | null
   user: AppUser | null
   permissions: Permissions
+  carriers: CarrierRef[]
   provisioned: boolean
   active: boolean
   tenant: TenantInfo | null
@@ -32,7 +33,7 @@ type AuthState = {
 }
 
 const Ctx = createContext<AuthState>({
-  loading: true, session: null, user: null, permissions: {}, provisioned: false,
+  loading: true, session: null, user: null, permissions: {}, carriers: [], provisioned: false,
   active: false, tenant: null, token: null, signOut: async () => {}, refresh: async () => {},
 })
 
@@ -46,10 +47,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [provisioned, setProvisioned] = useState(false)
   const [active, setActive] = useState(false)
   const [tenant, setTenant] = useState<TenantInfo | null>(null)
+  const [carriers, setCarriers] = useState<CarrierRef[]>([])
 
   const loadProfile = useCallback(async (sess: any | null) => {
     if (!sess?.access_token) {
-      setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setTenant(null); setSessionOrgId(null)
+      setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setTenant(null); setCarriers([]); setSessionOrgId(null)
       return
     }
     try {
@@ -64,8 +66,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setProvisioned(!!d.provisioned)
       setActive(d.active !== false)
       setTenant(d.tenant || null)
+      setCarriers(d.carriers || [])
     } catch {
-      setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setTenant(null); setSessionOrgId(null)
+      setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setTenant(null); setCarriers([]); setSessionOrgId(null)
     }
   }, [])
 
@@ -88,7 +91,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
-    setSession(null); setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setTenant(null); setSessionOrgId(null)
+    setSession(null); setUser(null); setPermissions({}); setProvisioned(false); setActive(false); setTenant(null); setCarriers([]); setSessionOrgId(null)
   }, [])
 
   const refresh = useCallback(async () => {
@@ -99,7 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <Ctx.Provider value={{
-      loading, session, user, permissions, provisioned, active, tenant,
+      loading, session, user, permissions, carriers, provisioned, active, tenant,
       token: session?.access_token || null, signOut, refresh,
     }}>
       {children}

@@ -230,6 +230,32 @@ export function isSuperAdmin(perms: Permissions): boolean {
   return !!perms?.modules?.admin
 }
 
+// ── Carrier-scoped nav ──────────────────────────────────────────────────────────────────────────
+// Some pages belong to a specific carrier (Boost vs Total). An href listed here shows ONLY when the
+// tenant has a matching carrier — UNLESS an admin override says otherwise. Everything not listed is
+// generic (all carriers). Currently DLAR-driven reporting (KPI/coaching) lives under Boost; as another
+// carrier gets its own DLAR/KPI reporting, add that carrier's code to the relevant hrefs.
+export type CarrierRef = { name?: string; code?: string }
+export const NAV_CARRIERS: Record<string, string[]> = {
+  '/commcalc/vip': ['boost'], '/commcalc/vip/paygo': ['boost'], '/commcalc/vip/sweep': ['boost'],
+  '/commcalc/distributors': ['boost'], '/commcalc/asset/lending': ['boost'],
+  '/commcalc/asset/owed-weekly': ['boost'], '/commcalc/asset/hotsheet-recon': ['boost'],
+  '/commcalc/kpi': ['boost'], '/commcalc/coaching': ['boost'],
+  '/commcalc/ma-commission': ['total'],
+}
+// Carrier gate: admin per-item override wins (caps['carrier:<href>'] true/false); else a carrier-scoped
+// item shows only when the tenant has a matching carrier. No carrier chosen yet → hide nothing.
+export function carrierOK(href: string, tenantCarriers: CarrierRef[] | undefined, caps: Record<string, boolean | null>): boolean {
+  const ov = caps['carrier:' + href]
+  if (ov === true) return true
+  if (ov === false) return false
+  const need = NAV_CARRIERS[href]
+  if (!need || need.length === 0) return true
+  if (!tenantCarriers || tenantCarriers.length === 0) return true
+  const have = tenantCarriers.map(c => (c.code || c.name || '').toLowerCase()).filter(Boolean)
+  return need.some(k => have.some(t => t.includes(k) || k.includes(t)))
+}
+
 export function canSeeItem(perms: Permissions, item: NavItem): boolean {
   if (isSuperAdmin(perms)) return true
   if (item.scopes && !item.scopes.includes(perms.scope || 'all')) return false

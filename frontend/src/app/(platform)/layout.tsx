@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
 import { api } from '@/lib/client'
-import { NAV, canSeeItem, canAccessPath, safeHomeFor, type NavItem } from '@/lib/rbac'
+import { NAV, canSeeItem, canAccessPath, carrierOK, safeHomeFor, type NavItem } from '@/lib/rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -51,7 +51,7 @@ function SetupBanner() {
 
 function PlatformShell({ children, open }: { children: React.ReactNode; open: boolean }) {
   const { period, setPeriod, periods } = usePeriod()
-  const { user, permissions, signOut } = useAuth()
+  const { user, permissions, carriers, signOut } = useAuth()
   const [collapsed, setCollapsed] = useState(false)
   const [openGroup, setOpenGroup] = useState<string | null>(null)  // accordion: only one group's items shown at a time
   const [menuOpen, setMenuOpen] = useState(false)
@@ -74,7 +74,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   // When login isn't enforced (open), show the full nav (today's behavior); otherwise gate it. Then
   // apply tenant capability gating (e.g. hide Asset Lending when no consignment distributor).
   const groups = (open ? NAV : NAV.map(g => ({ ...g, items: g.items.filter(it => canSeeItem(permissions, it)) })))
-    .map(g => ({ ...g, items: g.items.filter(capOK) }))
+    .map(g => ({ ...g, items: g.items.filter(capOK).filter(it => carrierOK(it.href, carriers, caps)) }))
     .filter(g => g.items.length > 0)
 
   // Accordion: keep every module group collapsed and open only the one holding the current page
