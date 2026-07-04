@@ -258,6 +258,79 @@ async def create_tenant(body: dict, authorization: str = Header(default="")):
                              password=body.get("temp_password"), slug=body.get("slug"), must_reset=True)
 
 
+# ─────────────────────────────────────────────
+# PLATFORM SUPER-ADMINS — logins that bypass tenant isolation (cross-tenant operators).
+# Audit + manage here instead of one-off SQL (mig 055 blanket-elevated house admins → drift).
+# ─────────────────────────────────────────────
+
+@router.get("/super-admins")
+async def list_super_admins(authorization: str = Header(default="")):
+    """Super-admin: every login holding platform-wide (cross-tenant) access. These bypass tenant
+    scoping (tenant_middleware honours super_admin), so this is the audit surface for who holds the keys."""
+    _require_super_admin(authorization)
+    rows = (sb().schema("storeops").table("app_users")
+            .select("id,email,full_name,role,org_id,is_active,last_login")
+            .eq("super_admin", True).order("email").execute().data) or []
+    return {"super_admins": rows}
+
+
+@router.post("/super-admins")
+async def create_super_admin(body: dict, authorization: str = Header(default="")):
+    """Super-admin: mint OR elevate a PLATFORM super-admin. A brand-new email gets a Supabase Auth
+    login created (house org = the platform home; super_admin bypasses tenant scoping regardless of
+    org_id) and a temp password returned. An EXISTING login is simply flagged — its password is left
+    untouched. Idempotent."""
+    _require_super_admin(authorization)
+    email = (body.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "email required")
+    client = sb()
+    existing = (client.schema("storeops").table("app_users").select("*")
+                .eq("org_id", ORG_ID).eq("email", email).limit(1).execute().data) or []
+    # Existing, already-linked login → just elevate; never touch their credential.
+    if existing and existing[0].get("auth_id"):
+        client.schema("storeops").table("app_users").update(
+            {"super_admin": True, "role": "admin", "is_active": True}
+        ).eq("id", existing[0]["id"]).execute()
+        return {"email": email, "elevated": True, "created": False, "temp_password": None}
+    # New login (or an orphan row without an auth account) → create/link auth + stamp super_admin.
+    chose_pw = bool((body.get("temp_password") or "").strip())
+    pw = (body.get("temp_password") or "").strip() or ("Mp" + secrets.token_urlsafe(6))
+    auth_id, created, err = _create_or_link_auth(get_supabase_admin(), email, pw)
+    if not auth_id:
+        raise HTTPException(500, f"could not create login: {err}")
+    fields = {"org_id": ORG_ID, "auth_id": auth_id, "email": email,
+              "full_name": (body.get("full_name") or "").strip() or None,
+              "role": "admin", "is_active": True, "super_admin": True,
+              "must_reset_password": not chose_pw}
+    if existing:
+        client.schema("storeops").table("app_users").update(fields).eq("id", existing[0]["id"]).execute()
+    else:
+        client.schema("storeops").table("app_users").insert(fields).execute()
+    return {"email": email, "elevated": bool(existing), "created": created,
+            "temp_password": (None if chose_pw else pw)}
+
+
+@router.delete("/super-admins")
+async def revoke_super_admin(email: str = "", authorization: str = Header(default="")):
+    """Super-admin: strip platform access from a login (demote to a normal tenant-scoped user). Does
+    NOT delete the login. Refuses to remove the LAST super-admin so the platform can't be locked out."""
+    _require_super_admin(authorization)
+    email = (email or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "email required")
+    client = sb()
+    supers = (client.schema("storeops").table("app_users").select("id,email")
+              .eq("super_admin", True).execute().data) or []
+    if len(supers) <= 1:
+        raise HTTPException(400, "cannot remove the last platform super-admin")
+    if not any((s.get("email") or "").lower() == email for s in supers):
+        raise HTTPException(404, "no super-admin with that email")
+    (client.schema("storeops").table("app_users").update({"super_admin": False})
+     .eq("super_admin", True).eq("email", email).execute())
+    return {"email": email, "revoked": True}
+
+
 @router.get("/modules")
 async def list_modules():
     """PUBLIC: the canonical module registry (module_key → label). Drives the billing plan

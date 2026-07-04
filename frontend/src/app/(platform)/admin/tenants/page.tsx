@@ -20,11 +20,18 @@ export default function TenantsAdmin() {
   const [taBusy, setTaBusy] = useState('')          // org_id currently resetting
   const [taReset, setTaReset] = useState<any>(null)  // last admin-reset result
   const [taPick, setTaPick] = useState<any>(null)    // {org_id, name, admins[]} when a tenant has >1 admin login
+  const [supers, setSupers] = useState<any[]>([])    // platform super-admins (bypass tenant isolation)
+  const [sa, setSa] = useState({ email: '', full_name: '', temp_password: '' })
+  const [saBusy, setSaBusy] = useState(false)
+  const [saCreated, setSaCreated] = useState<any>(null)
 
   const load = useCallback(() => {
     api('/api/v1/core/tenants').then((d: any) => setTenants(d.tenants || [])).catch(e => setErr(e?.message || 'Failed to load'))
   }, [])
-  useEffect(() => { if (isSuper) load() }, [isSuper, load])
+  const loadSupers = useCallback(() => {
+    api('/api/v1/core/super-admins').then((d: any) => setSupers(d.super_admins || [])).catch(() => {})
+  }, [])
+  useEffect(() => { if (isSuper) { load(); loadSupers() } }, [isSuper, load, loadSupers])
 
   async function addTenant() {
     if (!np.name.trim() || !np.admin_email.trim()) { setErr('Company name and admin email are required.'); return }
@@ -41,6 +48,22 @@ export default function TenantsAdmin() {
       const r = await api('/api/v1/core/users/reset-password', { method: 'POST', body: JSON.stringify(rp) })
       setReset(r); setRp({ email: '', temp_password: '' })
     } catch (e: any) { setErr(e?.message || 'Could not reset password') } finally { setRpBusy(false) }
+  }
+  async function addSuper() {
+    if (!sa.email.trim()) { setErr('Enter an email to make a platform super-admin.'); return }
+    setSaBusy(true); setErr(''); setSaCreated(null)
+    try {
+      const r = await api('/api/v1/core/super-admins', { method: 'POST', body: JSON.stringify(sa) })
+      setSaCreated(r); setSa({ email: '', full_name: '', temp_password: '' }); loadSupers()
+    } catch (e: any) { setErr(e?.message || 'Could not create super-admin') } finally { setSaBusy(false) }
+  }
+  async function revokeSuper(email: string) {
+    if (!confirm(`Remove platform (cross-tenant) access from ${email}? They stay a normal tenant user — their login is not deleted.`)) return
+    setErr('')
+    try {
+      await api(`/api/v1/core/super-admins?email=${encodeURIComponent(email)}`, { method: 'DELETE' })
+      loadSupers()
+    } catch (e: any) { setErr(e?.message || 'Could not revoke') }
   }
   async function resetTenantAdmin(t: Tenant, email?: string) {
     setTaBusy(t.org_id); setErr(''); setTaReset(null)
@@ -129,6 +152,42 @@ export default function TenantsAdmin() {
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Hand this to the user — they'll be prompted to set a new password on next login.</div>
           </div>
         )}
+      </div>
+
+      <div className="card" style={{ padding: 16, marginBottom: 16, borderColor: '#fca5a5' }}>
+        <div style={{ fontWeight: 700, marginBottom: 4 }}>🛡️ Platform super-admins</div>
+        <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
+          These logins <b>bypass tenant isolation</b> and can see every tenant's data — keep the list to your internal operators only.
+          A new email gets a login created (temp password shown once); an existing email is just elevated (its password is left unchanged).
+          A row flagged <b style={{ color: '#c0392b' }}>in red</b> holds platform access with a non-admin role — almost always a mistake to fix.
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+          <input style={{ ...inp, width: 240 }} placeholder="Email *" value={sa.email} onChange={e => setSa(v => ({ ...v, email: e.target.value }))} />
+          <input style={{ ...inp, width: 160 }} placeholder="Name" value={sa.full_name} onChange={e => setSa(v => ({ ...v, full_name: e.target.value }))} />
+          <input style={{ ...inp, width: 150 }} placeholder="Temp password (auto)" value={sa.temp_password} onChange={e => setSa(v => ({ ...v, temp_password: e.target.value }))} />
+          <button className="btn btn-primary" disabled={saBusy} onClick={addSuper}>{saBusy ? 'Saving…' : 'Add / elevate'}</button>
+        </div>
+        {saCreated && (
+          <div style={{ marginBottom: 10, padding: 12, borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 14 }}>
+            ✅ {saCreated.elevated ? 'Elevated' : 'Created'} <b>{saCreated.email}</b>
+            {saCreated.temp_password && <> · temp password: <code style={{ background: '#fff', padding: '2px 6px', borderRadius: 4 }}>{saCreated.temp_password}</code></>}
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>{saCreated.temp_password ? "Hand this to them — they'll set a new password on first login." : 'Existing login elevated; their password is unchanged.'}</div>
+          </div>
+        )}
+        <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+          {supers.length === 0 ? <div style={{ padding: 12, color: 'var(--text3)', fontSize: 13 }}>No super-admins.</div>
+            : supers.map(s => {
+              const odd = (s.role || '').toLowerCase() !== 'admin'
+              return (
+                <div key={s.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '9px 12px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 600, flex: 1, minWidth: 180 }}>{s.email}{s.full_name ? <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {s.full_name}</span> : null}</span>
+                  <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 999, background: odd ? '#fef2f2' : 'var(--surface)', color: odd ? '#c0392b' : 'var(--text3)', border: `1px solid ${odd ? '#fca5a5' : 'var(--border)'}` }}>{s.role || '—'}{odd ? ' ⚠' : ''}</span>
+                  {!s.is_active && <span style={{ fontSize: 12, color: '#b45309' }}>inactive</span>}
+                  <button className="btn btn-sm" onClick={() => revokeSuper(s.email)}>Revoke</button>
+                </div>
+              )
+            })}
+        </div>
       </div>
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
