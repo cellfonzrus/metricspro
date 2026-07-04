@@ -5672,17 +5672,6 @@ def _is_open_month(period):
         return False
 
 
-def _merge_actuals(monthly, feed):
-    """Per (store_code, rep_name, trans_date), the daily-feed row REPLACES the monthly row when present
-    (the daily B2B feed is fresher intra-month); days only in the monthly file are kept."""
-    def key(r):
-        return (str(r.get('store_code') or ''), str(r.get('rep_name') or ''), str(r.get('trans_date') or ''))
-    out = {key(r): r for r in monthly}
-    for r in feed:
-        out[key(r)] = r
-    return list(out.values())
-
-
 _BOX_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
 
 
@@ -5765,33 +5754,21 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
 
 
 def _fetch_actuals(client, org_id, period):
-    try:
-        rows = (client.schema('commcalc')
-                .rpc('daily_sales_actuals', {'p_org_id': org_id, 'p_period': period})
-                .execute().data) or []
-    except Exception as e:
-        print('daily_sales_actuals RPC failed:', e)
-        rows = []
-    # THEME 5(2) intra-month freshness + robustness: for the CURRENT open month (or any period the
-    # authoritative monthly raw_sales file is empty/lagging for), overlay the DAILY FEED — now computed
-    # in Python (_compute_feed_actuals_py) with tolerant contract_type classification, so activations/
-    # accessories are captured even when B2B's labels drift (fixes July Action-Plan zeros). Closed months
-    # with a real monthly file stay monthly-authoritative; the feed only fills the per-day gaps.
-    # Canonicalize rep names on BOTH sources BEFORE merging, so the per-(store,rep,day) merge key lines
-    # up (the RPC name-map-resolves names; the feed carries raw salesperson) — otherwise the same rep's
-    # day could survive twice and double-count.
+    """MTD 'achieved' actuals for Daily Targets — from the ONE processed sales source with ONE tolerant
+    classification (_compute_feed_actuals_py), no rigid SQL label lists. Open month → the daily feed is
+    freshest; a closed month → the authoritative monthly raw_sales; each falls back to the other when
+    empty. Display-only (targets), never commission payout, so making it MORE accurate is safe. The old
+    daily_sales_actuals / daily_sales_feed_actuals SQL functions are no longer on the critical path (they
+    dropped activations whose Contract Type labels weren't in their hardcoded list — the July zeros)."""
+    primary = 'daily_sales_feed' if _is_open_month(period) else 'raw_sales'
+    other = 'raw_sales' if primary == 'daily_sales_feed' else 'daily_sales_feed'
+    rows = _compute_feed_actuals_py(client, org_id, period, source=primary)
+    if not rows:
+        rows = _compute_feed_actuals_py(client, org_id, period, source=other)
     cmap = _rep_canon_map(client, org_id)
-
-    def _canon_rows(rs):
-        for r in rs:
-            if r.get('rep_name'):
-                r['rep_name'] = _canon(r.get('rep_name'), cmap)
-        return rs
-    rows = _canon_rows(rows)
-    if _is_open_month(period) or not rows:
-        feed = _canon_rows(_compute_feed_actuals_py(client, org_id, period))
-        if feed:
-            rows = _merge_actuals(rows, feed) if rows else feed
+    for r in rows:
+        if r.get('rep_name'):
+            r['rep_name'] = _canon(r.get('rep_name'), cmap)
     return rows
 
 
