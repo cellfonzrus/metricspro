@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 import VisitActions from './VisitActions'
 
 const row: React.CSSProperties = { padding: '8px 0', borderBottom: '1px solid var(--border)', display: 'flex', gap: 10, alignItems: 'flex-start' }
@@ -72,7 +73,7 @@ export default function VisitDetailPage() {
     <div style={{ maxWidth: 860 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6, flexWrap: 'wrap', gap: 10 }}>
         <Link href="/storeops/visits" style={{ fontSize: 13, color: 'var(--accent)' }}>← All visits</Link>
-        <ExportButtons payload={payload} />
+        <><ExportButtons payload={payload} /><SendReportButton exportPayload={payload} compact /></>
       </div>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>{v.store_address || v.store_code || 'Store visit'}</h1>
       <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 18px' }}>

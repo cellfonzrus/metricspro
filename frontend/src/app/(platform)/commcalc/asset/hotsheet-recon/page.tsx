@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 type Bucket = 'matched' | 'underpaid' | 'overpaid' | 'no_expected' | 'no_hotsheet' | 'unmapped_type'
 type Item = {
@@ -127,7 +128,7 @@ export default function HotsheetReconPage() {
               {syncing ? 'Syncing…' : '🚩 Sync underpaid → Flags'}
             </button>
           )}
-          {data && items.length > 0 && <ExportButtons payload={buildPayload} />}
+          {data && items.length > 0 && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
         </div>
       </div>
 

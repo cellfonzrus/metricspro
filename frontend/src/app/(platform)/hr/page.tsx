@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, ORG_ID, fmt } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
 function periodToMonth(p: string): string {
@@ -118,7 +119,7 @@ export default function HRPage() {
         ))}
         {msg && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{msg}</span>}
         <span style={{ flex: 1 }} />
-        {tab === 'comp' && comp?.rows?.length > 0 && <ExportButtons payload={compPayload} compact />}
+        {tab === 'comp' && comp?.rows?.length > 0 && <><ExportButtons payload={compPayload} compact /><SendReportButton exportPayload={compPayload} compact /></>}
       </div>
 
       {err && <div className="card" style={{ padding: 12, color: '#c0392b', borderColor: '#c0392b', marginBottom: 12 }}>{err}</div>}

@@ -118,7 +118,8 @@ export function SendReportButton({ reportKey, filters, compact, exportPayload, t
               <button className="btn btn-secondary" style={{ padding: '2px 8px' }} onClick={() => setOpen(false)}>✕</button>
             </div>
             <div style={{ fontSize: 12, color: 'var(--muted,#888)', marginBottom: 12 }}>
-              Report: <b>{reportKey}</b>{Object.keys(filters || {}).length ? ` · filters: ${JSON.stringify(filters)}` : ''}
+              Report: <b>{title || reportKey || 'this report'}</b>{filters && Object.keys(filters).length ? ` · filters: ${JSON.stringify(filters)}` : ''}
+              {exportPayload ? ' · current filtered view' : ''}
             </div>
 
             <div style={{ display: 'flex', gap: 20, marginBottom: 12, flexWrap: 'wrap' }}>

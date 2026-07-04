@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 const inp: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
@@ -89,7 +90,7 @@ export default function InventoryValuesPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--text2)', maxWidth: 360 }}>{msg}</span>}
-          {rows.length > 0 && <ExportButtons payload={buildPayload} />}
+          {rows.length > 0 && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
           <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? '…' : '💾 Save overrides'}</button>
         </div>
       </div>

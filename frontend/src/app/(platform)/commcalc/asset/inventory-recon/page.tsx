@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, localToday } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 type Cat = { asset: number; b2b: number; diff: number }
 type Row = { store: string; market: string | null; categories: Record<string, Cat>; total_abs_diff: number; in_asset: boolean; in_b2b: boolean }
@@ -113,7 +114,7 @@ export default function InventoryReconPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <a className="btn" href="/commcalc/asset" style={{ textDecoration: 'none' }}>← Asset</a>
-          <ExportButtons payload={buildPayload} />
+          <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>
         </div>
       </div>
 

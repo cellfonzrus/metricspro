@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 // KPI definitions. repKey = key inside rep_commissions.kpi_values; storeKey = raw_dlar_store column.
 // All values are whole-number percents (e.g. 70.6), compared directly to the target.
@@ -137,7 +138,7 @@ export default function KPIPage() {
             {period} · From DLAR Elevate Go report · {count} {view === 'rep' ? 'reps' : 'stores'} with KPI data
           </p>
         </div>
-        {!loading && count > 0 && <ExportButtons payload={buildPayload} />}
+        {!loading && count > 0 && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
       </div>
 
       {/* Filter bar: view toggle + store filter + rep filter */}

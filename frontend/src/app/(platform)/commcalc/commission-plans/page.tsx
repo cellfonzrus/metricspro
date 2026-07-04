@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, fmt } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 // Configurable commission PLAN engine (migration 059). A PLAN is a set of RULES the user creates — each
 // rule matches sale lines on any sales-transaction field (contract_type/tender_type/department/category/
@@ -323,7 +324,7 @@ export default function CommissionPlansPage() {
           <span style={{ flex: 1 }} />
           <input style={{ ...sel, width: 140 }} placeholder="June 2026" value={period} onChange={e => setPeriod(e.target.value)} />
           <button className="btn btn-secondary" disabled={previewBusy} onClick={() => runPreview(draft?.id)}>{previewBusy ? '…' : draft?.id ? 'Preview this plan' : 'Preview (per assignment)'}</button>
-          {preview?.by_rep?.length > 0 && <ExportButtons payload={previewPayload} />}
+          {preview?.by_rep?.length > 0 && <><ExportButtons payload={previewPayload} /><SendReportButton exportPayload={previewPayload} compact /></>}
         </div>
         {preview && (
           preview.ready === false ? <div style={{ fontSize: 13, color: '#b45309' }}>{preview.note || 'Migration 059 not applied.'}</div>

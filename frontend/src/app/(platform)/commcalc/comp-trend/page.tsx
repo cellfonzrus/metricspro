@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 export default function CompTrendPage() {
   // 'rep' = the commission WE pay each rep (rep_commissions.total_payout) — what "commission being
@@ -114,8 +115,8 @@ export default function CompTrendPage() {
           </label>
           <input className="select" placeholder={view === 'rep' ? 'filter rep / store…' : 'filter store / business…'} value={storeFilter} onChange={e => setStoreFilter(e.target.value)} style={{ width: 180 }} />
           {view === 'rep'
-            ? (repData?.reps?.length ? <ExportButtons payload={buildRepPayload} /> : null)
-            : (data?.totals_by_month ? <ExportButtons payload={buildPayload} /> : null)}
+            ? (repData?.reps?.length ? <><ExportButtons payload={buildRepPayload} /><SendReportButton exportPayload={buildRepPayload} compact /></> : null)
+            : (data?.totals_by_month ? <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></> : null)}
         </div>
       </div>
 

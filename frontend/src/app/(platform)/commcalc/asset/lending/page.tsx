@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 // Asset Lending (VIP PayGo) report — the weekly lent-device billing ledger. Data comes from the VIP
 // PayGo sweep (commcalc.vip_paygo_payments) via /commcalc/vip/paygo/summary; this presents it as an
@@ -122,7 +123,7 @@ export default function AssetLendingPage() {
             <option value="">All years</option>
             {years.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
-          {allBatches.length > 0 && <ExportButtons payload={buildPayload} />}
+          {allBatches.length > 0 && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
         </div>
       </div>
 

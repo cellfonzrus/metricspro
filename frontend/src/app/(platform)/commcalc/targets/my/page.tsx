@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, ORG_ID, fmt, fmtN, localToday } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 const CATS = [
   { key: 'activations', label: 'Activations', unit: 'count', hint: 'premium + BYOD' },
@@ -141,7 +142,7 @@ export default function MyTargetsPage() {
             <div style={{ fontSize: 13, color: 'var(--text2)' }}>
               <strong>{rep}</strong> · {fmtN(detail.scheduled_hours_total, 0)}h scheduled this month{detail.rep_share != null ? ` · ${Math.round(detail.rep_share * 100)}% of store hours (your target share)` : ''} · today {detail.today}
             </div>
-            <ExportButtons payload={buildPayload} compact />
+            <><ExportButtons payload={buildPayload} compact /><SendReportButton exportPayload={buildPayload} compact /></>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
             {CATS.map(c => {

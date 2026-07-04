@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 type StoreRow = {
   store: string; market: string | null
@@ -118,7 +119,7 @@ export default function OnInventoryByStorePage() {
             Unsold On-Inventory devices and $ owed to the Distributor, rolled up per store. Aging buckets match Inventory Aging (&lt;45 / 45–60 WARN / &gt;60 MISSED, from acquired date).
           </p>
         </div>
-        {data && <ExportButtons payload={buildPayload} />}
+        {data && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
       </div>
 
       {/* Stale data banner */}

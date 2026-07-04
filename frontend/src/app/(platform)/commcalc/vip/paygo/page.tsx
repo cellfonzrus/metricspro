@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 type Pay = {
   vip_payment_id: number; batch_type: string; dealer: string | null
@@ -70,7 +71,7 @@ export default function PaygoPage() {
             What the Distributor bills for lent (Pay-As-You-Go) devices each week, scraped from the dealer portal. Each weekly batch is a group of invoices — the invoice numbers join to your Distributor invoices &amp; device IMEIs.
           </p>
         </div>
-        {data?.configured && <ExportButtons payload={buildPayload} />}
+        {data?.configured && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
       </div>
 
       {loading ? (

@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, ORG_ID, fmt, fmtN, localToday } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 const CATS = [
   { key: 'activations', label: 'Activations', unit: 'count' },
@@ -259,7 +260,7 @@ export default function DailyTargetsPage() {
         {detail && <span style={{ fontSize: 12, color: 'var(--text3)' }}>
           {fmtN(detail.scheduled_hours_total, 0)}h scheduled · {detail.open_days_total} open days{detail.projected_open_days ? ` (${detail.projected_open_days} projected)` : ''} · today {detail.today}
         </span>}
-        {detail && <span style={{ marginLeft: 'auto' }}><ExportButtons payload={buildPayload} compact /></span>}
+        {detail && <span style={{ marginLeft: 'auto' }}><><ExportButtons payload={buildPayload} compact /><SendReportButton exportPayload={buildPayload} compact /></></span>}
       </div>
 
       {detail && !detail.has_schedule && (

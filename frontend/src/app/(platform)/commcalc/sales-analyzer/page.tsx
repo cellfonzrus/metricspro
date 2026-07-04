@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 export default function SalesAnalyzerPage() {
   const { period } = usePeriod()
@@ -92,7 +93,7 @@ export default function SalesAnalyzerPage() {
             </select>
           </label>
           <input className="select" placeholder="filter rep…" value={repFilter} onChange={e => setRepFilter(e.target.value)} style={{ width: 140 }} />
-          {data?.reps && <ExportButtons payload={buildPayload} />}
+          {data?.reps && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
         </div>
       </div>
 

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { api } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 const cell: React.CSSProperties = { padding: '8px 10px', borderBottom: '1px solid var(--border)' }
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -75,7 +76,7 @@ export default function StoreVisitsPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {!loading && filtered.length > 0 && <ExportButtons payload={payload} />}
+          {!loading && filtered.length > 0 && <><ExportButtons payload={payload} /><SendReportButton exportPayload={payload} compact /></>}
           {isAdmin && <Link href="/storeops/visits/settings" className="btn btn-secondary" style={{ fontSize: 13 }}>🧾 Checklist</Link>}
           <Link href="/storeops/visits/new" className="btn btn-primary" style={{ fontSize: 13 }}>＋ Start visit</Link>
         </div>

@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, Fragment } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 type Payment = { id: string; amount: number; paid_date: string; note: string | null }
 type Loan = {
@@ -142,7 +143,7 @@ export default function BorrowedMoneyPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <a className="btn" href="/commcalc/asset" style={{ textDecoration: 'none' }}>← Asset</a>
-          <ExportButtons payload={buildPayload} />
+          <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>
         </div>
       </div>
 

@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 type Group = { key: string; label: string; count: number; owed: number }
 type Summary = { groups: Record<string, Group>; total_loss: { total: number; appeals: number; rma: number } }
@@ -132,7 +133,7 @@ export default function AssetDashboard() {
         </div>
         <div style={{ display:'flex', gap:10, alignItems:'center' }}>
           {syncMsg && <span style={{ fontSize:13 }}>{syncMsg}</span>}
-          {data && <ExportButtons payload={buildPayload} />}
+          {data && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
           <button className="btn" onClick={pushFlags} disabled={syncing}>{syncing ? '⏳ Pushing…' : '🚨 Push Flags (Appeals + RMA)'}</button>
         </div>
       </div>

@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 // X-Tender Recon — the POS "X report" tenders (commcalc.pos_tender_summary) vs the daily closing sheet
 // employees submit (commcalc.daily_closing), per store, cash vs card. Reads GET /commcalc/x-tender-recon.
@@ -73,7 +74,7 @@ export default function XTenderReconPage() {
           <label style={{ fontSize: 12, color: 'var(--text2)' }}>± $
             <input className="select" type="number" value={tolerance} onChange={e => setTolerance(Number(e.target.value) || 0)} style={{ width: 64, marginLeft: 4 }} />
           </label>
-          {allRows.length > 0 && <ExportButtons payload={buildPayload} />}
+          {allRows.length > 0 && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
         </div>
       </div>
 
