@@ -18,6 +18,13 @@ type Invoice = {
   issued_at: string | null; due_date: string | null; payment_ref: string | null; notes: string | null; created_at: string
 }
 type SummaryRow = { org_id: string; name: string; plan: Plan | null; quantity: number; monthly_amount: number; latest_invoice: Invoice | null }
+type Connector = {
+  id?: string; provider: string; display_name?: string; credential?: string; credential_masked?: string; has_credential?: boolean
+  config?: any; flat_monthly_cost?: number | null; is_enabled?: boolean
+  last_cost?: number | null; last_currency?: string; last_synced_at?: string | null
+  last_status?: string | null; last_detail?: string | null; sort_order?: number; notes?: string | null
+}
+type Provider = { key: string; label: string; live: boolean; hint: string }
 
 const BASES = ['flat', 'per_store', 'per_entity', 'per_user', 'per_module']
 const CYCLES = ['monthly', 'annual']
@@ -42,6 +49,12 @@ export default function BillingAdmin() {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [period, setPeriod] = useState({ period_start: '', period_end: '', due_date: '' })
   const [busy, setBusy] = useState(false)
+  // Platform costs (operator's own spend) + derived cost-per-tenant
+  const [pc, setPc] = useState<{ total_monthly: number; active_tenants: number; cost_per_tenant: number; connectors: Connector[]; ready: boolean }>({ total_monthly: 0, active_tenants: 0, cost_per_tenant: 0, connectors: [], ready: true })
+  const [providers, setProviders] = useState<Provider[]>([])
+  const [pcEdit, setPcEdit] = useState<Partial<Connector> | null>(null)
+  const [pcBusy, setPcBusy] = useState(false)
+  const [pcMsg, setPcMsg] = useState('')
 
   const load = useCallback(() => {
     api('/api/v1/billing/plans')
@@ -52,6 +65,31 @@ export default function BillingAdmin() {
       .catch(() => {})
   }, [])
   useEffect(() => { if (isSuper) load() }, [isSuper, load])
+
+  const loadCosts = useCallback(() => {
+    api('/api/v1/billing/platform-costs')
+      .then((d: any) => setPc({ total_monthly: d.total_monthly || 0, active_tenants: d.active_tenants || 0, cost_per_tenant: d.cost_per_tenant || 0, connectors: d.connectors || [], ready: d.ready !== false }))
+      .catch(() => {})
+    api('/api/v1/billing/platform-providers').then((d: any) => setProviders(d.providers || [])).catch(() => {})
+  }, [])
+  useEffect(() => { if (isSuper) loadCosts() }, [isSuper, loadCosts])
+
+  async function refreshCosts() {
+    setPcBusy(true); setPcMsg('')
+    try { const d = await api('/api/v1/billing/platform-costs/refresh', { method: 'POST', body: '{}' }); setPcMsg(`Refreshed ${d.refreshed} connector(s).`); loadCosts() }
+    catch (e: any) { setPcMsg(e?.message || 'Refresh failed') } finally { setPcBusy(false) }
+  }
+  async function saveConnector() {
+    if (!pcEdit?.provider) { setPcMsg('Pick a provider.'); return }
+    setPcBusy(true); setPcMsg('')
+    try { await api('/api/v1/billing/platform-connectors', { method: 'POST', body: JSON.stringify(pcEdit) }); setPcEdit(null); loadCosts() }
+    catch (e: any) { setPcMsg(e?.message || 'Save failed') } finally { setPcBusy(false) }
+  }
+  async function deleteConnector(id?: string) {
+    if (!id || !confirm('Remove this platform connector?')) return
+    try { await api(`/api/v1/billing/platform-connectors/${id}`, { method: 'DELETE' }); setPcEdit(null); loadCosts() }
+    catch (e: any) { setPcMsg(e?.message || 'Delete failed') }
+  }
 
   function openEdit(row: PlanRow) {
     setDraft(row.plan ? { ...row.plan } : { org_id: row.org_id, basis: 'flat', unit_price: 0, cycle: 'monthly', currency: 'USD', is_active: true })
@@ -138,6 +176,16 @@ export default function BillingAdmin() {
           <div style={{ fontSize: 12, color: 'var(--text3)' }}>Tenants</div>
           <div style={{ fontSize: 26, fontWeight: 800 }}>{plans.length}</div>
         </div>
+        <div className="card" style={{ padding: 16, minWidth: 170 }}>
+          <div style={{ fontSize: 12, color: 'var(--text3)' }}>Monthly run-cost</div>
+          <div style={{ fontSize: 26, fontWeight: 800 }}>{fmt(pc.total_monthly)}</div>
+          <div style={{ fontSize: 11, color: 'var(--text3)' }}>what all platforms cost</div>
+        </div>
+        <div className="card" style={{ padding: 16, minWidth: 175, borderColor: '#c7d2fe' }}>
+          <div style={{ fontSize: 12, color: 'var(--text3)' }}>Break-even / tenant</div>
+          <div style={{ fontSize: 26, fontWeight: 800 }}>{fmt(pc.cost_per_tenant)}</div>
+          <div style={{ fontSize: 11, color: 'var(--text3)' }}>{pc.active_tenants} active · price above this</div>
+        </div>
       </div>
 
       {!ready && <div className="card" style={{ borderColor: '#f59e0b', color: '#b45309', padding: 12, marginBottom: 12 }}>
@@ -174,6 +222,42 @@ export default function BillingAdmin() {
               </span>
             </div>
           ))}
+      </div>
+
+      {/* Platform costs — the operator's own spend to run MetricsPro + cost per tenant */}
+      <div className="card" style={{ padding: 16, marginTop: 18 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 6 }}>
+          <div style={{ fontWeight: 700 }}>🧾 Platform costs — what it costs to run MetricsPro</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-sm" disabled={pcBusy} onClick={refreshCosts}>{pcBusy ? 'Refreshing…' : '↻ Refresh live'}</button>
+            <button className="btn btn-primary btn-sm" onClick={() => setPcEdit({ provider: 'anthropic', is_enabled: true })}>+ Add platform</button>
+          </div>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
+          Live cost is pulled where the platform has a cost API (Anthropic first); the rest use a flat monthly figure.
+          Total ÷ active tenants = your <b>break-even per tenant</b> — set plans above it for margin.
+        </div>
+        {!pc.ready && <div style={{ color: '#b45309', fontSize: 13, marginBottom: 8 }}>⚠️ Run migration <code>090_platform_billing.sql</code> in Supabase to enable this.</div>}
+        {pcMsg && <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>{pcMsg}</div>}
+        <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+          {pc.connectors.length === 0 ? <div style={{ padding: 12, color: 'var(--text3)', fontSize: 13 }}>No platforms yet — add Anthropic, Railway, Supabase, Vercel, Bluehost…</div>
+            : pc.connectors.map(c => {
+              const live = providers.find(p => p.key === c.provider)?.live
+              const sc = c.last_status === 'ok' ? '#16a34a' : c.last_status === 'manual' ? '#2563eb' : c.last_status === 'error' ? '#c0392b' : '#64748b'
+              return (
+                <div key={c.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '9px 12px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 600, flex: 1, minWidth: 150 }}>{c.display_name || c.provider}
+                    {!c.is_enabled && <span style={{ color: '#b45309', fontSize: 12 }}> · off</span>}
+                    {live && <span style={{ fontSize: 11, color: '#16a34a', marginLeft: 6 }}>● live</span>}
+                  </span>
+                  <span style={{ width: 100, textAlign: 'right', fontWeight: 700 }}>{c.last_cost != null ? fmt(c.last_cost) : '—'}</span>
+                  <span style={{ width: 110, fontSize: 12, color: sc }} title={c.last_detail || ''}>{c.last_status || 'not synced'}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text3)', width: 150 }}>{c.last_synced_at ? new Date(c.last_synced_at).toLocaleString() : ''}</span>
+                  <button className="btn btn-sm" onClick={() => setPcEdit({ ...c, credential: '' })}>Edit</button>
+                </div>
+              )
+            })}
+        </div>
       </div>
 
       {/* Plan edit modal */}
@@ -267,6 +351,36 @@ export default function BillingAdmin() {
                   ))}
                 </tbody>
               </table>}
+          </div>
+        </div>
+      )}
+
+      {/* Platform connector modal */}
+      {pcEdit && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }} onClick={() => setPcEdit(null)}>
+          <div className="card" style={{ padding: 20, width: 450, maxWidth: '92vw' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 12 }}>{pcEdit.id ? 'Edit platform' : 'Add platform'}</div>
+            <label style={{ fontSize: 12, color: 'var(--text3)' }}>Provider</label>
+            <select className="select" style={{ ...inp, width: '100%', marginBottom: 6 }} value={pcEdit.provider || 'anthropic'} onChange={e => setPcEdit(d => ({ ...d!, provider: e.target.value }))}>
+              {providers.map(p => <option key={p.key} value={p.key}>{p.label}{p.live ? ' · live' : ''}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>{providers.find(p => p.key === pcEdit.provider)?.hint}</div>
+            <label style={{ fontSize: 12, color: 'var(--text3)' }}>Label</label>
+            <input style={{ ...inp, width: '100%', marginBottom: 10 }} placeholder="e.g. Anthropic (Claude)" value={pcEdit.display_name || ''} onChange={e => setPcEdit(d => ({ ...d!, display_name: e.target.value }))} />
+            <label style={{ fontSize: 12, color: 'var(--text3)' }}>API key / token {pcEdit.has_credential ? '(blank = keep current)' : ''}</label>
+            <input type="password" autoComplete="off" style={{ ...inp, width: '100%', marginBottom: 10 }} placeholder={pcEdit.has_credential ? '•••• stored' : 'paste token (stored server-side, never logged)'} value={pcEdit.credential || ''} onChange={e => setPcEdit(d => ({ ...d!, credential: e.target.value }))} />
+            <label style={{ fontSize: 12, color: 'var(--text3)' }}>Flat monthly cost (for platforms with no cost API, or an override)</label>
+            <input type="number" step="0.01" style={{ ...inp, width: '100%', marginBottom: 10 }} placeholder="e.g. 20" value={pcEdit.flat_monthly_cost ?? ''} onChange={e => setPcEdit(d => ({ ...d!, flat_monthly_cost: e.target.value === '' ? null : parseFloat(e.target.value) }))} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 12 }}>
+              <input type="checkbox" checked={pcEdit.is_enabled ?? true} onChange={e => setPcEdit(d => ({ ...d!, is_enabled: e.target.checked }))} /> Count in the total
+            </label>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              {pcEdit.id ? <button className="btn btn-sm" style={{ color: '#c0392b' }} onClick={() => deleteConnector(pcEdit.id)}>Delete</button> : <span />}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-sm" onClick={() => setPcEdit(null)}>Cancel</button>
+                <button className="btn btn-primary btn-sm" disabled={pcBusy} onClick={saveConnector}>{pcBusy ? 'Saving…' : 'Save'}</button>
+              </div>
+            </div>
           </div>
         </div>
       )}

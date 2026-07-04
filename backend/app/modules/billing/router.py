@@ -309,3 +309,148 @@ async def summary(authorization: str = Header(default="")):
         })
     mrr = round(mrr, 2)
     return {"ready": True, "tenants": rows, "mrr": mrr, "arr": round(mrr * 12, 2)}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# PLATFORM COSTS — the OPERATOR's own spend to run MetricsPro (vendor/infra bills), plus the derived
+# break-even COST PER TENANT so pricing/billing is easy. Super-admin only. (migration 090)
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+from app.modules.billing import platform_costs as _pc
+
+
+def _pcstore():
+    return sb().schema("storeops").table("platform_billing_connector")
+
+
+def _pc_out(row: dict) -> dict:
+    return {
+        "id": row.get("id"), "provider": row.get("provider"), "display_name": row.get("display_name"),
+        "credential_masked": _pc.mask(row.get("credential")), "has_credential": bool(row.get("credential")),
+        "config": row.get("config") or {}, "flat_monthly_cost": row.get("flat_monthly_cost"),
+        "is_enabled": row.get("is_enabled", True), "last_cost": row.get("last_cost"),
+        "last_currency": row.get("last_currency"), "last_synced_at": row.get("last_synced_at"),
+        "last_status": row.get("last_status"), "last_detail": row.get("last_detail"),
+        "sort_order": row.get("sort_order", 0), "notes": row.get("notes"),
+    }
+
+
+@router.get("/platform-providers")
+async def platform_providers(authorization: str = Header(default="")):
+    """The provider registry for the connector dropdown (which have a live cost API vs manual)."""
+    _require_super_admin(authorization)
+    return {"providers": _pc.PROVIDERS}
+
+
+@router.get("/platform-connectors")
+async def list_platform_connectors(authorization: str = Header(default="")):
+    _require_super_admin(authorization)
+    try:
+        rows = _pcstore().select("*").order("sort_order").order("provider").execute().data or []
+    except Exception:
+        return {"ready": False, "connectors": []}
+    return {"ready": True, "connectors": [_pc_out(r) for r in rows]}
+
+
+@router.post("/platform-connectors")
+async def upsert_platform_connector(body: dict, authorization: str = Header(default="")):
+    """Add or update a platform connector. The credential is only overwritten when a NEW (non-masked)
+    value is supplied — re-saving with the masked placeholder keeps the stored secret."""
+    _require_super_admin(authorization)
+    provider = (body.get("provider") or "").strip().lower()
+    if not provider:
+        raise HTTPException(400, "provider required")
+    row = {"org_id": ORG_ID, "provider": provider,
+           "display_name": (body.get("display_name") or "").strip() or provider,
+           "is_enabled": bool(body.get("is_enabled", True))}
+    cred = (body.get("credential") or "").strip()
+    if cred and "…" not in cred and "•" not in cred:   # a real new secret, not the masked echo
+        row["credential"] = cred
+    if "config" in body:
+        row["config"] = body.get("config") or {}
+    if "flat_monthly_cost" in body:
+        row["flat_monthly_cost"] = _pc._num(body.get("flat_monthly_cost"))
+    if "sort_order" in body:
+        try: row["sort_order"] = int(body.get("sort_order") or 0)
+        except (TypeError, ValueError): pass
+    if "notes" in body:
+        row["notes"] = body.get("notes")
+    try:
+        cid = body.get("id")
+        if cid:
+            _pcstore().update(row).eq("id", cid).execute()
+            return {"ok": True, "id": cid}
+        res = _pcstore().insert(row).execute()
+        return {"ok": True, "id": (res.data[0]["id"] if res.data else None)}
+    except Exception as e:
+        raise HTTPException(500, f"save failed: {e} (run migration 090?)")
+
+
+@router.delete("/platform-connectors/{cid}")
+async def delete_platform_connector(cid: str, authorization: str = Header(default="")):
+    _require_super_admin(authorization)
+    try:
+        _pcstore().delete().eq("id", cid).execute()
+    except Exception as e:
+        raise HTTPException(500, f"delete failed: {e}")
+    return {"ok": True}
+
+
+def _active_tenant_count(client) -> int:
+    try:
+        tenants = client.schema("storeops").table("tenants").select("org_id,is_active").execute().data or []
+        return sum(1 for t in tenants if t.get("is_active") is not False)
+    except Exception:
+        return 0
+
+
+@router.get("/platform-costs")
+async def platform_costs_summary(authorization: str = Header(default="")):
+    """Total monthly cost to run MetricsPro (sum of the last synced connector costs) + the derived
+    break-even COST PER TENANT (total ÷ active tenants). Pair it with /summary's MRR to see margin."""
+    _require_super_admin(authorization)
+    client = sb()
+    try:
+        rows = _pcstore().select("*").order("sort_order").order("provider").execute().data or []
+    except Exception:
+        return {"ready": False, "total_monthly": 0, "active_tenants": 0, "cost_per_tenant": 0, "connectors": []}
+    total = round(sum((_pc._num(r.get("last_cost")) or 0) for r in rows if r.get("is_enabled", True)), 2)
+    active = _active_tenant_count(client)
+    return {"ready": True, "total_monthly": total, "active_tenants": active,
+            "cost_per_tenant": round(total / active, 2) if active else 0.0,
+            "connectors": [_pc_out(r) for r in rows]}
+
+
+@router.post("/platform-costs/refresh")
+async def refresh_platform_costs(body: dict = None, authorization: str = Header(default="")):
+    """Pull live cost for every enabled connector (or one, if {id} is passed), persist the result, and
+    return the new total + per-connector status. Providers without a live fetcher use their flat figure."""
+    _require_super_admin(authorization)
+    body = body or {}
+    only = body.get("id")
+    try:
+        rows = _pcstore().select("*").execute().data or []
+    except Exception as e:
+        raise HTTPException(500, f"not ready: {e} (run migration 090?)")
+    results = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for r in rows:
+        if only and r.get("id") != only:
+            continue
+        if not r.get("is_enabled", True):
+            continue
+        out = _pc.fetch_cost(r)
+        try:
+            _pcstore().update({
+                "last_cost": out.get("cost"), "last_currency": out.get("currency") or "USD",
+                "last_status": out.get("status"), "last_detail": (out.get("detail") or "")[:300],
+                "last_synced_at": now_iso,
+            }).eq("id", r["id"]).execute()
+        except Exception:
+            pass
+        results.append({"id": r["id"], "provider": r.get("provider"),
+                        "display_name": r.get("display_name"), **out})
+    total = round(sum((_pc._num(x.get("cost")) or 0) for x in results), 2)
+    active = _active_tenant_count(sb())
+    return {"ok": True, "refreshed": len(results), "total_monthly": total,
+            "active_tenants": active, "cost_per_tenant": round(total / active, 2) if active else 0.0,
+            "results": results}
