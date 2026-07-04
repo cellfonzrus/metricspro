@@ -302,7 +302,7 @@ export default function EmailImportsPage() {
         </table>
       </div>
       {/* ── Payment-processor sources (mig 083): distributor → processor → LOGINS registry ── */}
-      <div className="card" style={{ padding: 16, marginTop: 16 }}>
+      <div id="portal-logins" className="card" style={{ padding: 16, marginTop: 16, scrollMarginTop: 80 }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>📡 Payment-processor sources</div>
           <div style={{ flex: 1 }} />
