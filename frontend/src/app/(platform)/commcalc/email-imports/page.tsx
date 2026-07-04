@@ -306,6 +306,7 @@ export default function EmailImportsPage() {
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>📡 Payment-processor sources</div>
           <div style={{ flex: 1 }} />
+          <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: 'b2bsoft', portal_url: 'https://wsreports.b2bsoft.com', enabled: false })}>＋ Add b2bsoft (sales)</button>
           <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: 'vidapay', enabled: false })}>＋ Add login</button>
         </div>
         <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 10px' }}>
@@ -352,8 +353,13 @@ export default function EmailImportsPage() {
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Label<br />
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="VidaPay — login 1 (NY stores)" value={srcDraft.label || ''} onChange={e => setSrcDraft({ ...srcDraft, label: e.target.value })} /></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Processor<br />
-                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} list="processors" value={srcDraft.processor || ''} onChange={e => setSrcDraft({ ...srcDraft, processor: e.target.value })} />
-                <datalist id="processors"><option value="vidapay" /><option value="total_access" /><option value="epay" /><option value="other" /></datalist></label>
+                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} list="processors" value={srcDraft.processor || ''} onChange={e => {
+                  const proc = e.target.value
+                  const patch: any = { processor: proc }
+                  if (!srcDraft.portal_url && proc === 'b2bsoft') patch.portal_url = 'https://wsreports.b2bsoft.com'
+                  setSrcDraft({ ...srcDraft, ...patch })
+                }} />
+                <datalist id="processors"><option value="vidapay" /><option value="total_access" /><option value="b2bsoft" /><option value="epay" /><option value="other" /></datalist></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Distributor<br />
                 <select style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.distributor_id || ''} onChange={e => setSrcDraft({ ...srcDraft, distributor_id: e.target.value })}>
                   <option value="">—</option>
@@ -388,6 +394,12 @@ export default function EmailImportsPage() {
               <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={saveSource}>💾 Save login</button>
             </div>
             <p style={{ fontSize: 12, color: 'var(--text3)', margin: '8px 0 0' }}>
+              <b>b2bsoft (daily Sales Transaction Details):</b> processor <code>b2bsoft</code>, Portal URL
+              <code>https://wsreports.b2bsoft.com</code>, fill User ID + Password (Account ID optional), Save, then
+              click <b>🔐 Log in</b> in the table above and enter the 2-factor code when prompted. b2bsoft usually
+              blocks the server&apos;s datacenter IP, so set a <b>residential / allow-listed proxy</b> above first —
+              otherwise Log in returns an anti-bot page. The signed-in session is saved and reused (~90 days) so
+              sales stops relying on the email feed.<br /><br />
               For VidaPay / Total Access: fill Account ID + User ID + Password, Save, then click <b>🔐 Log in</b> in the
               table above. The portal will text/email a 2-factor code — enter it when prompted. The signed-in session
               is saved and reused for scheduled pulls; when it expires the status shows <b>🔒 Needs 2FA</b> and you just
