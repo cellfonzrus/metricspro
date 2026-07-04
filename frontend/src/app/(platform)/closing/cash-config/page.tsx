@@ -9,6 +9,7 @@ const SCOPES = [
   { key: 'closing_missing', label: 'Daily closing not submitted' },
   { key: 'cash_unpicked', label: 'Cash not picked up' },
   { key: 'deposit_mismatch', label: 'Deposit mismatch' },
+  { key: 'connector', label: 'Data source failed / stale (imports, sweeps)' },
   { key: 'all', label: 'All alerts' },
 ]
 

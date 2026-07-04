@@ -6875,6 +6875,84 @@ def email_processed(org_id: str = ORG_ID, limit: int = 100):
             .order("processed_at", desc=True).limit(limit).execute().data) or []
 
 
+# ── Connector-health alerts (user 2026-07-04): if a data source/sweep ERRORS or goes STALE, WhatsApp/
+# email the assigned person. Reuses the cash-mgmt alert foundation (closing._send_alert → email+WhatsApp,
+# deduped via storeops.alert_log). Recipients come from alert_recipient scope 'connector' (falls back to
+# the tenant DM); a cron hits /connector-health/run-due hourly. ──────────────────────────────────────
+_CONNECTOR_HEALTH_SOURCES = [
+    ("data_source", "Portal login"), ("email_sweep_config", "Email import"),
+    ("epay_sweep_config", "ePay sweep"), ("dlar_sweep_config", "DLAR sweep"),
+    ("vip_sweep_config", "VIP sweep"), ("b2b_sweep_config", "B2B sweep"),
+    ("ftp_sweep_config", "FTP import"),
+]
+_CONNECTOR_STALE_HOURS = 30  # a daily source with no run in >30h has silently stalled
+
+
+def _scan_connector_health(client):
+    """Enabled data sources across the sweep + portal registries that have ERRORED or gone STALE."""
+    now = _datetime.now(_timezone.utc)
+    out = []
+    for table, label in _CONNECTOR_HEALTH_SOURCES:
+        try:
+            rows = (client.schema("commcalc").table(table).select("*").execute().data) or []
+        except Exception:
+            rows = []
+        for r in rows:
+            if r.get("enabled", r.get("is_enabled", True)) is False:
+                continue
+            status = (r.get("last_status") or "").lower()
+            name = (r.get("label") or r.get("source_name") or r.get("account")
+                    or r.get("vendor_name") or label)
+            failed = ("error" in status) or ("fail" in status) or ("403" in status)
+            stale = False
+            lr = r.get("last_run_at")
+            if not failed and lr:
+                try:
+                    last = _datetime.fromisoformat(str(lr).replace("Z", "+00:00"))
+                    if last.tzinfo is None:
+                        last = last.replace(tzinfo=_timezone.utc)
+                    stale = (now - last).total_seconds() > _CONNECTOR_STALE_HOURS * 3600
+                except Exception:
+                    stale = False
+            if failed or stale:
+                kind = "errored" if failed else "stalled"
+                out.append({
+                    "org_id": r.get("org_id") or ORG_ID, "source": f"{label} — {name}", "kind": kind,
+                    "detail": (r.get("last_status") or f"no run in {_CONNECTOR_STALE_HOURS}h+")[:180],
+                    "ref_key": f"connector:{table}:{r.get('id')}:{now.date()}:{kind}",
+                })
+    return out
+
+
+@router.get("/connector-health")
+def connector_health(org_id: str = ORG_ID):
+    """This tenant's errored/stale data sources — drives a health banner + the alert cron."""
+    require_org(org_id)
+    return [f for f in _scan_connector_health(sb()) if f["org_id"] == org_id]
+
+
+@router.post("/connector-health/run-due")
+async def connector_health_run_due(x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint (hourly): WhatsApp/email the assigned person for any errored/stale data source.
+    Deduped via alert_log so it won't re-alert every tick until the source recovers."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    client = sb()
+    failures = _scan_connector_health(client)
+    from app.modules.closing.router import _send_alert  # lazy import: avoids a commcalc↔closing cycle
+    sent = []
+    for f in failures:
+        subject = f"⚠️ Data source {f['kind']}: {f['source']}"
+        text = (f"MetricsPro — a data source {f['kind']}.\n\n{f['source']}\nStatus: {f['detail']}\n\n"
+                f"Check the connector / re-run the sweep so reports keep updating.")
+        try:
+            res = await _send_alert(client, f["org_id"], "connector", subject, text, f["ref_key"])
+            sent.append({"source": f["source"], "kind": f["kind"], "result": res})
+        except Exception as e:
+            sent.append({"source": f["source"], "kind": f["kind"], "error": str(e)[:160]})
+    return {"checked_sources": len(_CONNECTOR_HEALTH_SOURCES), "failing": len(failures), "sent": sent}
+
+
 @router.post("/email-sweep/run-due")
 async def email_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint — run the email sweep if enabled + due, then advance next_run_at."""
