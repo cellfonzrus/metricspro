@@ -50,7 +50,7 @@ function ymd(v: any): string {
   return s
 }
 
-export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children }: {
+export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick }: {
   title: string
   subtitle?: string
   filename?: string
@@ -59,6 +59,7 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   compact?: boolean
   right?: React.ReactNode                   // extra toolbar content (page-specific controls)
   children?: React.ReactNode                // optional custom body ABOVE the table (charts, tiles…)
+  onRowClick?: (row: any) => void           // makes each data row clickable (e.g. drill into a transaction)
 }) {
   const cols = useMemo(() => columns.filter(Boolean), [columns])
   const byKey = useMemo(() => Object.fromEntries(cols.map(c => [key(c), c])), [cols])
@@ -134,6 +135,7 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
 
   return (
     <div>
+      <style>{`.rs-clickable:hover td{background:var(--surface2)}`}</style>
       {/* Toolbar */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
         {repCol && (
@@ -212,7 +214,9 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
           <thead><tr>{cols.map(c => <th key={key(c)} style={{ ...th, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left' }}>{c.header}</th>)}</tr></thead>
           <tbody>
             {!groups && filtered.map((r, i) => (
-              <tr key={i}>{cols.map(c => <td key={key(c)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left' }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
+              <tr key={i} onClick={onRowClick ? () => onRowClick(r) : undefined} style={onRowClick ? { cursor: 'pointer' } : undefined}
+                className={onRowClick ? 'rs-clickable' : undefined}>
+                {cols.map(c => <td key={key(c)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left' }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
             ))}
             {groups && groups.map(([g, rs]) => (
               <Fragment key={g}>
@@ -221,7 +225,9 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
                   {cols.filter(isMoney).map(c => <td key={'gs' + key(c)} style={{ ...cell, textAlign: 'right', fontWeight: 700 }}>{money(subtotal(rs, c))}</td>)}
                 </tr>
                 {rs.map((r, i) => (
-                  <tr key={g + i}>{cols.map(c => <td key={key(c)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left' }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
+                  <tr key={g + i} onClick={onRowClick ? () => onRowClick(r) : undefined} style={onRowClick ? { cursor: 'pointer' } : undefined}
+                    className={onRowClick ? 'rs-clickable' : undefined}>
+                    {cols.map(c => <td key={key(c)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left' }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
                 ))}
               </Fragment>
             ))}

@@ -15,6 +15,18 @@ export default function SalesReportPage() {
   const [period, setPeriod] = useState(thisMonth())
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [drill, setDrill] = useState<any>(null)          // the clicked (store, rep, day) cell
+  const [detail, setDetail] = useState<any>(null)        // its transactions
+  const [drillBusy, setDrillBusy] = useState(false)
+  const [openTxn, setOpenTxn] = useState<Record<string, boolean>>({})
+
+  function openDrill(r: any) {
+    setDrill(r); setDetail(null); setOpenTxn({}); setDrillBusy(true)
+    const qs = new URLSearchParams({ period, store: r.store || '', salesperson: r.salesperson || '', date: r.trans_date || '' })
+    api(`/api/v1/commcalc/sales-report/detail?${qs.toString()}`)
+      .then(setDetail).catch(e => setDetail({ transactions: [], error: String(e?.message || e) }))
+      .finally(() => setDrillBusy(false))
+  }
 
   const load = useCallback(() => {
     setLoading(true)
@@ -98,7 +110,76 @@ export default function SalesReportPage() {
           filename={`sales-report-${period.replace(/\s+/g, '-')}`}
           columns={cols}
           rows={rows}
+          onRowClick={openDrill}
         />
+      )}
+
+      {!loading && rows.length > 0 && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>💡 Click any row to see the individual transactions behind it.</div>}
+
+      {/* Transaction drill-down */}
+      {drill && (
+        <div onClick={() => setDrill(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} className="card" style={{ background: 'var(--surface)', borderRadius: 12, padding: 20, width: 'min(820px,97vw)', maxHeight: '88vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>{drill.store} · {drill.salesperson}</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)' }}>{drill.trans_date} · {detail?.txn_count ?? drill.txns} transaction{(detail?.txn_count ?? drill.txns) === 1 ? '' : 's'}</div>
+              </div>
+              <button className="btn btn-secondary" style={{ padding: '2px 10px' }} onClick={() => setDrill(null)}>✕</button>
+            </div>
+            {drillBusy ? (
+              <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>Loading transactions…</div>
+            ) : detail?.error ? (
+              <div style={{ padding: 20, color: '#dc2626', fontSize: 13 }}>❌ {detail.error}</div>
+            ) : (detail?.transactions || []).length === 0 ? (
+              <div style={{ padding: 20, color: 'var(--text3)', fontSize: 13 }}>No transaction detail found for this cell.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {detail.transactions.map((t: any) => {
+                  const open = !!openTxn[t.trans_id]
+                  return (
+                    <div key={t.trans_id} className="card" style={{ padding: 0, border: '1px solid var(--border)', borderRadius: 8 }}>
+                      <div onClick={() => setOpenTxn(o => ({ ...o, [t.trans_id]: !o[t.trans_id] }))}
+                        style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '9px 12px', cursor: 'pointer', flexWrap: 'wrap' }}>
+                        <span style={{ color: 'var(--text3)', width: 12 }}>{open ? '▾' : '▸'}</span>
+                        <span style={{ fontFamily: 'monospace', fontSize: 12 }}>#{t.trans_id}</span>
+                        {t.customer && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{t.customer}</span>}
+                        <span style={{ fontSize: 11, color: 'var(--text3)' }}>{t.line_count} line{t.line_count === 1 ? '' : 's'}</span>
+                        <div style={{ flex: 1 }} />
+                        <span style={{ fontSize: 12, color: 'var(--text3)' }}>GP {fmt(t.gp)}</span>
+                        <span style={{ fontSize: 14, fontWeight: 700 }}>{fmt(t.total)}</span>
+                      </div>
+                      {open && (
+                        <div style={{ borderTop: '1px solid var(--border)', overflowX: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                            <thead><tr style={{ background: 'var(--surface2)' }}>
+                              {['Department', 'Category', 'Contract', 'Product', 'MDN', 'Serial', 'Price', 'GP'].map(h =>
+                                <th key={h} style={{ textAlign: h === 'Price' || h === 'GP' ? 'right' : 'left', padding: '5px 8px', fontSize: 10, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
+                            </tr></thead>
+                            <tbody>
+                              {t.lines.map((l: any, i: number) => (
+                                <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                                  <td style={{ padding: '5px 8px' }}>{l.department || '—'}</td>
+                                  <td style={{ padding: '5px 8px' }}>{l.category || '—'}</td>
+                                  <td style={{ padding: '5px 8px' }}>{l.contract_type || '—'}</td>
+                                  <td style={{ padding: '5px 8px' }}>{l.product || '—'}{l.sku ? <span style={{ color: 'var(--text3)' }}> · {l.sku}</span> : ''}</td>
+                                  <td style={{ padding: '5px 8px' }}>{l.mdn || '—'}</td>
+                                  <td style={{ padding: '5px 8px', fontFamily: 'monospace', fontSize: 11 }}>{l.serial || '—'}</td>
+                                  <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(l.ext_price)}</td>
+                                  <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(l.gp)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   )

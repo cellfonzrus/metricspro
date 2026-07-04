@@ -5187,6 +5187,71 @@ async def sales_report(period: str = "", org_id: str = ORG_ID):
             "periods": sorted(periods, reverse=True)}
 
 
+@router.get("/sales-report/detail")
+async def sales_report_detail(period: str = "", store: str = "", salesperson: str = "",
+                              date: str = "", org_id: str = ORG_ID):
+    """Transaction drill-down for one Sales Report cell (store + rep + day): every transaction that
+    rolled into that line, each with its line items (product, contract type, price, GP). Same
+    raw_sales → daily_sales_feed fallback as the report, so it works off whichever source it used."""
+    client = sb()
+    if not period:
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+    cols = ("trans_id,trans_date,store,salesperson,customer,department,category,contract_type,"
+            "product_desc,sku,ext_price,gp,mdn,serial_1,voided")
+
+    def _q(table):
+        q = (client.schema("commcalc").table(table).select(cols)
+             .eq("org_id", org_id).in_("period", _pvariants(period)).limit(50000))
+        if store:
+            q = q.eq("store", store)
+        if salesperson:
+            q = q.eq("salesperson", salesperson)
+        return q.execute().data or []
+    rows = _q("raw_sales")
+    if not rows:
+        try:
+            rows = _q("daily_sales_feed")
+        except Exception:
+            rows = []
+    if date:
+        rows = [r for r in rows if str(r.get("trans_date") or "")[:10] == date]
+
+    txns = {}
+    for r in rows:
+        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+            continue
+        tid = r.get("trans_id") or "—"
+        t = txns.get(tid)
+        if not t:
+            t = txns[tid] = {"trans_id": tid, "trans_date": str(r.get("trans_date") or "")[:10],
+                             "customer": (r.get("customer") or "").strip(), "lines": [],
+                             "total": 0.0, "gp": 0.0}
+        try:
+            ext = float(r.get("ext_price") or 0)
+        except (TypeError, ValueError):
+            ext = 0.0
+        try:
+            gp = float(r.get("gp") or 0)
+        except (TypeError, ValueError):
+            gp = 0.0
+        t["lines"].append({"department": r.get("department"), "category": r.get("category"),
+                           "contract_type": r.get("contract_type"), "product": r.get("product_desc"),
+                           "sku": r.get("sku"), "mdn": r.get("mdn"), "serial": r.get("serial_1"),
+                           "ext_price": round(ext, 2), "gp": round(gp, 2)})
+        t["total"] += ext
+        t["gp"] += gp
+        if not t["customer"] and (r.get("customer") or "").strip():
+            t["customer"] = (r.get("customer") or "").strip()
+    out = sorted(txns.values(), key=lambda x: str(x["trans_id"]))
+    for t in out:
+        t["total"] = round(t["total"], 2)
+        t["gp"] = round(t["gp"], 2)
+        t["line_count"] = len(t["lines"])
+    return {"store": store, "salesperson": salesperson, "date": date, "period": period,
+            "transactions": out, "txn_count": len(out)}
+
+
 # ─────────────────────────────────────────────
 # SALES FEED RECON (Theme 5) — monthly authoritative vs daily B2B feed, trans_id grain
 # ─────────────────────────────────────────────
