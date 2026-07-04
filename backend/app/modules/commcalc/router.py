@@ -5252,6 +5252,46 @@ async def sales_report_detail(period: str = "", store: str = "", salesperson: st
             "transactions": out, "txn_count": len(out)}
 
 
+@router.get("/sales-diagnostics")
+def sales_diagnostics(period: str = "", org_id: str = ORG_ID):
+    """Why do the Action-Plan / targets tiles show what they show? For a period this reports what the
+    sales tables ACTUALLY hold — row counts, the exact period spellings present, and the distinct
+    Contract Type + Department values (with counts) in daily_sales_feed and raw_sales — plus the
+    computed actuals totals (activations/byod/upgrades/accessory$). Read-only; the go-to when a store's
+    numbers look wrong (usually a Contract Type label the old rigid SQL didn't recognize)."""
+    from collections import Counter
+    client = sb()
+    if not period:
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+    pv = _pvariants(period)
+
+    def _scan(table):
+        try:
+            rows = (client.schema('commcalc').table(table)
+                    .select('period,contract_type,department,salesperson')
+                    .eq('org_id', org_id).in_('period', pv).limit(200000).execute().data) or []
+        except Exception as e:
+            return {'error': str(e)}
+        ct, dept, per = Counter(), Counter(), Counter()
+        for r in rows:
+            per[str(r.get('period') or '')] += 1
+            ct[(r.get('contract_type') or '').strip() or '(blank)'] += 1
+            dept[(r.get('department') or '').strip() or '(blank)'] += 1
+        return {'rows': len(rows), 'periods': dict(per),
+                'contract_types': dict(ct.most_common(40)), 'departments': dict(dept.most_common(40))}
+
+    feed_actuals = _compute_feed_actuals_py(client, org_id, period)
+    tot = {'activations': sum(a['prem_count'] for a in feed_actuals),
+           'byod': sum(a['byod_count'] for a in feed_actuals),
+           'upgrades': sum(a['upg_count'] for a in feed_actuals),
+           'accessory_gp': round(sum(a['acc_gp'] for a in feed_actuals), 2),
+           'store_rep_days': len(feed_actuals)}
+    return {'period': period, 'period_variants': pv, 'open_month': _is_open_month(period),
+            'daily_sales_feed': _scan('daily_sales_feed'), 'raw_sales': _scan('raw_sales'),
+            'computed_actuals_totals': tot}
+
+
 # ─────────────────────────────────────────────
 # SALES FEED RECON (Theme 5) — monthly authoritative vs daily B2B feed, trans_id grain
 # ─────────────────────────────────────────────
@@ -5629,6 +5669,87 @@ def _merge_actuals(monthly, feed):
     return list(out.values())
 
 
+_BOX_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
+
+
+def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
+    """The ONE processed sales source, computed in Python so the whole targets/recon system agrees.
+
+    Mirrors the daily_sales_feed_actuals RPC BUT (a) is period-spelling agnostic (_pvariants), and
+    (b) classifies contract_type by CONTAINS — anything with 'byod' is BYOD, 'upgrade' is an upgrade,
+    any other non-empty Contract Type is an activation — instead of a rigid hardcoded label list. That
+    is what fixes "activations/accessories show 0" when B2B's Contract Type labels drift from the exact
+    strings the SQL function hardcodes (the July Action-Plan bug). Reads `source` (the daily feed),
+    falling back to raw_sales. Returns the same shape targets_engine expects."""
+    cols = ("trans_id,trans_date,store,salesperson,user_login,contract_type,department,"
+            "product_desc,gp,voided,trans_type")
+
+    def _q(table):
+        return (client.schema('commcalc').table(table).select(cols)
+                .eq('org_id', org_id).in_('period', _pvariants(period)).limit(200000).execute().data) or []
+    rows = _q(source)
+    if not rows and source != 'raw_sales':
+        try:
+            rows = _q('raw_sales')
+        except Exception:
+            rows = []
+    if not rows:
+        return []
+    sm = (client.schema('commcalc').table('store_mapping')
+          .select('store_code,store_address').eq('org_id', org_id).execute().data) or []
+    addr_to_code = {}
+    for m in sm:
+        a = (m.get('store_address') or '').strip().lower()
+        c = (m.get('store_code') or '').strip()
+        if a and c:
+            addr_to_code[a] = c
+    agg = {}
+    for r in rows:
+        if str(r.get('voided') or '').strip().upper() == 'YES':
+            continue
+        if str(r.get('trans_type') or '').strip() == 'Return':
+            continue
+        rep = (r.get('salesperson') or '').strip()
+        if not rep or rep.lower() == 'admin':
+            continue
+        date = str(r.get('trans_date') or '')[:10]
+        if not date:
+            continue
+        store = (r.get('store') or '').strip()
+        code = addr_to_code.get(store.lower(), store)
+        tid = str(r.get('trans_id') or '').strip()
+        ct = (r.get('contract_type') or '').strip().lower()
+        dept = (r.get('department') or '').strip()
+        pdesc = (r.get('product_desc') or '').lower()
+        k = (code, rep.upper(), date)
+        a = agg.get(k)
+        if not a:
+            a = agg[k] = {'store_code': code, 'store': store, 'rep_name': rep, 'login': r.get('user_login'),
+                          'trans_date': date, '_prem': set(), '_byod': set(), '_upg': set(),
+                          'acc_gp': 0.0, 'box_count': 0, '_billpay': set()}
+        if tid and ct:
+            if 'byod' in ct:
+                a['_byod'].add(tid)
+            elif 'upgrade' in ct:
+                a['_upg'].add(tid)
+            else:
+                a['_prem'].add(tid)
+        if dept == 'Ondigo':
+            a['acc_gp'] += safe_float(r.get('gp'))
+        if dept in _BOX_DEPTS:
+            a['box_count'] += 1
+        if tid and ('boost rtr' in pdesc or 'xfinity prepaid refill' in pdesc):
+            a['_billpay'].add(tid)
+    out = []
+    for a in agg.values():
+        out.append({'store_code': a['store_code'], 'store': a['store'], 'rep_name': a['rep_name'],
+                    'login': a['login'], 'trans_date': a['trans_date'],
+                    'prem_count': len(a['_prem']), 'byod_count': len(a['_byod']),
+                    'upg_count': len(a['_upg']), 'acc_gp': round(a['acc_gp'], 2),
+                    'box_count': a['box_count'], 'billpay_count': len(a['_billpay'])})
+    return out
+
+
 def _fetch_actuals(client, org_id, period):
     try:
         rows = (client.schema('commcalc')
@@ -5636,27 +5757,27 @@ def _fetch_actuals(client, org_id, period):
                 .execute().data) or []
     except Exception as e:
         print('daily_sales_actuals RPC failed:', e)
-        return []
-    # THEME 5(2) intra-month freshness: for the CURRENT open month the authoritative monthly file lags
-    # (re-uploaded periodically) while the daily B2B feed is current, so prefer the feed per day. Closed
-    # months stay monthly-authoritative (the THEME 5 design decision). Graceful: if the sibling feed RPC
-    # isn't deployed (migration 048) or returns nothing, behavior is identical to before.
-    # ...and for a CLOSED month whose monthly file was never uploaded (raw_sales empty for the period), FALL
-    # BACK to the feed so "achieved" isn't silently 0 (the June-shows-0 bug). Monthly stays authoritative
-    # whenever it actually has rows — this only fills the gap when it doesn't.
+        rows = []
+    # THEME 5(2) intra-month freshness + robustness: for the CURRENT open month (or any period the
+    # authoritative monthly raw_sales file is empty/lagging for), overlay the DAILY FEED — now computed
+    # in Python (_compute_feed_actuals_py) with tolerant contract_type classification, so activations/
+    # accessories are captured even when B2B's labels drift (fixes July Action-Plan zeros). Closed months
+    # with a real monthly file stay monthly-authoritative; the feed only fills the per-day gaps.
+    # Canonicalize rep names on BOTH sources BEFORE merging, so the per-(store,rep,day) merge key lines
+    # up (the RPC name-map-resolves names; the feed carries raw salesperson) — otherwise the same rep's
+    # day could survive twice and double-count.
+    cmap = _rep_canon_map(client, org_id)
+
+    def _canon_rows(rs):
+        for r in rs:
+            if r.get('rep_name'):
+                r['rep_name'] = _canon(r.get('rep_name'), cmap)
+        return rs
+    rows = _canon_rows(rows)
     if _is_open_month(period) or not rows:
-        try:
-            feed = (client.schema('commcalc')
-                    .rpc('daily_sales_feed_actuals', {'p_org_id': org_id, 'p_period': period})
-                    .execute().data) or []
-        except Exception:
-            feed = []
+        feed = _canon_rows(_compute_feed_actuals_py(client, org_id, period))
         if feed:
             rows = _merge_actuals(rows, feed) if rows else feed
-    cmap = _rep_canon_map(client, org_id)
-    for r in rows:
-        if r.get('rep_name'):
-            r['rep_name'] = _canon(r.get('rep_name'), cmap)
     return rows
 
 
