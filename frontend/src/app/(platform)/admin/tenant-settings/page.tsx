@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
 import { api } from '@/lib/client'
+import CarrierPicker from '@/components/CarrierPicker'
 
 // Per-tenant pay period / work-week (mig 085). The tenant admin defines the work-week start, the
 // pay cycle (weekly/biweekly), and how the payday is placed — with a LIVE worked example so they
@@ -87,6 +88,8 @@ export default function TenantSettingsPage() {
           </div>
         )}
       </div>
+
+      <CarrierPicker canEdit={canEdit} />
 
       <div className="card" style={{ padding: 18, marginTop: 16 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Upcoming pay periods</div>
