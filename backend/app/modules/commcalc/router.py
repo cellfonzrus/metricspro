@@ -4540,18 +4540,25 @@ def get_nav_config(org_id: str = ORG_ID):
     Consumed by the (platform) layout; degrades to empty labels (built-in labels show) pre-068."""
     client = sb()
     labels = {}
+    caps = {}
     try:
         rows = (client.schema('commcalc').table('ui_label_override').select('scope,key,label')
                 .eq('org_id', org_id).execute().data) or []
         for r in rows:
-            k = (r.get('key') or '')
-            if r.get('scope') == 'group':
+            scope = r.get('scope'); k = (r.get('key') or ''); lab = r.get('label')
+            if scope == 'cap':   # per-tenant capability override (e.g. 'carrier:<href>' = show|hide)
+                if k:
+                    v = (lab or '').lower()
+                    caps[k] = True if v == 'show' else (False if v == 'hide' else None)
+                continue
+            if scope == 'group':
                 k = 'group:' + k
-            if k and r.get('label'):
-                labels[k] = r['label']
+            if k and lab:
+                labels[k] = lab
     except Exception:
         labels = {}
-    return {"labels": labels, "capabilities": {"asset_lending": _asset_lending_capability(client, org_id)}}
+    caps['asset_lending'] = _asset_lending_capability(client, org_id)
+    return {"labels": labels, "capabilities": caps}
 
 
 @router.post("/nav-labels")

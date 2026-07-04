@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
-import { NAV } from '@/lib/rbac'
+import { NAV, NAV_CARRIERS } from '@/lib/rbac'
 
 // Display Labels — per-tenant nicknames for the sidebar. Rename what you SEE ("Distributors"→"Suppliers",
 // "Payment Processor"→"VidaPay") without touching code or DB column names. Display-only: changing a label
@@ -15,13 +15,27 @@ export default function DisplayLabelsPage() {
   const [draft, setDraft] = useState<Record<string, string>>({})
   const [msg, setMsg] = useState('')
   const [loaded, setLoaded] = useState(false)
+  const [caps, setCaps] = useState<Record<string, boolean | null>>({})   // capability overrides (carrier:<href>)
 
   useEffect(() => {
     api('/api/v1/commcalc/nav-config')
-      .then(c => { const l = (c?.labels as Record<string, string>) || {}; setOver(l); setDraft(l) })
+      .then(c => {
+        const l = (c?.labels as Record<string, string>) || {}; setOver(l); setDraft(l)
+        setCaps((c?.capabilities as Record<string, boolean | null>) || {})
+      })
       .catch(() => {})
       .finally(() => setLoaded(true))
   }, [])
+
+  async function setCap(href: string, val: 'auto' | 'show' | 'hide') {
+    const key = 'carrier:' + href
+    try {
+      await api('/api/v1/commcalc/nav-labels', { method: 'POST', body: JSON.stringify({ scope: 'cap', key, label: val === 'auto' ? '' : val }) })
+      setCaps(p => { const n = { ...p }; if (val === 'auto') delete n[key]; else n[key] = val === 'show'; return n })
+      setMsg(val === 'auto' ? 'Reset to carrier default' : val === 'show' ? 'Always shown' : 'Always hidden')
+      setTimeout(() => setMsg(''), 3000)
+    } catch (e: any) { setMsg(e?.message || 'Save failed') }
+  }
 
   async function save(scope: 'nav' | 'group', key: string) {
     const label = (draft[key] || '').trim()
@@ -67,7 +81,22 @@ export default function DisplayLabelsPage() {
             <div key={it.href} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '5px 0' }}>
               <div style={{ fontSize: 13, color: 'var(--text)' }}><span style={{ marginRight: 8 }}>{it.icon}</span>{it.label}
                 <span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 8 }}>{it.href}</span></div>
-              {field('nav', it.href, it.label)}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {NAV_CARRIERS[it.href] && (() => {
+                  const cur = caps['carrier:' + it.href]
+                  const v = cur === true ? 'show' : cur === false ? 'hide' : 'auto'
+                  return (
+                    <select value={v} onChange={e => setCap(it.href, e.target.value as 'auto' | 'show' | 'hide')}
+                      title="Carrier visibility — Auto follows the tenant's carrier; override to always show or hide"
+                      style={{ padding: '5px 7px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }}>
+                      <option value="auto">Auto ({NAV_CARRIERS[it.href].join('/')})</option>
+                      <option value="show">Always show</option>
+                      <option value="hide">Always hide</option>
+                    </select>
+                  )
+                })()}
+                {field('nav', it.href, it.label)}
+              </div>
             </div>
           ))}
         </div>
