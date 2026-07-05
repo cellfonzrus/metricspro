@@ -23,8 +23,9 @@ export default function SalesReportPage() {
   const [diagBusy, setDiagBusy] = useState(false)
   const [accOpen, setAccOpen] = useState(false)          // accessory-settings modal
   const [accFields, setAccFields] = useState<any>(null)  // distinct departments/categories + current config
-  const [accSel, setAccSel] = useState<{ d: string[]; c: string[] }>({ d: [], c: [] })
+  const [accSel, setAccSel] = useState<{ d: string[]; c: string[]; p: string[] }>({ d: [], c: [], p: [] })
   const [accMsg, setAccMsg] = useState('')
+  const [kwInput, setKwInput] = useState('')
 
   function openDiag() {
     setDiag({}); setDiagBusy(true)
@@ -33,16 +34,19 @@ export default function SalesReportPage() {
       .finally(() => setDiagBusy(false))
   }
   function openAccCfg() {
-    setAccOpen(true); setAccFields(null); setAccMsg('')
+    setAccOpen(true); setAccFields(null); setAccMsg(''); setKwInput('')
     api(`/api/v1/commcalc/sales-fields?period=${encodeURIComponent(period)}`).then((f: any) => {
       setAccFields(f)
-      setAccSel({ d: f.accessory_departments || [], c: f.accessory_categories || [] })
+      setAccSel({ d: f.accessory_departments || [], c: f.accessory_categories || [], p: f.accessory_product_keywords || [] })
     }).catch(e => setAccMsg('❌ ' + (e?.message || e)))
   }
   async function saveAccCfg() {
     setAccMsg('Saving…')
+    // fold any half-typed keyword in the box into the list before saving
+    const extra = kwInput.split(',').map(s => s.trim()).filter(Boolean)
+    const kws = Array.from(new Set([...accSel.p, ...extra]))
     try {
-      await api('/api/v1/commcalc/accessory-config', { method: 'PUT', body: JSON.stringify({ departments: accSel.d, categories: accSel.c }) })
+      await api('/api/v1/commcalc/accessory-config', { method: 'PUT', body: JSON.stringify({ departments: accSel.d, categories: accSel.c, product_keywords: kws }) })
       setAccMsg('✅ Saved.'); setAccOpen(false); load()
     } catch (e: any) { setAccMsg('❌ ' + (e?.message || e)) }
   }
@@ -297,10 +301,36 @@ export default function SalesReportPage() {
                     </div>
                   ))}
                 </div>
+                {/* Product-keyword matching — for feeds (like the B2B daily feed) with NO Department/Category */}
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Product name contains… <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(use when Department/Category are blank — a non-phone line is an accessory if its product description contains any of these)</span></div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+                    {accSel.p.map(k => (
+                      <span key={k} style={{ display: 'inline-flex', gap: 4, alignItems: 'center', background: 'var(--surface2)', borderRadius: 12, padding: '2px 8px', fontSize: 12 }}>
+                        {k}<span style={{ cursor: 'pointer', color: '#dc2626', fontWeight: 700 }} onClick={() => setAccSel(s => ({ ...s, p: s.p.filter(x => x !== k) }))}>✕</span>
+                      </span>
+                    ))}
+                    {accSel.p.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>none</span>}
+                  </div>
+                  <input style={{ ...sel, width: '100%' }} placeholder="e.g. case, screen, protector, charger, cable (comma-separated) — Enter to add"
+                    value={kwInput} onChange={e => setKwInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { const xs = kwInput.split(',').map(s => s.trim()).filter(Boolean); setAccSel(s => ({ ...s, p: Array.from(new Set([...s.p, ...xs])) })); setKwInput('') } }} />
+                  {(accFields.products || []).length > 0 && (
+                    <div style={{ marginTop: 6 }}>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>Products seen on non-phone lines (click to add as a keyword):</div>
+                      <div style={{ maxHeight: 120, overflowY: 'auto', display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                        {(accFields.products || []).slice(0, 40).map((p: string) => (
+                          <span key={p} style={{ cursor: 'pointer', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '2px 7px', fontSize: 11 }}
+                            onClick={() => setAccSel(s => ({ ...s, p: s.p.includes(p) ? s.p : [...s.p, p] }))}>{p}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, gap: 8 }}>
                   <span style={{ fontSize: 12, color: accMsg.startsWith('❌') ? '#dc2626' : 'var(--text3)' }}>{accMsg}</span>
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => setAccSel({ d: [], c: [] })}>Clear (use Ondigo default)</button>
+                    <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => { setAccSel({ d: [], c: [], p: [] }); setKwInput('') }}>Clear (use Ondigo default)</button>
                     <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={saveAccCfg}>Save</button>
                   </div>
                 </div>

@@ -1575,27 +1575,37 @@ def _b2b_sales_rows(client, org_id: str, date: str, cols: str) -> list:
 
 
 def _acc_cfg(client, org_id):
-    """The org's configurable accessory departments/categories (mig 092, shared with the commcalc
-    Sales Report). Empty → default department 'Ondigo'. Read directly (no cross-module import)."""
-    depts, cats = [], []
+    """The org's configurable accessory departments/categories/product-keywords (mig 092/093, shared with
+    the commcalc Sales Report). Empty → default department 'Ondigo'. Read directly (no cross-module import)."""
+    depts, cats, kws = [], [], []
     try:
         rows = (client.schema("commcalc").table("flag_rules")
-                .select("accessory_departments,accessory_categories").eq("org_id", org_id)
-                .eq("id", 1).limit(1).execute().data) or []
+                .select("accessory_departments,accessory_categories,accessory_product_keywords")
+                .eq("org_id", org_id).eq("id", 1).limit(1).execute().data) or []
         if rows:
             depts = [d for d in (rows[0].get("accessory_departments") or []) if d]
             cats = [c for c in (rows[0].get("accessory_categories") or []) if c]
+            kws = [k for k in (rows[0].get("accessory_product_keywords") or []) if k]
     except Exception:
         pass
-    if not depts and not cats:
+    if not depts and not cats and not kws:
         depts = ["Ondigo"]
-    return {"d": {x.strip().lower() for x in depts}, "c": {x.strip().lower() for x in cats}}
+    return {"d": {x.strip().lower() for x in depts}, "c": {x.strip().lower() for x in cats},
+            "p": {x.strip().lower() for x in kws}}
 
 
-def _is_acc(dept, cat, acc):
+def _is_acc(dept, cat, acc, product=""):
     d = (dept or "").strip().lower()
     c = (cat or "").strip().lower()
-    return d in acc["d"] or (bool(c) and c in acc["c"])
+    if d in acc["d"]:
+        return True
+    if c and c in acc["c"]:
+        return True
+    if acc["p"]:
+        p = (product or "").strip().lower()
+        if p and any(k in p for k in acc["p"]):
+            return True
+    return False
 
 
 def _b2b_counts_by_store(client, org_id: str, date: str) -> dict:
@@ -1607,7 +1617,7 @@ def _b2b_counts_by_store(client, org_id: str, date: str) -> dict:
     resolve = _addr_resolver(client, org_id)
     acc = _acc_cfg(client, org_id)
     rows = _b2b_sales_rows(client, org_id, date,
-                           "store,department,category,contract_type,trans_id,gp,voided,trans_type")
+                           "store,department,category,product_desc,contract_type,trans_id,gp,voided,trans_type")
     out, seen = {}, {}
     for r in rows:
         if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
@@ -1625,7 +1635,7 @@ def _b2b_counts_by_store(client, org_id: str, date: str) -> dict:
             s["act"].add(tid)
         elif tid and cls == "upgrade":
             s["upg"].add(tid)
-        if _is_acc(r.get("department"), r.get("category"), acc):
+        if _is_acc(r.get("department"), r.get("category"), acc, r.get("product_desc")):
             o["acc_gp"] += _f(r.get("gp"))
     for code, o in out.items():
         o["activations"] = len(seen[code]["act"])
@@ -1727,7 +1737,7 @@ def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
         return None
 
     acc = _acc_cfg(client, org_id)
-    rows = _b2b_sales_rows(client, org_id, date, "store,department,category,tender_type,ext_price,voided")
+    rows = _b2b_sales_rows(client, org_id, date, "store,department,category,product_desc,tender_type,ext_price,voided")
 
     out = {}
     for r in rows:
@@ -1744,7 +1754,7 @@ def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
         dept = (r.get("department") or "").strip()
         if dept:
             agg["_dept_seen"] = True
-        if _is_acc(dept, r.get("category"), acc):
+        if _is_acc(dept, r.get("category"), acc, r.get("product_desc")):
             agg["acc_gross"] += ext
         tname = (r.get("tender_type") or "—").strip() or "—"
         agg["tenders"][tname] = round(agg["tenders"].get(tname, 0.0) + ext, 2)
@@ -1798,7 +1808,7 @@ def _b2b_day(client, org_id: str, date: str) -> dict:
     from app.modules.commcalc.calculator import classify_contract_type
     acc = _acc_cfg(client, org_id)
     rows = _b2b_sales_rows(client, org_id, date,
-                           "store,salesperson,department,category,contract_type,trans_id,tender_type,ext_price,voided,trans_type")
+                           "store,salesperson,department,category,product_desc,contract_type,trans_id,tender_type,ext_price,voided,trans_type")
     by_store, by_rep, counts, seen = {}, {}, {}, {}
     for r in rows:
         if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
@@ -1808,7 +1818,7 @@ def _b2b_day(client, org_id: str, date: str) -> dict:
             continue
         ext = _f(r.get("ext_price"))
         cls = _tender_class(r.get("tender_type"))
-        is_acc = _is_acc(r.get("department"), r.get("category"), acc)
+        is_acc = _is_acc(r.get("department"), r.get("category"), acc, r.get("product_desc"))
         st = by_store.setdefault(code, {"cash": 0.0, "card": 0.0, "other": 0.0, "acc_gross": 0.0, "total": 0.0})
         st[cls] += ext
         st["total"] += ext

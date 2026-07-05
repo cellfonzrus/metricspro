@@ -2927,28 +2927,39 @@ def _accessory_config(client, org_id):
     """Configurable accessory classification (mig 092): which POS departments and/or categories count as
     accessory sales. Empty config → the historical default department 'Ondigo', so nothing changes until
     the user sets it on Sales Report → ⚙️ Accessory settings. Returns normalized sets + the raw lists."""
-    depts, cats = [], []
+    depts, cats, kws = [], [], []
     try:
         rows = (client.schema("commcalc").table("flag_rules")
-                .select("accessory_departments,accessory_categories").eq("org_id", org_id).eq("id", 1)
-                .limit(1).execute().data) or []
+                .select("accessory_departments,accessory_categories,accessory_product_keywords")
+                .eq("org_id", org_id).eq("id", 1).limit(1).execute().data) or []
         if rows:
             depts = [d for d in (rows[0].get("accessory_departments") or []) if d]
             cats = [c for c in (rows[0].get("accessory_categories") or []) if c]
+            kws = [k for k in (rows[0].get("accessory_product_keywords") or []) if k]
     except Exception:
         pass
-    if not depts and not cats:
+    if not depts and not cats and not kws:
         depts = ["Ondigo"]
     return {"departments": {d.strip().lower() for d in depts},
             "categories": {c.strip().lower() for c in cats},
-            "departments_list": depts, "categories_list": cats}
+            "products": {k.strip().lower() for k in kws},
+            "departments_list": depts, "categories_list": cats, "products_list": kws}
 
 
-def _is_accessory(dept, category, acfg):
-    """A sale line is an accessory if its department OR its category is in the configured lists."""
+def _is_accessory(dept, category, product, acfg):
+    """A sale line is an accessory if its department OR category is in the configured lists, OR its
+    product description contains a configured keyword (for POS feeds that carry no dept/category)."""
     d = (dept or "").strip().lower()
     c = (category or "").strip().lower()
-    return (d in acfg["departments"]) or (bool(c) and c in acfg["categories"])
+    if d in acfg["departments"]:
+        return True
+    if c and c in acfg["categories"]:
+        return True
+    if acfg["products"]:
+        p = (product or "").strip().lower()
+        if p and any(k in p for k in acfg["products"]):
+            return True
+    return False
 
 
 def _load_item_map(client, org_id):
@@ -4046,7 +4057,8 @@ async def _run_calculation(period: str, org_id: str):
         # accessory pay uses the same department/category rules as the reports (default 'Ondigo').
         _acfg = _accessory_config(client, org_id)
         cfg = {**cfg, 'accessory_departments': _acfg['departments_list'],
-               'accessory_categories': _acfg['categories_list']}
+               'accessory_categories': _acfg['categories_list'],
+               'accessory_product_keywords': _acfg['products_list']}
 
         # Resolve payment categories
         cat_map = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
@@ -5142,7 +5154,7 @@ async def sales_report(period: str = "", org_id: str = ORG_ID):
     if not period:
         n = datetime.now(timezone.utc)
         period = f"{n.year}-{n.month:02d}"
-    cols = "trans_id,trans_date,store,salesperson,department,category,contract_type,ext_price,gp,voided,trans_type"
+    cols = "trans_id,trans_date,store,salesperson,department,category,product_desc,contract_type,ext_price,gp,voided,trans_type"
     acfg = _accessory_config(client, org_id)
 
     def _q(table):
@@ -5208,7 +5220,7 @@ async def sales_report(period: str = "", org_id: str = ORG_ID):
         a["lines"] += 1
         a["revenue"] += ext
         a["gp"] += gp
-        if _is_accessory(dept, r.get("category"), acfg):
+        if _is_accessory(dept, r.get("category"), r.get("product_desc"), acfg):
             a["accessory_rev"] += ext
         _cls = classify_contract_type(r.get("contract_type"))   # shared classifier (matches commissions)
         if tid and _cls == "byod":
@@ -5371,36 +5383,41 @@ def sales_diagnostics(period: str = "", org_id: str = ORG_ID):
 
 @router.get("/accessory-config")
 def get_accessory_config(org_id: str = ORG_ID):
-    """The configured accessory department/category lists (empty → defaults to department 'Ondigo')."""
+    """The configured accessory department/category lists + product keywords (empty → default 'Ondigo')."""
     c = _accessory_config(sb(), org_id)
-    return {"departments": c["departments_list"], "categories": c["categories_list"]}
+    return {"departments": c["departments_list"], "categories": c["categories_list"],
+            "product_keywords": c["products_list"]}
 
 
 @router.put("/accessory-config")
 def put_accessory_config(body: dict, org_id: str = ORG_ID):
-    """Set which POS departments and/or categories count as accessory sales. Body:
-    {departments:[...], categories:[...]}. Drives the accessory$ in the Sales Report, the Action-Plan
-    accessory tile, and (on recalc) commission accessory pay. Needs migration 092."""
+    """Set what counts as accessory sales. Body: {departments:[...], categories:[...], product_keywords:[...]}.
+    A line is an accessory if its department OR category is listed, OR its product description contains a
+    keyword (for POS feeds with no dept/category). Drives the Sales Report accessory$, the Action-Plan
+    accessory tile, and (on recalc) commission accessory pay. Needs migrations 092 + 093."""
     depts = [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()]
     cats = [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()]
+    kws = [str(x).strip() for x in (body.get("product_keywords") or []) if str(x).strip()]
     row = {"id": 1, "org_id": org_id, "accessory_departments": depts,
-           "accessory_categories": cats, "updated_at": _cb_now()}
+           "accessory_categories": cats, "accessory_product_keywords": kws, "updated_at": _cb_now()}
     try:
         sb().schema("commcalc").table("flag_rules").upsert(row, on_conflict="id").execute()
     except Exception as e:
-        raise HTTPException(500, f"save failed — run migration 092_accessory_classification.sql first: {e}")
+        raise HTTPException(500, f"save failed — run migrations 092 + 093 first: {e}")
     return get_accessory_config(org_id)
 
 
 @router.get("/sales-fields")
 def sales_fields(period: str = "", org_id: str = ORG_ID):
-    """The distinct Department + Category values present in the sales data (populate the accessory-
-    settings dropdowns) plus the current accessory config. `period` optional (blank = all periods)."""
+    """Populate the accessory-settings pickers: the distinct Department + Category values in the sales
+    data, plus the top PRODUCT descriptions on the non-phone (blank Contract Type) lines — that's where
+    accessories live when a POS carries no dept/category — as keyword suggestions. `period` blank = all."""
     client = sb()
     depts, cats = set(), set()
+    prod = {}
     for tbl in ("daily_sales_feed", "raw_sales"):
         try:
-            q = client.schema("commcalc").table(tbl).select("department,category").eq("org_id", org_id)
+            q = client.schema("commcalc").table(tbl).select("department,category,product_desc,contract_type").eq("org_id", org_id)
             if period:
                 q = q.in_("period", _pvariants(period))
             for r in (q.limit(200000).execute().data or []):
@@ -5410,11 +5427,17 @@ def sales_fields(period: str = "", org_id: str = ORG_ID):
                     depts.add(d)
                 if c:
                     cats.add(c)
+                if not (r.get("contract_type") or "").strip():   # non-phone line → candidate accessory
+                    p = (r.get("product_desc") or "").strip()
+                    if p:
+                        prod[p] = prod.get(p, 0) + 1
         except Exception:
             pass
+    top_products = [p for p, _ in sorted(prod.items(), key=lambda kv: -kv[1])[:60]]
     cur = _accessory_config(client, org_id)
-    return {"departments": sorted(depts), "categories": sorted(cats),
-            "accessory_departments": cur["departments_list"], "accessory_categories": cur["categories_list"]}
+    return {"departments": sorted(depts), "categories": sorted(cats), "products": top_products,
+            "accessory_departments": cur["departments_list"], "accessory_categories": cur["categories_list"],
+            "accessory_product_keywords": cur["products_list"]}
 
 
 # ─────────────────────────────────────────────
@@ -5848,7 +5871,7 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
             a['_upg'].add(tid)
         elif tid and _cls == 'premium':
             a['_prem'].add(tid)
-        if _is_accessory(dept, r.get('category'), acfg):
+        if _is_accessory(dept, r.get('category'), r.get('product_desc'), acfg):
             a['acc_gp'] += safe_float(r.get('gp'))
         if dept in _BOX_DEPTS:
             a['box_count'] += 1
