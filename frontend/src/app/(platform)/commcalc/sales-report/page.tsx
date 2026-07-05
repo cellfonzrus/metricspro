@@ -275,14 +275,14 @@ export default function SalesReportPage() {
               <button className="btn btn-secondary" style={{ padding: '2px 10px' }} onClick={() => setAccOpen(false)}>✕</button>
             </div>
             <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 12px' }}>
-              Pick which POS <b>departments</b> and/or <b>categories</b> count as accessory sales. A line is an accessory if its department OR category is ticked. This drives the Accessory$ tile here, the Action-Plan accessory target, and (after a recalc) commission accessory pay. Leave everything unticked to fall back to the default department <code>Ondigo</code>.
+              Works with <b>any POS</b> — these lists are the actual <b>Department / product-type</b> and <b>Category</b> values found in your uploaded sales data. Tick which ones are accessory sales (a line counts if its department OR category is ticked). This drives the Accessory$ here, the Action-Plan accessory target, and — after a recalc — commission accessory pay. If the values below look wrong/empty because your POS uses different column names, map your file&apos;s columns to ours first in <a href="/commcalc/column-mapping" style={{ color: 'var(--accent)' }}>Column Mapping</a>. Leave everything unticked to fall back to the default department <code>Ondigo</code>.
             </p>
             {!accFields ? (
               <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>{accMsg || 'Loading…'}</div>
             ) : (
               <>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                  {([['Departments', 'd', accFields.departments], ['Categories', 'c', accFields.categories]] as const).map(([lbl, keyName, list]: any) => (
+                  {([['Department / product-type', 'd', accFields.departments], ['Category', 'c', accFields.categories]] as const).map(([lbl, keyName, list]: any) => (
                     <div key={lbl}>
                       <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>{lbl} <span style={{ fontWeight: 400, color: 'var(--text3)' }}>({(list || []).length})</span></div>
                       <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
