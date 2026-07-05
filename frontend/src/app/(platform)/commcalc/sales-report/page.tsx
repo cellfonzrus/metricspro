@@ -19,6 +19,15 @@ export default function SalesReportPage() {
   const [detail, setDetail] = useState<any>(null)        // its transactions
   const [drillBusy, setDrillBusy] = useState(false)
   const [openTxn, setOpenTxn] = useState<Record<string, boolean>>({})
+  const [diag, setDiag] = useState<any>(null)            // data diagnostics for this period
+  const [diagBusy, setDiagBusy] = useState(false)
+
+  function openDiag() {
+    setDiag({}); setDiagBusy(true)
+    api(`/api/v1/commcalc/sales-diagnostics?period=${encodeURIComponent(period)}`)
+      .then(setDiag).catch(e => setDiag({ error: String(e?.message || e) }))
+      .finally(() => setDiagBusy(false))
+  }
 
   function openDrill(r: any) {
     setDrill(r); setDetail(null); setOpenTxn({}); setDrillBusy(true)
@@ -84,6 +93,7 @@ export default function SalesReportPage() {
               </select>
             : <input type="month" style={sel} value={period.length === 7 ? period : thisMonth()} onChange={e => setPeriod(e.target.value)} />}
         </label>
+        <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openDiag}>🔍 Data diagnostics</button>
         {data?.source === 'daily_sales_feed' && <span style={{ fontSize: 11, color: '#b45309' }}>source: daily email feed (raw_sales not promoted yet — enable ‘auto’ on Connectors)</span>}
         {data?.error && <span style={{ fontSize: 12, color: '#dc2626' }}>❌ {data.error}</span>}
       </div>
@@ -179,6 +189,58 @@ export default function SalesReportPage() {
                   )
                 })}
               </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Data diagnostics — what the sales tables actually hold for this month */}
+      {diag && (
+        <div onClick={() => setDiag(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} className="card" style={{ background: 'var(--surface)', borderRadius: 12, padding: 20, width: 'min(880px,97vw)', maxHeight: '88vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>🔍 Data diagnostics · {period}</div>
+              <button className="btn btn-secondary" style={{ padding: '2px 10px' }} onClick={() => setDiag(null)}>✕</button>
+            </div>
+            <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 12px' }}>
+              What the sales tables actually hold for this month — so a wrong tile can be traced to an unrecognized Contract Type or a missing month. Screenshot this to me if numbers still look off.
+            </p>
+            {diagBusy ? (
+              <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>Loading…</div>
+            ) : diag.error ? (
+              <div style={{ padding: 20, color: '#dc2626', fontSize: 13 }}>❌ {diag.error}</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 13, marginBottom: 12, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                  <span>Computed totals: <b>{diag.computed_actuals_totals?.activations ?? 0}</b> act · <b>{diag.computed_actuals_totals?.byod ?? 0}</b> byod · <b>{diag.computed_actuals_totals?.upgrades ?? 0}</b> upg · <b>{fmt(diag.computed_actuals_totals?.accessory_gp || 0)}</b> acc GP</span>
+                  <span style={{ color: 'var(--text3)' }}>open month: {String(diag.open_month)}</span>
+                </div>
+                {['daily_sales_feed', 'raw_sales'].map(tbl => {
+                  const d = diag[tbl] || {}
+                  const dist = (obj: any) => Object.entries(obj || {}).sort((a: any, b: any) => b[1] - a[1])
+                  return (
+                    <div key={tbl} style={{ marginBottom: 16 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>{tbl} <span style={{ fontWeight: 400, color: 'var(--text3)' }}>· {d.rows ?? 0} rows{d.periods ? ` · periods: ${Object.keys(d.periods).join(', ') || '—'}` : ''}</span></div>
+                      {d.error ? <div style={{ fontSize: 12, color: '#dc2626' }}>{d.error}</div> : (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                          {[['Contract Types', d.contract_types], ['Departments', d.departments]].map(([lbl, obj]: any) => (
+                            <div key={lbl}>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', marginBottom: 2 }}>{lbl}</div>
+                              <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12 }}>
+                                {dist(obj).length === 0 ? <div style={{ padding: 8, color: 'var(--text3)' }}>—</div> : dist(obj).map(([k, v]: any) => (
+                                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 8px', borderTop: '1px solid var(--border)' }}>
+                                    <span>{k}</span><span style={{ color: 'var(--text3)' }}>{v}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </>
             )}
           </div>
         </div>
