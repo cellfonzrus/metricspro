@@ -1211,6 +1211,27 @@ def _emp_period(period):
     return f"{_cal.month_name[n.month]} {n.year}"
 
 
+def _emp_period_variants(period):
+    """Both spellings of a month-period ('July 2026' and '2026-07') so the dashboard's exact-match
+    queries hit the data no matter which way it was stored (the recurring period-spelling gotcha) —
+    important now the dashboard has a month picker."""
+    import calendar as _cal
+    p = str(period or "").strip()
+    out = {p}
+    try:
+        names = {m.lower(): i for i, m in enumerate(_cal.month_name) if m}
+        if len(p) >= 7 and p[:4].isdigit() and p[4] == "-" and p[5:7].isdigit():
+            mo, yr = int(p[5:7]), int(p[:4])
+        else:
+            parts = p.split()
+            mo, yr = names[parts[0].lower()], int(parts[1])
+        out.add(f"{_cal.month_name[mo]} {yr}")
+        out.add(f"{yr}-{mo:02d}")
+    except Exception:
+        pass
+    return [x for x in out if x]
+
+
 @router.get("/employee-widgets")
 def employee_widgets_keys():
     """The canonical widget list (for the roles manager toggles)."""
@@ -1245,6 +1266,7 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
     name = (emp.get("name") or "").strip()
     eslp = (emp.get("epay_salesperson") or "").strip()
     period = _emp_period(period)
+    pvar = _emp_period_variants(period)
     keys_upper = {name.upper(), eslp.upper()} - {""}
 
     def _is_me(rec, *fields):
@@ -1277,8 +1299,9 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
         "period": period, "widgets": widgets,
     }
 
-    # Commission (current period) + tracking (all periods).
-    comm = client.schema("commcalc").table("rep_commissions").select("*").eq("org_id", org_id).eq("period", period).execute().data or []
+    # Commission (selected period) + tracking (all periods). period-variant match so the picked month
+    # hits the data whether it's stored 'July 2026' or '2026-07'.
+    comm = client.schema("commcalc").table("rep_commissions").select("*").eq("org_id", org_id).in_("period", pvar).execute().data or []
     myc = next((c for c in comm if _is_me(c, "storeops_name", "epay_salesperson")), None)
     out["commission"] = myc
     allc = (client.schema("commcalc").table("rep_commissions")
@@ -1289,22 +1312,33 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
     out["commission_tracking"] = track
 
     # Flags + chargebacks attributed to this rep.
-    fl = client.schema("commcalc").table("flags").select("*").eq("org_id", org_id).eq("period", period).execute().data or []
+    fl = client.schema("commcalc").table("flags").select("*").eq("org_id", org_id).in_("period", pvar).execute().data or []
     myf = [f for f in fl if _is_me(f, "epay_salesperson")]
     out["flags"] = myf
-    cbs = client.schema("commcalc").table("chargeback_items").select("*").eq("org_id", org_id).eq("period", period).execute().data or []
+    cbs = client.schema("commcalc").table("chargeback_items").select("*").eq("org_id", org_id).in_("period", pvar).execute().data or []
     mycb = [c for c in cbs if _is_me(c, "epay_salesperson")]
     out["chargebacks"] = mycb
 
-    # Schedule (upcoming 7 days) + hours (current month) from storeops.shifts.
+    # Schedule (upcoming 7 days) + hours (for the SELECTED month) from storeops.shifts.
     today = _date.today()
     out["schedule"] = (client.schema("storeops").table("shifts").select("*")
                        .eq("org_id", org_id).eq("is_deleted", False).eq("employee_id", employee_id)
                        .gte("shift_date", today.isoformat())
                        .lte("shift_date", (today + _td(days=7)).isoformat())
                        .order("shift_date").execute().data or [])
-    ym = f"{today.year}-{today.month:02d}"
-    nxt = f"{today.year + 1}-01-01" if today.month == 12 else f"{today.year}-{today.month + 1:02d}-01"
+    # Hours are for the picked month (so a prior month shows the hours it closed with), not always today's.
+    import calendar as _cal2
+    try:
+        _names = {m.lower(): i for i, m in enumerate(_cal2.month_name) if m}
+        _p = str(period).strip()
+        if len(_p) >= 7 and _p[:4].isdigit() and _p[4] == "-" and _p[5:7].isdigit():
+            _yr, _mo = int(_p[:4]), int(_p[5:7])
+        else:
+            _parts = _p.split(); _mo = _names[_parts[0].lower()]; _yr = int(_parts[1])
+    except Exception:
+        _yr, _mo = today.year, today.month
+    ym = f"{_yr}-{_mo:02d}"
+    nxt = f"{_yr + 1}-01-01" if _mo == 12 else f"{_yr}-{_mo + 1:02d}-01"
     msh = (client.schema("storeops").table("shifts").select("scheduled_hours,actual_hours")
            .eq("org_id", org_id).eq("is_deleted", False).eq("employee_id", employee_id)
            .gte("shift_date", f"{ym}-01").lt("shift_date", nxt).execute().data or [])
