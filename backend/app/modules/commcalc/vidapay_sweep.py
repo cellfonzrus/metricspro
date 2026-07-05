@@ -541,20 +541,35 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
                     "The b2bsoft session has expired (or the datacenter IP was walled) — please re-"
                     "authenticate (Log in + 2FA). If it keeps walling, set a residential proxy on the source.")
             diag = _snapshot(page)
-            links = []
+            # Rich probe of the reports UI (links + export buttons + date fields + dropdowns) so the
+            # actual Sales-Transaction-Details download can be wired in ONE pass from a real logged-in
+            # session, instead of guessing the portal's navigation blind.
+            probe = {}
             for fr in _frames(page):
                 try:
-                    links += fr.evaluate(
-                        """() => Array.from(document.querySelectorAll('a,button,span,li,option'))
-                                 .map(e => (e.innerText||e.textContent||'').trim())
-                                 .filter(t => /sales|transaction|report|inventory|aging|daily|export|download/i.test(t))
-                                 .filter((v,i,a)=>a.indexOf(v)===i).slice(0,30)""")
+                    p = fr.evaluate(
+                        """() => ({
+                            url: location.href, title: document.title,
+                            links: Array.from(document.querySelectorAll('a')).map(a=>({t:(a.innerText||'').trim(), href:a.href, id:a.id}))
+                                    .filter(x=>x.t && /sales|transaction|report|export|download|daily|detail/i.test(x.t)).slice(0,40),
+                            buttons: Array.from(document.querySelectorAll('button,input[type=button],input[type=submit]'))
+                                    .map(b=>({t:(b.innerText||b.value||'').trim(), id:b.id, name:b.name}))
+                                    .filter(x=>x.t && /report|export|download|run|view|generate|search|submit|go/i.test(x.t)).slice(0,40),
+                            dates: Array.from(document.querySelectorAll('input')).map(i=>({id:i.id,name:i.name,type:i.type,ph:i.placeholder}))
+                                    .filter(x=>/date|from|to|start|end/i.test((x.id||'')+(x.name||'')+(x.ph||''))).slice(0,20),
+                            selects: Array.from(document.querySelectorAll('select')).map(s=>({id:s.id,name:s.name,opts:Array.from(s.options).slice(0,12).map(o=>(o.text||'').trim())})).slice(0,20),
+                        })""")
+                    if p and (p.get("links") or p.get("buttons") or p.get("selects")):
+                        probe = p
+                        break
+                    if p and not probe:
+                        probe = p
                 except Exception:
                     continue
             return {
                 "status": "session verified — logged in to b2bsoft OK; Sales Transaction Details auto-"
                           "download pending one live calibration (the email feed keeps ingesting meanwhile)",
-                "authenticated": True, "report_links_seen": links[:30], "diag": diag,
+                "authenticated": True, "report_probe": probe, "diag": diag,
             }
         finally:
             browser.close()
