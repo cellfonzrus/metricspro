@@ -28,8 +28,9 @@ export default function EmailImportsPage() {
   // A brand-new mailbox starts with the standard b2bsoft rules — an empty rules list silently
   // matches NOTHING ("0/0 ingested" with reports sitting in the inbox), which bit the Total setup.
   const DEFAULT_RULES = [
-    { pattern: '*Sales*Transaction*Details*', upload_type: 'daily_sales', note: 'daily B2B sales export' },
-    { pattern: '*Inventory*Aging*', upload_type: 'inventory_aging', note: 'b2bsoft inventory aging' },
+    { pattern: '*Sales*Transaction*Details*', upload_type: 'daily_sales', note: 'daily B2B sales export (use the "for Metrics pro" custom report — full columns)' },
+    { pattern: '*Inventory*Aging*', upload_type: 'inventory_aging', note: 'b2bsoft inventory aging → Asset / Inventory Recon' },
+    { pattern: '*X-Report*', upload_type: 'x_report', note: 'POS X-report tender summary → Daily Closing cash/credit recon' },
   ]
   const BLANK = { imap_port: 993, use_ssl: true, mailbox: 'INBOX', since_days: 14, patterns: DEFAULT_RULES as any[], frequency: 'daily', hour: 7 }
   const [cfg, setCfg] = useState<any>({ account: 'default', ...BLANK })
