@@ -25,7 +25,7 @@ def _timeoff_targets(client, org_id, params):
     # time_off_requests lives in the STOREOPS schema (storeops' own sb() = get_supabase().schema('storeops')).
     # A remediation-module client defaults to 'public', so qualify it explicitly or it hits a stale table.
     rows = (client.schema("storeops").table("time_off_requests")
-            .select("id,employee_id,employee_name,start_date,end_date,status")
+            .select("id,employee_id,start_date,end_date,status")
             .eq("org_id", org_id).limit(20000).execute().data) or []
     from collections import defaultdict
     groups = defaultdict(list)
@@ -50,7 +50,7 @@ def preview_dedupe_timeoff(client, org_id, params):
     t = _timeoff_targets(client, org_id, params)
     if not t:
         return {"summary": "No duplicate voided time-off rows are currently blocking scheduling.", "count": 0}
-    who = ", ".join(sorted({str(x.get("employee_name") or x.get("employee_id")) for x in t}))
+    who = ", ".join(sorted({f"employee {x.get('employee_id')}" for x in t}))
     ids = [x["id"] for x in t]
     return {"summary": f"Will deny {len(ids)} leftover approved/pending time-off row(s) for {who} "
                        f"(a voided sibling exists) so the rep(s) can be scheduled.",
