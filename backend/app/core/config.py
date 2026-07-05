@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     # The current approved metricspro_report template has NO document header → keep false
     # so we send the report link in the body (Meta rejects header params otherwise: #132018).
     WHATSAPP_TEMPLATE_DOC_HEADER: bool = False
+    # ── Auto-remediation WhatsApp approval (mig 097 Phase 2) ──────────────────────────────
+    # A separate approved template with 3 body vars {{1}}=issue {{2}}=fix {{3}}=preview and two
+    # QUICK-REPLY buttons ("Approve" idx0, "Reject" idx1). Payloads are injected per-send.
+    WHATSAPP_APPROVAL_TEMPLATE: str = "remediation_approval"
+    WHATSAPP_APPROVAL_LANG: str = "en"
+    # Webhook (Meta App → WhatsApp → Configuration): the verify token you set on the callback URL,
+    # and the app secret to validate X-Hub-Signature-256 on inbound POSTs (optional but recommended).
+    WHATSAPP_VERIFY_TOKEN: str = ""
+    WHATSAPP_APP_SECRET: str = ""
 
     # ── Account Module — Claude-powered accounting engine (#8/#9/#10) ─────────────
     # Drives statement assembly + narrative + the #10 missed-days recon. The engine

@@ -72,6 +72,67 @@ def _is_header_error(text: str) -> bool:
     return "132018" in t or "title component" in t or "does not contain" in t
 
 
+def approval_configured() -> bool:
+    return bool(is_configured() and settings.WHATSAPP_APPROVAL_TEMPLATE)
+
+
+def _clean_var(s: str, n: int = 280) -> str:
+    """Template body variables reject newlines/tabs and long runs of spaces (Meta #132000). Flatten."""
+    t = " ".join(str(s or "").split())
+    return t[:n] or "—"
+
+
+async def send_approval(to: str, req_id: str, token: str, issue: str, fix: str, preview: str) -> str:
+    """Send the auto-remediation approval template: body {{1}}=issue {{2}}=fix {{3}}=preview and two
+    QUICK-REPLY buttons whose per-send payloads carry the decision + request id + token. When the
+    recipient taps a button, Meta posts that payload to our webhook, which runs the decision. Returns
+    the message id. Requires the 'remediation_approval' template to be APPROVED in WhatsApp Manager."""
+    if not approval_configured():
+        raise RuntimeError("WhatsApp approval not configured (WHATSAPP_APPROVAL_TEMPLATE + base creds)")
+    msg = {
+        "messaging_product": "whatsapp", "to": to, "type": "template",
+        "template": {
+            "name": settings.WHATSAPP_APPROVAL_TEMPLATE,
+            "language": {"code": settings.WHATSAPP_APPROVAL_LANG or "en"},
+            "components": [
+                {"type": "body", "parameters": [
+                    {"type": "text", "text": _clean_var(issue)},
+                    {"type": "text", "text": _clean_var(fix)},
+                    {"type": "text", "text": _clean_var(preview)}]},
+                {"type": "button", "sub_type": "quick_reply", "index": "0",
+                 "parameters": [{"type": "payload", "payload": f"approve|{req_id}|{token}"}]},
+                {"type": "button", "sub_type": "quick_reply", "index": "1",
+                 "parameters": [{"type": "payload", "payload": f"reject|{req_id}|{token}"}]},
+            ],
+        },
+    }
+    async with httpx.AsyncClient(timeout=30) as cx:
+        r = await cx.post(f"{_base()}/messages", headers=_headers(), json=msg)
+    if r.status_code >= 300:
+        raise RuntimeError(f"WhatsApp approval send {r.status_code}: {r.text[:300]}")
+    try:
+        return (r.json().get("messages") or [{}])[0].get("id", "")
+    except Exception:
+        return ""
+
+
+async def send_text(to: str, body: str) -> str:
+    """Plain text message. Only deliverable inside the 24h customer-service window (i.e. right after
+    the recipient messaged/tapped us) — used to confirm a decision back in-thread. Best-effort."""
+    if not is_configured():
+        return ""
+    payload = {"messaging_product": "whatsapp", "to": to, "type": "text",
+               "text": {"body": (body or "")[:1000]}}
+    async with httpx.AsyncClient(timeout=30) as cx:
+        r = await cx.post(f"{_base()}/messages", headers=_headers(), json=payload)
+    if r.status_code >= 300:
+        raise RuntimeError(f"WhatsApp text {r.status_code}: {r.text[:200]}")
+    try:
+        return (r.json().get("messages") or [{}])[0].get("id", "")
+    except Exception:
+        return ""
+
+
 async def send_document(to: str, data: bytes, mime: str, filename: str, body_text: str) -> str:
     """Send the approved template to `to`. Attaches the file as a document header when the
     template supports one (WHATSAPP_TEMPLATE_DOC_HEADER), else sends body-only with the link.

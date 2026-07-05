@@ -6,11 +6,14 @@ and stores an awaiting-approval request with a signed magic-link. The assignee g
 WhatsApp) with Approve/Reject. On APPROVE the one bounded playbook executes and the result is recorded +
 returned. CODE-class issues are escalated, never auto-fixed. Everything is audited in remediation_request.
 """
+import hashlib
+import hmac
 import json
 import secrets
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 
 from app.core.database import get_supabase
 from app.core.config import settings
@@ -111,7 +114,21 @@ async def _send_approval(req, approval_url):
     template-gated in this stack (Phase 2 inbound). Never raises — delivery failure ≠ propose failure."""
     contact = req.get("assignee_contact") or {}
     email = (contact.get("email") or "").strip()
+    wa = (contact.get("whatsapp") or "").strip()
     channels = []
+    # WhatsApp interactive approval (Phase 2): the template's two quick-reply buttons carry per-send
+    # payloads → a tap posts to /whatsapp-webhook → the decision runs, all inside WhatsApp.
+    if wa:
+        try:
+            from app.modules.notify.channels import whatsapp_meta
+            if whatsapp_meta.approval_configured():
+                await whatsapp_meta.send_approval(
+                    wa, req["id"], req.get("approval_token") or "",
+                    req.get("issue") or "", req.get("proposed_action") or req.get("title") or "",
+                    req.get("preview") or "")
+                channels.append("whatsapp")
+        except Exception:
+            pass
     subject = f"[MetricsPro] Approve a fix: {req.get('title') or req.get('playbook_key')}"
     html = (f"<p>An automated fix is awaiting your approval.</p>"
             f"<p><b>Issue:</b> {(req.get('issue') or '')[:400]}</p>"
@@ -218,6 +235,27 @@ def get_request(req_id: str, org_id: str = ORG_ID):
 
 
 # ── decision (the magic-link target) ───────────────────────────────────────────────────────────────
+def _apply_decision(client, org_id, req, decision, decided_by):
+    """Apply approve/reject to an awaiting_approval request; execute the bounded playbook on approve.
+    Idempotent: a non-pending request is returned unchanged with _already=True. Shared by the web
+    decision endpoint AND the WhatsApp webhook, so both paths behave identically + audit the same."""
+    if req.get("status") != "awaiting_approval":
+        return {**req, "_already": True}
+    rid = req["id"]
+    if decision == "reject":
+        upd = {"status": "rejected", "decided_at": _now(), "decided_by": decided_by}
+        client.schema("commcalc").table("remediation_request").update(upd).eq("id", rid).execute()
+        return {**req, **upd}
+    try:
+        result = pb.run_execute(req.get("playbook_key"), client, org_id, req.get("params") or {})
+        upd = {"status": "executed", "decided_at": _now(), "decided_by": decided_by,
+               "executed_at": _now(), "result": result, "error": None}
+    except Exception as e:
+        upd = {"status": "failed", "decided_at": _now(), "decided_by": decided_by, "error": str(e)[:500]}
+    client.schema("commcalc").table("remediation_request").update(upd).eq("id", rid).execute()
+    return {**req, **upd}
+
+
 @router.post("/requests/{req_id}/decision")
 def decide(req_id: str, body: dict, org_id: str = ORG_ID):
     """Approve or reject a pending remediation. Body: {decision:'approve'|'reject', token, decided_by?}.
@@ -234,25 +272,118 @@ def decide(req_id: str, body: dict, org_id: str = ORG_ID):
     req = rows[0]
     if not req.get("approval_token") or token != req.get("approval_token"):
         raise HTTPException(403, "invalid or missing approval token")
-    if req.get("status") != "awaiting_approval":
-        # idempotent: already decided → report the current state instead of re-running
-        req.pop("approval_token", None)
-        return {"request": req, "already": True}
-
     decided_by = body.get("decided_by") or (req.get("assignee_contact") or {}).get("name") or "approver"
-    if decision == "reject":
-        upd = {"status": "rejected", "decided_at": _now(), "decided_by": decided_by}
-        client.schema("commcalc").table("remediation_request").update(upd).eq("id", req_id).execute()
-        return {"request": {**req, **upd, "approval_token": None}}
-
-    # approve → execute the bounded playbook
-    try:
-        result = pb.run_execute(req.get("playbook_key"), client, org_id, req.get("params") or {})
-        upd = {"status": "executed", "decided_at": _now(), "decided_by": decided_by,
-               "executed_at": _now(), "result": result, "error": None}
-    except Exception as e:
-        upd = {"status": "failed", "decided_at": _now(), "decided_by": decided_by, "error": str(e)[:500]}
-    client.schema("commcalc").table("remediation_request").update(upd).eq("id", req_id).execute()
-    out = {**req, **upd}
+    out = _apply_decision(client, org_id, req, decision, decided_by)
+    already = out.pop("_already", False)
     out.pop("approval_token", None)
-    return {"request": out}
+    return {"request": out, "already": already}
+
+
+# ── WhatsApp interactive approval (Phase 2) ────────────────────────────────────────────────────────
+def _text_decision(text):
+    t = (text or "").strip().lower()
+    if t in ("yes", "y", "approve", "approved", "ok", "okay", "confirm", "1", "✅"):
+        return "approve"
+    if t in ("no", "n", "reject", "rejected", "deny", "cancel", "2", "❌"):
+        return "reject"
+    return None
+
+
+def _digits(s):
+    return "".join(c for c in str(s or "") if c.isdigit())
+
+
+def _valid_signature(sig_header, body):
+    """Validate Meta's X-Hub-Signature-256 when an app secret is configured (else allow — the payload
+    token still gates every mutation)."""
+    if not settings.WHATSAPP_APP_SECRET:
+        return True
+    if not (sig_header or "").startswith("sha256="):
+        return False
+    expected = hmac.new(settings.WHATSAPP_APP_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig_header.split("=", 1)[1])
+
+
+@router.get("/whatsapp-webhook")
+def whatsapp_verify(request: Request):
+    """Meta webhook verification handshake — echoes hub.challenge when hub.verify_token matches
+    WHATSAPP_VERIFY_TOKEN. Set the same value on the callback URL in the Meta App dashboard."""
+    q = request.query_params
+    if q.get("hub.mode") == "subscribe" and q.get("hub.verify_token") and \
+            q.get("hub.verify_token") == settings.WHATSAPP_VERIFY_TOKEN:
+        return PlainTextResponse(q.get("hub.challenge") or "")
+    raise HTTPException(403, "verification failed")
+
+
+async def _handle_inbound(client, frm, payload, text):
+    """Resolve an inbound WhatsApp reply (a quick-reply button payload 'decision|id|token', or a
+    YES/NO text) to a pending request, apply the decision, and confirm back in-thread."""
+    decision, req = None, None
+    if payload and "|" in payload:
+        parts = payload.split("|")
+        if len(parts) == 3 and parts[0] in ("approve", "reject"):
+            decision = parts[0]
+            rows = (client.schema("commcalc").table("remediation_request").select("*")
+                    .eq("id", parts[1]).limit(1).execute().data) or []
+            if rows and rows[0].get("approval_token") and rows[0]["approval_token"] == parts[2]:
+                req = rows[0]
+    if req is None and text:  # free-text YES/NO fallback → most recent pending for this sender number
+        d = _text_decision(text)
+        if d:
+            decision = d
+            digits = _digits(frm)
+            rows = (client.schema("commcalc").table("remediation_request").select("*")
+                    .eq("status", "awaiting_approval").order("created_at", desc=True)
+                    .limit(50).execute().data) or []
+            for r in rows:
+                if _digits((r.get("assignee_contact") or {}).get("whatsapp")) == digits and digits:
+                    req = r
+                    break
+    if req is None or decision is None:
+        return
+    out = _apply_decision(client, req.get("org_id") or ORG_ID, req, decision,
+                          decided_by=(req.get("assignee_contact") or {}).get("name") or frm)
+    try:
+        from app.modules.notify.channels import whatsapp_meta
+        if out.get("_already"):
+            msg = f"Already {out.get('status')}."
+        elif out.get("status") == "executed":
+            msg = f"✅ Approved & done: {(out.get('result') or {}).get('summary', '')}"
+        elif out.get("status") == "failed":
+            msg = f"⚠️ Approved, but the action failed: {out.get('error', '')}"
+        elif out.get("status") == "rejected":
+            msg = "❌ Rejected — nothing was changed."
+        else:
+            msg = f"Recorded: {out.get('status')}."
+        await whatsapp_meta.send_text(frm, msg)
+    except Exception:
+        pass
+
+
+@router.post("/whatsapp-webhook")
+async def whatsapp_inbound(request: Request):
+    """Receive WhatsApp inbound events. A quick-reply button tap (or a YES/NO text) drives the same
+    _apply_decision path as the web page. Always 200s fast (Meta retries on non-2xx)."""
+    body = await request.body()
+    if not _valid_signature(request.headers.get("X-Hub-Signature-256", ""), body):
+        raise HTTPException(403, "bad signature")
+    try:
+        data = json.loads(body or b"{}")
+    except Exception:
+        return {"ok": True}
+    client = sb()
+    for entry in data.get("entry", []) or []:
+        for ch in entry.get("changes", []) or []:
+            for m in (ch.get("value", {}) or {}).get("messages", []) or []:
+                frm = m.get("from")
+                payload, text = None, None
+                mtype = m.get("type")
+                if mtype == "button":                       # template quick-reply
+                    payload = (m.get("button") or {}).get("payload")
+                elif mtype == "interactive":                # interactive button reply
+                    payload = ((m.get("interactive") or {}).get("button_reply") or {}).get("id")
+                elif mtype == "text":
+                    text = (m.get("text") or {}).get("body")
+                if frm and (payload or text):
+                    await _handle_inbound(client, frm, payload, text)
+    return {"ok": True}

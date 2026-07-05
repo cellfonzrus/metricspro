@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlencode
 _PUBLIC_PREFIXES = (
     "/health", "/docs", "/redoc", "/openapi.json",
     "/api/v1/core/me", "/api/v1/core/auth-config", "/api/v1/core/signup",
+    "/api/v1/remediation/whatsapp-webhook",  # Meta WhatsApp calls this with no bearer token
 )
 _cache: dict = {}   # token -> (org_id, expiry_epoch)
 _TTL = 60.0

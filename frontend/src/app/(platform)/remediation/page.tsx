@@ -13,6 +13,7 @@ const STATUS_TONE: Record<string, string> = {
 export default function RemediationConsole() {
   const [issue, setIssue] = useState('')
   const [email, setEmail] = useState('')
+  const [whatsapp, setWhatsapp] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<any>(null)
   const [err, setErr] = useState('')
@@ -31,7 +32,11 @@ export default function RemediationConsole() {
     try {
       const r = await api('/api/v1/remediation/propose', {
         method: 'POST',
-        body: JSON.stringify({ issue, assignee: email ? { email } : undefined, source: 'manual' }),
+        body: JSON.stringify({
+          issue,
+          assignee: (email || whatsapp) ? { email, whatsapp } : undefined,
+          source: 'manual',
+        }),
       })
       setResult(r); load()
     } catch (e: any) { setErr(e?.message || 'Could not propose a fix.') }
@@ -57,6 +62,9 @@ export default function RemediationConsole() {
             background: 'var(--surface)', fontSize: 14, resize: 'vertical' }} />
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 10 }}>
           <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Approver email (optional)"
+            style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)',
+              background: 'var(--surface)', fontSize: 13 }} />
+          <input value={whatsapp} onChange={e => setWhatsapp(e.target.value)} placeholder="WhatsApp # e.g. 15551234567"
             style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)',
               background: 'var(--surface)', fontSize: 13 }} />
           <button className="btn btn-primary" disabled={busy || !issue.trim()} onClick={propose}>
