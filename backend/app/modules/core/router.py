@@ -1267,11 +1267,32 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
     eslp = (emp.get("epay_salesperson") or "").strip()
     period = _emp_period(period)
     pvar = _emp_period_variants(period)
-    keys_upper = {name.upper(), eslp.upper()} - {""}
+
+    # Robust name match: the employee is "Ali" but the sales/commission data uses the full
+    # "ali, mohammad khalid". Match on normalized words, not exact string — otherwise the dashboard
+    # shows "No commission" while the Rep Commission Report has real numbers (the reported bug).
+    import re as _re
+
+    def _norm(s):
+        return _re.sub(r"[^a-z0-9]+", " ", str(s or "").lower()).strip()
+    _emp_norms = {_norm(x) for x in (name, eslp) if _norm(x)}
+    _emp_tokens = set()
+    for n in _emp_norms:
+        _emp_tokens.update(n.split())
 
     def _is_me(rec, *fields):
         for f in fields:
-            if (rec.get(f) or "").strip().upper() in keys_upper:
+            rn = _norm(rec.get(f))
+            if not rn:
+                continue
+            if rn in _emp_norms:                     # exact (normalized)
+                return True
+            rtok = set(rn.split())
+            for en in _emp_norms:                    # full-name subset either direction
+                ent = set(en.split())
+                if ent and (ent <= rtok or rtok <= ent):
+                    return True
+            if len(_emp_tokens) == 1 and next(iter(_emp_tokens)) in rtok:  # single-name rep as a word
                 return True
         return False
 
@@ -1310,6 +1331,12 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
     track = [c for c in allc if _is_me(c, "storeops_name", "epay_salesperson")]
     track.sort(key=lambda r: (r.get("period_year") or 0, r.get("period_month") or 0))
     out["commission_tracking"] = track
+    # The rep name used by the sales/commission data (e.g. 'ali, mohammad khalid'), so the coaching +
+    # target-calendar calls (which match rep names exactly) scope to the right person, not the short
+    # employee name. Prefer the selected month's row, else the most recent month the rep has.
+    _src = myc or (track[-1] if track else None)
+    rep_full = ((_src.get("storeops_name") or _src.get("epay_salesperson")) if _src else "") or ""
+    out["employee"]["rep_name"] = rep_full.strip() or eslp or name
 
     # Flags + chargebacks attributed to this rep.
     fl = client.schema("commcalc").table("flags").select("*").eq("org_id", org_id).in_("period", pvar).execute().data or []

@@ -39,7 +39,9 @@ export default function EmployeeDashboardPage() {
     api(`/api/v1/core/employee-dashboard?org_id=${ORG_ID}&employee_id=${encodeURIComponent(eid)}${period ? `&period=${encodeURIComponent(period)}` : ''}`)
       .then((d: any) => {
         setData(d)
-        const nm = d?.employee?.name, per = d?.period, store = d?.employee?.store
+        // Use the rep name the SALES data uses (e.g. "ali, mohammad khalid") for coaching + targets,
+        // not the short employee display name ("Ali") — otherwise they scope to nobody.
+        const nm = d?.employee?.rep_name || d?.employee?.name, per = d?.period, store = d?.employee?.store
         if (nm && per) api(`/api/v1/commcalc/coaching/${encodeURIComponent(per)}?rep=${encodeURIComponent(nm)}`)
           .then((c: any) => setCoach((c?.reps || [])[0] || null)).catch(() => {})
         if (nm && per && store) api(`/api/v1/commcalc/targets/${encodeURIComponent(per)}/calendar?scope=rep&store_code=${encodeURIComponent(store)}&rep=${encodeURIComponent(nm)}&today=${localToday()}`)
