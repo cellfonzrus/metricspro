@@ -446,7 +446,11 @@ async def upload_file(
                     'Activation' if any(x in str(r.get('Product Desc','')) for x in ['New Act','Activation','New Line']) else
                     ''
                 )),
-                'department': r.get('Department',''), 'category': r.get('Category',''),
+                # 'category' also accepts the custom "for Metrics pro" export's 'System Category' column
+                # (values Regular / RTR Product / Accessory / CellPhone) → accessories classify EXACTLY by
+                # category='Accessory' (no product-keyword list needed).
+                'department': r.get('Department',''),
+                'category': r.get('Category','') or r.get('System Category',''),
                 'product_desc': r.get('Product Desc',''), 'product_id': safe_float(r.get('Product ID')) or None,
                 'gp': safe_float(r.get('GP')), 'ext_price': safe_float(r.get('Ext Price')),
                 'trans_id': str(r.get('Trans ID','')).replace('.0','').strip(),
