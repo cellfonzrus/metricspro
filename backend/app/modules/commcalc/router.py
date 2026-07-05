@@ -2932,6 +2932,15 @@ ACC_HINTS = ("ACCESS", "CASE", "SCREEN", "PROTECT", "CHARGER", "CABLE", "EARBUD"
              "POWER BANK", "ADAPTER", "STYLUS", "GRIP", "ONDIGO", "LIQUID", "WARRANTY")
 PHONE_HINTS = ("IPHONE", "GALAXY", "HANDSET", "SMARTPHONE", "TABLET", "ANDROID", "MOTO",
                "MOTOROLA", "SAMSUNG", "APPLE", "PIXEL", " - XP")
+# Promo / equipment-rebate credit lines (e.g. "MOTO G STYLUS 5G - 2023 - 2024 Q2 Promo New Act
+# Boost 5G - $269.99"): a reimbursement the carrier owes when a phone sells on a promo, NOT a
+# saleable SKU. Classified 'rebate' so it's kept OUT of accessory $ and phone-unit counts (and out
+# of the forecast). The expected $ itself is a hotsheet/payables concern, not item_mapping.
+REBATE_HINTS = ("PROMO", "REBATE", "REIMB", "NEW ACT", "SPIFF", "CLAWBACK", "CLAW BACK")
+# Strong phone brand/family tokens — these WIN over a stray accessory word embedded in a MODEL name
+# (e.g. "MOTO G STYLUS" contains the accessory word STYLUS but is a handset, not a stylus pen).
+PHONE_STRONG = ("IPHONE", "GALAXY", "PIXEL", "MOTOROLA", "MOTO ", "SAMSUNG", "APPLE",
+                "SMARTPHONE", "HANDSET", " - XP")
 
 
 def _item_key(sku, desc):
@@ -2942,12 +2951,20 @@ def _item_key(sku, desc):
 
 
 def _guess_item_type(department, category, desc):
-    """Best-effort first-sight classification from raw_sales Department / Category / description."""
+    """Best-effort first-sight classification from raw_sales Department / Category / description.
+    Order matters: a promo/rebate CREDIT line is neither a phone nor an accessory (→ 'rebate'); and a
+    phone whose MODEL name embeds an accessory word ('Moto G STYLUS') must not be mistaken for one."""
     blob = " ".join(str(x or "") for x in (department, category, desc)).upper()
-    if any(h in blob for h in ACC_HINTS):
+    if any(h in blob for h in REBATE_HINTS):
+        return "rebate"
+    strong_phone = any(h in blob for h in PHONE_STRONG)
+    acc = any(h in blob for h in ACC_HINTS)
+    if acc and not strong_phone:
         return "accessory"
-    if any(h in blob for h in PHONE_HINTS):
+    if strong_phone or any(h in blob for h in PHONE_HINTS):
         return "phone"
+    if acc:
+        return "accessory"
     return "unclassified"
 
 

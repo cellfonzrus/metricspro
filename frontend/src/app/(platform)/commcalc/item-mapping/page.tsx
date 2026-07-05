@@ -11,8 +11,8 @@ type Item = {
   department: string | null; category: string | null; item_type: string
   device_model: string | null; source: string | null
 }
-const TYPES = ['accessory', 'phone', 'other', 'unclassified']
-const TYPE_COLOR: Record<string, string> = { accessory: '#b45309', phone: '#2563eb', other: '#6b7280', unclassified: '#b42318' }
+const TYPES = ['accessory', 'phone', 'rebate', 'other', 'unclassified']
+const TYPE_COLOR: Record<string, string> = { accessory: '#b45309', phone: '#2563eb', rebate: '#7c3aed', other: '#6b7280', unclassified: '#b42318' }
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
 
