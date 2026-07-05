@@ -41,6 +41,9 @@ export default function ReportsPage() {
   const [filterStore, setFilterStore] = useState('')
   const [cfg, setCfg] = useState<any>({})
   const [chargebacks, setChargebacks] = useState<any[]>([])
+  const [drillComp, setDrillComp] = useState<string | null>(null)   // clicked commission component
+  const [drillData, setDrillData] = useState<any>(null)
+  const [drillBusy, setDrillBusy] = useState(false)
 
   useEffect(() => {
     api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
@@ -74,6 +77,19 @@ export default function ReportsPage() {
   })
 
   const currentRep = reps.find(r => r.epay_salesperson === selectedRep) || reps[0]
+
+  const COMP_LABEL: Record<string, string> = { premium: 'Premium Activations', byod: 'BYOD Activations', upgrade: 'Device Upgrades', accessories: 'Accessories', setup: 'Setup Fees', acima: 'ACIMA Lease' }
+  function openDrill(comp: string) {
+    setDrillComp(comp)
+    const rep = currentRep?.storeops_name || currentRep?.epay_salesperson || ''
+    if (drillData && drillData._rep === rep) return   // already loaded for this rep+period
+    setDrillData(null); setDrillBusy(true)
+    api(`/api/v1/commcalc/commission-drill?org_id=${ORG_ID}&period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
+      .then((d: any) => setDrillData({ ...d, _rep: rep }))
+      .catch(e => setDrillData({ error: String(e?.message || e), _rep: rep }))
+      .finally(() => setDrillBusy(false))
+  }
+  const drillStyle = { cursor: 'pointer' } as React.CSSProperties
 
   function TierBadge({ tier }: { tier: number }) {
     const pct = Math.round((tier || 0) * 100)
@@ -248,32 +264,32 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td>Premium Activations</td>
+                    <tr className="rs-clickable" style={drillStyle} onClick={() => openDrill('premium')}>
+                      <td>🔍 Premium Activations</td>
                       <td style={{ textAlign: 'right' }}>{currentRep.premium_acts}</td>
                       <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>{fmt(cfg.premium_flat || 0)}/act</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.premium_comm)}</td>
                     </tr>
-                    <tr>
-                      <td>BYOD Activations</td>
+                    <tr className="rs-clickable" style={drillStyle} onClick={() => openDrill('byod')}>
+                      <td>🔍 BYOD Activations</td>
                       <td style={{ textAlign: 'right' }}>{currentRep.byod_acts}</td>
                       <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>{fmt((cfg.byod_flat || 0) + (cfg.byod_extra_spiff || 0))}/act</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.byod_comm)}</td>
                     </tr>
-                    <tr>
-                      <td>Device Upgrades</td>
+                    <tr className="rs-clickable" style={drillStyle} onClick={() => openDrill('upgrade')}>
+                      <td>🔍 Device Upgrades</td>
                       <td style={{ textAlign: 'right' }}>{currentRep.upgrade_acts}</td>
                       <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>{fmt(cfg.upgrade_flat || 0)}/act</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.upgrade_comm)}</td>
                     </tr>
-                    <tr>
-                      <td>Accessories (10% GP)</td>
+                    <tr className="rs-clickable" style={drillStyle} onClick={() => openDrill('accessories')}>
+                      <td>🔍 Accessories (10% GP)</td>
                       <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>GP</td>
                       <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>10% GP</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.acc_comm)}</td>
                     </tr>
-                    <tr>
-                      <td>Setup Fees (10% GP)</td>
+                    <tr className="rs-clickable" style={drillStyle} onClick={() => openDrill('setup')}>
+                      <td>🔍 Setup Fees (10% GP)</td>
                       <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>GP</td>
                       <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>10% GP</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.setup_fee_comm)}</td>
@@ -285,8 +301,8 @@ export default function ReportsPage() {
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.trade_in_comm)}</td>
                     </tr>
                     {(currentRep.acima_comm || 0) > 0 && (
-                      <tr>
-                        <td>ACIMA Lease SPIFF</td>
+                      <tr className="rs-clickable" style={drillStyle} onClick={() => openDrill('acima')}>
+                        <td>🔍 ACIMA Lease SPIFF</td>
                         <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>
                           {Math.round((currentRep.acima_comm || 0) / (cfg.acima_spiff || 25))} txns
                         </td>
@@ -403,6 +419,54 @@ export default function ReportsPage() {
           </table>
         </div>
       )}
+
+      {/* Commission component drill-down — the exact transactions behind a paid-out line */}
+      {drillComp && (() => {
+        const b = drillData && !drillData.error ? drillData[drillComp] : null
+        const moneyBucket = drillComp === 'accessories' || drillComp === 'setup'
+        return (
+          <div onClick={() => setDrillComp(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: 'var(--surface)', borderRadius: 12, padding: 20, width: 'min(900px,97vw)', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 700 }}>{COMP_LABEL[drillComp]} · {currentRep?.storeops_name || currentRep?.epay_salesperson}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)' }}>{period}{b ? ` · ${moneyBucket ? `${b.count} line${b.count === 1 ? '' : 's'} · ${fmt(b.sales)} sales · ${fmt(b.gp)} GP` : `${b.count} transaction${b.count === 1 ? '' : 's'}`}` : ''}{drillData?.source === 'daily_sales_feed' ? ' · source: daily feed' : ''}</div>
+                </div>
+                <button className="btn btn-secondary" style={{ padding: '2px 10px' }} onClick={() => setDrillComp(null)}>✕</button>
+              </div>
+              {drillBusy ? (
+                <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>Loading transactions…</div>
+              ) : drillData?.error ? (
+                <div style={{ padding: 20, color: '#dc2626', fontSize: 13 }}>❌ {drillData.error}</div>
+              ) : !b || b.items.length === 0 ? (
+                <div style={{ padding: 20, color: 'var(--text3)', fontSize: 13 }}>No transactions found for this component in {period}.</div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead><tr style={{ background: 'var(--surface2)' }}>
+                      {['Date', 'Trans ID', 'Product', drillComp === 'acima' ? 'Tender' : 'Contract', 'MDN', 'Price', 'GP'].map(h =>
+                        <th key={h} style={{ textAlign: h === 'Price' || h === 'GP' ? 'right' : 'left', padding: '5px 8px', fontSize: 10, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {b.items.map((it: any, i: number) => (
+                        <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                          <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>{it.date}</td>
+                          <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{it.trans_id}</td>
+                          <td style={{ padding: '5px 8px' }}>{it.product || '—'}</td>
+                          <td style={{ padding: '5px 8px' }}>{drillComp === 'acima' ? (it.tender_type || '—') : (it.contract_type || '—')}</td>
+                          <td style={{ padding: '5px 8px' }}>{it.mdn || '—'}</td>
+                          <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(it.ext_price)}</td>
+                          <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(it.gp)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

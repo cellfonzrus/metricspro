@@ -5440,6 +5440,83 @@ def sales_fields(period: str = "", org_id: str = ORG_ID):
             "accessory_product_keywords": cur["products_list"]}
 
 
+@router.get("/commission-drill")
+def commission_drill(period: str, rep: str = "", org_id: str = ORG_ID):
+    """The exact transactions behind each paid-out commission component for one rep + period, so every
+    number on the Rep Commission Report can be verified. Replays the SAME classification the calculator
+    uses (shared contract-type classifier + configurable accessory + setup-fee + ACIMA-tender), over the
+    rep's raw_sales rows (the calc's source; falls back to the daily feed for visibility). Premium/BYOD/
+    upgrade/ACIMA are DISTINCT transactions (matching the pay counts); accessories/setup are line items."""
+    import re as _re
+    client = sb()
+    acfg = _accessory_config(client, org_id)
+    cols = ("trans_id,trans_date,store,salesperson,department,category,product_desc,sku,contract_type,"
+            "tender_type,ext_price,gp,voided,trans_type,mdn,serial_1")
+
+    def _q(table):
+        return (client.schema("commcalc").table(table).select(cols)
+                .eq("org_id", org_id).in_("period", _pvariants(period)).limit(200000).execute().data) or []
+    rows = _q("raw_sales")
+    source = "raw_sales"
+    if not rows:
+        try:
+            rows = _q("daily_sales_feed"); source = "daily_sales_feed"
+        except Exception:
+            rows = []
+
+    def _norm(s):
+        return _re.sub(r"[^a-z0-9]+", " ", str(s or "").lower()).strip()
+    rnorm = _norm(rep)
+    rtok = set(rnorm.split())
+
+    def _match(sp):
+        s = _norm(sp)
+        if not (s and rnorm):
+            return False
+        if s == rnorm:
+            return True
+        st = set(s.split())
+        return bool(st) and (st <= rtok or rtok <= st)
+    if rep:
+        rows = [r for r in rows if _match(r.get("salesperson"))]
+
+    def _line(r):
+        return {"trans_id": r.get("trans_id"), "date": str(r.get("trans_date") or "")[:10],
+                "product": r.get("product_desc"), "contract_type": r.get("contract_type"),
+                "ext_price": round(safe_float(r.get("ext_price")), 2), "gp": round(safe_float(r.get("gp")), 2),
+                "tender_type": r.get("tender_type"), "mdn": r.get("mdn"), "serial": r.get("serial_1")}
+    prem, byod, upg, acima = {}, {}, {}, {}
+    acc, setup = [], []
+    for r in rows:
+        if str(r.get("voided") or "").strip().upper() == "YES":
+            continue
+        if str(r.get("trans_type") or "").strip() == "Return":
+            continue
+        tid = str(r.get("trans_id") or "").strip()
+        cls = classify_contract_type(r.get("contract_type"))
+        if tid and cls == "premium":
+            prem.setdefault(tid, _line(r))
+        elif tid and cls == "byod":
+            byod.setdefault(tid, _line(r))
+        elif tid and cls == "upgrade":
+            upg.setdefault(tid, _line(r))
+        if _is_accessory(r.get("department"), r.get("category"), r.get("product_desc"), acfg):
+            acc.append(_line(r))
+        if "Device Setup Charge" in str(r.get("product_desc") or ""):
+            setup.append(_line(r))
+        if tid and "acima" in str(r.get("tender_type") or "").lower():
+            acima.setdefault(tid, _line(r))
+
+    def _bucket(d):
+        items = list(d.values()) if isinstance(d, dict) else d
+        items.sort(key=lambda x: (x["date"], str(x["trans_id"])))
+        return {"count": len(items), "sales": round(sum(x["ext_price"] for x in items), 2),
+                "gp": round(sum(x["gp"] for x in items), 2), "items": items[:2000]}
+    return {"rep": rep, "period": period, "source": source,
+            "premium": _bucket(prem), "byod": _bucket(byod), "upgrade": _bucket(upg),
+            "accessories": _bucket(acc), "setup": _bucket(setup), "acima": _bucket(acima)}
+
+
 # ─────────────────────────────────────────────
 # SALES FEED RECON (Theme 5) — monthly authoritative vs daily B2B feed, trans_id grain
 # ─────────────────────────────────────────────
