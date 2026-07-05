@@ -5336,17 +5336,25 @@ def sales_diagnostics(period: str = "", org_id: str = ORG_ID):
     def _scan(table):
         try:
             rows = (client.schema('commcalc').table(table)
-                    .select('period,contract_type,department,salesperson')
+                    .select('period,contract_type,department,category,product_desc,salesperson')
                     .eq('org_id', org_id).in_('period', pv).limit(200000).execute().data) or []
         except Exception as e:
             return {'error': str(e)}
-        ct, dept, per = Counter(), Counter(), Counter()
+        ct, dept, cat, prod, per = Counter(), Counter(), Counter(), Counter(), Counter()
+        # Products on the NON-phone lines (blank Contract Type) — that's where accessories hide when a
+        # POS doesn't carry Department/Category (the B2B daily feed case).
         for r in rows:
             per[str(r.get('period') or '')] += 1
-            ct[(r.get('contract_type') or '').strip() or '(blank)'] += 1
+            ctv = (r.get('contract_type') or '').strip()
+            ct[ctv or '(blank)'] += 1
             dept[(r.get('department') or '').strip() or '(blank)'] += 1
+            cat[(r.get('category') or '').strip() or '(blank)'] += 1
+            if not ctv:
+                prod[(r.get('product_desc') or '').strip() or '(blank)'] += 1
         return {'rows': len(rows), 'periods': dict(per),
-                'contract_types': dict(ct.most_common(40)), 'departments': dict(dept.most_common(40))}
+                'contract_types': dict(ct.most_common(40)), 'departments': dict(dept.most_common(40)),
+                'categories': dict(cat.most_common(40)),
+                'products_on_nonphone_lines': dict(prod.most_common(40))}
 
     feed_actuals = _compute_feed_actuals_py(client, org_id, period)
     tot = {'activations': sum(a['prem_count'] for a in feed_actuals),

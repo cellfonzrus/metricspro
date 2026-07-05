@@ -243,7 +243,7 @@ export default function SalesReportPage() {
                       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>{tbl} <span style={{ fontWeight: 400, color: 'var(--text3)' }}>· {d.rows ?? 0} rows{d.periods ? ` · periods: ${Object.keys(d.periods).join(', ') || '—'}` : ''}</span></div>
                       {d.error ? <div style={{ fontSize: 12, color: '#dc2626' }}>{d.error}</div> : (
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                          {[['Contract Types', d.contract_types], ['Departments', d.departments]].map(([lbl, obj]: any) => (
+                          {[['Contract Types', d.contract_types], ['Departments', d.departments], ['Categories', d.categories], ['Products (non-phone lines = accessories live here)', d.products_on_nonphone_lines]].map(([lbl, obj]: any) => (
                             <div key={lbl}>
                               <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', marginBottom: 2 }}>{lbl}</div>
                               <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12 }}>
