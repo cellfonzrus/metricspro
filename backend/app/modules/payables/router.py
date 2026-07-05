@@ -16,6 +16,7 @@ router = APIRouter()
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 PAGE = 1000
 DEV_DEPTS = {"android - xp", "iphone - xp", "tablet - xp"}   # device box lines (mig 013 daily_sales_actuals)
+DEV_DEPTS_EXACT = ["Android - XP", "IPHONE - XP", "TABLET - XP"]   # exact-case for server-side .in_()
 
 
 def sb():
@@ -58,21 +59,50 @@ def rebuild(carrier_id: str = "", org_id: str = ORG_ID):
 
 # ── Part A — forecast (phones only) ───────────────────────────────────────────
 @router.get("/forecast")
-def forecast(days: int = 30, store: str = "", org_id: str = ORG_ID):
-    """Phones-only: velocity (raw_sales device lines over the trailing `days`) vs on-hand
-    (asset_ledger unsold On-Inventory) → recommend_order per store/model."""
+def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = "", carrier: str = "", org_id: str = ORG_ID):
+    """Phones-only ordering forecast, SEPARATE PER CARRIER. Velocity = units sold in the last `lookback`
+    days; projected demand = velocity × the next `horizon` days; recommend_order = max(0, projected −
+    on_hand). Both windows are user-defined. Carrier + canonical model come from the PHONE MAPPING table
+    (commcalc.device_model_alias, mig 096); an unmapped model falls back to its source carrier + raw name
+    and is flagged so it can be curated (the onboarding to-do). Sales sources: raw_sales (Boost) +
+    raw_ma_commission (Total). On-hand: asset_ledger unsold (Boost consignment)."""
     client = sb()
-    days = max(1, min(days, 365))
-    alias = engine._load_model_alias(client, org_id)
-    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
+    if days:                                     # back-compat: a single `days` sets both windows
+        lookback = horizon = days
+    lookback = max(1, min(lookback, 365))
+    horizon = max(1, min(horizon, 365))
+    pmap = engine.load_phone_map(client, org_id)
+    carriers = client.schema("commcalc").table("carrier").select("id,name,code").eq("org_id", org_id).execute().data or []
+    cby = {c["id"]: c.get("name") for c in carriers}
 
-    def vel_q():
+    def _find(sub):
+        for c in carriers:
+            if sub in (c.get("name") or "").lower() or sub in (c.get("code") or "").lower():
+                return c["id"], c.get("name")
+        return None, sub.capitalize()
+    boost_id, boost_name = _find("boost")
+    total_id, total_name = _find("total")
+    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=lookback)).isoformat()
+
+    agg = {}   # (carrier, store, canonical) -> row
+
+    def _bucket(raw, default_cid, default_cname, st):
+        base = str(raw or "").split(" - ")[0].strip()
+        m = pmap.get(base.lower())
+        canonical = (m["canonical"] if m and m.get("canonical") else base) or base
+        cid = (m["carrier_id"] if m and m.get("carrier_id") else default_cid)
+        cname = (cby.get(cid) or default_cname) if cid else default_cname
+        key = (cname, st, canonical)
+        return agg.setdefault(key, {"carrier": cname, "store": st, "device_model": canonical,
+                                    "units": 0, "on_hand": 0, "mapped": bool(m)})
+
+    # velocity — Boost device sales (raw_sales device lines)
+    def sq():
         q = (client.schema("commcalc").table("raw_sales")
              .select("store,product_desc,department,voided,trans_type,salesperson")
              .eq("org_id", org_id).gte("trans_date", cutoff))
         return q.eq("store", store) if store else q
-    vel = {}
-    for r in _fetch_all(vel_q):
+    for r in _fetch_all(sq):
         if (r.get("voided") or "").upper() == "YES" or (r.get("trans_type") or "") == "Return":
             continue
         if (r.get("department") or "").strip().lower() not in DEV_DEPTS:
@@ -80,32 +110,39 @@ def forecast(days: int = 30, store: str = "", org_id: str = ORG_ID):
         sp = (r.get("salesperson") or "").strip().lower()
         if not sp or sp == "admin":
             continue
-        key = (r.get("store"), _canon(r.get("product_desc"), alias))
-        vel[key] = vel.get(key, 0) + 1
+        _bucket(r.get("product_desc"), boost_id, boost_name, r.get("store"))["units"] += 1
 
-    def onhand_q():
+    # velocity — Total device sales (raw_ma_commission), if the table has rows
+    try:
+        for r in _fetch_all(lambda: client.schema("commcalc").table("raw_ma_commission")
+                            .select("sku,tx_date").eq("org_id", org_id).gte("tx_date", cutoff)):
+            _bucket(r.get("sku"), total_id, total_name, None)["units"] += 1
+    except Exception:
+        pass
+
+    # on-hand — asset_ledger unsold On-Inventory (Boost consignment; the only per-model on-hand we have)
+    def oq():
         q = (client.schema("commcalc").table("asset_ledger")
              .select("store,device_model,date_sold,category").eq("org_id", org_id))
         return q.eq("store", store) if store else q
-    onhand = {}
-    for r in _fetch_all(onhand_q):
+    for r in _fetch_all(oq):
         if r.get("date_sold") or "on inventory" not in (r.get("category") or "").lower():
             continue
-        key = (r.get("store"), _canon(r.get("device_model"), alias))
-        onhand[key] = onhand.get(key, 0) + 1
+        _bucket(r.get("device_model"), boost_id, boost_name, r.get("store"))["on_hand"] += 1
 
     out = []
-    for k in set(vel) | set(onhand):
-        st, model = k
-        units = vel.get(k, 0)
-        rate = units / days
-        projected = int(round(rate * days))
-        oh = onhand.get(k, 0)
-        out.append({"store": st, "device_model": model, "units_sold_window": units,
-                    "avg_daily_velocity": round(rate, 2), "projected_demand": projected,
-                    "on_hand": oh, "recommend_order": max(0, projected - oh)})
-    out.sort(key=lambda x: (x["recommend_order"], x["units_sold_window"]), reverse=True)
-    return {"days": days, "store": store or None, "rows": out, "total": len(out)}
+    for e in agg.values():
+        rate = e["units"] / lookback
+        e["avg_daily_velocity"] = round(rate, 2)
+        e["projected_demand"] = int(round(rate * horizon))
+        e["recommend_order"] = max(0, e["projected_demand"] - e["on_hand"])
+        out.append(e)
+    if carrier:
+        out = [r for r in out if (r["carrier"] or "").lower() == carrier.lower()]
+    out.sort(key=lambda x: (x["recommend_order"], x["units"]), reverse=True)
+    return {"lookback": lookback, "horizon": horizon, "store": store or None,
+            "carriers": sorted({r["carrier"] for r in out if r["carrier"]}),
+            "unmapped": sum(1 for r in out if not r["mapped"]), "rows": out, "total": len(out)}
 
 
 # ── Part B — payables + offsets + due ─────────────────────────────────────────
@@ -275,3 +312,88 @@ def put_settings(body: dict, org_id: str = ORG_ID):
     if upd:
         client.schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
     return {"saved": True, **upd}
+
+
+# ── phone mapping table (raw model → canonical + carrier) — the forecast alignment + onboarding to-do ──
+def _carriers(client, org_id):
+    return client.schema("commcalc").table("carrier").select("id,name,code").eq("org_id", org_id).execute().data or []
+
+
+def _find_carrier(carriers, sub):
+    for c in carriers:
+        if sub in (c.get("name") or "").lower() or sub in (c.get("code") or "").lower():
+            return c["id"], c.get("name")
+    return None, sub.capitalize()
+
+
+@router.get("/phone-map")
+def list_phone_map(org_id: str = ORG_ID):
+    client = sb()
+    rows = (client.schema("commcalc").table("device_model_alias").select("*")
+            .eq("org_id", org_id).order("raw_model").execute().data) or []
+    carriers = _carriers(client, org_id)
+    cby = {c["id"]: c.get("name") for c in carriers}
+    for r in rows:
+        r["carrier_name"] = cby.get(r.get("carrier_id"))
+    return {"rows": rows, "carriers": carriers}
+
+
+@router.get("/phone-map/candidates")
+def phone_map_candidates(limit: int = 300, days: int = 180, org_id: str = ORG_ID):
+    """Distinct raw model strings seen in sales + inventory that are NOT yet in the phone map — the
+    onboarding to-do list. Each carries a suggested side + carrier and a frequency (map the big ones first)."""
+    client = sb()
+    mapped = {(r.get("raw_model") or "").strip().lower()
+              for r in (client.schema("commcalc").table("device_model_alias").select("raw_model")
+                        .eq("org_id", org_id).execute().data or [])}
+    carriers = _carriers(client, org_id)
+    boost_id, boost_name = _find_carrier(carriers, "boost")
+    total_id, total_name = _find_carrier(carriers, "total")
+    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=max(1, days))).isoformat()
+    cand = {}
+
+    def _add(raw, side, cid, cname):
+        base = str(raw or "").split(" - ")[0].strip()
+        if not base or base.lower() in mapped:
+            return
+        e = cand.setdefault(base.lower(), {"raw_model": base, "side": side, "carrier_id": cid,
+                                           "carrier": cname, "count": 0})
+        e["count"] += 1
+
+    for r in _fetch_all(lambda: client.schema("commcalc").table("raw_sales").select("product_desc")
+                        .eq("org_id", org_id).in_("department", DEV_DEPTS_EXACT).gte("trans_date", cutoff)):
+        _add(r.get("product_desc"), "sales", boost_id, boost_name)
+    try:
+        for r in _fetch_all(lambda: client.schema("commcalc").table("raw_ma_commission").select("sku")
+                            .eq("org_id", org_id).gte("tx_date", cutoff)):
+            _add(r.get("sku"), "sales", total_id, total_name)
+    except Exception:
+        pass
+    for r in _fetch_all(lambda: client.schema("commcalc").table("asset_ledger").select("device_model")
+                        .eq("org_id", org_id).ilike("category", "%On Inventory%").is_("date_sold", "null")):
+        _add(r.get("device_model"), "inventory", boost_id, boost_name)
+
+    out = sorted(cand.values(), key=lambda x: x["count"], reverse=True)[:limit]
+    return {"rows": out, "total_unmapped": len(cand), "carriers": carriers}
+
+
+@router.post("/phone-map")
+def upsert_phone_map(body: dict, org_id: str = ORG_ID):
+    client = sb()
+    raw = (body.get("raw_model") or "").strip()
+    if not raw:
+        raise HTTPException(400, "raw_model required")
+    row = {"org_id": org_id, "raw_model": raw,
+           "canonical_model": (body.get("canonical_model") or raw).strip(),
+           "carrier_id": body.get("carrier_id") or None, "side": body.get("side"), "source": "manual"}
+    r = (client.schema("commcalc").table("device_model_alias")
+         .upsert(row, on_conflict="org_id,raw_model").execute())
+    return {"saved": True, "row": (r.data or [None])[0]}
+
+
+@router.delete("/phone-map/{map_id}")
+def delete_phone_map(map_id: str, org_id: str = ORG_ID):
+    client = sb()
+    client.schema("commcalc").table("device_model_alias").delete() \
+        .eq("org_id", org_id).eq("id", map_id).execute()
+    return {"deleted": True}

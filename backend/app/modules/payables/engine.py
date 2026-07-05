@@ -81,6 +81,21 @@ def _load_model_alias(client, org_id):
     return out
 
 
+def load_phone_map(client, org_id):
+    """The phone mapping table (commcalc.device_model_alias, extended in mig 096): raw model string →
+    {canonical, carrier_id}. Keyed by lower(raw_model). Empty until the user curates it (onboarding to-do)."""
+    out = {}
+    try:
+        for r in (client.schema("commcalc").table("device_model_alias")
+                  .select("raw_model,canonical_model,carrier_id").eq("org_id", org_id).execute().data or []):
+            k = (r.get("raw_model") or "").strip().lower()
+            if k:
+                out[k] = {"canonical": r.get("canonical_model"), "carrier_id": r.get("carrier_id")}
+    except Exception:
+        pass
+    return out
+
+
 def _terms_days(client, org_id, distributor_id):
     if not distributor_id:
         return None

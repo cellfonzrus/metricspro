@@ -5,10 +5,37 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 // Device Forecasting & Vendor Payables (module 095). Reads the config-driven ledger built by
 // POST /api/v1/payables/rebuild. Forecasting is phones-only; payables + due are per-IMEI.
 
-type Tab = 'forecast' | 'payables' | 'owed'
+type Tab = 'forecast' | 'payables' | 'owed' | 'map'
 const sel = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' } as const
 const STATUS_COLORS: Record<string, string> = {
   discrepancy: '#dc2626', due: '#d97706', offset: '#16a34a', open: '#6b7280', unconfigured: '#6b7280',
+}
+
+// One unmapped raw-model candidate → map it to a canonical name + carrier. Own local state so typing
+// isn't lost on parent re-renders (defined at module scope, not inside the page component).
+function MapRow({ cand, carriers, onSave }: any) {
+  const [canonical, setCanonical] = useState(cand.raw_model)
+  const [cid, setCid] = useState(cand.carrier_id || '')
+  const [saving, setSaving] = useState(false)
+  const cell = { padding: '7px 10px', borderBottom: '1px solid var(--border)', fontSize: 13 }
+  return (
+    <tr>
+      <td style={cell}><div style={{ fontSize: 12 }}>{cand.raw_model}</div><div style={{ fontSize: 11, color: 'var(--muted)' }}>{cand.side} · {cand.count}×</div></td>
+      <td style={cell}><input value={canonical} onChange={e => setCanonical(e.target.value)} style={{ ...sel, width: '100%' }} /></td>
+      <td style={cell}>
+        <select value={cid} onChange={e => setCid(e.target.value)} style={sel}>
+          <option value="">(carrier)</option>
+          {carriers.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </td>
+      <td style={cell}>
+        <button disabled={saving} onClick={async () => { setSaving(true); try { await onSave(cand.raw_model, canonical, cid, cand.side) } finally { setSaving(false) } }}
+          style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: 'var(--accent, #2563eb)', color: '#fff', fontSize: 12, cursor: 'pointer' }}>
+          {saving ? '…' : 'Save'}
+        </button>
+      </td>
+    </tr>
+  )
 }
 
 export default function PayablesPage() {
@@ -17,8 +44,14 @@ export default function PayablesPage() {
   const [msg, setMsg] = useState('')
 
   // forecast
-  const [days, setDays] = useState(30)
+  const [lookback, setLookback] = useState(7)
+  const [horizon, setHorizon] = useState(7)
   const [fRows, setFRows] = useState<any[]>([])
+  const [fMeta, setFMeta] = useState<any>({})
+  // phone mapping
+  const [candidates, setCandidates] = useState<any[]>([])
+  const [mappings, setMappings] = useState<any[]>([])
+  const [carriersList, setCarriersList] = useState<any[]>([])
   // payables
   const [status, setStatus] = useState('')
   const [store, setStore] = useState('')
@@ -31,9 +64,11 @@ export default function PayablesPage() {
   const [showSettings, setShowSettings] = useState(false)
 
   useEffect(() => { api(`/api/v1/payables/settings?org_id=${ORG_ID}`).then(setSettings).catch(() => {}) }, [])
-  useEffect(() => { if (tab === 'forecast') loadForecast() }, [tab, days, store])
+  useEffect(() => { const t = new URLSearchParams(window.location.search).get('tab'); if (t && ['payables', 'forecast', 'owed', 'map'].includes(t)) setTab(t as Tab) }, [])
+  useEffect(() => { if (tab === 'forecast') loadForecast() }, [tab, lookback, horizon, store])
   useEffect(() => { if (tab === 'payables') loadPayables() }, [tab, status, store])
   useEffect(() => { if (tab === 'owed') loadOwed() }, [tab, store])
+  useEffect(() => { if (tab === 'map') loadMap() }, [tab])
 
   async function rebuild() {
     setBusy(true); setMsg('Rebuilding ledger… (may take a minute for a full Boost rebuild)')
@@ -51,11 +86,31 @@ export default function PayablesPage() {
   async function loadForecast() {
     setLoading(true)
     try {
-      const qs = new URLSearchParams({ org_id: ORG_ID, days: String(days) })
+      const qs = new URLSearchParams({ org_id: ORG_ID, lookback: String(lookback), horizon: String(horizon) })
       if (store) qs.set('store', store)
-      const d = await api(`/api/v1/payables/forecast?${qs}`); setFRows(d.rows || [])
+      const d = await api(`/api/v1/payables/forecast?${qs}`); setFRows(d.rows || []); setFMeta(d)
     } catch (e) { console.error(e) }
     setLoading(false)
+  }
+  async function loadMap() {
+    setLoading(true)
+    try {
+      const [c, m] = await Promise.all([
+        api(`/api/v1/payables/phone-map/candidates?org_id=${ORG_ID}`),
+        api(`/api/v1/payables/phone-map?org_id=${ORG_ID}`),
+      ])
+      setCandidates(c.rows || []); setCarriersList(c.carriers || m.carriers || []); setMappings(m.rows || [])
+    } catch (e) { console.error(e) }
+    setLoading(false)
+  }
+  async function saveMapping(raw: string, canonical: string, cid: string, side: string) {
+    await api(`/api/v1/payables/phone-map?org_id=${ORG_ID}`, { method: 'POST', body: JSON.stringify({ raw_model: raw, canonical_model: canonical, carrier_id: cid || null, side }) })
+    setCandidates(prev => prev.filter(c => c.raw_model !== raw))    // drop the mapped one locally (candidates rescan is heavy)
+    api(`/api/v1/payables/phone-map?org_id=${ORG_ID}`).then((m: any) => setMappings(m.rows || [])).catch(() => {})
+  }
+  async function deleteMapping(id: string) {
+    try { await api(`/api/v1/payables/phone-map/${id}?org_id=${ORG_ID}`, { method: 'DELETE' }); loadMap() }
+    catch (e: any) { setMsg(e.message) }
   }
   async function loadPayables() {
     setLoading(true)
@@ -124,18 +179,23 @@ export default function PayablesPage() {
       {msg && <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, background: 'var(--surface)', border: '1px solid var(--border)', fontSize: 13 }}>{msg}</div>}
 
       <div style={{ display: 'flex', gap: 8, margin: '18px 0 14px', flexWrap: 'wrap' }}>
-        {(['payables', 'forecast', 'owed'] as Tab[]).map(t => (
+        {(['payables', 'forecast', 'owed', 'map'] as Tab[]).map(t => (
           <button key={t} onClick={() => setTab(t)}
             style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, cursor: 'pointer',
               background: tab === t ? 'var(--accent, #2563eb)' : 'var(--surface)', color: tab === t ? '#fff' : 'var(--text)', fontWeight: tab === t ? 600 : 400 }}>
-            {t === 'payables' ? 'Payables (per IMEI)' : t === 'forecast' ? 'Forecast (phones)' : 'Daily Owed'}
+            {t === 'payables' ? 'Payables (per IMEI)' : t === 'forecast' ? 'Forecast (phones)' : t === 'owed' ? 'Daily Owed' : 'Phone Mapping'}
           </button>
         ))}
-        <input placeholder="Store filter…" value={store} onChange={e => setStore(e.target.value)} style={{ ...sel, minWidth: 160 }} />
+        {tab !== 'map' && <input placeholder="Store filter…" value={store} onChange={e => setStore(e.target.value)} style={{ ...sel, minWidth: 160 }} />}
         {tab === 'forecast' && (
-          <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-            Days: <input type="number" min={1} max={365} value={days} onChange={e => setDays(+e.target.value || 30)} style={{ ...sel, width: 70 }} />
-          </label>
+          <>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+              Look-back (days): <input type="number" min={1} max={365} value={lookback} onChange={e => setLookback(+e.target.value || 7)} style={{ ...sel, width: 64 }} />
+            </label>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+              Order for next (days): <input type="number" min={1} max={365} value={horizon} onChange={e => setHorizon(+e.target.value || 7)} style={{ ...sel, width: 64 }} />
+            </label>
+          </>
         )}
         {tab === 'payables' && (
           <select value={status} onChange={e => setStatus(e.target.value)} style={sel}>
@@ -151,13 +211,19 @@ export default function PayablesPage() {
       {loading && <div style={{ color: 'var(--muted)', fontSize: 13 }}>Loading…</div>}
 
       {tab === 'forecast' && !loading && (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={th}>Store</th><th style={th}>Model</th><th style={th}>Sold (window)</th><th style={th}>Velocity/day</th><th style={th}>Projected</th><th style={th}>On hand</th><th style={th}>Recommend order</th></tr></thead>
-          <tbody>{fRows.map((r, i) => (
-            <tr key={i}><td style={td}>{r.store}</td><td style={td}>{r.device_model}</td><td style={td}>{r.units_sold_window}</td><td style={td}>{r.avg_daily_velocity}</td><td style={td}>{r.projected_demand}</td><td style={td}>{r.on_hand}</td>
-              <td style={{ ...td, fontWeight: r.recommend_order > 0 ? 700 : 400, color: r.recommend_order > 0 ? '#d97706' : 'inherit' }}>{r.recommend_order}</td></tr>
-          ))}</tbody>
-        </table>
+        <>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
+            Velocity from the last {fMeta.lookback ?? lookback} days → order for the next {fMeta.horizon ?? horizon} days, per carrier.
+            {(fMeta.unmapped ?? 0) > 0 && <> · <button onClick={() => setTab('map')} style={{ background: 'none', border: 'none', color: '#d97706', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' }}>{fMeta.unmapped} unmapped model(s)</button> — map them so sales &amp; stock line up.</>}
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={th}>Carrier</th><th style={th}>Store</th><th style={th}>Model</th><th style={th}>Sold ({fMeta.lookback ?? lookback}d)</th><th style={th}>Velocity/day</th><th style={th}>Projected ({fMeta.horizon ?? horizon}d)</th><th style={th}>On hand</th><th style={th}>Order</th></tr></thead>
+            <tbody>{fRows.map((r, i) => (
+              <tr key={i}><td style={td}>{r.carrier}{!r.mapped && <span title="unmapped model — map it on the Phone Mapping tab" style={{ color: '#d97706' }}> •</span>}</td><td style={td}>{r.store || '—'}</td><td style={td}>{r.device_model}</td><td style={td}>{r.units}</td><td style={td}>{r.avg_daily_velocity}</td><td style={td}>{r.projected_demand}</td><td style={td}>{r.on_hand}</td>
+                <td style={{ ...td, fontWeight: r.recommend_order > 0 ? 700 : 400, color: r.recommend_order > 0 ? '#d97706' : 'inherit' }}>{r.recommend_order}</td></tr>
+            ))}</tbody>
+          </table>
+        </>
       )}
 
       {tab === 'payables' && !loading && (
@@ -183,6 +249,29 @@ export default function PayablesPage() {
             <tr key={i}><td style={td}>{r.due_date}</td><td style={td}>{r.count}</td><td style={{ ...td, fontWeight: 600 }}>{fmt(r.owed)}</td></tr>
           ))}</tbody>
         </table>
+      )}
+
+      {tab === 'map' && !loading && (
+        <div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+            Map each raw model name (as it appears in sales or inventory) to a canonical model + its carrier, so the forecast can line sales up with stock and split by carrier. This is an onboarding to-do — map the highest-frequency ones first.
+          </div>
+          <h3 style={{ fontSize: 15, margin: '0 0 8px' }}>Unmapped models ({candidates.length})</h3>
+          {candidates.length === 0
+            ? <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 20 }}>All seen models are mapped. 🎉</div>
+            : <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 24 }}>
+                <thead><tr><th style={th}>Raw model (side · freq)</th><th style={th}>Canonical model</th><th style={th}>Carrier</th><th style={th}></th></tr></thead>
+                <tbody>{candidates.map((c, i) => <MapRow key={c.raw_model + i} cand={c} carriers={carriersList} onSave={saveMapping} />)}</tbody>
+              </table>}
+          <h3 style={{ fontSize: 15, margin: '0 0 8px' }}>Existing mappings ({mappings.length})</h3>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={th}>Raw model</th><th style={th}>Canonical</th><th style={th}>Carrier</th><th style={th}></th></tr></thead>
+            <tbody>{mappings.map((m: any) => (
+              <tr key={m.id}><td style={td}>{m.raw_model}</td><td style={td}>{m.canonical_model}</td><td style={td}>{m.carrier_name || '—'}</td>
+                <td style={td}><button onClick={() => deleteMapping(m.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 12 }}>Remove</button></td></tr>
+            ))}</tbody>
+          </table>
+        </div>
       )}
 
       {drill && (

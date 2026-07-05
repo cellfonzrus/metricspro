@@ -11,7 +11,7 @@ import { usePeriod } from '@/lib/period-context'
 
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
-const STEPS = ['Company', 'Carrier', 'Connector & reports', 'Upload & columns', 'Categories', 'Stores', 'Distributors', 'KPI Metrics', 'Activate']
+const STEPS = ['Company', 'Carrier', 'Connector & reports', 'Upload & columns', 'Categories', 'Stores', 'Distributors', 'KPI Metrics', 'Phone Mapping', 'Activate']
 const SWEEP_KINDS = ['manual', 'epay', 'vip', 'dlar', 'b2b', 'google_closing']
 
 export default function OnboardingWizard() {
@@ -201,10 +201,13 @@ export default function OnboardingWizard() {
         {/* STEP 8 — KPI Metrics */}
         {step === 7 && <KpiMetricsStep carrierId={carrierId} setMsg={setMsg} />}
 
-        {/* STEP 9 — Activate */}
-        {step === 8 && (
+        {/* STEP 9 — Phone Mapping (forecast alignment; to-do) */}
+        {step === 8 && <PhoneMappingStep />}
+
+        {/* STEP 10 — Activate */}
+        {step === 9 && (
           <div>
-            <h3 style={{ marginTop: 0 }}>9. Activate</h3>
+            <h3 style={{ marginTop: 0 }}>10. Activate</h3>
             <ul style={{ fontSize: 14, lineHeight: 1.8 }}>
               <li>Company: <b>{companies.find(c => c.id === companyId)?.name || '—'}</b></li>
               <li>Carrier: <b>{carriers.find(c => c.id === carrierId)?.name || '—'}</b></li>
@@ -353,6 +356,21 @@ function StoresStep() {
 // ── Step 7: distributors — who supplies devices/inventory + on what ARRANGEMENT ─────────────────
 // Captures the tenant's supplier setup: terms (net credit), consignment (lent devices billed on a
 // cycle = Asset Lending, like VIP), or COD — and the default funding (own vs borrowed account).
+function PhoneMappingStep() {
+  return (
+    <div>
+      <h3 style={{ marginTop: 0 }}>9. Phone Mapping <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--muted)' }}>(to-do — powers the ordering forecast)</span></h3>
+      <p style={{ fontSize: 14, lineHeight: 1.6 }}>
+        Map each phone model name (as it appears in your sales and inventory data) to a canonical model and its carrier.
+        This lets the ordering forecast line sales up with stock and split the forecast by carrier. The Phone Mapping tool
+        lists every unmapped model it sees, highest-frequency first — map the big ones first.
+      </p>
+      <Link href="/commcalc/payables?tab=map" className="btn btn-primary">Open Phone Mapping →</Link>
+      <div style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)' }}>You can finish this later — the forecast still runs, with unmapped models shown separately.</div>
+    </div>
+  )
+}
+
 function DistributorsStep({ carrierId, setMsg }: { carrierId: string; setMsg: (s: string) => void }) {
   const [dists, setDists] = useState<any[]>([])
   const [d, setD] = useState({ name: '', arrangement: 'terms', terms_days: 30, billing_cycle: 'weekly', has_asset_lending: false, default_funding: 'own' })
