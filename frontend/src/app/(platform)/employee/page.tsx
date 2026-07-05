@@ -5,14 +5,24 @@ import EmployeeWidgets from '@/components/EmployeeWidgets'
 import PortalReports from '@/components/PortalReports'
 
 const sel: React.CSSProperties = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, background: 'var(--surface)' }
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+// Commissions are stored as "Month YYYY", so build the selector in that format (last ~14 months).
+function recentPeriods(n = 14): string[] {
+  const out: string[] = []
+  const d = new Date(); d.setDate(1)
+  for (let i = 0; i < n; i++) { out.push(`${MONTHS[d.getMonth()]} ${d.getFullYear()}`); d.setMonth(d.getMonth() - 1) }
+  return out
+}
 
 export default function EmployeeDashboardPage() {
   const [emps, setEmps] = useState<any[]>([])
   const [eid, setEid] = useState('')
+  const [period, setPeriod] = useState(recentPeriods(1)[0])   // default = current month
   const [data, setData] = useState<any>(null)
   const [coach, setCoach] = useState<any>(null)
   const [repTargets, setRepTargets] = useState<any>(null)
   const [loading, setLoading] = useState(false)
+  const periods = recentPeriods(14)
 
   useEffect(() => {
     api('/api/v1/core/employees').then((d: any) => {
@@ -26,7 +36,7 @@ export default function EmployeeDashboardPage() {
     if (!eid) return
     setLoading(true)
     setCoach(null); setRepTargets(null)
-    api(`/api/v1/core/employee-dashboard?org_id=${ORG_ID}&employee_id=${encodeURIComponent(eid)}`)
+    api(`/api/v1/core/employee-dashboard?org_id=${ORG_ID}&employee_id=${encodeURIComponent(eid)}${period ? `&period=${encodeURIComponent(period)}` : ''}`)
       .then((d: any) => {
         setData(d)
         const nm = d?.employee?.name, per = d?.period, store = d?.employee?.store
@@ -35,7 +45,7 @@ export default function EmployeeDashboardPage() {
         if (nm && per && store) api(`/api/v1/commcalc/targets/${encodeURIComponent(per)}/calendar?scope=rep&store_code=${encodeURIComponent(store)}&rep=${encodeURIComponent(nm)}&today=${localToday()}`)
           .then(setRepTargets).catch(() => {})
       }).catch(console.error).finally(() => setLoading(false))
-  }, [eid])
+  }, [eid, period])
 
   return (
     <div>
@@ -46,9 +56,14 @@ export default function EmployeeDashboardPage() {
             {data?.employee ? `${data.employee.name} · ${data.employee.store || '—'} · ${data.period}` : 'Per-employee performance, schedule, pay, and flags.'}
           </p>
         </div>
-        <select style={sel} value={eid} onChange={e => setEid(e.target.value)}>
-          {emps.map(e => <option key={e.employee_id} value={e.employee_id}>{e.name}</option>)}
-        </select>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <select style={sel} value={period} onChange={e => setPeriod(e.target.value)} title="Month">
+            {periods.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <select style={sel} value={eid} onChange={e => setEid(e.target.value)}>
+            {emps.map(e => <option key={e.employee_id} value={e.employee_id}>{e.name}</option>)}
+          </select>
+        </div>
       </div>
 
       {loading || !data ? (
