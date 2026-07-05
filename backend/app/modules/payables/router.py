@@ -19,6 +19,13 @@ DEV_DEPTS = {"android - xp", "iphone - xp", "tablet - xp"}   # device box lines 
 DEV_DEPTS_EXACT = ["Android - XP", "IPHONE - XP", "TABLET - XP"]   # exact-case for server-side .in_()
 
 
+def _is_device_line(dept, category):
+    """A physical-phone sale line. The custom 'for Metrics pro' report marks it category='CellPhone'
+    (department is blank on that feed); the older format used the 'Android/IPHONE/TABLET - XP' depts.
+    Accept EITHER so the forecast counts device units regardless of which report format is flowing."""
+    return (str(category or "").strip().lower() == "cellphone") or ((dept or "").strip().lower() in DEV_DEPTS)
+
+
 def sb():
     return get_supabase()
 
@@ -99,13 +106,13 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
     # velocity — Boost device sales (raw_sales device lines)
     def sq():
         q = (client.schema("commcalc").table("raw_sales")
-             .select("store,product_desc,department,voided,trans_type,salesperson")
+             .select("store,product_desc,department,category,voided,trans_type,salesperson")
              .eq("org_id", org_id).gte("trans_date", cutoff))
         return q.eq("store", store) if store else q
     for r in _fetch_all(sq):
         if (r.get("voided") or "").upper() == "YES" or (r.get("trans_type") or "") == "Return":
             continue
-        if (r.get("department") or "").strip().lower() not in DEV_DEPTS:
+        if not _is_device_line(r.get("department"), r.get("category")):
             continue
         sp = (r.get("salesperson") or "").strip().lower()
         if not sp or sp == "admin":
@@ -361,8 +368,11 @@ def phone_map_candidates(limit: int = 300, days: int = 180, org_id: str = ORG_ID
         e["count"] += 1
 
     for r in _fetch_all(lambda: client.schema("commcalc").table("raw_sales").select("product_desc")
+                        .eq("org_id", org_id).eq("category", "CellPhone").gte("trans_date", cutoff)):
+        _add(r.get("product_desc"), "sales", boost_id, boost_name)          # custom report phone lines
+    for r in _fetch_all(lambda: client.schema("commcalc").table("raw_sales").select("product_desc")
                         .eq("org_id", org_id).in_("department", DEV_DEPTS_EXACT).gte("trans_date", cutoff)):
-        _add(r.get("product_desc"), "sales", boost_id, boost_name)
+        _add(r.get("product_desc"), "sales", boost_id, boost_name)          # legacy-format phone lines
     try:
         for r in _fetch_all(lambda: client.schema("commcalc").table("raw_ma_commission").select("sku")
                             .eq("org_id", org_id).gte("tx_date", cutoff)):
