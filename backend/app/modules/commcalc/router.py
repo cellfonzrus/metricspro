@@ -4038,7 +4038,23 @@ async def _run_calculation(period: str, org_id: str):
                 return r.data or []
             except: return []
         
-        sales      = fetch('raw_sales', {'period': period})
+        # Sales come from the ONE unified source (same as the Sales Report / targets): the OPEN month
+        # reads the daily feed (the hourly-emailed Sales Transaction Details lands there; raw_sales lags/
+        # isn't promoted), a closed month reads the authoritative raw_sales — each falling back to the
+        # other, period-spelling agnostic. This is what makes CURRENT-month commissions calculate.
+        def _fetch_sales_unified(_period):
+            def _q(table):
+                try:
+                    return (client.schema('commcalc').table(table).select('*')
+                            .eq('org_id', org_id).in_('period', _pvariants(_period))
+                            .limit(200000).execute().data) or []
+                except Exception:
+                    return []
+            _primary = 'daily_sales_feed' if _is_open_month(_period) else 'raw_sales'
+            _other = 'raw_sales' if _primary == 'daily_sales_feed' else 'daily_sales_feed'
+            _rows = _q(_primary)
+            return _rows if _rows else _q(_other)
+        sales      = _fetch_sales_unified(period)
         pay_detail = fetch('raw_payment_detail', {'period': period})
         mi_rows    = fetch('raw_mi', {'period': period})
         dlar_rep   = fetch('raw_dlar_rep', {'period': period})
