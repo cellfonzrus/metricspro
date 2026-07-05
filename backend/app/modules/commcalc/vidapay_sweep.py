@@ -419,54 +419,74 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
         page = ctx.new_page()
         try:
             _goto_login(page, base_url)
-            page.wait_for_timeout(1500)
-            # ── STEP 1: Access Code (Company ID) → Continue ──
-            acc_el = (_find_input(page, want=("access", "company", "account", "acct", "code", "agent", "dealer"),
-                                  avoid=("user", "pass"))
-                      or page.query_selector("#companyId")
-                      or page.query_selector("input[name='CompanyId']"))
-            if acc_el and access_code:
+            page.wait_for_timeout(1800)
+
+            def _fill_id(sel, val):
+                if not val:
+                    return False
+                el = page.query_selector(sel)
+                if not el:
+                    return False
                 try:
-                    acc_el.fill(str(access_code))
+                    el.click()
+                    el.fill("")
+                    el.type(str(val), delay=15)   # type() fires the keystroke events the progressive form listens for
+                except Exception:
+                    try:
+                        el.fill(str(val))
+                    except Exception:
+                        return False
+                return True
+
+            # ── STEP 1: Access Code (Company ID). If User ID / Password aren't revealed yet, Continue. ──
+            _fill_id("#companyId", access_code)
+            uname = page.query_selector("#username")
+            if not (uname and uname.is_visible()):
+                b = page.query_selector("#btnSubmit")
+                if b:
+                    try:
+                        b.click()
+                    except Exception:
+                        pass
+                try:
+                    page.wait_for_selector("#password", state="visible", timeout=15000)
                 except Exception:
                     pass
-                if not _click_submit(page, ("continue", "next", "submit", "log in")):
-                    b = page.query_selector("#btnSubmit")
-                    if b:
-                        try:
-                            b.click()
-                        except Exception:
-                            pass
-                try:
-                    page.wait_for_load_state("networkidle", timeout=20000)
-                except Exception:
-                    pass
-                page.wait_for_timeout(2500)
+                page.wait_for_timeout(1500)
                 _wait_settle(page)
-            # ── STEP 2: User ID + Password → submit ──
-            login_fr, pw_el = _password_frame(page)
-            if not pw_el:
-                diag = _snapshot(page)
-                if _looks_like_bot_wall(page):
+
+            # ── STEP 2: re-assert ALL THREE by id (the Company ID can clear on the re-render — that was the
+            #   "rejected / all fields empty" symptom), then submit with #btnSubmit. ──
+            if not page.query_selector("#password"):
+                # Fall back to the generic heuristics if the ids aren't there (portal variant).
+                login_fr, pw_el = _password_frame(page)
+                if not pw_el:
+                    diag = _snapshot(page)
+                    if _looks_like_bot_wall(page):
+                        raise VidaPayLoginError(
+                            "b2bsoft served an anti-automation page instead of the password form — reach it from a "
+                            "residential / allow-listed IP (set the Egress proxy). Diagnostic: " + str(diag))
                     raise VidaPayLoginError(
-                        "b2bsoft served an anti-automation page instead of the password form — reach it from a "
-                        "residential / allow-listed IP (set the Egress proxy). Diagnostic: " + str(diag))
-                raise VidaPayLoginError(
-                    "Reached b2bsoft but could not find the password field after the Access-Code step — send "
-                    "this diagnostic so I can pin the field. Diagnostic: " + str(diag))
-            user_el = _find_input(login_fr, want=("user", "login", "email", "userid", "username"),
-                                  avoid=("company", "access", "code", "pass"))
-            if user_el and user:
-                try:
-                    user_el.fill(str(user))
-                except Exception:
-                    pass
-            pw_el.fill(str(pw or ""))
-            if not _click_submit(login_fr, ("log in", "login", "sign in", "signin", "submit", "continue")):
-                try:
-                    pw_el.press("Enter")
-                except Exception:
-                    pass
+                        "Reached b2bsoft but could not find the password field — send this diagnostic. Diagnostic: " + str(diag))
+                ue = _find_input(login_fr, want=("user", "login", "email", "userid", "username"),
+                                 avoid=("company", "access", "code", "pass"))
+                if ue and user:
+                    ue.fill(str(user))
+                pw_el.fill(str(pw or ""))
+                _click_submit(login_fr, ("log in", "login", "sign in", "signin", "submit")) or pw_el.press("Enter")
+            else:
+                _fill_id("#companyId", access_code)
+                _fill_id("#username", user)
+                _fill_id("#password", pw)
+                page.wait_for_timeout(400)
+                b = page.query_selector("#btnSubmit")
+                if b:
+                    try:
+                        b.click()
+                    except Exception:
+                        pass
+                else:
+                    _click_submit(page, ("login", "log in", "sign in", "submit"))
             try:
                 page.wait_for_load_state("networkidle", timeout=25000)
             except Exception:
