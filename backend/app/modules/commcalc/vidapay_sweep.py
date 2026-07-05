@@ -402,6 +402,98 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             browser.close()
 
 
+def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
+    """b2bsoft SSO (sso.b2bsoft.com, IdentityServer) is a MULTI-STEP login: page 1 asks for the ACCESS
+    CODE (Company ID — the same value as VidaPay's Account ID, DB field account_id), THEN page 2 asks for
+    User ID + Password, then the 2FA challenge. The generic single-page begin_login can't find the
+    password on page 1 (that page only has #companyId), so this does the Access-Code step first. Same
+    {status, storage_state, two_fa_hint, diag} return shape as begin_login."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        raise VidaPayLoginError("Playwright/Chromium is not available in the backend image.")
+    base_url = (url or B2BSOFT_URL).strip() or B2BSOFT_URL
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+        ctx = _new_context(browser, proxy=_proxy_arg(proxy_url))
+        page = ctx.new_page()
+        try:
+            _goto_login(page, base_url)
+            page.wait_for_timeout(1500)
+            # ── STEP 1: Access Code (Company ID) → Continue ──
+            acc_el = (_find_input(page, want=("access", "company", "account", "acct", "code", "agent", "dealer"),
+                                  avoid=("user", "pass"))
+                      or page.query_selector("#companyId")
+                      or page.query_selector("input[name='CompanyId']"))
+            if acc_el and access_code:
+                try:
+                    acc_el.fill(str(access_code))
+                except Exception:
+                    pass
+                if not _click_submit(page, ("continue", "next", "submit", "log in")):
+                    b = page.query_selector("#btnSubmit")
+                    if b:
+                        try:
+                            b.click()
+                        except Exception:
+                            pass
+                try:
+                    page.wait_for_load_state("networkidle", timeout=20000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(2500)
+                _wait_settle(page)
+            # ── STEP 2: User ID + Password → submit ──
+            login_fr, pw_el = _password_frame(page)
+            if not pw_el:
+                diag = _snapshot(page)
+                if _looks_like_bot_wall(page):
+                    raise VidaPayLoginError(
+                        "b2bsoft served an anti-automation page instead of the password form — reach it from a "
+                        "residential / allow-listed IP (set the Egress proxy). Diagnostic: " + str(diag))
+                raise VidaPayLoginError(
+                    "Reached b2bsoft but could not find the password field after the Access-Code step — send "
+                    "this diagnostic so I can pin the field. Diagnostic: " + str(diag))
+            user_el = _find_input(login_fr, want=("user", "login", "email", "userid", "username"),
+                                  avoid=("company", "access", "code", "pass"))
+            if user_el and user:
+                try:
+                    user_el.fill(str(user))
+                except Exception:
+                    pass
+            pw_el.fill(str(pw or ""))
+            if not _click_submit(login_fr, ("log in", "login", "sign in", "signin", "submit", "continue")):
+                try:
+                    pw_el.press("Enter")
+                except Exception:
+                    pass
+            try:
+                page.wait_for_load_state("networkidle", timeout=25000)
+            except Exception:
+                pass
+            page.wait_for_timeout(3500)
+            _wait_settle(page)
+            state = _classify(page)
+            diag = _snapshot(page)
+            if state == "twofa":
+                return {"status": "needs_2fa", "storage_state": ctx.storage_state(),
+                        "two_fa_hint": _twofa_hint(page), "diag": diag}
+            if state == "authenticated":
+                return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": diag}
+            if state == "botwall":
+                raise VidaPayLoginError(
+                    "b2bsoft served an anti-automation page after login — set a residential proxy. Diagnostic: " + str(diag))
+            if state == "login":
+                raise VidaPayLoginError(
+                    "Login rejected — Access Code / User ID / Password not accepted (still on the login form). "
+                    "Diagnostic: " + str(diag))
+            return {"status": "needs_2fa", "storage_state": ctx.storage_state(),
+                    "two_fa_hint": _twofa_hint(page),
+                    "diag": {**diag, "_note": "post-login page not recognized as 2FA/app; send this diagnostic"}}
+        finally:
+            browser.close()
+
+
 # ── phase 2: submit the 2FA code ─────────────────────────────────────────────────────────────
 def complete_2fa(url, pending_state, code, proxy_url=None):
     """Restore the mid-2FA session, submit the code, return the durable authenticated session."""

@@ -7636,8 +7636,11 @@ async def data_source_login_start(sid: str, org_id: str = ORG_ID):
     s = rows[0]
     if not (s.get("password") and (s.get("username") or s.get("account_id"))):
         raise HTTPException(400, "Enter the Account ID, User ID and Password on this login first, then Log in.")
+    # b2bsoft's SSO is a MULTI-STEP login (Access Code → User ID + Password → 2FA); dispatch to its
+    # dedicated flow. Everything else uses the generic single-page begin_login.
+    _login_fn = vp.begin_login_b2bsoft if (s.get("processor") or "").lower() in ("b2bsoft", "b2b") else vp.begin_login
     try:
-        res = await run_in_threadpool(vp.begin_login, s.get("portal_url"),
+        res = await run_in_threadpool(_login_fn, s.get("portal_url"),
                                       s.get("account_id"), s.get("username"), s.get("password"),
                                       s.get("proxy_url"))
     except vp.VidaPayLoginError as e:
