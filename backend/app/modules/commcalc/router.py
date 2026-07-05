@@ -2931,15 +2931,16 @@ def _accessory_config(client, org_id):
     """Configurable accessory classification (mig 092): which POS departments and/or categories count as
     accessory sales. Empty config → the historical default department 'Ondigo', so nothing changes until
     the user sets it on Sales Report → ⚙️ Accessory settings. Returns normalized sets + the raw lists."""
-    depts, cats, kws = [], [], []
+    depts, cats, kws, acima = [], [], [], []
     try:
         rows = (client.schema("commcalc").table("flag_rules")
-                .select("accessory_departments,accessory_categories,accessory_product_keywords")
+                .select("accessory_departments,accessory_categories,accessory_product_keywords,acima_tenders")
                 .eq("org_id", org_id).eq("id", 1).limit(1).execute().data) or []
         if rows:
             depts = [d for d in (rows[0].get("accessory_departments") or []) if d]
             cats = [c for c in (rows[0].get("accessory_categories") or []) if c]
             kws = [k for k in (rows[0].get("accessory_product_keywords") or []) if k]
+            acima = [t for t in (rows[0].get("acima_tenders") or []) if t]
     except Exception:
         pass
     if not depts and not cats and not kws:
@@ -2947,7 +2948,8 @@ def _accessory_config(client, org_id):
     return {"departments": {d.strip().lower() for d in depts},
             "categories": {c.strip().lower() for c in cats},
             "products": {k.strip().lower() for k in kws},
-            "departments_list": depts, "categories_list": cats, "products_list": kws}
+            "departments_list": depts, "categories_list": cats, "products_list": kws,
+            "acima_tenders_list": acima}
 
 
 def _is_accessory(dept, category, product, acfg):
@@ -4078,7 +4080,8 @@ async def _run_calculation(period: str, org_id: str):
         _acfg = _accessory_config(client, org_id)
         cfg = {**cfg, 'accessory_departments': _acfg['departments_list'],
                'accessory_categories': _acfg['categories_list'],
-               'accessory_product_keywords': _acfg['products_list']}
+               'accessory_product_keywords': _acfg['products_list'],
+               'acima_tenders': _acfg['acima_tenders_list']}
 
         # Resolve payment categories
         cat_map = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
@@ -5405,27 +5408,31 @@ def sales_diagnostics(period: str = "", org_id: str = ORG_ID):
 
 @router.get("/accessory-config")
 def get_accessory_config(org_id: str = ORG_ID):
-    """The configured accessory department/category lists + product keywords (empty → default 'Ondigo')."""
+    """The configured accessory dept/category/product-keyword lists + the ACIMA-lease tender(s)."""
     c = _accessory_config(sb(), org_id)
     return {"departments": c["departments_list"], "categories": c["categories_list"],
-            "product_keywords": c["products_list"]}
+            "product_keywords": c["products_list"], "acima_tenders": c["acima_tenders_list"]}
 
 
 @router.put("/accessory-config")
 def put_accessory_config(body: dict, org_id: str = ORG_ID):
-    """Set what counts as accessory sales. Body: {departments:[...], categories:[...], product_keywords:[...]}.
-    A line is an accessory if its department OR category is listed, OR its product description contains a
-    keyword (for POS feeds with no dept/category). Drives the Sales Report accessory$, the Action-Plan
-    accessory tile, and (on recalc) commission accessory pay. Needs migrations 092 + 093."""
-    depts = [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()]
-    cats = [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()]
-    kws = [str(x).strip() for x in (body.get("product_keywords") or []) if str(x).strip()]
-    row = {"id": 1, "org_id": org_id, "accessory_departments": depts,
-           "accessory_categories": cats, "accessory_product_keywords": kws, "updated_at": _cb_now()}
+    """Set what counts as accessory sales + which Tender Type = an ACIMA lease. Body: {departments:[...],
+    categories:[...], product_keywords:[...], acima_tenders:[...]}. A line is an accessory if its
+    department OR category is listed OR its product description contains a keyword. ACIMA commission =
+    distinct transactions whose Tender Type contains any acima_tenders value × acima_spiff. Drives the
+    Sales Report, the Action-Plan accessory tile, and (on recalc) commission accessory + ACIMA pay.
+    Needs migrations 092 + 093 + 094. Only the keys present in the body are updated."""
+    row = {"id": 1, "org_id": org_id, "updated_at": _cb_now()}
+    if "departments" in body or "categories" in body or "product_keywords" in body:
+        row["accessory_departments"] = [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()]
+        row["accessory_categories"] = [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()]
+        row["accessory_product_keywords"] = [str(x).strip() for x in (body.get("product_keywords") or []) if str(x).strip()]
+    if "acima_tenders" in body:
+        row["acima_tenders"] = [str(x).strip() for x in (body.get("acima_tenders") or []) if str(x).strip()]
     try:
         sb().schema("commcalc").table("flag_rules").upsert(row, on_conflict="id").execute()
     except Exception as e:
-        raise HTTPException(500, f"save failed — run migrations 092 + 093 first: {e}")
+        raise HTTPException(500, f"save failed — run migrations 092 + 093 + 094 first: {e}")
     return get_accessory_config(org_id)
 
 
@@ -5435,20 +5442,23 @@ def sales_fields(period: str = "", org_id: str = ORG_ID):
     data, plus the top PRODUCT descriptions on the non-phone (blank Contract Type) lines — that's where
     accessories live when a POS carries no dept/category — as keyword suggestions. `period` blank = all."""
     client = sb()
-    depts, cats = set(), set()
+    depts, cats, tenders = set(), set(), set()
     prod = {}
     for tbl in ("daily_sales_feed", "raw_sales"):
         try:
-            q = client.schema("commcalc").table(tbl).select("department,category,product_desc,contract_type").eq("org_id", org_id)
+            q = client.schema("commcalc").table(tbl).select("department,category,product_desc,contract_type,tender_type").eq("org_id", org_id)
             if period:
                 q = q.in_("period", _pvariants(period))
             for r in (q.limit(200000).execute().data or []):
                 d = (r.get("department") or "").strip()
                 c = (r.get("category") or "").strip()
+                t = (r.get("tender_type") or "").strip()
                 if d:
                     depts.add(d)
                 if c:
                     cats.add(c)
+                if t:
+                    tenders.add(t)
                 if not (r.get("contract_type") or "").strip():   # non-phone line → candidate accessory
                     p = (r.get("product_desc") or "").strip()
                     if p:
@@ -5458,8 +5468,9 @@ def sales_fields(period: str = "", org_id: str = ORG_ID):
     top_products = [p for p, _ in sorted(prod.items(), key=lambda kv: -kv[1])[:60]]
     cur = _accessory_config(client, org_id)
     return {"departments": sorted(depts), "categories": sorted(cats), "products": top_products,
+            "tenders": sorted(tenders),
             "accessory_departments": cur["departments_list"], "accessory_categories": cur["categories_list"],
-            "accessory_product_keywords": cur["products_list"]}
+            "accessory_product_keywords": cur["products_list"], "acima_tenders": cur["acima_tenders_list"]}
 
 
 @router.get("/commission-drill")
@@ -5472,6 +5483,7 @@ def commission_drill(period: str, rep: str = "", org_id: str = ORG_ID):
     import re as _re
     client = sb()
     acfg = _accessory_config(client, org_id)
+    _acima_tender_set = {t.strip().lower() for t in acfg["acima_tenders_list"] if t.strip()} or {"acima"}
     cols = ("trans_id,trans_date,store,salesperson,department,category,product_desc,contract_type,"
             "tender_type,ext_price,gp,voided,trans_type,mdn,serial_1")   # no 'sku' — feed lacks that column
 
@@ -5526,7 +5538,8 @@ def commission_drill(period: str, rep: str = "", org_id: str = ORG_ID):
             acc.append(_line(r))
         if "Device Setup Charge" in str(r.get("product_desc") or ""):
             setup.append(_line(r))
-        if tid and "acima" in str(r.get("tender_type") or "").lower():
+        _tl = str(r.get("tender_type") or "").lower()
+        if tid and any(at in _tl for at in _acima_tender_set):
             acima.setdefault(tid, _line(r))
 
     def _bucket(d):

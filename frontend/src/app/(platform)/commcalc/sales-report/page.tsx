@@ -23,7 +23,7 @@ export default function SalesReportPage() {
   const [diagBusy, setDiagBusy] = useState(false)
   const [accOpen, setAccOpen] = useState(false)          // accessory-settings modal
   const [accFields, setAccFields] = useState<any>(null)  // distinct departments/categories + current config
-  const [accSel, setAccSel] = useState<{ d: string[]; c: string[]; p: string[] }>({ d: [], c: [], p: [] })
+  const [accSel, setAccSel] = useState<{ d: string[]; c: string[]; p: string[]; a: string[] }>({ d: [], c: [], p: [], a: [] })
   const [accMsg, setAccMsg] = useState('')
   const [kwInput, setKwInput] = useState('')
 
@@ -37,7 +37,7 @@ export default function SalesReportPage() {
     setAccOpen(true); setAccFields(null); setAccMsg(''); setKwInput('')
     api(`/api/v1/commcalc/sales-fields?period=${encodeURIComponent(period)}`).then((f: any) => {
       setAccFields(f)
-      setAccSel({ d: f.accessory_departments || [], c: f.accessory_categories || [], p: f.accessory_product_keywords || [] })
+      setAccSel({ d: f.accessory_departments || [], c: f.accessory_categories || [], p: f.accessory_product_keywords || [], a: f.acima_tenders || [] })
     }).catch(e => setAccMsg('❌ ' + (e?.message || e)))
   }
   async function saveAccCfg() {
@@ -46,7 +46,7 @@ export default function SalesReportPage() {
     const extra = kwInput.split(',').map(s => s.trim()).filter(Boolean)
     const kws = Array.from(new Set([...accSel.p, ...extra]))
     try {
-      await api('/api/v1/commcalc/accessory-config', { method: 'PUT', body: JSON.stringify({ departments: accSel.d, categories: accSel.c, product_keywords: kws }) })
+      await api('/api/v1/commcalc/accessory-config', { method: 'PUT', body: JSON.stringify({ departments: accSel.d, categories: accSel.c, product_keywords: kws, acima_tenders: accSel.a }) })
       setAccMsg('✅ Saved.'); setAccOpen(false); load()
     } catch (e: any) { setAccMsg('❌ ' + (e?.message || e)) }
   }
@@ -117,7 +117,7 @@ export default function SalesReportPage() {
             : <input type="month" style={sel} value={period.length === 7 ? period : thisMonth()} onChange={e => setPeriod(e.target.value)} />}
         </label>
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openDiag}>🔍 Data diagnostics</button>
-        <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openAccCfg}>⚙️ Accessory settings</button>
+        <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openAccCfg}>⚙️ Classification settings</button>
         {data?.source === 'daily_sales_feed' && <span style={{ fontSize: 11, color: '#b45309' }}>source: daily email feed (raw_sales not promoted yet — enable ‘auto’ on Connectors)</span>}
         {data?.error && <span style={{ fontSize: 12, color: '#dc2626' }}>❌ {data.error}</span>}
       </div>
@@ -275,7 +275,7 @@ export default function SalesReportPage() {
         <div onClick={() => setAccOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
           <div onClick={e => e.stopPropagation()} className="card" style={{ background: 'var(--surface)', borderRadius: 12, padding: 20, width: 'min(720px,97vw)', maxHeight: '88vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>⚙️ Accessory settings</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>⚙️ Classification settings</div>
               <button className="btn btn-secondary" style={{ padding: '2px 10px' }} onClick={() => setAccOpen(false)}>✕</button>
             </div>
             <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 12px' }}>
@@ -327,10 +327,23 @@ export default function SalesReportPage() {
                     </div>
                   )}
                 </div>
+                {/* ACIMA lease tender — which Tender Type = an ACIMA/financing lease (spiff = # txns × rate) */}
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>ACIMA lease tender <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(tick the Tender Type(s) that = an ACIMA/financing lease — the spiff pays per such transaction; leave empty for the old &lsquo;acima&rsquo; default)</span></div>
+                  <div style={{ maxHeight: 150, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
+                    {(accFields.tenders || []).length === 0 ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>no tender types in this period</div> : (accFields.tenders || []).map((t: string) => (
+                      <label key={t} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, padding: '2px 0' }}>
+                        <input type="checkbox" checked={accSel.a.includes(t)}
+                          onChange={() => setAccSel(s => ({ ...s, a: s.a.includes(t) ? s.a.filter(x => x !== t) : [...s.a, t] }))} />
+                        {t}
+                      </label>
+                    ))}
+                  </div>
+                </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, gap: 8 }}>
                   <span style={{ fontSize: 12, color: accMsg.startsWith('❌') ? '#dc2626' : 'var(--text3)' }}>{accMsg}</span>
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => { setAccSel({ d: [], c: [], p: [] }); setKwInput('') }}>Clear (use Ondigo default)</button>
+                    <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => { setAccSel({ d: [], c: [], p: [], a: [] }); setKwInput('') }}>Clear all</button>
                     <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={saveAccCfg}>Save</button>
                   </div>
                 </div>

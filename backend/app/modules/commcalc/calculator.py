@@ -107,6 +107,9 @@ def calc_rep_commissions(
     _acc_kws = {str(k).strip().lower() for k in (cfg.get('accessory_product_keywords') or []) if str(k).strip()}
     if not _acc_depts and not _acc_cats and not _acc_kws:
         _acc_depts = {'ondigo'}
+    # Configurable ACIMA-lease tender (mig 094): which Tender Type value(s) mark an ACIMA lease
+    # (substring, e.g. 'financing'). Empty → the historical default substring 'acima'.
+    _acima_tenders = {str(t).strip().lower() for t in (cfg.get('acima_tenders') or []) if str(t).strip()} or {'acima'}
 
     def _is_acc(dept, cat, product=''):
         d = (dept or '').strip().lower()
@@ -307,7 +310,7 @@ def calc_rep_commissions(
         acima_count = len({
             str(s.get('trans_id', '')).replace('.0', '').strip()
             for s in rep['sales']
-            if 'acima' in str(s.get('tender_type', '')).lower()
+            if any(at in str(s.get('tender_type', '')).lower() for at in _acima_tenders)
         })
         acima_comm = acima_count * G['acima_spiff']
         
