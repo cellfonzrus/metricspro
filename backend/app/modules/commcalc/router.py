@@ -4090,8 +4090,7 @@ async def _run_calculation(period: str, org_id: str):
                             .limit(200000).execute().data) or []
                 except Exception:
                     return []
-            _primary = 'daily_sales_feed' if _is_open_month(_period) else 'raw_sales'
-            _other = 'raw_sales' if _primary == 'daily_sales_feed' else 'daily_sales_feed'
+            _primary, _other = _open_month_source(client, org_id, _period)
             _rows = _q(_primary)
             return _rows if _rows else _q(_other)
         sales      = _fetch_sales_unified(period)
@@ -5221,8 +5220,7 @@ async def sales_report(period: str = "", org_id: str = ORG_ID):
     # ONE processed source, same preference as the targets: the OPEN month reads the daily feed (freshest
     # + complete — the monthly raw_sales lags/promotes late even with 'auto' on), a closed month reads the
     # authoritative raw_sales; each falls back to the other. This is why July always shows.
-    primary = "daily_sales_feed" if _is_open_month(period) else "raw_sales"
-    other = "raw_sales" if primary == "daily_sales_feed" else "daily_sales_feed"
+    primary, other = _open_month_source(client, org_id, period)
     rows = _q(primary)
     source = primary
     if not rows:
@@ -5338,8 +5336,7 @@ async def sales_report_detail(period: str = "", store: str = "", salesperson: st
             except Exception:
                 pass
         return q.execute().data or []
-    _primary = "daily_sales_feed" if _is_open_month(period) else "raw_sales"
-    _other = "raw_sales" if _primary == "daily_sales_feed" else "daily_sales_feed"
+    _primary, _other = _open_month_source(client, org_id, period)
     rows = _q(_primary)
     if not rows:
         try:
@@ -5962,6 +5959,27 @@ def _is_open_month(period):
 _BOX_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
 
 
+def _open_month_source(client, org_id, period):
+    """(primary, other) sales tables for a period. Closed month → the authoritative raw_sales first.
+    Open month → the daily feed first, EXCEPT when the feed has NO Category-bearing rows for the period
+    but raw_sales does — then raw_sales (the richer custom data) leads. Keeps a Legacy (Category-blank)
+    feed from masking a better raw_sales for the open month. No-op in the healthy state where the feed
+    already carries Category. Best-effort — any error falls back to the plain feed-first rule."""
+    if not _is_open_month(period):
+        return 'raw_sales', 'daily_sales_feed'
+    primary, other = 'daily_sales_feed', 'raw_sales'
+    try:
+        def _cat(tbl):
+            return (client.schema('commcalc').table(tbl).select('id', count='exact')
+                    .eq('org_id', org_id).in_('period', _pvariants(period))
+                    .neq('category', '').limit(1).execute().count) or 0
+        if _cat('daily_sales_feed') == 0 and _cat('raw_sales') > 0:
+            primary, other = 'raw_sales', 'daily_sales_feed'
+    except Exception:
+        pass
+    return primary, other
+
+
 def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
     """The ONE processed sales source, computed in Python so the whole targets/recon system agrees.
 
@@ -6047,8 +6065,7 @@ def _fetch_actuals(client, org_id, period):
     empty. Display-only (targets), never commission payout, so making it MORE accurate is safe. The old
     daily_sales_actuals / daily_sales_feed_actuals SQL functions are no longer on the critical path (they
     dropped activations whose Contract Type labels weren't in their hardcoded list — the July zeros)."""
-    primary = 'daily_sales_feed' if _is_open_month(period) else 'raw_sales'
-    other = 'raw_sales' if primary == 'daily_sales_feed' else 'daily_sales_feed'
+    primary, other = _open_month_source(client, org_id, period)
     rows = _compute_feed_actuals_py(client, org_id, period, source=primary)
     if not rows:
         rows = _compute_feed_actuals_py(client, org_id, period, source=other)

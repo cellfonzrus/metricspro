@@ -5,6 +5,7 @@ each through the existing /upload pipeline exactly like the FTP sweep.
 """
 import email
 import imaplib
+import os
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
 
@@ -132,7 +133,14 @@ def fetch_new_attachments(cfg, already):
     out = []
     try:
         for mid, msg in _iter_messages(M, cfg):
-            for fname, payload in _attachments(msg):
+            atts = list(_attachments(msg))
+            # b2bsoft attaches BOTH an .xlsx (the good one) and a same-named .csv that ingests 0 rows and
+            # errors on every hourly email — pure noise. When a .csv has a same-stem .xlsx/.xls sibling in
+            # the SAME message, skip the .csv (the .xlsx wins). A .csv with no Excel sibling still ingests.
+            xlsx_stems = {os.path.splitext(f)[0].lower() for f, _ in atts if f.lower().endswith((".xlsx", ".xls"))}
+            for fname, payload in atts:
+                if fname.lower().endswith(".csv") and os.path.splitext(fname)[0].lower() in xlsx_stems:
+                    continue
                 ut = match_upload_type(fname, patterns)
                 if not ut:
                     continue
