@@ -19,12 +19,28 @@ export default function RecoveryPage() {
   const [cfgOpen, setCfgOpen] = useState(false)
   const [claims, setClaims] = useState<any[]>([])
   const [open, setOpen] = useState<Record<string, boolean>>({})
+  const [recipEmails, setRecipEmails] = useState('')
+  const [recipWa, setRecipWa] = useState('')
 
   const load = useCallback((st: string) => {
     api(`/api/v1/recovery/ledger?status=${encodeURIComponent(st)}`).then(setData).catch((e: any) => setMsg(String(e?.message || e)))
     api('/api/v1/recovery/claims').then((r: any) => setClaims(r.claims || [])).catch(() => {})
   }, [])
-  useEffect(() => { load(status); api('/api/v1/recovery/config').then((r: any) => setCfg(r.config)).catch(() => {}) }, [load, status])
+  useEffect(() => {
+    load(status)
+    api('/api/v1/recovery/config').then((r: any) => {
+      setCfg(r.config)
+      const rc = r.config?.recipients || []
+      setRecipEmails(rc.filter((x: any) => x.email).map((x: any) => x.email).join(', '))
+      setRecipWa(rc.filter((x: any) => x.whatsapp).map((x: any) => x.whatsapp).join(', '))
+    }).catch(() => {})
+  }, [load, status])
+
+  async function sendClaim(id: string) {
+    setBusy('send-' + id); setMsg('')
+    try { const r = await api(`/api/v1/recovery/claims/${id}/send`, { method: 'POST', body: '{}' }); setMsg(r.count ? `Sent to ${r.delivered.join(', ')}.` : 'No recipients configured — add them in ⚙️ Settings.') }
+    catch (e: any) { setMsg('Send failed: ' + (e?.message || e)) } finally { setBusy('') }
+  }
 
   async function run(kind: 'rebuild' | 'claim') {
     setBusy(kind); setMsg('')
@@ -39,7 +55,11 @@ export default function RecoveryPage() {
 
   async function saveCfg() {
     setBusy('cfg')
-    try { const r = await api('/api/v1/recovery/config', { method: 'PUT', body: JSON.stringify(cfg) }); setCfg(r.config); setMsg('Settings saved.') }
+    const recipients = [
+      ...recipEmails.split(',').map(s => s.trim()).filter(Boolean).map(email => ({ email })),
+      ...recipWa.split(',').map(s => s.trim()).filter(Boolean).map(whatsapp => ({ whatsapp })),
+    ]
+    try { const r = await api('/api/v1/recovery/config', { method: 'PUT', body: JSON.stringify({ ...cfg, recipients }) }); setCfg(r.config); setMsg('Settings saved.') }
     catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) } finally { setBusy('') }
   }
 
@@ -87,9 +107,26 @@ export default function RecoveryPage() {
                 <option value="any">Any (also a later re-sale)</option>
               </select></label>
           </div>
-          <div style={{ display: 'flex', gap: 16, marginTop: 10, fontSize: 13 }}>
-            <label><input type="checkbox" checked={!!cfg.match_mdn} onChange={e => setCfg({ ...cfg, match_mdn: e.target.checked })} /> Match by phone #</label>
-            <label><input type="checkbox" checked={!!cfg.match_imei} onChange={e => setCfg({ ...cfg, match_imei: e.target.checked })} /> Match by IMEI</label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
+            <label style={{ fontSize: 12 }}>Weekly claim → recipient emails (comma-separated)
+              <input value={recipEmails} onChange={e => setRecipEmails(e.target.value)} placeholder="ops@company.com, manager@company.com"
+                style={{ width: '100%', padding: 6, marginTop: 3, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)' }} /></label>
+            <label style={{ fontSize: 12 }}>…and WhatsApp #s (comma-separated)
+              <input value={recipWa} onChange={e => setRecipWa(e.target.value)} placeholder="15551234567, 15559876543"
+                style={{ width: '100%', padding: 6, marginTop: 3, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)' }} /></label>
+          </div>
+          <div style={{ display: 'flex', gap: 12, marginTop: 10, fontSize: 13, alignItems: 'center', flexWrap: 'wrap' }}>
+            <label><input type="checkbox" checked={!!cfg.enabled} onChange={e => setCfg({ ...cfg, enabled: e.target.checked })} /> Weekly auto-claim</label>
+            <label>on&nbsp;
+              <select value={cfg.weekly_day_of_week} onChange={e => setCfg({ ...cfg, weekly_day_of_week: +e.target.value })}
+                style={{ padding: 5, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)' }}>
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, i) => <option key={i} value={i}>{d}</option>)}
+              </select></label>
+            <label>at&nbsp;
+              <input type="number" min={0} max={23} value={cfg.weekly_hour} onChange={e => setCfg({ ...cfg, weekly_hour: +e.target.value })}
+                style={{ width: 60, padding: 5, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)' }} />:00 UTC</label>
+            <label style={{ marginLeft: 12 }}><input type="checkbox" checked={!!cfg.match_mdn} onChange={e => setCfg({ ...cfg, match_mdn: e.target.checked })} /> Match phone #</label>
+            <label><input type="checkbox" checked={!!cfg.match_imei} onChange={e => setCfg({ ...cfg, match_imei: e.target.checked })} /> Match IMEI</label>
             <button className="btn btn-primary" style={{ marginLeft: 'auto' }} disabled={busy === 'cfg'} onClick={saveCfg}>Save settings</button>
           </div>
         </div>
@@ -146,6 +183,7 @@ export default function RecoveryPage() {
           <div key={c.id} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: 13 }}>
             <span className={`badge ${c.status === 'paid' ? 'badge-green' : c.status === 'rejected' ? 'badge-red' : 'badge-blue'}`} style={{ textTransform: 'capitalize', minWidth: 80, textAlign: 'center' }}>{c.status}</span>
             <div style={{ flex: 1 }}>{c.period_label} · {c.device_count} devices · {money(c.total_amount)}</div>
+            <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 8px' }} disabled={busy === 'send-' + c.id} onClick={() => sendClaim(c.id)}>{busy === 'send-' + c.id ? '…' : '📤 Send claim'}</button>
             <span style={{ color: 'var(--text3)', fontSize: 12 }}>{String(c.created_at || '').slice(0, 10)}</span>
           </div>
         ))}
