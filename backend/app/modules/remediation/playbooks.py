@@ -22,7 +22,9 @@ def _sb():
 def _timeoff_targets(client, org_id, params):
     emp = str(params.get("employee_id") or "").strip()
     day = str(params.get("date") or "").strip()[:10]
-    rows = (client.table("time_off_requests")
+    # time_off_requests lives in the STOREOPS schema (storeops' own sb() = get_supabase().schema('storeops')).
+    # A remediation-module client defaults to 'public', so qualify it explicitly or it hits a stale table.
+    rows = (client.schema("storeops").table("time_off_requests")
             .select("id,employee_id,employee_name,start_date,end_date,status")
             .eq("org_id", org_id).limit(20000).execute().data) or []
     from collections import defaultdict
@@ -59,7 +61,7 @@ def execute_dedupe_timeoff(client, org_id, params):
     t = _timeoff_targets(client, org_id, params)
     ids = [x["id"] for x in t]
     for i in ids:
-        client.table("time_off_requests").update({"status": "denied"}).eq("id", i).execute()
+        client.schema("storeops").table("time_off_requests").update({"status": "denied"}).eq("id", i).execute()
     return {"summary": f"Denied {len(ids)} leftover time-off row(s).", "denied_ids": ids}
 
 
