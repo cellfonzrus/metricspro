@@ -164,7 +164,6 @@ def reconcile_timeoff_duplicates(org_id: str = ORG_ID):
     voided (a 'denied' row exists) but a duplicate 'approved'/'pending' copy for the SAME employee +
     dates survived and keeps blocking scheduling, deny the surviving copy too. Acts ONLY where a denied
     sibling proves the void intent — never denies a standalone approval (e.g. genuine approved PTO)."""
-    require_org(org_id)
     client = sb()
     rows = (client.table("time_off_requests")
             .select("id,employee_id,start_date,end_date,status")
