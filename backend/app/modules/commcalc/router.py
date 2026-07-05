@@ -165,6 +165,13 @@ def _parse_xreport(contents: bytes, filename: str):
     return out
 
 
+# Row-count guardrail thresholds (user 2026-07-05): flag an ingest that SHRINKS a day/period which
+# previously held real data — the fingerprint of a truncated/partial export. Detection lives in
+# upload_file (all ingest paths); the email sweep escalates a hit to a WhatsApp/email alert.
+_SHRINK_MIN_PRIOR = 100   # only guard a key that already had a meaningful row count (avoids day-start noise)
+_SHRINK_RATIO = 0.5       # alert when the incoming count is < 50% of what it replaces
+
+
 # ── Upload endpoints ─────────────────────────────────────────
 @router.post("/upload/{file_type}")
 async def upload_file(
@@ -667,6 +674,11 @@ async def upload_file(
     # period. catalog/master_cats replace the whole table.
     DATE_KEYED = {'daily_sales': 'trans_date', 'ma_commission': 'tx_date',
                   'ma_daily_tx': 'tx_date', 'ma_fulfillment': 'date_ordered'}
+    # Row-count guardrail (user 2026-07-05): BEFORE the delete-and-replace, compare the incoming count
+    # against what's already stored for the same day/period. A day-to-date feed only grows through the
+    # day and a monthly file only shrinks on a bad/partial export (June arrived ~1/6th complete). A big
+    # shrink is recorded in `shrink` so the email sweep can alert. Best-effort — NEVER blocks the upload.
+    shrink = []
     if mapped:
         if file_type in DATE_KEYED:
             # Date-grain feeds are keyed by DAY, not month. Make a re-pull of the same day(s)
@@ -676,12 +688,33 @@ async def upload_file(
             feed_dates = sorted({m.get(dk) for m in mapped if m.get(dk)})
             if feed_dates:
                 try:
+                    new_by_date = {}
+                    for _m in mapped:
+                        _d = _m.get(dk)
+                        if _d:
+                            new_by_date[_d] = new_by_date.get(_d, 0) + 1
+                    for _d in feed_dates:
+                        prior = (client.schema('commcalc').table(table).select('org_id', count='exact')
+                                 .eq('org_id', org_id).eq(dk, _d).execute().count) or 0
+                        newc = new_by_date.get(_d, 0)
+                        if prior >= _SHRINK_MIN_PRIOR and newc < prior * _SHRINK_RATIO:
+                            shrink.append({'key': str(_d), 'prior': int(prior), 'new': int(newc)})
+                except Exception as e:
+                    print(f'WARN row-count guardrail (date) skipped: {e}')
+                try:
                     client.schema('commcalc').table(table).delete()\
                         .eq('org_id', org_id).in_(dk, feed_dates).execute()
                 except Exception as e:
                     mig = 'migration 047' if file_type == 'daily_sales' else 'migration 083'
                     raise HTTPException(500, f"Failed to clear existing {file_type} rows: {e}. Run {mig}.")
         elif has_period and period:
+            try:
+                prior = (client.schema('commcalc').table(table).select('org_id', count='exact')
+                         .eq('org_id', org_id).in_('period', _pvariants(period)).execute().count) or 0
+                if prior >= _SHRINK_MIN_PRIOR and len(mapped) < prior * _SHRINK_RATIO:
+                    shrink.append({'key': period, 'prior': int(prior), 'new': len(mapped)})
+            except Exception as e:
+                print(f'WARN row-count guardrail (period) skipped: {e}')
             try:
                 client.schema('commcalc').table(table).delete().eq('org_id', org_id).in_('period', _pvariants(period)).execute()
             except Exception as e:
@@ -759,7 +792,8 @@ async def upload_file(
             except Exception as e:
                 print(f'WARN sales-recon flag sync after {file_type} upload failed (run 047?): {e}')
 
-    return {"saved": saved, "file_type": file_type, "period": period, "fraud": fraud, "recon": recon}
+    return {"saved": saved, "file_type": file_type, "period": period, "fraud": fraud, "recon": recon,
+            "shrink": shrink}
 
 
 @router.get("/upload/history")
@@ -7163,14 +7197,16 @@ async def _run_email_sweep(org_id, account='default'):
             {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': f"connect error: {e}"})
         return {"ok": False, "error": str(e), "account": account}
     results = []
+    shrinks = []   # row-count guardrail hits (a truncated/partial export) → alert after the loop
     for f in files:
         name, size, ut, mid = f['name'], f['size'], f.get('upload_type'), f.get('message_id')
         period = "" if ut in ("daily_sales", "ma_commission", "ma_daily_tx", "ma_fulfillment") else _ftp_current_period()
-        status, detail, rows_saved = "ok", None, 0
+        status, detail, rows_saved, shrink = "ok", None, 0, []
         try:
             uf = _UF(io.BytesIO(f['bytes']), filename=name)
             res = await upload_file(ut, uf, period, False, org_id)
             rows_saved = (res or {}).get('saved', 0)
+            shrink = (res or {}).get('shrink') or []
         except HTTPException as he:
             status, detail = "error", str(he.detail)[:300]
         except Exception as e:
@@ -7183,11 +7219,32 @@ async def _run_email_sweep(org_id, account='default'):
                 on_conflict='org_id,account,message_id,filename').execute()
         except Exception:
             pass
-        results.append({"file": name, "upload_type": ut, "status": status, "rows_saved": rows_saved, "detail": detail})
+        for s in shrink:
+            shrinks.append({'file': name, 'upload_type': ut, **s})
+        results.append({"file": name, "upload_type": ut, "status": status, "rows_saved": rows_saved,
+                        "detail": detail, "shrink": shrink})
     ok = sum(1 for r in results if r['status'] == 'ok')
+    # A truncated/partial emailed export (far fewer rows than the day/period it replaced) would silently
+    # corrupt reports — alert the connector recipients (same scope as connector-health) so it's caught.
+    if shrinks:
+        try:
+            from app.modules.closing.router import _send_alert  # lazy: avoids a commcalc<->closing cycle
+            _today = _datetime.now(_timezone.utc).date()
+            for s in shrinks:
+                subject = f"⚠️ Partial data export: {s['upload_type']} dropped to {s['new']} rows for {s['key']}"
+                text = (f"MetricsPro — an emailed {s['upload_type']} file ingested FAR fewer rows than the data "
+                        f"it replaced for {s['key']}: {s['new']} rows vs {s['prior']} previously.\n\n"
+                        f"File: {s['file']}\nMailbox: {account}\n\nThis is the signature of a truncated or "
+                        f"partial export. Verify the source report is complete before trusting {s['upload_type']} "
+                        f"numbers for {s['key']}; re-sending the full report self-heals (the ingest replaces it).")
+                ref = f"datadrop:{org_id}:{s['upload_type']}:{s['key']}:{_today}"
+                await _send_alert(client, org_id, "connector", subject, text, ref)
+        except Exception as e:
+            print(f"WARN row-count guardrail alert failed: {e}")
     _email_status_update(client, org_id, account,
         {'last_run_at': _datetime.now(_timezone.utc).isoformat(),
-         'last_status': f"{ok}/{len(results)} attachments ingested"})
+         'last_status': f"{ok}/{len(results)} attachments ingested"
+                        + (f" ⚠️ {len(shrinks)} partial-export drop(s)" if shrinks else "")})
     # Auto-derive the monthly commission basis (raw_sales) from the feed when 'sales' is set to auto
     # on the Connectors page — best-effort + guarded, never breaks the sweep. This is what lets the
     # user stop uploading the monthly Sales file by hand. OFF until 'sales' auto is enabled.
