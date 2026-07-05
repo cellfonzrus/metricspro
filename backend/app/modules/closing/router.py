@@ -349,24 +349,14 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
     closer_by_store = {c.get("store_code"): (c.get("employee_name") or "").strip()
                        for c in closer_rows if c.get("store_code")}
 
-    # B2B actual daily sales for that period → that day, per store.
+    # B2B actual daily sales per store — from the UNIFIED source (feed-first for the open month) with
+    # the shared contract-type classifier + configurable accessory, so July populates and it agrees with
+    # the Sales Report / Action Plan (no rigid daily_sales_actuals RPC).
     b2b = {}
     try:
-        actuals = (client.schema("commcalc")
-                   .rpc("daily_sales_actuals", {"p_org_id": org_id, "p_period": _period_label(date)})
-                   .execute().data) or []
-        for a in actuals:
-            if str(a.get("trans_date"))[:10] != date:
-                continue
-            sc = a.get("store_code")
-            if not sc:
-                continue
-            agg = b2b.setdefault(sc, {"activations": 0, "upgrades": 0, "acc_gp": 0.0})
-            agg["activations"] += int(a.get("prem_count") or 0) + int(a.get("byod_count") or 0)
-            agg["upgrades"] += int(a.get("upg_count") or 0)
-            agg["acc_gp"] += float(a.get("acc_gp") or 0)
+        b2b = _b2b_counts_by_store(client, org_id, date)
     except Exception as e:
-        print("closing B2B recon RPC failed:", e)
+        print("closing B2B recon count failed:", e)
 
     # B2B MONEY actuals for that day (accessory gross, cash vs card by tender) → store money-recon.
     try:
@@ -1584,6 +1574,65 @@ def _b2b_sales_rows(client, org_id: str, date: str, cols: str) -> list:
     return rows
 
 
+def _acc_cfg(client, org_id):
+    """The org's configurable accessory departments/categories (mig 092, shared with the commcalc
+    Sales Report). Empty → default department 'Ondigo'. Read directly (no cross-module import)."""
+    depts, cats = [], []
+    try:
+        rows = (client.schema("commcalc").table("flag_rules")
+                .select("accessory_departments,accessory_categories").eq("org_id", org_id)
+                .eq("id", 1).limit(1).execute().data) or []
+        if rows:
+            depts = [d for d in (rows[0].get("accessory_departments") or []) if d]
+            cats = [c for c in (rows[0].get("accessory_categories") or []) if c]
+    except Exception:
+        pass
+    if not depts and not cats:
+        depts = ["Ondigo"]
+    return {"d": {x.strip().lower() for x in depts}, "c": {x.strip().lower() for x in cats}}
+
+
+def _is_acc(dept, cat, acc):
+    d = (dept or "").strip().lower()
+    c = (cat or "").strip().lower()
+    return d in acc["d"] or (bool(c) and c in acc["c"])
+
+
+def _b2b_counts_by_store(client, org_id: str, date: str) -> dict:
+    """Per store_code: activations / upgrades (distinct trans_id, the SHARED contract-type classifier)
+    + accessory GP — from the SAME unified B2B source as the money recon (_b2b_sales_rows, feed-first
+    for the open month). Replaces the rigid daily_sales_actuals RPC so the recon counts populate for
+    July too, and stay consistent with the Sales Report / Action Plan."""
+    from app.modules.commcalc.calculator import classify_contract_type
+    resolve = _addr_resolver(client, org_id)
+    acc = _acc_cfg(client, org_id)
+    rows = _b2b_sales_rows(client, org_id, date,
+                           "store,department,category,contract_type,trans_id,gp,voided,trans_type")
+    out, seen = {}, {}
+    for r in rows:
+        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+            continue
+        if str(r.get("trans_type") or "").strip() == "Return":
+            continue
+        code = resolve(r.get("store"))
+        if not code:
+            continue
+        o = out.setdefault(code, {"activations": 0, "upgrades": 0, "acc_gp": 0.0})
+        s = seen.setdefault(code, {"act": set(), "upg": set()})
+        tid = str(r.get("trans_id") or "").strip()
+        cls = classify_contract_type(r.get("contract_type"))
+        if tid and cls in ("premium", "byod"):
+            s["act"].add(tid)
+        elif tid and cls == "upgrade":
+            s["upg"].add(tid)
+        if _is_acc(r.get("department"), r.get("category"), acc):
+            o["acc_gp"] += _f(r.get("gp"))
+    for code, o in out.items():
+        o["activations"] = len(seen[code]["act"])
+        o["upgrades"] = len(seen[code]["upg"])
+    return out
+
+
 def _addr_resolver(client, org_id):
     """A store-name/address → store_code resolver (exact lowercased address, then unambiguous leading
     street-number), shared by the B2B and X-report tender aggregations."""
@@ -1677,7 +1726,8 @@ def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
             return num_to_code.get(nk)
         return None
 
-    rows = _b2b_sales_rows(client, org_id, date, "store,department,tender_type,ext_price,voided")
+    acc = _acc_cfg(client, org_id)
+    rows = _b2b_sales_rows(client, org_id, date, "store,department,category,tender_type,ext_price,voided")
 
     out = {}
     for r in rows:
@@ -1694,7 +1744,7 @@ def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
         dept = (r.get("department") or "").strip()
         if dept:
             agg["_dept_seen"] = True
-        if dept == "Ondigo":
+        if _is_acc(dept, r.get("category"), acc):
             agg["acc_gross"] += ext
         tname = (r.get("tender_type") or "—").strip() or "—"
         agg["tenders"][tname] = round(agg["tenders"].get(tname, 0.0) + ext, 2)
@@ -1745,8 +1795,11 @@ def _b2b_day(client, org_id: str, date: str) -> dict:
             return num_to_code.get(nk)
         return None
 
-    rows = _b2b_sales_rows(client, org_id, date, "store,salesperson,department,tender_type,ext_price,voided")
-    by_store, by_rep = {}, {}
+    from app.modules.commcalc.calculator import classify_contract_type
+    acc = _acc_cfg(client, org_id)
+    rows = _b2b_sales_rows(client, org_id, date,
+                           "store,salesperson,department,category,contract_type,trans_id,tender_type,ext_price,voided,trans_type")
+    by_store, by_rep, counts, seen = {}, {}, {}, {}
     for r in rows:
         if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
             continue
@@ -1755,18 +1808,28 @@ def _b2b_day(client, org_id: str, date: str) -> dict:
             continue
         ext = _f(r.get("ext_price"))
         cls = _tender_class(r.get("tender_type"))
+        is_acc = _is_acc(r.get("department"), r.get("category"), acc)
         st = by_store.setdefault(code, {"cash": 0.0, "card": 0.0, "other": 0.0, "acc_gross": 0.0, "total": 0.0})
         st[cls] += ext
         st["total"] += ext
-        if (r.get("department") or "").strip() == "Ondigo":
+        if is_acc:
             st["acc_gross"] += ext
         sp = (r.get("salesperson") or "").strip()
         rp = by_rep.setdefault((code, sp.lower()),
                                {"cash": 0.0, "card": 0.0, "other": 0.0, "acc_gross": 0.0, "total": 0.0, "salesperson": sp})
         rp[cls] += ext
         rp["total"] += ext
-        if (r.get("department") or "").strip() == "Ondigo":
+        if is_acc:
             rp["acc_gross"] += ext
+        # Activation/upgrade counts from the SAME source + shared classifier (no rigid RPC).
+        if str(r.get("trans_type") or "").strip() != "Return":
+            tid = str(r.get("trans_id") or "").strip()
+            ct_cls = classify_contract_type(r.get("contract_type"))
+            s = seen.setdefault(code, {"act": set(), "upg": set()})
+            if tid and ct_cls in ("premium", "byod"):
+                s["act"].add(tid)
+            elif tid and ct_cls == "upgrade":
+                s["upg"].add(tid)
 
     # Flag stores/reps whose feed rows carry NO tender split (all in 'other') so the gate treats
     # them as recon-pending instead of blocking on a fabricated $0 cash/card.
@@ -1774,22 +1837,8 @@ def _b2b_day(client, org_id: str, date: str) -> dict:
         for v in d.values():
             v["tenders_available"] = bool(v["total"] <= 0 or (v["cash"] + v["card"]) > 0)
 
-    counts = {}
-    try:
-        actuals = (client.schema("commcalc")
-                   .rpc("daily_sales_actuals", {"p_org_id": org_id, "p_period": _period_label(date)})
-                   .execute().data) or []
-        for a in actuals:
-            if str(a.get("trans_date"))[:10] != date:
-                continue
-            sc = a.get("store_code")
-            if not sc:
-                continue
-            c = counts.setdefault(sc, {"activations": 0, "upgrades": 0})
-            c["activations"] += int(a.get("prem_count") or 0) + int(a.get("byod_count") or 0)
-            c["upgrades"] += int(a.get("upg_count") or 0)
-    except Exception:
-        pass
+    for code, s in seen.items():
+        counts[code] = {"activations": len(s["act"]), "upgrades": len(s["upg"])}
     return {"has_data": len(rows) > 0, "by_store": by_store, "by_rep": by_rep, "counts": counts}
 
 
