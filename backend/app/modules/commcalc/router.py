@@ -7700,8 +7700,9 @@ async def data_source_login_verify(sid: str, body: dict, org_id: str = ORG_ID):
             raise
         except Exception:
             pass
+    _verify_fn = vp.complete_2fa_b2bsoft if (s.get("processor") or "").lower() in ("b2bsoft", "b2b") else vp.complete_2fa
     try:
-        res = await run_in_threadpool(vp.complete_2fa, s.get("portal_url"), s.get("pending_state"),
+        res = await run_in_threadpool(_verify_fn, s.get("portal_url"), s.get("pending_state"),
                                       code, s.get("proxy_url"))
     except vp.VidaPayAuthError as e:
         client.schema("commcalc").table("data_source").update(

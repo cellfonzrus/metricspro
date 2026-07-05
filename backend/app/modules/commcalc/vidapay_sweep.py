@@ -516,6 +516,16 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                         }""")
                 except Exception:
                     return []
+            # b2bsoft's SSO 2FA page (#TwoFactorCode / URL .../TwoFactor/...) trips the GENERIC bot-wall
+            # heuristic — detect it EXPLICITLY and return needs_2fa (this was the false "anti-automation" error).
+            if page.query_selector("#TwoFactorCode") or "twofactor" in (page.url or "").lower():
+                d2 = _snapshot(page)
+                try:
+                    d2 = {**d2, "filled": _filled}
+                except Exception:
+                    pass
+                return {"status": "needs_2fa", "storage_state": ctx.storage_state(),
+                        "two_fa_hint": _twofa_hint(page), "diag": d2}
             state = _classify(page)
             diag = _snapshot(page)
             try:
@@ -600,6 +610,78 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
                     "try again; it may have expired, request a new one.")
             return {"status": "authenticated", "storage_state": ctx.storage_state(),
                     "diag": {**_snapshot(page), "_note": "post-2FA page not definitively recognized"}}
+        finally:
+            browser.close()
+
+
+def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
+    """b2bsoft SSO 2FA: fill #TwoFactorCode, TICK 'Remember this device for 90 days' (#IsTrustedDevice —
+    so the session persists and future logins skip 2FA), click #verifyButton, then the OIDC flow
+    redirects back to the portal (authenticated). Returns the durable session."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        raise VidaPayLoginError("Playwright/Chromium is not available in the backend image.")
+    if not pending_state:
+        raise VidaPayAuthError("No pending login to verify — start the login again.")
+    base_url = (url or B2BSOFT_URL).strip() or B2BSOFT_URL
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+        ctx = _new_context(browser, storage_state=pending_state, proxy=_proxy_arg(proxy_url))
+        page = ctx.new_page()
+        try:
+            # Restoring the mid-2FA session + hitting the portal resumes the pending 2FA challenge.
+            page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+            _wait_settle(page)
+            page.wait_for_timeout(2500)
+            on_2fa = bool(page.query_selector("#TwoFactorCode")) or "twofactor" in (page.url or "").lower()
+            if not on_2fa and _classify(page) == "authenticated":
+                return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": _snapshot(page)}
+            code_el = page.query_selector("#TwoFactorCode")
+            if not code_el:
+                for fr in _frames(page):
+                    code_el = _find_input(fr, kinds=("text", "tel", "number"),
+                                          want=("code", "otp", "pin", "verif", "token", "2fa", "twofactor"))
+                    if code_el:
+                        break
+            if not code_el:
+                raise VidaPayAuthError(
+                    "Could not find the 2FA code field to enter the code. Diagnostic: " + str(_snapshot(page)))
+            code_el.fill(str(code).strip())
+            # Remember this device for 90 days → the session stays valid + skips 2FA next time.
+            trust = page.query_selector("#IsTrustedDevice")
+            if trust:
+                try:
+                    if not trust.is_checked():
+                        trust.check()
+                except Exception:
+                    try:
+                        trust.click()
+                    except Exception:
+                        pass
+            vb = page.query_selector("#verifyButton")
+            if vb:
+                try:
+                    vb.click()
+                except Exception:
+                    pass
+            elif not _click_submit(page, ("verify", "submit", "confirm", "continue")):
+                try:
+                    code_el.press("Enter")
+                except Exception:
+                    pass
+            try:
+                page.wait_for_load_state("networkidle", timeout=30000)
+            except Exception:
+                pass
+            page.wait_for_timeout(4000)
+            _wait_settle(page)
+            if page.query_selector("#TwoFactorCode") or "twofactor" in (page.url or "").lower():
+                raise VidaPayAuthError(
+                    "2FA code was not accepted (still on the verification screen) — check the code and try "
+                    "again; it may have expired, click Resend for a new one.")
+            return {"status": "authenticated", "storage_state": ctx.storage_state(),
+                    "diag": {**_snapshot(page), "_note": "post-2FA (b2bsoft)"}}
         finally:
             browser.close()
 
