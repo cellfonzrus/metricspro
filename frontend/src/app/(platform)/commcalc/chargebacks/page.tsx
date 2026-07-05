@@ -1,7 +1,9 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 // Chargeback & fraud bucket — candidates (VIP file now; fraud detectors next) ASSIGNED to the rep
 // who did the sale, which writes the employee's chargeback. Fraud-review rows can be dismissed
@@ -22,6 +24,10 @@ export default function ChargebacksPage() {
   const [edit, setEdit] = useState<Record<string, Edit>>({})
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
+  const [fRep, setFRep] = useState('')
+  const [fStore, setFStore] = useState('')
+  const [fMonth, setFMonth] = useState('')
+  const [q, setQ] = useState('')
 
   const load = useCallback(() => {
     setLoading(true)
@@ -64,6 +70,39 @@ export default function ChargebacksPage() {
   const rows: any[] = data?.rows || []
   const c = data?.counts || {}
 
+  const repOf = (r: any) => (r.assigned_rep || r.suggested_rep || '').trim()
+  const storeOf = (r: any) => (r.store_address || r.store_code || '').trim()
+  const dateOf = (r: any) => String(r.occurred_date || r.period || '')
+  const reps = useMemo(() => Array.from(new Set(rows.map(repOf).filter(Boolean))).sort(), [rows])
+  const stores = useMemo(() => Array.from(new Set(rows.map(storeOf).filter(Boolean))).sort(), [rows])
+  const months = useMemo(() => Array.from(new Set(rows.map(r => dateOf(r).slice(0, 7)).filter(m => /^\d{4}-\d{2}/.test(m)))).sort().reverse(), [rows])
+  const filtered = useMemo(() => rows.filter(r => {
+    if (fRep && repOf(r) !== fRep) return false
+    if (fStore && storeOf(r) !== fStore) return false
+    if (fMonth && dateOf(r).slice(0, 7) !== fMonth) return false
+    if (q) { const s = q.toLowerCase(); if (![r.customer_name, r.email, r.phone_number, r.esn, r.imei, storeOf(r), repOf(r), r.detail].some(v => String(v || '').toLowerCase().includes(s))) return false }
+    return true
+  }), [rows, fRep, fStore, fMonth, q])
+
+  function buildPayload(): ExportPayload {
+    return {
+      title: 'Chargebacks & Fraud', subtitle: [status || 'all', fRep, fStore, fMonth].filter(Boolean).join(' · '),
+      filename: `chargebacks-${fMonth || status || 'all'}`,
+      sheets: [{ name: 'Chargebacks', rows: filtered, columns: [
+        { header: 'Source', get: (r: any) => SRC[r.source] || r.source },
+        { header: 'Store', get: storeOf },
+        { header: 'Rep', get: repOf },
+        { header: 'Customer', get: (r: any) => r.customer_name || r.email || '' },
+        { header: 'Email', get: (r: any) => r.email || '' },
+        { header: 'IMEI/ESN', get: (r: any) => r.esn || r.imei || '' },
+        { header: 'Date', get: dateOf },
+        { header: 'Amount', get: (r: any) => r.amount, money: true },
+        { header: 'Status', get: (r: any) => r.status },
+        { header: 'Reason', get: (r: any) => r.reason || r.detail || '' },
+      ] }],
+    }
+  }
+
   return (
     <div>
       <div style={{ marginBottom: 14 }}>
@@ -94,6 +133,19 @@ export default function ChargebacksPage() {
         {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
       </div>
 
+      {/* Same filters + export/send as the other reports */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
+        <select style={sel} value={fRep} onChange={e => setFRep(e.target.value)}><option value="">👤 All reps</option>{reps.map(r => <option key={r} value={r}>{r}</option>)}</select>
+        <select style={sel} value={fStore} onChange={e => setFStore(e.target.value)}><option value="">🏬 All stores</option>{stores.map(s => <option key={s} value={s}>{s}</option>)}</select>
+        <select style={sel} value={fMonth} onChange={e => setFMonth(e.target.value)}><option value="">🗓️ All months</option>{months.map(m => <option key={m} value={m}>{m}</option>)}</select>
+        <input style={{ ...sel, minWidth: 180 }} placeholder="Search customer / email / IMEI…" value={q} onChange={e => setQ(e.target.value)} />
+        {(fRep || fStore || fMonth || q) && <button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={() => { setFRep(''); setFStore(''); setFMonth(''); setQ('') }}>Clear</button>}
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>{filtered.length} of {rows.length}</span>
+        <div style={{ flex: 1 }} />
+        <ExportButtons payload={buildPayload} compact />
+        <SendReportButton exportPayload={buildPayload} title="Chargebacks & Fraud" compact />
+      </div>
+
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : rows.length === 0 ? (
@@ -106,7 +158,7 @@ export default function ChargebacksPage() {
                 <th key={i} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {rows.map(r => {
+              {filtered.map(r => {
                 const e = edit[r.id] || {} as Edit
                 const done = r.status !== 'open'
                 const crit = r.severity === 'critical'

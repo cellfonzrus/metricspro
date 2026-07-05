@@ -5261,8 +5261,10 @@ async def sales_report_detail(period: str = "", store: str = "", salesperson: st
     if not period:
         n = datetime.now(timezone.utc)
         period = f"{n.year}-{n.month:02d}"
+    # NOTE: no 'sku' — daily_sales_feed has no sku column, and selecting it throws (was swallowed to []
+    # → the "drill-down shows 0 transactions" bug). Only columns present in BOTH tables.
     cols = ("trans_id,trans_date,store,salesperson,customer,department,category,contract_type,"
-            "product_desc,sku,ext_price,gp,mdn,serial_1,voided")
+            "product_desc,ext_price,gp,mdn,serial_1,voided")
 
     def _q(table):
         # Bound to the day in the query (trans_date may be a DATE or 'YYYY-MM-DD HH:MM' text — a
@@ -5450,8 +5452,8 @@ def commission_drill(period: str, rep: str = "", org_id: str = ORG_ID):
     import re as _re
     client = sb()
     acfg = _accessory_config(client, org_id)
-    cols = ("trans_id,trans_date,store,salesperson,department,category,product_desc,sku,contract_type,"
-            "tender_type,ext_price,gp,voided,trans_type,mdn,serial_1")
+    cols = ("trans_id,trans_date,store,salesperson,department,category,product_desc,contract_type,"
+            "tender_type,ext_price,gp,voided,trans_type,mdn,serial_1")   # no 'sku' — feed lacks that column
 
     def _q(table):
         return (client.schema("commcalc").table(table).select(cols)
@@ -5874,11 +5876,18 @@ def _fetch_shifts(client, start, end, org_id=ORG_ID):
 
 
 def _is_open_month(period):
-    """True if `period` ('June 2026') is the current in-progress calendar month."""
+    """True if `period` is the current in-progress calendar month. Handles BOTH 'June 2026' and the
+    '2026-07' shape (parse_period only understands the month-name form → it silently mapped '2026-07'
+    to January, so July read as a CLOSED month — the source-selection bug)."""
     try:
-        pm = parse_period(period)
+        p = str(period).strip()
+        if len(p) >= 7 and p[:4].isdigit() and p[4] == '-' and p[5:7].isdigit():
+            yr, mo = int(p[:4]), int(p[5:7])
+        else:
+            pm = parse_period(period)
+            yr, mo = pm['year'], pm['month']
         t = _date.today()
-        return pm['month'] == t.month and pm['year'] == t.year
+        return mo == t.month and yr == t.year
     except Exception:
         return False
 
