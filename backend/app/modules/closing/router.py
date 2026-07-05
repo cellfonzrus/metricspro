@@ -1563,20 +1563,22 @@ def _num_key(s: str) -> str:
 
 
 def _b2b_sales_rows(client, org_id: str, date: str, cols: str) -> list:
-    """The day's B2B sales rows for recon. Prefers raw_sales (the monthly upload the detectors have
-    always read) but FALLS BACK to daily_sales_feed (the emailed daily feed) when raw_sales has no
-    rows for that day — so cash/credit reconciliation works off the daily email import even when the
-    monthly file hasn't been uploaded and the feed→raw_sales promotion is off (the Boost case: the
-    emailed transactions land in daily_sales_feed, raw_sales stays empty). Same schema + keys either
-    way; either/or per day, so no double counting."""
+    """The day's B2B sales rows for recon — the SAME source the Sales Report / Daily Targets use, so every
+    B2B consumer agrees. For a day in the CURRENT (open) month it reads the daily email feed first (the
+    freshest + complete source — the monthly raw_sales lags / promotes late even with 'auto' on); for a
+    closed month it reads the authoritative raw_sales first; each falls back to the other. This is why the
+    closing / X-tender recon was showing "b2b sales not loaded" for July — raw_sales was empty/partial and
+    it didn't fall to the feed which HAD the data. Either/or per day, so no double counting."""
     def _q(table):
         return (client.schema("commcalc").table(table).select(cols)
                 .eq("org_id", org_id).in_("period", [_period_label(date), date[:7]])
                 .eq("trans_date", date).limit(100000).execute().data) or []
-    rows = _q("raw_sales")
+    open_month = str(date)[:7] == _biz_today_iso()[:7]
+    primary, other = ("daily_sales_feed", "raw_sales") if open_month else ("raw_sales", "daily_sales_feed")
+    rows = _q(primary)
     if not rows:
         try:
-            rows = _q("daily_sales_feed")
+            rows = _q(other)
         except Exception:
             pass
     return rows
