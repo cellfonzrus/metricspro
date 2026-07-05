@@ -1200,7 +1200,7 @@ async def purge_employee(body: dict, org_id: str = ORG_ID):
 
 # ── Employee Dashboard (role-gated widgets) ───────────────────────────────────
 EMP_WIDGETS = ["schedule", "timeoff", "hours", "commission", "targets",
-               "report_card", "commission_tracking", "flags", "chargebacks"]
+               "report_card", "commission_tracking", "flags", "chargebacks", "phone_priority"]
 
 
 def _emp_period(period):
@@ -1319,6 +1319,14 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
                      "epay_salesperson": eslp, "role": role_name, "pay_rate": float(emp.get("pay_rate") or 0)},
         "period": period, "widgets": widgets,
     }
+
+    # Priority-sell list (module 095): devices at this rep's store in the final pct% of their pay
+    # window. Guarded + lazy-imported so it never breaks the dashboard if the ledger isn't built yet.
+    try:
+        from app.modules.payables.engine import priority_for_store
+        out["phone_priority"] = priority_for_store(client, org_id, emp.get("home_store"))
+    except Exception:
+        out["phone_priority"] = []
 
     # Commission (selected period) + tracking (all periods). period-variant match so the picked month
     # hits the data whether it's stored 'July 2026' or '2026-07'.

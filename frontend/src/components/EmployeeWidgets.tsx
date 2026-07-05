@@ -88,6 +88,25 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16, alignItems: 'start' }}>
 
+      {on('phone_priority') && (data?.phone_priority?.length > 0) && (
+        <Card title="Sell These Phones Today" icon="📱">
+          <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
+            These are in the final stretch of their pay window — prioritize selling them so the store doesn't owe the vendor.
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <tbody>
+              {(data.phone_priority || []).map((p: any, i: number) => (
+                <tr key={i}>
+                  <td style={cell}>{p.device_model || '—'}</td>
+                  <td style={{ ...cell, fontFamily: 'monospace', fontSize: 11 }}>{p.imei}</td>
+                  <td style={{ ...cell, textAlign: 'right', color: '#d97706', fontWeight: 600 }}>due {p.window_end || p.due_date || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
       {coach && (
         <Card title="Coaching — what's costing you" icon="🎓">
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>

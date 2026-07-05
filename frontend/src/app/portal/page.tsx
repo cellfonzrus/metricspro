@@ -41,6 +41,8 @@ export default function PortalPage() {
   const [allStores, setAllStores] = useState<{ code: string; label: string }[]>([])  // every store (for the picker)
   const [selStore, setSelStore] = useState('')           // the store they're clocking in at
   const [ovr, setOvr] = useState<{ store_code: string; selfie: string; g: any } | null>(null)  // pending override
+  const [prio, setPrio] = useState<any | null>(null)          // pending priority-sell ack (module 095)
+  const [prioChecked, setPrioChecked] = useState(false)
   const [mgr, setMgr] = useState({ email: '', pw: '', busy: false, err: '' })
   const [status, setStatus] = useState<any>(null)        // {clockedIn, entry}
   const [registered, setRegistered] = useState<boolean | null>(null)
@@ -283,11 +285,30 @@ export default function PortalPage() {
         // not home/scheduled/floater → hold the punch for a manager to approve (keeps the selfie/GPS)
         setOvr({ store_code: res.store_code || selStore, selfie, g })
         setMsg(res.message || `You're not scheduled at ${res.store_code || selStore} today — manager approval needed.`)
+      } else if (res?.needs_priority_ack) {
+        // store has phones in the final % of their pay window → rep must acknowledge before clocking in
+        setPrio({ store_code: res.store_code || selStore, priority: res.priority || [], selfie, g, matchPct })
+        setPrioChecked(false)
+        setMsg(res.message || 'Acknowledge the priority phones to clock in.')
       } else {
         setMsg(`✅ Clocked in at ${res?.data?.time || ''}${res?.data?.store_code ? ` · ${res.data.store_code}` : ''}.`)
       }
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     finally { setBusy(false); closeCamera(); refreshStatus() }
+  }
+
+  async function confirmPriorityAck() {
+    if (!prio || !prioChecked) return
+    setBusy(true)
+    try {
+      const res: any = await authed('/api/v1/storeops/timeclock/clock-in', { method: 'POST', body: JSON.stringify({
+        selfie: prio.selfie, device: 'kiosk', face_match_pct: prio.matchPct, store_code: prio.store_code || undefined,
+        gps_lat: prio.g?.lat, gps_lng: prio.g?.lng, gps_accuracy_m: prio.g?.acc,
+        priority_ack: true, priority_ack_count: (prio.priority || []).length }) })
+      setMsg(`✅ Clocked in at ${res?.data?.time || ''}${res?.data?.store_code ? ` · ${res.data.store_code}` : ''}.`)
+      setPrio(null)
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    finally { setBusy(false); refreshStatus() }
   }
 
   async function clockOut() {
@@ -427,6 +448,34 @@ export default function PortalPage() {
           {gpsRef.current.lat ? 'GPS ✓' : 'GPS off'} · {modelsReady ? 'face ✓' : faceError ? 'face ✗' : 'face …'}
         </div>
       </div>
+
+      {/* priority-sell acknowledgment — store has phones in the final % of their pay window (module 095) */}
+      {prio && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 16 }}>
+          <div style={{ background: '#fff', borderRadius: 14, padding: 22, width: '100%', maxWidth: 420, maxHeight: '85vh', overflow: 'auto' }}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: '#1E3A5F' }}>📱 Sell these phones today</div>
+            <div style={{ fontSize: 13, color: '#475569', margin: '6px 0 12px' }}>
+              These devices at <b>{prio.store_code}</b> are near their payment due date. Prioritize selling them today.
+            </div>
+            <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden', marginBottom: 14 }}>
+              {(prio.priority || []).map((p: any, i: number) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderBottom: i < prio.priority.length - 1 ? '1px solid #f1f5f9' : 'none', fontSize: 13 }}>
+                  <span><b>{p.device_model || '—'}</b> <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#64748b' }}>{p.imei}</span></span>
+                  <span style={{ color: '#d97706', fontWeight: 600 }}>due {p.window_end || p.due_date || '—'}</span>
+                </div>
+              ))}
+            </div>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, color: '#334155', cursor: 'pointer' }}>
+              <input type="checkbox" checked={prioChecked} onChange={e => setPrioChecked(e.target.checked)} style={{ marginTop: 3 }} />
+              <span>I will prioritize selling these phones today.</span>
+            </label>
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <button disabled={!prioChecked || busy} onClick={confirmPriorityAck} style={{ ...bigBtn, padding: '12px 0', fontSize: 15, background: prioChecked ? '#059669' : '#94a3b8', color: '#fff', opacity: busy ? 0.7 : 1 }}>{busy ? 'Clocking in…' : 'Acknowledge & clock in'}</button>
+              <button onClick={() => { setPrio(null); setMsg('') }} style={{ ...bigBtn, padding: '12px 0', fontSize: 15, background: '#eee', color: '#333', flex: '0 0 90px' }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* manager override — the employee is at a store they're not scheduled for */}
       {ovr && (

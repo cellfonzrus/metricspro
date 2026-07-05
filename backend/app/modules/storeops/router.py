@@ -802,6 +802,21 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
             return {"success": False, "needs_override": True, "store_code": req_store,
                     "allowed_stores": sorted(allowed), "home_store": home_store,
                     "message": f"You're not scheduled at {req_store} today. A manager can approve it."}
+    # Priority-sell acknowledgment gate (module 095): if the tenant enabled it and this store has
+    # devices in the final % of their pay window, the rep must acknowledge before clocking in. Any
+    # lookup gap → no block (never trap a rep on a config/migration miss — mirrors the closing gate).
+    if not body.get("priority_ack"):
+        try:
+            t = (sb().table("tenants").select("priority_ack_enabled").eq("org_id", org_id).limit(1).execute().data) or []
+            if t and t[0].get("priority_ack_enabled"):
+                from app.modules.payables.engine import priority_for_store
+                prio = priority_for_store(get_supabase(), org_id, req_store)
+                if prio:
+                    return {"success": False, "needs_priority_ack": True, "store_code": req_store,
+                            "priority": prio,
+                            "message": "Acknowledge the phones to prioritize selling today, then clock in."}
+        except Exception:
+            pass
     selfie_path = _upload_selfie(org_id, employee_id, body.get("selfie"))
     row = {"org_id": org_id, "employee_id": employee_id, "employee_name": name,
            "store_code": req_store,
@@ -811,6 +826,13 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
            "gps_accuracy_m": body.get("gps_accuracy_m"), "face_match_pct": body.get("face_match_pct")}
     r = sb().table("timelog").insert(row).execute()
     saved = r.data[0] if r.data else row
+    if body.get("priority_ack"):   # record the "I will prioritize these phones" acknowledgment (module 095)
+        try:
+            get_supabase().schema("commcalc").table("priority_ack_log").insert({
+                "org_id": org_id, "employee_id": employee_id, "store_code": req_store,
+                "ack_date": work_date, "imei_count": int(body.get("priority_ack_count") or 0)}).execute()
+        except Exception:
+            pass
     return {"success": True, "data": {"time": _fmt_time(saved.get("clock_in")), "entry_id": saved.get("id"),
                                       "store_code": req_store}}
 
