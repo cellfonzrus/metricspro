@@ -457,6 +457,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
 
             # ── STEP 2: re-assert ALL THREE by id (the Company ID can clear on the re-render — that was the
             #   "rejected / all fields empty" symptom), then submit with #btnSubmit. ──
+            _filled = {}
             if not page.query_selector("#password"):
                 # Fall back to the generic heuristics if the ids aren't there (portal variant).
                 login_fr, pw_el = _password_frame(page)
@@ -479,6 +480,16 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                 _fill_id("#username", user)
                 _fill_id("#password", pw)
                 page.wait_for_timeout(400)
+                # Read back what's ACTUALLY in the fields at submit-time (the post-reject snapshot always
+                # shows them empty, which hides whether the fill worked vs the creds were refused).
+                def _val(sel):
+                    try:
+                        el = page.query_selector(sel)
+                        return el.input_value() if el else None
+                    except Exception:
+                        return None
+                _filled = {"companyId": _val("#companyId"), "username": _val("#username"),
+                           "password_len": len(_val("#password") or "")}
                 b = page.query_selector("#btnSubmit")
                 if b:
                     try:
@@ -493,8 +504,24 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                 pass
             page.wait_for_timeout(3500)
             _wait_settle(page)
+
+            def _b2b_error(pg):
+                try:
+                    return pg.evaluate(
+                        """() => {
+                            const sels=['.validation-summary-errors','.text-danger','.field-validation-error',
+                                        '.alert','[role=alert]','.error','.errorMessage','#error','.login-error','.text-error'];
+                            let m=[]; for (const s of sels) document.querySelectorAll(s).forEach(e=>{const t=(e.innerText||'').trim(); if(t) m.push(t)});
+                            return m.filter((v,i,a)=>a.indexOf(v)===i).slice(0,8);
+                        }""")
+                except Exception:
+                    return []
             state = _classify(page)
             diag = _snapshot(page)
+            try:
+                diag = {**diag, "filled": _filled, "portal_error": _b2b_error(page)}
+            except Exception:
+                pass
             if state == "twofa":
                 return {"status": "needs_2fa", "storage_state": ctx.storage_state(),
                         "two_fa_hint": _twofa_hint(page), "diag": diag}
@@ -505,8 +532,9 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                     "b2bsoft served an anti-automation page after login — set a residential proxy. Diagnostic: " + str(diag))
             if state == "login":
                 raise VidaPayLoginError(
-                    "Login rejected — Access Code / User ID / Password not accepted (still on the login form). "
-                    "Diagnostic: " + str(diag))
+                    "Login rejected — still on the login form. What was typed + the portal's own error are in the "
+                    "diagnostic (filled / portal_error) — if 'filled' shows your values, the creds/Access-Code are "
+                    "being refused; if empty, the form didn't accept the fill. Diagnostic: " + str(diag))
             return {"status": "needs_2fa", "storage_state": ctx.storage_state(),
                     "two_fa_hint": _twofa_hint(page),
                     "diag": {**diag, "_note": "post-login page not recognized as 2FA/app; send this diagnostic"}}
