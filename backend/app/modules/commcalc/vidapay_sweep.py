@@ -437,6 +437,25 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
             _goto_login(page, base_url)
             page.wait_for_timeout(1800)
 
+            def _blocked(pg):
+                try:
+                    d = _snapshot(pg)
+                    txt = ((pg.title() or "") + " " + " ".join(d.get("headings", []))).lower()
+                except Exception:
+                    d, txt = {}, ""
+                hit = any(k in txt for k in ("request is blocked", "service unavailable", "access denied",
+                                             "forbidden", "captcha", "unusual traffic", "are you a human",
+                                             "doesn't look right", "temporarily unavailable"))
+                return (hit or _looks_like_bot_wall(pg)), d
+            _b, _d0 = _blocked(page)
+            if _b:
+                raise VidaPayLoginError(
+                    "b2bsoft's WAF is blocking our server's requests (\"" +
+                    ((_d0.get("headings") or ["blocked"])[0]) +
+                    "\") — this is the datacenter-IP wall (it lets a few logins through, then flags the IP). "
+                    "The login itself works; the portal is refusing our egress IP. Put a RESIDENTIAL / allow-"
+                    "listed proxy in the Egress proxy field and retry. Diagnostic: " + str(_d0))
+
             def _fill_id(sel, val):
                 if not val:
                     return False
