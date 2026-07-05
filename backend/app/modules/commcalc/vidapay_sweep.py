@@ -680,8 +680,24 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
                 raise VidaPayAuthError(
                     "2FA code was not accepted (still on the verification screen) — check the code and try "
                     "again; it may have expired, click Resend for a new one.")
+            # CRITICAL: force the OIDC flow to FULLY land on the portal app before capturing the session.
+            # If we grab storage_state while still on the SSO domain (mid-redirect), the wsreports app cookie
+            # isn't saved → the session 'expires' on the very next use (the reported bug). Navigate to the
+            # portal and confirm we STAY authenticated (don't bounce to login) before saving.
+            try:
+                page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+                _wait_settle(page)
+                page.wait_for_timeout(3000)
+            except Exception:
+                pass
+            u = (page.url or "").lower()
+            if page.query_selector("#TwoFactorCode") or page.query_selector("#companyId") \
+                    or "/account/login" in u or "twofactor" in u:
+                raise VidaPayAuthError(
+                    "The code was accepted but the portal session didn't persist (it bounced back to login) — "
+                    "usually 'Remember this device' didn't stick. Click Log in again and enter the code promptly.")
             return {"status": "authenticated", "storage_state": ctx.storage_state(),
-                    "diag": {**_snapshot(page), "_note": "post-2FA (b2bsoft)"}}
+                    "diag": {**_snapshot(page), "_note": "post-2FA landed on portal (b2bsoft)"}}
         finally:
             browser.close()
 
@@ -757,11 +773,13 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
             page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
             page.wait_for_timeout(2500)
-            state = _classify(page)
-            if state in ("login", "twofa", "botwall"):
+            # b2bsoft-specific validity check (the generic _classify can misread the wsreports app as a
+            # login page): the session is invalid ONLY if we're on the SSO login (#companyId) or 2FA screen.
+            u = (page.url or "").lower()
+            if page.query_selector("#companyId") or page.query_selector("#TwoFactorCode") \
+                    or "/account/login" in u or "twofactor" in u:
                 raise VidaPayAuthError(
-                    "The b2bsoft session has expired (or the datacenter IP was walled) — please re-"
-                    "authenticate (Log in + 2FA). If it keeps walling, set a residential proxy on the source.")
+                    "The b2bsoft session has expired — please re-authenticate (Log in + enter the 2FA code).")
             diag = _snapshot(page)
             # Rich probe of the reports UI (links + export buttons + date fields + dropdowns) so the
             # actual Sales-Transaction-Details download can be wired in ONE pass from a real logged-in
