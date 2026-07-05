@@ -6004,6 +6004,16 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
     if not rows:
         return []
     acfg = _accessory_config(client, org_id)
+    # Canonicalize the feed's store string through the SAME resolver the P&L / Store-Matching UI use
+    # (exact address → store_aliases → store_code → unambiguous leading number). Without this the actuals
+    # key on the RAW feed spelling (e.g. "3 Palisade Ave Yonkers") while the Daily Target keys on the
+    # canonical store_code (B-3PL) → scope_achieved_mtd matches nothing → the store shows 0 activations
+    # even though its sales are in the feed. Any store needing an alias/leading-number was silently 0.
+    try:
+        from app.modules.account import coa
+        _resolve_store = coa.store_resolver(client, org_id)
+    except Exception:
+        _resolve_store = None
     sm = (client.schema('commcalc').table('store_mapping')
           .select('store_code,store_address').eq('org_id', org_id).execute().data) or []
     addr_to_code = {}
@@ -6025,7 +6035,8 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
         if not date:
             continue
         store = (r.get('store') or '').strip()
-        code = addr_to_code.get(store.lower(), store)
+        canon = (_resolve_store(store) if (_resolve_store and store) else None) or store
+        code = addr_to_code.get(canon.strip().lower(), canon)
         tid = str(r.get('trans_id') or '').strip()
         dept = (r.get('department') or '').strip()
         pdesc = (r.get('product_desc') or '').lower()
