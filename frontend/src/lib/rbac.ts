@@ -194,6 +194,7 @@ export const NAV: NavGroup[] = [
     { href: '/helpdesk/new', label: 'Raise a Ticket', icon: '➕', module: 'helpdesk' },
     { href: '/helpdesk/dashboard', label: 'Dashboard', icon: '📊', module: 'helpdesk', scopes: ['all', 'market', 'store'] },
     { href: '/helpdesk/settings', label: 'Settings', icon: '⚙️', module: 'helpdesk', scopes: ['all'] },
+    { href: '/remediation', label: 'Auto-Remediation', icon: '🤖', module: 'helpdesk', scopes: ['all', 'market'] },
   ]},
   { group: 'Configuration', module: 'admin', items: [
     { href: '/configurations', label: 'All Settings', icon: '⚙️', module: 'admin' },
@@ -218,6 +219,7 @@ export function moduleForPath(path: string): string {
   if (path.startsWith('/accounts')) return 'accounts'
   if (path.startsWith('/notify')) return 'notify'
   if (path.startsWith('/helpdesk')) return 'helpdesk'
+  if (path.startsWith('/remediation')) return 'helpdesk'
   if (path.startsWith('/commcalc/targets')) return 'targets'
   if (path.startsWith('/commcalc/asset')) return 'asset'
   if (path.startsWith('/commcalc/vip')) return 'vip'
