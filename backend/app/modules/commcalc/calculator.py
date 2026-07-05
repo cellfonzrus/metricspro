@@ -19,6 +19,29 @@ PREMIUM_ACT = {
     'Eligible Port-In Activation','Activation Add A Line',
     'Eligible Port-In Add A Line'
 }
+# Activation keyword patterns — recognize label VARIANTS the exact sets above miss (e.g. "New
+# Activation", "Standard Activation", "Eligible Port In Activation") so drifted B2B Contract Type
+# labels still pay/count instead of being silently dropped. Kept activation-specific (NOT "any
+# non-empty type") so a stray non-activation label can't accidentally earn an activation bounty.
+_PREMIUM_KEYS = ('activation', 'port-in', 'port in', 'add a line', 'add-a-line', 'new line', ' aal', 'aal ')
+
+
+def classify_contract_type(ct: str):
+    """The ONE contract-type classifier shared by commissions, targets, and the sales report.
+    Returns 'byod' | 'upgrade' | 'premium' | None. Tolerant of label drift: BYOD/Upgrade by CONTAINS,
+    premium by the known set OR an activation keyword. None = not a phone-activation line (e.g. an
+    accessory line, which carries a blank Contract Type)."""
+    c = (ct or '').strip()
+    if not c:
+        return None
+    cl = c.lower()
+    if 'byod' in cl:
+        return 'byod'
+    if 'upgrade' in cl:
+        return 'upgrade'
+    if c in PREMIUM_ACT or any(k in cl for k in _PREMIUM_KEYS):
+        return 'premium'
+    return None
 
 def parse_period(period: str) -> dict:
     months = {
@@ -187,9 +210,10 @@ def calc_rep_commissions(
         cat = str(r.get('category','')).strip()
         product = str(r.get('product_desc','')).strip()
         
-        if ct in BYOD_ACT: entry['byod_set'].add(tid)
-        elif ct in UPGRADE_ACT: entry['upg_set'].add(tid)
-        elif ct in PREMIUM_ACT: entry['prem_set'].add(tid)
+        _cls = classify_contract_type(ct)
+        if _cls == 'byod': entry['byod_set'].add(tid)
+        elif _cls == 'upgrade': entry['upg_set'].add(tid)
+        elif _cls == 'premium': entry['prem_set'].add(tid)
         
         if dept == 'Ondigo':
             entry['acc_gp'] += gp

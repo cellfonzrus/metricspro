@@ -5,7 +5,7 @@ import pandas as pd
 import io
 import re
 from app.core.database import get_supabase
-from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float
+from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
 from app.modules.commcalc.gp_report import calc_gp_report
 from app.modules.commcalc.flags import calc_flags
 from app.modules.commcalc.portout_flags import calc_portout_flags
@@ -5148,7 +5148,6 @@ async def sales_report(period: str = "", org_id: str = ORG_ID):
             continue
         store = (r.get("store") or "—").strip() or "—"
         date = str(r.get("trans_date") or "")[:10]
-        ct = (r.get("contract_type") or "").strip().lower()
         dept = (r.get("department") or "").strip()
         tid = str(r.get("trans_id") or "").strip()
         try:
@@ -5172,13 +5171,13 @@ async def sales_report(period: str = "", org_id: str = ORG_ID):
         a["gp"] += gp
         if dept == "Ondigo":
             a["accessory_rev"] += ext
-        if tid and ct:                          # a contract-typed line is a phone line
-            if "byod" in ct:
-                a["_byod"].add(tid)
-            elif "upgrade" in ct:
-                a["_upg"].add(tid)
-            else:
-                a["_act"].add(tid)
+        _cls = classify_contract_type(r.get("contract_type"))   # shared classifier (matches commissions)
+        if tid and _cls == "byod":
+            a["_byod"].add(tid)
+        elif tid and _cls == "upgrade":
+            a["_upg"].add(tid)
+        elif tid and _cls == "premium":
+            a["_act"].add(tid)
 
     out = []
     for a in agg.values():
@@ -5721,7 +5720,6 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
         store = (r.get('store') or '').strip()
         code = addr_to_code.get(store.lower(), store)
         tid = str(r.get('trans_id') or '').strip()
-        ct = (r.get('contract_type') or '').strip().lower()
         dept = (r.get('department') or '').strip()
         pdesc = (r.get('product_desc') or '').lower()
         k = (code, rep.upper(), date)
@@ -5730,13 +5728,13 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
             a = agg[k] = {'store_code': code, 'store': store, 'rep_name': rep, 'login': r.get('user_login'),
                           'trans_date': date, '_prem': set(), '_byod': set(), '_upg': set(),
                           'acc_gp': 0.0, 'box_count': 0, '_billpay': set()}
-        if tid and ct:
-            if 'byod' in ct:
-                a['_byod'].add(tid)
-            elif 'upgrade' in ct:
-                a['_upg'].add(tid)
-            else:
-                a['_prem'].add(tid)
+        _cls = classify_contract_type(r.get('contract_type'))
+        if tid and _cls == 'byod':
+            a['_byod'].add(tid)
+        elif tid and _cls == 'upgrade':
+            a['_upg'].add(tid)
+        elif tid and _cls == 'premium':
+            a['_prem'].add(tid)
         if dept == 'Ondigo':
             a['acc_gp'] += safe_float(r.get('gp'))
         if dept in _BOX_DEPTS:
