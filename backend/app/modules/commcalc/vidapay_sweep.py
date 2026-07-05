@@ -99,7 +99,14 @@ def _proxy_arg(proxy_url):
 
 def _new_context(browser, storage_state=None, proxy=None):
     """A desktop-Chrome context with the anti-automation shims applied before any page script runs.
-    `proxy` is a Playwright proxy dict (see _proxy_arg) routing the session through a given egress."""
+    `proxy` is a Playwright proxy dict (see _proxy_arg) routing the session through a given egress.
+    Also RE-INJECTS sessionStorage stashed under storage_state['_sessionStorage'] (Playwright's
+    storage_state doesn't persist sessionStorage — many OIDC SPAs keep their token there, so without
+    this the session 'expires' the moment it's restored in a fresh context)."""
+    ss_stash = None
+    if isinstance(storage_state, dict) and "_sessionStorage" in storage_state:
+        ss_stash = storage_state.get("_sessionStorage")
+        storage_state = {k: v for k, v in storage_state.items() if k != "_sessionStorage"}
     kw = dict(user_agent=UA, accept_downloads=True, locale="en-US",
               timezone_id="America/New_York", viewport={"width": 1366, "height": 900},
               extra_http_headers={"Accept-Language": "en-US,en;q=0.9"})
@@ -112,6 +119,15 @@ def _new_context(browser, storage_state=None, proxy=None):
         ctx.add_init_script(_STEALTH_JS)
     except Exception:
         pass
+    if ss_stash and ss_stash.get("items"):
+        try:
+            import json as _json
+            items_js = _json.dumps(ss_stash.get("items") or {})
+            ctx.add_init_script(
+                "(() => { try { const it = " + items_js +
+                "; for (const k in it) sessionStorage.setItem(k, it[k]); } catch(e){} })();")
+        except Exception:
+            pass
     return ctx
 
 
@@ -680,24 +696,53 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
                 raise VidaPayAuthError(
                     "2FA code was not accepted (still on the verification screen) — check the code and try "
                     "again; it may have expired, click Resend for a new one.")
-            # CRITICAL: force the OIDC flow to FULLY land on the portal app before capturing the session.
-            # If we grab storage_state while still on the SSO domain (mid-redirect), the wsreports app cookie
-            # isn't saved → the session 'expires' on the very next use (the reported bug). Navigate to the
-            # portal and confirm we STAY authenticated (don't bounce to login) before saving.
+            # After Verify the OIDC hybrid flow chains: SSO 2FA → /connect/authorize callback → (form_post)
+            # → wsreports/signin-oidc → app. WAIT for it to leave the SSO domain and land on the app (don't
+            # navigate away mid-chain — that restarts auth and loses the token).
             try:
-                page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
-                _wait_settle(page)
-                page.wait_for_timeout(3000)
+                page.wait_for_url(lambda uu: "sso.b2bsoft.com" not in (uu or "").lower(), timeout=30000)
             except Exception:
                 pass
+            try:
+                page.wait_for_load_state("networkidle", timeout=20000)
+            except Exception:
+                pass
+            page.wait_for_timeout(3500)
+            _wait_settle(page)
+
+            def _storage_diag(pg):
+                try:
+                    return pg.evaluate(
+                        """() => ({url: location.href, host: location.host,
+                                   ls: Object.keys(localStorage||{}).slice(0,30),
+                                   ss: Object.keys(sessionStorage||{}).slice(0,30)})""")
+                except Exception:
+                    return {}
+            sd = _storage_diag(page)
+            try:
+                ck = ctx.cookies()
+                cookie_hosts = sorted({(c.get("domain") or "") for c in ck})
+            except Exception:
+                cookie_hosts = []
             u = (page.url or "").lower()
-            if page.query_selector("#TwoFactorCode") or page.query_selector("#companyId") \
-                    or "/account/login" in u or "twofactor" in u:
+            if "sso.b2bsoft.com" in u or page.query_selector("#TwoFactorCode") or page.query_selector("#companyId"):
                 raise VidaPayAuthError(
-                    "The code was accepted but the portal session didn't persist (it bounced back to login) — "
-                    "usually 'Remember this device' didn't stick. Click Log in again and enter the code promptly.")
-            return {"status": "authenticated", "storage_state": ctx.storage_state(),
-                    "diag": {**_snapshot(page), "_note": "post-2FA landed on portal (b2bsoft)"}}
+                    "The code was accepted but sign-in didn't complete — still on the SSO screen. "
+                    "Diagnostic: " + str({"final_url": page.url, "storage": sd, "cookie_hosts": cookie_hosts}))
+            # IMPORTANT: capture BOTH the storage_state AND a snapshot of sessionStorage (Playwright's
+            # storage_state does NOT save sessionStorage — many OIDC SPAs keep the token there, which is the
+            # classic "session won't persist" cause). We stash sessionStorage so the sweep can re-inject it.
+            ss_dump = {}
+            try:
+                ss_dump = page.evaluate("() => { const o={}; for (let i=0;i<sessionStorage.length;i++){const k=sessionStorage.key(i); o[k]=sessionStorage.getItem(k);} return o; }") or {}
+            except Exception:
+                pass
+            st = ctx.storage_state()
+            if ss_dump:
+                st["_sessionStorage"] = {"origin": sd.get("url") or base_url, "items": ss_dump}
+            return {"status": "authenticated", "storage_state": st,
+                    "diag": {**_snapshot(page), "final_url": page.url, "storage": sd,
+                             "cookie_hosts": cookie_hosts, "_note": "post-2FA landed on portal (b2bsoft)"}}
         finally:
             browser.close()
 
