@@ -113,8 +113,20 @@ def create_time_off(request: dict, org_id: str = ORG_ID):
     status = str(request.get("status") or "pending").lower()
     if status not in ("pending", "approved", "denied"):
         status = "pending"
+    oid = request.get("org_id") or org_id
+    # Dedupe: a re-submitted request for the SAME employee + exact date range must not leave a stale
+    # active copy behind. A surviving duplicate 'approved' row is what caused "voided but still can't
+    # be scheduled" (the void denied only one copy). Retire prior active copies before inserting.
+    if status in ("approved", "pending"):
+        try:
+            (sb().table("time_off_requests").update({"status": "denied"})
+             .eq("org_id", oid).eq("employee_id", str(request.get("employee_id")))
+             .eq("start_date", request.get("start_date")).eq("end_date", request.get("end_date"))
+             .in_("status", ["approved", "pending"]).execute())
+        except Exception:
+            pass
     # Stamp org_id (no column default) so the request survives the org-scoped GET /time-off filter.
-    row = {**request, "status": status, "org_id": request.get("org_id") or org_id}
+    row = {**request, "status": status, "org_id": oid}
     # Manager approve-at-submission: stamp approved_at if approved and not already set.
     if status == "approved" and not row.get("approved_at"):
         row["approved_at"] = datetime.now(timezone.utc).isoformat()
@@ -126,8 +138,50 @@ def create_time_off(request: dict, org_id: str = ORG_ID):
     return r.data[0]
 
 @router.patch("/time-off/{request_id}")
-def update_time_off(request_id: int, updates: dict):
-    r = sb().table("time_off_requests").update(updates).eq("id", request_id).execute()
+def update_time_off(request_id: int, updates: dict, org_id: str = ORG_ID):
+    client = sb()
+    r = client.table("time_off_requests").update(updates).eq("id", request_id).execute()
+    row = (r.data or [None])[0]
+    new_status = str(updates.get("status") or (row or {}).get("status") or "").lower()
+    # Voiding/revoking must clear the WHOLE block: a duplicate 'approved' copy for the same
+    # employee+dates would otherwise keep blocking scheduling (the reported bug). Cascade the revoke
+    # to every sibling approved/pending copy of the same request.
+    if row and new_status in ("denied", "cancelled", "voided", "rejected"):
+        try:
+            (client.table("time_off_requests").update({"status": "denied"})
+             .eq("org_id", row.get("org_id") or org_id)
+             .eq("employee_id", str(row.get("employee_id")))
+             .eq("start_date", row.get("start_date")).eq("end_date", row.get("end_date"))
+             .in_("status", ["approved", "pending"]).execute())
+        except Exception:
+            pass
+    return row or updates
+
+
+@router.post("/time-off/reconcile-duplicates")
+def reconcile_timeoff_duplicates(org_id: str = ORG_ID):
+    """Idempotent cleanup for the "voided but still can't be scheduled" backlog: when a time-off was
+    voided (a 'denied' row exists) but a duplicate 'approved'/'pending' copy for the SAME employee +
+    dates survived and keeps blocking scheduling, deny the surviving copy too. Acts ONLY where a denied
+    sibling proves the void intent — never denies a standalone approval (e.g. genuine approved PTO)."""
+    require_org(org_id)
+    client = sb()
+    rows = (client.table("time_off_requests")
+            .select("id,employee_id,start_date,end_date,status")
+            .eq("org_id", org_id).limit(20000).execute().data) or []
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for r in rows:
+        groups[(str(r.get("employee_id")), str(r.get("start_date")), str(r.get("end_date")))].append(r)
+    fixed = []
+    for g in groups.values():
+        statuses = {str(x.get("status") or "").lower() for x in g}
+        if "denied" in statuses:
+            for x in g:
+                if str(x.get("status") or "").lower() in ("approved", "pending"):
+                    client.table("time_off_requests").update({"status": "denied"}).eq("id", x["id"]).execute()
+                    fixed.append(x["id"])
+    return {"ok": True, "reconciled": len(fixed), "ids": fixed}
     return r.data[0] if r.data else updates
 
 @router.get("/payroll")
