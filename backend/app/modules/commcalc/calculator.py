@@ -99,6 +99,17 @@ def calc_rep_commissions(
         't75pct':           float(cfg.get('tier_75_pct') or 0.75),
         't50pct':           float(cfg.get('tier_50_pct') or 0.50),
     }
+    # Configurable accessory classification (mig 092): which POS departments/categories are accessories.
+    # Empty → the historical default department 'Ondigo', so pay is unchanged until it's configured.
+    _acc_depts = {str(d).strip().lower() for d in (cfg.get('accessory_departments') or []) if str(d).strip()}
+    _acc_cats = {str(c).strip().lower() for c in (cfg.get('accessory_categories') or []) if str(c).strip()}
+    if not _acc_depts and not _acc_cats:
+        _acc_depts = {'ondigo'}
+
+    def _is_acc(dept, cat):
+        d = (dept or '').strip().lower()
+        c = (cat or '').strip().lower()
+        return d in _acc_depts or (bool(c) and c in _acc_cats)
     KPI = {
         'atu':       float(cfg.get('kpi_atu_target') or 55),
         'protect':   float(cfg.get('kpi_protect_target') or 80),
@@ -215,7 +226,7 @@ def calc_rep_commissions(
         elif _cls == 'upgrade': entry['upg_set'].add(tid)
         elif _cls == 'premium': entry['prem_set'].add(tid)
         
-        if dept == 'Ondigo':
+        if _is_acc(dept, cat):
             entry['acc_gp'] += gp
             entry['acc_sales'] += ext
         if 'Device Setup Charge' in product:

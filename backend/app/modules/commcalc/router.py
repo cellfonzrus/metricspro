@@ -2923,6 +2923,34 @@ def _flag_rules(client, org_id):
     return {"accessory_threshold": 35, "accessory_chargeback_amount": 0, "accessory_min_threshold": 0}
 
 
+def _accessory_config(client, org_id):
+    """Configurable accessory classification (mig 092): which POS departments and/or categories count as
+    accessory sales. Empty config → the historical default department 'Ondigo', so nothing changes until
+    the user sets it on Sales Report → ⚙️ Accessory settings. Returns normalized sets + the raw lists."""
+    depts, cats = [], []
+    try:
+        rows = (client.schema("commcalc").table("flag_rules")
+                .select("accessory_departments,accessory_categories").eq("org_id", org_id).eq("id", 1)
+                .limit(1).execute().data) or []
+        if rows:
+            depts = [d for d in (rows[0].get("accessory_departments") or []) if d]
+            cats = [c for c in (rows[0].get("accessory_categories") or []) if c]
+    except Exception:
+        pass
+    if not depts and not cats:
+        depts = ["Ondigo"]
+    return {"departments": {d.strip().lower() for d in depts},
+            "categories": {c.strip().lower() for c in cats},
+            "departments_list": depts, "categories_list": cats}
+
+
+def _is_accessory(dept, category, acfg):
+    """A sale line is an accessory if its department OR its category is in the configured lists."""
+    d = (dept or "").strip().lower()
+    c = (category or "").strip().lower()
+    return (d in acfg["departments"]) or (bool(c) and c in acfg["categories"])
+
+
 def _load_item_map(client, org_id):
     """{item_key: row} for the org's item_mapping (empty dict if migration 041 isn't run yet)."""
     try:
@@ -4014,7 +4042,12 @@ async def _run_calculation(period: str, org_id: str):
         stores     = fetch('stores')
         
         cfg = cfg_rows[0] if cfg_rows else {}
-        
+        # Thread the configurable accessory classification (mig 092) into the money path so commission
+        # accessory pay uses the same department/category rules as the reports (default 'Ondigo').
+        _acfg = _accessory_config(client, org_id)
+        cfg = {**cfg, 'accessory_departments': _acfg['departments_list'],
+               'accessory_categories': _acfg['categories_list']}
+
         # Resolve payment categories
         cat_map = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
         for r in pay_detail:
@@ -5109,17 +5142,23 @@ async def sales_report(period: str = "", org_id: str = ORG_ID):
     if not period:
         n = datetime.now(timezone.utc)
         period = f"{n.year}-{n.month:02d}"
-    cols = "trans_id,trans_date,store,salesperson,department,contract_type,ext_price,gp,voided,trans_type"
+    cols = "trans_id,trans_date,store,salesperson,department,category,contract_type,ext_price,gp,voided,trans_type"
+    acfg = _accessory_config(client, org_id)
 
     def _q(table):
         return (client.schema("commcalc").table(table).select(cols)
                 .eq("org_id", org_id).in_("period", _pvariants(period))
                 .limit(200000).execute().data) or []
-    rows = _q("raw_sales")
-    source = "raw_sales"
+    # ONE processed source, same preference as the targets: the OPEN month reads the daily feed (freshest
+    # + complete — the monthly raw_sales lags/promotes late even with 'auto' on), a closed month reads the
+    # authoritative raw_sales; each falls back to the other. This is why July always shows.
+    primary = "daily_sales_feed" if _is_open_month(period) else "raw_sales"
+    other = "raw_sales" if primary == "daily_sales_feed" else "daily_sales_feed"
+    rows = _q(primary)
+    source = primary
     if not rows:
         try:
-            rows = _q("daily_sales_feed"); source = "daily_sales_feed"
+            rows = _q(other); source = other
         except Exception:
             rows = []
 
@@ -5169,7 +5208,7 @@ async def sales_report(period: str = "", org_id: str = ORG_ID):
         a["lines"] += 1
         a["revenue"] += ext
         a["gp"] += gp
-        if dept == "Ondigo":
+        if _is_accessory(dept, r.get("category"), acfg):
             a["accessory_rev"] += ext
         _cls = classify_contract_type(r.get("contract_type"))   # shared classifier (matches commissions)
         if tid and _cls == "byod":
@@ -5214,21 +5253,36 @@ async def sales_report_detail(period: str = "", store: str = "", salesperson: st
             "product_desc,sku,ext_price,gp,mdn,serial_1,voided")
 
     def _q(table):
+        # Bound to the day in the query (trans_date may be a DATE or 'YYYY-MM-DD HH:MM' text — a
+        # lexicographic gte/lt range works for both). We DON'T .eq() store/salesperson here: the report
+        # STRIPPED those, so an exact match on the raw DB value (trailing spaces / case) returns nothing —
+        # that was the "drill-down shows no transactions" bug. We match them normalized in Python below.
         q = (client.schema("commcalc").table(table).select(cols)
              .eq("org_id", org_id).in_("period", _pvariants(period)).limit(50000))
-        if store:
-            q = q.eq("store", store)
-        if salesperson:
-            q = q.eq("salesperson", salesperson)
+        if date:
+            try:
+                from datetime import date as _d, timedelta as _td
+                nxt = (_d.fromisoformat(date) + _td(days=1)).isoformat()
+                q = q.gte("trans_date", date).lt("trans_date", nxt)
+            except Exception:
+                pass
         return q.execute().data or []
-    rows = _q("raw_sales")
+    _primary = "daily_sales_feed" if _is_open_month(period) else "raw_sales"
+    _other = "raw_sales" if _primary == "daily_sales_feed" else "daily_sales_feed"
+    rows = _q(_primary)
     if not rows:
         try:
-            rows = _q("daily_sales_feed")
+            rows = _q(_other)
         except Exception:
             rows = []
-    if date:
-        rows = [r for r in rows if str(r.get("trans_date") or "")[:10] == date]
+
+    def _n(s):
+        return (s or "").strip().lower()
+    ns, nr = _n(store), _n(salesperson)
+    rows = [r for r in rows
+            if (not date or str(r.get("trans_date") or "")[:10] == date)
+            and (not store or _n(r.get("store")) == ns)
+            and (not salesperson or _n(r.get("salesperson")) == nr)]
 
     txns = {}
     for r in rows:
@@ -5300,9 +5354,59 @@ def sales_diagnostics(period: str = "", org_id: str = ORG_ID):
            'upgrades': sum(a['upg_count'] for a in feed_actuals),
            'accessory_gp': round(sum(a['acc_gp'] for a in feed_actuals), 2),
            'store_rep_days': len(feed_actuals)}
+    acfg = _accessory_config(client, org_id)
     return {'period': period, 'period_variants': pv, 'open_month': _is_open_month(period),
             'daily_sales_feed': _scan('daily_sales_feed'), 'raw_sales': _scan('raw_sales'),
-            'computed_actuals_totals': tot}
+            'computed_actuals_totals': tot,
+            'accessory_config': {'departments': acfg['departments_list'], 'categories': acfg['categories_list']}}
+
+
+@router.get("/accessory-config")
+def get_accessory_config(org_id: str = ORG_ID):
+    """The configured accessory department/category lists (empty → defaults to department 'Ondigo')."""
+    c = _accessory_config(sb(), org_id)
+    return {"departments": c["departments_list"], "categories": c["categories_list"]}
+
+
+@router.put("/accessory-config")
+def put_accessory_config(body: dict, org_id: str = ORG_ID):
+    """Set which POS departments and/or categories count as accessory sales. Body:
+    {departments:[...], categories:[...]}. Drives the accessory$ in the Sales Report, the Action-Plan
+    accessory tile, and (on recalc) commission accessory pay. Needs migration 092."""
+    depts = [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()]
+    cats = [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()]
+    row = {"id": 1, "org_id": org_id, "accessory_departments": depts,
+           "accessory_categories": cats, "updated_at": _cb_now()}
+    try:
+        sb().schema("commcalc").table("flag_rules").upsert(row, on_conflict="id").execute()
+    except Exception as e:
+        raise HTTPException(500, f"save failed — run migration 092_accessory_classification.sql first: {e}")
+    return get_accessory_config(org_id)
+
+
+@router.get("/sales-fields")
+def sales_fields(period: str = "", org_id: str = ORG_ID):
+    """The distinct Department + Category values present in the sales data (populate the accessory-
+    settings dropdowns) plus the current accessory config. `period` optional (blank = all periods)."""
+    client = sb()
+    depts, cats = set(), set()
+    for tbl in ("daily_sales_feed", "raw_sales"):
+        try:
+            q = client.schema("commcalc").table(tbl).select("department,category").eq("org_id", org_id)
+            if period:
+                q = q.in_("period", _pvariants(period))
+            for r in (q.limit(200000).execute().data or []):
+                d = (r.get("department") or "").strip()
+                c = (r.get("category") or "").strip()
+                if d:
+                    depts.add(d)
+                if c:
+                    cats.add(c)
+        except Exception:
+            pass
+    cur = _accessory_config(client, org_id)
+    return {"departments": sorted(depts), "categories": sorted(cats),
+            "accessory_departments": cur["departments_list"], "accessory_categories": cur["categories_list"]}
 
 
 # ─────────────────────────────────────────────
@@ -5683,7 +5787,7 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
     is what fixes "activations/accessories show 0" when B2B's Contract Type labels drift from the exact
     strings the SQL function hardcodes (the July Action-Plan bug). Reads `source` (the daily feed),
     falling back to raw_sales. Returns the same shape targets_engine expects."""
-    cols = ("trans_id,trans_date,store,salesperson,user_login,contract_type,department,"
+    cols = ("trans_id,trans_date,store,salesperson,user_login,contract_type,department,category,"
             "product_desc,gp,voided,trans_type")
 
     def _q(table):
@@ -5697,6 +5801,7 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
             rows = []
     if not rows:
         return []
+    acfg = _accessory_config(client, org_id)
     sm = (client.schema('commcalc').table('store_mapping')
           .select('store_code,store_address').eq('org_id', org_id).execute().data) or []
     addr_to_code = {}
@@ -5735,7 +5840,7 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
             a['_upg'].add(tid)
         elif tid and _cls == 'premium':
             a['_prem'].add(tid)
-        if dept == 'Ondigo':
+        if _is_accessory(dept, r.get('category'), acfg):
             a['acc_gp'] += safe_float(r.get('gp'))
         if dept in _BOX_DEPTS:
             a['box_count'] += 1

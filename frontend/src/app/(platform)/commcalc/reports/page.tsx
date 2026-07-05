@@ -85,7 +85,7 @@ export default function ReportsPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Reports</h1>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Rep Commission Report</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             {period} · {reps.length} reps · Total: <strong style={{ color: 'var(--accent)' }}>{fmt(totalPayout)}</strong>
           </p>

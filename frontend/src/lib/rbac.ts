@@ -75,7 +75,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions' },
     { href: '/commcalc/sales-report', label: 'Sales Report', icon: '🧾', module: 'commissions' },
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/reports', label: 'All Reports', icon: '📋', module: 'commissions' },
+    { href: '/commcalc/reports', label: 'Rep Commission Report', icon: '📋', module: 'commissions' },
     { href: '/commcalc/kpi', label: 'KPI Metrics', icon: '🎯', module: 'commissions' },
     { href: '/commcalc/coaching', label: 'Rep Coaching', icon: '🎓', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-analyzer', label: 'Sales Analyzer', icon: '📉', module: 'commissions', scopes: ['all', 'market', 'store'] },

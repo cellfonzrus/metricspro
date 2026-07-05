@@ -21,6 +21,10 @@ export default function SalesReportPage() {
   const [openTxn, setOpenTxn] = useState<Record<string, boolean>>({})
   const [diag, setDiag] = useState<any>(null)            // data diagnostics for this period
   const [diagBusy, setDiagBusy] = useState(false)
+  const [accOpen, setAccOpen] = useState(false)          // accessory-settings modal
+  const [accFields, setAccFields] = useState<any>(null)  // distinct departments/categories + current config
+  const [accSel, setAccSel] = useState<{ d: string[]; c: string[] }>({ d: [], c: [] })
+  const [accMsg, setAccMsg] = useState('')
 
   function openDiag() {
     setDiag({}); setDiagBusy(true)
@@ -28,6 +32,21 @@ export default function SalesReportPage() {
       .then(setDiag).catch(e => setDiag({ error: String(e?.message || e) }))
       .finally(() => setDiagBusy(false))
   }
+  function openAccCfg() {
+    setAccOpen(true); setAccFields(null); setAccMsg('')
+    api(`/api/v1/commcalc/sales-fields?period=${encodeURIComponent(period)}`).then((f: any) => {
+      setAccFields(f)
+      setAccSel({ d: f.accessory_departments || [], c: f.accessory_categories || [] })
+    }).catch(e => setAccMsg('❌ ' + (e?.message || e)))
+  }
+  async function saveAccCfg() {
+    setAccMsg('Saving…')
+    try {
+      await api('/api/v1/commcalc/accessory-config', { method: 'PUT', body: JSON.stringify({ departments: accSel.d, categories: accSel.c }) })
+      setAccMsg('✅ Saved.'); setAccOpen(false); load()
+    } catch (e: any) { setAccMsg('❌ ' + (e?.message || e)) }
+  }
+  const toggle = (arr: string[], v: string) => arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v]
 
   function openDrill(r: any) {
     setDrill(r); setDetail(null); setOpenTxn({}); setDrillBusy(true)
@@ -94,6 +113,7 @@ export default function SalesReportPage() {
             : <input type="month" style={sel} value={period.length === 7 ? period : thisMonth()} onChange={e => setPeriod(e.target.value)} />}
         </label>
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openDiag}>🔍 Data diagnostics</button>
+        <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openAccCfg}>⚙️ Accessory settings</button>
         {data?.source === 'daily_sales_feed' && <span style={{ fontSize: 11, color: '#b45309' }}>source: daily email feed (raw_sales not promoted yet — enable ‘auto’ on Connectors)</span>}
         {data?.error && <span style={{ fontSize: 12, color: '#dc2626' }}>❌ {data.error}</span>}
       </div>
@@ -240,6 +260,50 @@ export default function SalesReportPage() {
                     </div>
                   )
                 })}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Accessory settings — configure which departments/categories count as accessory sales */}
+      {accOpen && (
+        <div onClick={() => setAccOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} className="card" style={{ background: 'var(--surface)', borderRadius: 12, padding: 20, width: 'min(720px,97vw)', maxHeight: '88vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>⚙️ Accessory settings</div>
+              <button className="btn btn-secondary" style={{ padding: '2px 10px' }} onClick={() => setAccOpen(false)}>✕</button>
+            </div>
+            <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 12px' }}>
+              Pick which POS <b>departments</b> and/or <b>categories</b> count as accessory sales. A line is an accessory if its department OR category is ticked. This drives the Accessory$ tile here, the Action-Plan accessory target, and (after a recalc) commission accessory pay. Leave everything unticked to fall back to the default department <code>Ondigo</code>.
+            </p>
+            {!accFields ? (
+              <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>{accMsg || 'Loading…'}</div>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                  {([['Departments', 'd', accFields.departments], ['Categories', 'c', accFields.categories]] as const).map(([lbl, keyName, list]: any) => (
+                    <div key={lbl}>
+                      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>{lbl} <span style={{ fontWeight: 400, color: 'var(--text3)' }}>({(list || []).length})</span></div>
+                      <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
+                        {(list || []).length === 0 ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>none in this period</div> : (list || []).map((v: string) => (
+                          <label key={v} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, padding: '2px 0' }}>
+                            <input type="checkbox" checked={(accSel as any)[keyName].includes(v)}
+                              onChange={() => setAccSel(s => ({ ...s, [keyName]: toggle((s as any)[keyName], v) }))} />
+                            {v}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, gap: 8 }}>
+                  <span style={{ fontSize: 12, color: accMsg.startsWith('❌') ? '#dc2626' : 'var(--text3)' }}>{accMsg}</span>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => setAccSel({ d: [], c: [] })}>Clear (use Ondigo default)</button>
+                    <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={saveAccCfg}>Save</button>
+                  </div>
+                </div>
               </>
             )}
           </div>
