@@ -10,6 +10,7 @@
 import { Fragment, useMemo, useState } from 'react'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
 
 type Col = ExportColumn
 type Filter = { field: string; op: string; value: string }
@@ -63,6 +64,7 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
 }) {
   const cols = useMemo(() => columns.filter(Boolean), [columns])
   const byKey = useMemo(() => Object.fromEntries(cols.map(c => [key(c), c])), [cols])
+  const cw = useColumnResize()   // auto-fit + user-resizable columns
 
   // Auto-detected quick-filter columns (first of each role).
   const repCol = useMemo(() => cols.find(c => detectRole(c) === 'rep'), [cols])
@@ -209,9 +211,11 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
       {children}
 
       {/* Table */}
+      {cw.dirty && <div style={{ fontSize: 11, color: 'var(--text3)', margin: '0 0 4px' }}><button className="btn" style={{ padding: '2px 8px', fontSize: 11 }} onClick={cw.resetAll}>↺ Reset column widths</button> <span>drag a column edge to resize · double-click to auto-fit</span></div>}
       <div className="table-wrapper" style={{ maxHeight: '70vh', overflow: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr>{cols.map(c => <th key={key(c)} style={{ ...th, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left' }}>{c.header}</th>)}</tr></thead>
+        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
+          <colgroup>{cols.map(c => <col key={key(c)} style={{ width: cw.width(key(c)) }} />)}</colgroup>
+          <thead><tr>{cols.map(c => <th key={key(c)} style={{ ...th, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', whiteSpace: 'nowrap', position: 'relative' }}>{c.header}<ResizeHandle onDown={e => cw.start(key(c), e)} onReset={() => cw.reset(key(c))} /></th>)}</tr></thead>
           <tbody>
             {!groups && filtered.map((r, i) => (
               <tr key={i} onClick={onRowClick ? () => onRowClick(r) : undefined} style={onRowClick ? { cursor: 'pointer' } : undefined}
