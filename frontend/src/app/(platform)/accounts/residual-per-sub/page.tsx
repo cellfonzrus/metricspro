@@ -1,9 +1,10 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { TrendChart, type TrendSeries } from '@/components/TrendChart'
 import { ExportButtons, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { captureChartPng } from '@/lib/chart-capture'
 
 // Residual (MI+ATU) per subscriber per store, month over month, with a commission overlay — to see
 // the effect of lower commissions on the residual payout. Data: GET /account/residual-per-sub?months=.
@@ -39,6 +40,8 @@ export default function ResidualPerSubPage() {
   const [showCommission, setShowCommission] = useState(true)
   const [perStore, setPerStore] = useState(false)
   const [msg, setMsg] = useState('')
+  const chartWrapRef = useRef<HTMLDivElement>(null)
+  const [chartImg, setChartImg] = useState('')
 
   useEffect(() => {
     setLoading(true); setMsg('')
@@ -105,8 +108,16 @@ export default function ResidualPerSubPage() {
       subtitle: `Last ${months} months${filtered ? ' · filtered' : ''}`,
       filename: `residual-per-sub-${months}mo`,
       sheets: [{ name: 'Residual per Sub', columns, rows }],
+      chartImage: chartImg,
     }
   }
+
+  // Capture the rendered chart to a PNG (debounced) so PDF / Print / Send embed the graph, not just the table.
+  useEffect(() => {
+    if (loading || !chartData.length) { setChartImg(''); return }
+    const t = setTimeout(() => { captureChartPng(chartWrapRef.current).then(setChartImg).catch(() => setChartImg('')) }, 450)
+    return () => clearTimeout(t)
+  }, [chartData, chartSeries, loading])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const rowsToShow = filtered ? visibleStores : stores
 
@@ -184,11 +195,13 @@ export default function ResidualPerSubPage() {
               {metricDef.label} — {breakout ? `${chartLines.length} store${chartLines.length > 1 ? 's' : ''}` : (filtered ? 'selected stores' : 'all stores')}
               {breakout && visibleStores.length > MAX_LINES && <span style={{ color: 'var(--text3)', fontWeight: 400 }}> (top {MAX_LINES} of {visibleStores.length} by residual)</span>}
             </div>
-            <TrendChart data={chartData} series={chartSeries} height={330}
-              leftMoney={metricDef.money} rightMoney
-              leftLabel={`${metricDef.label}${metricDef.money ? ' ($)' : ''}`}
-              rightLabel="commission paid ($)"
-              hint="A subscriber = a distinct phone number paid MI+ATU that month." />
+            <div ref={chartWrapRef}>
+              <TrendChart data={chartData} series={chartSeries} height={330}
+                leftMoney={metricDef.money} rightMoney
+                leftLabel={`${metricDef.label}${metricDef.money ? ' ($)' : ''}`}
+                rightLabel="commission paid ($)"
+                hint="A subscriber = a distinct phone number paid MI+ATU that month." />
+            </div>
           </div>
 
           {/* Matrix table */}

@@ -21,6 +21,14 @@ export type ExportPayload = {
   subtitle?: string
   filename: string // base name, no extension
   sheets: ExportSheet[]
+  chartImage?: string   // optional PNG data URL (a captured trend chart) rendered atop PDF + Print
+}
+
+function imgSize(dataUrl: string): Promise<{ w: number; h: number }> {
+  return new Promise(res => {
+    if (typeof window === 'undefined' || !dataUrl) { res({ w: 0, h: 0 }); return }
+    const im = new Image(); im.onload = () => res({ w: im.naturalWidth, h: im.naturalHeight }); im.onerror = () => res({ w: 0, h: 0 }); im.src = dataUrl
+  })
 }
 
 const money = (n: any) =>
@@ -89,6 +97,19 @@ async function buildPdfDoc(p: ExportPayload) {
   doc.setFontSize(8); doc.setTextColor(150, 163, 175)
   doc.text(new Date().toLocaleString(), pageW - 40, 42, { align: 'right' })
   let startY = p.subtitle ? 74 : 62
+  // Trend chart image atop the first page (scaled to fit).
+  if (p.chartImage) {
+    try {
+      const { w: iw, h: ih } = await imgSize(p.chartImage)
+      if (iw && ih) {
+        const maxW = pageW - 80, maxH = 250
+        let w = maxW, h = w * ih / iw
+        if (h > maxH) { h = maxH; w = h * iw / ih }
+        doc.addImage(p.chartImage, 'PNG', 40, startY, w, h)
+        startY += h + 18
+      }
+    } catch { /* chart is best-effort; table still exports */ }
+  }
   for (const sheet of p.sheets) {
     if (p.sheets.length > 1) {
       doc.setFontSize(11); doc.setTextColor(30, 58, 95)
@@ -147,9 +168,11 @@ export function printReport(p: ExportPayload) {
       th{background:#1e3a5f;color:#fff;text-align:left;padding:5px 8px;font-size:10px;text-transform:uppercase}
       td{padding:4px 8px;border-bottom:1px solid #e2e8f0}
       tr:nth-child(even) td{background:#f1f5f9}
-      .r{text-align:right} @media print{body{margin:10mm}}
+      .r{text-align:right} img.chart{max-width:100%;height:auto;margin:0 0 18px;border:1px solid #e2e8f0;border-radius:8px}
+      @media print{body{margin:10mm}}
     </style></head><body>
     <h1>${esc(p.title)}</h1>${p.subtitle ? `<p class="sub">${esc(p.subtitle)}</p>` : ''}
+    ${p.chartImage ? `<img class="chart" src="${p.chartImage}"/>` : ''}
     ${tables}
     <script>window.onload=function(){window.print()}</script>
     </body></html>`)
