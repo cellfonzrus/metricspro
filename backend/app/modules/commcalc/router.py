@@ -7213,6 +7213,49 @@ async def put_expenses(period: str, body: dict, org_id: str = ORG_ID):
     return {"saved": len(ins), "period": period}
 
 
+@router.get("/commission-by-store/{period}")
+async def commission_by_store(period: str, org_id: str = ORG_ID):
+    """Σ rep_commissions.total_payout per STORE CODE for the period — feeds the Store Expenses
+    'Employee Commission' auto-fill (the commission we PAY reps, booked as a store expense).
+    rep_commissions.store is an address/label, so it's resolved to a store_code via store_mapping by
+    street number (the same bridge gp_report uses). Returns commission_by_store {store_code: $} plus
+    the total that couldn't be matched to a store."""
+    require_org(org_id)
+    import re as _re
+    client = sb()
+    comms = (client.schema('commcalc').table('rep_commissions')
+             .select('store,total_payout').eq('org_id', org_id)
+             .in_('period', _pvariants(period)).execute().data) or []
+    sm = (client.schema('commcalc').table('store_mapping')
+          .select('store_code,store_address').eq('org_id', org_id).execute().data) or []
+
+    def _num(a):
+        m = _re.match(r'\s*(\d+)', str(a or ''))
+        return m.group(1) if m else ''
+
+    # street-number -> store_code, and also allow rep_commissions.store to already BE a store_code
+    code_by_num, codes = {}, set()
+    for s in sm:
+        code = str(s.get('store_code') or '').strip()
+        if code:
+            codes.add(code)
+        n = _num(s.get('store_address'))
+        if n and code:
+            code_by_num.setdefault(n, code)
+
+    out, unmatched = {}, 0.0
+    for r in comms:
+        pay = safe_float(r.get('total_payout'))
+        st = str(r.get('store') or '').strip()
+        code = st if st in codes else code_by_num.get(_num(st))
+        if code:
+            out[code] = round(out.get(code, 0.0) + pay, 2)
+        else:
+            unmatched = round(unmatched + pay, 2)
+    return {"period": period, "commission_by_store": out,
+            "stores": len(out), "unmatched_total": unmatched}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # GENERIC FTP-PULL SWEEP (Theme 6) — pull vendor files (B2B etc.) → route to upload parsers (mig 046)
 # ═══════════════════════════════════════════════════════════════════════════════

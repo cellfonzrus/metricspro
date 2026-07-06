@@ -12,7 +12,8 @@ const DEFAULT_CATS: { name: string; type: string }[] = [
   { name: 'Cleaning', type: 'Fixed' }, { name: 'Garbage / Waste', type: 'Variable' },
   { name: 'Maintenance', type: 'Fixed' }, { name: 'ADT Security', type: 'Fixed' },
   { name: 'Back Office Fee', type: 'Fixed' }, { name: 'Taxes / Accounting', type: 'Fixed' },
-  { name: 'Employee Salaries', type: 'Fixed' }, { name: 'Owner / Mgmt Salaries', type: 'Fixed' },
+  { name: 'Employee Salaries', type: 'Fixed' }, { name: 'Employee Commission', type: 'Fixed' },
+  { name: 'Owner / Mgmt Salaries', type: 'Fixed' },
 ]
 const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const SALARY_ROW = 'Employee Salaries'
@@ -23,6 +24,24 @@ function periodToMonth(p: string): string {
   const m = MONTHS[mon]
   return m && yr ? `${yr}-${String(m).padStart(2, '0')}` : ''
 }
+const COMMISSION_ROW = 'Employee Commission'
+// Matrix-upload support: map a store owner's own category labels → the canonical expense names, and the
+// rows to skip (computed totals / targets, which aren't expenses).
+const CAT_ALIASES: Record<string, string> = {
+  rent: 'Rent / Lease', b2b: 'B2B Platform Fee', cellsmart: 'Cellsmart POS', electric: 'Electric',
+  heat: 'Heat / Gas', 'heat / gas': 'Heat / Gas', water: 'Water', internet: 'Internet',
+  insurane: 'Insurance', insurance: 'Insurance', advertise: 'Advertising', advertising: 'Advertising',
+  cleaning: 'Cleaning', garbage: 'Garbage / Waste', 'garbage / waste': 'Garbage / Waste',
+  maintance: 'Maintenance', maintenance: 'Maintenance', adt: 'ADT Security', 'adt security': 'ADT Security',
+  backoffice: 'Back Office Fee', 'back office fee': 'Back Office Fee', 'taxes/lalit': 'Taxes / Accounting',
+  taxes: 'Taxes / Accounting', 'taxes / accounting': 'Taxes / Accounting',
+  'emp. salaries': 'Employee Salaries', 'emp salaries': 'Employee Salaries', 'employee salaries': 'Employee Salaries',
+  'emp commission': 'Employee Commission', 'emp. commission': 'Employee Commission', 'employee commission': 'Employee Commission',
+  'our salaries': 'Owner / Mgmt Salaries', 'owner / mgmt salaries': 'Owner / Mgmt Salaries',
+}
+const CAT_SKIP = new Set(['', 'store#', 'store #', 'total', 'sub total', 'subtotal', 'total exp.', 'total exp', 'min.sales target', 'min sales target', 'min. sales target'])
+const canonCat = (raw: string) => { const k = (raw || '').trim().toLowerCase(); return CAT_ALIASES[k] || (raw || '').trim() }
+const typeFor = (name: string) => DEFAULT_CATS.find(c => c.name === name)?.type || 'Fixed'
 
 export default function ExpensesPage() {
   const { period } = usePeriod()
@@ -40,6 +59,8 @@ export default function ExpensesPage() {
   const [autoSave, setAutoSave] = useState(false)
   const [salaryBusy, setSalaryBusy] = useState(false)
   const [salaryFrom, setSalaryFrom] = useState('')     // where the salary auto-fill came from (banner)
+  const [commissionBusy, setCommissionBusy] = useState(false)
+  const [commissionFrom, setCommissionFrom] = useState('')
   const [dirty, setDirty] = useState(0)                // bumps ONLY on real edits → drives auto-save
 
   function load() {
@@ -49,7 +70,8 @@ export default function ExpensesPage() {
       api('/api/v1/storeops/stores').catch(() => []),
       api(`/api/v1/commcalc/expenses/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => ({ expenses: [] })),
       mo ? api(`/api/v1/storeops/payroll-by-store?month=${mo}&org_id=${ORG_ID}`).catch(() => ({ stores: [] })) : Promise.resolve({ stores: [] }),
-    ]).then(([st, ex, pay]: any) => {
+      api(`/api/v1/commcalc/commission-by-store/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => ({ commission_by_store: {} })),
+    ]).then(([st, ex, pay, comm]: any) => {
       setStores((st || []).filter((s: any) => s.is_active !== false))
       setCarriedFrom(ex?.carried_from || '')
       const map: any = {}; const extra: Record<string, string> = {}
@@ -58,13 +80,20 @@ export default function ExpensesPage() {
         map[e.store_code][e.expense_name] = parseFloat(e.amount) || 0
         if (!DEFAULT_CATS.find(c => c.name === e.expense_name)) extra[e.expense_name] = e.expense_type || 'Fixed'
       })
-      // Auto-fill Employee Salaries from worked hours when the month is fresh (carried from last month,
-      // or no salary saved yet). A month with a saved salary is left alone — use ↻ to re-pull on demand.
+      // Auto-fill Employee Salaries (from worked hours) and Employee Commission (from calculated rep
+      // commissions) when the month is fresh (carried from last month, or that row has nothing saved).
+      // A month with a saved value is left alone — use the ↻ buttons to re-pull on demand.
       const hasSalary = (ex.expenses || []).some((e: any) => e.expense_name === SALARY_ROW && parseFloat(e.amount) > 0)
       if ((ex?.carried_from || !hasSalary) && (pay.stores || []).length) {
         ;(pay.stores || []).forEach((s: any) => { if (!map[s.store_code]) map[s.store_code] = {}; map[s.store_code][SALARY_ROW] = s.amount || 0 })
         setSalaryFrom(period)
       } else setSalaryFrom('')
+      const hasComm = (ex.expenses || []).some((e: any) => e.expense_name === COMMISSION_ROW && parseFloat(e.amount) > 0)
+      const cmap = comm?.commission_by_store || {}
+      if ((ex?.carried_from || !hasComm) && Object.keys(cmap).length) {
+        Object.entries(cmap).forEach(([sc, amt]: any) => { if (!map[sc]) map[sc] = {}; map[sc][COMMISSION_ROW] = Number(amt) || 0 })
+        setCommissionFrom(period)
+      } else setCommissionFrom('')
       setAmounts(map)
       setCats([...DEFAULT_CATS, ...Object.entries(extra).map(([name, type]) => ({ name, type: type as string }))])
     }).catch(console.error).finally(() => { setDirty(0); setLoading(false) })
@@ -125,6 +154,23 @@ export default function ExpensesPage() {
     setSalaryBusy(false)
   }
 
+  // Pull the calculated rep commissions (rep_commissions.total_payout, summed per store) into the
+  // Employee Commission row — the commission we pay reps, booked as a store expense. Editable after.
+  async function fillCommission() {
+    setCommissionBusy(true); setMsg('')
+    try {
+      const r = await api(`/api/v1/commcalc/commission-by-store/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+      const cmap = r?.commission_by_store || {}
+      const map = { ...amounts }
+      Object.entries(cmap).forEach(([sc, amt]: any) => { if (!map[sc]) map[sc] = {}; map[sc][COMMISSION_ROW] = Number(amt) || 0 })
+      setAmounts(map); setCommissionFrom(period); setDirty(d => d + 1)
+      const total = Object.values(cmap).reduce((a: number, v: any) => a + (Number(v) || 0), 0)
+      setMsg(`Filled Employee Commission from calculated commissions for ${period} (${fmt(total)} across ${Object.keys(cmap).length} stores)`
+        + (r?.unmatched_total ? ` · ${fmt(r.unmatched_total)} couldn't be matched to a store` : '') + '. Review, then Save.')
+    } catch (e: any) { setMsg('Could not load commissions: ' + (e?.message || e)) }
+    setCommissionBusy(false)
+  }
+
   async function downloadTemplate() {
     const XLSX = await import('xlsx')
     const aoa: any[] = [['store_code', 'expense_name', 'expense_type', 'amount']]
@@ -132,24 +178,45 @@ export default function ExpensesPage() {
     const ws = XLSX.utils.aoa_to_sheet(aoa); const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Expenses'); XLSX.writeFile(wb, `expenses-${period.replace(/\s+/g, '-')}.xlsx`)
   }
+  // Accepts BOTH layouts: LONG (columns store_code/expense_name/expense_type/amount) and the natural
+  // MATRIX/pivot an owner keeps by hand (col A = expense names, header row = store codes across the top).
+  // Category labels are mapped to the canonical names (canonCat) and computed total/target rows skipped.
   async function upload(file: File) {
     setUpBusy(true); setMsg('Reading sheet…')
     try {
       const XLSX = await import('xlsx')
       const wb = XLSX.read(await file.arrayBuffer())
-      const raw: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
-      const pick = (r: any, k: string[]) => { for (const kk of Object.keys(r)) if (k.includes(kk.trim().toLowerCase())) return String(r[kk]).trim(); return '' }
-      const map = { ...amounts }; const newCats: Record<string, string> = {}
-      raw.forEach(r => {
-        const sc = pick(r, ['store_code', 'store']); const nm = pick(r, ['expense_name', 'expense', 'name'])
-        const tp = pick(r, ['expense_type', 'type']) || 'Fixed'; const amt = parseFloat(pick(r, ['amount', 'amt'])) || 0
-        if (!sc || !nm) return
-        if (!map[sc]) map[sc] = {}; map[sc][nm] = amt
-        if (!cats.find(c => c.name === nm)) newCats[nm] = tp
-      })
+      const aoa: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+      if (!aoa.length) { setMsg('That sheet is empty.'); setUpBusy(false); return }
+      const hdr = (aoa[0] || []).map((h: any) => String(h).trim().toLowerCase())
+      const isLong = hdr.some(h => ['store_code', 'store'].includes(h)) && hdr.some(h => ['expense_name', 'expense', 'name'].includes(h)) && hdr.some(h => ['amount', 'amt'].includes(h))
+      const num = (v: any) => parseFloat(String(v ?? '').replace(/[$,\s]/g, '')) || 0
+      const map = { ...amounts }; const newCats: Record<string, string> = {}; let loaded = 0
+      const put = (sc: string, nm: string, amt: number) => { sc = String(sc).trim(); if (!sc || !nm) return; if (!map[sc]) map[sc] = {}; map[sc][nm] = amt; if (!cats.find(c => c.name === nm) && !newCats[nm]) newCats[nm] = typeFor(nm); loaded++ }
+      if (isLong) {
+        const idx = (keys: string[]) => hdr.findIndex(h => keys.includes(h))
+        const iSC = idx(['store_code', 'store']), iNM = idx(['expense_name', 'expense', 'name']), iTP = idx(['expense_type', 'type']), iAM = idx(['amount', 'amt'])
+        aoa.slice(1).forEach(r => {
+          const nm = canonCat(String(r[iNM] || ''))
+          if (iTP >= 0 && r[iTP] && !cats.find(c => c.name === nm)) newCats[nm] = String(r[iTP]).trim()
+          put(String(r[iSC] || ''), nm, num(r[iAM]))
+        })
+      } else {
+        const storeCodes = (aoa[0] || []).slice(1).map((s: any) => String(s).trim())
+        aoa.slice(1).forEach(r => {
+          const rawLabel = String(r[0] || '').trim()
+          if (CAT_SKIP.has(rawLabel.toLowerCase())) return
+          const nm = canonCat(rawLabel)
+          storeCodes.forEach((sc, i) => { if (sc) put(sc, nm, num(r[i + 1])) })
+        })
+      }
       setAmounts(map); setDirty(d => d + 1)
-      if (Object.keys(newCats).length) setCats(c => [...c, ...Object.entries(newCats).map(([name, type]) => ({ name, type: type as string }))])
-      setMsg(`Loaded ${raw.length} rows. Review, then Save All.`)
+      if (Object.keys(newCats).length) setCats(c => [...c, ...Object.entries(newCats).filter(([n]) => !c.find(x => x.name === n)).map(([name, type]) => ({ name, type: type as string }))])
+      const matched = Object.keys(map).filter(sc => stores.find(s => s.store_code === sc)).length
+      const unmatched = Object.keys(map).filter(sc => !stores.find(s => s.store_code === sc))
+      setMsg(`Loaded ${loaded} values (${isLong ? 'long' : 'matrix'} format). ${matched} store(s) matched the system`
+        + (unmatched.length ? `; ${unmatched.length} store code(s) not in StoreOps didn't map: ${unmatched.slice(0, 6).join(', ')}${unmatched.length > 6 ? '…' : ''}` : '')
+        + '. Review, then Save All.')
     } catch (e: any) { setMsg('Upload failed: ' + (e?.message || e)) }
     setUpBusy(false)
   }
@@ -166,6 +233,9 @@ export default function ExpensesPage() {
           <button className="btn" onClick={fillSalaries} disabled={salaryBusy || loading}
             title="Fill the Employee Salaries row from worked hours (actual where clocked, else scheduled) × pay rate">
             {salaryBusy ? '…' : '↻ Salaries from hours'}</button>
+          <button className="btn" onClick={fillCommission} disabled={commissionBusy || loading}
+            title="Fill the Employee Commission row from calculated rep commissions (rep_commissions) per store">
+            {commissionBusy ? '…' : '↻ Commission from calc'}</button>
           <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text2)', cursor: 'pointer' }}
             title="Save automatically ~1s after each edit">
             <input type="checkbox" checked={autoSave} onChange={e => setAutoSave(e.target.checked)} /> Auto-save
@@ -204,6 +274,12 @@ export default function ExpensesPage() {
         <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#f0fdf4', borderLeft: '4px solid #16a34a', fontSize: 13 }}>
           💵 <b>Employee Salaries auto-filled from worked hours</b> for {period} (actual hours where clocked, otherwise scheduled, × each employee's pay rate).
           Edit any store's figure to override, or hit <b>↻ Salaries from hours</b> to re-pull. Nothing is saved until you <b>Save All</b>.
+        </div>
+      )}
+      {commissionFrom && !loading && (
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#fef9f0', borderLeft: '4px solid #f59e0b', fontSize: 13 }}>
+          🧮 <b>Employee Commission auto-filled from calculated commissions</b> for {period} (rep_commissions total payout, summed per store).
+          Edit to override or hit <b>↻ Commission from calc</b> to re-pull. Save All to keep.
         </div>
       )}
 
