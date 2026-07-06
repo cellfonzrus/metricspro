@@ -1,8 +1,15 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
+import { TrendChart } from '@/components/TrendChart'
+
+const r2 = (n: number) => Math.round((n || 0) * 100) / 100
+const shortPeriod = (p: string) => {
+  const m = String(p || '').match(/^([A-Za-z]+)\s+(\d{4})$/)
+  return m ? `${m[1].slice(0, 3)} '${m[2].slice(2)}` : p
+}
 
 interface StoreRow {
   store: string; store_code: string; market: string
@@ -46,6 +53,7 @@ export default function GPReportPage() {
   const [data, setData] = useState<any>({})
   const [loading, setLoading] = useState(true)
   const [markets, setMarkets] = useState<string[]>([])
+  const [gpTrend, setGpTrend] = useState<any>(null)   // month-over-month net-profit chart on top
 
   useEffect(() => {
     setLoading(true)
@@ -60,6 +68,15 @@ export default function GPReportPage() {
       .catch(console.error)
       .finally(() => setLoading(false))
   }, [period])
+  // Net-profit + revenue trend for the chart on top (cross-period, fetched once).
+  useEffect(() => { api(`/api/v1/commcalc/gp-trend?months=6&org_id=${ORG_ID}`).then(setGpTrend).catch(() => {}) }, [])
+
+  const gpTrendData = useMemo(() => (gpTrend?.months || []).map((p: string) => {
+    let np = 0, rev = 0
+    if (!selMarkets.length) { const c = (gpTrend?.company || []).find((x: any) => x.period === p); np = c?.net_profit || 0; rev = c?.total_rev || 0 }
+    else (gpTrend?.stores || []).filter((s: any) => selMarkets.includes(s.market)).forEach((s: any) => { const pt = s.series.find((x: any) => x.period === p); np += pt?.net_profit || 0; rev += pt?.total_rev || 0 })
+    return { name: shortPeriod(p), net_profit: r2(np), total_rev: r2(rev) }
+  }), [gpTrend, selMarkets])
 
   const allRows: StoreRow[] = data.store_rows || []
   const rows: StoreRow[] = allRows.filter(r => {
@@ -161,6 +178,18 @@ export default function GPReportPage() {
           </div>
         ))}
       </div>
+
+      {/* Net-profit trend on top */}
+      {gpTrendData.length > 1 && (
+        <div className="card" style={{ padding: '12px 12px 6px', marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, paddingLeft: 6 }}>
+            📈 Net profit &amp; revenue — last {gpTrendData.length} months{selMarkets.length ? ` · ${selMarkets.join(', ')}` : ' · all stores'}
+            {gpTrend?.pending_months?.length ? <span style={{ fontWeight: 400, color: '#f59e0b' }}> · {gpTrend.pending_months.length} month(s) computing (reload)</span> : ''}
+          </div>
+          <TrendChart data={gpTrendData} height={220}
+            series={[{ key: 'net_profit', name: 'Net profit', color: '#16a34a', money: true }, { key: 'total_rev', name: 'Revenue', color: '#2e75b6', money: true, dashed: true }]} />
+        </div>
+      )}
 
       {/* Rep view */}
       {!loading && view === 'rep' && (

@@ -1,7 +1,14 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { TrendChart } from '@/components/TrendChart'
+
+const r2 = (n: number) => Math.round((n || 0) * 100) / 100
+const shortPeriod = (p: string) => {
+  const m = String(p || '').match(/^([A-Za-z]+)\s+(\d{4})$/)
+  return m ? `${m[1].slice(0, 3)} '${m[2].slice(2)}` : p
+}
 
 // Default expense list (name + Fixed/Variable). The user can add ad-hoc expenses.
 const DEFAULT_CATS: { name: string; type: string }[] = [
@@ -62,6 +69,7 @@ export default function ExpensesPage() {
   const [commissionBusy, setCommissionBusy] = useState(false)
   const [commissionFrom, setCommissionFrom] = useState('')
   const [dirty, setDirty] = useState(0)                // bumps ONLY on real edits → drives auto-save
+  const [expTrend, setExpTrend] = useState<any>(null)  // month-over-month total-expenses chart on top
 
   function load() {
     setLoading(true)
@@ -99,6 +107,8 @@ export default function ExpensesPage() {
     }).catch(console.error).finally(() => { setDirty(0); setLoading(false) })
   }
   useEffect(() => { load() }, [period])
+  // Month-over-month total-expenses trend for the chart on top (cross-period, so fetched once).
+  useEffect(() => { api(`/api/v1/commcalc/expenses-trend?months=6&org_id=${ORG_ID}`).then(setExpTrend).catch(() => {}) }, [])
 
   // Persist the auto-save preference across sessions.
   useEffect(() => { if (typeof window !== 'undefined' && localStorage.getItem('exp_autosave') === '1') setAutoSave(true) }, [])
@@ -117,6 +127,13 @@ export default function ExpensesPage() {
   const setVal = (sc: string, n: string, v: number) => { setAmounts(a => ({ ...a, [sc]: { ...a[sc], [n]: v } })); setDirty(d => d + 1) }
   const storeTotal = (sc: string) => cats.reduce((s, c) => s + getVal(sc, c.name), 0)
   const grand = visStores.reduce((s, st) => s + storeTotal(st.store_code), 0)
+  // Total-expenses trend, aggregated to the current market filter (all stores when no market picked).
+  const expTrendData = useMemo(() => (expTrend?.months || []).map((p: string) => {
+    let v = 0
+    if (!market) { const c = (expTrend?.company || []).find((x: any) => x.period === p); v = c?.total || 0 }
+    else (expTrend?.stores || []).filter((s: any) => s.market === market).forEach((s: any) => { const pt = s.series.find((x: any) => x.period === p); v += pt?.total || 0 })
+    return { name: shortPeriod(p), total: r2(v) }
+  }), [expTrend, market])
 
   function addCat() {
     const name = newCat.name.trim()
@@ -263,6 +280,13 @@ export default function ExpensesPage() {
             onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.currentTarget.value = '' }} />
         </label>
       </div>
+
+      {expTrendData.length > 1 && !loading && (
+        <div className="card" style={{ padding: '12px 12px 6px', marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, paddingLeft: 6 }}>📉 Total expenses — last {expTrendData.length} months{market ? ` · ${market}` : ' · all stores'}</div>
+          <TrendChart data={expTrendData} height={210} series={[{ key: 'total', name: 'Total expenses', color: '#dc2626', money: true }]} />
+        </div>
+      )}
 
       {carriedFrom && !loading && (
         <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#eef6ff', borderLeft: '4px solid var(--accent)', fontSize: 13 }}>
