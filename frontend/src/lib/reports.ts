@@ -40,6 +40,7 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/accounts/pl', label: 'P&L Statement', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/balance-sheet', label: 'Balance Sheet', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/recon', label: 'Reconciliation', module: 'accounts', scopes: ['all', 'market'] },
+    { href: '/accounts/residual-per-sub', label: 'Residual per Subscriber', module: 'accounts', scopes: ['all', 'market'] },
   ] },
   { category: 'StoreOps', reports: [
     { href: '/storeops/reports', label: 'Hours / Payroll Reports', module: 'storeops', scopes: ['all', 'market'] },

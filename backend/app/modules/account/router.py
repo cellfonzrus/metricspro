@@ -349,6 +349,19 @@ async def sweep_credit_memos(org_id: str = ORG_ID):
         raise HTTPException(500, f"credit-memo sweep failed: {type(e).__name__}: {e}")
 
 
+# ── residual per subscriber (MI+ATU) per store, month over month + commission overlay ─────────
+@router.get("/residual-per-sub")
+async def residual_per_sub(months: int = 6, org_id: str = ORG_ID):
+    """Residual (MI+ATU) per SUBSCRIBER per store, month over month, with each month's commission
+    (rep_commissions.total_payout) alongside it — built to show the effect of lower commissions on the
+    residual payout over time. Store/market filtering is client-side, so every store's monthly series
+    is returned. Aggregated in Postgres via commcalc.residual_per_sub_by_store (falls back to a bounded
+    Python aggregation until migration 101 is run)."""
+    require_org(org_id)
+    from app.modules.account import residual_subs
+    return residual_subs.compute(sb(), org_id, months=max(1, min(int(months or 6), 36)))
+
+
 # ── health ──────────────────────────────────────────────────────────────────────────────────
 @router.get("/health")
 async def health():
