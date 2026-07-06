@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { TrendChart } from '@/components/TrendChart'
+import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
 
 const r2 = (n: number) => Math.round((n || 0) * 100) / 100
 const shortPeriod = (p: string) => {
@@ -70,6 +71,7 @@ export default function ExpensesPage() {
   const [commissionFrom, setCommissionFrom] = useState('')
   const [dirty, setDirty] = useState(0)                // bumps ONLY on real edits → drives auto-save
   const [expTrend, setExpTrend] = useState<any>(null)  // month-over-month total-expenses chart on top
+  const cw = useColumnResize()                          // auto-fit + user-resizable columns
 
   function load() {
     setLoading(true)
@@ -313,17 +315,24 @@ export default function ExpensesPage() {
         <div className="card" style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>No stores match. (Add stores in StoreOps Admin.)</div>
       ) : (
         <div style={{ overflowX: 'auto', background: 'white', border: '1px solid var(--border)', borderRadius: 12 }}>
-          <table style={{ minWidth: visStores.length * 150 + 240, borderCollapse: 'collapse' }}>
+          {cw.dirty && <div style={{ padding: '4px 10px', fontSize: 11, color: 'var(--text3)' }}><button className="btn" style={{ padding: '2px 8px', fontSize: 11 }} onClick={cw.resetAll}>↺ Reset column widths</button> <span>drag a column edge to resize · double-click to auto-fit</span></div>}
+          <table style={{ borderCollapse: 'collapse', tableLayout: 'auto' }}>
+            <colgroup>
+              <col style={{ width: cw.width('expense') }} />
+              {visStores.map(s => <col key={s.store_code} style={{ width: cw.width(s.store_code) }} />)}
+              <col style={{ width: cw.width('total') }} />
+            </colgroup>
             <thead>
               <tr style={{ background: 'var(--accent)' }}>
-                <th style={{ padding: '10px 16px', color: 'white', fontSize: 12, textAlign: 'left', position: 'sticky', left: 0, background: 'var(--accent)', width: 230 }}>Expense</th>
+                <th style={{ padding: '10px 16px', color: 'white', fontSize: 12, textAlign: 'left', position: 'sticky', left: 0, background: 'var(--accent)', whiteSpace: 'nowrap' }}>Expense<ResizeHandle onDown={e => cw.start('expense', e)} onReset={() => cw.reset('expense')} /></th>
                 {visStores.map(s => (
-                  <th key={s.store_code} style={{ padding: '8px 10px', color: 'white', fontSize: 11, textAlign: 'right', minWidth: 130 }}>
+                  <th key={s.store_code} style={{ padding: '8px 10px', color: 'white', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative' }}>
                     <div style={{ fontWeight: 700 }}>{s.store_code}</div>
                     <div style={{ fontWeight: 400, opacity: 0.7, fontSize: 10 }}>{(s.address || '').substring(0, 18)}</div>
+                    <ResizeHandle onDown={e => cw.start(s.store_code, e)} onReset={() => cw.reset(s.store_code)} />
                   </th>
                 ))}
-                <th style={{ padding: '10px 14px', color: 'white', fontSize: 12, textAlign: 'right', width: 110 }}>Total</th>
+                <th style={{ padding: '10px 14px', color: 'white', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative' }}>Total<ResizeHandle onDown={e => cw.start('total', e)} onReset={() => cw.reset('total')} /></th>
               </tr>
             </thead>
             <tbody>

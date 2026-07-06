@@ -4,6 +4,7 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
 import { TrendChart } from '@/components/TrendChart'
+import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
 
 const r2 = (n: number) => Math.round((n || 0) * 100) / 100
 const shortPeriod = (p: string) => {
@@ -54,6 +55,7 @@ export default function GPReportPage() {
   const [loading, setLoading] = useState(true)
   const [markets, setMarkets] = useState<string[]>([])
   const [gpTrend, setGpTrend] = useState<any>(null)   // month-over-month net-profit chart on top
+  const cw = useColumnResize()                          // auto-fit + user-resizable columns
 
   useEffect(() => {
     setLoading(true)
@@ -229,17 +231,22 @@ export default function GPReportPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : view === 'store' && (
         <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 320px)', background: 'white', border: '1px solid var(--border)', borderRadius: 12 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1600 }}>
+          {cw.dirty && <div style={{ padding: '4px 10px', fontSize: 11, color: 'var(--text3)' }}><button className="btn" style={{ padding: '2px 8px', fontSize: 11 }} onClick={cw.resetAll}>↺ Reset column widths</button> <span>drag a column edge to resize · double-click to auto-fit</span></div>}
+          <table style={{ borderCollapse: 'collapse', tableLayout: 'auto' }}>
+            <colgroup>
+              <col style={{ width: cw.width('store') }} />
+              {COLS.map(c => <col key={c.key} style={{ width: cw.width(c.key) }} />)}
+            </colgroup>
             <thead>
               <tr>
-                <th style={{ padding: '12px 14px', color: 'white', fontSize: 12, fontWeight: 700, letterSpacing: '0.03em', textAlign: 'left', position: 'sticky', left: 0, top: 0, zIndex: 3, background: '#1e3a5f', width: 200 }}>
-                  STORE
+                <th style={{ padding: '12px 14px', color: 'white', fontSize: 12, fontWeight: 700, letterSpacing: '0.03em', textAlign: 'left', position: 'sticky', left: 0, top: 0, zIndex: 3, background: '#1e3a5f', whiteSpace: 'nowrap' }}>
+                  STORE<ResizeHandle onDown={e => cw.start('store', e)} onReset={() => cw.reset('store')} />
                 </th>
                 {COLS.map(c => (
                   <th key={c.key} style={{ padding: '12px 10px', color: 'white', fontSize: 12, fontWeight: 700, letterSpacing: '0.03em', textAlign: 'right',
                     position: 'sticky', top: 0, zIndex: 2, background: '#1e3a5f', whiteSpace: 'nowrap',
                     borderLeft: ['comm', 'total_rev', 'rep_pay', 'net_profit'].includes(c.key) ? '2px solid rgba(255,255,255,0.25)' : undefined }}>
-                    {c.label}
+                    {c.label}<ResizeHandle onDown={e => cw.start(c.key, e)} onReset={() => cw.reset(c.key)} />
                   </th>
                 ))}
               </tr>

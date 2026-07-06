@@ -5,6 +5,7 @@ import { TrendChart, type TrendSeries } from '@/components/TrendChart'
 import { ExportButtons, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { captureChartPng } from '@/lib/chart-capture'
+import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
 
 // Residual (MI+ATU) per subscriber per store, month over month, with a commission overlay — to see
 // the effect of lower commissions on the residual payout. Data: GET /account/residual-per-sub?months=.
@@ -42,6 +43,7 @@ export default function ResidualPerSubPage() {
   const [msg, setMsg] = useState('')
   const chartWrapRef = useRef<HTMLDivElement>(null)
   const [chartImg, setChartImg] = useState('')
+  const cw = useColumnResize()
 
   useEffect(() => {
     setLoading(true); setMsg('')
@@ -206,12 +208,18 @@ export default function ResidualPerSubPage() {
 
           {/* Matrix table */}
           <div style={{ overflowX: 'auto', background: 'white', border: '1px solid var(--border)', borderRadius: 12 }}>
-            <table style={{ minWidth: periods.length * 92 + 300, borderCollapse: 'collapse', width: '100%' }}>
+            {cw.dirty && <div style={{ padding: '4px 10px', fontSize: 11, color: 'var(--text3)' }}><button className="btn" style={{ padding: '2px 8px', fontSize: 11 }} onClick={cw.resetAll}>↺ Reset column widths</button> <span>drag a column edge to resize · double-click to auto-fit</span></div>}
+            <table style={{ borderCollapse: 'collapse', width: '100%', tableLayout: 'auto' }}>
+              <colgroup>
+                <col style={{ width: cw.width('store') }} />
+                {periods.map(p => <col key={p} style={{ width: cw.width(p) }} />)}
+                <col style={{ width: cw.width('total') }} />
+              </colgroup>
               <thead>
                 <tr style={{ background: 'var(--accent)' }}>
-                  <th style={{ padding: '10px 14px', color: 'white', fontSize: 12, textAlign: 'left', position: 'sticky', left: 0, background: 'var(--accent)', minWidth: 200 }}>Store · {metricDef.label}</th>
-                  {periods.map(p => <th key={p} style={{ padding: '10px 10px', color: 'white', fontSize: 11, textAlign: 'right' }}>{shortPeriod(p)}</th>)}
-                  <th style={{ padding: '10px 12px', color: 'white', fontSize: 11, textAlign: 'right' }}>Total</th>
+                  <th style={{ padding: '10px 14px', color: 'white', fontSize: 12, textAlign: 'left', position: 'sticky', left: 0, background: 'var(--accent)', whiteSpace: 'nowrap' }}>Store · {metricDef.label}<ResizeHandle onDown={e => cw.start('store', e)} onReset={() => cw.reset('store')} /></th>
+                  {periods.map(p => <th key={p} style={{ padding: '10px 10px', color: 'white', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative' }}>{shortPeriod(p)}<ResizeHandle onDown={e => cw.start(p, e)} onReset={() => cw.reset(p)} /></th>)}
+                  <th style={{ padding: '10px 12px', color: 'white', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative' }}>Total<ResizeHandle onDown={e => cw.start('total', e)} onReset={() => cw.reset('total')} /></th>
                 </tr>
               </thead>
               <tbody>
