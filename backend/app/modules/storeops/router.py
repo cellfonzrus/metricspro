@@ -230,6 +230,49 @@ def get_payroll(month: str = None, authorization: str = Header(default=""), org_
     return sorted(rows, key=lambda x: x["name"])
 
 
+@router.get("/payroll-by-store")
+def get_payroll_by_store(month: str = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Per-STORE payroll for a month, for the Store Expenses 'Employee Salaries' auto-fill.
+
+    For each shift in the month, hours = actual_hours where clocked else scheduled_hours (SAME basis
+    as /payroll, so the numbers reconcile), pay = hours * the employee's pay_rate, attributed to the
+    shift's own store_code (a floater's hours land at the store they worked). Returns one row per store:
+    {store_code, hours, amount}."""
+    q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
+    if month:
+        # Exclusive upper bound = first day of next month (avoids the invalid "{month}-32" DATE cast).
+        parts = str(month).split("-")
+        y, m = int(parts[0]), int(parts[1])
+        nxt = f"{y + 1}-01-01" if m == 12 else f"{y}-{m + 1:02d}-01"
+        q = q.gte("shift_date", f"{month}-01").lt("shift_date", nxt)
+    shifts = q.execute().data or []
+    # All employees (active OR not) — a terminated rep who worked this month still earns; rate=0 if unknown.
+    employees = sb().table("employees").select("employee_id,pay_rate").eq("org_id", org_id).execute().data or []
+    rate_map = {e.get("employee_id"): float(e.get("pay_rate") or 0) for e in employees}
+
+    by_store = {}
+    for s in shifts:
+        store = (s.get("store_code") or "").strip()
+        if not store:
+            continue
+        sched = float(s.get("scheduled_hours") or 0)
+        act = float(s.get("actual_hours") or 0)
+        hrs = act if act > 0 else sched
+        rate = rate_map.get(s.get("employee_id"), 0.0)
+        d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
+        d["hours"] += hrs
+        d["amount"] += hrs * rate
+
+    rows = list(by_store.values())
+    for r in rows:
+        r["hours"] = round(r["hours"], 2)
+        r["amount"] = round(r["amount"], 2)
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
+    return {"month": month, "stores": sorted(rows, key=lambda x: x["store_code"])}
+
+
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
 EMP_FIELDS = ("name", "home_store", "role", "pay_rate", "is_active", "email",

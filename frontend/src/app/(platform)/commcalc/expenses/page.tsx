@@ -15,6 +15,14 @@ const DEFAULT_CATS: { name: string; type: string }[] = [
   { name: 'Employee Salaries', type: 'Fixed' }, { name: 'Owner / Mgmt Salaries', type: 'Fixed' },
 ]
 const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
+const SALARY_ROW = 'Employee Salaries'
+// 'June 2026' → '2026-06' for the storeops payroll month filter (no Date() to dodge the UTC off-by-one).
+const MONTHS: Record<string, number> = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12 }
+function periodToMonth(p: string): string {
+  const [mon, yr] = (p || '').trim().toLowerCase().split(/\s+/)
+  const m = MONTHS[mon]
+  return m && yr ? `${yr}-${String(m).padStart(2, '0')}` : ''
+}
 
 export default function ExpensesPage() {
   const { period } = usePeriod()
@@ -29,13 +37,19 @@ export default function ExpensesPage() {
   const [newCat, setNewCat] = useState({ name: '', type: 'Fixed' })
   const [upBusy, setUpBusy] = useState(false)
   const [carriedFrom, setCarriedFrom] = useState('')
+  const [autoSave, setAutoSave] = useState(false)
+  const [salaryBusy, setSalaryBusy] = useState(false)
+  const [salaryFrom, setSalaryFrom] = useState('')     // where the salary auto-fill came from (banner)
+  const [dirty, setDirty] = useState(0)                // bumps ONLY on real edits → drives auto-save
 
   function load() {
     setLoading(true)
+    const mo = periodToMonth(period)
     Promise.all([
       api('/api/v1/storeops/stores').catch(() => []),
       api(`/api/v1/commcalc/expenses/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => ({ expenses: [] })),
-    ]).then(([st, ex]: any) => {
+      mo ? api(`/api/v1/storeops/payroll-by-store?month=${mo}&org_id=${ORG_ID}`).catch(() => ({ stores: [] })) : Promise.resolve({ stores: [] }),
+    ]).then(([st, ex, pay]: any) => {
       setStores((st || []).filter((s: any) => s.is_active !== false))
       setCarriedFrom(ex?.carried_from || '')
       const map: any = {}; const extra: Record<string, string> = {}
@@ -44,17 +58,34 @@ export default function ExpensesPage() {
         map[e.store_code][e.expense_name] = parseFloat(e.amount) || 0
         if (!DEFAULT_CATS.find(c => c.name === e.expense_name)) extra[e.expense_name] = e.expense_type || 'Fixed'
       })
+      // Auto-fill Employee Salaries from worked hours when the month is fresh (carried from last month,
+      // or no salary saved yet). A month with a saved salary is left alone — use ↻ to re-pull on demand.
+      const hasSalary = (ex.expenses || []).some((e: any) => e.expense_name === SALARY_ROW && parseFloat(e.amount) > 0)
+      if ((ex?.carried_from || !hasSalary) && (pay.stores || []).length) {
+        ;(pay.stores || []).forEach((s: any) => { if (!map[s.store_code]) map[s.store_code] = {}; map[s.store_code][SALARY_ROW] = s.amount || 0 })
+        setSalaryFrom(period)
+      } else setSalaryFrom('')
       setAmounts(map)
       setCats([...DEFAULT_CATS, ...Object.entries(extra).map(([name, type]) => ({ name, type: type as string }))])
-    }).catch(console.error).finally(() => setLoading(false))
+    }).catch(console.error).finally(() => { setDirty(0); setLoading(false) })
   }
   useEffect(() => { load() }, [period])
+
+  // Persist the auto-save preference across sessions.
+  useEffect(() => { if (typeof window !== 'undefined' && localStorage.getItem('exp_autosave') === '1') setAutoSave(true) }, [])
+  useEffect(() => { if (typeof window !== 'undefined') localStorage.setItem('exp_autosave', autoSave ? '1' : '0') }, [autoSave])
+  // Auto-save: debounce 1.2s after a real edit (dirty>0), only when the toggle is on and not loading.
+  useEffect(() => {
+    if (!autoSave || loading || dirty === 0) return
+    const t = setTimeout(() => { save(true) }, 1200)
+    return () => clearTimeout(t)
+  }, [dirty, autoSave])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const markets = Array.from(new Set(stores.map(s => s.market).filter(Boolean))).sort()
   const visStores = stores.filter(s => (!market || s.market === market) &&
     (!storeSearch || `${s.store_code} ${s.address || ''}`.toLowerCase().includes(storeSearch.toLowerCase())))
   const getVal = (sc: string, n: string) => amounts[sc]?.[n] || 0
-  const setVal = (sc: string, n: string, v: number) => setAmounts(a => ({ ...a, [sc]: { ...a[sc], [n]: v } }))
+  const setVal = (sc: string, n: string, v: number) => { setAmounts(a => ({ ...a, [sc]: { ...a[sc], [n]: v } })); setDirty(d => d + 1) }
   const storeTotal = (sc: string) => cats.reduce((s, c) => s + getVal(sc, c.name), 0)
   const grand = visStores.reduce((s, st) => s + storeTotal(st.store_code), 0)
 
@@ -65,15 +96,33 @@ export default function ExpensesPage() {
     setCats(c => [...c, { name, type: newCat.type }]); setNewCat({ name: '', type: 'Fixed' })
   }
 
-  async function save() {
-    setSaving(true); setMsg('')
+  async function save(silent = false) {
+    setSaving(true); if (!silent) setMsg('')
     const rows: any[] = []
     stores.forEach(s => cats.forEach(c => { const amt = getVal(s.store_code, c.name); if (amt > 0) rows.push({ store_code: s.store_code, expense_name: c.name, expense_type: c.type, amount: amt }) }))
     try {
       const r = await api(`/api/v1/commcalc/expenses/${encodeURIComponent(period)}?org_id=${ORG_ID}`, { method: 'PUT', body: JSON.stringify({ rows }) })
-      setMsg(`Saved ${r.saved} expense entries. Re-run Calculation to include in Gross Profit.`)
-    } catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) }
+      setMsg(silent ? `Auto-saved ✓ ${new Date().toLocaleTimeString()}` : `Saved ${r.saved} expense entries. Re-run Calculation to include in Gross Profit.`)
+      setCarriedFrom(''); setSalaryFrom(''); setDirty(0)   // once saved for THIS period it's no longer carried/pending
+    } catch (e: any) { setMsg((silent ? 'Auto-save' : 'Save') + ' failed: ' + (e?.message || e)) }
     setSaving(false)
+  }
+
+  // Pull per-store worked-hours payroll (actual where clocked, else scheduled × pay rate) into the
+  // Employee Salaries row. Editable afterward; auto-save persists it if the toggle is on.
+  async function fillSalaries() {
+    const mo = periodToMonth(period)
+    if (!mo) { setMsg('Could not read the period as a month.'); return }
+    setSalaryBusy(true); setMsg('')
+    try {
+      const r = await api(`/api/v1/storeops/payroll-by-store?month=${mo}&org_id=${ORG_ID}`)
+      const map = { ...amounts }
+      ;(r.stores || []).forEach((s: any) => { if (!map[s.store_code]) map[s.store_code] = {}; map[s.store_code][SALARY_ROW] = s.amount || 0 })
+      setAmounts(map); setSalaryFrom(period); setDirty(d => d + 1)
+      const total = (r.stores || []).reduce((a: number, s: any) => a + (s.amount || 0), 0)
+      setMsg(`Filled Employee Salaries from worked hours for ${period} (${fmt(total)} across ${(r.stores || []).length} stores). Review, then Save.`)
+    } catch (e: any) { setMsg('Could not load payroll: ' + (e?.message || e)) }
+    setSalaryBusy(false)
   }
 
   async function downloadTemplate() {
@@ -98,7 +147,7 @@ export default function ExpensesPage() {
         if (!map[sc]) map[sc] = {}; map[sc][nm] = amt
         if (!cats.find(c => c.name === nm)) newCats[nm] = tp
       })
-      setAmounts(map)
+      setAmounts(map); setDirty(d => d + 1)
       if (Object.keys(newCats).length) setCats(c => [...c, ...Object.entries(newCats).map(([name, type]) => ({ name, type: type as string }))])
       setMsg(`Loaded ${raw.length} rows. Review, then Save All.`)
     } catch (e: any) { setMsg('Upload failed: ' + (e?.message || e)) }
@@ -114,7 +163,14 @@ export default function ExpensesPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{msg}</span>}
-          <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? '…' : '💾 Save All'}</button>
+          <button className="btn" onClick={fillSalaries} disabled={salaryBusy || loading}
+            title="Fill the Employee Salaries row from worked hours (actual where clocked, else scheduled) × pay rate">
+            {salaryBusy ? '…' : '↻ Salaries from hours'}</button>
+          <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text2)', cursor: 'pointer' }}
+            title="Save automatically ~1s after each edit">
+            <input type="checkbox" checked={autoSave} onChange={e => setAutoSave(e.target.checked)} /> Auto-save
+          </label>
+          <button className="btn btn-primary" onClick={() => save()} disabled={saving}>{saving ? '…' : '💾 Save All'}</button>
         </div>
       </div>
 
@@ -142,6 +198,12 @@ export default function ExpensesPage() {
         <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#eef6ff', borderLeft: '4px solid var(--accent)', fontSize: 13 }}>
           📋 <b>Carried forward from {carriedFrom}</b> — no expenses entered for {period} yet, so last month's are pre-filled below.
           Review and <b>Save All</b> to keep them for {period} (they'll carry to next month too).
+        </div>
+      )}
+      {salaryFrom && !loading && (
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#f0fdf4', borderLeft: '4px solid #16a34a', fontSize: 13 }}>
+          💵 <b>Employee Salaries auto-filled from worked hours</b> for {period} (actual hours where clocked, otherwise scheduled, × each employee's pay rate).
+          Edit any store's figure to override, or hit <b>↻ Salaries from hours</b> to re-pull. Nothing is saved until you <b>Save All</b>.
         </div>
       )}
 
