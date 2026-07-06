@@ -120,11 +120,13 @@ export default function EmailImportsPage() {
     setBusy('run')
     try {
       const r: any = await api(`/api/v1/commcalc/email-sweep/run-now?account=${encodeURIComponent(cfg.account || 'default')}`, { method: 'POST', body: '{}' })
+      const errs = (r.files || []).filter((f: any) => f.status === 'error')
       setMsg(!r.ok ? `❌ ${r.error}`
         : r.ingested > 0 ? `✅ Ingested ${r.ingested} attachment(s).`
+        : errs.length ? `⚠️ 0 ingested — ${errs.length} file(s) errored: ${errs.slice(0, 2).map((e: any) => `${e.file}: ${e.detail}`).join(' · ')}`
         : !(cfg.patterns || []).some((p: any) => (p.pattern || '').trim())
           ? '⚠️ 0 ingested — this mailbox has NO filename rules, so nothing can match. Add the rules below and Save.'
-          : '⚠️ 0 ingested — no NEW attachments matched your rules (already-imported files are skipped; use Test connection to see the attachment names in the box).')
+          : '⚠️ 0 ingested — nothing new: matched files already imported OK (errored/empty ones now auto-retry), or none match your rules. Use Test connection to see the attachment names + which rule they hit.')
       refresh(cfg.account)
     }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }

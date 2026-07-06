@@ -7648,8 +7648,12 @@ async def _run_email_sweep(org_id, account='default'):
              'last_status': "no filename rules configured — add patterns, nothing can match"})
         return {"ok": False, "account": account,
                 "error": "This mailbox has no filename rules — add a rule (e.g. *Sales*Transaction*Details* → daily sales) and Save."}
-    seen = client.schema('commcalc').table('email_processed').select('message_id,filename').eq('org_id', org_id).limit(100000).execute().data or []
-    already = {(r.get('message_id'), r.get('filename')) for r in seen}
+    seen = client.schema('commcalc').table('email_processed').select('message_id,filename,rows_saved,status').eq('org_id', org_id).limit(100000).execute().data or []
+    # Skip a file ONLY if it ACTUALLY ingested (status ok + rows saved). A prior attempt that errored or
+    # saved 0 rows is NOT treated as done, so it auto-retries on the next sweep — fixes "a file that failed
+    # once is skipped forever (0 ingested)" without any manual email_processed cleanup.
+    already = {(r.get('message_id'), r.get('filename')) for r in seen
+               if r.get('status') == 'ok' and (r.get('rows_saved') or 0) > 0}
     try:
         files = _email.fetch_new_attachments(cfg, already)
     except Exception as e:
@@ -7701,10 +7705,15 @@ async def _run_email_sweep(org_id, account='default'):
                 await _send_alert(client, org_id, "connector", subject, text, ref)
         except Exception as e:
             print(f"WARN row-count guardrail alert failed: {e}")
+    errs = [r for r in results if r['status'] == 'error']
+    status_msg = (f"{ok}/{len(results)} attachments ingested" if results
+                  else "no new attachments to import — matched files already imported OK, or none match your rules (use Test connection)")
+    if errs:
+        status_msg += " · errors: " + "; ".join(f"{e['file']}: {e['detail']}" for e in errs[:2])[:240]
+    if shrinks:
+        status_msg += f" ⚠️ {len(shrinks)} partial-export drop(s)"
     _email_status_update(client, org_id, account,
-        {'last_run_at': _datetime.now(_timezone.utc).isoformat(),
-         'last_status': f"{ok}/{len(results)} attachments ingested"
-                        + (f" ⚠️ {len(shrinks)} partial-export drop(s)" if shrinks else "")})
+        {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': status_msg})
     # Auto-derive the monthly commission basis (raw_sales) from the feed when 'sales' is set to auto
     # on the Connectors page — best-effort + guarded, never breaks the sweep. This is what lets the
     # user stop uploading the monthly Sales file by hand. OFF until 'sales' auto is enabled.
