@@ -172,6 +172,88 @@ _SHRINK_MIN_PRIOR = 100   # only guard a key that already had a meaningful row c
 _SHRINK_RATIO = 0.5       # alert when the incoming count is < 50% of what it replaces
 
 
+# ── Built-in vs. self-serve custom import types ──────────────────────────────────────────────
+# The seeded, hard-coded parsers upload_file knows. Anything NOT here is treated as a user-defined
+# custom sheet (migration 099) IF it's registered in report_definitions — captured generically as
+# JSONB, no code. Kept as a module constant so upload_file and the custom-type endpoints agree.
+BUILTIN_UPLOAD_TYPES = ["sales", "daily_sales", "payment_detail", "mi_report", "dlar_rep", "dlar_store",
+                        "catalog", "master_cats", "comp_report", "inventory_aging", "x_report",
+                        "ma_commission", "ma_daily_tx", "ma_fulfillment"]  # Total/VidaPay MA reports (mig 083)
+CUSTOM_IMPORT_TABLE = "raw_custom_import"
+
+
+def _custom_report_def(client, org_id, report_key):
+    """Return the report_definitions row for a USER-DEFINED custom-capture sheet (generic JSONB), else
+    None. A custom sheet is one whose target_table is the catch-all or whose upload_endpoint is 'custom'
+    — created self-serve on Email/FTP Imports, never a built-in/column-mapped report."""
+    if not report_key:
+        return None
+    try:
+        rows = (client.schema("commcalc").table("report_definitions").select("*")
+                .eq("org_id", org_id).eq("report_key", report_key).limit(1).execute().data) or []
+    except Exception:
+        return None
+    rd = rows[0] if rows else None
+    if rd and (rd.get("upload_endpoint") == "custom" or rd.get("target_table") == CUSTOM_IMPORT_TABLE):
+        return rd
+    return None
+
+
+async def _ingest_custom_report(report_key, file, period, org_id, rdef=None):
+    """Generic JSONB capture for a self-serve custom sheet (migration 099). Reads the sheet and stores
+    every row verbatim into commcalc.raw_custom_import keyed by report_key — same guards as the other
+    importers: never wipe on an empty/unreadable file, replace-by-period (or by filename when periodless)
+    so a re-import is idempotent, batched insert, upload_log. Returns {saved, ...} like upload_mapped so
+    the FTP/email sweeps read res['saved'] uniformly."""
+    client = sb()
+    contents = await file.read()
+    fname = getattr(file, "filename", "") or ""
+    try:
+        df = _read_upload_df(contents, fname)
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file for '{report_key}': {e}")
+    # Honor the report's period_mode: 'none' → capture periodless (ignore any month the sweep supplied).
+    if (rdef or {}).get("period_mode") == "none":
+        period = ""
+    pm = parse_period(period) if period else {"month": 0, "year": 0}
+    records = df.to_dict("records")
+    rows = []
+    for i, r in enumerate(records):
+        data = {str(k).strip(): ("" if v is None else str(v)) for k, v in r.items() if str(k).strip()}
+        if not any(str(v).strip().lower() not in ("", "nan", "none") for v in data.values()):
+            continue  # skip a fully-blank row
+        rows.append({"org_id": org_id, "report_key": report_key, "period": period or None,
+                     "period_month": pm["month"] or None, "period_year": pm["year"] or None,
+                     "source_filename": fname or None, "row_index": i, "data": data})
+    if not rows:
+        # Empty/misaligned file → never wipe what's already captured.
+        return {"saved": 0, "report_key": report_key, "target_table": CUSTOM_IMPORT_TABLE, "period": period,
+                "note": "no data rows found — nothing captured (existing data preserved)"}
+    # Replace prior rows for this sheet+period (or sheet+filename when periodless) so re-imports don't stack.
+    try:
+        q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE).delete()
+             .eq("org_id", org_id).eq("report_key", report_key))
+        q = q.in_("period", _pvariants(period)) if period else q.eq("source_filename", fname or "")
+        q.execute()
+    except Exception as e:
+        raise HTTPException(500, f"Failed to clear existing custom-import rows for '{report_key}': {e}")
+    saved = 0
+    for i in range(0, len(rows), 500):
+        try:
+            client.schema("commcalc").table(CUSTOM_IMPORT_TABLE).insert(rows[i:i + 500]).execute()
+            saved += len(rows[i:i + 500])
+        except Exception as e:
+            raise HTTPException(500, f"Insert into {CUSTOM_IMPORT_TABLE} failed at row {i}: {e}")
+    try:
+        client.schema("commcalc").table("upload_log").insert(
+            {"org_id": org_id, "file_type": report_key, "period": period or None,
+             "filename": fname or None, "rows_saved": saved}).execute()
+    except Exception as e:
+        print(f"WARN upload_log insert failed: {e}")
+    return {"saved": saved, "report_key": report_key, "target_table": CUSTOM_IMPORT_TABLE,
+            "period": period, "rows_read": len(records)}
+
+
 # ── Upload endpoints ─────────────────────────────────────────
 @router.post("/upload/{file_type}")
 async def upload_file(
@@ -188,9 +270,14 @@ async def upload_file(
     can't be mislabeled into the wrong month — the bug that wiped a month's residual trend."""
     require_org(org_id)
     
-    SUPPORTED = ["sales","daily_sales","payment_detail","mi_report","dlar_rep","dlar_store","catalog","master_cats","comp_report","inventory_aging","x_report",
-                 "ma_commission","ma_daily_tx","ma_fulfillment"]  # Total/VidaPay Master-Agent reports (mig 083)
+    SUPPORTED = BUILTIN_UPLOAD_TYPES
     if file_type not in SUPPORTED:
+        # Self-serve custom sheet (report_definitions, target_table=raw_custom_import / upload_endpoint=
+        # 'custom') → generic JSONB capture, no code. Both sweeps AND manual upload reach it through here,
+        # so a user can add a new auto-import sheet (e.g. B2B "Sales Trend") without a code change.
+        _rdef = _custom_report_def(sb(), org_id, file_type)
+        if _rdef:
+            return await _ingest_custom_report(file_type, file, period, org_id, _rdef)
         raise HTTPException(400, f"Unknown file type: {file_type}. Supported: {SUPPORTED}")
     
     contents = await file.read()
@@ -2530,6 +2617,103 @@ def update_report_def(rid: str, body: dict, org_id: str = ORG_ID):
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
     sb().schema('commcalc').table('report_definitions').update(row).eq('org_id', org_id).eq('id', rid).execute()
     return {"ok": True}
+
+
+# ── Self-serve custom import sheets (migration 099) ─────────────────────────────────────────────
+# A user adds a NEW auto-import sheet (e.g. B2B "Sales Trend") from the UI: create a custom type here,
+# then add a filename pattern on Email/FTP Imports pointing at its report_key. The sweep captures every
+# row as JSONB into raw_custom_import — no code, no per-report table. See _ingest_custom_report above.
+def _slugify_report_key(s):
+    out = "".join(ch if ch.isalnum() else "_" for ch in (s or "").lower())
+    while "__" in out:
+        out = out.replace("__", "_")
+    return out.strip("_") or "custom_report"
+
+
+@router.get("/custom-import-types")
+def list_custom_import_types(org_id: str = ORG_ID):
+    """Every user-defined custom sheet + its captured-row count, for the Email/FTP Imports dropdown."""
+    require_org(org_id)
+    client = sb()
+    defs = (client.schema('commcalc').table('report_definitions').select('*')
+            .eq('org_id', org_id).execute().data) or []
+    custom = [d for d in defs if d.get('upload_endpoint') == 'custom' or d.get('target_table') == CUSTOM_IMPORT_TABLE]
+    out = []
+    for d in custom:
+        rk = d.get('report_key')
+        try:
+            cnt = (client.schema('commcalc').table(CUSTOM_IMPORT_TABLE).select('id', count='exact')
+                   .eq('org_id', org_id).eq('report_key', rk).limit(1).execute()).count or 0
+        except Exception:
+            cnt = 0
+        out.append({'report_key': rk, 'label': d.get('label') or rk,
+                    'period_mode': d.get('period_mode'), 'note': d.get('note'), 'rows': cnt})
+    return sorted(out, key=lambda r: (r['label'] or '').lower())
+
+
+@router.post("/custom-import-types")
+def create_custom_import_type(body: dict, org_id: str = ORG_ID):
+    """Register a self-serve custom sheet. body: {label, report_key?, period_mode?, note?}. Auto-slugs a
+    report_key from the label, rejects a collision with a built-in type, and marks it as a generic JSONB
+    capture (target_table=raw_custom_import). Returns the report_key to use in a filename pattern.
+    Idempotent (upsert by report_key)."""
+    require_org(org_id)
+    label = (body.get('label') or '').strip()
+    if not label:
+        raise HTTPException(400, "label required")
+    rk = _slugify_report_key((body.get('report_key') or '').strip() or label)
+    if rk in BUILTIN_UPLOAD_TYPES:
+        raise HTTPException(400, f"'{rk}' is a built-in report type — pick a different name")
+    row = {'org_id': org_id, 'report_key': rk, 'label': label,
+           'period_mode': (body.get('period_mode') or 'current'),
+           'target_table': CUSTOM_IMPORT_TABLE, 'upload_endpoint': 'custom',
+           'auto': True, 'note': (body.get('note') or None),
+           'updated_at': _datetime.now(_timezone.utc).isoformat()}
+    r = sb().schema('commcalc').table('report_definitions').upsert(row, on_conflict='org_id,report_key').execute()
+    return (r.data[0] if r.data else row)
+
+
+@router.delete("/custom-import-types/{report_key}")
+def delete_custom_import_type(report_key: str, purge: bool = False, org_id: str = ORG_ID):
+    """Remove a custom sheet definition. purge=true also deletes its captured rows (default keeps them)."""
+    require_org(org_id)
+    client = sb()
+    if not _custom_report_def(client, org_id, report_key):
+        raise HTTPException(404, f"no custom sheet '{report_key}'")
+    client.schema('commcalc').table('report_definitions').delete().eq('org_id', org_id).eq('report_key', report_key).execute()
+    purged = 0
+    if purge:
+        try:
+            res = (client.schema('commcalc').table(CUSTOM_IMPORT_TABLE).delete()
+                   .eq('org_id', org_id).eq('report_key', report_key).execute())
+            purged = len(res.data or [])
+        except Exception:
+            pass
+    return {"ok": True, "report_key": report_key, "purged_rows": purged}
+
+
+@router.get("/custom-import/{report_key}")
+def view_custom_import(report_key: str, limit: int = 200, period: str = "", org_id: str = ORG_ID):
+    """Viewer: recent captured rows for a custom sheet + the union of columns seen, so it isn't a black
+    box. Flattens each row's JSONB `data` for display."""
+    require_org(org_id)
+    client = sb()
+    q = (client.schema('commcalc').table(CUSTOM_IMPORT_TABLE)
+         .select('period,source_filename,row_index,data,created_at')
+         .eq('org_id', org_id).eq('report_key', report_key))
+    if period:
+        q = q.in_('period', _pvariants(period))
+    rows = (q.order('created_at', desc=True).order('row_index').limit(min(limit, 2000)).execute().data) or []
+    cols, seen = [], set()
+    for r in rows:
+        for k in (r.get('data') or {}).keys():
+            if k not in seen:
+                seen.add(k)
+                cols.append(k)
+    flat = [{**{c: (r.get('data') or {}).get(c, '') for c in cols},
+             '_period': r.get('period'), '_file': r.get('source_filename')} for r in rows]
+    periods = sorted({r.get('period') for r in rows if r.get('period')})
+    return {"report_key": report_key, "columns": cols, "rows": flat, "count": len(flat), "periods": periods}
 
 
 # ── Connector sweep registry (B-phase2 de-hardcode) ────────────────────────────────────────────

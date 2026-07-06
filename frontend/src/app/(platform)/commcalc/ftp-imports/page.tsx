@@ -5,7 +5,7 @@ import { api } from '@/lib/client'
 // Generic FTP-pull sweep (Theme 6). Configure a vendor's FTP (host/creds/folder) and filename →
 // upload-type patterns; the backend pulls new files on a schedule and routes each to the right parser.
 // Nothing hard-coded — works for B2B Soft or any vendor that FTP-pushes report files.
-const UPLOAD_TYPES = ['sales', 'daily_sales', 'payment_detail', 'mi_report', 'dlar_rep', 'dlar_store', 'comp_report', 'catalog', 'inventory_aging', 'x_report']
+const BUILTIN_TYPES = ['sales', 'daily_sales', 'payment_detail', 'mi_report', 'dlar_rep', 'dlar_store', 'comp_report', 'catalog', 'inventory_aging', 'x_report', 'ma_commission', 'ma_daily_tx', 'ma_fulfillment']
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
 const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 2 }
@@ -17,10 +17,12 @@ export default function FtpImportsPage() {
   const [processed, setProcessed] = useState<any[]>([])
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
+  const [customTypes, setCustomTypes] = useState<any[]>([])   // self-serve custom sheets (mig 099); managed on Email Imports
 
   const load = useCallback(() => {
     api('/api/v1/commcalc/ftp-sweep/config').then((c: any) => setCfg({ ...c, patterns: c.patterns || [] })).catch(() => {})
     api('/api/v1/commcalc/ftp-sweep/processed').then((p: any) => setProcessed(p || [])).catch(() => {})
+    api('/api/v1/commcalc/custom-import-types').then((r: any) => setCustomTypes(Array.isArray(r) ? r : [])).catch(() => {})
   }, [])
   useEffect(() => { load() }, [load])
 
@@ -28,6 +30,7 @@ export default function FtpImportsPage() {
   const setPat = (i: number, patch: any) => setCfg((c: any) => ({ ...c, patterns: c.patterns.map((p: any, j: number) => j === i ? { ...p, ...patch } : p) }))
   const addPat = () => setCfg((c: any) => ({ ...c, patterns: [...(c.patterns || []), { pattern: '', upload_type: 'sales', note: '' }] }))
   const delPat = (i: number) => setCfg((c: any) => ({ ...c, patterns: c.patterns.filter((_: any, j: number) => j !== i) }))
+  const knownTypeKeys = new Set([...BUILTIN_TYPES, ...customTypes.map((c: any) => c.report_key)])
 
   const body = () => ({ ...cfg, password: pwd || undefined })
 
@@ -81,7 +84,13 @@ export default function FtpImportsPage() {
             {(cfg.patterns || []).map((p: any, i: number) => (
               <tr key={i}>
                 <td style={cell}><input style={{ ...sel, width: '100%' }} placeholder="*Sales-Transaction-Details*" value={p.pattern || ''} onChange={e => setPat(i, { pattern: e.target.value })} /></td>
-                <td style={cell}><select style={sel} value={p.upload_type} onChange={e => setPat(i, { upload_type: e.target.value })}>{UPLOAD_TYPES.map(u => <option key={u} value={u}>{u}</option>)}</select></td>
+                <td style={cell}><select style={sel} value={p.upload_type} onChange={e => setPat(i, { upload_type: e.target.value })}>
+                  <optgroup label="Built-in">{BUILTIN_TYPES.map((u: string) => <option key={u} value={u}>{u}</option>)}</optgroup>
+                  {customTypes.length > 0 && (
+                    <optgroup label="Custom sheets">{customTypes.map((c: any) => <option key={c.report_key} value={c.report_key}>{c.label + ' (' + c.report_key + ')'}</option>)}</optgroup>
+                  )}
+                  {p.upload_type && !knownTypeKeys.has(p.upload_type) && <option value={p.upload_type}>{p.upload_type}</option>}
+                </select></td>
                 <td style={cell}><input style={{ ...sel, width: '100%' }} placeholder="optional" value={p.note || ''} onChange={e => setPat(i, { note: e.target.value })} /></td>
                 <td style={cell}><button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={() => delPat(i)}>✕</button></td>
               </tr>

@@ -28,7 +28,7 @@ const btnP: React.CSSProperties = { ...btn, background: 'var(--accent,#2563eb)',
 const chip = (role: string): React.CSSProperties => ({ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, color: '#fff', background: ROLE_COLOR[role] || '#64748b' })
 
 export default function OnboardingAdminPage() {
-  const [tab, setTab] = useState<'docs' | 'setup'>('docs')
+  const [tab, setTab] = useState<'docs' | 'done' | 'setup'>('docs')
   const [cats, setCats] = useState<Cat[]>([])
   const [ready, setReady] = useState(true)
   const [states, setStates] = useState<string[]>([])
@@ -136,12 +136,14 @@ export default function OnboardingAdminPage() {
 
       {/* tabs: the operational Documents board vs the checklist/intake template setup */}
       <div style={{ display: 'flex', gap: 6, borderBottom: '1px solid var(--border)', marginBottom: 16 }}>
-        {([['docs', '📤 Documents'], ['setup', '🧩 Checklist setup']] as const).map(([k, l]) => (
+        {([['docs', '📤 Documents'], ['done', '✅ Completed'], ['setup', '🧩 Checklist setup']] as const).map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} style={{ padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none', borderBottom: tab === k ? '2px solid var(--accent,#2563eb)' : '2px solid transparent', color: tab === k ? 'var(--accent,#2563eb)' : 'var(--text2)' }}>{l}</button>
         ))}
       </div>
 
       {tab === 'docs' && <DocumentsBoard />}
+
+      {tab === 'done' && <CompletedDocuments />}
 
       {tab === 'setup' && <>
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
@@ -422,6 +424,130 @@ function DocumentsBoard() {
           )
         })}
         {shown.length === 0 && <div style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text3)' }}>No employees match.</div>}
+      </div>
+    </div>
+  )
+}
+
+
+// ── ✅ Completed — review & approve finished packets, forward to a customizable accounting destination ──
+function CompletedDocuments() {
+  const [rows, setRows] = useState<any[]>([])
+  const [ready, setReady] = useState(true)
+  const [cfg, setCfg] = useState<any>({ emails: [], subject: '', message: '', include_portal_link: true, email_configured: true, ready: true })
+  const [emailsText, setEmailsText] = useState('')
+  const [q, setQ] = useState('')
+  const [busy, setBusy] = useState('')
+  const [msg, setMsg] = useState('')
+  const [savingCfg, setSavingCfg] = useState(false)
+
+  async function load() {
+    try { const d = await api('/api/v1/hr/onboarding/doc-status'); setReady(d?.ready !== false); setRows(d?.employees || []) }
+    catch (e: any) { setMsg(e?.message || 'Load failed') }
+    try { const c = await api('/api/v1/hr/onboarding/accounting-settings'); setCfg(c); setEmailsText((c.emails || []).join(', ')) }
+    catch { /* migration 100 optional */ }
+  }
+  useEffect(() => { load() }, [])
+
+  const APPROVED = new Set(['docs_verified', 'provisioned', 'active'])
+  const complete = rows.filter(r => r.total > 0 && r.pending === 0 && r.returned === 0)
+  const shown = complete.filter(r => !q || `${r.name || ''} ${r.employee_id || ''} ${r.email || ''}`.toLowerCase().includes(q.toLowerCase()))
+  const fmt = (d?: string | null) => (d ? String(d).slice(0, 10) : '')
+  const hasDest = emailsText.trim().length > 0 || (cfg.emails || []).length > 0
+
+  async function saveCfg() {
+    setSavingCfg(true); setMsg('')
+    try {
+      await api('/api/v1/hr/onboarding/accounting-settings', { method: 'PUT', body: JSON.stringify({ emails: emailsText, subject: cfg.subject, message: cfg.message, include_portal_link: cfg.include_portal_link }) })
+      setMsg('✅ Accounting destination saved.'); load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    setSavingCfg(false)
+  }
+  async function approve(r: any) {
+    setBusy('approve:' + r.employee_id); setMsg('')
+    try { await api(`/api/v1/hr/onboarding/employee/${encodeURIComponent(r.employee_id)}/approve`, { method: 'POST', body: '{}' }); setMsg(`✅ Approved ${r.name || r.employee_id}.`); load() }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    setBusy('')
+  }
+  async function forward(r: any) {
+    if (!hasDest) { setMsg('⚠️ Set the accounting recipient email above (and Save) first.'); return }
+    const dest = emailsText.trim() || (cfg.emails || []).join(', ')
+    if (!window.confirm(`Forward ${r.name || r.employee_id}'s completed paperwork to accounting (${dest})?`)) return
+    setBusy('fwd:' + r.employee_id); setMsg('')
+    try {
+      const res: any = await api(`/api/v1/hr/onboarding/employee/${encodeURIComponent(r.employee_id)}/forward-accounting`, { method: 'POST', body: '{}' })
+      setMsg(`↗ Forwarded ${r.name || r.employee_id} to ${(res.sent_to || []).join(', ')} — ${res.docs} document link(s).`); load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    setBusy('')
+  }
+
+  return (
+    <div>
+      <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 12px' }}>
+        New hires whose paperwork is <b>all back</b> (nothing pending or returned). Open each to <b>review</b>, mark it
+        <b> approved</b>, then <b>forward</b> the completed packet to your accounting office. The forward destination is
+        fully customizable below.
+      </p>
+      {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>{msg}</div>}
+      {!ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>Run migration <b>073</b> (+ <b>082</b>) to activate onboarding tracking.</div>}
+      {cfg.ready === false && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>Run migration <b>100_hr_accounting_forward.sql</b> to save the accounting destination + track forwards.</div>}
+      {cfg.ready !== false && cfg.email_configured === false && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>Email delivery isn&apos;t configured (RESEND_API_KEY + NOTIFY_FROM_EMAIL) — forwarding will fail until it&apos;s set in Railway.</div>}
+
+      {/* Customizable forward destination */}
+      <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 14, background: 'var(--surface)' }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>↗ Forward destination — accounting office</div>
+        <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>
+          Where a completed &amp; approved packet is sent. Set one or more emails (comma-separated). Each forward emails a
+          per-document summary + <b>secure 7-day download links</b> for every file — accounting doesn&apos;t need an app login.
+        </p>
+        <div style={{ display: 'grid', gap: 8 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Accounting email(s)
+            <input style={inp} value={emailsText} onChange={e => setEmailsText(e.target.value)} placeholder="accounting@company.com, ap@company.com" /></label>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Subject (optional · {'{name}'} = employee)
+            <input style={inp} value={cfg.subject || ''} onChange={e => setCfg((c: any) => ({ ...c, subject: e.target.value }))} placeholder="Completed onboarding paperwork — {name}" /></label>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Message (optional)
+            <textarea style={{ ...inp, minHeight: 44 }} value={cfg.message || ''} onChange={e => setCfg((c: any) => ({ ...c, message: e.target.value }))} placeholder="Intro line for the accounting email…" /></label>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <label style={{ fontSize: 12, display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={cfg.include_portal_link !== false} onChange={e => setCfg((c: any) => ({ ...c, include_portal_link: e.target.checked }))} /> Include a MetricsPro reference line</label>
+            <div style={{ flex: 1 }} />
+            <button style={btnP} disabled={savingCfg} onClick={saveCfg}>{savingCfg ? 'Saving…' : 'Save destination'}</button>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+        <input style={{ ...inp, width: 240 }} placeholder="Search completed…" value={q} onChange={e => setQ(e.target.value)} />
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>{shown.length} complete</span>
+      </div>
+
+      <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 1.1fr 1.4fr', gap: 8, padding: '8px 12px', background: 'var(--surface)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)' }}>
+          <span>Employee</span><span>Review</span><span>Approval</span><span>Forward to accounting</span>
+        </div>
+        {shown.map(r => {
+          const approved = APPROVED.has(r.workflow_status)
+          const fwd = r.accounting_forwarded_at
+          return (
+            <div key={r.employee_id} style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 1.1fr 1.4fr', gap: 8, padding: '9px 12px', borderTop: '1px solid var(--border)', fontSize: 13, alignItems: 'center' }}>
+              <div>
+                <div style={{ fontWeight: 600 }}>{r.name || r.employee_id}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)' }}>{r.employee_id}{r.email ? ' · ' + r.email : ''}</div>
+              </div>
+              <div><a href={`/hr/onboarding/${r.employee_id}`} style={{ fontSize: 12, color: 'var(--accent,#2563eb)', textDecoration: 'none' }}>📄 Review packet</a></div>
+              <div>
+                {approved
+                  ? <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>✓ Approved</span>
+                  : <button style={{ ...btn, fontSize: 12, padding: '4px 10px' }} disabled={busy === 'approve:' + r.employee_id} onClick={() => approve(r)}>{busy === 'approve:' + r.employee_id ? '…' : 'Approve'}</button>}
+              </div>
+              <div>
+                <button style={{ ...btnP, fontSize: 12, padding: '4px 10px', opacity: busy === 'fwd:' + r.employee_id ? 0.6 : 1 }} disabled={busy === 'fwd:' + r.employee_id} onClick={() => forward(r)}>{busy === 'fwd:' + r.employee_id ? 'Sending…' : '↗ Forward'}</button>
+                {fwd && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>sent {fmt(fwd)}{r.accounting_forwarded_to ? ' → ' + r.accounting_forwarded_to : ''}</div>}
+              </div>
+            </div>
+          )
+        })}
+        {shown.length === 0 && <div style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text3)' }}>No completed packets yet. An employee appears here once every assigned document is back (nothing pending or returned).</div>}
       </div>
     </div>
   )

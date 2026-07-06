@@ -5,7 +5,7 @@ import { api } from '@/lib/client'
 // Generic email (IMAP) inbox sweep — sibling of the FTP sweep. Configure a mailbox (host/creds) and
 // attachment-filename → upload-type patterns; the backend polls the inbox on a schedule and routes
 // each matching attachment to the right parser. For B2B Soft (or any vendor) that EMAILS report files.
-const UPLOAD_TYPES = ['sales', 'daily_sales', 'payment_detail', 'mi_report', 'dlar_rep', 'dlar_store', 'comp_report', 'catalog', 'inventory_aging', 'x_report']
+const BUILTIN_TYPES = ['sales', 'daily_sales', 'payment_detail', 'mi_report', 'dlar_rep', 'dlar_store', 'comp_report', 'catalog', 'inventory_aging', 'x_report', 'ma_commission', 'ma_daily_tx', 'ma_fulfillment']
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
 const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 2 }
@@ -49,6 +49,10 @@ export default function EmailImportsPage() {
   const [twoFa, setTwoFa] = useState<any>(null)     // { source, hint } while a 2FA code is needed
   const [code, setCode] = useState('')
   const [authBusy, setAuthBusy] = useState('')
+  const [customTypes, setCustomTypes] = useState<any[]>([])   // self-serve custom sheets (mig 099)
+  const [newSheet, setNewSheet] = useState('')
+  const [viewer, setViewer] = useState<any>(null)             // { report_key, label } while viewing data
+  const [viewData, setViewData] = useState<any>(null)
 
   // Load all of the tenant's mailboxes (multi-mailbox = mig 075); keep or select one in the editor.
   const refresh = useCallback((keepAccount?: string) => {
@@ -67,6 +71,7 @@ export default function EmailImportsPage() {
     api('/api/v1/commcalc/data-sources').then((r: any) => { setSources(r.sources || []); setSrcReady(r.ready !== false) }).catch(() => {})
     api('/api/v1/commcalc/carriers').then((r: any) => setCarriers(r || [])).catch(() => {})
     api('/api/v1/commcalc/distributors').then((r: any) => setDistributors(Array.isArray(r) ? r : (r?.distributors || []))).catch(() => {})
+    api('/api/v1/commcalc/custom-import-types').then((r: any) => setCustomTypes(Array.isArray(r) ? r : [])).catch(() => {})
   }, [])
   useEffect(() => { refresh() }, [refresh])
 
@@ -74,6 +79,7 @@ export default function EmailImportsPage() {
   const setPat = (i: number, patch: any) => setCfg((c: any) => ({ ...c, patterns: c.patterns.map((p: any, j: number) => j === i ? { ...p, ...patch } : p) }))
   const addPat = () => setCfg((c: any) => ({ ...c, patterns: [...(c.patterns || []), { pattern: '', upload_type: 'daily_sales', note: '' }] }))
   const delPat = (i: number) => setCfg((c: any) => ({ ...c, patterns: c.patterns.filter((_: any, j: number) => j !== i) }))
+  const knownTypeKeys = new Set([...BUILTIN_TYPES, ...customTypes.map((c: any) => c.report_key)])
 
   const body = () => ({ ...cfg, password: pwd || undefined })
 
@@ -122,6 +128,31 @@ export default function EmailImportsPage() {
       refresh(cfg.account)
     }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
+  }
+
+  // Self-serve custom sheets (mig 099): add a report by name, then route a filename pattern to its key.
+  const reloadCustom = () => api('/api/v1/commcalc/custom-import-types').then((r: any) => setCustomTypes(Array.isArray(r) ? r : [])).catch(() => {})
+  async function addCustomSheet() {
+    const label = newSheet.trim()
+    if (!label) return
+    try {
+      const r: any = await api('/api/v1/commcalc/custom-import-types', { method: 'POST', body: JSON.stringify({ label }) })
+      setNewSheet(''); await reloadCustom()
+      setMsg(`✅ Added custom sheet "${r.label}" (key: ${r.report_key}). Now add a filename pattern above that routes to it.`)
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function delCustomSheet(rk: string, label: string) {
+    if (!confirm(`Remove custom sheet "${label}"? (Imported data is kept unless you also purge it.)`)) return
+    const purge = confirm('Also DELETE all captured rows for this sheet?\n\nOK = delete the data too · Cancel = keep the data')
+    try {
+      await api(`/api/v1/commcalc/custom-import-types/${encodeURIComponent(rk)}?purge=${purge}`, { method: 'DELETE' })
+      await reloadCustom()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function openViewer(c: any) {
+    setViewer(c); setViewData(null)
+    try { const r: any = await api(`/api/v1/commcalc/custom-import/${encodeURIComponent(c.report_key)}`); setViewData(r) }
+    catch (e: any) { setViewData({ error: e?.message || String(e) }) }
   }
 
   async function saveSource() {
@@ -246,7 +277,13 @@ export default function EmailImportsPage() {
             {(cfg.patterns || []).map((p: any, i: number) => (
               <tr key={i}>
                 <td style={cell}><input style={{ ...sel, width: '100%' }} placeholder="*Sales*Transaction*Details*" value={p.pattern || ''} onChange={e => setPat(i, { pattern: e.target.value })} /></td>
-                <td style={cell}><select style={sel} value={p.upload_type} onChange={e => setPat(i, { upload_type: e.target.value })}>{UPLOAD_TYPES.map(u => <option key={u} value={u}>{u}</option>)}</select></td>
+                <td style={cell}><select style={sel} value={p.upload_type} onChange={e => setPat(i, { upload_type: e.target.value })}>
+                  <optgroup label="Built-in">{BUILTIN_TYPES.map((u: string) => <option key={u} value={u}>{u}</option>)}</optgroup>
+                  {customTypes.length > 0 && (
+                    <optgroup label="Custom sheets">{customTypes.map((c: any) => <option key={c.report_key} value={c.report_key}>{c.label + ' (' + c.report_key + ')'}</option>)}</optgroup>
+                  )}
+                  {p.upload_type && !knownTypeKeys.has(p.upload_type) && <option value={p.upload_type}>{p.upload_type}</option>}
+                </select></td>
                 <td style={cell}><input style={{ ...sel, width: '100%' }} placeholder="optional" value={p.note || ''} onChange={e => setPat(i, { note: e.target.value })} /></td>
                 <td style={cell}><button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={() => delPat(i)}>✕</button></td>
               </tr>
@@ -262,6 +299,37 @@ export default function EmailImportsPage() {
           {cfg.last_status && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Last: {cfg.last_status} {cfg.last_run_at ? `· ${new Date(cfg.last_run_at).toLocaleString()}` : ''}</span>}
           {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
         </div>
+      </div>
+
+      <div className="card" style={{ padding: 16, marginBottom: 14 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>🧩 Custom import sheets</div>
+        <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 10px' }}>
+          Add your own report (e.g. B2B <b>Sales Trend</b>) with no code. Name it here, then add a filename pattern above
+          that routes to its key — every matching attachment is captured as-is and viewable below. Needs migration <b>099_custom_import.sql</b>.
+        </p>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+          <input style={{ ...sel, minWidth: 240 }} placeholder="New sheet name, e.g. Sales Trend" value={newSheet}
+            onChange={e => setNewSheet(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addCustomSheet() }} />
+          <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={addCustomSheet}>＋ Add sheet</button>
+        </div>
+        {customTypes.length > 0 ? (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr style={{ background: 'var(--surface2)' }}>{['Sheet', 'Key (use in a pattern)', 'Captured rows', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {customTypes.map((c: any) => (
+                <tr key={c.report_key} style={{ borderTop: '1px solid var(--border)', fontSize: 13 }}>
+                  <td style={{ padding: '6px 8px', fontWeight: 600 }}>{c.label}</td>
+                  <td style={{ padding: '6px 8px' }}><code>{c.report_key}</code></td>
+                  <td style={{ padding: '6px 8px' }}>{c.rows || 0}</td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => openViewer(c)}>👁 View data</button>{' '}
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => delCustomSheet(c.report_key, c.label)}>✕</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : <div style={{ fontSize: 13, color: 'var(--text3)' }}>No custom sheets yet — add one above to auto-import any new report the vendor emails.</div>}
       </div>
 
       {test && (
@@ -409,6 +477,37 @@ export default function EmailImportsPage() {
           </div>
         )}
       </div>
+
+      {/* ── Custom-sheet data viewer ── */}
+      {viewer && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }} onClick={() => setViewer(null)}>
+          <div className="card" style={{ padding: 18, width: 900, maxWidth: '94vw', maxHeight: '86vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>👁 {viewer.label} <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 12 }}>({viewer.report_key})</span></div>
+              <div style={{ flex: 1 }} />
+              <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setViewer(null)}>Close</button>
+            </div>
+            {!viewData ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div>
+              : viewData.error ? <div style={{ color: '#dc2626', fontSize: 13 }}>❌ {viewData.error}</div>
+              : (viewData.rows || []).length === 0 ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>No data captured yet for this sheet. Add a matching filename pattern above and run the sweep.</div>
+              : (
+                <div style={{ overflowX: 'auto' }}>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>{viewData.count} row(s){viewData.periods?.length ? ` · periods: ${viewData.periods.join(', ')}` : ''} · showing first 500</div>
+                  <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: '100%' }}>
+                    <thead><tr style={{ background: 'var(--surface2)' }}>{(viewData.columns || []).map((c: string) => <th key={c} style={{ textAlign: 'left', padding: '5px 8px', whiteSpace: 'nowrap', borderBottom: '1px solid var(--border)' }}>{c}</th>)}</tr></thead>
+                    <tbody>
+                      {(viewData.rows || []).slice(0, 500).map((row: any, i: number) => (
+                        <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                          {(viewData.columns || []).map((c: string) => <td key={c} style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>{String(row[c] ?? '')}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+          </div>
+        </div>
+      )}
 
       {/* ── 2FA challenge modal: entered after 🔐 Log in reaches the verification step ── */}
       {twoFa && (

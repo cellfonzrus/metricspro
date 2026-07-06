@@ -1745,6 +1745,8 @@ def onboarding_doc_status(org_id: str = ORG_ID):
                     "invite_method": prof.get("invite_method"),
                     "intake_submitted": bool(prof.get("intake_submitted_at")),
                     "sent": bool(prof.get("docs_sent_at") or prof.get("invited_at")),
+                    "accounting_forwarded_at": prof.get("accounting_forwarded_at"),
+                    "accounting_forwarded_to": prof.get("accounting_forwarded_to"),
                     **counts,
                     "pending_labels": pending_labels[:12], "returned_labels": returned_labels[:12],
                     "last_activity": last})
@@ -1793,3 +1795,160 @@ async def onboarding_send_documents(body: dict, org_id: str = ORG_ID):
     ok = sum(1 for r in results if r.get("ok"))
     emailed = sum(1 for r in results if r.get("emailed"))
     return {"sent": ok, "emailed": emailed, "total": len(results), "results": results}
+
+
+# ── Completed-paperwork review/approval + forward to accounting (customizable) — migration 100 ─────
+def _recipient_list(v):
+    """Normalize a recipients value (list OR comma/;/newline-separated string) → clean list."""
+    if isinstance(v, list):
+        return [str(x).strip() for x in v if str(x).strip()]
+    return [x.strip() for x in str(v or "").replace(";", ",").replace("\n", ",").split(",") if x.strip()]
+
+
+def _accounting_settings(org_id):
+    """The org's accounting-forward config row ({} if unset / migration 100 not applied)."""
+    try:
+        rows = (_so().table("hr_onboarding_settings").select("*").eq("org_id", org_id).limit(1).execute().data) or []
+        return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+def _completed_docs_for(org_id, employee_id, expires=604800):
+    """Secure (7-day) download links to every uploaded onboarding document for a hire, labelled by task.
+    Used to forward the completed packet to accounting without giving them app access."""
+    tmpl = onboarding_template(org_id=org_id)
+    labels = {t["id"]: t["label"] for c in tmpl.get("categories", []) for t in c.get("tasks", [])}
+    try:
+        rows = (_so().table("employee_onboarding")
+                .select("task_id,status,document_path,document_name,signed_at")
+                .eq("org_id", org_id).eq("employee_id", employee_id).execute().data) or []
+    except Exception:
+        rows = []
+    docs = []
+    for r in rows:
+        p = r.get("document_path")
+        if not p:
+            continue
+        docs.append({"label": labels.get(r.get("task_id"), "Document"),
+                     "name": r.get("document_name"), "signed_at": r.get("signed_at"),
+                     "url": _sign_onboard_path(p, expires=expires)})
+    return docs
+
+
+@router.get("/onboarding/accounting-settings")
+def onboarding_get_accounting_settings(org_id: str = ORG_ID):
+    """The CUSTOMIZABLE accounting-forward destination (email recipients + subject/message template)."""
+    from app.modules.notify.channels.email_resend import is_configured as _email_ok
+    try:
+        rows = (_so().table("hr_onboarding_settings").select("*").eq("org_id", org_id).limit(1).execute().data) or []
+        s = rows[0] if rows else {}
+        ready = True
+    except Exception:
+        s, ready = {}, False   # migration 100 not applied yet
+    return {"ready": ready, "email_configured": _email_ok(),
+            "emails": s.get("accounting_emails") or [], "whatsapps": s.get("accounting_whatsapps") or [],
+            "subject": s.get("forward_subject") or "", "message": s.get("forward_message") or "",
+            "include_portal_link": s.get("include_portal_link", True)}
+
+
+@router.put("/onboarding/accounting-settings")
+def onboarding_set_accounting_settings(body: dict, org_id: str = ORG_ID):
+    """Save the accounting-forward destination. emails/whatsapps accept a list or a comma-separated string."""
+    row = {"org_id": org_id,
+           "accounting_emails": _recipient_list(body.get("emails")),
+           "accounting_whatsapps": _recipient_list(body.get("whatsapps")),
+           "forward_subject": (body.get("subject") or "").strip() or None,
+           "forward_message": (body.get("message") or "").strip() or None,
+           "include_portal_link": body.get("include_portal_link", True) is not False,
+           "updated_at": _now_iso()}
+    try:
+        _so().table("hr_onboarding_settings").upsert(row, on_conflict="org_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — is migration 100 applied? ({e})")
+    return {"ok": True}
+
+
+def _is_complete_row(st):
+    """A doc-status row is 'complete' when there ARE applicable items and none are pending/returned."""
+    return bool(st) and st.get("total", 0) > 0 and st.get("pending", 0) == 0 and st.get("returned", 0) == 0
+
+
+@router.post("/onboarding/employee/{employee_id}/approve")
+def onboarding_approve(employee_id: str, body: dict, org_id: str = ORG_ID):
+    """Mark a completed hire's paperwork REVIEWED & APPROVED → advance the workflow to docs_verified.
+    Guards that the employee-owned checklist is actually all back (override with body.force=true)."""
+    so = _so()
+    st = {r["employee_id"]: r for r in onboarding_doc_status(org_id=org_id).get("employees", [])}.get(employee_id)
+    if not body.get("force") and not _is_complete_row(st):
+        raise HTTPException(400, "Not all documents are back yet — review the outstanding items, or pass force=true.")
+    prof = _get_profile(so, org_id, employee_id) or {}
+    cur = prof.get("workflow_status") or "invited"
+    is_override = STATUS_ORDER.get("docs_verified", 0) != STATUS_ORDER.get(cur, 0) + 1
+    new = _set_status(so, org_id, employee_id, "docs_verified", actor=(body.get("actor") or "HR"),
+                      reason=(body.get("reason") or "Onboarding paperwork reviewed & approved"), is_override=is_override)
+    return {"ok": True, "workflow_status": new}
+
+
+@router.post("/onboarding/employee/{employee_id}/forward-accounting")
+async def onboarding_forward_accounting(employee_id: str, body: dict, org_id: str = ORG_ID):
+    """Forward a completed hire's paperwork to the (customizable) accounting recipients: an email with a
+    per-document summary + secure 7-day download links. Recipients default to the saved settings; body may
+    override emails/subject/message. Stamps accounting_forwarded_at + audits. Body: emails?, subject?,
+    message?, actor?, force? (skip the completeness guard)."""
+    from app.modules.notify.channels.email_resend import send_email, is_configured
+    so = _so()
+    emp = _employee_row(org_id, employee_id)
+    if not emp:
+        raise HTTPException(404, "employee not found")
+    if not is_configured():
+        raise HTTPException(400, "Email isn't configured (RESEND_API_KEY + NOTIFY_FROM_EMAIL) — can't forward.")
+    s = _accounting_settings(org_id)
+    emails = _recipient_list(body.get("emails")) or (s.get("accounting_emails") or [])
+    if not emails:
+        raise HTTPException(400, "No accounting recipient configured — set one in the Completed tab settings (or pass emails).")
+    if not body.get("force"):
+        st = {r["employee_id"]: r for r in onboarding_doc_status(org_id=org_id).get("employees", [])}.get(employee_id)
+        if not _is_complete_row(st):
+            raise HTTPException(400, "This hire's paperwork isn't complete yet — forward once everything is back (or pass force=true).")
+    docs = _completed_docs_for(org_id, employee_id)
+    name = emp.get("name") or employee_id
+    subject = (body.get("subject") or s.get("forward_subject") or "Completed onboarding paperwork — {name}").replace("{name}", name)
+    intro = (body.get("message") or s.get("forward_message")
+             or "The onboarding paperwork below is complete and approved. Secure download links (valid 7 days) are included for the accounting file.")
+    rows_html = "".join(
+        '<tr><td style="padding:6px 10px;border-top:1px solid #eee">' + str(d.get("label") or "Document") + "</td>"
+        '<td style="padding:6px 10px;border-top:1px solid #eee">'
+        + (f'<a href="{d["url"]}">{d.get("name") or "Download"}</a>' if d.get("url") else "(link unavailable)")
+        + "</td></tr>"
+        for d in docs)
+    html = ('<div style="font-family:system-ui,Arial,sans-serif;font-size:14px;color:#111">'
+            f"<p>{intro}</p><p><b>Employee:</b> {name} ({employee_id})</p>"
+            '<table style="border-collapse:collapse;font-size:13px"><thead><tr>'
+            '<th style="text-align:left;padding:6px 10px">Document</th>'
+            '<th style="text-align:left;padding:6px 10px">File</th></tr></thead><tbody>'
+            + (rows_html or '<tr><td colspan="2" style="padding:6px 10px">No uploaded files on record.</td></tr>')
+            + "</tbody></table>")
+    if s.get("include_portal_link", True):
+        html += f'<p style="margin-top:12px;color:#666;font-size:12px">Sent from MetricsPro · onboarding {employee_id}</p>'
+    html += "</div>"
+    sent, errors = [], []
+    for to in emails:
+        try:
+            await send_email(to, subject, html)
+            sent.append(to)
+        except Exception as e:
+            errors.append({"to": to, "error": str(e)[:200]})
+    if sent:
+        try:
+            so.table("employee_onboarding_profile").upsert(
+                {"org_id": org_id, "employee_id": employee_id,
+                 "accounting_forwarded_at": _now_iso(), "accounting_forwarded_to": ", ".join(sent)},
+                on_conflict="org_id,employee_id").execute()
+        except Exception:
+            pass  # pre-100 — the forward still went out; just no stamp
+        _log_event(org_id, employee_id, "forwarded_accounting", actor=(body.get("actor") or "HR"),
+                   detail={"to": sent, "docs": len(docs)})
+    if not sent:
+        raise HTTPException(400, f"Forward failed for all recipients: {errors}")
+    return {"ok": True, "sent_to": sent, "docs": len(docs), "errors": errors}
