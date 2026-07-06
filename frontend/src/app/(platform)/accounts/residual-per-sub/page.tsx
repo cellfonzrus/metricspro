@@ -1,9 +1,9 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
-import {
-  ResponsiveContainer, ComposedChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
-} from 'recharts'
+import { TrendChart, type TrendSeries } from '@/components/TrendChart'
+import { ExportButtons, type ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 
 // Residual (MI+ATU) per subscriber per store, month over month, with a commission overlay — to see
 // the effect of lower commissions on the residual payout. Data: GET /account/residual-per-sub?months=.
@@ -85,19 +85,27 @@ export default function ResidualPerSubPage() {
 
   const toggle = (arr: string[], v: string, set: (x: string[]) => void) => set(arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v])
 
-  async function exportXlsx() {
-    const XLSX = await import('xlsx')
-    const head = ['Store', 'Market', ...periods.map(shortPeriod), 'Total']
-    const aoa: any[] = [[`Residual per Subscriber — ${metricDef.label}`], head]
-    const rowsForXlsx = filtered ? visibleStores : stores
-    rowsForXlsx.forEach(s => {
-      const cells = periods.map(p => r2(metricVal(s.series.find((x: any) => x.period === p))))
-      aoa.push([s.store, s.market, ...cells, r2(metricVal(s.totals))])
-    })
-    aoa.push([]); aoa.push(['Commission (Σ)', '', ...periods.map(p => Math.round(aggByPeriod[p]?.commission || 0))])
-    const ws = XLSX.utils.aoa_to_sheet(aoa); const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Residual per Sub')
-    XLSX.writeFile(wb, `residual-per-sub-${months}mo.xlsx`)
+  // Chart series for the shared <TrendChart>: the metric line(s) on the left axis + commission on the right.
+  const chartSeries: TrendSeries[] = [
+    ...chartLines.map(l => ({ key: l.key, name: l.name, color: l.color, axis: 'left' as const, money: metricDef.money })),
+    ...(showCommission ? [{ key: 'commission', name: 'Commission', color: '#94a3b8', axis: 'right' as const, money: true, dashed: true }] : []),
+  ]
+
+  // Structured payload → Excel / PDF / Print / Send (shared lib), reflecting the current metric + filters.
+  const buildPayload = (): ExportPayload => {
+    const rows = filtered ? visibleStores : stores
+    const columns = [
+      { header: 'Store', get: (r: any) => r.store },
+      { header: 'Market', get: (r: any) => r.market },
+      ...periods.map(p => ({ header: shortPeriod(p), money: metricDef.money, align: 'right' as const, get: (r: any) => r2(metricVal(r.series.find((x: any) => x.period === p))) })),
+      { header: 'Total', money: metricDef.money, align: 'right' as const, get: (r: any) => r2(metricVal(r.totals)) },
+    ]
+    return {
+      title: `Residual per Subscriber — ${metricDef.label}`,
+      subtitle: `Last ${months} months${filtered ? ' · filtered' : ''}`,
+      filename: `residual-per-sub-${months}mo`,
+      sheets: [{ name: 'Residual per Sub', columns, rows }],
+    }
   }
 
   const rowsToShow = filtered ? visibleStores : stores
@@ -113,7 +121,10 @@ export default function ResidualPerSubPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--red)' }}>{msg}</span>}
-          <button className="btn" onClick={exportXlsx} disabled={loading || !periods.length}>⬇️ Excel</button>
+          {!loading && periods.length > 0 && <>
+            <ExportButtons payload={buildPayload} compact />
+            <SendReportButton exportPayload={buildPayload} title={`Residual per Subscriber — ${metricDef.label}`} compact />
+          </>}
         </div>
       </div>
 
@@ -173,28 +184,11 @@ export default function ResidualPerSubPage() {
               {metricDef.label} — {breakout ? `${chartLines.length} store${chartLines.length > 1 ? 's' : ''}` : (filtered ? 'selected stores' : 'all stores')}
               {breakout && visibleStores.length > MAX_LINES && <span style={{ color: 'var(--text3)', fontWeight: 400 }}> (top {MAX_LINES} of {visibleStores.length} by residual)</span>}
             </div>
-            <ResponsiveContainer width="100%" height={330}>
-              <ComposedChart data={chartData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} stroke="var(--text3)" />
-                <YAxis yAxisId="left" tick={{ fontSize: 11 }} stroke="var(--text3)"
-                  tickFormatter={(v: number) => metricDef.money ? usd0(v) : String(v)} />
-                {showCommission && <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} stroke="#94a3b8"
-                  tickFormatter={(v: number) => usd0(v)} />}
-                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} labelStyle={{ fontSize: 12 }}
-                  formatter={(v: any, n: any) => [n === 'Commission' ? fmt(Number(v)) : (metricDef.money ? fmt(Number(v)) : Number(v).toLocaleString()), n]} />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                {chartLines.map(l => (
-                  <Line key={l.key} yAxisId="left" type="monotone" dataKey={l.key} name={l.name}
-                    stroke={l.color} strokeWidth={2} dot={{ r: 2 }} />
-                ))}
-                {showCommission && <Line yAxisId="right" type="monotone" dataKey="commission" name="Commission"
-                  stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 4" dot={false} />}
-              </ComposedChart>
-            </ResponsiveContainer>
-            <div style={{ fontSize: 11, color: 'var(--text3)', padding: '2px 6px 4px' }}>
-              Left axis: {metricDef.label}{metricDef.money ? ' ($)' : ''}. {showCommission && 'Right axis (dashed): commission paid ($).'} A subscriber = a distinct phone number paid MI+ATU that month.
-            </div>
+            <TrendChart data={chartData} series={chartSeries} height={330}
+              leftMoney={metricDef.money} rightMoney
+              leftLabel={`${metricDef.label}${metricDef.money ? ' ($)' : ''}`}
+              rightLabel="commission paid ($)"
+              hint="A subscriber = a distinct phone number paid MI+ATU that month." />
           </div>
 
           {/* Matrix table */}
