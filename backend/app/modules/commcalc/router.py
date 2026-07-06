@@ -5203,13 +5203,11 @@ async def store_unmatched(org_id: str = ORG_ID):
             'sources_scanned': [s[0] for s in srcs]}
 
 
-@router.get("/gp/{period}")
-async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001"):
-    client = sb()
+def _compute_gp(client, org_id, period, market=""):
+    """The Gross-Profit engine call, factored out so BOTH GET /gp/{period} and the Trends gp-trend can
+    use it. Returns the full result; pass `market` to filter store_rows. Same narrowed selects as before."""
     pv = _pvariants(period)
     sc = client.schema('commcalc')
-    # Select ONLY the columns calc_gp_report reads. select('*') pulled ~90k WIDE rows (~20s of transfer;
-    # compute is 0.06s) — narrowing the 3 big tables (sales/pay_detail/mi) cut it ~3x. Verified identical.
     sales      = sc.table('raw_sales').select('store,department,gp,product_desc,ext_price,salesperson').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
     pay_detail = sc.table('raw_payment_detail').select('business_address,amount,payment_type').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
     mi_rows    = sc.table('raw_mi').select('salesforce_id,actual_mi_payout,actual_atu_payout').eq('org_id', org_id).in_('period', pv).execute().data or []
@@ -5232,6 +5230,161 @@ async def get_gp_report(period: str, view: str = "store", market: str = "", org_
     if market:
         result['store_rows'] = [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]
     return result
+
+
+def _gp_snapshot_rows(result):
+    return [{'store': r.get('store'), 'store_code': r.get('store_code'), 'market': r.get('market'),
+             'total_rev': r.get('total_rev'), 'net_profit': r.get('net_profit')}
+            for r in (result.get('store_rows') or [])]
+
+
+def _write_gp_snapshot(client, org_id, period, result):
+    """Cache per-period GP totals for the Trends hub (best-effort; never breaks the report)."""
+    try:
+        client.schema('commcalc').table('gp_snapshot').upsert(
+            {'org_id': org_id, 'period': period, 'store_rows': _gp_snapshot_rows(result),
+             'computed_at': _datetime.now(_timezone.utc).isoformat()},
+            on_conflict='org_id,period').execute()
+    except Exception as e:
+        print(f"WARN gp_snapshot upsert failed (run migration 102?): {e}")
+
+
+@router.get("/gp/{period}")
+async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001"):
+    client = sb()
+    result = _compute_gp(client, org_id, period, market="")   # full (unfiltered) so the snapshot is complete
+    _write_gp_snapshot(client, org_id, period, result)
+    if market:
+        result = {**result, 'store_rows': [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]}
+    return result
+
+
+# ═══ TRENDS (month-over-month) — power the Trends hub + per-report charts ═════════════════════════
+def _tperiods(periods_present, months):
+    """Sort present 'Month YYYY' periods chronologically; keep the most recent `months`."""
+    kept = sorted({(p or '').strip() for p in periods_present if p},
+                  key=lambda p: (parse_period(p)['year'], parse_period(p)['month']))
+    return kept[-months:] if months and months > 0 else kept
+
+
+def _trend_shape(kept, by_store, comp, mkt, value_keys):
+    """Assemble the common trend response from per-(store,period) values."""
+    stores = []
+    for code, per in by_store.items():
+        series = [{'period': p, **{k: round((per.get(p) or {}).get(k, 0.0), 2) for k in value_keys}} for p in kept]
+        stores.append({'store': code, 'store_code': code, 'market': mkt.get(code, 'Boost'), 'series': series})
+    sort_key = value_keys[0]
+    stores.sort(key=lambda x: -sum(s[sort_key] for s in x['series']))
+    company = [{'period': p, **{k: round(comp[p].get(k, 0.0), 2) for k in value_keys}} for p in kept]
+    return stores, company
+
+
+@router.get("/expenses-trend")
+async def expenses_trend(months: int = 6, org_id: str = ORG_ID):
+    """Total store expenses per month, per store (+ company total). Cheap (store_expenses only)."""
+    require_org(org_id)
+    sc = sb().schema('commcalc')
+    rows = sc.table('store_expenses').select('period,store_code,amount').eq('org_id', org_id).limit(200000).execute().data or []
+    sm = sc.table('store_mapping').select('store_code,market').eq('org_id', org_id).execute().data or []
+    mkt = {str(s.get('store_code') or '').strip(): (s.get('market') or 'Boost') for s in sm}
+    kept = _tperiods({r.get('period') for r in rows}, months); ks = set(kept)
+    by, comp = {}, {p: {'total': 0.0} for p in kept}
+    for r in rows:
+        p = (r.get('period') or '').strip()
+        if p not in ks:
+            continue
+        code = str(r.get('store_code') or '').strip()
+        amt = safe_float(r.get('amount'))
+        by.setdefault(code, {}).setdefault(p, {'total': 0.0})
+        by[code][p]['total'] += amt
+        comp[p]['total'] += amt
+    stores, company = _trend_shape(kept, by, comp, mkt, ['total'])
+    return {'months': kept, 'company': company, 'stores': stores,
+            'markets': sorted({s['market'] for s in stores if s['market']}), 'money': True}
+
+
+@router.get("/commission-trend")
+async def commission_trend(months: int = 6, org_id: str = ORG_ID):
+    """Commission WE PAY (Σ rep_commissions.total_payout) per month, per store (+ company total)."""
+    require_org(org_id)
+    import re as _re
+    sc = sb().schema('commcalc')
+    comms = sc.table('rep_commissions').select('period,store,total_payout').eq('org_id', org_id).limit(200000).execute().data or []
+    sm = sc.table('store_mapping').select('store_code,store_address,market').eq('org_id', org_id).execute().data or []
+
+    def _num(a):
+        m = _re.match(r'\s*(\d+)', str(a or ''))
+        return m.group(1) if m else ''
+
+    code_by_num, mkt, codes = {}, {}, set()
+    for s in sm:
+        code = str(s.get('store_code') or '').strip()
+        if code:
+            codes.add(code); mkt[code] = s.get('market') or 'Boost'
+        n = _num(s.get('store_address'))
+        if n and code:
+            code_by_num.setdefault(n, code)
+    kept = _tperiods({r.get('period') for r in comms}, months); ks = set(kept)
+    by, comp = {}, {p: {'total': 0.0} for p in kept}
+    for r in comms:
+        p = (r.get('period') or '').strip()
+        if p not in ks:
+            continue
+        pay = safe_float(r.get('total_payout'))
+        comp[p]['total'] += pay
+        st = str(r.get('store') or '').strip()
+        code = st if st in codes else code_by_num.get(_num(st))
+        if code:
+            by.setdefault(code, {}).setdefault(p, {'total': 0.0})
+            by[code][p]['total'] += pay
+    stores, company = _trend_shape(kept, by, comp, mkt, ['total'])
+    return {'months': kept, 'company': company, 'stores': stores,
+            'markets': sorted({s['market'] for s in stores if s['market']}), 'money': True}
+
+
+@router.get("/gp-trend")
+async def gp_trend(months: int = 6, compute_missing: int = 3, org_id: str = ORG_ID):
+    """Revenue + Net Profit per month, per store (+ company total), from the gp_snapshot cache. Computes
+    up to `compute_missing` newest un-cached months inline (then caches them) so the hub fills in over a
+    few loads without recomputing 40k rows every time; older un-cached months are reported in pending_months."""
+    require_org(org_id)
+    client = sb(); sc = client.schema('commcalc')
+    try:
+        snaps = {r['period']: (r.get('store_rows') or []) for r in
+                 (sc.table('gp_snapshot').select('period,store_rows').eq('org_id', org_id).execute().data or [])}
+    except Exception:
+        snaps = {}   # migration 102 not run yet
+    cand = set(snaps.keys())
+    for t in ('store_expenses', 'rep_commissions'):
+        for r in (sc.table(t).select('period').eq('org_id', org_id).limit(200000).execute().data or []):
+            if r.get('period'):
+                cand.add(r['period'].strip())
+    kept = _tperiods(cand, months)
+    missing = [p for p in kept if p not in snaps]
+    for p in list(reversed(missing))[:max(0, compute_missing)]:
+        try:
+            res = _compute_gp(client, org_id, p, market="")
+            _write_gp_snapshot(client, org_id, p, res)
+            snaps[p] = _gp_snapshot_rows(res)
+        except Exception as e:
+            print(f"WARN gp-trend compute {p} failed: {e}")
+    mkt, by, comp = {}, {}, {p: {'total_rev': 0.0, 'net_profit': 0.0} for p in kept}
+    for p in kept:
+        for r in snaps.get(p, []):
+            code = str(r.get('store_code') or r.get('store') or '').strip()
+            if not code:
+                continue
+            mkt.setdefault(code, r.get('market') or 'Boost')
+            by.setdefault(code, {})[p] = {'total_rev': safe_float(r.get('total_rev')),
+                                          'net_profit': safe_float(r.get('net_profit'))}
+            comp[p]['total_rev'] += safe_float(r.get('total_rev'))
+            comp[p]['net_profit'] += safe_float(r.get('net_profit'))
+    stores, company = _trend_shape(kept, by, comp, mkt, ['net_profit', 'total_rev'])
+    pending = [p for p in kept if p not in snaps]
+    return {'months': kept, 'company': company, 'stores': stores,
+            'markets': sorted({s['market'] for s in stores if s['market']}), 'money': True,
+            'pending_months': pending,
+            'note': (f"{len(pending)} month(s) not yet computed — open the Gross Profit report for them, or reload to compute a few more." if pending else None)}
 
 
 # ═══ GP / P&L department → category map (de-hardcode Gross Profit, mig 069) ══════════════════════

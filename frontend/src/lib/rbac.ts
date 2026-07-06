@@ -103,6 +103,7 @@ export const NAV: NavGroup[] = [
   ]},
   { group: 'Finance', module: 'accounts', items: [
     { href: '/accounts', label: 'Dashboard', icon: '💼', module: 'accounts', scopes: ['all', 'market'] },
+    { href: '/accounts/trends', label: 'Trends', icon: '📊', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/pl', label: 'P&L Statement', icon: '📈', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/commcalc/gp', label: 'Gross Profit', icon: '💰', module: 'commissions' },
     { href: '/accounts/balance-sheet', label: 'Balance Sheet', icon: '⚖️', module: 'accounts', scopes: ['all', 'market'] },

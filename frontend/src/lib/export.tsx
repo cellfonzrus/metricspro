@@ -21,7 +21,8 @@ export type ExportPayload = {
   subtitle?: string
   filename: string // base name, no extension
   sheets: ExportSheet[]
-  chartImage?: string   // optional PNG data URL (a captured trend chart) rendered atop PDF + Print
+  chartImage?: string     // optional PNG data URL (a captured trend chart) rendered atop PDF + Print
+  chartImages?: string[]  // multiple captured charts (e.g. the Trends hub) — rendered stacked
 }
 
 function imgSize(dataUrl: string): Promise<{ w: number; h: number }> {
@@ -97,15 +98,18 @@ async function buildPdfDoc(p: ExportPayload) {
   doc.setFontSize(8); doc.setTextColor(150, 163, 175)
   doc.text(new Date().toLocaleString(), pageW - 40, 42, { align: 'right' })
   let startY = p.subtitle ? 74 : 62
-  // Trend chart image atop the first page (scaled to fit).
-  if (p.chartImage) {
+  // Trend chart image(s) atop the report (scaled to fit; paginated when several are passed).
+  const pdfImgs = [p.chartImage, ...(p.chartImages || [])].filter(Boolean) as string[]
+  const pageH = doc.internal.pageSize.getHeight()
+  for (const im of pdfImgs) {
     try {
-      const { w: iw, h: ih } = await imgSize(p.chartImage)
+      const { w: iw, h: ih } = await imgSize(im)
       if (iw && ih) {
         const maxW = pageW - 80, maxH = 250
         let w = maxW, h = w * ih / iw
         if (h > maxH) { h = maxH; w = h * iw / ih }
-        doc.addImage(p.chartImage, 'PNG', 40, startY, w, h)
+        if (startY + h > pageH - 40) { doc.addPage(); startY = 50 }
+        doc.addImage(im, 'PNG', 40, startY, w, h)
         startY += h + 18
       }
     } catch { /* chart is best-effort; table still exports */ }
@@ -172,7 +176,7 @@ export function printReport(p: ExportPayload) {
       @media print{body{margin:10mm}}
     </style></head><body>
     <h1>${esc(p.title)}</h1>${p.subtitle ? `<p class="sub">${esc(p.subtitle)}</p>` : ''}
-    ${p.chartImage ? `<img class="chart" src="${p.chartImage}"/>` : ''}
+    ${[p.chartImage, ...(p.chartImages || [])].filter(Boolean).map(src => `<img class="chart" src="${src}"/>`).join('')}
     ${tables}
     <script>window.onload=function(){window.print()}</script>
     </body></html>`)
