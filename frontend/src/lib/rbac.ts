@@ -208,8 +208,36 @@ export const NAV: NavGroup[] = [
     { href: '/admin/org', label: 'Org Structure', icon: '🌳', module: 'admin' },
     { href: '/admin/org-chart', label: 'Employee Org Chart', icon: '👥', module: 'admin' },
     { href: '/admin/labels', label: 'Display Labels', icon: '🏷️', module: 'admin' },
+    { href: '/admin/menu', label: 'Menu Layout', icon: '🧭', module: 'admin' },
   ]},
 ]
+
+export type NavLayout = { items?: Record<string, { group?: string; hidden?: boolean }> }
+
+// Apply a per-org sidebar layout (admin config) ON TOP of the already-filtered groups: move an item to
+// a different group, or hide it. Items with no override keep their built-in group. Default group order
+// is preserved; a brand-new group name lands at the end. Returns groups ready to render.
+export function applyNavLayout(groups: NavGroup[], layout?: NavLayout): NavGroup[] {
+  const ov = layout?.items
+  if (!ov || !Object.keys(ov).length) return groups
+  const moduleByGroup: Record<string, string> = {}
+  const defaultOrder: string[] = []
+  groups.forEach(g => { if (!(g.group in moduleByGroup)) { moduleByGroup[g.group] = g.module; defaultOrder.push(g.group) } })
+  const targets: { group: string; it: NavItem }[] = []
+  for (const g of groups) for (const it of g.items) {
+    const o = ov[it.href]
+    if (o?.hidden) continue
+    targets.push({ group: (o?.group && o.group.trim()) || g.group, it })
+  }
+  const seen = new Set<string>(); const order: string[] = []
+  defaultOrder.forEach(g => { if (targets.some(t => t.group === g)) { order.push(g); seen.add(g) } })
+  targets.forEach(t => { if (!seen.has(t.group)) { order.push(t.group); seen.add(t.group) } })
+  return order.map(group => ({
+    group,
+    module: moduleByGroup[group] || (targets.find(t => t.group === group)?.it.module || ''),
+    items: targets.filter(t => t.group === group).map(t => t.it),
+  })).filter(g => g.items.length > 0)
+}
 
 export function moduleForPath(path: string): string {
   if (path.startsWith('/reports')) return 'targets'

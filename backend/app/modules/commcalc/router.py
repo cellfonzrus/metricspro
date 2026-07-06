@@ -4843,6 +4843,7 @@ def get_nav_config(org_id: str = ORG_ID):
     client = sb()
     labels = {}
     caps = {}
+    layout = {}
     try:
         rows = (client.schema('commcalc').table('ui_label_override').select('scope,key,label')
                 .eq('org_id', org_id).execute().data) or []
@@ -4853,6 +4854,13 @@ def get_nav_config(org_id: str = ORG_ID):
                     v = (lab or '').lower()
                     caps[k] = True if v == 'show' else (False if v == 'hide' else None)
                 continue
+            if scope == 'layout':
+                try:
+                    import json as _json
+                    layout = _json.loads(lab) if lab else {}
+                except Exception:
+                    layout = {}
+                continue
             if scope == 'group':
                 k = 'group:' + k
             if k and lab:
@@ -4860,7 +4868,7 @@ def get_nav_config(org_id: str = ORG_ID):
     except Exception:
         labels = {}
     caps['asset_lending'] = _asset_lending_capability(client, org_id)
-    return {"labels": labels, "capabilities": caps}
+    return {"labels": labels, "capabilities": caps, "layout": layout}
 
 
 @router.post("/nav-labels")
@@ -4886,6 +4894,33 @@ def set_nav_label(body: dict, org_id: str = ORG_ID):
     except Exception as e:
         raise HTTPException(400, f"Could not save label — run migration 068_ui_label_override.sql first. [{e}]")
     return {"ok": True, "scope": scope, "key": key, "label": label}
+
+
+@router.post("/nav-layout")
+def set_nav_layout(body: dict, org_id: str = ORG_ID):
+    """Save the per-tenant sidebar LAYOUT (admin config): which group each nav item appears under, plus
+    hidden items. Body = {items: {<href>: {group?: str, hidden?: bool}}}. Stored as ONE JSON row in
+    commcalc.ui_label_override (scope='layout', reusing mig 068 — no new migration); an empty items map
+    clears it (reverts to the built-in menu). Display-only — never touches routes, data, or access control."""
+    import json as _json
+    items = (body or {}).get('items') or {}
+    # keep only meaningful overrides (a group move or a hide)
+    items = {h: v for h, v in items.items()
+             if isinstance(v, dict) and ((v.get('group') or '').strip() or v.get('hidden'))}
+    client = sb()
+    try:
+        if not items:
+            client.schema('commcalc').table('ui_label_override').delete() \
+                .eq('org_id', org_id).eq('scope', 'layout').eq('key', '__nav__').execute()
+            return {"ok": True, "cleared": True}
+        client.schema('commcalc').table('ui_label_override').upsert(
+            {"org_id": org_id, "scope": "layout", "key": "__nav__",
+             "label": _json.dumps({"items": items}),
+             "updated_at": _datetime.now(_timezone.utc).isoformat()},
+            on_conflict="org_id,scope,key").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save menu layout — run migration 068_ui_label_override.sql first. [{e}]")
+    return {"ok": True, "items": items}
 
 
 @router.get("/distributors")

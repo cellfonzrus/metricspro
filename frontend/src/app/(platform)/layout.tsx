@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
 import { api } from '@/lib/client'
-import { NAV, canSeeItem, canAccessPath, carrierOK, safeHomeFor, type NavItem } from '@/lib/rbac'
+import { NAV, canSeeItem, canAccessPath, carrierOK, safeHomeFor, applyNavLayout, type NavItem, type NavLayout } from '@/lib/rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -55,7 +55,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   const [collapsed, setCollapsed] = useState(false)
   const [openGroup, setOpenGroup] = useState<string | null>(null)  // accordion: only one group's items shown at a time
   const [menuOpen, setMenuOpen] = useState(false)
-  const [navCfg, setNavCfg] = useState<{ labels?: Record<string, string>; capabilities?: Record<string, boolean | null> }>({})
+  const [navCfg, setNavCfg] = useState<{ labels?: Record<string, string>; capabilities?: Record<string, boolean | null>; layout?: NavLayout }>({})
   const pathname = usePathname()
   const router = useRouter()
 
@@ -73,9 +73,12 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
 
   // When login isn't enforced (open), show the full nav (today's behavior); otherwise gate it. Then
   // apply tenant capability gating (e.g. hide Asset Lending when no consignment distributor).
-  const groups = (open ? NAV : NAV.map(g => ({ ...g, items: g.items.filter(it => canSeeItem(permissions, it)) })))
+  const filteredGroups = (open ? NAV : NAV.map(g => ({ ...g, items: g.items.filter(it => canSeeItem(permissions, it)) })))
     .map(g => ({ ...g, items: g.items.filter(capOK).filter(it => carrierOK(it.href, carriers, caps)) }))
     .filter(g => g.items.length > 0)
+  // Per-org admin layout override (move items between groups / hide) — applied AFTER all access gating,
+  // so anything an admin hasn't touched keeps its built-in placement and a newly-enabled item still shows.
+  const groups = applyNavLayout(filteredGroups, navCfg.layout)
 
   // Accordion: keep every module group collapsed and open only the one holding the current page
   // (so the user is never lost) — clicking another header opens that one and closes the rest.
