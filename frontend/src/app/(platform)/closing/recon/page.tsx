@@ -26,6 +26,9 @@ export default function ClosingReconPage() {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<'all' | 'block' | 'flag' | 'pending'>('all')
+  const [storeFilter, setStoreFilter] = useState('')
+  const [dateFilter, setDateFilter] = useState('')
+  const [dirs, setDirs] = useState({ cash_over: true, cash_under: true, credit_over: true, credit_under: true })
 
   useEffect(() => { if (user?.market && permissions?.scope === 'market') setMarket(user.market) }, [user, permissions])
 
@@ -54,7 +57,23 @@ export default function ClosingReconPage() {
 
   const s = data?.summary || {}
   const errors: any[] = data?.errors || []
-  const shown = filter === 'all' ? errors : errors.filter(e => e.severity === filter)
+  const storeOpts = Array.from(new Set(errors.map(e => e.store_address || e.store_code).filter(Boolean))).sort()
+  const dateOpts = Array.from(new Set(errors.map(e => e.date).filter(Boolean))).sort()
+  // A money row's direction: cash short=under / cash over; credit over / credit under. Non-money rows null.
+  const dirOf = (e: any): keyof typeof dirs | null => {
+    if (e.variance == null) return null
+    if (e.metric === 'cash') return e.variance < 0 ? 'cash_under' : 'cash_over'
+    if (e.metric === 'credit') return e.variance > 0 ? 'credit_over' : 'credit_under'
+    return null
+  }
+  const shown = errors.filter(e => {
+    if (filter !== 'all' && e.severity !== filter) return false
+    if (storeFilter && (e.store_address || e.store_code) !== storeFilter) return false
+    if (dateFilter && e.date !== dateFilter) return false
+    const d = dirOf(e)                       // direction checkboxes only hide the money rows they name
+    if (d && !dirs[d]) return false
+    return true
+  })
   const money = (v: any) => v == null ? '—' : fmt(v)
 
   return (
@@ -69,10 +88,29 @@ export default function ClosingReconPage() {
         <Link href="/closing" className="btn btn-secondary" style={{ fontSize: 13 }}>← Dashboard</Link>
       </div>
 
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <input type="month" style={sel} value={period} onChange={e => setPeriod(e.target.value)} />
+        <select style={sel} value={storeFilter} onChange={e => setStoreFilter(e.target.value)}>
+          <option value="">All stores</option>
+          {storeOpts.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <select style={sel} value={dateFilter} onChange={e => setDateFilter(e.target.value)}>
+          <option value="">All dates</option>
+          {dateOpts.map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
         {market && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Market: {market}</span>}
         <label style={{ fontSize: 12, color: 'var(--text3)' }}>Tolerance $<input style={{ ...sel, width: 60, marginLeft: 4 }} value={tol} onChange={e => setTol(e.target.value)} /></label>
+      </div>
+      <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', padding: '8px 12px', background: 'var(--surface2)', borderRadius: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)' }}>Discrepancy:</span>
+        <DirCheck label="Cash over" on={dirs.cash_over} set={v => setDirs(d => ({ ...d, cash_over: v }))} />
+        <DirCheck label="Cash under" on={dirs.cash_under} set={v => setDirs(d => ({ ...d, cash_under: v }))} />
+        <DirCheck label="Credit over" on={dirs.credit_over} set={v => setDirs(d => ({ ...d, credit_over: v }))} />
+        <DirCheck label="Credit under" on={dirs.credit_under} set={v => setDirs(d => ({ ...d, credit_under: v }))} />
+        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+          <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 9px' }} onClick={() => setDirs({ cash_over: true, cash_under: true, credit_over: true, credit_under: true })}>All</button>
+          <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 9px' }} onClick={() => setDirs({ cash_over: false, cash_under: false, credit_over: false, credit_under: false })}>None</button>
+        </div>
       </div>
 
       {loading ? (
@@ -136,4 +174,10 @@ const Tile = ({ label, value, tone, onClick, active }: { label: string; value: n
     <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
     <div style={{ fontSize: 24, fontWeight: 700, marginTop: 2, color: tone }}>{value}</div>
   </div>
+)
+
+const DirCheck = ({ label, on, set }: { label: string; on: boolean; set: (v: boolean) => void }) => (
+  <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+    <input type="checkbox" checked={on} onChange={e => set(e.target.checked)} /> {label}
+  </label>
 )
