@@ -343,7 +343,19 @@ export default function EmailImportsPage() {
                 <tr key={i}>
                   <td style={{ ...cell, fontSize: 12 }}><div style={{ fontWeight: 600 }}>{m.subject || '(no subject)'}</div><div style={{ color: 'var(--text3)' }}>{m.from} · {m.date}</div></td>
                   <td style={cell}>
-                    {(m.attachments || []).length === 0 ? <span style={{ color: 'var(--text3)', fontSize: 12 }}>no attachments</span> :
+                    {(m.attachments || []).length === 0 ? (
+                      <div>
+                        <span style={{ color: 'var(--text3)', fontSize: 12 }}>no importable file extracted</span>
+                        {(m.parts || []).length > 0 && (
+                          <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text3)' }}>
+                            <div style={{ fontWeight: 600 }}>message contains:</div>
+                            {(m.parts || []).map((p: any, k: number) => (
+                              <div key={k}>· {p.filename} — {p.content_type}{p.size ? ` · ${(p.size / 1024).toFixed(0)} KB` : ''}{p.disposition && p.disposition !== '(none)' ? ` · ${p.disposition}` : ''}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) :
                       (m.attachments || []).map((a: any, j: number) => (
                         <div key={j} style={{ fontSize: 12 }}>{a.name} {a.matches ? <span className="badge" style={{ background: '#16794a', color: '#fff', fontSize: 11 }}>→ {a.matches}</span> : <span style={{ color: 'var(--text3)' }}>no pattern</span>}</div>
                       ))}

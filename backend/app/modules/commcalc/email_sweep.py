@@ -2,14 +2,33 @@
 app/DB deps (the router does the routing to parsers + processed-tracking, so no circular import).
 Pulls attachments whose filename matches an fnmatch glob and returns their bytes; the router routes
 each through the existing /upload pipeline exactly like the FTP sweep.
+
+Extraction is deliberately tolerant (the recurring "the email arrives but the file won't come out"
+class of bug): it unwraps .zip attachments, recovers spreadsheet/CSV parts that arrive WITHOUT a
+filename (inline / octet-stream), and descends nested forwarded messages. list_messages() also returns
+a full MIME part inventory so Test connection can SHOW what is inside an email even when nothing matched.
 """
 import email
 import imaplib
+import io
 import os
+import zipfile
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
 
 from app.modules.commcalc.ftp_sweep import match_upload_type  # shared glob → upload_type logic
+
+# Extensions the downstream /upload pipeline can actually read.
+_DATA_EXTS = (".xlsx", ".xlsm", ".xlsb", ".xls", ".csv", ".txt", ".tsv")
+# Content-Types that mean "this part is a spreadsheet/CSV" even when it has no filename.
+_DATA_MIMES = {
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+    "application/vnd.ms-excel.sheet.macroenabled.12",
+    "application/vnd.ms-excel.sheet.binary.macroenabled.12",
+    "text/csv", "application/csv", "application/x-csv",
+    "text/comma-separated-values", "text/tab-separated-values",
+}
 
 
 def _decode(s):
@@ -80,30 +99,189 @@ def _iter_messages(M, cfg):
         yield mid, msg
 
 
-def _attachments(msg):
-    """Yield (filename, payload_bytes) for every attachment part of a message."""
+def _ext_from_magic(payload):
+    """Best-guess file extension from the leading magic bytes."""
+    if not payload:
+        return ""
+    if payload[:4] == b"PK\x03\x04":       # ZIP container (xlsx is one too)
+        return ".xlsx"
+    if payload[:4] == b"\xD0\xCF\x11\xE0":  # OLE2 compound doc (legacy .xls)
+        return ".xls"
+    return ".csv"
+
+
+def _ext_for_mime(ctype):
+    ctype = (ctype or "").lower()
+    if "spreadsheetml" in ctype:
+        return ".xlsx"
+    if "ms-excel" in ctype:
+        return ".xls"
+    if "tab-separated" in ctype:
+        return ".tsv"
+    if "csv" in ctype or "comma-separated" in ctype:
+        return ".csv"
+    return ""
+
+
+def _looks_like_data(fname, ctype, payload):
+    """Is this part a spreadsheet/CSV we can ingest — by extension, MIME, or magic bytes?
+    Used ONLY for parts that arrive without a filename (so we never misread an email body as a file)."""
+    if (fname or "").lower().endswith(_DATA_EXTS):
+        return True
+    if (ctype or "").lower() in _DATA_MIMES:
+        return True
+    if payload and payload[:4] in (b"PK\x03\x04", b"\xD0\xCF\x11\xE0"):
+        return True
+    return False
+
+
+def _sniff_csv(payload):
+    """Last resort for a nameless octet-stream attachment: does its head decode to delimited text?
+    (A real CSV mailed with no filename and no text/csv MIME — otherwise indistinguishable from binary.)"""
+    if not payload or payload[:4] in (b"PK\x03\x04", b"\xD0\xCF\x11\xE0"):
+        return False
+    head = payload[:4096]
+    txt = None
+    for enc in ("utf-8", "latin-1"):
+        try:
+            txt = head.decode(enc)
+            break
+        except Exception:
+            continue
+    if not txt or ("\n" not in txt and "\r" not in txt):
+        return False
+    if not any(d in txt for d in (",", "\t", ";")):
+        return False
+    printable = sum(1 for c in txt if c.isprintable() or c in "\r\n\t")
+    return printable / max(len(txt), 1) > 0.9
+
+
+def _is_zip_archive(fname, payload):
+    """True when a part is a real .zip we should unwrap — NOT an .xlsx (which is also a PK zip)."""
+    fl = (fname or "").lower()
+    if fl.endswith((".xlsx", ".xlsm")):
+        return False
+    if fl.endswith(".zip"):
+        return True
+    if payload[:4] == b"PK\x03\x04" and not fl.endswith(_DATA_EXTS):
+        # Nameless PK container — a bare xlsx (has xl/ + [Content_Types].xml) or a real archive. Peek.
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as z:
+                names = z.namelist()
+            if any(n == "[Content_Types].xml" or n.startswith("xl/") for n in names):
+                return False
+            return True
+        except Exception:
+            return False
+    return False
+
+
+def _unzip_data(payload):
+    """Yield (inner_filename, inner_bytes) for every ingestible data file inside a .zip attachment."""
+    out = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as z:
+            for n in z.namelist():
+                if n.endswith("/"):
+                    continue
+                base = n.split("/")[-1]
+                if base.lower().endswith(_DATA_EXTS):
+                    try:
+                        out.append((base, z.read(n)))
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+    return out
+
+
+def _leaf_parts(msg):
+    """Yield a descriptor for every leaf MIME part (skipping multipart/message containers, which
+    walk() descends into anyway). Basis for both extraction and the Test-connection diagnostics."""
     for part in msg.walk():
         if part.get_content_maintype() == "multipart":
             continue
-        disp = (part.get("Content-Disposition") or "")
-        fname = part.get_filename()
-        if not fname and "attachment" not in disp.lower():
-            continue
-        fname = _decode(fname)
-        if not fname:
-            continue
+        if part.get_content_type() == "message/rfc822":
+            continue  # container: walk() already yields its embedded message's parts
         try:
             payload = part.get_payload(decode=True)
         except Exception:
             payload = None
-        if payload is None:
+        disp = (part.get("Content-Disposition") or "")
+        yield {
+            "content_type": (part.get_content_type() or "").lower(),
+            "disposition": disp,
+            "filename": _decode(part.get_filename()),
+            "payload": payload,
+            "size": len(payload or b""),
+        }
+
+
+def _attachments(msg):
+    """Yield (filename, payload_bytes) for every ingestible attachment in a message.
+
+    Tolerant by design — this is where "the email is here but the file won't extract" gets fixed:
+      • real .zip attachments are unwrapped and each inner data file is yielded on its own;
+      • a spreadsheet/CSV part with NO filename (inline / octet-stream) is recovered and given a
+        synthesized name so the pattern rules + parser have something to work with;
+      • any normally-named attachment flows through exactly as before (no regression to Boost).
+    """
+    idx = 0
+    for leaf in _leaf_parts(msg):
+        payload = leaf["payload"]
+        if not payload:
             continue
-        yield fname, payload
+        fname = leaf["filename"]
+        ctype = leaf["content_type"]
+        disp = (leaf["disposition"] or "").lower()
+
+        # (1) A real .zip → unwrap and yield the inner data files.
+        if _is_zip_archive(fname, payload):
+            for zn, zb in _unzip_data(payload):
+                yield zn, zb
+            continue
+
+        # (2) Any named attachment flows through unchanged (pattern-match filters it downstream).
+        if fname:
+            yield fname, payload
+            continue
+
+        # (3) NEW: a nameless part that is clearly a spreadsheet/CSV — by MIME, magic bytes, or (for an
+        #     explicitly-marked attachment) a text sniff — gets a synthesized name so it can match + parse.
+        if _looks_like_data(fname, ctype, payload):
+            idx += 1
+            ext = _ext_for_mime(ctype) or _ext_from_magic(payload)
+            yield f"attachment-{idx}{ext}", payload
+        elif "attachment" in disp and _sniff_csv(payload):
+            idx += 1
+            yield f"attachment-{idx}.csv", payload
+
+
+def _part_inventory(msg):
+    """Human-readable list of every leaf part (for Test-connection diagnostics). The email body
+    (text/plain, text/html) is collapsed to a single 'body' note so the file parts stand out."""
+    parts, bodies = [], 0
+    for leaf in _leaf_parts(msg):
+        ct = leaf["content_type"]
+        if ct in ("text/plain", "text/html") and not leaf["filename"]:
+            bodies += 1
+            continue
+        parts.append({
+            "content_type": ct,
+            "filename": leaf["filename"] or "(no filename)",
+            "size": leaf["size"],
+            "disposition": (leaf["disposition"] or "").split(";")[0].strip() or "(none)",
+        })
+    if bodies:
+        parts.append({"content_type": "text/*", "filename": "(message body)", "size": 0,
+                      "disposition": f"{bodies} body part(s)"})
+    return parts
 
 
 def list_messages(cfg, limit=50):
-    """For the test/preview: recent messages with from/subject/date + attachment filenames and which
-    match a configured pattern. Read-only."""
+    """For the test/preview: recent messages with from/subject/date + the ingestible files we can
+    extract (with pattern match) AND a full MIME part inventory so a non-matching email is diagnosable.
+    Read-only."""
     patterns = cfg.get("patterns") or []
     M = _connect(cfg)
     out = []
@@ -114,7 +292,8 @@ def list_messages(cfg, limit=50):
                 atts.append({"name": fname, "size": len(payload or b""),
                              "matches": match_upload_type(fname, patterns)})
             out.append({"from": _decode(msg.get("From")), "subject": _decode(msg.get("Subject")),
-                        "date": msg.get("Date") or "", "attachments": atts})
+                        "date": msg.get("Date") or "", "attachments": atts,
+                        "parts": _part_inventory(msg)})
             if len(out) >= limit:
                 break
     finally:
