@@ -158,8 +158,10 @@ export const NAV: NavGroup[] = [
     { href: '/closing', label: 'Dashboard', icon: '🧾', module: 'closing', scopes: ['all', 'market', 'store'] },
     { href: '/closing/submit', label: 'Submit Closing', icon: '➕', module: 'closing' },
     { href: '/closing/verify', label: 'DM Verify', icon: '✅', module: 'closing', scopes: ['all', 'market'] },
+    { href: '/closing/management', label: 'Management Review', icon: '🛡️', module: 'closing' },
     { href: '/closing/recon', label: 'Reconciliation', icon: '🔎', module: 'closing', scopes: ['all', 'market'] },
     { href: '/closing/tender-recon', label: 'X-Tender Recon', icon: '🧾', module: 'closing', scopes: ['all', 'market'] },
+    { href: '/closing/tender-recon-3way', label: '3-Way Tender Recon', icon: '🧮', module: 'closing', scopes: ['all', 'market'] },
     { href: '/closing/pickup', label: 'Cash Pickup', icon: '💵', module: 'closing', scopes: ['all', 'market'] },
     { href: '/closing/cash-config', label: 'Cash Setup', icon: '⚙️', module: 'closing', scopes: ['all'] },
     { href: '/closing/imports', label: 'Auto-Import', icon: '🔄', module: 'closing', scopes: ['all'] },
@@ -291,8 +293,19 @@ export function carrierOK(href: string, tenantCarriers: CarrierRef[] | undefined
   return need.some(k => have.some(t => t.includes(k) || k.includes(t)))
 }
 
+// Pages restricted to management (company-wide leadership by default; DMs excluded), but still
+// grantable/revocable per role via a `pages` override — mirrors the backend _can_mgmt_review gate.
+const MGMT_ONLY = new Set<string>(['/closing/management'])
+export function canManage(perms: Permissions, href: string): boolean {
+  if (isSuperAdmin(perms)) return true
+  const ov = perms.pages?.[href]
+  if (typeof ov === 'boolean') return ov
+  return (perms.scope || 'all') === 'all'
+}
+
 export function canSeeItem(perms: Permissions, item: NavItem): boolean {
   if (isSuperAdmin(perms)) return true
+  if (MGMT_ONLY.has(item.href)) return canManage(perms, item.href)
   if (item.scopes && !item.scopes.includes(perms.scope || 'all')) return false
   // Per-function override wins (either direction) — lets an admin grant/deny each function per role.
   const ov = perms.pages?.[item.href]
@@ -335,6 +348,7 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
     }
   }
   if (isSuperAdmin(perms)) return true
+  if (MGMT_ONLY.has(path)) return canManage(perms, path)   // management-only pages, DMs excluded
   const ov = pageOverrideForPath(perms, path)   // per-function override wins
   if (typeof ov === 'boolean') return ov
   const area = reportAreaForPath(path)   // report pages need the separate report permission

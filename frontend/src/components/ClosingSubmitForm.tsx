@@ -2,23 +2,36 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
 
-// Rep-facing in-app closing form — replicates the Google "Envelopes Data" sheet, one row per rep per
-// day. Posts to /closing/row (source='manual'); coexists with the sheet upload. Shared by the
-// platform /closing/submit page AND the /portal kiosk (so it's prop-driven — no useAuth dependency).
+// Rep-facing in-app closing form — one row per rep per day. Posts to /closing/row (source='manual').
+// Money is captured by the 6 tender types that mirror the POS X-report (cash / credit / external CC /
+// gift card / store account / zelle). Shared by the platform /closing/submit page AND the /portal kiosk.
 const inp: React.CSSProperties = { padding: '8px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 14, background: 'var(--surface)', width: '100%' }
 const cell: React.CSSProperties = { padding: '6px 9px', borderBottom: '1px solid var(--border)', fontSize: 13 }
 
+// The 6 tender fields, in display order — labels match the X-report vocabulary.
+const TENDERS: { key: TenderKey; label: string }[] = [
+  { key: 't_cash', label: 'Cash $' },
+  { key: 't_credit', label: 'Credit $' },
+  { key: 't_ext_cc', label: 'External Credit Card $' },
+  { key: 't_gift', label: 'Gift Card $' },
+  { key: 't_store_acct', label: 'Store Account $' },
+  { key: 't_zelle', label: 'Zelle / CashApp $' },
+]
+type TenderKey = 't_cash' | 't_credit' | 't_ext_cc' | 't_gift' | 't_store_acct' | 't_zelle'
+
 type State = {
   close_date: string; sfid: string; store_name: string; store_code: string; employee_name: string
-  store_cash: string; store_cc: string; epay_cash: string; epay_cc: string; acc_sale: string; other_account: string
+  t_cash: string; t_credit: string; t_ext_cc: string; t_gift: string; t_store_acct: string; t_zelle: string
+  acc_sale: string
   upgrade_count: string; new_line_count: string; postpaid_count: string; envelope_picture: string; remarks: string
 }
 
 const blank = (): State => ({
   close_date: localToday(), sfid: '', store_name: '', store_code: '', employee_name: '',
-  store_cash: '', store_cc: '', epay_cash: '', epay_cc: '', acc_sale: '', other_account: '',
+  t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', acc_sale: '',
   upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '',
 })
+const MONEY_KEYS: (keyof State)[] = ['t_cash', 't_credit', 't_ext_cc', 't_gift', 't_store_acct', 't_zelle', 'acc_sale']
 
 export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitted }:
   { defaultEmployeeName?: string; onSubmitted?: () => void }) {
@@ -27,6 +40,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [recent, setRecent] = useState<any[]>([])
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  const [retry, setRetry] = useState<{ attempt_no: number; max: number; message: string } | null>(null)
   const [envPreview, setEnvPreview] = useState('')
   const [ocrCash, setOcrCash] = useState('')
   const [ocrAmounts, setOcrAmounts] = useState<number[]>([])
@@ -34,7 +48,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
 
   const set = (patch: Partial<State>) => setF(p => ({ ...p, ...patch }))
 
-  const enteredCash = (parseFloat(f.store_cash) || 0) + (parseFloat(f.epay_cash) || 0)
+  const enteredCash = parseFloat(f.t_cash) || 0
   const ocrNum = parseFloat(ocrCash) || 0
   const ocrMismatch = ocrCash !== '' && Math.abs(ocrNum - enteredCash) > 1
 
@@ -85,18 +99,28 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
       const r = await api('/api/v1/closing/row', { method: 'POST', body: JSON.stringify({
         close_date: f.close_date, sfid: f.sfid, store_code: f.store_code, store_name: f.store_name,
         employee_name: f.employee_name.trim(),
-        store_cash: f.store_cash, store_cc: f.store_cc, epay_cash: f.epay_cash, epay_cc: f.epay_cc,
-        acc_sale: f.acc_sale, other_account: f.other_account,
+        t_cash: f.t_cash, t_credit: f.t_credit, t_ext_cc: f.t_ext_cc,
+        t_gift: f.t_gift, t_store_acct: f.t_store_acct, t_zelle: f.t_zelle,
+        acc_sale: f.acc_sale,
         upgrade_count: f.upgrade_count, new_line_count: f.new_line_count, postpaid_count: f.postpaid_count,
         envelope_picture: f.envelope_picture, remarks: f.remarks,
         ocr_cash: ocrCash || undefined,
       }) })
+      // Not accepted → recount (direction only, never the amount). Keep the form so they can re-enter.
+      if (r && r.accepted === false && r.retry) {
+        setRetry({ attempt_no: r.retry.attempt_no, max: r.retry.max, message: r.retry.message })
+        setMsg('')
+        return
+      }
+      setRetry(null)
       const flags: string[] = r?.recon?.flags || []
       const pending = r?.recon?.status === 'recon_pending'
-      setMsg(flags.length ? `⚠️ Submitted — flagged: ${flags.join('; ')}`
+      const auto = r?.recon?.auto_accepted
+      setMsg(auto ? `✅ Submitted — count didn't match after 3 tries, so it was accepted and sent for management review.`
+        : flags.length ? `⚠️ Submitted — ${flags.join('; ')}`
         : pending ? '✅ Submitted (B2B not loaded yet — will reconcile once it lands).'
-        : '✅ Closing submitted and tallies with B2B. You can enter another below.')
-      setF(p => ({ ...p, store_cash: '', store_cc: '', epay_cash: '', epay_cc: '', acc_sale: '', other_account: '',
+        : '✅ Closing submitted and tallies with the system. You can enter another below.')
+      setF(p => ({ ...p, t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', acc_sale: '',
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))
       setEnvPreview(''); setOcrCash(''); setOcrAmounts([])
       loadRecent()
@@ -106,6 +130,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   }
 
   const storeIdx = stores.findIndex(s => (f.sfid && s.sfid === f.sfid) || (!f.sfid && f.store_code && s.store_code === f.store_code))
+  const total = MONEY_KEYS.reduce((a, k) => a + (parseFloat(f[k] as string) || 0), 0)
 
   return (
     <>
@@ -121,16 +146,20 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           <Field label="Employee"><input style={inp} value={f.employee_name} onChange={e => set({ employee_name: e.target.value })} placeholder="Your name" /></Field>
         </Row>
 
-        <SectionLabel>Money collected</SectionLabel>
+        <SectionLabel>Money collected — by tender (matches the X-report)</SectionLabel>
         <Row>
-          <Field label="Store Cash $"><input style={inp} inputMode="decimal" value={f.store_cash} onChange={e => set({ store_cash: e.target.value })} placeholder="0.00" /></Field>
-          <Field label="Store CC $"><input style={inp} inputMode="decimal" value={f.store_cc} onChange={e => set({ store_cc: e.target.value })} placeholder="0.00" /></Field>
-          <Field label="ePay Cash $"><input style={inp} inputMode="decimal" value={f.epay_cash} onChange={e => set({ epay_cash: e.target.value })} placeholder="0.00" /></Field>
+          {TENDERS.slice(0, 3).map(t => (
+            <Field key={t.key} label={t.label}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
+          ))}
         </Row>
         <Row>
-          <Field label="ePay CC $"><input style={inp} inputMode="decimal" value={f.epay_cc} onChange={e => set({ epay_cc: e.target.value })} placeholder="0.00" /></Field>
+          {TENDERS.slice(3).map(t => (
+            <Field key={t.key} label={t.label}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
+          ))}
+        </Row>
+        <Row>
           <Field label="Accessory Sale $"><input style={inp} inputMode="decimal" value={f.acc_sale} onChange={e => set({ acc_sale: e.target.value })} placeholder="0.00" /></Field>
-          <Field label="Zelle / CashApp / Other $"><input style={inp} inputMode="decimal" value={f.other_account} onChange={e => set({ other_account: e.target.value })} placeholder="0.00" /></Field>
+          <Field label="Total collected"><div style={{ ...inp, background: 'var(--surface2)', fontWeight: 700 }}>{fmt(total)}</div></Field>
         </Row>
 
         <SectionLabel>Transaction counts</SectionLabel>
@@ -155,7 +184,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
               <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: ocrMismatch ? '#fdeaea' : '#e7f6ec', fontSize: 13 }}>
                 <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                   <span>📸 OCR cash read: <b>$</b><input style={{ ...inp, width: 110, display: 'inline-block', padding: '4px 8px' }} inputMode="decimal" value={ocrCash} onChange={e => setOcrCash(e.target.value)} /></span>
-                  <span>vs entered cash <b>${enteredCash.toFixed(2)}</b></span>
+                  <span>vs cash entered <b>${enteredCash.toFixed(2)}</b></span>
                   {ocrMismatch ? <span style={{ color: '#b42318', fontWeight: 600 }}>⚠️ mismatch — off by ${Math.abs(ocrNum - enteredCash).toFixed(2)}</span> : <span style={{ color: '#16794a' }}>✓ matches</span>}
                 </div>
                 {ocrAmounts.length > 0 && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>amounts detected: {ocrAmounts.map(n => `$${n}`).join(', ')} — adjust the read above if wrong (handwriting reads roughly).</div>}
@@ -167,12 +196,19 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           <Field label="Remarks" wide><input style={inp} value={f.remarks} onChange={e => set({ remarks: e.target.value })} placeholder="Optional note" /></Field>
         </Row>
 
+        {retry && (
+          <div style={{ marginTop: 14, padding: 12, borderRadius: 8, background: '#fdeaea', border: '1px solid #f3b4b4' }}>
+            <div style={{ fontWeight: 700, color: '#b42318', fontSize: 14 }}>⚠️ Attempt {retry.attempt_no} of {retry.max} — recount needed</div>
+            <div style={{ fontSize: 13, marginTop: 4 }}>{retry.message}</div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 16 }}>
-          <button className="btn btn-primary" style={{ fontSize: 14 }} disabled={busy} onClick={submit}>{busy ? '⏳ Submitting…' : '✅ Submit closing'}</button>
+          <button className="btn btn-primary" style={{ fontSize: 14 }} disabled={busy} onClick={submit}>{busy ? '⏳ Submitting…' : retry ? '🔁 Re-submit count' : '✅ Submit closing'}</button>
           {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>
-          🔒 Your close is checked against B2B sales: a <b>cash shortage</b> or <b>credit above</b> B2B will block submission. Cash over / credit under are allowed but flagged.
+          🔒 Your close is checked against the system. If your cash or credit doesn’t match you’ll be asked to recount — you’ll be told only whether it’s <b>over</b> or <b>short</b>, not by how much. After 3 tries the count is accepted and sent for management review.
         </div>
       </div>
 
@@ -184,22 +220,25 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           <div className="card table-wrapper" style={{ padding: 0 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['Employee', 'Store', 'Cash', 'Credit', 'Acc', 'Other', 'Upg', 'New', 'Post', 'Src'].map(h =>
-                  <th key={h} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
+                {['Employee', 'Store', 'Cash', 'Credit', 'Ext CC', 'Gift', 'Acct', 'Zelle', 'Acc', 'Upg', 'New', 'Post', ''].map((h, i) =>
+                  <th key={i} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
               </tr></thead>
               <tbody>
                 {recent.map((r: any) => (
                   <tr key={r.id}>
                     <td style={cell}>{r.employee_name || '—'}</td>
                     <td style={cell}>{r.store_address || r.store_name || r.store_code || '—'}</td>
-                    <td style={cell}>{fmt((r.store_cash || 0) + (r.epay_cash || 0))}</td>
-                    <td style={cell}>{fmt((r.store_cc || 0) + (r.epay_cc || 0))}</td>
+                    <td style={cell}>{fmt(r.t_cash ?? ((r.store_cash || 0) + (r.epay_cash || 0)))}</td>
+                    <td style={cell}>{fmt(r.t_credit ?? ((r.store_cc || 0) + (r.epay_cc || 0)))}</td>
+                    <td style={cell}>{fmt(r.t_ext_cc)}</td>
+                    <td style={cell}>{fmt(r.t_gift)}</td>
+                    <td style={cell}>{fmt(r.t_store_acct)}</td>
+                    <td style={cell}>{fmt(r.t_zelle ?? r.other_account)}</td>
                     <td style={cell}>{fmt(r.acc_sale)}</td>
-                    <td style={cell}>{fmt(r.other_account)}</td>
                     <td style={cell}>{r.upgrade_count}</td>
                     <td style={cell}>{r.new_line_count}</td>
                     <td style={cell}>{r.postpaid_count}</td>
-                    <td style={cell}><span style={{ fontSize: 11, color: 'var(--text3)' }}>{r.source === 'manual' ? 'form' : 'sheet'}</span></td>
+                    <td style={cell}>{r.auto_accepted ? <span title="accepted after 3 tries — under management review" style={{ fontSize: 11, color: '#b42318' }}>⚑ review</span> : <span style={{ fontSize: 11, color: 'var(--text3)' }}>{r.source === 'manual' ? 'form' : 'sheet'}</span>}</td>
                   </tr>
                 ))}
               </tbody>

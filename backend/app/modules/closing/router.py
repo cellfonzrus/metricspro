@@ -680,50 +680,103 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
         "store_code": payload.get("store_code") or sm.get("store_code"),
         "store_address": sm.get("store_address"),
         "employee_name": payload.get("employee_name"),
-        "store_cash": _money(payload.get("store_cash")), "store_cc": _money(payload.get("store_cc")),
-        "epay_cash": _money(payload.get("epay_cash")), "epay_cc": _money(payload.get("epay_cc")),
-        "acc_sale": _money(payload.get("acc_sale")), "other_account": _money(payload.get("other_account")),
+        "acc_sale": _money(payload.get("acc_sale")),
         "upgrade_count": _int(payload.get("upgrade_count")), "new_line_count": _int(payload.get("new_line_count")),
         "postpaid_count": _int(payload.get("postpaid_count")),
         "envelope_picture": (payload.get("envelope_picture") or "").strip() or None,
         "remarks": payload.get("remarks"), "source": "manual",
     }
-    # Close gate: rep can't submit if cash is SHORT or credit is OVER vs B2B (when B2B is loaded
-    # and the rep matches B2B sales). Cash-over / credit-under are allowed but flagged. If B2B
-    # isn't loaded yet, or the rep didn't match B2B, it's recon-pending and never blocks.
-    declared_cash = body["store_cash"] + body["epay_cash"]
-    declared_credit = body["store_cc"] + body["epay_cc"]
+    # ── Six tender types (mirror the POS X-report). Accept the new t_* fields; fall back to the legacy
+    #    store/epay/other fields for any caller (old kiosk) that hasn't sent them yet. ──
+    def _pt(k):
+        return _money(payload.get(k))
+    if any(payload.get(k) not in (None, "") for k in ("t_cash", "t_credit", "t_ext_cc", "t_gift", "t_store_acct", "t_zelle")):
+        tenders = {"cash": _pt("t_cash"), "credit": _pt("t_credit"), "ext_cc": _pt("t_ext_cc"),
+                   "gift": _pt("t_gift"), "store_acct": _pt("t_store_acct"), "zelle": _pt("t_zelle")}
+    else:
+        tenders = {"cash": _money(payload.get("store_cash")) + _money(payload.get("epay_cash")),
+                   "credit": _money(payload.get("store_cc")) + _money(payload.get("epay_cc")),
+                   "ext_cc": 0.0, "gift": 0.0, "store_acct": 0.0,
+                   "zelle": _money(payload.get("other_account"))}
+    body.update({"t_cash": tenders["cash"], "t_credit": tenders["credit"], "t_ext_cc": tenders["ext_cc"],
+                 "t_gift": tenders["gift"], "t_store_acct": tenders["store_acct"], "t_zelle": tenders["zelle"]})
+    # Keep the legacy columns populated so existing dashboards / recon keep reconciling unchanged.
+    body["store_cash"] = tenders["cash"]
+    body["epay_cash"] = 0.0
+    body["store_cc"] = round(tenders["credit"] + tenders["ext_cc"], 2)
+    body["epay_cc"] = 0.0
+    body["other_account"] = round(tenders["zelle"] + tenders["store_acct"] + tenders["gift"], 2)
+
+    # ── Close gate + 3-TRY flow: cash SHORT or credit OVER vs B2B is a "blocker". The rep is told only
+    #    the DIRECTION (never the amount) and may recount up to 3 times; the 3rd try is auto-accepted and
+    #    flagged for management review. Every try is logged to closing_attempt. Cash-over / credit-under
+    #    stay non-blocking flags. No B2B / rep-not-matched → recon-pending, never blocks. ──
+    declared_cash = tenders["cash"]
+    declared_credit = round(tenders["credit"] + tenders["ext_cc"], 2)
     tol = float(payload.get("tolerance") or 1.0)
     gate = _gate_row(client, org_id, body.get("store_code"), d, body.get("employee_name") or "",
                      declared_cash, declared_credit, tol)
-    if gate["block_reasons"]:
-        raise HTTPException(409, "Can't close shift — " + "; ".join(gate["block_reasons"])
-                            + ". Recount and correct, then resubmit.")
+    b2b = gate.get("b2b")
+    issues = _money_issues(declared_cash, declared_credit, b2b["cash"], b2b["card"], tol) if b2b else []
+    dirs = _variance_dirs(issues)
+    is_blocking = any(i["severity"] == "block" for i in issues)
+
+    prior = (client.schema("commcalc").table("closing_attempt").select("id")
+             .eq("org_id", org_id).eq("close_date", d)
+             .eq("store_code", body.get("store_code") or "")
+             .eq("employee_name", body.get("employee_name") or "").execute().data) or []
+    attempt_no = len(prior) + 1
+    accept = (not is_blocking) or attempt_no >= 3
+    auto_accepted = bool(is_blocking and attempt_no >= 3)
+
+    _log_attempt(client, org_id, d, body, tenders, declared_cash, declared_credit, b2b, dirs,
+                 attempt_no, blocked=(is_blocking and not accept), accepted=accept, auto_accepted=auto_accepted)
+
+    if not accept:
+        # DIRECTION ONLY — never the amount. "Cash is short / Credit is over. Recount (N left)."
+        return {"accepted": False, "retry": {
+            "attempt_no": attempt_no, "max": 3, "remaining": 3 - attempt_no,
+            "directions": {k: v for k, v in dirs.items()
+                           if (k == "cash" and v == "short") or (k == "credit" and v == "over")},
+            "message": _direction_message(dirs, attempt_no)}}
+
+    body["attempts"] = attempt_no
+    body["auto_accepted"] = auto_accepted
+    body["mgmt_flag"] = auto_accepted
     r = client.schema("commcalc").table("daily_closing").insert(body).execute()
     saved = r.data[0] if r.data else body
 
-    # 3-way envelope recon: OCR'd cash (from the photo) vs entered cash vs B2B. A mismatch beyond
-    # tolerance is surfaced to the rep AND sent to the designated closing recipient.
+    # 3-way envelope recon: OCR'd cash (the rep's OWN photo) vs entered cash — this is the rep's own
+    # data, so it's fine to show. It does NOT reveal the B2B system figure.
     ocr_mismatch = None
     if payload.get("ocr_cash") not in (None, ""):
         ocr_cash = _money(payload.get("ocr_cash"))
         diff = round(ocr_cash - declared_cash, 2)
         if abs(diff) > tol:
-            ocr_mismatch = {"ocr_cash": ocr_cash, "declared_cash": declared_cash, "diff": diff,
-                            "b2b_cash": (gate.get("b2b") or {}).get("cash")}
+            ocr_mismatch = {"ocr_cash": ocr_cash, "declared_cash": declared_cash, "diff": diff}
             summary = (f"Envelope OCR mismatch — {body.get('store_name') or body.get('store_code') or '—'}, "
                        f"{body.get('employee_name') or '—'} on {d}: photo reads {_usd(ocr_cash)} but "
                        f"{_usd(declared_cash)} was entered (off by {_usd(diff)}). "
-                       f"B2B cash: {_usd((gate.get('b2b') or {}).get('cash'))}.")
+                       f"B2B cash: {_usd((b2b or {}).get('cash'))}.")
             try:
                 await _notify_envelope_mismatch(client, org_id, summary)
             except Exception:
                 pass
-    recon = {"status": gate["status"], "flags": gate["flags"], "b2b": gate["b2b"]}
+
+    # Rep-facing recon: DIRECTION-ONLY flags, NO B2B amount. auto_accept → sent for management review.
+    rep_flags = []
+    if dirs.get("cash") == "over":
+        rep_flags.append("Cash is over vs the system — flagged for review.")
+    if dirs.get("credit") == "under":
+        rep_flags.append("Credit is under vs the system — flagged for review.")
+    if auto_accepted:
+        rep_flags.append("Count didn't match after 3 tries — accepted and sent for management review.")
+    recon = {"status": ("auto_accepted" if auto_accepted else gate["status"]),
+             "flags": rep_flags, "auto_accepted": auto_accepted, "attempts": attempt_no}
     if ocr_mismatch:
         recon["envelope_mismatch"] = ocr_mismatch
-        recon["flags"] = list(recon["flags"]) + [f"Envelope photo reads {_usd(ocr_mismatch['ocr_cash'])} vs {_usd(declared_cash)} entered"]
-    return {**saved, "recon": recon, "envelope_url": _signed_envelope(saved.get("envelope_picture"))}
+        recon["flags"] = rep_flags + [f"Envelope photo reads {_usd(ocr_mismatch['ocr_cash'])} vs {_usd(declared_cash)} entered"]
+    return {**saved, "accepted": True, "recon": recon, "envelope_url": _signed_envelope(saved.get("envelope_picture"))}
 
 
 @router.patch("/row/{row_id}")
@@ -749,6 +802,176 @@ def update_row(row_id: str, updates: dict, org_id: str = ORG_ID):
 def delete_row(row_id: str):
     sb().schema("commcalc").table("daily_closing").delete().eq("id", row_id).execute()
     return {"deleted": row_id}
+
+
+# ── Management review (permission-gated, DMs excluded): the 3-try close-attempt log ──────────────
+@router.get("/attempts")
+def closing_attempts(period: str = None, date: str = None, store: str = None, only_review: bool = False,
+                     authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Every value a rep entered before a close was accepted, grouped by (date, store, rep), WITH the
+    true B2B variance the rep never saw. Restricted to management (super-admin / company-wide scope /
+    explicit /closing/management grant) — a DM cannot see it. only_review=true → just the groups that
+    took >1 try or were auto-accepted (the ones worth reviewing)."""
+    require_org(org_id)
+    client = sb()
+    if not _can_mgmt_review(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Management review is permission-restricted (not available to DMs).")
+    q = client.schema("commcalc").table("closing_attempt").select("*").eq("org_id", org_id)
+    if period:
+        q = q.eq("period", period)
+    if date:
+        q = q.eq("close_date", _date(date) or date)
+    if store:
+        q = q.eq("store_code", store)
+    rows = q.limit(50000).execute().data or []
+    groups = {}
+    for r in rows:
+        k = (r.get("close_date"), r.get("store_code"), r.get("employee_name"))
+        groups.setdefault(k, []).append(r)
+    out = []
+    for (dt, sc, emp), tries in groups.items():
+        tries.sort(key=lambda x: x.get("attempt_no") or 0)
+        last = tries[-1]
+        auto = any(t.get("auto_accepted") for t in tries)
+        if only_review and not (len(tries) > 1 or auto):
+            continue
+        out.append({
+            "close_date": dt, "store_code": sc, "store_address": last.get("store_address"),
+            "employee_name": emp, "attempts": len(tries), "auto_accepted": auto,
+            "final_dir": {"cash": last.get("cash_dir"), "credit": last.get("credit_dir")},
+            "b2b": {"cash": last.get("b2b_cash"), "credit": last.get("b2b_credit")},
+            "tries": [{"attempt_no": t.get("attempt_no"), "entered_cash": t.get("entered_cash"),
+                       "entered_credit": t.get("entered_credit"), "cash_dir": t.get("cash_dir"),
+                       "credit_dir": t.get("credit_dir"), "blocked": t.get("blocked"),
+                       "accepted": t.get("accepted"), "auto_accepted": t.get("auto_accepted"),
+                       "t_cash": t.get("t_cash"), "t_credit": t.get("t_credit"), "t_ext_cc": t.get("t_ext_cc"),
+                       "t_gift": t.get("t_gift"), "t_store_acct": t.get("t_store_acct"), "t_zelle": t.get("t_zelle"),
+                       "created_at": t.get("created_at")} for t in tries],
+        })
+    out.sort(key=lambda x: (x["close_date"] or "", x["store_address"] or ""), reverse=True)
+    return {"groups": out, "total": len(out)}
+
+
+# ── 3-way tender recon: DAILY CLOSING vs POS X-REPORT vs SALES TRANSACTIONS, per store, per tender ──
+def _sales_tenders_by_store(client, org_id: str, date: str) -> dict:
+    """The day's sales-transaction $ bucketed to the 6 canonical tenders, per store_code (from the same
+    unified B2B source the money recon uses). Sums ext_price per tender — merchandise by tender, so it
+    tracks the X-report's tender split (which also includes tax, hence small deltas are expected)."""
+    resolve = _addr_resolver(client, org_id)
+    rows = _b2b_sales_rows(client, org_id, date, "store,tender_type,ext_price,voided,trans_type")
+    out = {}
+    for r in rows:
+        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+            continue
+        if str(r.get("trans_type") or "").strip() == "Return":
+            continue
+        canon = _canon_tender(r.get("tender_type"))
+        if not canon:
+            continue
+        code = resolve(r.get("store")) or (r.get("store") or "?")
+        agg = out.setdefault(code, {t: 0.0 for t in CANON_TENDERS})
+        agg[canon] += _f(r.get("ext_price"))
+    return out
+
+
+@router.get("/tender-recon-3way")
+def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
+    """One day, per store: the SAME tenders captured three independent ways — (1) DAILY CLOSING (what the
+    rep entered), (2) POS X-REPORT (pos_tender_summary), (3) SALES TRANSACTIONS (raw_sales / feed). All
+    bucketed to cash / credit / external CC / gift card / store account / zelle. The X-report is generated
+    from the sales transactions, so those two should agree; the closing is the human cross-check."""
+    require_org(org_id)
+    client = sb()
+    d = _date(date)
+    if not d:
+        raise HTTPException(400, "valid date required (YYYY-MM-DD)")
+    # (1) closing — rep t_* per store_code
+    closing = {}
+    cq = (client.schema("commcalc").table("daily_closing")
+          .select("store_code,store_address,t_cash,t_credit,t_ext_cc,t_gift,t_store_acct,t_zelle")
+          .eq("org_id", org_id).eq("close_date", d))
+    if store:
+        cq = cq.eq("store_code", store)
+    addr_by_code = {}
+    for r in (cq.limit(50000).execute().data or []):
+        code = r.get("store_code") or "?"
+        if r.get("store_address"):
+            addr_by_code[code] = r.get("store_address")
+        agg = closing.setdefault(code, {t: 0.0 for t in CANON_TENDERS})
+        for t, col in (("cash", "t_cash"), ("credit", "t_credit"), ("ext_cc", "t_ext_cc"),
+                       ("gift", "t_gift"), ("store_acct", "t_store_acct"), ("zelle", "t_zelle")):
+            agg[t] += _f(r.get(col))
+    # (2) X-report — pos_tender_summary raw tender_type → canon
+    resolve = _addr_resolver(client, org_id)
+    xrep = {}
+    xrows = (client.schema("commcalc").table("pos_tender_summary")
+             .select("store,tender_type,amount").eq("org_id", org_id).eq("close_date", d).execute().data) or []
+    for r in xrows:
+        canon = _canon_tender(r.get("tender_type"))
+        if not canon:
+            continue
+        code = resolve(r.get("store")) or (r.get("store") or "?")
+        agg = xrep.setdefault(code, {t: 0.0 for t in CANON_TENDERS})
+        agg[canon] += _f(r.get("amount"))
+    # (3) sales transactions
+    sales = _sales_tenders_by_store(client, org_id, d)
+    if store:
+        xrep = {k: v for k, v in xrep.items() if k == store}
+        sales = {k: v for k, v in sales.items() if k == store}
+    # store names
+    sm = (client.schema("commcalc").table("store_mapping").select("store_code,store_address")
+          .eq("org_id", org_id).execute().data) or []
+    name_by_code = {s.get("store_code"): s.get("store_address") for s in sm if s.get("store_code")}
+    codes = sorted(set(closing) | set(xrep) | set(sales))
+    stores_out = []
+    for code in codes:
+        c, x, s = closing.get(code, {}), xrep.get(code, {}), sales.get(code, {})
+        per = []
+        for t in CANON_TENDERS:
+            cv, xv, sv = round(c.get(t, 0), 2), round(x.get(t, 0), 2), round(s.get(t, 0), 2)
+            per.append({"tender": t, "label": CANON_TENDER_LABEL[t], "closing": cv, "x_report": xv, "sales": sv,
+                        "match": abs(cv - xv) <= 1 and abs(xv - sv) <= 1 and abs(cv - sv) <= 1})
+        stores_out.append({
+            "store_code": code, "store_address": name_by_code.get(code) or addr_by_code.get(code) or code,
+            "tenders": per,
+            "totals": {"closing": round(sum(c.values()), 2), "x_report": round(sum(x.values()), 2),
+                       "sales": round(sum(s.values()), 2)}})
+    return {"date": d, "tenders": [{"key": t, "label": CANON_TENDER_LABEL[t]} for t in CANON_TENDERS],
+            "stores": stores_out,
+            "sources_present": {"closing": bool(closing), "x_report": bool(xrep), "sales": bool(sales)},
+            "note": ("X-report tender amounts include tax; sales-transaction figures are merchandise "
+                     "(ext price), so small deltas between those two are expected.")}
+
+
+@router.get("/tender-drilldown")
+def tender_drilldown(date: str, store: str = None, tender: str = None, org_id: str = ORG_ID):
+    """Every sales-transaction line for a day (optionally one store / one canonical tender) — so a manager
+    can see exactly which transactions fell under External CC / Gift Card / Store Account / Zelle / etc."""
+    require_org(org_id)
+    client = sb()
+    d = _date(date)
+    if not d:
+        raise HTTPException(400, "valid date required (YYYY-MM-DD)")
+    resolve = _addr_resolver(client, org_id)
+    rows = _b2b_sales_rows(client, org_id, d,
+                           "store,trans_id,salesperson,tender_type,product_desc,ext_price,mdn,voided,trans_type")
+    out = []
+    for r in rows:
+        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+            continue
+        canon = _canon_tender(r.get("tender_type"))
+        code = resolve(r.get("store")) or (r.get("store") or "?")
+        if store and code != store:
+            continue
+        if tender and canon != tender:
+            continue
+        out.append({"store_code": code, "trans_id": r.get("trans_id"), "salesperson": r.get("salesperson"),
+                    "tender_type": r.get("tender_type"), "canon": canon,
+                    "canon_label": CANON_TENDER_LABEL.get(canon, "(unmapped)"),
+                    "product_desc": r.get("product_desc"), "amount": round(_f(r.get("ext_price")), 2),
+                    "mdn": r.get("mdn"), "is_return": str(r.get("trans_type") or "").strip() == "Return"})
+    out.sort(key=lambda x: (x["store_code"] or "", str(x["trans_id"] or "")))
+    return {"date": d, "rows": out, "count": len(out), "total": round(sum(x["amount"] for x in out), 2)}
 
 
 # ── Reconciliation sheet: every day's closing-vs-B2B errors over a period ────────────────────
@@ -1543,6 +1766,118 @@ def _tender_class(t: str) -> str:
     if any(h in s for h in _CARD_HINTS):
         return "card"
     return "other"
+
+
+# ── Canonical 6 tender types (the axis of the 3-way recon: closing vs X-report vs sales-transactions) ──
+CANON_TENDERS = ["cash", "credit", "ext_cc", "gift", "store_acct", "zelle"]
+CANON_TENDER_LABEL = {
+    "cash": "Cash", "credit": "Credit", "ext_cc": "External Credit Card",
+    "gift": "Gift Card", "store_acct": "Store Account", "zelle": "Zelle / CashApp",
+}
+
+
+def _canon_tender(raw: str):
+    """Map any source's raw tender string to one of the 6 canonical tenders (or None = unmapped).
+    ORDER MATTERS: 'gift card' contains 'card', 'cash app' contains 'cash', 'external credit card'
+    contains 'credit' — so the specific buckets are tested before the generic cash/credit ones."""
+    t = (raw or "").strip().lower()
+    if not t:
+        return None
+    if "gift" in t:
+        return "gift"
+    if "zelle" in t or "cashapp" in t or "cash app" in t or "venmo" in t:
+        return "zelle"
+    if ("store" in t and ("acct" in t or "account" in t)) or t in ("account", "on account", "store credit"):
+        return "store_acct"
+    if "ext" in t or "external" in t:
+        return "ext_cc"
+    if "cash" in t:
+        return "cash"
+    if any(h in t for h in ("credit", "debit", "card", "visa", "master", "amex", "discover")):
+        return "credit"
+    return None
+
+
+def _variance_dirs(issues: list) -> dict:
+    """From _money_issues, the DIRECTION of each variance (no amount): cash short/over, credit over/under."""
+    d = {"cash": "ok", "credit": "ok"}
+    for i in issues:
+        if i.get("metric") == "cash":
+            d["cash"] = "short" if _f(i.get("variance")) < 0 else "over"
+        elif i.get("metric") == "credit":
+            d["credit"] = "over" if _f(i.get("variance")) > 0 else "under"
+    return d
+
+
+def _direction_message(dirs: dict, attempt_no: int) -> str:
+    """Rep-facing prompt — the DIRECTION only, never the amount (so a rep can't reverse-engineer the
+    system figure by nudging until it clears)."""
+    parts = []
+    if dirs.get("cash") == "short":
+        parts.append("Cash is short")
+    if dirs.get("credit") == "over":
+        parts.append("Credit is over")
+    what = " and ".join(parts) if parts else "The count doesn't match"
+    left = max(0, 3 - attempt_no)
+    if left > 0:
+        return f"{what} vs the system. Recount and re-enter — {left} attempt(s) left before it's sent for review."
+    return f"{what} vs the system."
+
+
+def _log_attempt(client, org_id, d, body, tenders, declared_cash, declared_credit, b2b, dirs,
+                 attempt_no, blocked, accepted, auto_accepted):
+    """Record ONE submission try. Management review reads these (with amounts + the true B2B variance);
+    the rep never sees the amounts. Best-effort — a logging failure must not break the close."""
+    try:
+        client.schema("commcalc").table("closing_attempt").insert({
+            "org_id": org_id, "close_date": d, "period": d[:7],
+            "store_code": body.get("store_code"), "store_address": body.get("store_address"),
+            "sfid": body.get("sfid"), "employee_name": body.get("employee_name"),
+            "attempt_no": attempt_no,
+            "entered_cash": round(_f(declared_cash), 2), "entered_credit": round(_f(declared_credit), 2),
+            "t_cash": tenders["cash"], "t_credit": tenders["credit"], "t_ext_cc": tenders["ext_cc"],
+            "t_gift": tenders["gift"], "t_store_acct": tenders["store_acct"], "t_zelle": tenders["zelle"],
+            "b2b_cash": (b2b or {}).get("cash"), "b2b_credit": (b2b or {}).get("card"),
+            "cash_dir": dirs.get("cash"), "credit_dir": dirs.get("credit"),
+            "blocked": bool(blocked), "accepted": bool(accepted), "auto_accepted": bool(auto_accepted),
+        }).execute()
+    except Exception as e:
+        print("closing attempt log failed:", e)
+
+
+def _caller_perms(client, authorization: str) -> dict:
+    """Resolve the logged-in user's role permissions (same source as /core/me) for a backend gate."""
+    try:
+        from app.modules.core.router import _uid_from_token
+        uid = _uid_from_token(authorization)
+        if not uid:
+            return {}
+        rows = (client.schema("storeops").table("app_users").select("org_id,role,super_admin")
+                .eq("auth_id", uid).limit(1).execute().data) or []
+        if not rows:
+            return {}
+        u = rows[0]
+        perms = {}
+        if u.get("role"):
+            rr = (client.schema("storeops").table("roles").select("permissions")
+                  .eq("org_id", u.get("org_id") or ORG_ID).eq("name", u["role"]).limit(1).execute().data) or []
+            if rr:
+                perms = dict(rr[0].get("permissions") or {})
+        perms["__super_admin"] = bool(u.get("super_admin"))
+        return perms
+    except Exception:
+        return {}
+
+
+def _can_mgmt_review(perms: dict) -> bool:
+    """Management-review gate: super-admin, an explicit page grant, or company-wide ('all') scope.
+    DMs (market/store scope) are excluded unless an admin grants /closing/management to their role."""
+    if perms.get("__super_admin"):
+        return True
+    ov = (perms.get("pages") or {}).get("/closing/management")
+    if isinstance(ov, bool):
+        return ov
+    return (perms.get("scope") or "all") == "all"
 
 
 def _num_key(s: str) -> str:
