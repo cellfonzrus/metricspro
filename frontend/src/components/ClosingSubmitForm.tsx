@@ -40,7 +40,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [recent, setRecent] = useState<any[]>([])
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
-  const [retry, setRetry] = useState<{ attempt_no: number; max: number; message: string } | null>(null)
+  const [retry, setRetry] = useState<{ message: string } | null>(null)
   const [envPreview, setEnvPreview] = useState('')
   const [ocrCash, setOcrCash] = useState('')
   const [ocrAmounts, setOcrAmounts] = useState<number[]>([])
@@ -108,7 +108,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
       }) })
       // Not accepted → recount (direction only, never the amount). Keep the form so they can re-enter.
       if (r && r.accepted === false && r.retry) {
-        setRetry({ attempt_no: r.retry.attempt_no, max: r.retry.max, message: r.retry.message })
+        setRetry({ message: r.retry.message })
         setMsg('')
         return
       }
@@ -116,7 +116,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
       const flags: string[] = r?.recon?.flags || []
       const pending = r?.recon?.status === 'recon_pending'
       const auto = r?.recon?.auto_accepted
-      setMsg(auto ? `✅ Submitted — count didn't match after 3 tries, so it was accepted and sent for management review.`
+      setMsg(auto ? `✅ Submitted — your report does not match the system and has been sent for management review.`
         : flags.length ? `⚠️ Submitted — ${flags.join('; ')}`
         : pending ? '✅ Submitted (B2B not loaded yet — will reconcile once it lands).'
         : '✅ Closing submitted and tallies with the system. You can enter another below.')
@@ -198,7 +198,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
 
         {retry && (
           <div style={{ marginTop: 14, padding: 12, borderRadius: 8, background: '#fdeaea', border: '1px solid #f3b4b4' }}>
-            <div style={{ fontWeight: 700, color: '#b42318', fontSize: 14 }}>⚠️ Attempt {retry.attempt_no} of {retry.max} — recount needed</div>
+            <div style={{ fontWeight: 700, color: '#b42318', fontSize: 14 }}>⚠️ Report doesn’t match — recount needed</div>
             <div style={{ fontSize: 13, marginTop: 4 }}>{retry.message}</div>
           </div>
         )}
@@ -208,7 +208,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>
-          🔒 Your close is checked against the system. If your cash or credit doesn’t match you’ll be asked to recount — you’ll be told only whether it’s <b>over</b> or <b>short</b>, not by how much. After 3 tries the count is accepted and sent for management review.
+          🔒 Your close is checked against the system. If your report does not match, it will be reviewed by management.
         </div>
       </div>
 

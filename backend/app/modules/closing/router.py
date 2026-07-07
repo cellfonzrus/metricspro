@@ -733,12 +733,8 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
                  attempt_no, blocked=(is_blocking and not accept), accepted=accept, auto_accepted=auto_accepted)
 
     if not accept:
-        # DIRECTION ONLY — never the amount. "Cash is short / Credit is over. Recount (N left)."
-        return {"accepted": False, "retry": {
-            "attempt_no": attempt_no, "max": 3, "remaining": 3 - attempt_no,
-            "directions": {k: v for k, v in dirs.items()
-                           if (k == "cash" and v == "short") or (k == "credit" and v == "over")},
-            "message": _direction_message(dirs, attempt_no)}}
+        # Rep sees NOTHING specific — not the amount, the over/short direction, or the attempt count.
+        return {"accepted": False, "retry": {"message": _REP_MISMATCH_RETRY}}
 
     body["attempts"] = attempt_no
     body["auto_accepted"] = auto_accepted
@@ -763,14 +759,12 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
             except Exception:
                 pass
 
-    # Rep-facing recon: DIRECTION-ONLY flags, NO B2B amount. auto_accept → sent for management review.
+    # Rep-facing recon: reveals NOTHING — a mismatch (auto-accepted or a non-blocking over/under) just
+    # says the report doesn't match and is going to management review. NO amount, direction, or count.
     rep_flags = []
-    if dirs.get("cash") == "over":
-        rep_flags.append("Cash is over vs the system — flagged for review.")
-    if dirs.get("credit") == "under":
-        rep_flags.append("Credit is under vs the system — flagged for review.")
-    if auto_accepted:
-        rep_flags.append("Count didn't match after 3 tries — accepted and sent for management review.")
+    mismatch = auto_accepted or dirs.get("cash") not in (None, "ok") or dirs.get("credit") not in (None, "ok")
+    if mismatch:
+        rep_flags.append(_REP_MISMATCH_REVIEW)
     recon = {"status": ("auto_accepted" if auto_accepted else gate["status"]),
              "flags": rep_flags, "auto_accepted": auto_accepted, "attempts": attempt_no}
     if ocr_mismatch:
@@ -1809,19 +1803,11 @@ def _variance_dirs(issues: list) -> dict:
     return d
 
 
-def _direction_message(dirs: dict, attempt_no: int) -> str:
-    """Rep-facing prompt — the DIRECTION only, never the amount (so a rep can't reverse-engineer the
-    system figure by nudging until it clears)."""
-    parts = []
-    if dirs.get("cash") == "short":
-        parts.append("Cash is short")
-    if dirs.get("credit") == "over":
-        parts.append("Credit is over")
-    what = " and ".join(parts) if parts else "The count doesn't match"
-    left = max(0, 3 - attempt_no)
-    if left > 0:
-        return f"{what} vs the system. Recount and re-enter — {left} attempt(s) left before it's sent for review."
-    return f"{what} vs the system."
+# Rep-facing wording — deliberately reveals NOTHING (not the amount, the over/short direction, or the
+# attempt count). The rep is only told the report doesn't match; the detail lives in management review.
+_REP_MISMATCH_RETRY = ("Your report does not match the system. Please recount and re-enter — if it still "
+                       "doesn't match it will be reviewed by management.")
+_REP_MISMATCH_REVIEW = "Your report does not match the system — sent for management review."
 
 
 def _log_attempt(client, org_id, d, body, tenders, declared_cash, declared_credit, b2b, dirs,
