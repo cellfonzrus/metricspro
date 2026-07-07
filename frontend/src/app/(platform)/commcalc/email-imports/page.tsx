@@ -132,6 +132,39 @@ export default function EmailImportsPage() {
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
   }
 
+  // Suggest a filename rule from an attachment name — recognizes the standard b2bsoft/portal reports,
+  // else builds a glob from the distinctive tokens. Turns a "no pattern" attachment into a saved rule
+  // in ONE click (no hand-typed globs), then re-tests so the user sees it match immediately.
+  function suggestRule(name: string): { pattern: string; upload_type: string } {
+    const low = (name || '').toLowerCase()
+    const known: [RegExp, string, string][] = [
+      [/sales.*transaction.*details/, '*Sales*Transaction*Details*', 'daily_sales'],
+      [/inventory.*aging/, '*Inventory*Aging*', 'inventory_aging'],
+      [/x.?report/, '*X-Report*', 'x_report'],
+      [/commission.*detail/, '*Commission*Details*', 'ma_commission'],
+      [/daily.*tx/, '*Daily*Tx*', 'ma_daily_tx'],
+      [/fulfillment/, '*Fulfillment*', 'ma_fulfillment'],
+      [/payment.*detail/, '*Payment*Detail*', 'payment_detail'],
+    ]
+    for (const [re, pat, ut] of known) if (re.test(low)) return { pattern: pat, upload_type: ut }
+    const base = (name || '').replace(/\.[a-z0-9]+$/i, '')
+    const toks = base.split(/[^a-zA-Z0-9]+/).filter(t => t.length > 2).slice(0, 3)
+    return { pattern: toks.length ? '*' + toks.join('*') + '*' : '*' + base + '*', upload_type: 'daily_sales' }
+  }
+  async function addRuleFor(name: string) {
+    const s = suggestRule(name)
+    const next = [...(cfg.patterns || []), { pattern: s.pattern, upload_type: s.upload_type, note: 'added from Test connection' }]
+    setCfg((c: any) => ({ ...c, patterns: next }))
+    setBusy('save')
+    try {
+      await api('/api/v1/commcalc/email-sweep/config', { method: 'PUT', body: JSON.stringify({ ...body(), patterns: next }) })
+      const r: any = await api('/api/v1/commcalc/email-sweep/test', { method: 'POST', body: JSON.stringify({ ...body(), patterns: next }) })
+      setTest(r)
+      setMsg(`✅ Rule added: ${s.pattern} → ${s.upload_type}. ${r.matched_attachments || 0} attachment(s) now match — click “Run now” to import.`)
+    } catch (e: any) { setMsg('Could not add rule: ' + (e?.message || e)) }
+    finally { setBusy('') }
+  }
+
   // Self-serve custom sheets (mig 099): add a report by name, then route a filename pattern to its key.
   const reloadCustom = () => api('/api/v1/commcalc/custom-import-types').then((r: any) => setCustomTypes(Array.isArray(r) ? r : [])).catch(() => {})
   async function addCustomSheet() {
@@ -357,7 +390,15 @@ export default function EmailImportsPage() {
                       </div>
                     ) :
                       (m.attachments || []).map((a: any, j: number) => (
-                        <div key={j} style={{ fontSize: 12 }}>{a.name} {a.matches ? <span className="badge" style={{ background: '#16794a', color: '#fff', fontSize: 11 }}>→ {a.matches}</span> : <span style={{ color: 'var(--text3)' }}>no pattern</span>}</div>
+                        <div key={j} style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <span>{a.name}</span>
+                          {a.matches
+                            ? <span className="badge" style={{ background: '#16794a', color: '#fff', fontSize: 11 }}>→ {a.matches}</span>
+                            : <>
+                                <span style={{ color: 'var(--text3)' }}>no pattern</span>
+                                <button disabled={busy === 'save'} onClick={() => addRuleFor(a.name)} className="btn btn-secondary" style={{ fontSize: 10, padding: '1px 7px' }}>＋ Add rule</button>
+                              </>}
+                        </div>
                       ))}
                   </td>
                 </tr>
