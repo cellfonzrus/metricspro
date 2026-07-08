@@ -116,9 +116,12 @@ async def _send_approval(req, approval_url):
     email = (contact.get("email") or "").strip()
     wa = (contact.get("whatsapp") or "").strip()
     channels = []
+    wa_status = None
     # WhatsApp interactive approval (Phase 2): the template's two quick-reply buttons carry per-send
     # payloads → a tap posts to /whatsapp-webhook → the decision runs, all inside WhatsApp.
-    if wa:
+    if not wa:
+        wa_status = "no WhatsApp number on the assignee"
+    else:
         try:
             from app.modules.notify.channels import whatsapp_meta
             if whatsapp_meta.approval_configured():
@@ -126,9 +129,23 @@ async def _send_approval(req, approval_url):
                     wa, req["id"], req.get("approval_token") or "",
                     req.get("issue") or "", req.get("proposed_action") or req.get("title") or "",
                     req.get("preview") or "")
-                channels.append("whatsapp")
-        except Exception:
-            pass
+                channels.append("whatsapp"); wa_status = "sent (approval template)"
+            elif whatsapp_meta.is_configured():
+                # Base WhatsApp works but the interactive approval template isn't set — send a plain-text
+                # approval with the link (delivers inside the 24h customer-initiated window; Meta rejects
+                # business-initiated free-form text otherwise). Set WHATSAPP_APPROVAL_TEMPLATE for buttons.
+                try:
+                    await whatsapp_meta.send_text(
+                        wa, f"MetricsPro — approve a fix: {(req.get('issue') or req.get('title') or '')[:200]}. "
+                            f"Review & approve: {approval_url}")
+                    channels.append("whatsapp-text")
+                    wa_status = "sent as plain text — set WHATSAPP_APPROVAL_TEMPLATE (approved in WhatsApp Manager) for inline buttons"
+                except Exception as e:
+                    wa_status = f"approval template not configured; text fallback failed ({str(e)[:120]})"
+            else:
+                wa_status = "WhatsApp base creds missing (WHATSAPP_ACCESS_TOKEN / PHONE_NUMBER_ID / TEMPLATE_NAME)"
+        except Exception as e:
+            wa_status = f"WhatsApp send error: {str(e)[:140]}"
     subject = f"[MetricsPro] Approve a fix: {req.get('title') or req.get('playbook_key')}"
     html = (f"<p>An automated fix is awaiting your approval.</p>"
             f"<p><b>Issue:</b> {(req.get('issue') or '')[:400]}</p>"
@@ -138,15 +155,20 @@ async def _send_approval(req, approval_url):
             f"border-radius:8px;text-decoration:none\">Review &amp; Approve / Reject</a></p>"
             f"<p style=\"color:#888;font-size:12px\">Only a whitelisted, bounded action runs — and only "
             f"after you approve.</p>")
-    if email:
+    email_status = None
+    if not email:
+        email_status = "no email on the assignee"
+    else:
         try:
             from app.modules.notify.channels import email_resend
             if email_resend.is_configured():
                 await email_resend.send_email(email, subject, html)
-                channels.append("email")
-        except Exception:
-            pass
-    return channels
+                channels.append("email"); email_status = "sent"
+            else:
+                email_status = "email (Resend) not configured"
+        except Exception as e:
+            email_status = f"email send error: {str(e)[:140]}"
+    return {"channels": channels, "whatsapp": wa_status, "email": email_status}
 
 
 # ── propose ────────────────────────────────────────────────────────────────────────────────────────
@@ -204,10 +226,10 @@ async def propose(body: dict, org_id: str = ORG_ID):
     r = client.schema("commcalc").table("remediation_request").insert(row).execute()
     req = (r.data or [row])[0]
     approval_url = _approval_url(req["id"], token)
-    channels = await _send_approval(req, approval_url)
+    delivery = await _send_approval(req, approval_url)
     req.pop("approval_token", None)
-    return {"request": req, "approval_url": approval_url, "notified": channels,
-            "preview": preview}
+    return {"request": req, "approval_url": approval_url, "notified": delivery.get("channels", []),
+            "delivery": delivery, "preview": preview}
 
 
 # ── list / detail ───────────────────────────────────────────────────────────────────────────────

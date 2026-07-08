@@ -83,6 +83,12 @@ export default function RemediationConsole() {
                   Sent to: {result.notified?.length ? result.notified.join(', ') : 'no channel (use the link)'} ·{' '}
                   <a href={result.approval_url} style={{ color: '#2563eb' }}>Open approval</a>
                 </div>
+                {result.delivery && (
+                  <div style={{ fontSize: 12, marginTop: 6, color: 'var(--text3, #888)' }}>
+                    <div>WhatsApp: {result.delivery.whatsapp || '—'}</div>
+                    <div>Email: {result.delivery.email || '—'}</div>
+                  </div>
+                )}
               </>
             )}
           </div>
