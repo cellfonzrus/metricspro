@@ -234,14 +234,25 @@ def closing_stores(org_id: str = ORG_ID):
     client = sb()
     sm = (client.schema("commcalc").table("store_mapping")
           .select("salesforce_id,store_code,store_address").eq("org_id", org_id).execute().data) or []
-    stores = (client.schema("storeops").table("stores").select("store_code,market").eq("org_id", org_id).execute().data) or []
+    stores = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
     mkt = {s.get("store_code"): s.get("market") for s in stores if s.get("store_code")}
-    out = [{
-        "sfid": (r.get("salesforce_id") or "").strip(),
-        "store_code": (r.get("store_code") or "").strip(),
-        "store_address": r.get("store_address"),
-        "market": mkt.get((r.get("store_code") or "").strip()) or "",
-    } for r in sm]
+    addr = {s.get("store_code"): s.get("address") for s in stores if s.get("store_code")}
+    by_code = {}
+    for r in sm:
+        code = (r.get("store_code") or "").strip()
+        if not code:
+            continue
+        by_code[code] = {"sfid": (r.get("salesforce_id") or "").strip(), "store_code": code,
+                         "store_address": r.get("store_address") or addr.get(code) or code,
+                         "market": mkt.get(code) or ""}
+    # A store created under StoreOps Admin (storeops.stores) but not yet in the commcalc store_mapping
+    # must STILL appear in Daily Closing — union it in so new stores propagate here immediately.
+    for s in stores:
+        code = (s.get("store_code") or "").strip()
+        if code and code not in by_code:
+            by_code[code] = {"sfid": "", "store_code": code,
+                             "store_address": s.get("address") or code, "market": s.get("market") or ""}
+    out = list(by_code.values())
     out.sort(key=lambda s: str(s.get("store_address") or ""))
     return out
 
