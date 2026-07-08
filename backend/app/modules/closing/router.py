@@ -1464,6 +1464,17 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     rows = q.execute().data or []
     stores = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
     smeta = {s.get("store_code"): s for s in stores if s.get("store_code")}
+    # storeops.stores.market is only partly populated; fall back to commcalc.store_mapping.market (much
+    # fuller) so a market-scoped DM still sees every store in their market (was: stores with a blank
+    # storeops market silently dropped out of the DM's market filter).
+    sm_market = {}
+    try:
+        for s in (client.schema("commcalc").table("store_mapping").select("store_code,market")
+                  .eq("org_id", org_id).execute().data or []):
+            if s.get("store_code") and (s.get("market") or "").strip():
+                sm_market[s.get("store_code")] = s["market"].strip()
+    except Exception:
+        pass
     pq = client.schema("commcalc").table("cash_pickup").select("*").eq("org_id", org_id)
     pq = pq.eq("close_date", date) if date else pq.gte("close_date", start).lte("close_date", end)
     try:
@@ -1480,8 +1491,8 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             continue
         code = r.get("store_code") or ""
         meta = smeta.get(code, {})
-        mk = meta.get("market") or ""
-        if market and mk != market:
+        mk = (meta.get("market") or "").strip() or sm_market.get(code, "")
+        if market and mk.strip().lower() != market.strip().lower():
             continue
         if store_f and (code or "").upper() != store_f:
             continue
