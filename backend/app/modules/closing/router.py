@@ -698,16 +698,18 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
     #    store/epay/other fields for any caller (old kiosk) that hasn't sent them yet. ──
     def _pt(k):
         return _money(payload.get(k))
-    if any(payload.get(k) not in (None, "") for k in ("t_cash", "t_credit", "t_ext_cc", "t_gift", "t_store_acct", "t_zelle")):
+    if any(payload.get(k) not in (None, "") for k in ("t_cash", "t_credit", "t_ext_cc", "t_gift", "t_store_acct", "t_zelle", "t_acima")):
         tenders = {"cash": _pt("t_cash"), "credit": _pt("t_credit"), "ext_cc": _pt("t_ext_cc"),
-                   "gift": _pt("t_gift"), "store_acct": _pt("t_store_acct"), "zelle": _pt("t_zelle")}
+                   "gift": _pt("t_gift"), "store_acct": _pt("t_store_acct"), "zelle": _pt("t_zelle"),
+                   "acima": _pt("t_acima")}
     else:
         tenders = {"cash": _money(payload.get("store_cash")) + _money(payload.get("epay_cash")),
                    "credit": _money(payload.get("store_cc")) + _money(payload.get("epay_cc")),
                    "ext_cc": 0.0, "gift": 0.0, "store_acct": 0.0,
-                   "zelle": _money(payload.get("other_account"))}
+                   "zelle": _money(payload.get("other_account")), "acima": 0.0}
     body.update({"t_cash": tenders["cash"], "t_credit": tenders["credit"], "t_ext_cc": tenders["ext_cc"],
-                 "t_gift": tenders["gift"], "t_store_acct": tenders["store_acct"], "t_zelle": tenders["zelle"]})
+                 "t_gift": tenders["gift"], "t_store_acct": tenders["store_acct"], "t_zelle": tenders["zelle"],
+                 "t_acima": tenders["acima"]})
     # Keep the legacy columns populated so existing dashboards / recon keep reconciling unchanged.
     body["store_cash"] = tenders["cash"]
     body["epay_cash"] = 0.0
@@ -848,6 +850,7 @@ def closing_attempts(period: str = None, date: str = None, store: str = None, on
                        "accepted": t.get("accepted"), "auto_accepted": t.get("auto_accepted"),
                        "t_cash": t.get("t_cash"), "t_credit": t.get("t_credit"), "t_ext_cc": t.get("t_ext_cc"),
                        "t_gift": t.get("t_gift"), "t_store_acct": t.get("t_store_acct"), "t_zelle": t.get("t_zelle"),
+                       "t_acima": t.get("t_acima"),
                        "created_at": t.get("created_at")} for t in tries],
         })
     out.sort(key=lambda x: (x["close_date"] or "", x["store_address"] or ""), reverse=True)
@@ -890,7 +893,7 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
     # (1) closing — rep t_* per store_code
     closing = {}
     cq = (client.schema("commcalc").table("daily_closing")
-          .select("store_code,store_address,t_cash,t_credit,t_ext_cc,t_gift,t_store_acct,t_zelle")
+          .select("store_code,store_address,t_cash,t_credit,t_ext_cc,t_gift,t_store_acct,t_zelle,t_acima")
           .eq("org_id", org_id).eq("close_date", d))
     if store:
         cq = cq.eq("store_code", store)
@@ -901,7 +904,8 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
             addr_by_code[code] = r.get("store_address")
         agg = closing.setdefault(code, {t: 0.0 for t in CANON_TENDERS})
         for t, col in (("cash", "t_cash"), ("credit", "t_credit"), ("ext_cc", "t_ext_cc"),
-                       ("gift", "t_gift"), ("store_acct", "t_store_acct"), ("zelle", "t_zelle")):
+                       ("gift", "t_gift"), ("store_acct", "t_store_acct"), ("zelle", "t_zelle"),
+                       ("acima", "t_acima")):
             agg[t] += _f(r.get(col))
     # (2) X-report — pos_tender_summary raw tender_type → canon
     resolve = _addr_resolver(client, org_id)
@@ -1770,11 +1774,12 @@ def _tender_class(t: str) -> str:
     return "other"
 
 
-# ── Canonical 6 tender types (the axis of the 3-way recon: closing vs X-report vs sales-transactions) ──
-CANON_TENDERS = ["cash", "credit", "ext_cc", "gift", "store_acct", "zelle"]
+# ── Canonical 7 tender types (the axis of the 3-way recon: closing vs X-report vs sales-transactions) ──
+CANON_TENDERS = ["cash", "credit", "ext_cc", "gift", "store_acct", "zelle", "acima"]
 CANON_TENDER_LABEL = {
     "cash": "Cash", "credit": "Credit", "ext_cc": "External Credit Card",
     "gift": "Gift Card", "store_acct": "Store Account", "zelle": "Zelle / CashApp",
+    "acima": "ACIMA (lease)",
 }
 
 
@@ -1785,6 +1790,8 @@ def _canon_tender(raw: str):
     t = (raw or "").strip().lower()
     if not t:
         return None
+    if "acima" in t:
+        return "acima"
     if "gift" in t:
         return "gift"
     if "zelle" in t or "cashapp" in t or "cash app" in t or "venmo" in t:
@@ -1831,6 +1838,7 @@ def _log_attempt(client, org_id, d, body, tenders, declared_cash, declared_credi
             "entered_cash": round(_f(declared_cash), 2), "entered_credit": round(_f(declared_credit), 2),
             "t_cash": tenders["cash"], "t_credit": tenders["credit"], "t_ext_cc": tenders["ext_cc"],
             "t_gift": tenders["gift"], "t_store_acct": tenders["store_acct"], "t_zelle": tenders["zelle"],
+            "t_acima": tenders["acima"],
             "b2b_cash": (b2b or {}).get("cash"), "b2b_credit": (b2b or {}).get("card"),
             "cash_dir": dirs.get("cash"), "credit_dir": dirs.get("credit"),
             "blocked": bool(blocked), "accepted": bool(accepted), "auto_accepted": bool(auto_accepted),

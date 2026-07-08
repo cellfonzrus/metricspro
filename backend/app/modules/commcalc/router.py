@@ -118,7 +118,8 @@ def _flatten_grouped_sales(df):
 
 # ── POS X-Report parser (multi-sheet: one SHEET PER STORE, tender matrix) ────────────────────────
 _XR_TENDERS = {"cash", "check", "credit card", "gift card", "store account",
-               "debit card", "credit", "debit", "card"}
+               "debit card", "credit", "debit", "card",
+               "acima", "acima lease", "acima leasing", "acima (lease)", "lease"}
 
 
 def _parse_xreport(contents: bytes, filename: str, fallback_date: str = None):

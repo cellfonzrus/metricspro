@@ -16,22 +16,24 @@ const TENDERS: { key: TenderKey; label: string }[] = [
   { key: 't_gift', label: 'Gift Card $' },
   { key: 't_store_acct', label: 'Store Account $' },
   { key: 't_zelle', label: 'Zelle / CashApp $' },
+  { key: 't_acima', label: 'ACIMA (lease) $' },
 ]
-type TenderKey = 't_cash' | 't_credit' | 't_ext_cc' | 't_gift' | 't_store_acct' | 't_zelle'
+type TenderKey = 't_cash' | 't_credit' | 't_ext_cc' | 't_gift' | 't_store_acct' | 't_zelle' | 't_acima'
 
 type State = {
   close_date: string; sfid: string; store_name: string; store_code: string; employee_name: string
-  t_cash: string; t_credit: string; t_ext_cc: string; t_gift: string; t_store_acct: string; t_zelle: string
+  t_cash: string; t_credit: string; t_ext_cc: string; t_gift: string; t_store_acct: string; t_zelle: string; t_acima: string
   acc_sale: string
   upgrade_count: string; new_line_count: string; postpaid_count: string; envelope_picture: string; remarks: string
 }
 
 const blank = (): State => ({
   close_date: localToday(), sfid: '', store_name: '', store_code: '', employee_name: '',
-  t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', acc_sale: '',
+  t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', acc_sale: '',
   upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '',
 })
-const MONEY_KEYS: (keyof State)[] = ['t_cash', 't_credit', 't_ext_cc', 't_gift', 't_store_acct', 't_zelle', 'acc_sale']
+// Total collected = the tender boxes ONLY. Accessory is declared separately (tallied vs sales), NOT a tender.
+const MONEY_KEYS: (keyof State)[] = ['t_cash', 't_credit', 't_ext_cc', 't_gift', 't_store_acct', 't_zelle', 't_acima']
 
 export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitted }:
   { defaultEmployeeName?: string; onSubmitted?: () => void }) {
@@ -100,7 +102,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         close_date: f.close_date, sfid: f.sfid, store_code: f.store_code, store_name: f.store_name,
         employee_name: f.employee_name.trim(),
         t_cash: f.t_cash, t_credit: f.t_credit, t_ext_cc: f.t_ext_cc,
-        t_gift: f.t_gift, t_store_acct: f.t_store_acct, t_zelle: f.t_zelle,
+        t_gift: f.t_gift, t_store_acct: f.t_store_acct, t_zelle: f.t_zelle, t_acima: f.t_acima,
         acc_sale: f.acc_sale,
         upgrade_count: f.upgrade_count, new_line_count: f.new_line_count, postpaid_count: f.postpaid_count,
         envelope_picture: f.envelope_picture, remarks: f.remarks,
@@ -120,7 +122,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         : flags.length ? `⚠️ Submitted — ${flags.join('; ')}`
         : pending ? '✅ Submitted (B2B not loaded yet — will reconcile once it lands).'
         : '✅ Closing submitted and tallies with the system. You can enter another below.')
-      setF(p => ({ ...p, t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', acc_sale: '',
+      setF(p => ({ ...p, t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', acc_sale: '',
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))
       setEnvPreview(''); setOcrCash(''); setOcrAmounts([])
       loadRecent()
@@ -158,8 +160,8 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           ))}
         </Row>
         <Row>
-          <Field label="Accessory Sale $"><input style={inp} inputMode="decimal" value={f.acc_sale} onChange={e => set({ acc_sale: e.target.value })} placeholder="0.00" /></Field>
-          <Field label="Total collected"><div style={{ ...inp, background: 'var(--surface2)', fontWeight: 700 }}>{fmt(total)}</div></Field>
+          <Field label="Accessory Sale $ (declared — tallied vs sales, NOT in total)"><input style={inp} inputMode="decimal" value={f.acc_sale} onChange={e => set({ acc_sale: e.target.value })} placeholder="0.00" /></Field>
+          <Field label="Total collected (tenders only)"><div style={{ ...inp, background: 'var(--surface2)', fontWeight: 700 }}>{fmt(total)}</div></Field>
         </Row>
 
         <SectionLabel>Transaction counts</SectionLabel>
