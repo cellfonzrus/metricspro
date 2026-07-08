@@ -981,6 +981,50 @@ def tender_drilldown(date: str, store: str = None, tender: str = None, org_id: s
 
 
 # ── Reconciliation sheet: every day's closing-vs-B2B errors over a period ────────────────────
+@router.get("/accessory-recon")
+def accessory_recon(date: str, store: str = None, tolerance: float = 1.0, org_id: str = ORG_ID):
+    """Accessory DECLARED (daily-closing acc_sale, per rep) vs ACTUAL accessory sales (B2B ext_price on
+    accessory lines, per store) for a day — so management catches reps entering wrong accessory numbers.
+    Accessory is NOT a tender, so this is its own tally (the tender total excludes it)."""
+    require_org(org_id)
+    client = sb()
+    d = _date(date)
+    if not d:
+        raise HTTPException(400, "valid date required (YYYY-MM-DD)")
+    cq = (client.schema("commcalc").table("daily_closing")
+          .select("store_code,store_address,employee_name,acc_sale")
+          .eq("org_id", org_id).eq("close_date", d))
+    if store:
+        cq = cq.eq("store_code", store)
+    declared = {}
+    for r in (cq.limit(50000).execute().data or []):
+        code = r.get("store_code") or "?"
+        s = declared.setdefault(code, {"store_address": r.get("store_address"), "declared": 0.0, "reps": []})
+        v = _f(r.get("acc_sale"))
+        s["declared"] += v
+        s["reps"].append({"employee_name": r.get("employee_name"), "acc_sale": round(v, 2)})
+    b2b = _b2b_money_by_store(client, org_id, d)
+    codes = [store] if store else sorted(set(declared) | set(b2b))
+    out = []
+    for code in codes:
+        dec = declared.get(code, {"store_address": None, "declared": 0.0, "reps": []})
+        actual = round(_f((b2b.get(code) or {}).get("acc_gross")), 2)
+        declared_v = round(dec["declared"], 2)
+        var = round(declared_v - actual, 2)
+        out.append({
+            "store_code": code, "store_address": dec["store_address"] or code,
+            "declared": declared_v, "actual": actual, "variance": var,
+            "flag": abs(var) > tolerance,
+            "direction": ("over" if var > tolerance else "under" if var < -tolerance else "ok"),
+            "reps": sorted(dec["reps"], key=lambda x: -_f(x.get("acc_sale"))),
+        })
+    out.sort(key=lambda x: -abs(x["variance"]))
+    return {"date": d, "tolerance": tolerance, "rows": out,
+            "totals": {"declared": round(sum(r["declared"] for r in out), 2),
+                       "actual": round(sum(r["actual"] for r in out), 2),
+                       "flagged": sum(1 for r in out if r["flag"]), "stores": len(out)}}
+
+
 @router.get("/recon")
 def closing_recon(period: str, market: str = None, tolerance: float = 1.0, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Per-rep (money) + per-store (counts) reconciliation of declared closing vs B2B actuals for
