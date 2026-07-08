@@ -1,0 +1,177 @@
+'use client'
+import { useState, useEffect, Fragment } from 'react'
+import { api, fmt, localToday } from '@/lib/client'
+import { ExportButtons, ExportPayload } from '@/lib/export'
+
+// ePay bill-payment recon: DECLARED ePay (closing) vs SALES bill-payments (by tender) vs BANK deposited.
+export default function EpayReconPage() {
+  const [date, setDate] = useState(() => localToday())
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [flaggedOnly, setFlaggedOnly] = useState(false)
+  const [open, setOpen] = useState<Record<string, boolean>>({})
+  const [stores, setStores] = useState<any[]>([])
+  // bank-deposit entry
+  const [dep, setDep] = useState<{ store_code: string; amount: string; employee_name: string; note: string; receipt_path?: string }>({ store_code: '', amount: '', employee_name: '', note: '' })
+  const [depMsg, setDepMsg] = useState('')
+  const [depBusy, setDepBusy] = useState(false)
+
+  function load() {
+    setLoading(true)
+    api(`/api/v1/closing/epay-recon?date=${date}`).then(setData).catch(e => setData({ error: e?.message || String(e) })).finally(() => setLoading(false))
+  }
+  useEffect(() => { load() }, [date])
+  useEffect(() => { api('/api/v1/closing/stores').then((s: any) => setStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
+
+  async function uploadReceipt(f: File) {
+    const r = new FileReader()
+    r.onload = async () => {
+      try { const u: any = await api('/api/v1/closing/envelope-photo', { method: 'POST', body: JSON.stringify({ image: r.result }) }); setDep(d => ({ ...d, receipt_path: u.path })); setDepMsg('📎 Receipt attached') }
+      catch (e: any) { setDepMsg('❌ receipt upload failed: ' + (e?.message || e)) }
+    }
+    r.readAsDataURL(f)
+  }
+  async function saveDeposit() {
+    if (!dep.store_code || !dep.amount) { setDepMsg('❌ Pick a store and enter the amount.'); return }
+    setDepBusy(true); setDepMsg('')
+    try {
+      await api('/api/v1/closing/bank-deposit', { method: 'POST', body: JSON.stringify({ ...dep, close_date: date, store_name: stores.find(s => s.store_code === dep.store_code)?.store_address }) })
+      setDepMsg('✅ Bank deposit recorded'); setDep({ store_code: '', amount: '', employee_name: '', note: '' }); load()
+    } catch (e: any) { setDepMsg('❌ ' + (e?.message || e)) }
+    setDepBusy(false)
+  }
+
+  const allRows: any[] = data?.rows || []
+  const rows = allRows.filter(r => !flaggedOnly || r.flag)
+  const t = data?.totals || {}
+  const inp = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
+
+  function buildPayload(): ExportPayload {
+    return {
+      title: 'ePay Bank-Deposit Recon', subtitle: date, filename: `epay-recon_${date}`,
+      sheets: [{ name: 'By store', rows, columns: [
+        { header: 'Store', get: (r: any) => r.store_address },
+        { header: 'Declared ePay cash', get: (r: any) => r.declared.cash, money: true },
+        { header: 'Sales bill-pay cash', get: (r: any) => r.sales.cash, money: true },
+        { header: 'Bank deposited', get: (r: any) => r.bank_deposited, money: true },
+        { header: 'Cash variance', get: (r: any) => r.cash_variance, money: true },
+        { header: 'Status', get: (r: any) => r.flag ? r.direction.toUpperCase() : 'OK' },
+      ] }],
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🏦 ePay Bank‑Deposit Recon</h1>
+          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 740 }}>
+            ePay bill‑payment cash: what reps <strong>declared</strong> (closing) vs the <strong>bill‑payments in sales</strong> (by tender)
+            vs what was <strong>deposited in the bank</strong>. Headline variance = declared ePay cash − bank deposited.
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input className="select" type="date" value={date} onChange={e => setDate(e.target.value)} />
+          {allRows.length > 0 && <ExportButtons payload={buildPayload} />}
+        </div>
+      </div>
+
+      {/* Record a bank deposit */}
+      <div className="card" style={{ padding: 14, marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong style={{ fontSize: 13 }}>Record bank deposit:</strong>
+        <select style={inp} value={dep.store_code} onChange={e => setDep(d => ({ ...d, store_code: e.target.value }))}>
+          <option value="">Store…</option>
+          {stores.map((s, i) => <option key={i} value={s.store_code}>{s.store_address || s.store_code}</option>)}
+        </select>
+        <input style={{ ...inp, width: 110 }} inputMode="decimal" placeholder="Amount $" value={dep.amount} onChange={e => setDep(d => ({ ...d, amount: e.target.value }))} />
+        <input style={{ ...inp, width: 130 }} placeholder="Deposited by" value={dep.employee_name} onChange={e => setDep(d => ({ ...d, employee_name: e.target.value }))} />
+        <label className="btn" style={{ cursor: 'pointer' }}>{dep.receipt_path ? '📎 Receipt ✓' : '📎 Receipt'}
+          <input type="file" accept="image/*,.pdf" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadReceipt(f) }} />
+        </label>
+        <button className="btn" disabled={depBusy} onClick={saveDeposit} style={{ background: 'var(--accent)', color: '#fff' }}>{depBusy ? 'Saving…' : 'Save'}</button>
+        {depMsg && <span style={{ fontSize: 12, color: depMsg.startsWith('❌') ? '#b91c1c' : 'var(--text2)' }}>{depMsg}</span>}
+      </div>
+
+      {loading ? (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
+      ) : data?.error ? (
+        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {data.error}</div>
+      ) : (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
+            <Stat label="Declared ePay cash" value={fmt(t.declared_cash)} />
+            <Stat label="Sales bill‑pay cash" value={fmt(t.sales_cash)} color="var(--text2)" />
+            <Stat label="Bank deposited" value={fmt(t.bank_deposited)} color="#16a34a" />
+            <Stat label="Stores flagged" value={`${t.flagged || 0} / ${t.stores || 0}`} color={t.flagged ? '#dc2626' : '#059669'} />
+          </div>
+          <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12 }}>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input type="checkbox" checked={flaggedOnly} onChange={e => setFlaggedOnly(e.target.checked)} /> Discrepancies only
+            </label>
+            <span style={{ fontSize: 12, color: 'var(--text3)' }}>{rows.length} store(s)</span>
+          </div>
+
+          {rows.length === 0 ? (
+            <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No ePay data for {date}.</div>
+          ) : (
+            <div className="card" style={{ padding: 0, overflow: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880 }}>
+                <thead><tr style={{ background: 'var(--surface2)', fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
+                  {['Store', 'Declared cash', 'Declared credit', 'Declared ACIMA', 'Sales cash', 'Bank deposited', 'Cash variance', 'Status'].map(h =>
+                    <th key={h} style={{ textAlign: h === 'Store' ? 'left' : 'right', padding: '8px 12px', whiteSpace: 'nowrap' }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {rows.map(r => (
+                    <Fragment key={r.store_code}>
+                      <tr onClick={() => setOpen(o => ({ ...o, [r.store_code]: !o[r.store_code] }))}
+                        style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: r.flag ? '#fffafa' : undefined }}>
+                        <td style={{ padding: '9px 12px', fontSize: 13, fontWeight: 600 }}>{(r.reps?.length || r.deposits?.length) ? (open[r.store_code] ? '▾ ' : '▸ ') : ''}{r.store_address}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13 }}>{fmt(r.declared.cash)}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--text2)' }}>{fmt(r.declared.credit)}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--text2)' }}>{fmt(r.declared.acima)}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--text3)' }}>{fmt(r.sales.cash)}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: '#16a34a' }}>{fmt(r.bank_deposited)}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, fontWeight: 700, color: r.flag ? '#dc2626' : 'var(--text1)' }}>{r.cash_variance >= 0 ? '+' : ''}{fmt(r.cash_variance)}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: 12 }}>
+                          {r.flag ? <span style={{ background: '#fee2e2', color: '#b91c1c', borderRadius: 5, padding: '1px 8px', fontWeight: 600 }}>{r.direction === 'short' ? 'NOT DEPOSITED' : 'OVER‑DEPOSITED'}</span> : <span style={{ color: '#059669' }}>✓ OK</span>}
+                        </td>
+                      </tr>
+                      {open[r.store_code] && [...(r.reps || []).map((x: any, i: number) => (
+                        <tr key={r.store_code + '_r' + i} style={{ background: 'var(--surface2)', fontSize: 12 }}>
+                          <td style={{ padding: '4px 12px 4px 30px', color: 'var(--text2)' }}>declared · {x.employee_name || '(unnamed)'}</td>
+                          <td style={{ padding: '4px 12px', textAlign: 'right' }}>{fmt(x.cash)}</td>
+                          <td style={{ padding: '4px 12px', textAlign: 'right' }}>{fmt(x.credit)}</td>
+                          <td style={{ padding: '4px 12px', textAlign: 'right' }}>{fmt(x.acima)}</td>
+                          <td colSpan={4} />
+                        </tr>
+                      )), ...(r.deposits || []).map((x: any, i: number) => (
+                        <tr key={r.store_code + '_d' + i} style={{ background: 'var(--surface2)', fontSize: 12 }}>
+                          <td style={{ padding: '4px 12px 4px 30px', color: '#16a34a' }}>bank deposit · {x.employee_name || ''}{x.receipt_path ? ' 📎' : ''}</td>
+                          <td colSpan={4} style={{ padding: '4px 12px', color: 'var(--text3)' }}>{x.note || ''}</td>
+                          <td style={{ padding: '4px 12px', textAlign: 'right', color: '#16a34a' }}>{fmt(x.amount)}</td>
+                          <td colSpan={2} />
+                        </tr>
+                      ))]}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 12 }}>
+            "Declared" = the ePay‑on‑cash/credit/ACIMA reps entered on the closing sheet. "Sales" = bill‑payment
+            transactions from the sales feed split by tender (best‑effort classifier). "Bank deposited" = the receipts
+            recorded above. NOT DEPOSITED = declared ePay cash exceeds what hit the bank. Tolerance ±{data?.tolerance ?? 1}.
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
+function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
+  return <div className="card" style={{ padding: '14px 16px' }}>
+    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</div>
+    <div style={{ fontSize: 20, fontWeight: 700, marginTop: 4, color: color || 'var(--text1)' }}>{value}</div>
+  </div>
+}

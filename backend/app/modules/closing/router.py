@@ -1000,6 +1000,134 @@ def tender_drilldown(date: str, store: str = None, tender: str = None, org_id: s
 
 
 # ── Reconciliation sheet: every day's closing-vs-B2B errors over a period ────────────────────
+# ── ePay bill-payment reconciliation: declared (closing) vs sales (by tender) vs bank-deposited ──────
+_EPAY_CATS = {"bill payments", "other carr. payments", "other carr payments", "bill payment"}
+_EPAY_KWS = ("epay", "rtr", "refill", "recharge", "wallet funding", "access charge",
+             "top up", "topup", "airtime", "bill pay")
+
+
+def _is_epay(dept, cat, product):
+    if (cat or "").strip().lower() in _EPAY_CATS:
+        return True
+    p = (product or "").strip().lower()
+    return bool(p) and any(k in p for k in _EPAY_KWS)
+
+
+def _epay_sales_by_store(client, org_id, date, store=None):
+    """Bill-payment (ePay) sales $ per store, SPLIT BY TENDER (cash / credit / acima). Best-effort:
+    identifies bill-payment lines by category or product keyword, then buckets ext_price by tender."""
+    resolve = _addr_resolver(client, org_id)
+    try:
+        rows = _b2b_sales_rows(client, org_id, date,
+                               "store,department,category,product_desc,tender_type,ext_price,voided,trans_type")
+    except Exception:
+        rows = []
+    out = {}
+    for r in rows:
+        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+            continue
+        if str(r.get("trans_type") or "").strip() == "Return":
+            continue
+        if not _is_epay(r.get("department"), r.get("category"), r.get("product_desc")):
+            continue
+        canon = _canon_tender(r.get("tender_type"))
+        bucket = "cash" if canon == "cash" else ("credit" if canon in ("credit", "ext_cc") else ("acima" if canon == "acima" else None))
+        if not bucket:
+            continue
+        code = resolve(r.get("store")) or (r.get("store") or "?")
+        if store and code != store:
+            continue
+        out.setdefault(code, {"cash": 0.0, "credit": 0.0, "acima": 0.0})[bucket] += _f(r.get("ext_price"))
+    return out
+
+
+@router.post("/bank-deposit")
+def bank_deposit(body: dict, org_id: str = ORG_ID):
+    """Record a bank deposit of ePay cash (bill-payment cash reps collected and deposited). One row per
+    deposit; reconciled vs declared ePay + sales bill-payments. Receipt image path comes from the shared
+    /closing/envelope-photo uploader."""
+    require_org(org_id)
+    client = sb()
+    d = _date(body.get("close_date")) or body.get("close_date")
+    row = {"org_id": org_id, "close_date": d, "period": (str(d)[:7] if d else None),
+           "store_code": (body.get("store_code") or "").strip() or None,
+           "store_address": body.get("store_name") or body.get("store_address"),
+           "employee_name": (body.get("employee_name") or "").strip() or None,
+           "amount": _money(body.get("amount")),
+           "receipt_path": body.get("receipt_path") or body.get("receipt") or None,
+           "handed_to": (body.get("handed_to") or "").strip() or None,
+           "note": (body.get("note") or "").strip() or None}
+    r = client.schema("commcalc").table("bank_deposit").insert(row).execute()
+    return {"ok": True, "row": (r.data or [row])[0]}
+
+
+@router.get("/epay-recon")
+def epay_recon(date: str, store: str = None, tolerance: float = 1.0, org_id: str = ORG_ID):
+    """ePay bill-payment reconciliation for a day, per store: DECLARED ePay (closing epay_on_* fields) vs
+    ACTUAL bill-payments from sales (by tender) vs BANK-DEPOSITED (bank_deposit receipts). The headline
+    variance is declared ePay CASH vs what was deposited in the bank."""
+    require_org(org_id)
+    client = sb()
+    d = _date(date)
+    if not d:
+        raise HTTPException(400, "valid date required (YYYY-MM-DD)")
+
+    def _dc(cols):
+        q = client.schema("commcalc").table("daily_closing").select(cols).eq("org_id", org_id).eq("close_date", d)
+        if store:
+            q = q.eq("store_code", store)
+        return q.limit(50000).execute().data or []
+    try:
+        drows = _dc("store_code,store_address,employee_name,epay_on_cash,epay_on_credit,epay_on_acima")
+    except Exception:
+        drows = []   # mig 106 not run yet
+    declared = {}
+    for r in drows:
+        code = r.get("store_code") or "?"
+        s = declared.setdefault(code, {"store_address": r.get("store_address"), "cash": 0.0, "credit": 0.0, "acima": 0.0, "reps": []})
+        c, cr, a = _f(r.get("epay_on_cash")), _f(r.get("epay_on_credit")), _f(r.get("epay_on_acima"))
+        s["cash"] += c; s["credit"] += cr; s["acima"] += a
+        s["reps"].append({"employee_name": r.get("employee_name"), "cash": round(c, 2), "credit": round(cr, 2), "acima": round(a, 2)})
+
+    bank = {}
+    try:
+        bq = client.schema("commcalc").table("bank_deposit").select("store_code,amount,receipt_path,employee_name,handed_to,note").eq("org_id", org_id).eq("close_date", d)
+        if store:
+            bq = bq.eq("store_code", store)
+        for r in (bq.limit(50000).execute().data or []):
+            code = r.get("store_code") or "?"
+            b = bank.setdefault(code, {"amount": 0.0, "deposits": []})
+            b["amount"] += _f(r.get("amount"))
+            b["deposits"].append({"amount": round(_f(r.get("amount")), 2), "receipt_path": r.get("receipt_path"),
+                                  "employee_name": r.get("employee_name"), "handed_to": r.get("handed_to"), "note": r.get("note")})
+    except Exception:
+        pass   # mig 107 not run yet
+
+    sales = _epay_sales_by_store(client, org_id, d, store)
+    codes = [store] if store else sorted(set(declared) | set(bank) | set(sales))
+    out = []
+    for code in codes:
+        dec = declared.get(code, {"store_address": None, "cash": 0.0, "credit": 0.0, "acima": 0.0, "reps": []})
+        bk = bank.get(code, {"amount": 0.0, "deposits": []})
+        sl = sales.get(code, {"cash": 0.0, "credit": 0.0, "acima": 0.0})
+        declared_cash, deposited = round(dec["cash"], 2), round(bk["amount"], 2)
+        var = round(declared_cash - deposited, 2)
+        out.append({
+            "store_code": code, "store_address": dec["store_address"] or code,
+            "declared": {"cash": declared_cash, "credit": round(dec["credit"], 2), "acima": round(dec["acima"], 2)},
+            "sales": {"cash": round(sl["cash"], 2), "credit": round(sl["credit"], 2), "acima": round(sl["acima"], 2)},
+            "bank_deposited": deposited, "cash_variance": var, "flag": abs(var) > tolerance,
+            "direction": ("short" if var > tolerance else "over" if var < -tolerance else "ok"),
+            "reps": dec["reps"], "deposits": bk["deposits"],
+        })
+    out.sort(key=lambda x: -abs(x["cash_variance"]))
+    return {"date": d, "tolerance": tolerance, "rows": out,
+            "totals": {"declared_cash": round(sum(r["declared"]["cash"] for r in out), 2),
+                       "bank_deposited": round(sum(r["bank_deposited"] for r in out), 2),
+                       "sales_cash": round(sum(r["sales"]["cash"] for r in out), 2),
+                       "flagged": sum(1 for r in out if r["flag"]), "stores": len(out)}}
+
+
 @router.get("/accessory-recon")
 def accessory_recon(date: str, store: str = None, tolerance: float = 1.0, org_id: str = ORG_ID):
     """Accessory DECLARED (daily-closing acc_sale, per rep) vs ACTUAL accessory sales (B2B ext_price on
