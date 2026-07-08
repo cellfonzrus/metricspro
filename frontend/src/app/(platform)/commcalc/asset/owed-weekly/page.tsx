@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { MultiSelect } from '@/lib/multiselect'
 
 function ymd(d: Date) {
   const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0')
@@ -44,8 +45,8 @@ function Kpi({ label, value, sub, color }: { label: string; value: string; sub?:
 export default function OwedWeeklyPage() {
   // Selected billing Friday (YYYY-MM-DD). Sent to the API under the legacy `thursday` key.
   const [friday, setFriday] = useState(ymd(upcomingFriday()))
-  const [market, setMarket] = useState('')
-  const [store, setStore] = useState('')
+  const [selMarkets, setSelMarkets] = useState<string[]>([])
+  const [selStores, setSelStores] = useState<string[]>([])
   const [markets, setMarkets] = useState<string[]>([])
   const [stores, setStores] = useState<{store:string;market:string}[]>([])
   const [report, setReport] = useState<Report | null>(null)
@@ -57,29 +58,37 @@ export default function OwedWeeklyPage() {
       .catch(console.error)
   }, [])
 
-  useEffect(() => { load() }, [friday, market, store])
+  useEffect(() => { load() }, [friday, selMarkets, selStores])
 
   async function load() {
     setLoading(true)
     try {
       const qs = new URLSearchParams({ org_id: ORG_ID, thursday: friday })
-      if (market) qs.set('market', market)
-      if (store) qs.set('store', store)
+      if (selMarkets.length) qs.set('market', selMarkets.join(','))
+      if (selStores.length) qs.set('store', selStores.join(','))
       const d = await api(`/api/v1/asset/owed-weekly?${qs.toString()}`)
       setReport(d)
     } catch(e) { console.error(e) }
     setLoading(false)
   }
 
-  const visibleStores = market ? stores.filter(s => s.market === market) : stores
-  const selStyle = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
+  const visibleStores = selMarkets.length ? stores.filter(s => selMarkets.includes(s.market)) : stores
+  // When markets change, drop any selected store no longer in the visible set.
+  function onMarketsChange(vs: string[]) {
+    setSelMarkets(vs)
+    const allowed = new Set((vs.length ? stores.filter(s => vs.includes(s.market)) : stores).map(s => s.store))
+    setSelStores(prev => prev.filter(st => allowed.has(st)))
+  }
 
   function buildPayload(): ExportPayload {
-    const filterLabel = [market||null, store||null].filter(Boolean).join(' · ') || 'All markets'
+    const parts: string[] = []
+    if (selMarkets.length) parts.push(selMarkets.join(', '))
+    if (selStores.length) parts.push(selStores.join(', '))
+    const filterLabel = parts.join(' · ') || 'All markets'
     return {
       title: 'Weekly Owed to Distributor',
       subtitle: `Billing ${pretty(friday)} · ${filterLabel}`,
-      filename: `owed-weekly-${friday}${store?'-'+store.replace(/[^a-z0-9]+/gi,'-').toLowerCase():''}`,
+      filename: `owed-weekly-${friday}${selStores.length===1?'-'+selStores[0].replace(/[^a-z0-9]+/gi,'-').toLowerCase():selStores.length>1?'-'+selStores.length+'stores':''}`,
       sheets: [
         { name:'By Store', rows:report?.by_store||[], columns:[
           { header:'Store', get:r=>r.store },
@@ -118,7 +127,7 @@ export default function OwedWeeklyPage() {
           </p>
         </div>
         {report && <ExportButtons payload={buildPayload} />}
-        {report && <SendReportButton reportKey="owed_weekly" filters={{ thursday: friday, ...(store?{store}:{}), ...(market?{market}:{}) }} />}
+        {report && <SendReportButton reportKey="owed_weekly" filters={{ thursday: friday, ...(selStores.length?{store:selStores.join(',')}:{}), ...(selMarkets.length?{market:selMarkets.join(',')}:{}) }} />}
       </div>
 
       {/* Controls */}
@@ -128,14 +137,9 @@ export default function OwedWeeklyPage() {
         <button className="btn" onClick={() => setFriday(shiftWeek(friday, 1))}>Next ▶</button>
         <button className="btn" onClick={() => setFriday(ymd(upcomingFriday()))}>This week</button>
         <div style={{ flex: 1 }} />
-        <select style={selStyle} value={market} onChange={e => { setMarket(e.target.value); setStore('') }}>
-          <option value="">All markets</option>
-          {markets.map(m => <option key={m} value={m}>{m}</option>)}
-        </select>
-        <select style={selStyle} value={store} onChange={e => setStore(e.target.value)}>
-          <option value="">All stores</option>
-          {visibleStores.map(s => <option key={s.store} value={s.store}>{s.store}</option>)}
-        </select>
+        <MultiSelect allLabel="All markets" width={150} value={selMarkets} options={markets} onChange={onMarketsChange} />
+        <MultiSelect allLabel="All stores" width={150} value={selStores} searchable
+          options={visibleStores.map(s => ({ value: s.store }))} onChange={setSelStores} />
       </div>
 
       {loading ? (

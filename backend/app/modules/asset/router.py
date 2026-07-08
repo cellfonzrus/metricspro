@@ -665,12 +665,16 @@ async def get_owed_weekly(
     from datetime import datetime, timedelta
     client = sb()
 
+    # market / store accept a single value OR a comma-separated list (multi-select filter).
+    store_list = [s.strip() for s in store.split(",") if s.strip()]
+    market_list = [m.strip() for m in market.split(",") if m.strip()]
+
     def base(select_cols):
         q = client.schema("commcalc").table("asset_ledger").select(select_cols).eq("org_id", org_id)
-        if store:
-            q = q.eq("store", store)
-        if market:
-            q = q.eq("market", market)
+        if store_list:
+            q = q.in_("store", store_list)
+        if market_list:
+            q = q.in_("market", market_list)
         return q
 
     def fetch_all(select_cols, apply_filter):
