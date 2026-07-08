@@ -7242,6 +7242,44 @@ def exec_overview(period: str, org_id: str = ORG_ID):
             "stores": stores}
 
 
+def _acc_flags_by_rep(client, org_id, period):
+    """Lightweight per-rep accessory-flag counts (over/under threshold) for the action plan — ONE read of
+    raw_sales via the configurable accessory classifier. NO item_mapping load/write (unlike the full
+    accessory-flags report), so it's cheap on the hot action-plan path. {REP_UPPER: {flags,over,under,total}}."""
+    rules = _flag_rules(client, org_id)
+    threshold = safe_float(rules.get("accessory_threshold"))
+    min_t = safe_float(rules.get("accessory_min_threshold"))
+    acfg = _accessory_config(client, org_id)
+    rows = (client.schema("commcalc").table("raw_sales")
+            .select("salesperson,department,category,product_desc,ext_price,voided,trans_type")
+            .eq("org_id", org_id).in_("period", _pvariants(period)).limit(200000).execute().data) or []
+    out = {}
+    for r in rows:
+        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+            continue
+        if str(r.get("trans_type") or "").strip() == "Return":
+            continue
+        pd = (r.get("product_desc") or "").lower()
+        if "boost protect" in pd or "xfinity" in pd:
+            continue
+        if not _is_accessory(r.get("department"), r.get("category"), r.get("product_desc"), acfg):
+            continue
+        price = safe_float(r.get("ext_price"))
+        over = price > threshold
+        under = min_t > 0 and price < min_t
+        if not (over or under):
+            continue
+        rep = (r.get("salesperson") or "").strip().upper()
+        if not rep:
+            continue
+        a = out.setdefault(rep, {"flags": 0, "over": 0, "under": 0, "total": 0.0})
+        a["flags"] += 1
+        a["over"] += 1 if over else 0
+        a["under"] += 1 if under else 0
+        a["total"] += price
+    return out
+
+
 @router.get("/targets/{period}/action-plan")
 async def get_action_plan(period: str, today: str = "", store_code: str = "", rep: str = "",
                           authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -7284,13 +7322,8 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
 
     # Accessory flags per rep (over/under-priced accessory sales) — surfaced as a rep action item so
     # employees see their accessory-pricing issues alongside conversion + commission.
-    acc_flag_by_rep = {}
     try:
-        _af_resp = accessory_flags(period=period, org_id=org_id)
-        for a in (_af_resp.get('by_rep') or []):
-            rn = (a.get('name') or '').strip().upper()
-            if rn:
-                acc_flag_by_rep[rn] = a
+        acc_flag_by_rep = _acc_flags_by_rep(client, org_id, period)   # {REP_UPPER: {flags,over,under,total}} — light, read-only
     except Exception:
         acc_flag_by_rep = {}
 
