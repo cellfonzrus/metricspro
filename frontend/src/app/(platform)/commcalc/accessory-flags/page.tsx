@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
+import { MultiSelect } from '@/lib/multiselect'
 
 // Accessories sold above the user-defined threshold → flag → push to the rep's chargebacks.
 // Phone model comes from the item mapping (the SU sheet). Chargeback $ is per-row editable with a
@@ -33,6 +34,9 @@ export default function AccessoryFlagsPage() {
   const [start, setStart] = useState(firstOfMonth())
   const [end, setEnd] = useState(today())
   const [storeF, setStoreF] = useState('')
+  const [selStores, setSelStores] = useState<string[]>([])
+  const [selMarkets, setSelMarkets] = useState<string[]>([])
+  const [assetStores, setAssetStores] = useState<{ store: string; market: string }[]>([])
   const [repF, setRepF] = useState('')
   const [reasonF, setReasonF] = useState<'' | 'over' | 'under'>('')
   const [rows, setRows] = useState<Row[]>([])
@@ -57,6 +61,7 @@ export default function AccessoryFlagsPage() {
     }).catch(() => {})
   }, [])
   useEffect(() => { loadRules() }, [loadRules])
+  useEffect(() => { api('/api/v1/asset/filter-options').then((d: any) => setAssetStores(d?.stores || [])).catch(() => {}) }, [])
 
   async function saveRules() {
     setMsg('')
@@ -97,8 +102,15 @@ export default function AccessoryFlagsPage() {
   }
 
   const stores = Array.from(new Set(rows.map(r => r.store || '').filter(Boolean))).sort()
+  const _mktAddr: Record<string, string> = {}, _mktNum: Record<string, string> = {}
+  const _lead = (a: string) => (a.match(/^\s*([0-9][0-9-]*)/)?.[1] || '').replace(/\D/g, '')
+  assetStores.forEach(s => { const a = (s.store || '').trim().toLowerCase(); if (!a || !s.market) return; _mktAddr[a] = s.market; const nk = _lead(a); if (nk && !_mktNum[nk]) _mktNum[nk] = s.market })
+  const marketOf = (st: string) => { const a = (st || '').trim().toLowerCase(); if (_mktAddr[a]) return _mktAddr[a]; const nk = _lead(a); return (nk && _mktNum[nk]) || '' }
+  const marketList = Array.from(new Set(stores.map(marketOf).filter(Boolean))).sort()
+  const storeOpts = stores.filter(s => !selMarkets.length || selMarkets.includes(marketOf(s))).map(s => ({ value: s }))
   const reps = Array.from(new Set(rows.map(r => r.rep || '').filter(Boolean))).sort()
-  const filtered = rows.filter(r => (!storeF || r.store === storeF) && (!repF || r.rep === repF) && (!reasonF || r.flag_reason === reasonF))
+  const filtered = rows.filter(r => (!storeF || r.store === storeF) && (!repF || r.rep === repF) && (!reasonF || r.flag_reason === reasonF)
+    && (!selStores.length || selStores.includes(r.store || '')) && (!selMarkets.length || selMarkets.includes(marketOf(r.store || ''))))
   const pickedRows = filtered.filter(r => picked[r.dedupe_key])
 
   function toggleAll(v: boolean) {
@@ -134,9 +146,10 @@ export default function AccessoryFlagsPage() {
       <div className="card" style={{ padding: 14, marginBottom: 14, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
         <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>From<br /><input type="date" style={{ ...sel, marginTop: 4 }} value={start} onChange={e => setStart(e.target.value)} /></label>
         <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>To<br /><input type="date" style={{ ...sel, marginTop: 4 }} value={end} onChange={e => setEnd(e.target.value)} /></label>
-        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Store<br />
-          <select style={{ ...sel, marginTop: 4, minWidth: 150 }} value={storeF} onChange={e => setStoreF(e.target.value)}>
-            <option value="">All stores</option>{stores.map(s => <option key={s} value={s}>{s}</option>)}</select></label>
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Markets<br />
+          <span style={{ display: 'inline-block', marginTop: 4 }}><MultiSelect allLabel="All markets" width={140} value={selMarkets} options={marketList} onChange={setSelMarkets} /></span></label>
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Stores<br />
+          <span style={{ display: 'inline-block', marginTop: 4 }}><MultiSelect allLabel="All stores" width={150} value={selStores} searchable options={storeOpts} onChange={setSelStores} /></span></label>
         <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Rep<br />
           <select style={{ ...sel, marginTop: 4, minWidth: 150 }} value={repF} onChange={e => setRepF(e.target.value)}>
             <option value="">All reps</option>{reps.map(s => <option key={s} value={s}>{s}</option>)}</select></label>
