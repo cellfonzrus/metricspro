@@ -766,6 +766,30 @@ async def upload_file(
     # day and a monthly file only shrinks on a bad/partial export (June arrived ~1/6th complete). A big
     # shrink is recorded in `shrink` so the email sweep can alert. Best-effort — NEVER blocks the upload.
     shrink = []
+    # PRICE-COVERAGE GUARD (2026-07-08): the hourly feed sometimes re-delivers a DEGRADED "Sales Transaction
+    # Details" export that dropped the Ext Price/GP columns (the price-less "for Metrics pro"/.csv variant).
+    # Because daily_sales does a delete-then-insert per day, ingesting it WIPES the real dollars. If the
+    # incoming file carries far fewer PRICED rows than what's already stored for the same day(s), refuse it
+    # so a bad export can never clobber good money data. (Only blocks when priced data actually exists to
+    # protect; a fresh priced re-pull has >= the priced rows and passes.)
+    if file_type == 'daily_sales' and mapped:
+        _pg_dates = sorted({m.get('trans_date') for m in mapped if m.get('trans_date')})
+        _inc_priced = sum(1 for m in mapped if safe_float(m.get('ext_price')) != 0)
+        try:
+            _ex_priced = ((client.schema('commcalc').table('daily_sales_feed').select('id', count='exact')
+                           .eq('org_id', org_id).in_('trans_date', _pg_dates).neq('ext_price', 0)
+                           .execute().count) or 0) if _pg_dates else 0
+        except Exception:
+            _ex_priced = 0
+        if _ex_priced >= 50 and _inc_priced < _ex_priced * 0.5:
+            print(f'PRICE GUARD: refused degraded daily_sales file — incoming_priced={_inc_priced} vs '
+                  f'existing_priced={_ex_priced} for dates {_pg_dates}; kept existing dollars')
+            return {"saved": 0, "file_type": file_type, "period": period, "fraud": None, "recon": None,
+                    "skipped": "price_guard",
+                    "shrink": [{"key": "price-guard", "prior": int(_ex_priced), "new": int(_inc_priced),
+                                "reason": "refused: far fewer priced (Ext Price) rows than already stored — "
+                                          "a degraded/price-less export. Kept existing dollars. Ensure the "
+                                          "scheduled b2bsoft report keeps the Ext Price + GP columns."}]}
     if mapped:
         if file_type in DATE_KEYED:
             # Date-grain feeds are keyed by DAY, not month. Make a re-pull of the same day(s)
