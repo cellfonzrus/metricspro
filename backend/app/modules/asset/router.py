@@ -984,6 +984,84 @@ async def get_missing_phones(org_id: str = ORG_ID, store: str = "", market: str 
             "owed_total": round(sum(float(r.get("owed_to_vip") or 0) for r in out), 2)}
 
 
+@router.get("/aging-rebate")
+async def get_aging_rebate(org_id: str = ORG_ID, store: str = "", market: str = ""):
+    """Devices STILL in Inventory Aging (unsold On-Inventory) but for which a REBATE was received — i.e.
+    they were effectively sold/activated, so they can be taken OUT of inventory. Each is matched to its
+    ePay rebate (raw_payment_detail by IMEI, with the rebate date) and to a sale (raw_sales serial). A
+    rebate with NO matching sale on record is flagged for investigation."""
+    client = sb()
+
+    def _fl(v):
+        try:
+            return float(v or 0)
+        except Exception:
+            return 0.0
+
+    def base(cols):
+        q = (client.schema("commcalc").table("asset_ledger").select(cols).eq("org_id", org_id)
+             .is_("date_sold", "null").ilike("category", "%On Inventory%"))
+        if store:
+            q = q.eq("store", store)
+        if market:
+            q = q.eq("market", market)
+        return q
+    rows, page = [], 0
+    while True:
+        chunk = (base("store,market,esn_imei,phone_number,device_model,category,status,acquired_date,due_date,owed_to_vip,reimbursement")
+                 .range(page * 1000, page * 1000 + 999).execute().data) or []
+        rows.extend(chunk)
+        if len(chunk) < 1000 or page > 50:
+            break
+        page += 1
+
+    cand = [r for r in rows if _fl(r.get("reimbursement")) > 0]   # rebate received but still in inventory
+    imeis = [str(r.get("esn_imei") or "").strip() for r in cand if r.get("esn_imei")]
+    rebate_by_imei, sale_by_imei = {}, {}
+    for i in range(0, len(imeis), 200):
+        batch = imeis[i:i + 200]
+        try:
+            for p in (client.schema("commcalc").table("raw_payment_detail")
+                      .select("imei,amount,payment_date").eq("org_id", org_id).in_("imei", batch).execute().data or []):
+                im = str(p.get("imei") or "").strip()
+                if not im:
+                    continue
+                d = rebate_by_imei.setdefault(im, {"amount": 0.0, "dates": set()})
+                d["amount"] += _fl(p.get("amount"))
+                if p.get("payment_date"):
+                    d["dates"].add(str(p.get("payment_date"))[:10])
+        except Exception:
+            pass
+        try:
+            for s in (client.schema("commcalc").table("raw_sales")
+                      .select("serial_1,trans_date,product_desc").eq("org_id", org_id).in_("serial_1", batch).execute().data or []):
+                im = str(s.get("serial_1") or "").strip()
+                if im and im not in sale_by_imei:
+                    sale_by_imei[im] = {"trans_date": str(s.get("trans_date") or "")[:10], "product_desc": s.get("product_desc")}
+        except Exception:
+            pass
+
+    out = []
+    for r in cand:
+        im = str(r.get("esn_imei") or "").strip()
+        reb = rebate_by_imei.get(im)
+        sale = sale_by_imei.get(im)
+        reb_dates = sorted(reb["dates"]) if reb else []
+        out.append({
+            "esn_imei": im, "store": r.get("store"), "market": r.get("market"),
+            "device_model": r.get("device_model"), "acquired_date": r.get("acquired_date"),
+            "owed_to_vip": round(_fl(r.get("owed_to_vip")), 2), "rebate": round(_fl(r.get("reimbursement")), 2),
+            "rebate_date": reb_dates[-1] if reb_dates else None,
+            "sale_found": bool(sale), "sale_date": (sale or {}).get("trans_date"),
+            "unmatched": not bool(sale),   # rebate received but NO sale on record for this IMEI → investigate
+        })
+    out.sort(key=lambda x: (0 if x["unmatched"] else 1, -(x["owed_to_vip"] or 0)))
+    return {"rows": out, "count": len(out),
+            "totals": {"rebate": round(sum(x["rebate"] for x in out), 2),
+                       "owed": round(sum(x["owed_to_vip"] for x in out), 2),
+                       "unmatched": sum(1 for x in out if x["unmatched"]), "stores": len({x["store"] for x in out})}}
+
+
 @router.get("/on-inventory-by-store")
 async def get_on_inventory_by_store(
     org_id: str = ORG_ID,
