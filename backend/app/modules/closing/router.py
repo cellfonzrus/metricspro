@@ -870,6 +870,18 @@ def _sales_tenders_by_store(client, org_id: str, date: str) -> dict:
 
 @router.get("/tender-recon-3way")
 def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
+    # DIAGNOSTIC WRAPPER (temporary): surface the real exception instead of a bare 500.
+    import traceback as _tb
+    try:
+        return _tender_recon_3way_impl(date, store, org_id)
+    except Exception as _e:
+        return {"date": date, "stores": [],
+                "tenders": [{"key": t, "label": CANON_TENDER_LABEL[t]} for t in CANON_TENDERS],
+                "sources_present": {"closing": False, "x_report": False, "sales": False},
+                "error": f"{type(_e).__name__}: {_e}", "trace": _tb.format_exc()[-1800:]}
+
+
+def _tender_recon_3way_impl(date: str, store: str = None, org_id: str = ORG_ID):
     """One day, per store: the SAME tenders captured three independent ways — (1) DAILY CLOSING (what the
     rep entered), (2) POS X-REPORT (pos_tender_summary), (3) SALES TRANSACTIONS (raw_sales / feed). All
     bucketed to cash / credit / external CC / gift card / store account / zelle. The X-report is generated
@@ -939,6 +951,16 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
 
 @router.get("/tender-drilldown")
 def tender_drilldown(date: str, store: str = None, tender: str = None, org_id: str = ORG_ID):
+    # DIAGNOSTIC WRAPPER (temporary): surface the real exception instead of a bare 500.
+    import traceback as _tb
+    try:
+        return _tender_drilldown_impl(date, store, tender, org_id)
+    except Exception as _e:
+        return {"date": date, "rows": [], "count": 0, "total": 0,
+                "error": f"{type(_e).__name__}: {_e}", "trace": _tb.format_exc()[-1800:]}
+
+
+def _tender_drilldown_impl(date: str, store: str = None, tender: str = None, org_id: str = ORG_ID):
     """Every sales-transaction line for a day (optionally one store / one canonical tender) — so a manager
     can see exactly which transactions fell under External CC / Gift Card / Store Account / Zelle / etc."""
     require_org(org_id)
