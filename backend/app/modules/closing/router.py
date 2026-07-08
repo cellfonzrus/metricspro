@@ -717,6 +717,12 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
     body["store_cc"] = round(tenders["credit"] + tenders["ext_cc"], 2)
     body["epay_cc"] = 0.0
     body["other_account"] = round(tenders["zelle"] + tenders["store_acct"] + tenders["gift"], 2)
+    # ePay (bill-payment) breakdown — how much of the cash / credit / ACIMA collected was ePay bill
+    # payments. INFORMATIONAL: a subset of those tenders, NOT added to the total and NOT part of the
+    # legacy cash/credit recon (epay_cash/epay_cc stay 0). Feeds the ePay bank-deposit reconciliation.
+    body["epay_on_cash"] = _money(payload.get("epay_on_cash") or payload.get("epay_cash"))
+    body["epay_on_credit"] = _money(payload.get("epay_on_credit") or payload.get("epay_credit"))
+    body["epay_on_acima"] = _money(payload.get("epay_on_acima") or payload.get("epay_acima"))
 
     # ── Close gate + 3-TRY flow: cash SHORT or credit OVER vs B2B is a "blocker". The rep is told only
     #    the DIRECTION (never the amount) and may recount up to 3 times; the 3rd try is auto-accepted and
@@ -750,7 +756,13 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
     body["attempts"] = attempt_no
     body["auto_accepted"] = auto_accepted
     body["mgmt_flag"] = auto_accepted
-    r = client.schema("commcalc").table("daily_closing").insert(body).execute()
+    try:
+        r = client.schema("commcalc").table("daily_closing").insert(body).execute()
+    except Exception:
+        # Tolerate a not-yet-run additive migration (e.g. epay_on_* from mig 106): drop the new keys + retry.
+        for _k in ("epay_on_cash", "epay_on_credit", "epay_on_acima"):
+            body.pop(_k, None)
+        r = client.schema("commcalc").table("daily_closing").insert(body).execute()
     saved = r.data[0] if r.data else body
 
     # 3-way envelope recon: OCR'd cash (the rep's OWN photo) vs entered cash — this is the rep's own

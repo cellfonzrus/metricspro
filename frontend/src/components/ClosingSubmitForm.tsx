@@ -23,13 +23,14 @@ type TenderKey = 't_cash' | 't_credit' | 't_ext_cc' | 't_gift' | 't_store_acct' 
 type State = {
   close_date: string; sfid: string; store_name: string; store_code: string; employee_name: string
   t_cash: string; t_credit: string; t_ext_cc: string; t_gift: string; t_store_acct: string; t_zelle: string; t_acima: string
+  epay_on_cash: string; epay_on_credit: string; epay_on_acima: string
   acc_sale: string
   upgrade_count: string; new_line_count: string; postpaid_count: string; envelope_picture: string; remarks: string
 }
 
 const blank = (): State => ({
   close_date: localToday(), sfid: '', store_name: '', store_code: '', employee_name: '',
-  t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', acc_sale: '',
+  t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', epay_on_cash: '', epay_on_credit: '', epay_on_acima: '', acc_sale: '',
   upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '',
 })
 // Total collected = the tender boxes ONLY. Accessory is declared separately (tallied vs sales), NOT a tender.
@@ -103,6 +104,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         employee_name: f.employee_name.trim(),
         t_cash: f.t_cash, t_credit: f.t_credit, t_ext_cc: f.t_ext_cc,
         t_gift: f.t_gift, t_store_acct: f.t_store_acct, t_zelle: f.t_zelle, t_acima: f.t_acima,
+        epay_on_cash: f.epay_on_cash, epay_on_credit: f.epay_on_credit, epay_on_acima: f.epay_on_acima,
         acc_sale: f.acc_sale,
         upgrade_count: f.upgrade_count, new_line_count: f.new_line_count, postpaid_count: f.postpaid_count,
         envelope_picture: f.envelope_picture, remarks: f.remarks,
@@ -122,7 +124,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         : flags.length ? `⚠️ Submitted — ${flags.join('; ')}`
         : pending ? '✅ Submitted (B2B not loaded yet — will reconcile once it lands).'
         : '✅ Closing submitted and tallies with the system. You can enter another below.')
-      setF(p => ({ ...p, t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', acc_sale: '',
+      setF(p => ({ ...p, t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', epay_on_cash: '', epay_on_credit: '', epay_on_acima: '', acc_sale: '',
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))
       setEnvPreview(''); setOcrCash(''); setOcrAmounts([])
       loadRecent()
@@ -162,6 +164,13 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         <Row>
           <Field label="Accessory Sale $ (declared — tallied vs sales, NOT in total)"><input style={inp} inputMode="decimal" value={f.acc_sale} onChange={e => set({ acc_sale: e.target.value })} placeholder="0.00" /></Field>
           <Field label="Total collected (tenders only)"><div style={{ ...inp, background: 'var(--surface2)', fontWeight: 700 }}>{fmt(total)}</div></Field>
+        </Row>
+
+        <SectionLabel>Of which ePay bill payments (already inside the tenders above — NOT added to the total)</SectionLabel>
+        <Row>
+          <Field label="ePay on Cash $"><input style={inp} inputMode="decimal" value={f.epay_on_cash} onChange={e => set({ epay_on_cash: e.target.value })} placeholder="0.00" /></Field>
+          <Field label="ePay on Credit $"><input style={inp} inputMode="decimal" value={f.epay_on_credit} onChange={e => set({ epay_on_credit: e.target.value })} placeholder="0.00" /></Field>
+          <Field label="ePay on Financing / ACIMA $"><input style={inp} inputMode="decimal" value={f.epay_on_acima} onChange={e => set({ epay_on_acima: e.target.value })} placeholder="0.00" /></Field>
         </Row>
 
         <SectionLabel>Transaction counts</SectionLabel>
