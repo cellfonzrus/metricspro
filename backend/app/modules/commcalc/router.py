@@ -6,6 +6,7 @@ import io
 import re
 from app.core.database import get_supabase
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
+from app.modules.commcalc import whatif
 from app.modules.commcalc.gp_report import calc_gp_report
 from app.modules.commcalc.flags import calc_flags
 from app.modules.commcalc.portout_flags import calc_portout_flags
@@ -905,6 +906,30 @@ async def upload_file(
 
     return {"saved": saved, "file_type": file_type, "period": period, "fraud": fraud, "recon": recon,
             "shrink": shrink}
+
+
+@router.get("/whatif/activation-baseline")
+def whatif_activation_baseline(period: str, org_id: str = ORG_ID):
+    """What-If tool #1 — live commission rates (payout_config) + baseline actuals (rep_commissions)
+    for a period. The projector recomputes Sum(count x rate) x tier client-side, matching calculator.py."""
+    require_org(org_id)
+    return whatif.activation_baseline(sb(), org_id, period)
+
+
+@router.get("/whatif/byod-residual")
+def whatif_byod_residual(months: int = 6, org_id: str = ORG_ID):
+    """What-If tool #2 — residual (MI+ATU) trend + avg residual/sub + BYOD activation counts per period,
+    to model BYOD's contribution to recurring residual."""
+    require_org(org_id)
+    return whatif.byod_residual(sb(), org_id, max(1, min(months, 24)))
+
+
+@router.get("/whatif/accessory-byod")
+def whatif_accessory_byod(months: int = 4, org_id: str = ORG_ID):
+    """What-If tool #3 — per store/period BYOD activations vs accessory revenue vs total revenue,
+    with Pearson correlations."""
+    require_org(org_id)
+    return whatif.accessory_byod_correlation(sb(), org_id, months)
 
 
 @router.get("/upload/history")
