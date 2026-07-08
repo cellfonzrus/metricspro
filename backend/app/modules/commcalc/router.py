@@ -566,6 +566,7 @@ async def upload_file(
                 'category': r.get('Category','') or r.get('System Category',''),
                 'product_desc': r.get('Product Desc',''), 'product_id': safe_float(r.get('Product ID')) or None,
                 'gp': safe_float(r.get('GP')), 'ext_price': safe_float(r.get('Ext Price')),
+                'tax': safe_float(r.get('Tax') or r.get('Sales Tax') or r.get('Tax Amount') or r.get('Tax Amt')),
                 'trans_id': str(r.get('Trans ID','')).replace('.0','').strip(),
                 'trans_date': str(r.get('Trans Date Time',r.get('Trans Date','')))[:10] or None,
                 'mdn': str(r.get('Activated Mobile Number','') or r.get('Primary Account Number','')).replace('.0','').strip(),
@@ -948,6 +949,52 @@ def whatif_accessory_byod(months: int = 4, org_id: str = ORG_ID):
     with Pearson correlations."""
     require_org(org_id)
     return whatif.accessory_byod_correlation(sb(), org_id, months)
+
+
+@router.get("/tax-collected")
+def tax_collected(period: str, org_id: str = ORG_ID):
+    """Retail SALES TAX collected per store for a period (from the sales export's Tax column, mig 105).
+    Populated once a Sales Transaction Details file WITH a Tax column is ingested. Also returns the
+    effective tax rate (tax ÷ pre-tax merchandise) per store."""
+    require_org(org_id)
+    client = sb()
+
+    def _q(tbl):
+        rows, pg = [], 0
+        while True:
+            try:
+                chunk = (client.schema('commcalc').table(tbl).select('store,ext_price,tax,voided,trans_type')
+                         .eq('org_id', org_id).in_('period', _pvariants(period))
+                         .range(pg * 1000, pg * 1000 + 999).execute().data) or []
+            except Exception:
+                chunk = []
+            rows.extend(chunk)
+            if len(chunk) < 1000 or pg > 60:
+                break
+            pg += 1
+        return rows
+
+    rows = _q('raw_sales') or _q('daily_sales_feed')
+    by_store = {}
+    for r in rows:
+        if str(r.get('voided') or '').strip().lower() in ('true', 'yes', '1', 'voided', 'void'):
+            continue
+        if str(r.get('trans_type') or '').strip() == 'Return':
+            continue
+        s = by_store.setdefault((r.get('store') or '?').strip() or '?', {'tax': 0.0, 'revenue': 0.0})
+        s['tax'] += safe_float(r.get('tax'))
+        s['revenue'] += safe_float(r.get('ext_price'))
+    out = [{'store': k, 'tax': round(v['tax'], 2), 'revenue': round(v['revenue'], 2),
+            'effective_rate': round(100 * v['tax'] / v['revenue'], 2) if v['revenue'] else 0.0}
+           for k, v in by_store.items()]
+    out.sort(key=lambda x: -x['tax'])
+    total_tax = round(sum(x['tax'] for x in out), 2)
+    return {'period': period, 'stores': out,
+            'totals': {'tax': total_tax, 'revenue': round(sum(x['revenue'] for x in out), 2)},
+            'has_tax': total_tax > 0,
+            'note': (None if total_tax > 0 else
+                     'No tax captured for this period yet — re-send a Sales Transaction Details file that '
+                     'includes the Tax column (migration 105 adds the field; the parser maps Tax / Sales Tax).')}
 
 
 @router.get("/upload/history")

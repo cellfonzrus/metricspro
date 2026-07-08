@@ -498,6 +498,7 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
             money_recon = {
                 "tolerance": tolerance,
                 "accessory": _cmp(totals["acc_sale"], bm["acc_gross"], dept_ok),  # gross vs gross
+                "tax_collected": round(bm.get("tax", 0.0), 2),  # sales tax on the day (ext_price is pre-tax; tenders include this)
                 "cash": _cmp(closing_cash, tender_cash, tenders_ok),
                 "credit": _cmp(closing_credit, tender_card, tenders_ok),
                 "epay": {"declared": closing_epay, "portal": None, "portal_pending": True,
@@ -2118,7 +2119,7 @@ def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
         return None
 
     acc = _acc_cfg(client, org_id)
-    rows = _b2b_sales_rows(client, org_id, date, "store,department,category,product_desc,tender_type,ext_price,voided")
+    rows = _b2b_sales_rows(client, org_id, date, "store,department,category,product_desc,tender_type,ext_price,tax,voided")
 
     out = {}
     for r in rows:
@@ -2129,8 +2130,9 @@ def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
             continue
         ext = _f(r.get("ext_price"))
         agg = out.setdefault(code, {"acc_gross": 0.0, "cash": 0.0, "card": 0.0,
-                                    "other": 0.0, "total": 0.0, "tenders": {}, "_dept_seen": False})
+                                    "other": 0.0, "total": 0.0, "tax": 0.0, "tenders": {}, "_dept_seen": False})
         agg["total"] += ext
+        agg["tax"] += _f(r.get("tax"))
         agg[_tender_class(r.get("tender_type"))] += ext
         dept = (r.get("department") or "").strip()
         if dept:
@@ -2146,7 +2148,7 @@ def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
         # NOT be compared against a fabricated $0 (that flags every rep). total<=0 = nothing to recon.
         a["tenders_available"] = bool(a["total"] <= 0 or (a["cash"] + a["card"]) > 0)
         a["dept_available"] = bool(a.pop("_dept_seen", False))  # Department present → accessory recon valid
-        for k in ("acc_gross", "cash", "card", "other", "total"):
+        for k in ("acc_gross", "cash", "card", "other", "total", "tax"):
             a[k] = round(a[k], 2)
     return out
 
