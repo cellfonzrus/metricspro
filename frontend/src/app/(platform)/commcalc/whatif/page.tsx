@@ -128,7 +128,7 @@ function ByodResidual() {
   const [active, setActive] = useState(12)
 
   useEffect(() => { api(`/api/v1/commcalc/whatif/byod-residual?org_id=${ORG_ID}&months=${months}`).then((d: any) => {
-    setData(d); setPerSub(num(d.avg_residual_per_sub)); setByod(num(d.latest?.byod_acts) || 0)
+    setData(d); setPerSub(num(d.byod_specific?.avg_residual_per_byod_sub) || num(d.avg_residual_per_sub)); setByod(num(d.latest?.byod_acts) || 0)
   }).catch(console.error) }, [months])
 
   if (!data) return <div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div>
@@ -147,6 +147,19 @@ function ByodResidual() {
         <Stat label="Avg residual / subscriber / mo" value={fmt(data.avg_residual_per_sub)} color="#059669" />
         <Stat label="Total paid subscribers" value={(data.total_subs || 0).toLocaleString()} />
       </div>
+
+      {data.byod_specific && (
+        <div className="card" style={{ padding: 16, marginBottom: 18, borderLeft: '3px solid var(--accent)' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 10 }}>
+            📶 BYOD‑specific residual — measured by joining BYOD activations → subscribers ({data.byod_specific.period})
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14 }}>
+            <Stat label="Residual / BYOD sub / mo" value={fmt(data.byod_specific.avg_residual_per_byod_sub)} color="var(--accent)" sub={`vs ${fmt(data.byod_specific.avg_residual_per_other_sub)} for non‑BYOD subs`} />
+            <Stat label="BYOD subs earning residual" value={(data.byod_specific.byod_subs_with_residual || 0).toLocaleString()} sub={`${Math.round((data.byod_specific.match_rate || 0) * 100)}% of BYOD activations matched to residual`} />
+            <Stat label="BYOD residual this month" value={fmt(data.byod_specific.byod_residual_month)} color="#059669" />
+          </div>
+        </div>
+      )}
 
       <div className="card" style={{ padding: 18, marginBottom: 18 }}>
         <div style={{ fontWeight: 700, marginBottom: 12 }}>What‑if: BYOD → residual contribution</div>
@@ -177,7 +190,7 @@ function ByodResidual() {
         </table>
       </div>
       <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 14 }}>
-        Residual = MI + ATU per subscriber (recurring). Default residual/sub is your measured company average; override it to model a different assumption. BYOD acts come from paid rep_commissions.
+        Residual = MI + ATU per active subscriber (recurring, seeded by each activation). The what‑if defaults to the measured BYOD‑specific residual/sub when available (else the company average) — override to model a different assumption. Historical residual can include subscribers from before our data window; going forward every logged transaction adds a residual stream. BYOD acts come from paid rep_commissions.
       </p>
     </div>
   )

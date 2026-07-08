@@ -135,8 +135,99 @@ def byod_residual(client, org_id, months=6):
         "avg_residual_per_sub": round(tot_res / tot_subs, 2) if tot_subs else 0.0,
         "total_residual": round(tot_res, 2), "total_subs": tot_subs,
         "latest": series[-1] if series else None,
+        # BYOD-specific: residual actually earned by subscribers whose activation was BYOD (MDN -> raw_mi).
+        # Best-effort + bounded; None if the join can't run. Falls back to the blended avg in the UI.
+        "byod_specific": _byod_specific_residual(client, org_id, company),
         "note": res.get("note"),
     }
+
+
+def _norm_mdn(v):
+    d = "".join(ch for ch in str(v or "") if ch.isdigit())
+    return d[-10:] if len(d) >= 10 else ""
+
+
+def _byod_mdns(client, org_id, periods):
+    """Distinct normalized MDNs whose activation classified as BYOD, across the given sales periods."""
+    out = set()
+    for period in periods:
+        for tbl in ("raw_sales", "daily_sales_feed"):
+            page, got = 0, False
+            while True:
+                try:
+                    chunk = (client.schema("commcalc").table(tbl)
+                             .select("mdn,contract_type,voided,trans_type")
+                             .eq("org_id", org_id).in_("period", _pvariants(period))
+                             .range(page * 1000, page * 1000 + 999).execute().data) or []
+                except Exception:
+                    chunk = []
+                if chunk:
+                    got = True
+                for r in chunk:
+                    if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+                        continue
+                    if str(r.get("trans_type") or "").strip() == "Return":
+                        continue
+                    if classify_contract_type(r.get("contract_type")) == "byod":
+                        m = _norm_mdn(r.get("mdn"))
+                        if m:
+                            out.add(m)
+                if len(chunk) < 1000 or page > 60:
+                    break
+                page += 1
+            if got:
+                break  # raw_sales preferred; if it had rows, don't double from the feed
+    return out
+
+
+def _residual_by_mdn(client, org_id, period):
+    """Sum (MI + ATU) per normalized MDN for ONE raw_mi period (bounded)."""
+    per, page = {}, 0
+    while True:
+        try:
+            chunk = (client.schema("commcalc").table("raw_mi")
+                     .select("phone_number,actual_mi_payout,actual_atu_payout")
+                     .eq("org_id", org_id).in_("period", _pvariants(period))
+                     .range(page * 1000, page * 1000 + 999).execute().data) or []
+        except Exception:
+            chunk = []
+        for r in chunk:
+            m = _norm_mdn(r.get("phone_number"))
+            if not m:
+                continue
+            per[m] = per.get(m, 0.0) + safe_float(r.get("actual_mi_payout")) + safe_float(r.get("actual_atu_payout"))
+        if len(chunk) < 1000 or page > 60:
+            break
+        page += 1
+    return per
+
+
+def _byod_specific_residual(client, org_id, company):
+    """Attribute a monthly residual/sub to BYOD subscribers: take the most complete recent residual
+    month, and of the subscribers earning residual that month, isolate those whose activation was BYOD
+    (any recent month) via the MDN join. Bounded to one residual month to stay fast; None on any failure."""
+    try:
+        if not company:
+            return None
+        base = max(company, key=lambda c: c["residual"])  # most complete (highest-$) recent month
+        res_by_mdn = _residual_by_mdn(client, org_id, base["period"])
+        if not res_by_mdn:
+            return None
+        byod_mdns = _byod_mdns(client, org_id, _list_periods(client, org_id)[:6])
+        matched = {m: v for m, v in res_by_mdn.items() if m in byod_mdns and v}
+        others = {m: v for m, v in res_by_mdn.items() if m not in byod_mdns and v}
+        byod_res = sum(matched.values())
+        return {
+            "period": base["period"],
+            "byod_activation_mdns": len(byod_mdns),
+            "byod_subs_with_residual": len(matched),
+            "byod_residual_month": round(byod_res, 2),
+            "avg_residual_per_byod_sub": round(byod_res / len(matched), 2) if matched else 0.0,
+            "avg_residual_per_other_sub": round(sum(others.values()) / len(others), 2) if others else 0.0,
+            "match_rate": round(len(matched) / len(byod_mdns), 3) if byod_mdns else 0.0,
+        }
+    except Exception:
+        return None
 
 
 # ─── 3. Accessory sales ↔ BYOD activations ↔ total revenue ──────────────────────────────────
