@@ -459,6 +459,31 @@ def bulk_payscale(body: dict, org_id: str = ORG_ID):
     return {"updated": updated, "errors": errors, "total": len(rows)}
 
 
+def _sync_store_mapping(org_id, stores):
+    """Mirror StoreOps-created stores into commcalc.store_mapping so a new store PROPAGATES everywhere
+    that reads the mapping (Daily Closing, Assets, Targets, recons, …). Insert-if-absent by store_code.
+    Best-effort — a mapping failure must never break store creation."""
+    try:
+        c = get_supabase()
+        want = {}
+        for s in stores:
+            code = str(s.get("store_code") or "").strip()
+            if code:
+                want[code] = {"org_id": org_id, "store_code": code,
+                              "store_address": s.get("address") or s.get("store_address") or code,
+                              "market": s.get("market")}
+        if not want:
+            return
+        have = {str(m.get("store_code") or "").strip() for m in
+                (c.schema("commcalc").table("store_mapping").select("store_code")
+                 .eq("org_id", org_id).in_("store_code", list(want)).execute().data or [])}
+        new = [v for code, v in want.items() if code not in have]
+        for i in range(0, len(new), 500):
+            c.schema("commcalc").table("store_mapping").insert(new[i:i + 500]).execute()
+    except Exception as e:
+        print(f"WARN store_mapping sync failed: {e}")
+
+
 @router.post("/stores/bulk")
 def bulk_create_stores(body: dict, org_id: str = ORG_ID):
     """Bulk-create stores from a filled template (new-tenant setup). Body: {stores:[{...}]}.
@@ -484,6 +509,7 @@ def bulk_create_stores(body: dict, org_id: str = ORG_ID):
     for i in range(0, len(to_insert), 500):
         r = sb().table("stores").insert(to_insert[i:i + 500]).execute()
         inserted += len(r.data or to_insert[i:i + 500])
+    _sync_store_mapping(org_id, to_insert)   # propagate new stores to commcalc.store_mapping
     return {"inserted": inserted, "skipped": skipped}
 
 
@@ -497,6 +523,7 @@ def create_store(store: dict, org_id: str = ORG_ID):
     if row.get("is_active") is None:
         row["is_active"] = True
     r = sb().table("stores").insert(row).execute()
+    _sync_store_mapping(org_id, [row])   # propagate the new store to commcalc.store_mapping
     return r.data[0] if r.data else row
 
 
