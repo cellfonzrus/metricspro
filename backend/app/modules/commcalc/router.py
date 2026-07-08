@@ -4593,7 +4593,7 @@ async def _run_calculation(period: str, org_id: str):
 
 # ── Report endpoints ──────────────────────────────────────────
 @router.get("/commissions/{period}")
-async def get_commissions(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def get_commissions(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     r = client.schema('commcalc').table('rep_commissions').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).order('total_payout', desc=True).execute()
     comms = r.data or []
@@ -4611,7 +4611,9 @@ async def get_commissions(period: str, org_id: str = "00000000-0000-0000-0000-00
         d = ded_by_rep.get(rep, 0)
         cr['chargeback_deduction'] = d
         cr['final_payout'] = safe_float(cr.get('total_payout')) - safe_float(d)
-    return comms
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
+    return [c for c in comms if in_keyset(ks, c.get('store'), c.get('store_code'))]
 
 @router.get("/dlar-store/{period}")
 async def get_dlar_store_kpis(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -4635,10 +4637,13 @@ async def get_dlar_store_kpis(period: str, authorization: str = Header(default="
 
 
 @router.get("/flags/{period}")
-async def get_flags(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def get_flags(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     r = client.schema('commcalc').table('flags').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).order('severity').execute()
-    return r.data or []
+    rows = r.data or []
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
+    return [f for f in rows if in_keyset(ks, f.get('store_address'), f.get('store_code'))]
 
 @router.get("/config/{period}")
 async def get_config(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
@@ -5402,10 +5407,14 @@ def _write_gp_snapshot(client, org_id, period, result):
 
 
 @router.get("/gp/{period}")
-async def get_gp_report(period: str, view: str = "store", market: str = "", org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def get_gp_report(period: str, view: str = "store", market: str = "", authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     result = _compute_gp(client, org_id, period, market="")   # full (unfiltered) so the snapshot is complete
-    _write_gp_snapshot(client, org_id, period, result)
+    _write_gp_snapshot(client, org_id, period, result)   # snapshot stays company-complete
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
+    if ks is not None:
+        result = {**result, 'store_rows': [r for r in result['store_rows'] if in_keyset(ks, r.get('store'), r.get('store_code'), r.get('address'))]}
     if market:
         result = {**result, 'store_rows': [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]}
     return result
@@ -5600,10 +5609,13 @@ async def get_gp_departments(period: str = "", org_id: str = ORG_ID):
 
 
 @router.get("/chargebacks/{period}")
-async def get_chargebacks(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def get_chargebacks(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     r = client.schema('commcalc').table('chargeback_items').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).order('epay_salesperson').execute()
-    return r.data or []
+    rows = r.data or []
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
+    return [c for c in rows if in_keyset(ks, c.get('store_code'), c.get('store_address'))]
 
 @router.put("/chargebacks/{item_id}")
 async def update_chargeback(item_id: str, body: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
@@ -5705,7 +5717,7 @@ async def delete_comp_rate(comp_rate_id: int, org_id: str = ORG_ID):
 # SALES REPORT — the actual sales done, all stores, from the imported Sales Transaction Details
 # ─────────────────────────────────────────────
 @router.get("/sales-report")
-async def sales_report(period: str = "", org_id: str = ORG_ID):
+async def sales_report(period: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Sales actually done, per (store, rep, day), from the imported Sales Transaction Details.
     Reads raw_sales (the authoritative monthly upload) for `period`, FALLING BACK to daily_sales_feed
     (the emailed daily feed) when raw_sales has no rows for that period — so the report works even
@@ -5801,6 +5813,10 @@ async def sales_report(period: str = "", org_id: str = ORG_ID):
             a[key] = round(a[key], 2)
         out.append(a)
     out.sort(key=lambda r: (r["store"], r["trans_date"], r["salesperson"]))
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
+    if ks is not None:
+        out = [r for r in out if in_keyset(ks, r.get("store"))]
     totals = {
         "txns": sum(r["txns"] for r in out), "lines": sum(r["lines"] for r in out),
         "activations": sum(r["activations"] for r in out), "byod": sum(r["byod"] for r in out),
