@@ -759,8 +759,8 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
     try:
         r = client.schema("commcalc").table("daily_closing").insert(body).execute()
     except Exception:
-        # Tolerate a not-yet-run additive migration (e.g. epay_on_* from mig 106): drop the new keys + retry.
-        for _k in ("epay_on_cash", "epay_on_credit", "epay_on_acima"):
+        # Tolerate not-yet-run additive migrations (t_acima=mig104, epay_on_*=mig106): drop the new keys + retry.
+        for _k in ("t_acima", "epay_on_cash", "epay_on_credit", "epay_on_acima"):
             body.pop(_k, None)
         r = client.schema("commcalc").table("daily_closing").insert(body).execute()
     saved = r.data[0] if r.data else body
@@ -903,15 +903,21 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
     d = _date(date)
     if not d:
         raise HTTPException(400, "valid date required (YYYY-MM-DD)")
-    # (1) closing — rep t_* per store_code
+    # (1) closing — rep t_* per store_code. Resilient to t_acima not existing yet (mig 104 not run):
+    # fall back to the 6-tender select so the recon never 500s on a not-yet-run migration.
     closing = {}
-    cq = (client.schema("commcalc").table("daily_closing")
-          .select("store_code,store_address,t_cash,t_credit,t_ext_cc,t_gift,t_store_acct,t_zelle,t_acima")
-          .eq("org_id", org_id).eq("close_date", d))
-    if store:
-        cq = cq.eq("store_code", store)
+    def _closing_rows(cols):
+        q = (client.schema("commcalc").table("daily_closing").select(cols)
+             .eq("org_id", org_id).eq("close_date", d))
+        if store:
+            q = q.eq("store_code", store)
+        return q.limit(50000).execute().data or []
+    try:
+        _crows = _closing_rows("store_code,store_address,t_cash,t_credit,t_ext_cc,t_gift,t_store_acct,t_zelle,t_acima")
+    except Exception:
+        _crows = _closing_rows("store_code,store_address,t_cash,t_credit,t_ext_cc,t_gift,t_store_acct,t_zelle")
     addr_by_code = {}
-    for r in (cq.limit(50000).execute().data or []):
+    for r in _crows:
         code = r.get("store_code") or "?"
         if r.get("store_address"):
             addr_by_code[code] = r.get("store_address")
