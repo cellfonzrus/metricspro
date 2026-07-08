@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { TrendChart } from '@/components/TrendChart'
 
 const card = { padding: 18, borderRadius: 12 } as const
 const num = (v: any) => { const n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : 0 }
@@ -137,10 +138,13 @@ function ByodResidual() {
   const perExtra = num(perSub) * num(active)
   return (
     <div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <label style={{ fontSize: 13, color: 'var(--text2)' }}>Residual window:</label>
-        {[3, 6, 12].map(m => <button key={m} onClick={() => setMonths(m)}
-          style={{ padding: '5px 12px', borderRadius: 7, fontSize: 12, cursor: 'pointer', border: '1px solid var(--border)', background: months === m ? 'var(--accent)' : 'var(--surface)', color: months === m ? '#fff' : 'var(--text2)' }}>{m} mo</button>)}
+        <select value={months} onChange={e => setMonths(Number(e.target.value))}
+          style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }}>
+          {Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{m} month{m > 1 ? 's' : ''}</option>)}
+        </select>
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>{data.months} month(s) with data</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, marginBottom: 18 }}>
         <Stat label={`Total residual (${data.months} mo, MI+ATU)`} value={fmt(data.total_residual)} />
@@ -160,6 +164,17 @@ function ByodResidual() {
           </div>
         </div>
       )}
+
+      <div className="card" style={{ padding: 16, marginBottom: 18 }}>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>Residual &amp; BYOD trend
+          <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}> — {data.months}-month window, month over month</span></div>
+        <TrendChart height={300} leftMoney rightMoney={false}
+          data={(data.series || []).map((s: any) => ({ name: s.period, residual: s.residual, byod_acts: s.byod_acts, per_sub: s.per_sub }))}
+          series={[
+            { key: 'residual', name: 'Residual (MI+ATU)', type: 'bar', axis: 'left', money: true, color: '#2e75b6' },
+            { key: 'byod_acts', name: 'BYOD activations', type: 'line', axis: 'right', money: false, color: '#f59e0b' },
+          ]} />
+      </div>
 
       <div className="card" style={{ padding: 18, marginBottom: 18 }}>
         <div style={{ fontWeight: 700, marginBottom: 12 }}>What‑if: BYOD → residual contribution</div>
