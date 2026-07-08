@@ -877,6 +877,9 @@ async def get_aging(
     _attach_vip_invoices(client, org_id,
                          buckets["under45"]["rows"] + buckets["warn"]["rows"]
                          + buckets["missed"]["rows"] + zero_returned)
+    _attach_investigation(client, org_id,
+                          buckets["under45"]["rows"] + buckets["warn"]["rows"]
+                          + buckets["missed"]["rows"] + zero_returned)
 
     # data freshness: max FileDate from raw_row
     fd = None
@@ -897,6 +900,88 @@ async def get_aging(
             "flagged_owed": round(sum(b["owed"] for b in buckets.values()), 2),
         },
     }
+
+
+def _attach_investigation(client, org_id, rows):
+    """Attach physically_missing + investigation_remark to device rows (by ESN/IMEI) from the side
+    asset_investigation table. Best-effort so a not-yet-run migration can't break the report."""
+    imeis = [r.get("esn_imei") for r in rows if r.get("esn_imei")]
+    if not imeis:
+        return
+    inv = {}
+    try:
+        for i in range(0, len(imeis), 300):
+            chunk = (client.schema("commcalc").table("asset_investigation")
+                     .select("esn_imei,physically_missing,remark,investigated_by,updated_at")
+                     .eq("org_id", org_id).in_("esn_imei", imeis[i:i + 300]).execute().data) or []
+            for x in chunk:
+                inv[x.get("esn_imei")] = x
+    except Exception:
+        return
+    for r in rows:
+        x = inv.get(r.get("esn_imei"))
+        r["physically_missing"] = bool(x and x.get("physically_missing"))
+        r["investigation_remark"] = (x or {}).get("remark") or ""
+
+
+@router.post("/investigation")
+async def set_investigation(body: dict, org_id: str = ORG_ID):
+    """Record an aging investigation for a device (physically-missing flag + remark). Upsert by ESN/IMEI
+    so it survives asset_ledger re-uploads."""
+    client = sb()
+    imei = (body.get("esn_imei") or "").strip()
+    if not imei:
+        raise HTTPException(400, "esn_imei required")
+    row = {"org_id": org_id, "esn_imei": imei,
+           "physically_missing": bool(body.get("physically_missing")),
+           "remark": (body.get("remark") or "").strip() or None,
+           "investigated_by": (body.get("investigated_by") or "").strip() or None,
+           "updated_at": datetime.now(timezone.utc).isoformat()}
+    client.schema("commcalc").table("asset_investigation").upsert(row, on_conflict="org_id,esn_imei").execute()
+    return {"ok": True, "esn_imei": imei, "physically_missing": row["physically_missing"]}
+
+
+@router.get("/missing-phones")
+async def get_missing_phones(org_id: str = ORG_ID, store: str = "", market: str = ""):
+    """Devices a user flagged as physically MISSING during aging investigation, joined to asset_ledger
+    for device detail + the owed-to-distributor exposure. The list to investigate."""
+    client = sb()
+    flagged = (client.schema("commcalc").table("asset_investigation")
+               .select("esn_imei,remark,investigated_by,updated_at")
+               .eq("org_id", org_id).eq("physically_missing", True).limit(50000).execute().data) or []
+    by_imei = {f.get("esn_imei"): f for f in flagged if f.get("esn_imei")}
+    if not by_imei:
+        return {"rows": [], "count": 0, "owed_total": 0.0}
+    imeis = list(by_imei)
+    dev = []
+    for i in range(0, len(imeis), 300):
+        dev.extend((client.schema("commcalc").table("asset_ledger")
+                    .select("store,market,esn_imei,phone_number,device_model,category,status,acquired_date,due_date,owed_to_vip")
+                    .eq("org_id", org_id).in_("esn_imei", imeis[i:i + 300]).execute().data) or [])
+    seen, out = set(), []
+    for r in dev:
+        im = r.get("esn_imei")
+        if im in seen:
+            continue
+        seen.add(im)
+        if store and r.get("store") != store:
+            continue
+        if market and r.get("market") != market:
+            continue
+        f = by_imei.get(im, {})
+        out.append({**r, "remark": f.get("remark") or "", "investigated_by": f.get("investigated_by"),
+                    "flagged_at": f.get("updated_at")})
+    # flagged devices no longer in the ledger (dropped off a later upload) — still surface them
+    if not (store or market):
+        in_ledger = {r.get("esn_imei") for r in dev}
+        for im, f in by_imei.items():
+            if im not in in_ledger:
+                out.append({"esn_imei": im, "store": None, "market": None, "device_model": None,
+                            "owed_to_vip": None, "not_in_ledger": True, "remark": f.get("remark") or "",
+                            "investigated_by": f.get("investigated_by"), "flagged_at": f.get("updated_at")})
+    out.sort(key=lambda x: -(float(x.get("owed_to_vip") or 0)))
+    return {"rows": out, "count": len(out),
+            "owed_total": round(sum(float(r.get("owed_to_vip") or 0) for r in out), 2)}
 
 
 @router.get("/on-inventory-by-store")

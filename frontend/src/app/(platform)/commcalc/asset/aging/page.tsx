@@ -10,6 +10,7 @@ type Row = {
   acquired_date: string|null; due_date: string|null; owed_to_vip: number|null
   selling_price: number|null; days_aged?: number
   vip_invoice_number: string|null; vip_invoice_date: string|null
+  physically_missing?: boolean; investigation_remark?: string
 }
 type Bucket = { count: number; owed: number; rows: Row[] }
 type Aging = {
@@ -28,20 +29,32 @@ function daysSince(iso: string|null) {
 }
 
 function RowTable({ rows, accent }: { rows: Row[]; accent: string }) {
+  const [edit, setEdit] = useState<Record<string, { missing: boolean; remark: string }>>({})
+  const [saving, setSaving] = useState<Record<string, boolean>>({})
   if (!rows.length) return <div style={{ padding: 18, color: 'var(--text3)', fontSize: 13 }}>No devices.</div>
+  const stateFor = (r: Row) => edit[r.esn_imei || ''] ?? { missing: !!r.physically_missing, remark: r.investigation_remark || '' }
+  async function save(imei: string, missing: boolean, remark: string) {
+    if (!imei) return
+    setEdit(e => ({ ...e, [imei]: { missing, remark } }))
+    setSaving(s => ({ ...s, [imei]: true }))
+    try { await api('/api/v1/asset/investigation', { method: 'POST', body: JSON.stringify({ esn_imei: imei, physically_missing: missing, remark }) }) } catch { /* best-effort */ }
+    setSaving(s => ({ ...s, [imei]: false }))
+  }
   return (
     <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
         <thead>
           <tr style={{ background: 'var(--surface2)' }}>
-            {['Store','Market','Device','IMEI/ESN','Acquired','Days','Due Date','Owed','Selling','Distributor Invoice #','Invoice Date'].map(h => (
+            {['Store','Market','Device','IMEI/ESN','Acquired','Days','Due Date','Owed','Selling','Distributor Invoice #','Invoice Date','Missing?','Investigation remark'].map(h => (
               <th key={h} style={{ textAlign:'left', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
-            <tr key={r.id} style={{ borderTop:'1px solid var(--border)', background: i%2===0?'transparent':'var(--surface2)' }}>
+          {rows.map((r, i) => {
+            const st = stateFor(r); const imei = r.esn_imei || ''
+            return (
+            <tr key={r.id} style={{ borderTop:'1px solid var(--border)', background: st.missing ? '#fff1f2' : (i%2===0?'transparent':'var(--surface2)') }}>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{r.store || '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, color:'var(--text2)' }}>{r.market || '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{r.device_model || '—'}</td>
@@ -53,8 +66,18 @@ function RowTable({ rows, accent }: { rows: Row[]; accent: string }) {
               <td style={{ padding:'8px 12px', fontSize:12 }}>{r.selling_price==null ? '—' : fmt(r.selling_price)}</td>
               <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'monospace' }}>{r.vip_invoice_number || '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '—'}</td>
+              <td style={{ padding:'8px 12px', textAlign:'center' }}>
+                <input type="checkbox" checked={st.missing} disabled={!imei || saving[imei]} title="Shows in aging but not physically in the store"
+                  onChange={e => save(imei, e.target.checked, st.remark)} />
+              </td>
+              <td style={{ padding:'6px 12px' }}>
+                <input value={st.remark} disabled={!imei} placeholder="investigation note…"
+                  onChange={e => setEdit(x => ({ ...x, [imei]: { missing: st.missing, remark: e.target.value } }))}
+                  onBlur={e => save(imei, st.missing, e.target.value)}
+                  style={{ width: 200, padding:'4px 8px', fontSize:12, borderRadius:6, border:'1px solid var(--border)', background:'var(--surface)' }} />
+              </td>
             </tr>
-          ))}
+          )})}
         </tbody>
       </table>
     </div>
