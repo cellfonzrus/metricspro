@@ -7282,6 +7282,18 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
         if key:
             comm_by_rep[key] = cr
 
+    # Accessory flags per rep (over/under-priced accessory sales) — surfaced as a rep action item so
+    # employees see their accessory-pricing issues alongside conversion + commission.
+    acc_flag_by_rep = {}
+    try:
+        _af_resp = accessory_flags(period=period, org_id=org_id)
+        for a in (_af_resp.get('by_rep') or []):
+            rn = (a.get('name') or '').strip().upper()
+            if rn:
+                acc_flag_by_rep[rn] = a
+    except Exception:
+        acc_flag_by_rep = {}
+
     def rep_commission(rep_name):
         cr = comm_by_rep.get((rep_name or '').strip().upper())
         if not cr:
@@ -7365,6 +7377,13 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
             citem = commission_item(comm)
             if citem:
                 rep_items.append(citem)
+            _af = acc_flag_by_rep.get((rep_name or '').strip().upper())
+            if _af and (_af.get('flags') or 0) > 0:
+                _o, _u = int(_af.get('over') or 0), int(_af.get('under') or 0)
+                _lbl = ', '.join([p for p in (f'{_o} over-priced' if _o else '', f'{_u} under-priced' if _u else '') if p]) or 'check pricing'
+                rep_items.append({'severity': 'warning', 'metric': 'accessory',
+                                  'title': f'{int(_af["flags"])} accessory flag(s)',
+                                  'detail': f'{_lbl}; ${safe_float(_af.get("total")):,.0f} rung in flagged accessory sales — review pricing & attach.'})
             if not rep_items:
                 continue  # nothing to flag and no commission row
             rep_items.sort(key=lambda it: rank.get(it['severity'], 9))
