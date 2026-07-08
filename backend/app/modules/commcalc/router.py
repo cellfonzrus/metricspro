@@ -6884,9 +6884,12 @@ async def get_target_calendar(
 
 
 @router.get("/targets/{period}/summary")
-async def get_targets_summary(period: str, today: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def get_targets_summary(period: str, today: str = "", include_untargeted: bool = False,
+                              authorization: str = Header(default=""), org_id: str = ORG_ID):
     """All-stores overview: store-level today/pace/need/monthly/achieved per category. When RBAC
-    enforcement is on, a non-admin manager only sees the stores in their org-unit span (Phase 5)."""
+    enforcement is on, a non-admin manager only sees the stores in their org-unit span (Phase 5).
+    include_untargeted=1 also returns stores that have sales/achieved but no target set (so the
+    Accessory tab can track achieved accessory $ even before per-store accessory targets exist)."""
     client = sb()
     start, end, today = _period_bounds(period, today)
     byod_def = _byod_pct_default(client, period, org_id)
@@ -6908,12 +6911,18 @@ async def get_targets_summary(period: str, today: str = "", authorization: str =
         if not trow:
             trow = {'accessories_monthly': safe_float(s.get('monthly_target'))}
         monthly = targets_engine.derive_monthly_by_cat(trow, byod_def)
-        if sum(monthly.values()) <= 0:
+        if sum(monthly.values()) <= 0 and not include_untargeted:
             continue
         hours_by_day = targets_engine.scope_hours_by_day(shifts, code, None)
         actuals_by_day = targets_engine.scope_actuals_by_day(actuals, code, None)
         res = targets_engine.compute_scope(monthly, hours_by_day, actuals_by_day, today,
                                            round_counts=True, month_end=end - _timedelta(days=1))
+        # Untargeted store (only reachable via include_untargeted): keep it only when it has real
+        # achieved actuals — else it's just noise. Targeted stores always pass.
+        if sum(monthly.values()) <= 0:
+            _cats = res.get('categories', {}) or {}
+            if not any(safe_float((_cats.get(c) or {}).get('achieved_mtd')) > 0 for c in _cats):
+                continue
         store_conv = targets_engine.scope_conversion(actuals, code, None, today)
         # Reps who worked/sold at this store + their MTD performance, so the store
         # row breaks down into the people driving it (for corrective action).

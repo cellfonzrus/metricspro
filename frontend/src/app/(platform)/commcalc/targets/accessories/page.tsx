@@ -17,8 +17,13 @@ export default function AccessoryTargetsPage() {
 
   useEffect(() => {
     setLoading(true)
-    api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/summary?org_id=${ORG_ID}&today=${localToday()}`)
-      .then((d: any) => setRows((d.stores || []).filter((s: any) => (s.categories?.accessories?.monthly || 0) > 0)))
+    api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/summary?org_id=${ORG_ID}&today=${localToday()}&include_untargeted=1`)
+      .then((d: any) => setRows((d.stores || []).filter((s: any) => {
+        const a = s.categories?.accessories || {}
+        // Show a store if it has an accessory target OR any accessory sales achieved this month —
+        // so accessory $ is tracked even before per-store targets are configured.
+        return (a.monthly || 0) > 0 || (a.achieved_mtd || 0) > 0
+      })))
       .catch(console.error).finally(() => setLoading(false))
   }, [period])
 
@@ -84,7 +89,7 @@ export default function AccessoryTargetsPage() {
               </tr></thead>
               <tbody>
                 {rows.map(s => {
-                  const a = acc(s); const p = pct(a); const ok = onTrack(a)
+                  const a = acc(s); const p = pct(a); const noTarget = (a.monthly || 0) <= 0; const ok = onTrack(a)
                   return (
                     <Fragment key={s.store_code}>
                       <tr onClick={() => setOpen(o => ({ ...o, [s.store_code]: !o[s.store_code] }))}
@@ -102,7 +107,9 @@ export default function AccessoryTargetsPage() {
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13 }}>{fmt(a.pace)}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--text2)' }}>{a.open_days_left}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 12 }}>
-                          <span style={{ background: ok ? '#dcfce7' : '#ffedd5', color: ok ? '#065f46' : '#9a3412', borderRadius: 5, padding: '1px 8px', fontWeight: 600 }}>{ok ? 'On track' : 'Behind'}</span>
+                          {noTarget
+                            ? <span style={{ background: 'var(--surface2)', color: 'var(--text2)', borderRadius: 5, padding: '1px 8px', fontWeight: 600 }}>No target</span>
+                            : <span style={{ background: ok ? '#dcfce7' : '#ffedd5', color: ok ? '#065f46' : '#9a3412', borderRadius: 5, padding: '1px 8px', fontWeight: 600 }}>{ok ? 'On track' : 'Behind'}</span>}
                         </td>
                       </tr>
                       {open[s.store_code] && (s.reps || []).map((rp: any, i: number) => (
@@ -120,7 +127,7 @@ export default function AccessoryTargetsPage() {
             </table>
           </div>
           <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 12 }}>
-            "Behind" = achieved MTD is under the pace expected by today. "$/day needed" spreads the remaining target over the open days left in the month. Set accessory targets per store in Target Settings.
+            "Behind" = achieved MTD is under the pace expected by today. "$/day needed" spreads the remaining target over the open days left in the month. Stores with accessory sales but marked <b>No target</b> still appear here so achieved $ is tracked — set a target for them in Target Settings to get pacing. Achieved MTD is accessory sales revenue (matches rep commissions).
           </p>
         </>
       )}
