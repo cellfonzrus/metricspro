@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { api, fmt, localToday } from '@/lib/client'
+import { api, fmt, localToday, apiUpload, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
@@ -21,6 +21,22 @@ export default function TenderRecon3WayPage() {
   const [assetStores, setAssetStores] = useState<{ store: string; market: string }[]>([])
   const [onlyMismatch, setOnlyMismatch] = useState(false)
   const [drill, setDrill] = useState<Drill | null>(null)
+  const [xrBusy, setXrBusy] = useState(false)
+  const [xrMsg, setXrMsg] = useState('')
+
+  async function uploadXReport(f: File) {
+    setXrBusy(true); setXrMsg('')
+    const form = new FormData(); form.append('file', f)
+    try {
+      const d: any = await apiUpload(`/api/v1/commcalc/upload/x_report?close_date=${encodeURIComponent(date)}&org_id=${ORG_ID}`, form)
+      const n = d?.tenders ?? d?.rows_saved ?? 0
+      setXrMsg(`✅ X‑Report ingested — ${n} tender rows${d?.date ? ' for ' + d.date : ''}. Recon refreshed.`)
+      load()
+    } catch (e: any) {
+      setXrMsg(`❌ ${e?.message || String(e)}`)
+    }
+    setXrBusy(false)
+  }
 
   function load() {
     setLoading(true)
@@ -97,9 +113,16 @@ export default function TenderRecon3WayPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <input className="select" type="date" value={date} onChange={e => setDate(e.target.value)} />
+          <label className="btn" style={{ cursor: xrBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
+            title="Upload the POS X-Report for this day. A single-day report only — a date-range file is rejected.">
+            {xrBusy ? '⏳ Uploading…' : '⬆ Upload X‑Report'}
+            <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={xrBusy}
+              onChange={e => { const f = e.target.files?.[0]; if (f) uploadXReport(f); e.currentTarget.value = '' }} />
+          </label>
           {allStores.length > 0 && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
         </div>
       </div>
+      {xrMsg && <div style={{ fontSize: 12, marginBottom: 10, color: xrMsg.startsWith('❌') ? '#b91c1c' : 'var(--text2)' }}>{xrMsg}</div>}
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12, fontSize: 12 }}>
         <Src label="Daily Closing" ok={sp.closing} />

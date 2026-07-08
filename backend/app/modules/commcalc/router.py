@@ -121,16 +121,25 @@ _XR_TENDERS = {"cash", "check", "credit card", "gift card", "store account",
                "debit card", "credit", "debit", "card"}
 
 
-def _parse_xreport(contents: bytes, filename: str):
+def _parse_xreport(contents: bytes, filename: str, fallback_date: str = None):
     """Parse the POS 'X-Report' workbook, which is ONE SHEET PER STORE (sheet name = store address),
     each holding a 'Tendered Amounts' matrix (Tender Types rows × Sales..Net columns). Returns
     [(store, date_iso, tender_type, net_amount)]. The date is the filename range
-    X-Report_MMDDYYYY-MMDDYYYY (single day when start==end); falls back to the business-local date.
+    X-Report_MMDDYYYY-MMDDYYYY — which MUST be a single day (start==end); a multi-day range raises
+    ValueError (an X-Report reconciles ONE day's drawer). With no filename date, uses fallback_date
+    (YYYY-MM-DD, e.g. the day being viewed) else the business-local date.
     Returns [] if the workbook isn't this format (caller then tries the generic flat parser)."""
     import re as _re
     m = _re.search(r'(\d{2})(\d{2})(\d{4})\s*-\s*(\d{2})(\d{2})(\d{4})', filename or "")
     if m:
-        date_iso = f"{m.group(6)}-{m.group(4)}-{m.group(5)}"   # END of the range = the day it covers
+        if (m.group(1), m.group(2), m.group(3)) != (m.group(4), m.group(5), m.group(6)):
+            raise ValueError(
+                f"X-Report must be for a SINGLE day — this file covers a range "
+                f"({m.group(1)}/{m.group(2)}/{m.group(3)} – {m.group(4)}/{m.group(5)}/{m.group(6)}). "
+                f"Re-run the X-Report for one day and upload that.")
+        date_iso = f"{m.group(3)}-{m.group(1)}-{m.group(2)}"   # single day (YYYY-MM-DD)
+    elif fallback_date and len(str(fallback_date)) >= 10 and str(fallback_date)[4] == "-":
+        date_iso = str(fallback_date)[:10]
     else:
         try:
             from zoneinfo import ZoneInfo
@@ -262,6 +271,7 @@ async def upload_file(
     file: UploadFile = File(...),
     period: str = "",
     force: bool = False,
+    close_date: str = "",
     org_id: str = "00000000-0000-0000-0000-000000000001"
 ):
     """Upload a data file (sales, payment_detail, mi, dlar_rep, dlar_store, catalog).
@@ -373,7 +383,11 @@ async def upload_file(
     if file_type == 'x_report':
         # First try the real B2B Soft X-Report: a MULTI-SHEET workbook (one sheet per store, tender
         # matrix), which the generic flat parser below can't read. Falls through if not that shape.
-        xr = _parse_xreport(contents, fname)
+        # A multi-day filename range is rejected (400) — an X-Report reconciles ONE day.
+        try:
+            xr = _parse_xreport(contents, fname, fallback_date=close_date or None)
+        except ValueError as _e:
+            raise HTTPException(400, str(_e))
         if xr:
             saved = 0
             for (store, d, tender) , amount in {(s, dd, t): a for (s, dd, t, a) in xr}.items():
@@ -418,12 +432,15 @@ async def upload_file(
             return "other"
         # Stamp the BUSINESS-local date (not UTC): the X report is swept in the evening (~6:50 PM ET),
         # which is already the next UTC day part of the year — a UTC stamp would file it under tomorrow.
-        try:
-            from zoneinfo import ZoneInfo
-            default_date = datetime.now(timezone.utc).astimezone(
-                ZoneInfo(settings.BUSINESS_TZ or "America/New_York")).date().isoformat()
-        except Exception:
-            default_date = datetime.now(timezone.utc).date().isoformat()
+        if close_date and len(close_date) >= 10 and close_date[4] == "-":
+            default_date = close_date[:10]
+        else:
+            try:
+                from zoneinfo import ZoneInfo
+                default_date = datetime.now(timezone.utc).astimezone(
+                    ZoneInfo(settings.BUSINESS_TZ or "America/New_York")).date().isoformat()
+            except Exception:
+                default_date = datetime.now(timezone.utc).date().isoformat()
         agg = {}
         current_store, current_date = None, None
         for r in rows:
