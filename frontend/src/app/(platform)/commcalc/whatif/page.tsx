@@ -7,7 +7,7 @@ const card = { padding: 18, borderRadius: 12 } as const
 const num = (v: any) => { const n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : 0 }
 
 function TabBar({ tab, setTab }: { tab: string; setTab: (t: string) => void }) {
-  const tabs = [['mix', '🎯 Activation Mix → Commission'], ['byod', '📶 BYOD → Residuals'], ['corr', '🔗 Accessories ↔ BYOD ↔ Revenue']]
+  const tabs = [['mix', '🎯 Activation Mix → Commission'], ['byod', '📶 BYOD → Residuals'], ['corr', '🔗 Accessories ↔ BYOD ↔ Revenue'], ['carrier', '💵 Carrier Income (mgmt)']]
   return (
     <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>
       {tabs.map(([k, label]) => (
@@ -280,6 +280,112 @@ function AccessoryByod() {
   )
 }
 
+// ───────────────────────── Tab 4: Carrier Income (management) ─────────────────────────
+function CarrierIncome() {
+  const [trend, setTrend] = useState<any>(null)
+  const [period, setPeriod] = useState('')
+  const [base, setBase] = useState<any>(null)
+  const [whatActs, setWhatActs] = useState(0)
+  const [touched, setTouched] = useState(false)
+
+  useEffect(() => {
+    api('/api/v1/commcalc/comp/residual-trend').then((d: any) => {
+      setTrend(d)
+      const months: any[] = d.totals_by_month || []
+      const withComp = months.filter(m => num(m.total_comp) > 0)
+      const def = (withComp.length ? withComp[withComp.length - 1] : months[months.length - 1])?.period
+      if (def) setPeriod(def)
+    }).catch(console.error)
+  }, [])
+  useEffect(() => {
+    if (!period) return
+    api(`/api/v1/commcalc/whatif/activation-baseline?org_id=${ORG_ID}&period=${encodeURIComponent(period)}`).then((d: any) => {
+      setBase(d)
+      if (!touched) setWhatActs(num(d.actuals?.premium_acts) + num(d.actuals?.byod_acts) + num(d.actuals?.upgrade_acts))
+    }).catch(console.error)
+  }, [period])
+
+  if (!trend) return <div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div>
+  const months: any[] = trend.totals_by_month || []
+  const cur = months.find(m => m.period === period) || months[months.length - 1] || {}
+  const comp = cur.components || {}
+  const residual = num(cur.residual)
+  const totalIncome = num(cur.total_comp) + residual
+  const acts = base ? num(base.actuals?.premium_acts) + num(base.actuals?.byod_acts) + num(base.actuals?.upgrade_acts) : 0
+  const repPay = num(base?.actuals?.total_payout)
+  const net = totalIncome - repPay
+  const incPerAct = acts ? totalIncome / acts : 0
+  const payPerAct = acts ? repPay / acts : 0
+  const projIncome = incPerAct * num(whatActs), projPay = payPerAct * num(whatActs), projNet = projIncome - projPay
+  const noComp = num(cur.total_comp) === 0
+
+  const HEADINGS: [string, number, string][] = [
+    ['Commission (promo)', num(comp.COMMISSION), '#2e75b6'],
+    ['SPIFF / bounty', num(comp.SPIFF), '#7c3aed'],
+    ['Reimbursement', num(comp.REIMBURSEMENT), '#0891b2'],
+    ['Residual (MI + ATU)', residual, '#16a34a'],
+    ['Unmapped', num(comp.UNMAPPED), '#f59e0b'],
+  ]
+  const chartData = months.map(m => ({ name: m.period, commission: num(m.components?.COMMISSION), spiff: num(m.components?.SPIFF), reimbursement: num(m.components?.REIMBURSEMENT), residual: num(m.residual) }))
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+        <label style={{ fontSize: 13, color: 'var(--text2)' }}>Period:</label>
+        <select value={period} onChange={e => setPeriod(e.target.value)}
+          style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }}>
+          {months.map(m => <option key={m.period} value={m.period}>{m.period}{num(m.total_comp) > 0 ? '' : ' (comp not posted)'}</option>)}
+        </select>
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>What the carrier pays us, by heading</span>
+      </div>
+
+      {noComp && <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 13, color: '#92400e', background: '#fffbeb', borderLeft: '3px solid #f59e0b' }}>
+        Carrier compensation (promo / bounty / reimbursement) for {period} isn’t posted yet — showing residual (MI+ATU) only. Pick a month marked with data for the full split.
+      </div>}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, marginBottom: 8 }}>
+        {HEADINGS.map(([lbl, val, color]) => (
+          <Stat key={lbl} label={lbl} value={fmt(val)} color={color as string}
+            sub={totalIncome ? `${Math.round((num(val) / totalIncome) * 100)}% of income` : undefined} />
+        ))}
+        <Stat label="TOTAL carrier income" value={fmt(totalIncome)} color="var(--accent)" sub="comp + residual" />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, margin: '14px 0 18px' }}>
+        <Stat label="We collect (carrier)" value={fmt(totalIncome)} color="#16a34a" sub={acts ? `${fmt(incPerAct)} / activation` : undefined} />
+        <Stat label="We pay reps" value={fmt(repPay)} color="#dc2626" sub={acts ? `${fmt(payPerAct)} / activation` : `${period} rep payout`} />
+        <Stat label="Net to company" value={fmt(net)} color={net >= 0 ? '#059669' : '#dc2626'}
+          sub={totalIncome ? `${Math.round((net / totalIncome) * 100)}% margin${acts ? ` · ${fmt(incPerAct - payPerAct)}/act` : ''}` : undefined} />
+      </div>
+
+      <div className="card" style={{ padding: 18, marginBottom: 18 }}>
+        <div style={{ fontWeight: 700, marginBottom: 10 }}>What‑if: scale the activation volume</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, marginBottom: 12, alignItems: 'end' }}>
+          <Field label="Activations (this scenario)" value={whatActs} onChange={v => { setTouched(true); setWhatActs(v) }} />
+          <Stat label="Projected carrier income" value={fmt(projIncome)} color="#16a34a" sub={`${fmt(incPerAct)}/act × ${whatActs}`} />
+          <Stat label="Projected net to company" value={fmt(projNet)} color={projNet >= 0 ? '#059669' : '#dc2626'} sub={`after ${fmt(projPay)} rep pay`} />
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text3)' }}>Scales the current per‑activation economics ({fmt(incPerAct)} carrier in, {fmt(payPerAct)} rep out) to the volume you enter. Uses {period} as the rate basis.</div>
+      </div>
+
+      <div className="card" style={{ padding: 16, marginBottom: 18 }}>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>Carrier income by heading, month over month</div>
+        <TrendChart height={320} leftMoney
+          data={chartData}
+          series={[
+            { key: 'commission', name: 'Commission (promo)', type: 'bar', axis: 'left', money: true, color: '#2e75b6' },
+            { key: 'spiff', name: 'SPIFF / bounty', type: 'bar', axis: 'left', money: true, color: '#7c3aed' },
+            { key: 'reimbursement', name: 'Reimbursement', type: 'bar', axis: 'left', money: true, color: '#0891b2' },
+            { key: 'residual', name: 'Residual (MI+ATU)', type: 'line', axis: 'left', money: true, color: '#16a34a' },
+          ]} />
+      </div>
+      <p style={{ fontSize: 12, color: 'var(--text3)' }}>
+        Carrier income = Comprehensive Comp (promo + bounty + reimbursement, from raw_comp_report) + Residual (MI+ATU, from raw_mi) — the comp report books $0 residual, so the two sources add without overlap. Net = carrier income − what we pay reps ({period}). Comp posts monthly (often a month in arrears), so recent months may show residual only until the carrier statement lands.
+      </p>
+    </div>
+  )
+}
+
 // shared bits
 function Stat({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
   return <div className="card" style={{ padding: '16px 18px' }}>
@@ -309,6 +415,7 @@ export default function WhatIfPage() {
       {tab === 'mix' && <ActivationMix />}
       {tab === 'byod' && <ByodResidual />}
       {tab === 'corr' && <AccessoryByod />}
+      {tab === 'carrier' && <CarrierIncome />}
     </div>
   )
 }
