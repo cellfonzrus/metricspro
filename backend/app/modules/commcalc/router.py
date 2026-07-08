@@ -6518,7 +6518,7 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
     strings the SQL function hardcodes (the July Action-Plan bug). Reads `source` (the daily feed),
     falling back to raw_sales. Returns the same shape targets_engine expects."""
     cols = ("trans_id,trans_date,store,salesperson,user_login,contract_type,department,category,"
-            "product_desc,gp,voided,trans_type")
+            "product_desc,gp,ext_price,voided,trans_type")
 
     def _q(table):
         return (client.schema('commcalc').table(table).select(cols)
@@ -6582,7 +6582,9 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
         elif tid and _cls == 'premium':
             a['_prem'].add(tid)
         if _is_accessory(dept, r.get('category'), r.get('product_desc'), acfg):
-            a['acc_gp'] += safe_float(r.get('gp'))
+            # Accessory "achieved" = accessory SALES revenue (ext_price) — matches rep_commissions'
+            # accessory basis and the July feed (which carries ext_price but $0 gp on accessory lines).
+            a['acc_gp'] += safe_float(r.get('ext_price'))
         if dept in _BOX_DEPTS:
             a['box_count'] += 1
         if tid and ('boost rtr' in pdesc or 'xfinity prepaid refill' in pdesc):
