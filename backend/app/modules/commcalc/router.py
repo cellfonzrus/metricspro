@@ -4614,7 +4614,7 @@ async def get_commissions(period: str, org_id: str = "00000000-0000-0000-0000-00
     return comms
 
 @router.get("/dlar-store/{period}")
-async def get_dlar_store_kpis(period: str, org_id: str = ORG_ID):
+async def get_dlar_store_kpis(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Store-level KPIs straight from the Elevate Go Store DLAR (raw_dlar_store) for the
     Store view of the KPI Metrics page. Values are whole-number percents (e.g. 55.0).
 
@@ -4628,7 +4628,10 @@ async def get_dlar_store_kpis(period: str, org_id: str = ORG_ID):
         'aal_conversion,conversion_rate,total_acts,gross_adds,total_upgrades'
     ).eq('org_id', org_id)
     q = q.eq('period_month', mo).eq('period_year', yr) if mo and yr else q.in_('period', _pvariants(period))
-    return q.order('location').execute().data or []
+    rows = q.order('location').execute().data or []
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
+    return [r for r in rows if in_keyset(ks, r.get('store_code'), r.get('address'), r.get('location'))]
 
 
 @router.get("/flags/{period}")
