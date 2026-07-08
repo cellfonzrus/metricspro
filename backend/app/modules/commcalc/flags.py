@@ -53,6 +53,24 @@ def calc_flags(
         and str(r.get('trans_type', '')).strip() != 'Return'
     ]
 
+    # Device model BY IMEI from the SALES report: the sales line carrying a serial IS the phone, so its
+    # product description is the DEVICE model — not the plan / accessory / service lines on the same
+    # transaction. Flags show the phone sold, not the plan activated. Prefer a device-looking description.
+    def _device_like(pd):
+        p = (pd or '').lower()
+        return bool(p) and not any(b in p for b in (
+            'unlimited', 'plan', ' rtr', 'refill', 'recharge', 'autopay', 'protect', 'setup charge',
+            'service charge', 'sim ', 'sim card', 'wall charger', 'access charge', 'wallet funding',
+            'insurance', 'warranty', 'boost rtr', 'top up', 'topup'))
+    model_by_imei: dict[str, str] = {}
+    for r in valid_sales:
+        ser = str(r.get('serial_1', '') or '').replace('.0', '').strip().upper()
+        pd = str(r.get('product_desc', '') or '').strip()
+        if not (ser and pd):
+            continue
+        if ser not in model_by_imei or (_device_like(pd) and not _device_like(model_by_imei[ser])):
+            model_by_imei[ser] = pd
+
     # ── 1. CHARGEBACK — show the REBATE LOST for that phone, not the bill-pay amount ──────
     for r in pay_detail:
         if str(r.get('category', '')).strip() == 'Chargeback':
@@ -61,7 +79,8 @@ def calc_flags(
                 imei = str(r.get('imei', '') or '').replace('.0', '').strip()
                 a = asset_by_imei.get(imei.upper()) if imei else None
                 rebate = safe_float(a.get('reimbursement')) if a else 0.0
-                model = ((a.get('device_model') if a else '') or '').strip()
+                # Prefer the device model resolved from the SALES report by IMEI; fall back to the asset row.
+                model = (model_by_imei.get(imei.upper()) or (a.get('device_model') if a else '') or '').strip()
                 acq = (a.get('acquired_date') if a else None) or (a.get('payg_date') if a else None)
                 disp = rebate if rebate > 0 else abs(amt)   # rebate lost; fall back to bill-pay if no asset match
                 txn = str(r.get('payment_date') or r.get('trans_date') or r.get('date') or '')[:10] or acq
