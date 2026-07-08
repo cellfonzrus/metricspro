@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { MultiSelect } from '@/lib/multiselect'
 
 // 3-Way Tender Recon — the SAME day's tenders captured three independent ways, per store, per tender:
 //  (1) Daily Closing (what the rep entered), (2) POS X-report, (3) Sales Transactions (raw_sales/feed).
@@ -14,7 +15,10 @@ export default function TenderRecon3WayPage() {
   const [date, setDate] = useState(() => localToday())
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
-  const [storeFilter, setStoreFilter] = useState('')
+  const [selMarkets, setSelMarkets] = useState<string[]>([])
+  const [selStores, setSelStores] = useState<string[]>([])
+  const [storeMeta, setStoreMeta] = useState<{ store_code: string; store_address: string; market: string }[]>([])
+  const [assetStores, setAssetStores] = useState<{ store: string; market: string }[]>([])
   const [onlyMismatch, setOnlyMismatch] = useState(false)
   const [drill, setDrill] = useState<Drill | null>(null)
 
@@ -24,12 +28,42 @@ export default function TenderRecon3WayPage() {
       .then(setData).catch(e => setData({ error: e?.message || String(e) })).finally(() => setLoading(false))
   }
   useEffect(() => { load() }, [date])
+  useEffect(() => {
+    api('/api/v1/closing/stores').then((d: any) => setStoreMeta(Array.isArray(d) ? d : (d?.stores || d?.data || []))).catch(() => {})
+    api('/api/v1/asset/filter-options').then((d: any) => setAssetStores(d?.stores || [])).catch(() => {})
+  }, [])
 
   const tenders: { key: string; label: string }[] = data?.tenders || []
   const allStores: any[] = data?.stores || []
+  // Market per store: prefer closing/stores by code, else asset market by address / leading street-number.
+  const mktByCode: Record<string, string> = {}
+  storeMeta.forEach(s => { if (s.store_code && s.market) mktByCode[s.store_code] = s.market })
+  const mktByAddr: Record<string, string> = {}, mktByNum: Record<string, string> = {}
+  const leadNum = (a: string) => (a.match(/^\s*([0-9][0-9-]*)/)?.[1] || '').replace(/\D/g, '')
+  assetStores.forEach(s => {
+    const a = (s.store || '').trim().toLowerCase(); if (!a || !s.market) return
+    mktByAddr[a] = s.market
+    const nk = leadNum(a); if (nk && !mktByNum[nk]) mktByNum[nk] = s.market
+  })
+  const marketOf = (s: any): string => {
+    if (mktByCode[s.store_code]) return mktByCode[s.store_code]
+    const a = (s.store_address || '').trim().toLowerCase()
+    if (mktByAddr[a]) return mktByAddr[a]
+    const nk = leadNum(a); return (nk && mktByNum[nk]) || ''
+  }
+  const markets = Array.from(new Set(allStores.map(marketOf).filter(Boolean))).sort()
+  const storeOpts = allStores
+    .filter(s => !selMarkets.length || selMarkets.includes(marketOf(s)))
+    .map(s => ({ value: s.store_code, label: s.store_address }))
   const stores = allStores.filter(s =>
-    (!storeFilter || (s.store_address || '').toLowerCase().includes(storeFilter.toLowerCase())) &&
+    (!selMarkets.length || selMarkets.includes(marketOf(s))) &&
+    (!selStores.length || selStores.includes(s.store_code)) &&
     (!onlyMismatch || s.tenders.some((t: any) => !t.match)))
+  function onMarketsChange(vs: string[]) {
+    setSelMarkets(vs)
+    const allowed = new Set(allStores.filter(s => !vs.length || vs.includes(marketOf(s))).map(s => s.store_code))
+    setSelStores(prev => prev.filter(c => allowed.has(c)))
+  }
   const sp = data?.sources_present || {}
 
   function buildPayload(): ExportPayload {
@@ -80,7 +114,8 @@ export default function TenderRecon3WayPage() {
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input className="select" placeholder="filter store…" value={storeFilter} onChange={e => setStoreFilter(e.target.value)} style={{ width: 200 }} />
+            <MultiSelect allLabel="All markets" width={140} value={selMarkets} options={markets} onChange={onMarketsChange} />
+            <MultiSelect allLabel="All stores" width={150} value={selStores} searchable options={storeOpts} onChange={setSelStores} />
             <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
               <input type="checkbox" checked={onlyMismatch} onChange={e => setOnlyMismatch(e.target.checked)} /> Stores with a mismatch only
             </label>
