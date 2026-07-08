@@ -6319,14 +6319,16 @@ async def get_top_sellers(period: str, limit: int = 10, org_id: str = ORG_ID):
 
 @router.get("/sales-analyzer/{period}")
 async def get_sales_analyzer(period: str, window_days: int = 90, rep: str = "",
-                            org_id: str = ORG_ID):
+                            authorization: str = Header(default=""), org_id: str = ORG_ID):
     """3-Month Retention (3MR) behavior per rep: each rep's activations from 3 months before
     `period` and which churned (cancelled/ported/suspended/deactivated) before their 3rd bill
     (within window_days). Returns per-rep summary + churned line items (model, MRC, sold-for,
-    dates, store)."""
+    dates, store). RBAC-scoped: a non-admin manager only sees subscribers in their stores."""
     require_org(org_id)
+    from app.modules.storeops.router import scope_keyset
+    ks = scope_keyset(authorization, org_id)
     try:
-        return sales_analyzer.analyze(sb(), org_id, period, window_days=window_days, rep=rep)
+        return sales_analyzer.analyze(sb(), org_id, period, window_days=window_days, rep=rep, store_keys=ks)
     except Exception as e:
         raise HTTPException(500, f"sales-analyzer failed: {type(e).__name__}: {e}")
 

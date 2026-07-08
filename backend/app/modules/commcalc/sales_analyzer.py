@@ -115,23 +115,37 @@ def _sales_index(client, org_id):
     return by_phone, by_serial, acc_by_trans
 
 
-def analyze(client, org_id, period, window_days=90, rep=""):
+def analyze(client, org_id, period, window_days=90, rep="", store_keys=None):
+    """store_keys: None = unrestricted; else a set of UPPER store keys (codes + addresses) the caller may
+    see (RBAC scope). Subscribers are scoped to those stores via raw_mi.salesforce_id → store_mapping."""
     cy, cm = _cohort_month(period)
     cohort_label = date(cy, cm, 1).strftime("%B %Y")
     namemap = _name_map(client, org_id)
     by_phone, by_serial, acc_by_trans = _sales_index(client, org_id)
 
+    # RBAC scope: salesforce_id → {store_code, store_address} (UPPER) so subs can be filtered to a
+    # manager's stores. Only built when scoping is active.
+    sfid_keys = {}
+    if store_keys is not None:
+        for m in _fetch_all(client, "store_mapping", "salesforce_id,store_code,store_address", {"org_id": org_id}):
+            sf = (m.get("salesforce_id") or "").strip()
+            if sf:
+                sfid_keys[sf] = {(m.get("store_code") or "").strip().upper(), (m.get("store_address") or "").strip().upper()} - {""}
+
     # Dedupe raw_mi to one row per subscriber, preferring the row that carries a deactivation
     # date (the churn signal) so we don't miss subs that dropped off later MI reports.
     rows = _fetch_all(client, "raw_mi",
                       "subscriber_id,subscriber_status,phone_number,device_serial,mi_activation_date,"
-                      "mi_deactivation_date,base_mrc,commissionable_mrc,customer_plan,rep_username,period",
+                      "mi_deactivation_date,base_mrc,commissionable_mrc,customer_plan,rep_username,period,salesforce_id",
                       {"org_id": org_id})
     subs = {}
     for r in rows:
         key = (r.get("subscriber_id") or r.get("phone_number") or "").strip()
         if not key:
             continue
+        if store_keys is not None:   # RBAC: keep only subs whose store is in the caller's scope
+            if not (sfid_keys.get((r.get("salesforce_id") or "").strip(), set()) & store_keys):
+                continue
         cur = subs.get(key)
         if cur is None or (r.get("mi_deactivation_date") and not cur.get("mi_deactivation_date")):
             subs[key] = r
