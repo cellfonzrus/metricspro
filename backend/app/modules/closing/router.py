@@ -606,6 +606,26 @@ def verify_store(payload: dict, org_id: str = ORG_ID):
     return {"ok": True, "store_code": code, "close_date": date}
 
 
+@router.post("/expense/approve")
+def approve_expense(payload: dict, org_id: str = ORG_ID):
+    """DM approval of a rep's daily-closing expense — a single toggle. Body: {row_id, approved(bool),
+    approved_by?}. Sets expense_approved(+by/at) on that daily_closing row; unchecking clears them."""
+    row_id = (payload.get("row_id") or "").strip()
+    if not row_id:
+        raise HTTPException(400, "row_id required")
+    approved = bool(payload.get("approved", True))
+    upd = {
+        "expense_approved": approved,
+        "expense_approved_by": (payload.get("approved_by") or "DM") if approved else None,
+        "expense_approved_at": _now() if approved else None,
+        "updated_at": _now(),
+    }
+    (sb().schema("commcalc").table("daily_closing").update(upd)
+     .eq("org_id", org_id).eq("id", row_id).execute())
+    return {"ok": True, "row_id": row_id, "expense_approved": approved,
+            "expense_approved_by": upd["expense_approved_by"], "expense_approved_at": upd["expense_approved_at"]}
+
+
 # ── Manual in-app row entry (the eventual switch off the Google sheet) ─────────────────────
 # ── Envelope photo: real capture/upload + OCR mismatch (Theme 3) ──────────────────────────────
 ENVELOPE_BUCKET = "closing-envelopes"
@@ -706,6 +726,15 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
         "envelope_picture": (payload.get("envelope_picture") or "").strip() or None,
         "remarks": payload.get("remarks"), "source": "manual",
     }
+    # Rep expense (reimbursement) — the rep enters an amount + a REQUIRED description; a positive
+    # amount with no description is rejected. Starts unapproved; the DM approves it on the verify screen.
+    exp_amt = _money(payload.get("expense_amount"))
+    exp_desc = (payload.get("expense_description") or "").strip()
+    if exp_amt > 0 and not exp_desc:
+        raise HTTPException(400, "A description is required for the expense.")
+    body["expense_amount"] = exp_amt
+    body["expense_description"] = exp_desc or None
+    body["expense_approved"] = False
     # ── Six tender types (mirror the POS X-report). Accept the new t_* fields; fall back to the legacy
     #    store/epay/other fields for any caller (old kiosk) that hasn't sent them yet. ──
     def _pt(k):
@@ -770,8 +799,10 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
     try:
         r = client.schema("commcalc").table("daily_closing").insert(body).execute()
     except Exception:
-        # Tolerate not-yet-run additive migrations (t_acima=mig104, epay_on_*=mig106): drop the new keys + retry.
-        for _k in ("t_acima", "epay_on_cash", "epay_on_credit", "epay_on_acima"):
+        # Tolerate not-yet-run additive migrations (t_acima=mig104, epay_on_*=mig106,
+        # expense_*=mig109): drop the new keys + retry.
+        for _k in ("t_acima", "epay_on_cash", "epay_on_credit", "epay_on_acima",
+                   "expense_amount", "expense_description", "expense_approved"):
             body.pop(_k, None)
         r = client.schema("commcalc").table("daily_closing").insert(body).execute()
     saved = r.data[0] if r.data else body

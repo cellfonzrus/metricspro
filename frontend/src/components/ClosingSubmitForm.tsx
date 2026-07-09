@@ -25,12 +25,14 @@ type State = {
   t_cash: string; t_credit: string; t_ext_cc: string; t_gift: string; t_store_acct: string; t_zelle: string; t_acima: string
   epay_on_cash: string; epay_on_credit: string; epay_on_acima: string
   acc_sale: string
+  expense_amount: string; expense_description: string
   upgrade_count: string; new_line_count: string; postpaid_count: string; envelope_picture: string; remarks: string
 }
 
 const blank = (): State => ({
   close_date: localToday(), sfid: '', store_name: '', store_code: '', employee_name: '',
   t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', epay_on_cash: '', epay_on_credit: '', epay_on_acima: '', acc_sale: '',
+  expense_amount: '', expense_description: '',
   upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '',
 })
 // Total collected = the tender boxes ONLY. Accessory is declared separately (tallied vs sales), NOT a tender.
@@ -97,6 +99,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     if (!f.close_date) { setMsg('❌ Pick a date.'); return }
     if (!f.sfid && !f.store_code) { setMsg('❌ Pick your store.'); return }
     if (!f.employee_name.trim()) { setMsg('❌ Enter your name.'); return }
+    if ((parseFloat(f.expense_amount) || 0) > 0 && !f.expense_description.trim()) { setMsg('❌ Describe the expense before submitting.'); return }
     setBusy(true); setMsg('')
     try {
       const r = await api('/api/v1/closing/row', { method: 'POST', body: JSON.stringify({
@@ -106,6 +109,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         t_gift: f.t_gift, t_store_acct: f.t_store_acct, t_zelle: f.t_zelle, t_acima: f.t_acima,
         epay_on_cash: f.epay_on_cash, epay_on_credit: f.epay_on_credit, epay_on_acima: f.epay_on_acima,
         acc_sale: f.acc_sale,
+        expense_amount: f.expense_amount, expense_description: f.expense_description.trim(),
         upgrade_count: f.upgrade_count, new_line_count: f.new_line_count, postpaid_count: f.postpaid_count,
         envelope_picture: f.envelope_picture, remarks: f.remarks,
         ocr_cash: ocrCash || undefined,
@@ -125,6 +129,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         : pending ? '✅ Submitted (B2B not loaded yet — will reconcile once it lands).'
         : '✅ Closing submitted and tallies with the system. You can enter another below.')
       setF(p => ({ ...p, t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', epay_on_cash: '', epay_on_credit: '', epay_on_acima: '', acc_sale: '',
+        expense_amount: '', expense_description: '',
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))
       setEnvPreview(''); setOcrCash(''); setOcrAmounts([])
       loadRecent()
@@ -178,6 +183,14 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           <Field label="Upgrades #"><input style={inp} inputMode="numeric" value={f.upgrade_count} onChange={e => set({ upgrade_count: e.target.value })} placeholder="0" /></Field>
           <Field label="New Lines #"><input style={inp} inputMode="numeric" value={f.new_line_count} onChange={e => set({ new_line_count: e.target.value })} placeholder="0" /></Field>
           <Field label="Postpaid #"><input style={inp} inputMode="numeric" value={f.postpaid_count} onChange={e => set({ postpaid_count: e.target.value })} placeholder="0" /></Field>
+        </Row>
+
+        <SectionLabel>Expense incurred (reimbursement — DM approves)</SectionLabel>
+        <Row>
+          <Field label="Expense amount $"><input style={inp} inputMode="decimal" value={f.expense_amount} onChange={e => set({ expense_amount: e.target.value })} placeholder="0.00" /></Field>
+          <Field label={`Description${(parseFloat(f.expense_amount) || 0) > 0 ? ' (required)' : ''}`} wide>
+            <input style={inp} value={f.expense_description} onChange={e => set({ expense_description: e.target.value })} placeholder="What was the expense for? (required if an amount is entered)" />
+          </Field>
         </Row>
 
         <SectionLabel>Envelope photo & remarks</SectionLabel>

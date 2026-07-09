@@ -85,6 +85,19 @@ export default function DailyClosingVerify() {
     } catch (e: any) { alert('Verify failed: ' + (e?.message || e)) }
   }
 
+  // DM expense approval — a single checkbox per rep row. Checking it asks "Is this an approved
+  // expense?"; on confirm we persist. Unchecking clears the approval. The checkbox is driven by
+  // server state (data reloads after each toggle), so a cancelled confirm just leaves it as-is.
+  async function approveExpense(r: any, approved: boolean) {
+    if (approved && !window.confirm('Is this an approved expense?')) return
+    try {
+      await api('/api/v1/closing/expense/approve', { method: 'POST', body: JSON.stringify({
+        row_id: r.id, approved, approved_by: user?.full_name || 'DM',
+      }) })
+      load()
+    } catch (e: any) { alert('Approve failed: ' + (e?.message || e)) }
+  }
+
   function setForm(k: string, patch: Partial<Form>) { setForms(p => ({ ...p, [k]: { ...p[k], ...patch } })) }
 
   const markets = Array.from(new Set((data?.stores || []).map((s: any) => s.market).filter(Boolean))).sort()
@@ -139,6 +152,8 @@ export default function DailyClosingVerify() {
         const t = s.totals || {}
         const ver = s.verification?.verified
         const recon = s.recon
+        const expTotal = (s.reps || []).reduce((a: number, r: any) => a + (Number(r.expense_amount) || 0), 0)
+        const expPending = (s.reps || []).filter((r: any) => (Number(r.expense_amount) || 0) > 0 && !r.expense_approved).length
         return (
           <div key={k} className="card" style={{ padding: 16, marginBottom: 14, borderLeft: `4px solid ${ver ? 'var(--green, #16794a)' : recon?.discrepancy ? 'var(--amber, #b45309)' : 'var(--border)'}` }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
@@ -185,8 +200,15 @@ export default function DailyClosingVerify() {
               <Stat label="ePay CC" value={fmt(t.epay_cc)} />
               <Stat label="Acc sale" value={fmt(t.acc_sale)} />
               <Stat label="Other" value={fmt(t.other_account)} />
+              {expTotal > 0 && <Stat label="Rep expenses" value={fmt(expTotal)} />}
               <Stat label="Upg / New / Post" value={`${t.upgrade_count} / ${t.new_line_count} / ${t.postpaid_count}`} />
             </div>
+
+            {expPending > 0 && (
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: '#9a3412', background: '#ffedd5', padding: '6px 10px', borderRadius: 8 }}>
+                💵 {expPending} rep expense{expPending === 1 ? '' : 's'} awaiting your approval — open the rep rows below to review and approve.
+              </div>
+            )}
 
             {/* B2B reconciliation */}
             {recon && (
@@ -208,7 +230,7 @@ export default function DailyClosingVerify() {
               <div className="table-wrapper" style={{ marginTop: 8 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead><tr style={{ background: 'var(--surface2)' }}>
-                    {['Employee', 'Store cash', 'Store CC', 'ePay cash', 'ePay CC', 'Acc', 'Other', 'Upg', 'New', 'Post', 'Env'].map(h =>
+                    {['Employee', 'Store cash', 'Store CC', 'ePay cash', 'ePay CC', 'Acc', 'Other', 'Upg', 'New', 'Post', 'Env', 'Expense', 'Approve exp.'].map(h =>
                       <th key={h} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
                   </tr></thead>
                   <tbody>
@@ -225,6 +247,21 @@ export default function DailyClosingVerify() {
                         <td style={cell}>{r.new_line_count}</td>
                         <td style={cell}>{r.postpaid_count}</td>
                         <td style={cell}>{(r.envelope_url || r.envelope_picture) ? <a href={r.envelope_url || r.envelope_picture} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>📷</a> : '—'}</td>
+                        <td style={cell}>
+                          {(Number(r.expense_amount) || 0) > 0
+                            ? <span><b>{fmt(r.expense_amount)}</b>{r.expense_description ? <span style={{ color: 'var(--text3)' }}> · {r.expense_description}</span> : null}</span>
+                            : <span style={{ color: 'var(--text3)' }}>—</span>}
+                        </td>
+                        <td style={cell}>
+                          {(Number(r.expense_amount) || 0) > 0
+                            ? <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, whiteSpace: 'nowrap' }}>
+                                <input type="checkbox" checked={!!r.expense_approved} onChange={e => approveExpense(r, e.target.checked)} />
+                                {r.expense_approved
+                                  ? <span style={{ color: 'var(--green, #16794a)', fontWeight: 600 }}>approved{r.expense_approved_by ? ` · ${r.expense_approved_by}` : ''}</span>
+                                  : <span style={{ color: 'var(--text3)' }}>approve</span>}
+                              </label>
+                            : <span style={{ color: 'var(--text3)' }}>—</span>}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
