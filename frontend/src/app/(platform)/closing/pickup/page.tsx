@@ -158,6 +158,35 @@ export default function CashPickupPage() {
         </div>
       </div>
 
+      {/* Day summary — total cash collected end-of-day + collection progress */}
+      {data && (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+          <Stat label="Total cash (end of day)" value={fmt(data.total_cash || 0)} accent />
+          <Stat label="Collected" value={fmt(data.collected_cash || 0)} sub={`${data.collected} envelope${data.collected === 1 ? '' : 's'}`} />
+          <Stat label="Still to collect" value={fmt(data.ready_cash || 0)} sub={`${data.ready} envelope${data.ready === 1 ? '' : 's'}`} />
+        </div>
+      )}
+
+      {/* Stores that did NOT submit a daily closing for the selected day */}
+      {data && date && (
+        (data.not_closed || []).length > 0 ? (
+          <div className="card" style={{ padding: 14, marginBottom: 16, borderLeft: '3px solid #dc2626' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: '#dc2626' }}>
+              ⚠️ {data.not_closed.length} store{data.not_closed.length === 1 ? '' : 's'} did not do the daily closing for {date}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {(data.not_closed as any[]).map(s => (
+                <span key={s.store_code} style={{ fontSize: 12, padding: '4px 9px', borderRadius: 7, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+                  {s.store_name || s.store_code}{s.market ? <span style={{ color: 'var(--text3)' }}> · {s.market}</span> : null}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 16 }}>✅ All active stores submitted a closing for {date}.</div>
+        )
+      )}
+
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : envelopes.length === 0 ? (
@@ -247,4 +276,12 @@ export default function CashPickupPage() {
 
 const L = ({ t, children }: { t: string; children: React.ReactNode }) => (
   <label style={{ fontSize: 11, color: 'var(--text3)' }}><div style={{ marginBottom: 3 }}>{t}</div>{children}</label>
+)
+
+const Stat = ({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) => (
+  <div className="card" style={{ padding: '12px 16px', minWidth: 150, flex: '0 1 auto', borderTop: accent ? '3px solid var(--accent)' : undefined }}>
+    <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</div>
+    <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>{value}</div>
+    {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+  </div>
 )

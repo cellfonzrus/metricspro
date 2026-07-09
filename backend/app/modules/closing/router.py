@@ -1607,7 +1607,7 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     q = client.schema("commcalc").table("daily_closing").select("*").eq("org_id", org_id)
     q = q.eq("close_date", date) if date else q.gte("close_date", start).lte("close_date", end)
     rows = q.execute().data or []
-    stores = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
+    stores = (client.schema("storeops").table("stores").select("store_code,address,market,is_active").eq("org_id", org_id).execute().data) or []
     smeta = {s.get("store_code"): s for s in stores if s.get("store_code")}
     # storeops.stores.market is only partly populated; fall back to commcalc.store_mapping.market (much
     # fuller) so a market-scoped DM still sees every store in their market (was: stores with a blank
@@ -1666,10 +1666,32 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "pickup_id": p.get("id") if p else None,
         })
     out.sort(key=lambda e: (e["picked_up"], str(e.get("close_date") or ""), str(e.get("store_name") or "")))
+
+    # Stores that did NOT submit a daily closing (single-date only — ambiguous over a range). Same
+    # "closed = has any daily_closing row" definition the missing-closing alert uses. Respects the
+    # market scope so a market-scoped DM only sees their own market's stragglers.
+    not_closed = []
+    if date:
+        closed = {(r.get("store_code") or "") for r in rows if r.get("store_code")}
+        for s in stores:
+            code = s.get("store_code") or ""
+            if not code or code in closed or s.get("is_active") is False:
+                continue
+            mk = (s.get("market") or "").strip() or sm_market.get(code, "")
+            if market and mk.strip().lower() != market.strip().lower():
+                continue
+            not_closed.append({"store_code": code, "store_name": s.get("address") or code, "market": mk})
+        not_closed.sort(key=lambda s: str(s.get("store_name") or ""))
+
     return {"date": date, "start": start, "end": end, "envelopes": out,
             "ready": sum(1 for e in out if not e["picked_up"]),
             "collected": sum(1 for e in out if e["picked_up"]),
-            "flagged": sum(1 for e in out if e["deposit_flagged"])}
+            "flagged": sum(1 for e in out if e["deposit_flagged"]),
+            # Cash-dollar totals (the count fields above are envelope counts).
+            "total_cash": round(sum(e["cash"] for e in out), 2),
+            "collected_cash": round(sum(e["cash"] for e in out if e["picked_up"]), 2),
+            "ready_cash": round(sum(e["cash"] for e in out if not e["picked_up"]), 2),
+            "not_closed": not_closed}
 
 
 def _ocr_deposit_amount(raw: bytes, ext: str):
