@@ -621,6 +621,18 @@ export default function EmailImportsPage() {
             <input autoFocus inputMode="numeric" value={code} onChange={e => setCode(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') verify2fa() }}
               placeholder="123456" style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 18, letterSpacing: 3, textAlign: 'center', marginBottom: 12 }} />
+            <details style={{ marginBottom: 12, fontSize: 12, color: 'var(--text2)' }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Not receiving the code?</summary>
+              <div style={{ marginTop: 6, lineHeight: 1.6 }}>
+                The portal sends the code to the phone/email registered <b>on that portal account</b>{twoFa.hint ? <> — it shows <b>{twoFa.hint}</b></> : ''}, not to this device. If you don’t get it:
+                <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+                  <li>Confirm the destination above is a phone/email <b>you control</b>. If it’s stale/someone else’s, log into the portal directly (normal browser) and update the 2-factor contact in its <b>account / security settings</b>, or have that person relay the code.</li>
+                  <li>For an <b>email</b> code, check <b>spam/junk</b>. For <b>SMS</b>, make sure the number can receive short-code texts.</li>
+                  <li>If the portal uses an <b>authenticator app</b> (no text is sent), open that app and enter the current 6-digit code.</li>
+                  <li>Each <b>↻ Resend</b> sends a <b>new</b> code and voids the previous one — use the latest, and don’t press Log in repeatedly.</li>
+                </ul>
+              </div>
+            </details>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
               <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={authBusy === 'verify'} onClick={() => startLogin(twoFa.source)}>↻ Resend</button>
               <div style={{ flex: 1 }} />
