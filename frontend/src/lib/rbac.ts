@@ -227,6 +227,7 @@ export const NAV: NavGroup[] = [
     { href: '/admin/org-chart', label: 'Employee Org Chart', icon: '👥', module: 'admin' },
     { href: '/admin/labels', label: 'Display Labels', icon: '🏷️', module: 'admin' },
     { href: '/admin/menu', label: 'Menu Layout', icon: '🧭', module: 'admin' },
+    { href: '/failures', label: 'Failure Logs', icon: '🩺', module: 'admin' },
   ]},
 ]
 

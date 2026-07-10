@@ -17,7 +17,7 @@ import PortalOnboarding from '@/components/PortalOnboarding'
 // store device). Served over HTTPS (Vercel) so the camera API is available.
 const MODELS = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights'
 const FACEAPI_SRC = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js'
-const MATCH_THRESHOLD = 0.55
+const MATCH_THRESHOLD_DEFAULT = 0.60   // face-api's own default; looser than the old 0.55 to stop false rejects. Tenant-overridable via GET /timeclock/config.
 const PORTAL_TZ = 'America/New_York'   // business tz — keep punch times consistent with reports
 
 const shell: React.CSSProperties = { maxWidth: 900, margin: '0 auto', padding: 16, fontFamily: 'system-ui, -apple-system, sans-serif' }
@@ -70,6 +70,7 @@ export default function PortalPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const gpsRef = useRef<{ lat?: number; lng?: number; acc?: number }>({})
   const initedRef = useRef(false)
+  const thresholdRef = useRef(MATCH_THRESHOLD_DEFAULT)   // tenant-configurable face-match distance cutoff
 
   // every timeclock call carries the Supabase token — the backend derives employee_id from it.
   const authed = useCallback((path: string, opts: RequestInit = {}) =>
@@ -108,6 +109,7 @@ export default function PortalPage() {
     if (!empId || !token) { setStatus(null); setRegistered(null); return }
     authed('/api/v1/storeops/timeclock/status').then(setStatus).catch(() => setStatus(null))
     authed('/api/v1/storeops/timeclock/face').then((r: any) => setRegistered(!!r?.registered)).catch(() => setRegistered(null))
+    authed('/api/v1/storeops/timeclock/config').then((r: any) => { const t = Number(r?.face_match_threshold); if (t) thresholdRef.current = t }).catch(() => {})
   }, [empId, token, authed])
   useEffect(() => { refreshStatus() }, [refreshStatus])
 
@@ -256,15 +258,25 @@ export default function PortalPage() {
       const faceapi = (window as any).faceapi
       const saved = await authed(`/api/v1/storeops/timeclock/face?action=descriptor`)
       const ref = new Float32Array(saved?.descriptor || [])
+      const thr = thresholdRef.current
       let best = 1, live: number[] | null = null
       for (let tries = 0; tries < 16; tries++) {
         live = await captureDescriptor()
-        if (live) { const dist = faceapi.euclideanDistance(new Float32Array(live), ref); if (dist < best) best = dist; if (dist < MATCH_THRESHOLD) break }
+        if (live) { const dist = faceapi.euclideanDistance(new Float32Array(live), ref); if (dist < best) best = dist; if (dist < thr) break }
         await wait(250)
       }
       const pct = Math.round((1 - Math.min(best, 1)) * 100)
-      if (best < MATCH_THRESHOLD) { setPhase(`Matched (${pct}%) — clocking you in…`); await finalizeClockIn(pct) }
-      else { setMsg(`Face didn't match (best ${pct}%). Try again in better light, or re-register.`); setBusy(false) }
+      if (best < thr) { setPhase(`Matched (${pct}%) — clocking you in…`); await finalizeClockIn(pct) }
+      else {
+        setMsg(`Face didn't match (best ${pct}%). Try again in better light, or re-register — a manager can also approve you.`); setBusy(false)
+        // Log the false-reject so admins can see recurring issues + the fix (Failure Logs module). Best-effort.
+        authed('/api/v1/core/failures', { method: 'POST', body: JSON.stringify({
+          category: 'face_mismatch', source: 'kiosk/clock-in', store_code: selStore || undefined,
+          employee_name: (user as any)?.full_name || (user as any)?.name || email || undefined,
+          message: `Face didn't match at clock-in (best ${pct}%).`,
+          detail: { best_pct: pct, best_distance: Number(best.toFixed(3)), threshold: thr },
+        }) }).catch(() => {})
+      }
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)); setBusy(false) }
   }
 

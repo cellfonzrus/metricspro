@@ -495,6 +495,7 @@ SETTING_AREAS = [
     {"key": "expenses",          "label": "Store Expenses"},
     {"key": "labels",            "label": "Display Labels"},
     {"key": "menu",              "label": "Menu Layout"},
+    {"key": "failures",          "label": "Failure Logs (clock-in sensitivity, logged categories)"},
 ]
 
 
@@ -542,6 +543,188 @@ async def list_setting_areas(authorization: str = Header(default="")):
     caller = _resolve_caller(sb(), uid) if uid else None
     return {"areas": SETTING_AREAS,
             "can_edit": {a["key"]: _can_edit_setting(caller, a["key"]) for a in SETTING_AREAS}}
+
+
+# ── Failure Logs ─────────────────────────────────────────────────────────────────────────────
+# A system log of failures the app hits (e.g. a valid rep rejected by kiosk face-match) WITH a
+# how-to-fix note, so admins can diagnose recurring issues. Admin-only by default; grant the /failures
+# page to any role to share it (RBAC). Writes are best-effort and never raise to the caller.
+FAILURE_TYPES = {
+    "face_mismatch": {
+        "label": "Clock-in face didn't match",
+        "severity": "warning",
+        "remediation": ("The rep's enrolled face may be out of date (new glasses/beard, poor lighting, or a "
+                        "low-quality enrollment). Fixes: (1) have the rep tap 'Re-register my face' on the "
+                        "kiosk in good, even light; (2) if it's happening to many reps, raise 'Clock-in Face "
+                        "Sensitivity' on the Failure Logs page toward 0.65 (looser); (3) a manager can approve "
+                        "the punch right away via the kiosk manager override."),
+    },
+    "clock_in_location": {
+        "label": "Clock-in blocked by location/schedule",
+        "severity": "info",
+        "remediation": ("The rep isn't at their home / scheduled / floater store. Add the shift, mark them a "
+                        "floater for that store, or a manager can approve the punch via override."),
+    },
+    "upload_rejected": {
+        "label": "Data upload rejected",
+        "severity": "error",
+        "remediation": ("A file failed ingest (wrong layout / missing columns / price-guard). Confirm the file "
+                        "has the required columns and re-upload; for the daily sales feed the report must carry "
+                        "Ext Price + GP."),
+    },
+    "sweep_error": {
+        "label": "Email/portal import error",
+        "severity": "error",
+        "remediation": ("An automated import run failed. Check /commcalc/email-imports last_status + Test "
+                        "connection; verify the mailbox credentials and the filename patterns."),
+    },
+    "other": {"label": "Other", "severity": "warning",
+              "remediation": "Review the detail and resolve manually."},
+}
+
+
+def _can_view_failures(caller):
+    """Admin-only by default. A role can be GRANTED the module via the /failures page override (RBAC)."""
+    if not caller:
+        return False
+    if caller.get("super_admin"):
+        return True
+    perms = caller.get("perms") or {}
+    pg = (perms.get("pages") or {}).get("/failures")
+    if pg is not None:
+        return bool(pg)
+    return perms.get("scope") == "all" or (caller.get("role") or "").lower() == "admin"
+
+
+@router.get("/failure-types")
+async def failure_types(authorization: str = Header(default="")):
+    """The registry of known failure categories + default remediation (drives filters / UI)."""
+    return {"types": [{"key": k, "label": v["label"], "severity": v["severity"],
+                       "remediation": v["remediation"]} for k, v in FAILURE_TYPES.items()]}
+
+
+@router.post("/failures")
+async def record_failure(body: dict, authorization: str = Header(default="")):
+    """Record a failure (best-effort — never raises). Any authed surface may call it; org comes from the
+    caller (falls back to body/house org for system callers). Remediation is auto-filled by category, and a
+    category the tenant has DISABLED is silently skipped (configurable)."""
+    uid = _uid_from_token(authorization)
+    client = sb()
+    caller = _resolve_caller(client, uid) if uid else None
+    org_id = (caller["org_id"] if caller else None) or body.get("org_id") or ORG_ID
+    category = (body.get("category") or "other").strip().lower()
+    try:
+        t = _tenant_row(client, org_id) or {}
+        disabled = [str(d).strip().lower() for d in (t.get("failure_log_disabled_categories") or [])]
+    except Exception:
+        disabled = []
+    if category in disabled:
+        return {"ok": True, "logged": False, "reason": "category disabled"}
+    meta = FAILURE_TYPES.get(category, FAILURE_TYPES["other"])
+    row = {
+        "org_id": org_id, "category": category,
+        "severity": (body.get("severity") or meta["severity"]),
+        "source": (body.get("source") or "")[:200] or None,
+        "employee_id": body.get("employee_id"),
+        "employee_name": (body.get("employee_name") or "")[:200] or None,
+        "store_code": (body.get("store_code") or "")[:80] or None,
+        "message": (body.get("message") or meta["label"])[:1000],
+        "detail": body.get("detail"),
+        "remediation": body.get("remediation") or meta["remediation"],
+    }
+    try:
+        r = client.schema("core").table("failure_log").insert(row).execute()
+        return {"ok": True, "logged": True, "id": (r.data[0]["id"] if r.data else None)}
+    except Exception as e:
+        return {"ok": False, "logged": False, "error": str(e)}
+
+
+@router.get("/failures")
+async def list_failures(authorization: str = Header(default=""), status: str = "", category: str = "", limit: int = 300):
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    caller = _resolve_caller(client, uid)
+    if not _can_view_failures(caller):
+        raise HTTPException(403, "Failure Logs are admin-only. Grant the /failures page to a role to share it.")
+    q = client.schema("core").table("failure_log").select("*").eq("org_id", caller["org_id"])
+    if status:
+        q = q.eq("status", status)
+    if category:
+        q = q.eq("category", category)
+    try:
+        rows = q.order("created_at", desc=True).limit(min(max(limit, 1), 1000)).execute().data or []
+    except Exception as e:
+        raise HTTPException(500, f"failure_log unavailable (run migration 112?): {e}")
+    open_n = sum(1 for r in rows if r.get("status") == "open")
+    return {"failures": rows, "open_count": open_n, "can_configure": _can_edit_setting(caller, "failures")}
+
+
+@router.patch("/failures/{fid}")
+async def update_failure(fid: str, body: dict, authorization: str = Header(default="")):
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    caller = _resolve_caller(client, uid)
+    if not _can_view_failures(caller):
+        raise HTTPException(403, "admin only")
+    patch = {}
+    if "status" in body:
+        patch["status"] = (body.get("status") or "open").strip().lower()
+        patch["resolved_at"] = datetime.now(timezone.utc).isoformat() if patch["status"] != "open" else None
+        patch["resolved_by"] = (caller.get("role") or "admin")
+    if "resolved_note" in body:
+        patch["resolved_note"] = body.get("resolved_note")
+    if not patch:
+        raise HTTPException(400, "nothing to update")
+    client.schema("core").table("failure_log").update(patch).eq("org_id", caller["org_id"]).eq("id", fid).execute()
+    return {"ok": True, "id": fid}
+
+
+@router.get("/failures/config")
+async def get_failures_config(authorization: str = Header(default="")):
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    caller = _resolve_caller(client, uid)
+    if not _can_view_failures(caller):
+        raise HTTPException(403, "admin only")
+    t = _tenant_row(client, caller["org_id"]) or {}
+    thr = t.get("face_match_threshold")
+    return {
+        "face_match_threshold": float(thr) if thr is not None else 0.60,
+        "disabled_categories": t.get("failure_log_disabled_categories") or [],
+        "types": [{"key": k, "label": v["label"]} for k, v in FAILURE_TYPES.items()],
+        "can_configure": _can_edit_setting(caller, "failures"),
+    }
+
+
+@router.put("/failures/config")
+async def put_failures_config(body: dict, authorization: str = Header(default="")):
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    caller = _resolve_caller(client, uid)
+    if not _can_edit_setting(caller, "failures"):
+        raise HTTPException(403, "you don't have permission to configure Failure Logs")
+    patch = {}
+    if "face_match_threshold" in body:
+        try:
+            v = float(body["face_match_threshold"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "face_match_threshold must be a number")
+        patch["face_match_threshold"] = max(0.45, min(0.72, v))  # clamp to a safe band
+    if "disabled_categories" in body:
+        dc = body.get("disabled_categories") or []
+        patch["failure_log_disabled_categories"] = [str(x).strip().lower() for x in dc if str(x).strip()]
+    if not patch:
+        raise HTTPException(400, "nothing to update")
+    client.schema("storeops").table("tenants").update(patch).eq("org_id", caller["org_id"]).execute()
+    return {"ok": True, **patch}
 
 
 @router.get("/tenant-settings")

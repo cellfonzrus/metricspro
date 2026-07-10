@@ -1094,6 +1094,28 @@ def timeclock_list(start: str = "", end: str = "", employee_id: str = "", author
     return rows
 
 
+# ── kiosk clock-in config (configurable face-match sensitivity) ───────────────────────────────
+@router.get("/timeclock/config")
+def timeclock_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Kiosk clock-in config for the caller's tenant. face_match_threshold = the face-api Euclidean-distance
+    cutoff; HIGHER = looser = fewer false rejects for the same rep. Any authed user may read. Default 0.60
+    (face-api's own default) when unset or migration 112 hasn't run. Set it on the Failure Logs page."""
+    thr = None
+    try:
+        t = (sb().table("tenants").select("face_match_threshold").eq("org_id", org_id).limit(1).execute().data) or []
+        if t:
+            thr = t[0].get("face_match_threshold")
+    except Exception:
+        thr = None
+    try:
+        thr = float(thr) if thr is not None else 0.60
+    except (TypeError, ValueError):
+        thr = 0.60
+    # clamp to the same safe band the setter enforces
+    thr = max(0.45, min(0.72, thr))
+    return {"face_match_threshold": thr}
+
+
 # ── face recognition (face-api.js 128-float descriptors) ──────────────────────────────────────
 @router.get("/timeclock/face")
 def get_face(authorization: str = Header(default=""), action: str = "", org_id: str = ORG_ID):
