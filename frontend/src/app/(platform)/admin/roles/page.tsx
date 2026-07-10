@@ -70,6 +70,7 @@ export default function RolesAdminPage() {
   const [markets, setMarkets] = useState<string[]>([])             // distinct markets → checkbox picker
   const [stores, setStores] = useState<{ code: string; label: string }[]>([])  // store dropdown source
   const [newRole, setNewRole] = useState({ name: '', display: '' })            // add-a-role form
+  const [settingAreas, setSettingAreas] = useState<{ key: string; label: string }[]>([])  // per-setting edit toggles
 
   async function loadAll() {
     setLoading(true)
@@ -89,6 +90,10 @@ export default function RolesAdminPage() {
           .filter((s: any) => s.code)
           .sort((a: any, b: any) => a.code.localeCompare(b.code)))
       } catch { /* stores/markets are best-effort */ }
+      try {
+        const sa = await api('/api/v1/core/setting-areas')
+        setSettingAreas(sa.areas || [])
+      } catch { /* setting areas are best-effort */ }
     } catch (err: any) { setMsg('Load failed: ' + (err?.message || err)) }
     setLoading(false)
   }
@@ -485,6 +490,28 @@ export default function RolesAdminPage() {
                           </label>
                         )
                       })}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Settings editing</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6, maxWidth: 240 }}>
+                      Which settings this role may change. Company admins (scope = whole company) edit all by
+                      default — grant a specific setting to a manager, or untick to lock it for this role.
+                    </div>
+                    <div style={{ display: 'grid', gap: 2 }}>
+                      {settingAreas.map(a => {
+                        const sv = (p.settings || {})[a.key]
+                        const adminDefault = (p.scope || 'all') === 'all'
+                        const checked = sv === undefined ? adminDefault : !!sv
+                        return (
+                          <label key={a.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                            <input type="checkbox" checked={checked}
+                              onChange={ev => setPerm(r.id, pp => ({ ...pp, settings: { ...(pp.settings || {}), [a.key]: ev.target.checked } }))} />
+                            {a.label}
+                          </label>
+                        )
+                      })}
+                      {settingAreas.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>—</span>}
                     </div>
                   </div>
                 </div>

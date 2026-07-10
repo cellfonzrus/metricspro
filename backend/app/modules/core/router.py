@@ -479,6 +479,71 @@ def _tenant_row(client, org_id):
     return r[0] if r else None
 
 
+# ── Per-setting edit permissions ─────────────────────────────────────────────────────────────
+# Every editable settings area is registered here so a tenant admin can grant/deny editing of each
+# one PER ROLE (permissions.settings[<key>] = true/false), on top of the role's data scope. Add a
+# row here + gate the area's write endpoint with _can_edit_setting(caller, key) to make a new setting
+# permission-controlled.
+SETTING_AREAS = [
+    {"key": "pay_period",        "label": "Pay Period & Work-Week"},
+    {"key": "carriers",          "label": "Carrier Selection"},
+    {"key": "commission_rates",  "label": "Boost Commission Rates"},
+    {"key": "commission_plans",  "label": "Commission Plans & Payout Schedules"},
+    {"key": "targets",           "label": "Target Settings"},
+    {"key": "closing",           "label": "Daily Closing / Tender Fields"},
+    {"key": "kpi",               "label": "KPI Metrics"},
+    {"key": "expenses",          "label": "Store Expenses"},
+    {"key": "labels",            "label": "Display Labels"},
+    {"key": "menu",              "label": "Menu Layout"},
+]
+
+
+def _resolve_caller(client, uid):
+    """Resolve the signed-in user to {org_id, role, super_admin, perms}. perms is the role's
+    permissions JSONB (scope / modules / settings / ...). None if the login has no tenant."""
+    urow = (client.schema("storeops").table("app_users").select("org_id,role,super_admin")
+            .eq("auth_id", uid).limit(1).execute().data) or []
+    if not urow:
+        return None
+    u = urow[0]
+    org_id = u.get("org_id") or ORG_ID
+    perms = {}
+    if u.get("role"):
+        rr = (client.schema("storeops").table("roles").select("permissions")
+              .eq("org_id", org_id).eq("name", u["role"]).limit(1).execute().data) or []
+        if rr:
+            perms = rr[0].get("permissions") or {}
+    return {"org_id": org_id, "role": u.get("role"), "super_admin": bool(u.get("super_admin")), "perms": perms}
+
+
+def _can_edit_setting(caller, area):
+    """True if this caller may EDIT the given settings area. Precedence:
+      1. super_admin              -> always yes.
+      2. explicit role grant/deny -> permissions.settings[area] (true/false) wins, even for an admin
+         (so an owner can DISABLE a specific setting for a manager, or GRANT one setting to a manager).
+      3. default                  -> a full-scope admin (scope='all' or the 'admin' role) edits every
+         setting; anyone else cannot."""
+    if not caller:
+        return False
+    if caller.get("super_admin"):
+        return True
+    perms = caller.get("perms") or {}
+    s = perms.get("settings") or {}
+    if area in s:
+        return bool(s[area])
+    return (perms.get("scope") == "all") or ((caller.get("role") or "").lower() == "admin")
+
+
+@router.get("/setting-areas")
+async def list_setting_areas(authorization: str = Header(default="")):
+    """The registry of permission-controlled settings areas (drives the Roles UI toggles). Also returns
+    which areas the CALLER can edit, so pages can gate their own edit affordances if they prefer."""
+    uid = _uid_from_token(authorization)
+    caller = _resolve_caller(sb(), uid) if uid else None
+    return {"areas": SETTING_AREAS,
+            "can_edit": {a["key"]: _can_edit_setting(caller, a["key"]) for a in SETTING_AREAS}}
+
+
 @router.get("/tenant-settings")
 async def get_tenant_settings(authorization: str = Header(default="")):
     """The signed-in user's OWN tenant pay-period settings + a worked example of upcoming periods.
@@ -487,16 +552,15 @@ async def get_tenant_settings(authorization: str = Header(default="")):
     if not uid:
         raise HTTPException(401, "not authenticated")
     client = sb()
-    urow = (client.schema("storeops").table("app_users").select("org_id,role")
-            .eq("auth_id", uid).limit(1).execute().data) or []
-    if not urow:
+    caller = _resolve_caller(client, uid)
+    if not caller:
         raise HTTPException(403, "no tenant for this login")
-    org_id = urow[0].get("org_id") or ORG_ID
+    org_id = caller["org_id"]
     t = _tenant_row(client, org_id) or {}
     s = _pp_settings(t)
     return {"org_id": org_id, "name": t.get("name"), "settings": s,
             "setup_complete": bool(t.get("setup_complete")),
-            "can_edit": (urow[0].get("role") or "").lower() == "admin",
+            "can_edit": _can_edit_setting(caller, "pay_period"),
             "preview": _next_periods(s)}
 
 
@@ -509,14 +573,12 @@ async def put_tenant_settings(body: dict, authorization: str = Header(default=""
     if not uid:
         raise HTTPException(401, "not authenticated")
     client = sb()
-    urow = (client.schema("storeops").table("app_users").select("org_id,role,super_admin")
-            .eq("auth_id", uid).limit(1).execute().data) or []
-    if not urow:
+    caller = _resolve_caller(client, uid)
+    if not caller:
         raise HTTPException(403, "no tenant for this login")
-    caller = urow[0]
-    org_id = (body.get("org_id") if caller.get("super_admin") else None) or caller.get("org_id") or ORG_ID
-    if not (caller.get("super_admin") or (caller.get("role") or "").lower() == "admin"):
-        raise HTTPException(403, "only a tenant admin can change pay-period settings")
+    org_id = (body.get("org_id") if caller["super_admin"] else None) or caller["org_id"] or ORG_ID
+    if not _can_edit_setting(caller, "pay_period"):
+        raise HTTPException(403, "you don't have permission to edit pay-period settings")
     upd = {}
     for k in _PP_FIELDS:
         if k in body:
