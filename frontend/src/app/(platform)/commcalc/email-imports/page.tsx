@@ -44,6 +44,19 @@ export default function EmailImportsPage() {
   const [srcReady, setSrcReady] = useState(true)
   const [srcDraft, setSrcDraft] = useState<any>(null)   // add/edit form for a data-source login
   const [srcMsg, setSrcMsg] = useState('')
+  const [proxyTest, setProxyTest] = useState<any>(null) // { proxy, direct, routed_through_proxy, is_us, summary }
+  const [proxyBusy, setProxyBusy] = useState(false)
+
+  async function testProxy() {
+    const px = (srcDraft?.proxy_url || '').trim()
+    if (!px) { setProxyTest({ summary: 'Enter a proxy URL first (http://user:pass@host:port).' }); return }
+    setProxyBusy(true); setProxyTest(null)
+    try {
+      const r = await api('/api/v1/commcalc/data-source/test-proxy', { method: 'POST', body: JSON.stringify({ proxy_url: px }) })
+      setProxyTest(r)
+    } catch (e: any) { setProxyTest({ summary: '❌ ' + (e?.message || e) }) }
+    finally { setProxyBusy(false) }
+  }
   const [carriers, setCarriers] = useState<any[]>([])
   const [distributors, setDistributors] = useState<any[]>([])
   const [twoFa, setTwoFa] = useState<any>(null)     // { source, hint } while a 2FA code is needed
@@ -503,8 +516,24 @@ export default function EmailImportsPage() {
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Password{srcDraft.id ? ' (blank = keep saved)' : ''}<br />
                 <input type="password" style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.password || ''} onChange={e => setSrcDraft({ ...srcDraft, password: e.target.value })} /></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Egress proxy (optional)<br />
-                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="http://user:pass@host:port" value={srcDraft.proxy_url || ''} onChange={e => setSrcDraft({ ...srcDraft, proxy_url: e.target.value })} /></label>
+                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  <input style={{ flex: 1, padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13 }} placeholder="http://user:pass@host:port" value={srcDraft.proxy_url || ''} onChange={e => setSrcDraft({ ...srcDraft, proxy_url: e.target.value })} />
+                  <button type="button" className="btn btn-secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }} disabled={proxyBusy} onClick={testProxy}>{proxyBusy ? 'Testing…' : '🧪 Test proxy'}</button>
+                </div></label>
             </div>
+            {proxyTest && (
+              <div style={{ margin: '0 0 8px', padding: '8px 10px', borderRadius: 8, fontSize: 12.5,
+                background: proxyTest.proxy?.ok ? (proxyTest.routed_through_proxy && proxyTest.is_us ? '#ecfdf5' : '#fffbeb') : '#fef2f2',
+                border: `1px solid ${proxyTest.proxy?.ok ? (proxyTest.routed_through_proxy && proxyTest.is_us ? '#a7f3d0' : '#fde68a') : '#fecaca'}` }}>
+                <div style={{ fontWeight: 600 }}>{proxyTest.summary}</div>
+                {proxyTest.proxy?.ok && (
+                  <div style={{ color: 'var(--text2)', marginTop: 3 }}>
+                    Egress IP <b>{proxyTest.proxy.ip}</b> · {proxyTest.proxy.city || '?'}, {proxyTest.proxy.region || '?'} {proxyTest.proxy.country || '?'} · {proxyTest.proxy.org || ''} · {proxyTest.proxy.elapsed_ms}ms
+                    {proxyTest.direct?.ip && <span style={{ color: 'var(--text3)' }}> · (server’s own IP: {proxyTest.direct.ip})</span>}
+                  </div>
+                )}
+              </div>
+            )}
             <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 8px' }}>
               💡 If Log in returns “Something doesn&apos;t look right” / an anti-bot page, the portal is blocking the
               server&apos;s datacenter IP. Enter a <b>residential / allow-listed proxy</b> above to route the login

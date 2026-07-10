@@ -8549,6 +8549,51 @@ def delete_data_source(sid: str, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+@router.post("/data-source/test-proxy")
+def test_proxy(body: dict, org_id: str = ORG_ID):
+    """Make ONE request through the given proxy_url to an IP-echo, so an operator can confirm a
+    residential/allow-listed proxy WORKS (and see the egress IP + country) BEFORE fighting a portal's 2FA.
+    Also probes the server's OWN egress (no proxy) for comparison, so 'routed through proxy' is provable.
+    Read-only; nothing is stored."""
+    proxy_url = (body.get("proxy_url") or "").strip()
+    if not proxy_url:
+        raise HTTPException(400, "enter a proxy_url first (http://user:pass@host:port)")
+    import time, requests
+
+    def _probe(px):
+        proxies = {"http": px, "https": px} if px else None
+        t0 = time.time()
+        try:
+            r = requests.get("https://ipinfo.io/json", proxies=proxies, timeout=15,
+                             headers={"User-Agent": "MetricsPro-proxy-test/1.0"})
+            ms = int((time.time() - t0) * 1000)
+            if r.status_code != 200:
+                return {"ok": False, "error": f"HTTP {r.status_code} from ipinfo", "elapsed_ms": ms}
+            d = r.json()
+            return {"ok": True, "ip": d.get("ip"), "city": d.get("city"), "region": d.get("region"),
+                    "country": d.get("country"), "org": d.get("org"), "elapsed_ms": ms}
+        except Exception as e:
+            msg = str(e)
+            if "SOCKS" in msg or "Missing dependencies" in msg:
+                msg = "SOCKS proxy needs the PySocks dependency — use an http:// proxy endpoint instead."
+            return {"ok": False, "error": msg[:300], "elapsed_ms": int((time.time() - t0) * 1000)}
+
+    via = _probe(proxy_url)
+    direct = _probe(None)
+    routed = bool(via.get("ok") and via.get("ip") and via.get("ip") != direct.get("ip"))
+    return {
+        "proxy": via, "direct": direct,
+        "routed_through_proxy": routed,
+        "is_us": (via.get("country") == "US") if via.get("ok") else None,
+        "summary": (
+            f"✅ Working — egress {via.get('ip')} ({via.get('city') or '?'}, {via.get('country') or '?'})"
+            + ("" if routed else " ⚠️ but it matches the server's own IP — traffic may NOT be going through the proxy")
+            + ("" if via.get("country") == "US" else " ⚠️ not a US IP")
+            if via.get("ok") else f"❌ {via.get('error')}"
+        ),
+    }
+
+
 @router.post("/data-sources/{sid}/run")
 async def run_data_source(sid: str, org_id: str = ORG_ID):
     """Pull now from this login. Dispatches to the processor's scraper when one is wired; until
