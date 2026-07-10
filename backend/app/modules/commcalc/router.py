@@ -1652,6 +1652,95 @@ def payout_plans_overview(org_id: str = ORG_ID):
     }
 
 
+@router.get("/payout-plans/diagnose")
+def payout_plans_diagnose(period: str, org_id: str = ORG_ID):
+    """WHY aren't reps showing in the commission report for this period? Read-only. Reports the rep-roster
+    sources (raw_sales / raw_mi), configured plans + assignments, what the plan + installment engines WOULD
+    produce, the current rep_commissions count, and a plain-language reason list. Drives the Overview
+    'Why is my report empty?' panel."""
+    require_org(org_id)
+    client = sb()
+    from app.modules.commcalc import commission_engine, installment_engine
+
+    def _roster(table, col):
+        rows, start, page, names = 0, 0, 1000, {}
+        while True:
+            try:
+                chunk = (client.schema('commcalc').table(table).select(col)
+                         .eq('org_id', org_id).in_('period', _pvariants(period))
+                         .range(start, start + page - 1).execute().data) or []
+            except Exception:
+                break
+            for r in chunk:
+                v = str(r.get(col) or '').strip()
+                if v:
+                    names[v.upper()] = names.get(v.upper(), 0) + 1
+            rows += len(chunk)
+            if len(chunk) < page:
+                break
+            start += page
+        return rows, sorted(names.keys())
+
+    sales_n, sales_reps = _roster('raw_sales', 'salesperson')
+    mi_n, mi_reps = _roster('raw_mi', 'epay_salesperson')
+    carriers = (client.schema('commcalc').table('carrier').select('*').eq('org_id', org_id).execute().data) or []
+    mode = _resolve_carrier_mode(carriers)
+
+    plans, _ready = commission_engine._load_plans(client, org_id)
+    plan_info = [{"name": p.get("name"), "carrier_id": p.get("carrier_id"),
+                  "is_active": p.get("is_active", True), "rules": len(p.get("rules") or []),
+                  "assignments": [{"scope": a.get("scope"), "value": a.get("scope_value")}
+                                  for a in (p.get("assignments") or [])]} for p in plans]
+    n_assign = sum(len(p.get("assignments") or []) for p in plans)
+    scoped = [a for p in plans for a in (p.get('assignments') or []) if a.get('scope') in ('market', 'store')]
+
+    try:
+        prev = commission_engine.preview(client, org_id, period)
+    except Exception as e:
+        prev = {"by_rep": [], "note": f"preview error: {e}"}
+    try:
+        inst = installment_engine.compute_installments(client, org_id, period, persist=False)
+    except Exception as e:
+        inst = {"by_rep": {}, "totals": {"reps": 0}, "note": f"installment error: {e}"}
+    scheds = (client.schema('commcalc').table('payout_schedule').select('id')
+              .eq('org_id', org_id).eq('is_active', True).execute().data) or []
+    rc = (client.schema('commcalc').table('rep_commissions').select('epay_salesperson')
+          .eq('org_id', org_id).in_('period', _pvariants(period)).limit(5000).execute().data) or []
+
+    prev_reps = [r.get("rep") for r in (prev.get("by_rep") or [])]
+    inst_reps = list((inst.get("by_rep") or {}).keys())
+    reasons = []
+    if mode == 'boost':
+        reasons.append("Carrier mode is BOOST for this org — it runs the Boost engine, not commission plans. If it should run plans (Total), set its DEFAULT carrier to a non-Boost carrier on tenant Carriers / Carrier Mapping.")
+    if sales_n == 0:
+        reasons.append("No raw_sales for this period. Commission-PLAN pay is computed from sale LINES, so plan reps come only from sales; with no sales, reps can come only from multi-month installments (raw_mi) or a carrier statement." + (" (In Boost mode this ABORTS the whole calc — now fixed for plan mode.)" if mode == 'boost' else ""))
+    if not plans:
+        reasons.append("No commission plans configured for this org.")
+    elif n_assign == 0:
+        reasons.append("Plans exist but have NO rep assignments — no rep is covered. Assign each plan to employees/stores/markets on Commission Plans.")
+    if scheds and mi_n == 0:
+        reasons.append("Payout schedules exist but there is no raw_mi for this period — multi-month installments have no subscriber/rep rows to pay on. Import the carrier MI/commission file for this period.")
+    if scoped:
+        reasons.append(f"{len(scoped)} assignment(s) use STORE/MARKET scope — those attach to a rep only if the rep's store (raw_sales.store) resolves to that store/market via Store Matching. An unmapped store → the plan won't attach. If unsure, use EMPLOYEE-scope assignments (rep name must match raw_sales.salesperson / raw_mi rep).")
+    if not prev_reps and not inst_reps:
+        reasons.append("Neither the plan engine nor the installment engine produced ANY rep for this period → nothing to write. Fix the data/assignment issues above.")
+    elif len(rc) == 0:
+        reasons.append("The engines WOULD produce reps but rep_commissions is EMPTY — the calc has not been re-run since setup. Click Run Calculation for this period (POST /calculate).")
+    if not reasons:
+        reasons.append("Engines produced reps and rep_commissions has rows — the report should be populated. If it isn't, check the report's period selector and any rep/store filters.")
+
+    return {
+        "period": period, "carrier_mode": mode,
+        "sales": {"rows": sales_n, "reps": sales_reps},
+        "raw_mi": {"rows": mi_n, "reps": mi_reps},
+        "plans": plan_info, "assignments_total": n_assign, "schedules": len(scheds),
+        "plan_engine": {"reps": prev_reps, "note": prev.get("note")},
+        "installment_engine": {"reps": inst_reps, "totals": inst.get("totals"), "note": inst.get("note")},
+        "rep_commissions_now": len(rc),
+        "reasons": reasons,
+    }
+
+
 # ── Generic column mapping (A2) — config-driven, any-carrier ingestion ────────────────────────
 @router.get("/column-mapping/targets")
 def column_mapping_targets(report_key: str = "", org_id: str = ORG_ID):
@@ -4335,7 +4424,7 @@ def _resolve_carrier_mode(carriers):
     return 'plan'
 
 
-def _apply_new_engines(client, org_id, period, comms):
+def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost'):
     """ADDITIVE layer of the new configurable payout engines on top of the standard (Boost) calc.
 
     BOOST-SAFE: with no commcalc.payout_schedule and no commcalc.commission_plan, the installment + plan
@@ -4448,6 +4537,26 @@ def _apply_new_engines(client, org_id, period, comms):
             if cols["carrier_statement_comm"]:
                 newrow["carrier_statement_comm"] = stmt_by_rep.get(rn, 0.0)
             comms.append(newrow)
+
+        # PLAN MODE: reps paid ONLY via multi-month installments or a carrier statement (no base row and
+        # no commission plan) would otherwise be dropped. Capture them so a Total/plan tenant's report is
+        # complete. Boost/house-org unaffected (only runs when carrier_mode == 'plan').
+        if carrier_mode == 'plan':
+            represented = set()
+            for row in comms:
+                represented |= _keys(row)
+            for rn in (set(inst_by_rep) | set(stmt_by_rep)) - represented:
+                inst = inst_by_rep.get(rn, 0.0)
+                newrow = {"org_id": org_id, "period": period,
+                          "period_month": pm.get("month"), "period_year": pm.get("year"),
+                          "storeops_name": rn.title(), "epay_salesperson": rn,
+                          "subtotal": 0.0, "tier": 1, "tier_source": "plan",
+                          "total_payout": round(safe_float(inst), 2)}
+                if cols["residual_installment_comm"]:
+                    newrow["residual_installment_comm"] = safe_float(inst)
+                if cols["carrier_statement_comm"]:
+                    newrow["carrier_statement_comm"] = stmt_by_rep.get(rn, 0.0)
+                comms.append(newrow)
         print(f"INFO new-engines applied org={org_id} period={period}: "
               f"plan_reps={len(plan_by_rep)} statement_reps={len(stmt_by_rep)} installment_reps={len(inst_by_rep)}")
         return comms
@@ -4520,14 +4629,17 @@ async def _run_calculation(period: str, org_id: str):
             r['category'] = cat_map.get(pt, 'Unknown')
         
         valid = [r for r in sales if str(r.get('voided','')).upper().strip() != 'YES' and str(r.get('trans_type','')).strip() != 'Return']
-        if not sales:
-            raise Exception(f"No sales data for {period}")
+        # (sales guard moved below the carrier gate — a plan-driven tenant may have no raw_sales)
         
         # Carrier gate: Boost tenants run the legacy verified engine; a tenant whose CHOSEN carrier
         # is explicitly non-Boost (e.g. Total / luxelink) skips the Boost tier/spiff math and is paid
         # ONLY from its configured Commission Plans + Payout Schedules (applied in _apply_new_engines).
         carrier_mode = _resolve_carrier_mode(fetch('carrier'))
         print(f"INFO calc org={org_id} period={period} carrier_mode={carrier_mode}")
+        # Boost needs sale lines for its spiff/tier math → abort if none. A plan-driven (non-Boost) tenant
+        # may legitimately have no raw_sales (paid from carrier statements / installments) → do NOT abort.
+        if not sales and carrier_mode == 'boost':
+            raise Exception(f"No sales data for {period}")
 
         # Run calculation
         result = calc_rep_commissions(
@@ -4546,7 +4658,7 @@ async def _run_calculation(period: str, org_id: str):
                 row['org_id'] = org_id
             # ADDITIVE: layer the new configurable engines (multi-month payout + commission plans) on top.
             # Boost-safe: with no schedule/plan configured this returns comms byte-identical (see helper).
-            comms = _apply_new_engines(client, org_id, period, comms)
+            comms = _apply_new_engines(client, org_id, period, comms, carrier_mode)
             for i in range(0, len(comms), 500):
                 client.schema('commcalc').table('rep_commissions').insert(comms[i:i+500]).execute()
         except Exception as e:

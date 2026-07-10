@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { usePeriod } from '@/lib/period-context'
 
 // Commission Payout Plans — the ONE place that answers "how does each carrier's rep get paid?".
 // It reads /payout-plans/overview, which uses the SAME carrier gate as the live calculator, so what
@@ -26,10 +27,26 @@ const PAYS: Record<string, { label: string; tone: string; href: string; cta: str
   unconfigured:     { label: 'Not configured yet',                     tone: '#dc2626',         href: '/commcalc/commission-plans', cta: 'Set up a plan' },
 }
 
+type Diag = {
+  period: string; carrier_mode: string
+  sales: { rows: number; reps: string[] }
+  raw_mi: { rows: number; reps: string[] }
+  plans: { name: string; carrier_id: string | null; is_active: boolean; rules: number; assignments: { scope: string; value: string | null }[] }[]
+  assignments_total: number; schedules: number
+  plan_engine: { reps: string[]; note: string | null }
+  installment_engine: { reps: string[]; totals: any; note: string | null }
+  rep_commissions_now: number
+  reasons: string[]
+}
+
 export default function PayoutPlansHub() {
+  const { period } = usePeriod()
   const [ov, setOv] = useState<Overview | null>(null)
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(true)
+  const [diag, setDiag] = useState<Diag | null>(null)
+  const [diagBusy, setDiagBusy] = useState(false)
+  const [diagErr, setDiagErr] = useState('')
 
   useEffect(() => {
     api('/api/v1/commcalc/payout-plans/overview')
@@ -37,6 +54,14 @@ export default function PayoutPlansHub() {
       .catch((e: any) => setErr(e?.message || String(e)))
       .finally(() => setLoading(false))
   }, [])
+
+  function runDiag() {
+    setDiagBusy(true); setDiagErr(''); setDiag(null)
+    api(`/api/v1/commcalc/payout-plans/diagnose?period=${encodeURIComponent(period)}`)
+      .then((d: Diag) => setDiag(d))
+      .catch((e: any) => setDiagErr(e?.message || String(e)))
+      .finally(() => setDiagBusy(false))
+  }
 
   const chip = (bg: string, color = '#fff') => ({
     padding: '2px 9px', borderRadius: 999, fontSize: 11, fontWeight: 700,
@@ -121,6 +146,62 @@ export default function PayoutPlansHub() {
             <span style={chip(ov.org_carrier_mode === 'boost' ? 'var(--accent)' : '#16a34a')}>
               {ov.org_carrier_mode === 'boost' ? 'BOOST ENGINE' : 'CONFIGURABLE PLANS'}
             </span>
+          </div>
+
+          {/* Diagnostic — why aren't reps captured in the report? */}
+          <div className="card" style={{ padding: 16, marginTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>🔎 Why aren’t reps showing in the commission report?</div>
+              <button className="btn btn-sm btn-primary" disabled={diagBusy} onClick={runDiag}>
+                {diagBusy ? 'Checking…' : `Run diagnostic for ${period}`}
+              </button>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>
+              Read-only. Checks the exact roster sources + plan/installment engines for this period and tells you what’s missing.
+            </div>
+            {diagErr && <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>Failed: {diagErr}</div>}
+            {diag && (
+              <div style={{ marginTop: 12 }}>
+                <ol style={{ margin: '0 0 12px 18px', fontSize: 13, lineHeight: 1.7 }}>
+                  {diag.reasons.map((r, i) => <li key={i} style={{ marginBottom: 4 }}>{r}</li>)}
+                </ol>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10, fontSize: 12.5 }}>
+                  {[
+                    ['Carrier mode', diag.carrier_mode.toUpperCase()],
+                    ['Sales rows', `${diag.sales.rows} (${diag.sales.reps.length} reps)`],
+                    ['raw_mi rows', `${diag.raw_mi.rows} (${diag.raw_mi.reps.length} reps)`],
+                    ['Plans', String(diag.plans.length)],
+                    ['Rep assignments', String(diag.assignments_total)],
+                    ['Payout schedules', String(diag.schedules)],
+                    ['Plan-engine reps', String(diag.plan_engine.reps.length)],
+                    ['Installment reps', String(diag.installment_engine.reps.length)],
+                    ['In report now', String(diag.rep_commissions_now)],
+                  ].map(([k, v]) => (
+                    <div key={k} className="card" style={{ padding: '8px 10px' }}>
+                      <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{k}</div>
+                      <div style={{ fontWeight: 700, marginTop: 2 }}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                {diag.plans.length > 0 && (
+                  <div style={{ marginTop: 12, fontSize: 12.5 }}>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>Plans &amp; assignments</div>
+                    {diag.plans.map((pl, i) => (
+                      <div key={i} style={{ padding: '4px 0', borderTop: '1px solid var(--border)' }}>
+                        <b>{pl.name}</b> — {pl.rules} rule(s), {pl.assignments.length} assignment(s)
+                        {pl.assignments.length > 0 && (
+                          <span style={{ color: 'var(--text3)' }}> · {pl.assignments.map(a => `${a.scope}=${a.value ?? '(any)'}`).join(', ')}</span>
+                        )}
+                        {!pl.is_active && <span style={{ color: '#dc2626' }}> · INACTIVE</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ marginTop: 10, fontSize: 12 }}>
+                  After fixing config, run <Link href="/commcalc" style={{ color: 'var(--accent)' }}>Dashboard → Run Calculation</Link> for {period}.
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}
