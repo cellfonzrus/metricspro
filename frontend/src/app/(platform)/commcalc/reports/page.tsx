@@ -23,6 +23,8 @@ interface Rep {
   acima_comm: number
   subtotal: number
   total_payout: number
+  residual_installment_comm?: number   // multi-month / Total-carrier installment pay (mig 057/078)
+  carrier_statement_comm?: number
 }
 
 const TABS = [
@@ -77,6 +79,10 @@ export default function ReportsPage() {
   })
 
   const currentRep = reps.find(r => r.epay_salesperson === selectedRep) || reps[0]
+  // Show the Installment column only when a rep actually has multi-month / Total-carrier pay (keeps the
+  // Boost view unchanged). residual_installment_comm + carrier_statement_comm are already inside Payout.
+  const instOf = (r: Rep) => (r.residual_installment_comm || 0) + (r.carrier_statement_comm || 0)
+  const hasInstallment = filtered.some(r => instOf(r) !== 0)
 
   const COMP_LABEL: Record<string, string> = { premium: 'Premium Activations', byod: 'BYOD Activations', upgrade: 'Device Upgrades', accessories: 'Accessories', setup: 'Setup Fees', acima: 'ACIMA Lease' }
   function openDrill(comp: string) {
@@ -166,17 +172,18 @@ export default function ReportsPage() {
                   <th>PA</th><th>BA</th><th>UA</th>
                   <th style={{ textAlign: 'right' }}>ACC GP</th>
                   <th style={{ textAlign: 'right' }}>ACIMA</th>
+                  {hasInstallment && <th style={{ textAlign: 'right' }} title="Multi-month / Total-carrier installment pay (already inside Payout)">Installment</th>}
                   <th style={{ textAlign: 'right' }}>Subtotal</th>
                   <th style={{ textAlign: 'right' }}>Payout</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={11} style={{ textAlign: 'center', padding: 40 }}>
+                  <tr><td colSpan={hasInstallment ? 12 : 11} style={{ textAlign: 'center', padding: 40 }}>
                     <div className="spinner" style={{ margin: '0 auto' }} />
                   </td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr><td colSpan={11} style={{ textAlign: 'center', color: 'var(--text3)', padding: 40 }}>
+                  <tr><td colSpan={hasInstallment ? 12 : 11} style={{ textAlign: 'center', color: 'var(--text3)', padding: 40 }}>
                     No data. Upload files and run calculation.
                   </td></tr>
                 ) : filtered.map((r, i) => (
@@ -200,6 +207,7 @@ export default function ReportsPage() {
                     <td style={{ textAlign: 'right', color: r.acima_comm > 0 ? '#7c3aed' : 'var(--text3)' }}>
                       {r.acima_comm > 0 ? fmt(r.acima_comm) : '—'}
                     </td>
+                    {hasInstallment && <td style={{ textAlign: 'right', color: instOf(r) ? '#0369a1' : 'var(--text3)' }}>{instOf(r) ? fmt(instOf(r)) : '—'}</td>}
                     <td style={{ textAlign: 'right' }}>{fmt(r.subtotal)}</td>
                     <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--accent)' }}>{fmt(r.total_payout)}</td>
                   </tr>
@@ -208,7 +216,9 @@ export default function ReportsPage() {
               {filtered.length > 0 && (
                 <tfoot>
                   <tr style={{ background: 'var(--surface2)', fontWeight: 700 }}>
-                    <td colSpan={10} style={{ textAlign: 'right', paddingRight: 8, color: 'var(--text2)' }}>Total:</td>
+                    <td colSpan={9} style={{ textAlign: 'right', paddingRight: 8, color: 'var(--text2)' }}>Total:</td>
+                    {hasInstallment && <td style={{ textAlign: 'right', color: '#0369a1' }}>{fmt(filtered.reduce((s, r) => s + instOf(r), 0))}</td>}
+                    <td style={{ textAlign: 'right', color: 'var(--text2)' }}>{fmt(filtered.reduce((s, r) => s + (r.subtotal || 0), 0))}</td>
                     <td style={{ textAlign: 'right', color: 'var(--accent)' }}>
                       {fmt(filtered.reduce((s, r) => s + r.total_payout, 0))}
                     </td>

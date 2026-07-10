@@ -124,6 +124,19 @@ export default function PayoutSchedulesPage() {
     try { setPreview(await api(`/api/v1/commcalc/payout-schedule/preview?period=${encodeURIComponent(period.trim())}`)) }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
   }
+  // Preview is read-only; THIS applies the saved schedules/plans to the live Rep Commission report by
+  // recomputing the period. Recompute can exceed the gateway timeout but still completes server-side.
+  async function recompute() {
+    if (!period.trim()) { setMsg('Enter a pay period (e.g. June 2026).'); return }
+    if (!confirm(`Recompute live commissions for ${period.trim()}?\n\nApplies your saved schedules/plans to the Rep Commission report. It can take a few minutes.`)) return
+    setBusy(true); setMsg('⏳ Recomputing ' + period.trim() + ' — this can take a few minutes and may look like it times out; the report updates when it finishes. Don’t re-run it.')
+    try {
+      await api(`/api/v1/commcalc/calculate/${encodeURIComponent(period.trim())}`, { method: 'POST' })
+      setMsg('✅ Recompute finished — open the Rep Commission report for ' + period.trim() + '.')
+    } catch {
+      setMsg('⏳ Recompute is running (the request timed out at the gateway but completes server-side). Check the Rep Commission report for ' + period.trim() + ' in a minute.')
+    } finally { setBusy(false) }
+  }
   const carrierName = (id?: string | null) => carriers.find(c => c.id === id)?.name || (id ? 'carrier' : 'Any carrier')
 
   return (
@@ -365,6 +378,7 @@ export default function PayoutSchedulesPage() {
           <div style={{ fontWeight: 700, fontSize: 14 }}>🔎 Preview (read-only)</div>
           <input style={{ ...sel, width: 150 }} placeholder="Pay period e.g. June 2026" value={period} onChange={e => setPeriod(e.target.value)} />
           <button className="btn btn-primary" disabled={busy} onClick={runPreview}>{busy ? '…' : 'Run preview'}</button>
+          <button className="btn btn-secondary" disabled={busy} onClick={recompute} title="Apply the saved schedules/plans to the live Rep Commission report for this period">⚙️ Recompute live payout</button>
           {preview?.totals && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{fmt(preview.totals.amount)} · {preview.totals.reps} reps · {preview.totals.paid} paid / {preview.totals.withheld} withheld / {preview.totals.pending} pending</span>}
         </div>
         {preview?.note && <div style={{ fontSize: 13, color: 'var(--text3)' }}>{preview.note}</div>}
