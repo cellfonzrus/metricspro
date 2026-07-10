@@ -324,6 +324,71 @@ def _twofa_hint(page):
     return None
 
 
+# Buttons/links that DISPATCH a 2FA code (a human clicks these; a headless login that only DETECTS the
+# 2FA screen never receives a code). Ordered SMS-first (the common working channel), then generic send.
+_SEND_CODE_TEXTS = (
+    "send text", "text me", "send me a text", "send sms", "send code via text", "via text message",
+    "send code", "send a code", "send me a code", "send verification", "send security code",
+    "send passcode", "request code", "request a code", "get code", "get a code", "email me",
+    "send email", "send me the code", "resend code", "send the code",
+)
+
+
+def _trigger_2fa_send(page):
+    """Click the best 'Send code' / method (SMS/Email) control so the portal actually DISPATCHES the code.
+    Returns the clicked label, or None if none found. SAFE: never clicks a verify/submit/login/continue/
+    cancel control (those would submit an empty code or leave the page)."""
+    AVOID = ("verify", "confirm", "submit", "continue", "log in", "login", "sign in",
+             "cancel", "back", "next", "logout", "log out")
+    try:
+        frames = _frames(page)
+    except Exception:
+        frames = [page]
+    for want in _SEND_CODE_TEXTS:
+        for fr in frames:
+            try:
+                cands = fr.query_selector_all("button, input[type=submit], input[type=button], a, a[role=button]")
+            except Exception:
+                continue
+            for c in cands:
+                try:
+                    if not c.is_visible():
+                        continue
+                    label = (c.get_attribute("value") or c.inner_text() or "").strip().lower()
+                    if not label or len(label) > 40:
+                        continue
+                    if want in label and not any(a in label for a in AVOID):
+                        c.click()
+                        return label[:40]
+                except Exception:
+                    continue
+    return None
+
+
+def _twofa_result(page, ctx, extra=None):
+    """Build a needs_2fa result, first CLICKING a send-code control if the portal requires one (else no
+    code is dispatched). Captures sent_via + the page's clickable buttons (in diag) for calibration."""
+    sent = None
+    try:
+        sent = _trigger_2fa_send(page)
+    except Exception:
+        sent = None
+    if sent:
+        try:
+            page.wait_for_timeout(3000)
+            _wait_settle(page)
+        except Exception:
+            pass
+    diag = _snapshot(page)
+    if extra:
+        try:
+            diag = {**diag, **extra}
+        except Exception:
+            pass
+    return {"status": "needs_2fa", "storage_state": ctx.storage_state(),
+            "two_fa_hint": _twofa_hint(page), "sent_via": sent, "diag": diag}
+
+
 def _goto_login(page, base_url):
     """Navigate to the portal and settle. If it lands on the bot-wall with no form, retry straight
     at the id-server login endpoint (deep links are flagged more often than the login URL itself)."""
@@ -398,8 +463,7 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             state = _classify(page)
             diag = _snapshot(page)
             if state == "twofa":
-                return {"status": "needs_2fa", "storage_state": ctx.storage_state(),
-                        "two_fa_hint": _twofa_hint(page), "diag": diag}
+                return _twofa_result(page, ctx)
             if state == "authenticated":
                 return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": diag}
             if state == "botwall":
@@ -410,10 +474,7 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
                 raise VidaPayLoginError(
                     "Login was rejected — Account ID / User ID / Password not accepted (still on the "
                     "login form). Double-check the three credentials. Diagnostic: " + str(diag))
-            return {"status": "needs_2fa", "storage_state": ctx.storage_state(),
-                    "two_fa_hint": _twofa_hint(page),
-                    "diag": {**diag, "_note": "post-login page not recognized as 2FA or app; if no "
-                             "code field appears, send this diagnostic for calibration"}}
+            return _twofa_result(page, ctx, {"_note": "post-login page not recognized as 2FA or app; if no code field appears, send this diagnostic for calibration"})
         finally:
             browser.close()
 
@@ -559,8 +620,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                     d2 = {**d2, "filled": _filled}
                 except Exception:
                     pass
-                return {"status": "needs_2fa", "storage_state": ctx.storage_state(),
-                        "two_fa_hint": _twofa_hint(page), "diag": d2}
+                return _twofa_result(page, ctx, {"filled": _filled})
             state = _classify(page)
             diag = _snapshot(page)
             try:
@@ -568,8 +628,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
             except Exception:
                 pass
             if state == "twofa":
-                return {"status": "needs_2fa", "storage_state": ctx.storage_state(),
-                        "two_fa_hint": _twofa_hint(page), "diag": diag}
+                return _twofa_result(page, ctx, {"filled": _filled, "portal_error": _b2b_error(page)})
             if state == "authenticated":
                 return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": diag}
             if state == "botwall":
@@ -580,9 +639,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                     "Login rejected — still on the login form. What was typed + the portal's own error are in the "
                     "diagnostic (filled / portal_error) — if 'filled' shows your values, the creds/Access-Code are "
                     "being refused; if empty, the form didn't accept the fill. Diagnostic: " + str(diag))
-            return {"status": "needs_2fa", "storage_state": ctx.storage_state(),
-                    "two_fa_hint": _twofa_hint(page),
-                    "diag": {**diag, "_note": "post-login page not recognized as 2FA/app; send this diagnostic"}}
+            return _twofa_result(page, ctx, {"_note": "post-login page not recognized as 2FA/app; send this diagnostic"})
         finally:
             browser.close()
 

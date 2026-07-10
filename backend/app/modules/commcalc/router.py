@@ -8685,10 +8685,25 @@ def _do_portal_login(sid: str, org_id: str):
             .eq("id", sid).eq("org_id", org_id).execute()
         return
     hint = res.get("two_fa_hint")
+    sent_via = res.get("sent_via")
+    btns = []
+    try:
+        for c in ((res.get("diag") or {}).get("controls") or []):
+            v = (c.get("val") or "").strip()
+            if v and c.get("vis") and v.lower() not in [b.lower() for b in btns]:
+                btns.append(v)
+    except Exception:
+        btns = []
+    if sent_via:
+        amsg = f"Requested a code (clicked \u201c{sent_via}\u201d) \u2014 enter it below." + (f" Sent to: {hint}" if hint else "")
+    else:
+        amsg = "Enter the 2FA code." + (f" Sent to: {hint}" if hint else "")
+        if btns:
+            amsg += " If no code arrived, the portal likely needs a button clicked \u2014 buttons on the page: " + " | ".join(btns[:8])
     client.schema("commcalc").table("data_source").update(
         {"auth_status": "needs_2fa", "two_fa_hint": hint, "pending_state": res.get("storage_state"),
          "pending_started_at": now.isoformat(),
-         "auth_message": "Enter the 2FA code sent to you." + (f" ({hint})" if hint else ""),
+         "auth_message": amsg[:400],
          "last_run_at": now.isoformat()})\
         .eq("id", sid).eq("org_id", org_id).execute()
 
