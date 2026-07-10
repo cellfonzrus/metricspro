@@ -190,6 +190,10 @@ _SHRINK_RATIO = 0.5       # alert when the incoming count is < 50% of what it re
 BUILTIN_UPLOAD_TYPES = ["sales", "daily_sales", "payment_detail", "mi_report", "dlar_rep", "dlar_store",
                         "catalog", "master_cats", "comp_report", "inventory_aging", "x_report",
                         "ma_commission", "ma_daily_tx", "ma_fulfillment"]  # Total/VidaPay MA reports (mig 083)
+# Derived / summary b2b reports that have NO importer — a filename sweep may match them but we skip them
+# cleanly (not a hard error) so one un-ingestable attachment doesn't show as a failed sweep. A tenant that
+# wants one captured can register it under Data Imports → Custom Reports (report_definitions).
+KNOWN_IGNORED_TYPES = {"sales_trend"}
 CUSTOM_IMPORT_TABLE = "raw_custom_import"
 
 
@@ -290,6 +294,10 @@ async def upload_file(
         _rdef = _custom_report_def(sb(), org_id, file_type)
         if _rdef:
             return await _ingest_custom_report(file_type, file, period, org_id, _rdef)
+        if file_type in KNOWN_IGNORED_TYPES:
+            return {"status": "skipped", "file_type": file_type, "rows": 0,
+                    "reason": f"'{file_type}' is a derived report with no importer — ignored. "
+                              f"Register it under Data Imports → Custom Reports to capture it."}
         raise HTTPException(400, f"Unknown file type: {file_type}. Supported: {SUPPORTED}")
     
     contents = await file.read()

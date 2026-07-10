@@ -37,6 +37,8 @@ const blank = (): State => ({
 })
 // Total collected = the tender boxes ONLY. Accessory is declared separately (tallied vs sales), NOT a tender.
 const MONEY_KEYS: (keyof State)[] = ['t_cash', 't_credit', 't_ext_cc', 't_gift', 't_store_acct', 't_zelle', 't_acima']
+// The 7 built-in tender_keys that map to physical t_* columns; anything else is a custom tender (mig 111).
+const STD_KEYS = ['cash', 'credit', 'ext_cc', 'gift', 'store_acct', 'zelle', 'acima']
 
 export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitted }:
   { defaultEmployeeName?: string; onSubmitted?: () => void }) {
@@ -50,10 +52,12 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [ocrCash, setOcrCash] = useState('')
   const [ocrAmounts, setOcrAmounts] = useState<number[]>([])
   const [ocrBusy, setOcrBusy] = useState(false)
+  const [tdefs, setTdefs] = useState<any[] | null>(null)     // configured tenders (null = built-in 7, static)
+  const [tv, setTv] = useState<Record<string, string>>({})   // amount per configured tender_key
 
   const set = (patch: Partial<State>) => setF(p => ({ ...p, ...patch }))
 
-  const enteredCash = parseFloat(f.t_cash) || 0
+  const enteredCash = parseFloat(tdefs ? (tv['cash'] || '') : f.t_cash) || 0
   const ocrNum = parseFloat(ocrCash) || 0
   const ocrMismatch = ocrCash !== '' && Math.abs(ocrNum - enteredCash) > 1
 
@@ -81,6 +85,8 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   }
 
   useEffect(() => { api('/api/v1/closing/stores').then(s => setStores(s || [])).catch(() => {}) }, [])
+  // Configured tenders (mig 111): render the tenant's own tender fields; null → the built-in 7 (static).
+  useEffect(() => { api('/api/v1/closing/tender-config').then((d: any) => setTdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setTdefs(null)) }, [])
   useEffect(() => { if (defaultEmployeeName && !f.employee_name) set({ employee_name: defaultEmployeeName }) }, [defaultEmployeeName]) // eslint-disable-line
 
   const loadRecent = useCallback(() => {
@@ -101,12 +107,26 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     if (!f.employee_name.trim()) { setMsg('❌ Enter your name.'); return }
     if ((parseFloat(f.expense_amount) || 0) > 0 && !f.expense_description.trim()) { setMsg('❌ Describe the expense before submitting.'); return }
     setBusy(true); setMsg('')
+    // Build the tender fields: configured tenders → standard keys to t_*, custom keys to custom_tenders;
+    // no config → the static t_* fields (unchanged behaviour).
+    let tenderFields: any
+    let customTenders: any = undefined
+    if (tdefs) {
+      tenderFields = {}; customTenders = {}
+      for (const d of tdefs) {
+        const val = tv[d.tender_key] || ''
+        if (STD_KEYS.includes(d.tender_key)) tenderFields['t_' + d.tender_key] = val
+        else customTenders[d.tender_key] = val
+      }
+    } else {
+      tenderFields = { t_cash: f.t_cash, t_credit: f.t_credit, t_ext_cc: f.t_ext_cc,
+        t_gift: f.t_gift, t_store_acct: f.t_store_acct, t_zelle: f.t_zelle, t_acima: f.t_acima }
+    }
     try {
       const r = await api('/api/v1/closing/row', { method: 'POST', body: JSON.stringify({
         close_date: f.close_date, sfid: f.sfid, store_code: f.store_code, store_name: f.store_name,
         employee_name: f.employee_name.trim(),
-        t_cash: f.t_cash, t_credit: f.t_credit, t_ext_cc: f.t_ext_cc,
-        t_gift: f.t_gift, t_store_acct: f.t_store_acct, t_zelle: f.t_zelle, t_acima: f.t_acima,
+        ...tenderFields, custom_tenders: customTenders,
         epay_on_cash: f.epay_on_cash, epay_on_credit: f.epay_on_credit, epay_on_acima: f.epay_on_acima,
         acc_sale: f.acc_sale,
         expense_amount: f.expense_amount, expense_description: f.expense_description.trim(),
@@ -131,6 +151,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
       setF(p => ({ ...p, t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', epay_on_cash: '', epay_on_credit: '', epay_on_acima: '', acc_sale: '',
         expense_amount: '', expense_description: '',
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))
+      setTv({})
       setEnvPreview(''); setOcrCash(''); setOcrAmounts([])
       loadRecent()
       onSubmitted?.()
@@ -139,7 +160,9 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   }
 
   const storeIdx = stores.findIndex(s => (f.sfid && s.sfid === f.sfid) || (!f.sfid && f.store_code && s.store_code === f.store_code))
-  const total = MONEY_KEYS.reduce((a, k) => a + (parseFloat(f[k] as string) || 0), 0)
+  const total = tdefs
+    ? tdefs.reduce((a, d) => a + (parseFloat(tv[d.tender_key] || '') || 0), 0)
+    : MONEY_KEYS.reduce((a, k) => a + (parseFloat(f[k] as string) || 0), 0)
 
   return (
     <>
@@ -156,16 +179,28 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         </Row>
 
         <SectionLabel>Money collected — by tender (matches the X-report)</SectionLabel>
-        <Row>
-          {TENDERS.slice(0, 3).map(t => (
-            <Field key={t.key} label={t.label}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
-          ))}
-        </Row>
-        <Row>
-          {TENDERS.slice(3).map(t => (
-            <Field key={t.key} label={t.label}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
-          ))}
-        </Row>
+        {tdefs ? (
+          <Row>
+            {tdefs.map((d: any) => (
+              <Field key={d.tender_key} label={`${d.label || d.tender_key} $`}>
+                <input style={inp} inputMode="decimal" value={tv[d.tender_key] || ''} onChange={e => setTv(v => ({ ...v, [d.tender_key]: e.target.value }))} placeholder="0.00" />
+              </Field>
+            ))}
+          </Row>
+        ) : (
+          <>
+            <Row>
+              {TENDERS.slice(0, 3).map(t => (
+                <Field key={t.key} label={t.label}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
+              ))}
+            </Row>
+            <Row>
+              {TENDERS.slice(3).map(t => (
+                <Field key={t.key} label={t.label}><input style={inp} inputMode="decimal" value={f[t.key]} onChange={e => set({ [t.key]: e.target.value } as Partial<State>)} placeholder="0.00" /></Field>
+              ))}
+            </Row>
+          </>
+        )}
         <Row>
           <Field label="Accessory Sale $ (declared — tallied vs sales, NOT in total)"><input style={inp} inputMode="decimal" value={f.acc_sale} onChange={e => set({ acc_sale: e.target.value })} placeholder="0.00" /></Field>
           <Field label="Total collected (tenders only)"><div style={{ ...inp, background: 'var(--surface2)', fontWeight: 700 }}>{fmt(total)}</div></Field>

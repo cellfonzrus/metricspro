@@ -171,6 +171,7 @@ export const NAV: NavGroup[] = [
     { href: '/closing/pickup', label: 'Cash Pickup', icon: '💵', module: 'closing', scopes: ['all', 'market'] },
     { href: '/closing/epay-recon', label: 'ePay Bank-Deposit Recon', icon: '🏦', module: 'closing', scopes: ['all', 'market'] },
     { href: '/closing/cash-config', label: 'Cash Setup', icon: '⚙️', module: 'closing', scopes: ['all'] },
+    { href: '/closing/tender-config', label: 'Tender Setup', icon: '🧾', module: 'closing', scopes: ['all'] },
     { href: '/closing/imports', label: 'Auto-Import', icon: '🔄', module: 'closing', scopes: ['all'] },
   ]},
   { group: 'Integrations & Imports', module: 'commissions', items: [

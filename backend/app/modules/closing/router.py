@@ -751,6 +751,11 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
     body.update({"t_cash": tenders["cash"], "t_credit": tenders["credit"], "t_ext_cc": tenders["ext_cc"],
                  "t_gift": tenders["gift"], "t_store_acct": tenders["store_acct"], "t_zelle": tenders["zelle"],
                  "t_acima": tenders["acima"]})
+    # Custom tenders (mig 111) — amounts for tender_keys beyond the standard 7 go to daily_closing.tenders
+    # JSONB. Only sent by a tenant that configured custom tenders (so the column exists post-mig-111).
+    _custom = payload.get("custom_tenders")
+    if isinstance(_custom, dict) and _custom:
+        body["tenders"] = {k: _money(v) for k, v in _custom.items() if k and k not in _TCOL}
     # Keep the legacy columns populated so existing dashboards / recon keep reconciling unchanged.
     body["store_cash"] = tenders["cash"]
     body["epay_cash"] = 0.0
@@ -913,11 +918,15 @@ def closing_attempts(period: str = None, date: str = None, store: str = None, on
 
 
 # ── 3-way tender recon: DAILY CLOSING vs POS X-REPORT vs SALES TRANSACTIONS, per store, per tender ──
-def _sales_tenders_by_store(client, org_id: str, date: str) -> dict:
-    """The day's sales-transaction $ bucketed to the 6 canonical tenders, per store_code (from the same
-    unified B2B source the money recon uses). Sums ext_price per tender — merchandise by tender, so it
-    tracks the X-report's tender split (which also includes tax, hence small deltas are expected)."""
-    resolve = _addr_resolver(client, org_id)
+def _sales_tenders_by_store(client, org_id: str, date: str, tresolve=None, keys=None) -> dict:
+    """The day's sales-transaction $ bucketed per tender, per store_code (from the same unified B2B
+    source the money recon uses). Sums ext_price per tender — merchandise by tender, so it tracks the
+    X-report's tender split (which also includes tax, hence small deltas are expected). `tresolve`/`keys`
+    let the caller pass a tenant-configured tender resolver + axis; default = the hardcoded
+    _canon_tender + CANON_TENDERS, so behaviour is unchanged when a tenant hasn't opted in."""
+    addr = _addr_resolver(client, org_id)
+    tresolve = tresolve or _canon_tender
+    keys = keys or CANON_TENDERS
     rows = _b2b_sales_rows(client, org_id, date, "store,tender_type,ext_price,voided,trans_type")
     out = {}
     for r in rows:
@@ -925,12 +934,13 @@ def _sales_tenders_by_store(client, org_id: str, date: str) -> dict:
             continue
         if str(r.get("trans_type") or "").strip() == "Return":
             continue
-        canon = _canon_tender(r.get("tender_type"))
+        canon = tresolve(r.get("tender_type"))
         if not canon:
             continue
-        code = resolve(r.get("store")) or (r.get("store") or "?")
-        agg = out.setdefault(code, {t: 0.0 for t in CANON_TENDERS})
-        agg[canon] += _f(r.get("ext_price"))
+        code = addr(r.get("store")) or (r.get("store") or "?")
+        agg = out.setdefault(code, {t: 0.0 for t in keys})
+        if canon in agg:
+            agg[canon] += _f(r.get("ext_price"))
     return out
 
 
@@ -945,8 +955,15 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
     d = _date(date)
     if not d:
         raise HTTPException(400, "valid date required (YYYY-MM-DD)")
-    # (1) closing — rep t_* per store_code. Resilient to t_acima not existing yet (mig 104 not run):
-    # fall back to the 6-tender select so the recon never 500s on a not-yet-run migration.
+    # Tenant tender config (mig 111): the axis (keys+labels) and per-report raw→tender resolvers.
+    # No config → the hardcoded CANON_TENDERS + _canon_tender, so an un-opted tenant is byte-identical.
+    from .tender_config import load_tender_config, tender_axis, make_resolver
+    _defs, _maps = load_tender_config(client, org_id)
+    keys, tlabel, _rclass, _intotal = tender_axis(_defs, CANON_TENDERS, CANON_TENDER_LABEL)
+    resolve_x = make_resolver(_maps, "x_report", _canon_tender, keys)
+    resolve_s = make_resolver(_maps, "sales", _canon_tender, keys)
+    # (1) closing — rep t_* (+ custom tenders JSONB) per store_code. Resilient to columns not existing
+    # yet (mig 104/111 not run): fall back so the recon never 500s on a not-yet-run migration.
     closing = {}
     def _closing_rows(cols):
         q = (client.schema("commcalc").table("daily_closing").select(cols)
@@ -955,33 +972,35 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
             q = q.eq("store_code", store)
         return q.limit(50000).execute().data or []
     try:
-        _crows = _closing_rows("store_code,store_address,t_cash,t_credit,t_ext_cc,t_gift,t_store_acct,t_zelle,t_acima")
+        _crows = _closing_rows("store_code,store_address,t_cash,t_credit,t_ext_cc,t_gift,t_store_acct,t_zelle,t_acima,tenders")
     except Exception:
-        _crows = _closing_rows("store_code,store_address,t_cash,t_credit,t_ext_cc,t_gift,t_store_acct,t_zelle")
+        try:
+            _crows = _closing_rows("store_code,store_address,t_cash,t_credit,t_ext_cc,t_gift,t_store_acct,t_zelle,t_acima")
+        except Exception:
+            _crows = _closing_rows("store_code,store_address,t_cash,t_credit,t_ext_cc,t_gift,t_store_acct,t_zelle")
     addr_by_code = {}
     for r in _crows:
         code = r.get("store_code") or "?"
         if r.get("store_address"):
             addr_by_code[code] = r.get("store_address")
-        agg = closing.setdefault(code, {t: 0.0 for t in CANON_TENDERS})
-        for t, col in (("cash", "t_cash"), ("credit", "t_credit"), ("ext_cc", "t_ext_cc"),
-                       ("gift", "t_gift"), ("store_acct", "t_store_acct"), ("zelle", "t_zelle"),
-                       ("acima", "t_acima")):
-            agg[t] += _f(r.get(col))
-    # (2) X-report — pos_tender_summary raw tender_type → canon
+        agg = closing.setdefault(code, {t: 0.0 for t in keys})
+        for t in keys:
+            agg[t] += _closing_amt(r, t)
+    # (2) X-report — pos_tender_summary raw tender_type → tenant tender (fallback _canon_tender)
     resolve = _addr_resolver(client, org_id)
     xrep = {}
     xrows = (client.schema("commcalc").table("pos_tender_summary")
              .select("store,tender_type,amount").eq("org_id", org_id).eq("close_date", d).execute().data) or []
     for r in xrows:
-        canon = _canon_tender(r.get("tender_type"))
+        canon = resolve_x(r.get("tender_type"))
         if not canon:
             continue
         code = resolve(r.get("store")) or (r.get("store") or "?")
-        agg = xrep.setdefault(code, {t: 0.0 for t in CANON_TENDERS})
-        agg[canon] += _f(r.get("amount"))
-    # (3) sales transactions
-    sales = _sales_tenders_by_store(client, org_id, d)
+        agg = xrep.setdefault(code, {t: 0.0 for t in keys})
+        if canon in agg:
+            agg[canon] += _f(r.get("amount"))
+    # (3) sales transactions (same tenant axis + resolver)
+    sales = _sales_tenders_by_store(client, org_id, d, resolve_s, keys)
     if store:
         xrep = {k: v for k, v in xrep.items() if k == store}
         sales = {k: v for k, v in sales.items() if k == store}
@@ -994,16 +1013,16 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
     for code in codes:
         c, x, s = closing.get(code, {}), xrep.get(code, {}), sales.get(code, {})
         per = []
-        for t in CANON_TENDERS:
+        for t in keys:
             cv, xv, sv = round(c.get(t, 0), 2), round(x.get(t, 0), 2), round(s.get(t, 0), 2)
-            per.append({"tender": t, "label": CANON_TENDER_LABEL[t], "closing": cv, "x_report": xv, "sales": sv,
+            per.append({"tender": t, "label": tlabel.get(t, t), "closing": cv, "x_report": xv, "sales": sv,
                         "match": abs(cv - xv) <= 1 and abs(xv - sv) <= 1 and abs(cv - sv) <= 1})
         stores_out.append({
             "store_code": code, "store_address": name_by_code.get(code) or addr_by_code.get(code) or code,
             "tenders": per,
             "totals": {"closing": round(sum(c.values()), 2), "x_report": round(sum(x.values()), 2),
                        "sales": round(sum(s.values()), 2)}})
-    return {"date": d, "tenders": [{"key": t, "label": CANON_TENDER_LABEL[t]} for t in CANON_TENDERS],
+    return {"date": d, "tenders": [{"key": t, "label": tlabel.get(t, t)} for t in keys],
             "stores": stores_out,
             "sources_present": {"closing": bool(closing), "x_report": bool(xrep), "sales": bool(sales)},
             "note": ("X-report tender amounts include tax; sales-transaction figures are merchandise "
@@ -1039,6 +1058,130 @@ def tender_drilldown(date: str, store: str = None, tender: str = None, org_id: s
                     "mdn": r.get("mdn"), "is_return": str(r.get("trans_type") or "").strip() == "Return"})
     out.sort(key=lambda x: (x["store_code"] or "", str(x["trans_id"] or "")))
     return {"date": d, "rows": out, "count": len(out), "total": round(sum(x["amount"] for x in out), 2)}
+
+
+# ── Configurable tenders (mig 111): standard-or-custom tender fields + smart raw-label→tender map ─────
+@router.get("/tender-config")
+def get_tender_config(org_id: str = ORG_ID):
+    """The tenant's tender field definitions + raw-label→tender maps + the built-in standard template +
+    recon mode. Empty defs → the app uses the built-in 7 (CANON_TENDERS); the wizard shows those as the
+    starting point."""
+    require_org(org_id)
+    client = sb()
+    from .tender_config import load_tender_config, STANDARD_DEFS
+    defs, maps = load_tender_config(client, org_id)
+    mode, custom = "3way", False
+    try:
+        t = (client.schema("storeops").table("tenants").select("closing_recon_mode,closing_tenders_custom")
+             .eq("org_id", org_id).limit(1).execute().data or [])
+        if t:
+            mode = t[0].get("closing_recon_mode") or "3way"
+            custom = bool(t[0].get("closing_tenders_custom"))
+    except Exception:
+        pass
+    standard = [{"tender_key": k, "label": lbl, "recon_class": rc, "is_standard": True, "include_in_total": intot}
+                for (k, lbl, rc, intot) in STANDARD_DEFS]
+    return {"defs": defs, "maps": maps, "standard": standard, "recon_mode": mode, "custom": custom}
+
+
+@router.put("/tender-config")
+def put_tender_config(payload: dict, org_id: str = ORG_ID):
+    """Save the tenant's tender defs + maps + recon mode. Body {defs:[...], maps:[...], recon_mode, custom}.
+    Full replace (delete-then-insert) — the wizard always sends the complete set."""
+    require_org(org_id)
+    client = sb()
+    defs = payload.get("defs") or []
+    maps = payload.get("maps") or []
+    client.schema("commcalc").table("closing_tender_def").delete().eq("org_id", org_id).execute()
+    rows = []
+    for i, dd in enumerate(defs):
+        key = (dd.get("tender_key") or "").strip()
+        if not key:
+            continue
+        rows.append({"org_id": org_id, "tender_key": key, "label": dd.get("label") or key,
+                     "sort_order": dd.get("sort_order", i), "is_standard": bool(dd.get("is_standard")),
+                     "is_active": dd.get("is_active", True) is not False,
+                     "recon_class": dd.get("recon_class") or "other",
+                     "include_in_total": dd.get("include_in_total", True) is not False})
+    if rows:
+        client.schema("commcalc").table("closing_tender_def").insert(rows).execute()
+    client.schema("commcalc").table("closing_tender_map").delete().eq("org_id", org_id).execute()
+    mrows = []
+    for m in maps:
+        key = (m.get("tender_key") or "").strip()
+        labels = [str(x).strip() for x in (m.get("source_labels") or []) if str(x).strip()]
+        if not key or not labels:
+            continue
+        mrows.append({"org_id": org_id, "tender_key": key, "report": m.get("report") or "both",
+                      "source_labels": labels, "match_mode": m.get("match_mode") or "substring",
+                      "priority": m.get("priority", 100)})
+    if mrows:
+        client.schema("commcalc").table("closing_tender_map").insert(mrows).execute()
+    try:
+        upd = {}
+        if "recon_mode" in payload:
+            upd["closing_recon_mode"] = payload.get("recon_mode") or "3way"
+        if "custom" in payload:
+            upd["closing_tenders_custom"] = bool(payload.get("custom"))
+        if upd:
+            client.schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
+    except Exception:
+        pass
+    return {"ok": True, "defs": len(rows), "maps": len(mrows)}
+
+
+@router.post("/tender-config/seed-standard")
+def seed_standard_tenders(org_id: str = ORG_ID):
+    """Seed the 7 built-in tenders as editable defs — the starting point for a 'standard' tenant."""
+    require_org(org_id)
+    client = sb()
+    from .tender_config import STANDARD_DEFS
+    client.schema("commcalc").table("closing_tender_def").delete().eq("org_id", org_id).execute()
+    rows = [{"org_id": org_id, "tender_key": k, "label": lbl, "sort_order": i,
+             "is_standard": True, "is_active": True, "recon_class": rc, "include_in_total": intot}
+            for i, (k, lbl, rc, intot) in enumerate(STANDARD_DEFS)]
+    client.schema("commcalc").table("closing_tender_def").insert(rows).execute()
+    return {"ok": True, "seeded": len(rows)}
+
+
+@router.post("/tender-config/detect")
+async def detect_tenders(file: UploadFile = File(None), org_id: str = ORG_ID):
+    """Smart mapping helper: gather the distinct raw Tender Type values in the tenant's data and SUGGEST
+    the best tender per value with a confidence. Sources: an uploaded sample (any column containing
+    'tender'), ELSE the already-ingested Sales report (raw_sales) + X-report (pos_tender_summary). The
+    wizard pre-fills each dropdown with the suggestion. On the Total side both reports are b2bsoft."""
+    require_org(org_id)
+    client = sb()
+    from .tender_config import load_tender_config, tender_axis, suggest_for_labels
+    defs, _maps = load_tender_config(client, org_id)
+    keys, labels, _rc, _it = tender_axis(defs, CANON_TENDERS, CANON_TENDER_LABEL)
+    sales_labels, x_labels = set(), set()
+    if file is not None:
+        try:
+            content = await file.read()
+            fn = (file.filename or "").lower()
+            df = pd.read_excel(io.BytesIO(content)) if fn.endswith((".xlsx", ".xls")) else pd.read_csv(io.BytesIO(content))
+            tcol = next((c for c in df.columns if "tender" in str(c).strip().lower()), None)
+            if tcol is not None:
+                sales_labels |= {str(v).strip() for v in df[tcol].dropna().unique() if str(v).strip()}
+        except Exception as e:
+            raise HTTPException(400, f"could not read sample file: {e}")
+    else:
+        try:
+            srows = (client.schema("commcalc").table("raw_sales").select("tender_type")
+                     .eq("org_id", org_id).limit(20000).execute().data) or []
+            sales_labels |= {str(r.get("tender_type")).strip() for r in srows if str(r.get("tender_type") or "").strip()}
+        except Exception:
+            pass
+        try:
+            xrows = (client.schema("commcalc").table("pos_tender_summary").select("tender_type")
+                     .eq("org_id", org_id).limit(20000).execute().data) or []
+            x_labels |= {str(r.get("tender_type")).strip() for r in xrows if str(r.get("tender_type") or "").strip()}
+        except Exception:
+            pass
+    return {"tenders": [{"key": k, "label": labels.get(k, k)} for k in keys],
+            "sales": suggest_for_labels(sorted(sales_labels), keys, labels, _canon_tender),
+            "x_report": suggest_for_labels(sorted(x_labels), keys, labels, _canon_tender)}
 
 
 # ── Reconciliation sheet: every day's closing-vs-B2B errors over a period ────────────────────
@@ -2071,6 +2214,21 @@ def _canon_tender(raw: str):
     if any(h in t for h in ("credit", "debit", "card", "visa", "master", "amex", "discover")):
         return "credit"
     return None
+
+
+# Standard tender_key → physical daily_closing column. A standard tender reads its t_* column; a custom
+# tender (mig 111 config) reads the `tenders` JSONB instead — so the two never double-count.
+_TCOL = {"cash": "t_cash", "credit": "t_credit", "ext_cc": "t_ext_cc", "gift": "t_gift",
+         "store_acct": "t_store_acct", "zelle": "t_zelle", "acima": "t_acima"}
+
+
+def _closing_amt(row: dict, key: str) -> float:
+    """Amount for one tender on a closing row — standard tender → its t_* column, custom → tenders JSONB."""
+    col = _TCOL.get(key)
+    if col:
+        return _f(row.get(col))
+    j = row.get("tenders")
+    return _f(j.get(key)) if isinstance(j, dict) else 0.0
 
 
 def _variance_dirs(issues: list) -> dict:
