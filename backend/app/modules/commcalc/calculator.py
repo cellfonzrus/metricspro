@@ -72,7 +72,8 @@ def calc_rep_commissions(
     employees: list[dict],
     stores: list[dict],
     period: str,
-    name_map: list[dict]
+    name_map: list[dict],
+    carrier_mode: str = 'boost'
 ) -> dict:
     """Main calculation function - returns commissions, flags, kpis"""
     
@@ -281,6 +282,52 @@ def calc_rep_commissions(
             pay_by_login[login]['trades'] += 1
     
     # ── Calculate per rep ─────────────────────────────────────
+    # ── Non-Boost carriers: pay ONLY from configurable Commission Plans / Payout Schedules ──────
+    # The Boost KPI-tier + flat-spiff model does NOT apply to other carriers (e.g. Total). Emit a
+    # ZEROED base row per rep found in this period's sales so (a) un-planned reps earn $0 instead of
+    # Boost pay, and (b) no Boost line-items/tier are shown. _apply_new_engines() then REPLACES
+    # total_payout with each rep's assigned plan (+ installments). Boost tenants never reach this
+    # branch (carrier_mode defaults to 'boost'), so their pay stays byte-identical.
+    if carrier_mode != 'boost':
+        plan_rows = []
+        for key, rep in rep_map.items():
+            plan_rows.append({
+                'period': period,
+                'period_month': period_month,
+                'period_year': period_year,
+                'epay_salesperson': rep['name'],
+                'storeops_name': rep['storeops_name'],
+                'store': rep['store'],
+                'tier': 1.0,
+                'tier_source': 'plan',
+                'kpis_met': 0,
+                'total_kpis': 0,
+                'kpi_values': {},
+                'premium_acts': len(rep['prem_set']),
+                'byod_acts': len(rep['byod_set']),
+                'upgrade_acts': len(rep['upg_set']),
+                'premium_comm': 0,
+                'byod_comm': 0,
+                'upgrade_comm': 0,
+                'acc_comm': 0,
+                'setup_fee_comm': 0,
+                'trade_in_comm': 0,
+                'acima_comm': 0,
+                'custom_comm': 0,
+                'acc_target': 0,
+                'subtotal': 0,
+                'total_payout': 0,
+                'boost_commission': None,
+                'boost_reimbursement': None,
+                'calculated_by': 'api_v1',
+            })
+        return {
+            'commissions': plan_rows,
+            'period': period,
+            'reps': len(plan_rows),
+            'total_payout': 0.0,
+        }
+
     comm_rows = []
     
     for key, rep in rep_map.items():

@@ -2,6 +2,8 @@
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { useAuth } from '@/lib/auth-context'
+import { carrierMode } from '@/lib/rbac'
 
 interface RepRow {
   epay_salesperson: string
@@ -18,6 +20,8 @@ interface RepRow {
 
 export default function CommCalcDashboard() {
   const { period } = usePeriod()
+  const { carriers } = useAuth()
+  const isBoost = carrierMode(carriers) === 'boost'   // non-Boost carriers pay via plans, not KPI tiers
   const [reps, setReps] = useState<RepRow[]>([])
   const [loading, setLoading] = useState(true)
   const [calcStatus, setCalcStatus] = useState<string>('')
@@ -99,8 +103,15 @@ export default function CommCalcDashboard() {
       {/* Tier Distribution + Top Reps */}
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16, marginBottom: 24 }}>
         <div className="card">
-          <div style={{ fontWeight: 600, marginBottom: 16 }}>Tier Distribution</div>
-          {[{pct: 100, color: '#16a34a'}, {pct: 75, color: '#d97706'}, {pct: 50, color: '#dc2626'}].map(({ pct, color }) => (
+          <div style={{ fontWeight: 600, marginBottom: 16 }}>{isBoost ? 'Tier Distribution' : 'Payout Basis'}</div>
+          {!isBoost && (
+            <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
+              Reps on this carrier are paid from their assigned <b>Commission Plan</b> — the Boost KPI‑tier
+              multiplier does not apply. Manage pay under{' '}
+              <a href="/commcalc/payout-plans" style={{ color: 'var(--accent)' }}>Commission Payout Plans</a>.
+            </div>
+          )}
+          {isBoost && [{pct: 100, color: '#16a34a'}, {pct: 75, color: '#d97706'}, {pct: 50, color: '#dc2626'}].map(({ pct, color }) => (
             <div key={pct} style={{ marginBottom: 12 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color }}>{pct}% Tier</span>
@@ -132,7 +143,7 @@ export default function CommCalcDashboard() {
                   <tr>
                     <th>Rep</th>
                     <th>Store</th>
-                    <th>Tier</th>
+                    <th>{isBoost ? 'Tier' : 'Basis'}</th>
                     <th>PA</th>
                     <th>BA</th>
                     <th>UA</th>
@@ -147,9 +158,13 @@ export default function CommCalcDashboard() {
                         {r.store?.substring(0, 25)}{r.store?.length > 25 ? '…' : ''}
                       </td>
                       <td>
-                        <span className={`badge ${r.tier >= 1 ? 'badge-green' : r.tier >= 0.75 ? 'badge-amber' : 'badge-red'}`}>
-                          {Math.round((r.tier || 0) * 100)}%
-                        </span>
+                        {isBoost ? (
+                          <span className={`badge ${r.tier >= 1 ? 'badge-green' : r.tier >= 0.75 ? 'badge-amber' : 'badge-red'}`}>
+                            {Math.round((r.tier || 0) * 100)}%
+                          </span>
+                        ) : (
+                          <span className="badge" style={{ background: 'var(--surface2)', color: 'var(--text2)' }}>Plan</span>
+                        )}
                       </td>
                       <td>{r.premium_acts || 0}</td>
                       <td>{r.byod_acts || 0}</td>

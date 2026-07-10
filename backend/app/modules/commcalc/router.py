@@ -1600,6 +1600,58 @@ def delete_carrier(cid: str, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+@router.get("/payout-plans/overview")
+def payout_plans_overview(org_id: str = ORG_ID):
+    """Per-carrier map of HOW each enabled carrier's reps get paid, and whether the calculator will
+    actually pay them. Drives the unified 'Commission Payout Plans' hub. Uses the SAME carrier gate
+    as the live calc, so what it shows is what /calculate will do."""
+    require_org(org_id)
+    client = sb()
+    def _all(table, cols="*"):
+        try:
+            return (client.schema("commcalc").table(table).select(cols)
+                    .eq("org_id", org_id).limit(10000).execute().data) or []
+        except Exception:
+            return []
+    carriers = _all("carrier")
+    plans    = _all("commission_plan", "id,carrier_id,is_active,name")
+    assigns  = _all("commission_plan_assignment", "plan_id,scope,scope_value")
+    scheds   = _all("payout_schedule", "id,carrier_id,is_active")
+    mode     = _resolve_carrier_mode(carriers)
+    default  = next((c for c in carriers if c.get("is_default")), None)
+    assign_by_plan = {}
+    for a in assigns:
+        assign_by_plan[a.get("plan_id")] = assign_by_plan.get(a.get("plan_id"), 0) + 1
+    def _is_boost(c):
+        return 'boost' in ((c.get('code') or '') + ' ' + (c.get('name') or '')).lower()
+    out = []
+    for c in carriers:
+        cid = c.get("id")
+        boost = _is_boost(c)
+        cplans  = [p for p in plans if p.get("carrier_id") in (cid, None) and p.get("is_active", True)]
+        cassign = sum(assign_by_plan.get(p["id"], 0) for p in cplans)
+        cscheds = [s for s in scheds if s.get("carrier_id") in (cid, None) and s.get("is_active", True)]
+        if boost:
+            pays_via, ready = "boost_rates", True
+        elif cassign > 0 or len(cscheds) > 0:
+            pays_via, ready = "commission_plans", True
+        else:
+            pays_via, ready = "unconfigured", False
+        out.append({
+            "id": cid, "name": c.get("name"), "code": c.get("code"),
+            "is_default": bool(c.get("is_default")), "is_boost": boost,
+            "pays_via": pays_via, "ready": ready,
+            "plan_count": len(cplans), "assignment_count": cassign,
+            "schedule_count": len(cscheds),
+        })
+    return {
+        "org_carrier_mode": mode,
+        "default_carrier": ({"id": default.get("id"), "name": default.get("name"),
+                             "code": default.get("code")} if default else None),
+        "carriers": out,
+    }
+
+
 # ── Generic column mapping (A2) — config-driven, any-carrier ingestion ────────────────────────
 @router.get("/column-mapping/targets")
 def column_mapping_targets(report_key: str = "", org_id: str = ORG_ID):
@@ -4265,6 +4317,24 @@ async def calculate(
     return {"status": "started", "period": period, "message": "Calculation running in background"}
 
 
+def _resolve_carrier_mode(carriers):
+    """'boost' -> legacy verified Boost engine; 'plan' -> pay ONLY from configurable Commission
+    Plans / Payout Schedules. Conservative so existing Boost tenants (and the house org, whose
+    default carrier IS Boost) are never flipped: return 'plan' ONLY when the org's CHOSEN carrier is
+    explicitly non-Boost. No explicit default + a Boost carrier present => 'boost'."""
+    def _is_boost(c):
+        return 'boost' in ((c.get('code') or '') + ' ' + (c.get('name') or '')).lower()
+    carriers = carriers or []
+    if not carriers:
+        return 'boost'
+    default = next((c for c in carriers if c.get('is_default')), None)
+    if default is not None:
+        return 'boost' if _is_boost(default) else 'plan'
+    if any(_is_boost(c) for c in carriers):
+        return 'boost'
+    return 'plan'
+
+
 def _apply_new_engines(client, org_id, period, comms):
     """ADDITIVE layer of the new configurable payout engines on top of the standard (Boost) calc.
 
@@ -4453,13 +4523,19 @@ async def _run_calculation(period: str, org_id: str):
         if not sales:
             raise Exception(f"No sales data for {period}")
         
+        # Carrier gate: Boost tenants run the legacy verified engine; a tenant whose CHOSEN carrier
+        # is explicitly non-Boost (e.g. Total / luxelink) skips the Boost tier/spiff math and is paid
+        # ONLY from its configured Commission Plans + Payout Schedules (applied in _apply_new_engines).
+        carrier_mode = _resolve_carrier_mode(fetch('carrier'))
+        print(f"INFO calc org={org_id} period={period} carrier_mode={carrier_mode}")
+
         # Run calculation
         result = calc_rep_commissions(
             sales=sales, pay_detail=pay_detail, dlar_rep=dlar_rep,
             dlar_store=dlar_store, mi_rows=mi_rows, catalog=catalog,
             cfg=cfg, store_mapping=store_map, shifts=shifts,
             employees=employees, stores=stores, period=period,
-            name_map=name_map
+            name_map=name_map, carrier_mode=carrier_mode
         )
         
         # Save commissions

@@ -3,6 +3,8 @@ import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
+import { useAuth } from '@/lib/auth-context'
+import { carrierMode } from '@/lib/rbac'
 
 interface Rep {
   epay_salesperson: string
@@ -25,6 +27,8 @@ interface Rep {
   total_payout: number
   residual_installment_comm?: number   // multi-month / Total-carrier installment pay (mig 057/078)
   carrier_statement_comm?: number
+  plan_comm?: number                    // configurable Commission Plan pay (non-Boost carriers, mig 059)
+  plan_name?: string
 }
 
 const TABS = [
@@ -35,6 +39,8 @@ const TABS = [
 
 export default function ReportsPage() {
   const { period } = usePeriod()
+  const { carriers } = useAuth()
+  const isBoost = carrierMode(carriers) === 'boost'   // non-Boost carriers pay via plans, not KPI tiers
   const [reps, setReps] = useState<Rep[]>([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('breakdown')
@@ -252,17 +258,48 @@ export default function ReportsPage() {
                   <div style={{ fontSize: 28, fontWeight: 700 }}>{fmt(currentRep.subtotal)}</div>
                   <div style={{ color: 'var(--text2)', fontSize: 12 }}>Subtotal (pre-tier)</div>
                 </div>
-                <div className="card" style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 28, fontWeight: 700 }}>
-                    <span style={{ color: currentRep.tier >= 1 ? '#16a34a' : currentRep.tier >= 0.75 ? '#d97706' : '#dc2626' }}>
-                      {Math.round((currentRep.tier || 0) * 100)}%
-                    </span>
+                {isBoost ? (
+                  <div className="card" style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 28, fontWeight: 700 }}>
+                      <span style={{ color: currentRep.tier >= 1 ? '#16a34a' : currentRep.tier >= 0.75 ? '#d97706' : '#dc2626' }}>
+                        {Math.round((currentRep.tier || 0) * 100)}%
+                      </span>
+                    </div>
+                    <div style={{ color: 'var(--text2)', fontSize: 12 }}>Tier Multiplier · {currentRep.kpis_met}/{currentRep.total_kpis} KPIs</div>
                   </div>
-                  <div style={{ color: 'var(--text2)', fontSize: 12 }}>Tier Multiplier · {currentRep.kpis_met}/{currentRep.total_kpis} KPIs</div>
-                </div>
+                ) : (
+                  <div className="card" style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, marginTop: 6 }}>{currentRep.plan_name || '— no plan —'}</div>
+                    <div style={{ color: 'var(--text2)', fontSize: 12 }}>Commission Plan</div>
+                  </div>
+                )}
               </div>
 
-              {/* Line items table */}
+              {/* Non-Boost carriers: pay comes from the assigned Commission Plan, not Boost line items */}
+              {!isBoost && (
+                <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 10 }}>Plan‑based Payout</div>
+                  <table>
+                    <tbody>
+                      <tr><td>Commission Plan</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{currentRep.plan_name || '— none assigned —'}</td></tr>
+                      <tr><td>Plan commission</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.plan_comm ?? 0)}</td></tr>
+                      {(currentRep.residual_installment_comm || 0) > 0 && (
+                        <tr><td>Multi‑month installments</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.residual_installment_comm || 0)}</td></tr>
+                      )}
+                      <tr style={{ fontWeight: 700 }}><td>Total Payout</td><td style={{ textAlign: 'right', color: 'var(--accent)' }}>{fmt(currentRep.total_payout)}</td></tr>
+                    </tbody>
+                  </table>
+                  {!currentRep.plan_name && (
+                    <div style={{ fontSize: 12, color: '#dc2626', marginTop: 8 }}>
+                      No plan assigned to this rep — they calculate to $0. Assign one on{' '}
+                      <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}>Commission Plans</a>.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Line items table (Boost KPI‑tier breakdown) */}
+              {isBoost && (
               <div className="card" style={{ padding: 0 }}>
                 <table>
                   <thead>
@@ -331,6 +368,7 @@ export default function ReportsPage() {
                   </tbody>
                 </table>
               </div>
+              )}
 
               {/* Chargeback review */}
               {(() => {

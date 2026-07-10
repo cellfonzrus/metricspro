@@ -89,9 +89,20 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️', module: 'commissions' },
     { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', icon: '🔁', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/settings', label: 'Commission Rates', icon: '⚙️', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/payout-schedules', label: 'Payout Schedules', icon: '📆', module: 'commissions', scopes: ['all'] },
+  ]},
+  // ── Commission Payout Plans ────────────────────────────────────────────────────────────────
+  // ONE home for HOW reps get paid, per carrier. 'Overview' maps each enabled carrier to the engine
+  // that actually pays it (Boost KPI-tier rates vs configurable Commission Plans / Payout Schedules).
+  // Boost Rates is carrier-gated to Boost tenants (NAV_CARRIERS) so a Total-only tenant never sees the
+  // hardcoded Boost tiers. Regroup is a ZERO-RBAC-CHANGE move — every item keeps its module + scopes.
+  { group: 'Commission Payout Plans', module: 'commissions', items: [
+    { href: '/commcalc/payout-plans', label: 'Overview', icon: '💳', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/commission-plans', label: 'Commission Plans', icon: '🧮', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/payout-schedules', label: 'Payout Schedules', icon: '📆', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/settings', label: 'Boost Rates (KPI‑tier)', icon: '⚙️', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/carrier-mapping', label: 'Carrier Mapping', icon: '📡', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/commission-category-map', label: 'Category → Bucket Map', icon: '🗺️', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/commission-import', label: 'Import Wizard', icon: '🪄', module: 'commissions', scopes: ['all'] },
   ]},
   { group: 'Targets & Coaching', module: 'targets', items: [
     { href: '/commcalc/targets', label: 'Daily Targets', icon: '📈', module: 'targets', scopes: ['all', 'market', 'store'] },
@@ -187,13 +198,10 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/dlar/sweep', label: 'Metrics Rep/Store Sync', icon: '🧹', module: 'commissions', scopes: ['all'] },
   ]},
   { group: 'Mapping', module: 'commissions', items: [
-    { href: '/commcalc/commission-import', label: 'Commission Import Wizard', icon: '🪄', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/mapping', label: 'All Mappings', icon: '🗂️', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/store-match', label: 'Store Matching', icon: '🏬', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/carrier-mapping', label: 'Carrier Mapping', icon: '🗺️', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/column-mapping', label: 'Column Mapping', icon: '🧩', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/target-fields', label: 'Custom Target Fields', icon: '🧱', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/commission-category-map', label: 'Commission Category Map', icon: '🗺️', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/gp-category-map', label: 'GP Category Map', icon: '💰', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/item-mapping', label: 'Item / Model Mapping', icon: '🧩', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/rep-aliases', label: 'Rep Aliases', icon: '🔗', module: 'commissions', scopes: ['all'] },
@@ -280,13 +288,29 @@ export function isSuperAdmin(perms: Permissions): boolean {
 // tenant has a matching carrier — UNLESS an admin override says otherwise. Everything not listed is
 // generic (all carriers). Currently DLAR-driven reporting (KPI/coaching) lives under Boost; as another
 // carrier gets its own DLAR/KPI reporting, add that carrier's code to the relevant hrefs.
-export type CarrierRef = { name?: string; code?: string }
+export type CarrierRef = { name?: string; code?: string; is_default?: boolean }
+
+// Mirror of backend _resolve_carrier_mode (commcalc/router.py): 'boost' = the legacy verified Boost
+// KPI-tier engine; 'plan' = pay ONLY from configurable Commission Plans / Payout Schedules. Conservative
+// so Boost tenants are never flipped. KEEP IN SYNC with the backend.
+export function carrierMode(carriers: CarrierRef[] | undefined): 'boost' | 'plan' {
+  const cs = carriers || []
+  const isB = (c: CarrierRef) => /boost/i.test((c.code || '') + ' ' + (c.name || ''))
+  if (cs.length === 0) return 'boost'
+  const def = cs.find(c => c.is_default)
+  if (def) return isB(def) ? 'boost' : 'plan'
+  if (cs.some(isB)) return 'boost'
+  return 'plan'
+}
 export const NAV_CARRIERS: Record<string, string[]> = {
   '/commcalc/vip': ['boost'], '/commcalc/vip/paygo': ['boost'], '/commcalc/vip/sweep': ['boost'],
   '/commcalc/distributors': ['boost'], '/commcalc/asset/lending': ['boost'],
   '/commcalc/asset/owed-weekly': ['boost'], '/commcalc/asset/hotsheet-recon': ['boost'],
   '/commcalc/kpi': ['boost'], '/commcalc/coaching': ['boost'],
   '/commcalc/ma-commission': ['total'],
+  // Boost Rates page = the hardcoded Boost KPI-tier config; only meaningful for Boost tenants. A
+  // Total-only tenant (e.g. luxelink) never sees it — they configure pay via Commission Plans instead.
+  '/commcalc/settings': ['boost'],
 }
 // Carrier gate: admin per-item override wins (caps['carrier:<href>'] true/false); else a carrier-scoped
 // item shows only when the tenant has a matching carrier. No carrier chosen yet → hide nothing.
