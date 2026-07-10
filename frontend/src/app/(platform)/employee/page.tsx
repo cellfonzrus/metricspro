@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, ORG_ID, localToday } from '@/lib/client'
+import { useAuth } from '@/lib/auth-context'
 import EmployeeWidgets from '@/components/EmployeeWidgets'
 import PortalReports from '@/components/PortalReports'
 
@@ -15,6 +16,7 @@ function recentPeriods(n = 14): string[] {
 }
 
 export default function EmployeeDashboardPage() {
+  const { user } = useAuth()
   const [emps, setEmps] = useState<any[]>([])
   const [eid, setEid] = useState('')
   const [period, setPeriod] = useState(recentPeriods(1)[0])   // default = current month
@@ -24,13 +26,16 @@ export default function EmployeeDashboardPage() {
   const [loading, setLoading] = useState(false)
   const periods = recentPeriods(14)
 
+  // Scope the picker to the caller's role (self→just them, store→their store, market/DM→their stores,
+  // admin→everyone) and DEFAULT to the logged-in employee's own dashboard, not a stranger.
   useEffect(() => {
-    api('/api/v1/core/employees').then((d: any) => {
+    api('/api/v1/storeops/employees/visible').then((d: any) => {
       const list = (d?.employees || []).filter((e: any) => e.employee_id)
       setEmps(list)
-      if (list.length && !eid) setEid(list[0].employee_id)
+      const mine = d?.employee_id || user?.employee_id || ''
+      setEid(mine && list.some((e: any) => e.employee_id === mine) ? mine : (list[0]?.employee_id || mine))
     }).catch(console.error)
-  }, [])
+  }, [user?.employee_id])
 
   useEffect(() => {
     if (!eid) return
@@ -62,9 +67,11 @@ export default function EmployeeDashboardPage() {
           <select style={sel} value={period} onChange={e => setPeriod(e.target.value)} title="Month">
             {periods.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
-          <select style={sel} value={eid} onChange={e => setEid(e.target.value)}>
-            {emps.map(e => <option key={e.employee_id} value={e.employee_id}>{e.name}</option>)}
-          </select>
+          {emps.length > 1 && (
+            <select style={sel} value={eid} onChange={e => setEid(e.target.value)} title="Employee">
+              {emps.map(e => <option key={e.employee_id} value={e.employee_id}>{e.name}{e.home_store ? ` · ${e.home_store}` : ''}</option>)}
+            </select>
+          )}
         </div>
       </div>
 

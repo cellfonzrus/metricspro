@@ -2068,6 +2068,42 @@ def org_my_span(authorization: str = Header(default=""), org_id: str = ORG_ID):
     return {"employee_id": eid, "store_codes": codes, "units": units, "is_manager": bool(codes)}
 
 
+@router.get("/employees/visible")
+def employees_visible(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The employee roster the SIGNED-IN caller may pick from on the dashboard, scoped by their role:
+    self → just themselves, store → their store('s) employees, market/DM → their markets' stores'
+    employees, admin/'all' (or an unidentifiable caller) → everyone. Uses _caller_span_codes (org tree
+    UNION the market/store pinned on the login) so it works even before the RBAC master switch is on —
+    it only bounds a dropdown, it is NOT the security boundary. Returns the caller's own employee_id so
+    the dashboard can default to self."""
+    c = sb()
+    au = _caller_app_user(authorization, org_id)
+    my_eid = (au.get("employee_id") or "").strip()
+    scope = _role_scope(org_id, (au.get("role") or "").strip()) if au else "all"
+    rows = (c.table("employees").select("employee_id,name,home_store,role,is_active")
+            .eq("org_id", org_id).execute().data or [])
+    rows = [r for r in rows if r.get("employee_id") and r.get("is_active", True)]
+    if au and scope != "all":
+        if scope == "self":
+            rows = [r for r in rows if str(r.get("employee_id")) == my_eid]
+        else:
+            codes = {x.strip().upper() for x in _caller_span_codes(authorization, org_id)}
+            keys = set(codes)
+            if codes:   # widen to each store's address too — home_store may be an address, not a code
+                meta = c.table("stores").select("store_code,address").eq("org_id", org_id).execute().data or []
+                for s in meta:
+                    if str(s.get("store_code") or "").strip().upper() in codes:
+                        ad = str(s.get("address") or "").strip().upper()
+                        if ad:
+                            keys.add(ad)
+            rows = [r for r in rows
+                    if str(r.get("home_store") or "").strip().upper() in keys
+                    or str(r.get("employee_id")) == my_eid]
+    rows.sort(key=lambda r: (str(r.get("home_store") or ""), str(r.get("name") or "")))
+    return {"employee_id": my_eid, "scope": scope,
+            "is_manager": scope not in ("self",), "employees": rows}
+
+
 @router.get("/org/my-team")
 def org_my_team(authorization: str = Header(default=""), unit_id: str = "", org_id: str = ORG_ID):
     """The caller's TEAM as the org subtree below the unit(s) they manage: each node = an org unit
