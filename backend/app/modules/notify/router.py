@@ -333,6 +333,32 @@ async def send_now(body: dict, org_id: str = ORG_ID):
         raise HTTPException(400, str(e))
 
 
+@router.post("/send-email")
+async def send_email_plain(body: dict, org_id: str = ORG_ID):
+    """Send a PLAIN email (not a registered report) via Resend — for handoff / action-item notes.
+    Body: {to: str|[str], subject, html?|text?}. Returns per-recipient message id or error."""
+    to = body.get("to") or []
+    if isinstance(to, str):
+        to = [to]
+    to = [t for t in to if t]
+    if not to:
+        raise HTTPException(400, "no recipient (provide `to`)")
+    subject = (body.get("subject") or "MetricsPro").strip()
+    html = body.get("html")
+    if not html:
+        text = body.get("text") or ""
+        import html as _h
+        html = "<pre style='font-family:system-ui,-apple-system,sans-serif;white-space:pre-wrap'>" + _h.escape(text) + "</pre>"
+    sent = []
+    for addr in to:
+        try:
+            mid = await email_resend.send_email(addr, subject, html, [])
+            sent.append({"to": addr, "id": mid})
+        except Exception as e:
+            sent.append({"to": addr, "error": str(e)})
+    return {"sent": sent, "email_configured": email_resend.is_configured()}
+
+
 # ── subscriptions (scheduled) ────────────────────────────────────────────────
 def _compute_next_run(frequency, day_of_week, day_of_month, hour, tzname) -> str:
     """Next occurrence (UTC ISO) after now, in the subscription's timezone.
