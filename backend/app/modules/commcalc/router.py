@@ -8648,15 +8648,58 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
         raise HTTPException(500, f"pull failed: {e}")
 
 
-@router.post("/data-sources/{sid}/login/start")
-async def data_source_login_start(sid: str, org_id: str = ORG_ID):
-    """Phase 1 of the interactive portal login: submit the stored Account ID + User ID + Password
-    and drive to the 2FA challenge. Persists the half-authenticated browser session (pending_state)
-    and flips auth_status to needs_2fa. Returns {status, message, two_fa_hint}. A portal that skips
-    2FA (remembered device) promotes straight to authenticated."""
-    require_org(org_id)
+def _do_portal_login(sid: str, org_id: str):
+    """Blocking portal login (Playwright + residential proxy) — runs as a BACKGROUND task so the HTTP
+    request returns instantly. A synchronous login through a residential proxy easily outlives the gateway
+    timeout, which surfaced in the browser as 'Failed to fetch'. Writes the outcome to the row; the UI polls
+    /data-sources until auth_status flips to needs_2fa / authenticated / error."""
     from app.modules.commcalc import vidapay_sweep as vp
-    from fastapi.concurrency import run_in_threadpool
+    client = sb()
+    rows = (client.schema("commcalc").table("data_source").select("*")
+            .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
+    if not rows:
+        return
+    s = rows[0]
+    _login_fn = vp.begin_login_b2bsoft if (s.get("processor") or "").lower() in ("b2bsoft", "b2b") else vp.begin_login
+    now = datetime.now(timezone.utc)
+    try:
+        res = _login_fn(s.get("portal_url"), s.get("account_id"), s.get("username"),
+                        s.get("password"), s.get("proxy_url"))
+    except vp.VidaPayLoginError as e:
+        client.schema("commcalc").table("data_source").update(
+            {"auth_status": "error", "auth_message": str(e)[:400], "last_run_at": now.isoformat()})\
+            .eq("id", sid).eq("org_id", org_id).execute()
+        return
+    except Exception as e:
+        client.schema("commcalc").table("data_source").update(
+            {"auth_status": "error", "auth_message": ("Login crashed: " + str(e))[:400],
+             "last_run_at": now.isoformat()})\
+            .eq("id", sid).eq("org_id", org_id).execute()
+        return
+    if res.get("status") == "authenticated":
+        client.schema("commcalc").table("data_source").update(
+            {"auth_status": "authenticated", "auth_message": "Logged in (no 2FA prompt). Session saved.",
+             "session_state": res.get("storage_state"), "pending_state": None,
+             "session_expires_at": (now + timedelta(hours=vp.SESSION_TTL_HOURS)).isoformat(),
+             "last_run_at": now.isoformat()})\
+            .eq("id", sid).eq("org_id", org_id).execute()
+        return
+    hint = res.get("two_fa_hint")
+    client.schema("commcalc").table("data_source").update(
+        {"auth_status": "needs_2fa", "two_fa_hint": hint, "pending_state": res.get("storage_state"),
+         "pending_started_at": now.isoformat(),
+         "auth_message": "Enter the 2FA code sent to you." + (f" ({hint})" if hint else ""),
+         "last_run_at": now.isoformat()})\
+        .eq("id", sid).eq("org_id", org_id).execute()
+
+
+@router.post("/data-sources/{sid}/login/start")
+async def data_source_login_start(sid: str, background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+    """Phase 1 of the interactive portal login. The Playwright login (slow through a residential proxy)
+    runs in the BACKGROUND, so this returns instantly with auth_status='authenticating'; the UI then polls
+    the row until it flips to needs_2fa / authenticated / error. This fixes the 'Failed to fetch' a
+    synchronous, gateway-timeout-exceeding login used to throw."""
+    require_org(org_id)
     client = sb()
     rows = (client.schema("commcalc").table("data_source").select("*")
             .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
@@ -8665,40 +8708,15 @@ async def data_source_login_start(sid: str, org_id: str = ORG_ID):
     s = rows[0]
     if not (s.get("password") and (s.get("username") or s.get("account_id"))):
         raise HTTPException(400, "Enter the Account ID, User ID and Password on this login first, then Log in.")
-    # b2bsoft's SSO is a MULTI-STEP login (Access Code → User ID + Password → 2FA); dispatch to its
-    # dedicated flow. Everything else uses the generic single-page begin_login.
-    _login_fn = vp.begin_login_b2bsoft if (s.get("processor") or "").lower() in ("b2bsoft", "b2b") else vp.begin_login
-    try:
-        res = await run_in_threadpool(_login_fn, s.get("portal_url"),
-                                      s.get("account_id"), s.get("username"), s.get("password"),
-                                      s.get("proxy_url"))
-    except vp.VidaPayLoginError as e:
-        client.schema("commcalc").table("data_source").update(
-            {"auth_status": "error", "auth_message": str(e)[:400],
-             "last_run_at": datetime.now(timezone.utc).isoformat()})\
-            .eq("id", sid).eq("org_id", org_id).execute()
-        raise HTTPException(400, str(e))
-    status = res.get("status")
     now = datetime.now(timezone.utc)
-    if status == "authenticated":
-        client.schema("commcalc").table("data_source").update(
-            {"auth_status": "authenticated", "auth_message": "Logged in (no 2FA prompt).",
-             "session_state": res.get("storage_state"), "pending_state": None,
-             "session_expires_at": (now + timedelta(hours=vp.SESSION_TTL_HOURS)).isoformat(),
-             "last_run_at": now.isoformat()})\
-            .eq("id", sid).eq("org_id", org_id).execute()
-        return {"ok": True, "status": "authenticated",
-                "message": "Logged in — no 2FA required. The session is saved."}
-    hint = res.get("two_fa_hint")
     client.schema("commcalc").table("data_source").update(
-        {"auth_status": "needs_2fa", "two_fa_hint": hint, "pending_state": res.get("storage_state"),
-         "pending_started_at": now.isoformat(),
-         "auth_message": "Enter the 2FA code sent to you." + (f" ({hint})" if hint else ""),
-         "last_run_at": now.isoformat()})\
+        {"auth_status": "authenticating", "auth_message": "Logging in…",
+         "pending_started_at": now.isoformat(), "last_run_at": now.isoformat()})\
         .eq("id", sid).eq("org_id", org_id).execute()
-    return {"ok": True, "status": "needs_2fa", "two_fa_hint": hint,
-            "message": "A verification code was requested. Enter the code to finish signing in."
-                       + (f" Sent to: {hint}" if hint else "")}
+    background_tasks.add_task(_do_portal_login, sid, org_id)
+    return {"ok": True, "status": "authenticating",
+            "message": "Logging in — this can take up to a minute (Chromium + your proxy). "
+                       "Watch the status; the 2FA prompt appears here when it's ready."}
 
 
 @router.post("/data-sources/{sid}/login/verify")

@@ -232,10 +232,25 @@ export default function EmailImportsPage() {
     setAuthBusy(s.id); setSrcMsg('🔐 Signing in…'); setCode('')
     try {
       const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/login/start`, { method: 'POST', body: '{}' })
-      if (r.status === 'authenticated') { setSrcMsg('✅ ' + r.message); setTwoFa(null) }
-      else { setSrcMsg('📩 ' + r.message); setTwoFa({ source: s, hint: r.two_fa_hint }) }
-    } catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)); setTwoFa(null) }
-    finally { setAuthBusy(''); try { const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) } catch { /* keep */ } }
+      if (r.status === 'authenticated') { setSrcMsg('✅ ' + r.message); setTwoFa(null); setAuthBusy('') }
+      else if (r.status === 'needs_2fa') { setSrcMsg('📩 ' + r.message); setTwoFa({ source: s, hint: r.two_fa_hint }); setAuthBusy('') }
+      else { setSrcMsg('⏳ ' + (r.message || 'Logging in…')); pollLogin(s.id) }   // 'authenticating' → poll the row
+    } catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)); setTwoFa(null); setAuthBusy('') }
+    try { const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) } catch { /* keep */ }
+  }
+  // The login runs in the background (Playwright through the proxy is slow); poll the row until it flips.
+  async function pollLogin(id: string) {
+    for (let i = 0; i < 40; i++) {           // ~2 min (40 × 3s)
+      await new Promise(res => setTimeout(res, 3000))
+      let row: any
+      try { const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []); row = (r.sources || []).find((x: any) => x.id === id) } catch { continue }
+      if (!row) continue
+      const st = row.auth_status
+      if (st === 'needs_2fa') { setSrcMsg('📩 ' + (row.auth_message || 'Enter your 2FA code.')); setTwoFa({ source: row, hint: row.two_fa_hint }); setAuthBusy(''); return }
+      if (st === 'authenticated') { setSrcMsg('✅ ' + (row.auth_message || 'Logged in — session saved.')); setTwoFa(null); setAuthBusy(''); return }
+      if (st === 'error') { setSrcMsg('❌ ' + (row.auth_message || 'Login failed.')); setTwoFa(null); setAuthBusy(''); return }
+    }
+    setSrcMsg('⌛ Still logging in — give it a moment and refresh; the proxy may be slow.'); setAuthBusy('')
   }
   async function verify2fa() {
     if (!twoFa || !code.trim()) return
@@ -250,6 +265,7 @@ export default function EmailImportsPage() {
     const st = s.auth_status || 'unconfigured'
     const map: Record<string, { t: string; c: string; b: string }> = {
       authenticated: { t: '✅ Connected', c: '#166534', b: '#dcfce7' },
+      authenticating: { t: '⏳ Logging in…', c: '#1e40af', b: '#dbeafe' },
       needs_2fa: { t: '🔒 Needs 2FA', c: '#9a3412', b: '#ffedd5' },
       error: { t: '⚠️ Login error', c: '#991b1b', b: '#fee2e2' },
       unconfigured: { t: '○ Not connected', c: 'var(--text3)', b: 'var(--surface2)' },
