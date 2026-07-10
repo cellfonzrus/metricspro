@@ -84,11 +84,50 @@ export default function CarrierMappingPage() {
   return (
     <div>
       <div style={{ marginBottom: 14 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🗺️ Carrier Category Map</h1>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📡 Carrier Mapping — Comp Report → 4 Components</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Map each carrier's raw compensation categories to the 4 canonical components — config-driven, so reports work for any carrier. {period}.
+          Manage your carriers, and sort each carrier's raw <b>compensation-report categories</b> into the 4
+          canonical components that power the <b>Total Compensation</b> report. Config-driven — works for any
+          carrier. Period: {period}.
         </p>
       </div>
+
+      {/* How-to (plain-language, step by step) */}
+      <details className="card" style={{ padding: 14, marginBottom: 16, background: 'var(--surface2)' }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>📘 How to use this page (step by step)</summary>
+        <ol style={{ margin: '10px 0 6px 18px', fontSize: 13, lineHeight: 1.7, color: 'var(--text2)' }}>
+          <li><b>Add your carrier</b> in the Carriers table below (Name + optional short code) if it isn't listed.</li>
+          <li>In <b>“Mapping rules for:”</b> pick the carrier you're mapping.</li>
+          <li>Look at <b style={{ color: '#b42318' }}>⚠️ categories that need mapping</b> — these are the REAL category
+            labels found in that carrier's comp data for {period}. For each, choose a component and click <b>Map</b>.
+            (Fastest way — you only map what actually appears.)</li>
+          <li>Or add a rule by hand in the <b>rules table</b>: type a <b>pattern</b>, choose how it should <b>match</b>,
+            and the <b>component</b> it belongs to. Click <b>+ Add</b>.</li>
+          <li>The <b>component totals</b> at the top update as you map. Anything left in <b>UNMAPPED</b> isn't counted —
+            keep mapping until UNMAPPED is $0.</li>
+        </ol>
+        <div style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.7 }}>
+          <b>What the 4 components mean:</b>
+          <div style={{ marginLeft: 4, marginTop: 2 }}>
+            🔵 <b>RESIDUAL</b> — recurring monthly income (MI + ATU) you keep earning each month per active line.<br/>
+            🟢 <b>COMMISSION</b> — the up-front payment for an activation / sale.<br/>
+            🟠 <b>SPIFF</b> — bonuses / promos / incentives on top of commission.<br/>
+            🟣 <b>REIMBURSEMENT</b> — money paid back to cover a cost (device, shipping, fees).
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <b>Match types:</b> <b>exact</b> = the label is exactly this · <b>prefix</b> = label starts with this ·
+            <b>contains</b> = the text appears anywhere (most common, safest) · <b>regex</b> = advanced pattern.
+            &nbsp;<b>Priority:</b> when two rules could match, the <b>lower number wins</b> — give specific rules a
+            number below 100.
+          </div>
+          <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+            ℹ️ <b>Not the same as “Category → Bucket Map”.</b> THIS page classifies the carrier's <b>comp / residual
+            statement</b> for the <b>Total Compensation</b> report (4 components). To classify a carrier's
+            <b> commission-file line items</b> for the <b>Commission Ledger</b> (5 buckets), use{' '}
+            <a href="/commcalc/commission-category-map" style={{ color: 'var(--accent)' }}>Category → Bucket Map</a>.
+          </div>
+        </div>
+      </details>
 
       {/* Carriers manager (add / edit / delete) */}
       <div className="card" style={{ padding: 14, marginBottom: 16 }}>

@@ -74,7 +74,7 @@ export default function CommissionCategoryMapPage() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1100 }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🗺️ Commission Category Map</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🗺️ Category → Bucket Map (Commission Ledger)</h1>
       <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 8 }}>
         Rules that classify a carrier's labels into the five canonical buckets. First match by ascending
         priority wins; payouts are <b>negative</b> amounts. Pick a template (Total / Boost / your own) — a
@@ -88,6 +88,36 @@ export default function CommissionCategoryMapPage() {
       )}
       {usingDefaults && ready && <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>No saved rules for this template yet — showing built-in defaults. Save one to start a custom set.</div>}
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>{msg}</div>}
+
+      {/* How-to (plain-language, step by step) */}
+      <details style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface)', padding: 12, marginBottom: 14 }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>📘 How to use this page (step by step)</summary>
+        <ol style={{ margin: '10px 0 6px 18px', fontSize: 13, lineHeight: 1.7, color: 'var(--text2)' }}>
+          <li>Pick the <b>Template</b> for the carrier/file you're mapping (Total, Boost, or <b>＋ New template</b> for your own).</li>
+          <li><b>Import that carrier's commission file</b> on the{' '}
+            <a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,#2563eb)' }}>Commission Ledger</a> page,
+            so its real labels appear in the table at the bottom of this page.</li>
+          <li>Scroll to <b>“Observed labels in the ledger”</b> — <b style={{ color: '#9a3412' }}>orange rows land in
+            “other”</b> (not yet classified). Those are exactly what you need to map.</li>
+          <li>In <b>“Add rule”</b>: choose the <b>field</b> to look at, how to <b>match</b> it, type the <b>pattern</b>,
+            choose the <b>bucket</b> it belongs to, then <b>Add</b>.</li>
+          <li>Re-check the observed table — the row should now land in your bucket. Totals show on the Commission Ledger.</li>
+        </ol>
+        <div style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.7 }}>
+          <b>Field:</b> <b>product_name</b> = the item / description text · <b>order_type</b> = the transaction type.
+          &nbsp;<b>Op:</b> <b>contains</b> = the text appears anywhere (most common) · <b>equals</b> = exact match.
+          &nbsp;<b>Sign:</b> <b>negative only</b> = count it only when the amount is a payout (carriers post payouts as
+          negatives) — leave this unless you know a bucket uses positive amounts.
+          &nbsp;<b>Priority:</b> lower number is tested first and the <b>first match wins</b>, so put specific rules
+          above generic ones.
+          <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+            ℹ️ <b>Not the same as “Carrier Mapping”.</b> THIS page classifies a carrier's <b>commission-file line
+            items</b> into the 5 <b>Commission Ledger</b> buckets. To classify a carrier's <b>comp / residual
+            statement</b> into the 4 components for <b>Total Compensation</b>, use{' '}
+            <a href="/commcalc/carrier-mapping" style={{ color: 'var(--accent,#2563eb)' }}>Carrier Mapping</a>.
+          </div>
+        </div>
+      </details>
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
         <label style={{ fontSize: 13, color: 'var(--text2)' }}>Template</label>
