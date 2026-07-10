@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, fmt } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
+import { MultiSelect } from '@/lib/multiselect'
 
 // The sales actually done across all stores, from the imported Sales Transaction Details
 // (raw_sales, falling back to the daily email feed). One row per store + rep + day; ReportShell
@@ -26,6 +27,8 @@ export default function SalesReportPage() {
   const [accSel, setAccSel] = useState<{ d: string[]; c: string[]; p: string[]; a: string[] }>({ d: [], c: [], p: [], a: [] })
   const [accMsg, setAccMsg] = useState('')
   const [kwInput, setKwInput] = useState('')
+  const [selMarkets, setSelMarkets] = useState<string[]>([])   // multi-select market filter
+  const [selStores, setSelStores] = useState<string[]>([])     // multi-select store filter
 
   function openDiag() {
     setDiag({}); setDiagBusy(true)
@@ -69,7 +72,19 @@ export default function SalesReportPage() {
   useEffect(() => { load() }, [load])
 
   const rows: any[] = data?.rows || []
-  const t = data?.totals || {}
+  const marketOpts: string[] = data?.markets || []
+  const storeOpts: string[] = data?.stores || []
+  // Apply the multi-select market/store filters in-memory; ReportShell handles the rest.
+  const fRows = rows.filter(r =>
+    (selMarkets.length === 0 || selMarkets.includes(r.market)) &&
+    (selStores.length === 0 || selStores.includes(r.store)))
+  const filtered = selMarkets.length > 0 || selStores.length > 0
+  // Tiles reflect the current filter (fall back to the backend period totals when nothing is filtered).
+  const sum = (k: string) => fRows.reduce((s, r) => s + (Number(r[k]) || 0), 0)
+  const t = filtered
+    ? { revenue: sum('revenue'), gp: sum('gp'), accessory_rev: sum('accessory_rev'),
+        txns: sum('txns'), activations: sum('activations'), byod: sum('byod'), upgrades: sum('upgrades') }
+    : (data?.totals || {})
   // Distinct months available across both sales tables (for the picker).
   const months = Array.from(new Set((data?.periods || []).map((p: string) => {
     const s = String(p)
@@ -79,6 +94,7 @@ export default function SalesReportPage() {
 
   const cols: ExportColumn[] = [
     { header: 'Store', get: r => r.store, role: 'store' },
+    { header: 'Market', get: r => r.market || '—' },
     { header: 'Rep', get: r => r.salesperson, role: 'rep' },
     { header: 'Date', get: r => r.trans_date, type: 'date' },
     { header: 'Txns', get: r => r.txns, align: 'right' },
@@ -116,6 +132,9 @@ export default function SalesReportPage() {
               </select>
             : <input type="month" style={sel} value={period.length === 7 ? period : thisMonth()} onChange={e => setPeriod(e.target.value)} />}
         </label>
+        {marketOpts.length > 0 && <MultiSelect allLabel="All markets" width={150} value={selMarkets} options={marketOpts} onChange={setSelMarkets} />}
+        {storeOpts.length > 0 && <MultiSelect allLabel="All stores" width={150} value={selStores} options={storeOpts} onChange={setSelStores} searchable />}
+        {filtered && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => { setSelMarkets([]); setSelStores([]) }}>Clear filters</button>}
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openDiag}>🔍 Data diagnostics</button>
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openAccCfg}>⚙️ Classification settings</button>
         {data?.source === 'daily_sales_feed' && <span style={{ fontSize: 11, color: '#b45309' }}>source: daily email feed (raw_sales not promoted yet — enable ‘auto’ on Connectors)</span>}
@@ -134,23 +153,24 @@ export default function SalesReportPage() {
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
-      ) : rows.length === 0 ? (
+      ) : fRows.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
-          No sales for {period}. Sales come from the imported Sales Transaction Details — check the month, or that the
-          daily feed / monthly upload has loaded on the Imports pages.
+          {filtered
+            ? <>No sales match the selected market/store filter for {period}. <span style={{ color: 'var(--accent)', cursor: 'pointer' }} onClick={() => { setSelMarkets([]); setSelStores([]) }}>Clear filters</span>.</>
+            : <>No sales for {period}. Sales come from the imported Sales Transaction Details — check the month, or that the daily feed / monthly upload has loaded on the Imports pages.</>}
         </div>
       ) : (
         <ReportShell
           title={`Sales Report — ${period}`}
-          subtitle="All stores · from Sales Transaction Details"
+          subtitle={`${filtered ? `${fRows.length} filtered rows` : 'All stores'} · from Sales Transaction Details`}
           filename={`sales-report-${period.replace(/\s+/g, '-')}`}
           columns={cols}
-          rows={rows}
+          rows={fRows}
           onRowClick={openDrill}
         />
       )}
 
-      {!loading && rows.length > 0 && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>💡 Click any row to see the individual transactions behind it.</div>}
+      {!loading && fRows.length > 0 && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>💡 Click any row to see the individual transactions behind it.</div>}
 
       {/* Transaction drill-down */}
       {drill && (

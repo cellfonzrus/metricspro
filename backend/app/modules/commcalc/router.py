@@ -5807,6 +5807,32 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
         elif tid and _cls == "premium":
             a["_act"].add(tid)
 
+    # Resolve each store to its market (store_mapping) so the report can filter by market —
+    # keyed by address, store_code, or leading store-number, matching commission-trend's resolver.
+    import re as _re_sr
+    sm_rows = (client.schema("commcalc").table("store_mapping")
+               .select("store_code,store_address,market").eq("org_id", org_id).execute().data) or []
+    def _lead_sr(s):
+        m = _re_sr.match(r"\s*(\d+)", str(s or "")); return m.group(1) if m else ""
+    mkt_by_code, mkt_by_addr, mkt_by_num = {}, {}, {}
+    for s in sm_rows:
+        mk = (s.get("market") or "").strip()
+        if not mk:
+            continue
+        code = str(s.get("store_code") or "").strip()
+        addr = str(s.get("store_address") or "").strip()
+        if code:
+            mkt_by_code[code] = mk
+        if addr:
+            mkt_by_addr[addr.lower()] = mk
+        n = _lead_sr(addr)
+        if n:
+            mkt_by_num.setdefault(n, mk)
+    def _market_for(store):
+        st = str(store or "").strip()
+        return (mkt_by_addr.get(st.lower()) or mkt_by_code.get(st)
+                or mkt_by_num.get(_lead_sr(st)) or "")
+
     out = []
     for a in agg.values():
         a["txns"] = len(a.pop("_txn"))
@@ -5815,6 +5841,7 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
         a["upgrades"] = len(a.pop("_upg"))
         for key in ("accessory_rev", "revenue", "gp"):
             a[key] = round(a[key], 2)
+        a["market"] = _market_for(a["store"])
         out.append(a)
     out.sort(key=lambda r: (r["store"], r["trans_date"], r["salesperson"]))
     from app.modules.storeops.router import scope_keyset, in_keyset
