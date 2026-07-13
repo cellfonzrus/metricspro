@@ -1,3 +1,15 @@
 __pycache__/
 *.pyc
 _PENDING_MIGRATIONS_*.sql
+
+# Secrets — never commit. The deploy habit here is `git add -A`, so an unignored
+# backend/.env (SUPABASE_SERVICE_KEY, FIELD_ENCRYPTION_KEY, portal creds) would be
+# swept straight into a public commit.
+.env
+.env.*
+!.env.example
+*.env
+*creds*
+.metricspro_token
+*.pem
+*.key
