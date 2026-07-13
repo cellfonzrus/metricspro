@@ -8529,6 +8529,10 @@ def save_data_source(body: dict, org_id: str = ORG_ID):
             row[k] = None
     if "password" in row and not (row.get("password") or "").strip():
         row.pop("password")   # blank password on the form = keep the saved one
+    if (row.get("portal_url") or "").strip():
+        # a scheme-less host crashes the Playwright login ("Cannot navigate to invalid URL")
+        pu = row["portal_url"].strip()
+        row["portal_url"] = pu if "://" in pu else "https://" + pu.lstrip("/")
     client = sb()
     try:
         if body.get("id"):

@@ -71,6 +71,17 @@ class VidaPayPortalError(Exception):
     """Logged in fine, but a later step (report navigation/download/parse) failed."""
 
 
+def _norm_url(u, fallback):
+    """Playwright rejects a scheme-less URL ("vidapaycrm.com" -> "Cannot navigate to invalid URL").
+    Operators naturally type the bare host, so add the scheme they omitted."""
+    u = (u or "").strip()
+    if not u:
+        return fallback
+    if "://" not in u:
+        u = "https://" + u.lstrip("/")
+    return u
+
+
 def _proxy_arg(proxy_url):
     """Parse a proxy URL (e.g. http://user:pass@host:port or socks5://host:port) into Playwright's
     proxy dict {server, username?, password?}. Datacenter IPs get walled by VidaPay's bot-management,
@@ -420,7 +431,7 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
         raise VidaPayLoginError(
             "Playwright/Chromium is not available in the backend image. Add "
             "`RUN playwright install --with-deps chromium` to backend/Dockerfile.")
-    base_url = (url or DEFAULT_URL).strip() or DEFAULT_URL
+    base_url = _norm_url(url, DEFAULT_URL)
     proxy = _proxy_arg(proxy_url)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
@@ -489,7 +500,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
         from playwright.sync_api import sync_playwright
     except Exception:
         raise VidaPayLoginError("Playwright/Chromium is not available in the backend image.")
-    base_url = (url or B2BSOFT_URL).strip() or B2BSOFT_URL
+    base_url = _norm_url(url, B2BSOFT_URL)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
         ctx = _new_context(browser, proxy=_proxy_arg(proxy_url))
@@ -653,7 +664,7 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
         raise VidaPayLoginError("Playwright/Chromium is not available in the backend image.")
     if not pending_state:
         raise VidaPayAuthError("No pending login to verify — start the login again.")
-    base_url = (url or DEFAULT_URL).strip() or DEFAULT_URL
+    base_url = _norm_url(url, DEFAULT_URL)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
         ctx = _new_context(browser, storage_state=pending_state, proxy=_proxy_arg(proxy_url))
@@ -716,7 +727,7 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
         raise VidaPayLoginError("Playwright/Chromium is not available in the backend image.")
     if not pending_state:
         raise VidaPayAuthError("No pending login to verify — start the login again.")
-    base_url = (url or B2BSOFT_URL).strip() or B2BSOFT_URL
+    base_url = _norm_url(url, B2BSOFT_URL)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
         ctx = _new_context(browser, storage_state=pending_state, proxy=_proxy_arg(proxy_url))
@@ -834,7 +845,7 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
         raise VidaPayLoginError("Playwright/Chromium is not available in the backend image.")
     if not session_state:
         raise VidaPayAuthError("Not authenticated yet — click “Log in” and complete 2FA first.")
-    base_url = (url or DEFAULT_URL).strip() or DEFAULT_URL
+    base_url = _norm_url(url, DEFAULT_URL)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
         ctx = _new_context(browser, storage_state=session_state, proxy=_proxy_arg(proxy_url))
@@ -885,7 +896,7 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
         raise VidaPayLoginError("Playwright/Chromium is not available in the backend image.")
     if not session_state:
         raise VidaPayAuthError("Not authenticated yet — click “Log in” and complete 2FA first.")
-    base_url = (url or B2BSOFT_URL).strip() or B2BSOFT_URL
+    base_url = _norm_url(url, B2BSOFT_URL)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
         ctx = _new_context(browser, storage_state=session_state, proxy=_proxy_arg(proxy_url))
