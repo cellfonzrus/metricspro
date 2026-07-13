@@ -82,6 +82,20 @@ def _norm_url(u, fallback):
     return u
 
 
+def egress_hint(proxy_url):
+    """Explains WHICH egress a walled attempt actually used — without this an operator cannot tell
+    'no proxy configured' (went out from the datacenter IP the WAF blocks) from 'proxy configured but
+    its IP is also walled'. Appended to WAF errors by the router, which holds the source's proxy_url."""
+    arg = _proxy_arg(proxy_url)
+    if not arg:
+        return (" No egress proxy is set on this source, so the login went out from the server's "
+                "datacenter IP — exactly what the WAF blocks. Set a residential/ISP proxy on the source, "
+                "click \u2699 Test proxy (expect green: routed + US), then Log in again.")
+    return (" This attempt WAS routed through the configured proxy (%s), so that egress IP is walled too. "
+            "Try a different residential/ISP IP — a dedicated ISP IP holds up better than a rotating "
+            "datacenter pool. Test proxy confirms routing, not IP reputation." % arg.get("server"))
+
+
 def _proxy_arg(proxy_url):
     """Parse a proxy URL (e.g. http://user:pass@host:port or socks5://host:port) into Playwright's
     proxy dict {server, username?, password?}. Datacenter IPs get walled by VidaPay's bot-management,
@@ -213,8 +227,8 @@ def _wait_settle(page, timeout_s=25):
         waited += 1.5
     if _looks_like_cloudflare(page):
         raise VidaPayLoginError(
-            "Cloudflare is blocking this egress IP (bot challenge did not clear). VidaPay must be "
-            "reachable from an allow-listed / residential IP — the same WAF caveat as ePay.")
+            "The portal's WAF is blocking this egress IP (bot challenge did not clear). It must be "
+            "reached from an allow-listed / residential IP — the same WAF caveat as ePay.")
 
 
 # ── heuristic field finders (frame-aware; credential-free; calibrated on first live login) ─────

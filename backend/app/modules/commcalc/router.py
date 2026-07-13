@@ -8670,8 +8670,11 @@ def _do_portal_login(sid: str, org_id: str):
         res = _login_fn(s.get("portal_url"), s.get("account_id"), s.get("username"),
                         s.get("password"), s.get("proxy_url"))
     except vp.VidaPayLoginError as e:
+        msg = str(e)
+        if "egress" in msg.lower() or "waf" in msg.lower():
+            msg += vp.egress_hint(s.get("proxy_url"))   # which IP did we actually go out from?
         client.schema("commcalc").table("data_source").update(
-            {"auth_status": "error", "auth_message": str(e)[:400], "last_run_at": now.isoformat()})\
+            {"auth_status": "error", "auth_message": msg[:400], "last_run_at": now.isoformat()})\
             .eq("id", sid).eq("org_id", org_id).execute()
         return
     except Exception as e:
