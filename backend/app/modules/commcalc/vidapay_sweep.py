@@ -82,18 +82,43 @@ def _norm_url(u, fallback):
     return u
 
 
+def _egress_ip(proxy_url=None, timeout=12):
+    """The public IP a request actually leaves from (through `proxy_url`, or direct). None on failure."""
+    try:
+        import requests
+        px = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+        r = requests.get("https://ipinfo.io/json", proxies=px, timeout=timeout,
+                         headers={"User-Agent": "MetricsPro-egress-check/1.0"})
+        return (r.json() or {}).get("ip") if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
 def egress_hint(proxy_url):
-    """Explains WHICH egress a walled attempt actually used — without this an operator cannot tell
-    'no proxy configured' (went out from the datacenter IP the WAF blocks) from 'proxy configured but
-    its IP is also walled'. Appended to WAF errors by the router, which holds the source's proxy_url."""
+    """Explains WHICH egress a walled attempt actually used. A configured proxy is NOT proof that it took
+    effect — a wrong scheme or missing credentials silently leaves traffic on the datacenter IP — so this
+    RESOLVES the real egress IP and compares it against the server's own instead of assuming."""
     arg = _proxy_arg(proxy_url)
+    fmt = ("Decodo ISP wants http://USER:PASS@isp.decodo.com:10001 — the http scheme, WITH credentials "
+           "(an https:// scheme or a credential-less URL both fail).")
     if not arg:
-        return (" No egress proxy is set on this source, so the login went out from the server's "
-                "datacenter IP — exactly what the WAF blocks. Set a residential/ISP proxy on the source, "
-                "click \u2699 Test proxy (expect green: routed + US), then Log in again.")
-    return (" This attempt WAS routed through the configured proxy (%s), so that egress IP is walled too. "
-            "Try a different residential/ISP IP — a dedicated ISP IP holds up better than a rotating "
-            "datacenter pool. Test proxy confirms routing, not IP reputation." % arg.get("server"))
+        return (" No egress proxy is set on this source, so the login went out from the server's datacenter "
+                "IP — exactly what the WAF blocks. Set a residential/ISP proxy on the source, click Test "
+                "proxy (expect green: routed + US), then Log in again. " + fmt)
+
+    server = arg.get("server")
+    via, direct = _egress_ip(proxy_url), _egress_ip(None)
+    if not via:
+        return (" The configured proxy (%s) did NOT answer, so this attempt egressed from the server's own "
+                "datacenter IP — which is what the WAF blocked. Fix the proxy URL first: %s Then click "
+                "Test proxy until it reports routed + US." % (server, fmt))
+    if direct and via == direct:
+        return (" The configured proxy (%s) is NOT taking effect — the egress IP (%s) is still the server's "
+                "own datacenter IP. Fix the proxy URL first: %s" % (server, via, fmt))
+    return (" Routed through %s — the real egress IP was %s, and the WAF is blocking THAT IP too. The proxy "
+            "IS working, so the IP itself is burned or untrusted: try a different dedicated ISP IP. If a clean "
+            "US ISP IP is still challenged, the block is on the headless-browser fingerprint, not the IP."
+            % (server, via))
 
 
 def _proxy_arg(proxy_url):
