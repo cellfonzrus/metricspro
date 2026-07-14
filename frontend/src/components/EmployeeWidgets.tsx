@@ -4,6 +4,11 @@ import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip,
   CartesianGrid, Cell, ReferenceLine,
 } from 'recharts'
+// Self-contained, self-fetching device lookup (commission-16). Renders its OWN card chrome + search box;
+// money rows are gated server-side (the 'device_commission' DATA_GRANT), so mounting it for every employee
+// is safe — non-granted reps still see history, the sell/upgrade prompt, and tenure. Reusable widget
+// intentionally shared out of the commcalc route tree (see its header comment).
+import DeviceHistoryLookup from '@/app/(platform)/commcalc/device-history/DeviceHistoryLookup'
 
 // Shared employee widget grid — rendered by BOTH the admin /employee dashboard (pick-anyone) and the
 // self-service kiosk /portal (scoped to the signed-in employee). Pure presentation: the caller fetches
@@ -87,6 +92,8 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16, alignItems: 'start' }}>
+
+      {on('device_history') && <DeviceHistoryLookup />}
 
       {on('phone_priority') && (data?.phone_priority?.length > 0) && (
         <Card title="Sell These Phones Today" icon="📱">

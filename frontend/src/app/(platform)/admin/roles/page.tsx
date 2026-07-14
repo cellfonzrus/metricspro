@@ -38,7 +38,7 @@ const EMP_WIDGETS = [
   { k: 'hours', label: 'Hours worked' }, { k: 'commission', label: 'Commission earned' },
   { k: 'targets', label: 'Targets' }, { k: 'report_card', label: 'Report card' },
   { k: 'commission_tracking', label: 'Commission tracking' }, { k: 'flags', label: 'Flags' },
-  { k: 'chargebacks', label: 'Chargebacks' },
+  { k: 'chargebacks', label: 'Chargebacks' }, { k: 'device_history', label: 'Device history' },
 ]
 
 type Role = { id: number; name: string; display_name: string; permissions: any }

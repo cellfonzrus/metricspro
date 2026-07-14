@@ -1907,7 +1907,8 @@ async def purge_employee(body: dict, org_id: str = ORG_ID):
 
 # ── Employee Dashboard (role-gated widgets) ───────────────────────────────────
 EMP_WIDGETS = ["schedule", "timeoff", "hours", "commission", "targets",
-               "report_card", "commission_tracking", "flags", "chargebacks", "phone_priority"]
+               "report_card", "commission_tracking", "flags", "chargebacks", "phone_priority",
+               "device_history"]
 
 
 def _emp_period(period):

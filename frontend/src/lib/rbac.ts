@@ -65,6 +65,8 @@ export function hasReport(perms: Permissions, area: string): boolean {
 export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
   { key: 'carrier_residual', label: 'Carrier residual (raw carrier data)',
     help: 'Raw carrier/processor residual reports (raw_mi-derived). Only enforced when the tenant sets residual visibility to "permissioned".' },
+  { key: 'device_commission', label: 'Device history commission amounts',
+    help: 'Per-period commission & rebate $ on the Device History Lookup (backend commcalc `_can_view_device_commission`). DEFAULT-CLOSED — admin-only until granted; the device history / prompts / tenure stay visible to everyone regardless.' },
 ]
 // Frontend mirror of backend commcalc `_can_view_carrier_residual` — KEEP IN SYNC. Super-admins /
 // company-wide ('all') roles / admins always pass; otherwise the grant is honored under either the
