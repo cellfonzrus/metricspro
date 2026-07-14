@@ -10,6 +10,7 @@ import EntityPicker, { US_STATES } from '@/components/EntityPicker'
 // the work state (so the right state tax form appears), and generates the credential-less QR a pre-start
 // employee scans to fill & upload their own forms. Backed by /api/v1/hr/onboarding/* (migration 073).
 
+type DocFile = { id: string; name: string; uploaded_at?: string; uploaded_by?: string; uploaded_role?: string; employee_can_delete?: boolean }
 type Task = {
   id: string; label: string; description?: string; owner_role: string; doc_url?: string; doc_label?: string
   is_fillable?: boolean; requires_upload?: boolean; applies_state?: string | null
@@ -19,6 +20,8 @@ type Task = {
   form_data?: Record<string, string> | null; validation?: { checkable?: boolean; missing?: string[]; empty?: string[]; filled?: number; fields?: number; signed?: boolean | null; online?: boolean } | null
   // migration 401 (items 1 / 4 / 6)
   is_mandatory?: boolean; work_auth?: boolean; sample_name?: string | null; sample_url?: string | null
+  // migration 402 (people-4): the full file list — HR can delete any of these at any time
+  documents?: DocFile[]
 }
 type Cat = { id: string; key: string; label: string; tasks: Task[] }
 type Field = { key: string; label: string; sensitive?: boolean }
@@ -68,11 +71,29 @@ export default function EmployeeOnboardingPage() {
   const [prov, setProv] = useState<{ role_name: string; override: boolean; reason: string; override_compliance: boolean; compliance_reason: string } | null>(null)
   const [inviteRes, setInviteRes] = useState<any>(null)
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  // migration 402 recovery tool: the pre-fix bug orphaned (never destroyed) files that a re-upload
+  // overwrote — this lets HR find them by filename and re-attach one to the right task.
+  const [orphans, setOrphans] = useState<{ path: string; name: string; last_modified?: string; url?: string }[] | null>(null)
+  const [orphanBusy, setOrphanBusy] = useState(false)
 
   async function load() {
     try { setD(await api(`/api/v1/hr/onboarding/employee/${employeeId}`)) }
     catch (e: any) { setMsg(e?.message || 'Load failed') }
     try { const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/events`); setEvents(r?.events || []) } catch { /* audit optional */ }
+  }
+  async function checkOrphans() {
+    setOrphanBusy(true)
+    try { const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/orphaned-files`); setOrphans(r?.orphaned || []) }
+    catch (e: any) { flash(e?.message || 'Could not check — is migration 402 applied?') }
+    setOrphanBusy(false)
+  }
+  async function reattachOrphan(path: string, taskId: string) {
+    if (!taskId) { flash('Pick which document this file belongs to first.'); return }
+    try {
+      await api(`/api/v1/hr/onboarding/employee/${employeeId}/task/${taskId}/reattach-orphan`, { method: 'POST',
+        body: JSON.stringify({ path, actor: user?.full_name || user?.email || 'HR' }) })
+      flash('File re-attached ✓'); setOrphans(o => (o || []).filter(x => x.path !== path)); load()
+    } catch (e: any) { flash(e?.message || 'Could not re-attach') }
   }
   useEffect(() => { load() }, [employeeId])  // eslint-disable-line react-hooks/exhaustive-deps
   function flash(m: string) { setMsg(m); setTimeout(() => setMsg(''), 4000) }
@@ -164,6 +185,19 @@ export default function EmployeeOnboardingPage() {
   async function viewDoc(t: Task) {
     try { const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/task/${t.id}/doc`); if (r?.url) window.open(r.url, '_blank') }
     catch (e: any) { flash(e?.message || 'No document') }
+  }
+  // migration 402: a document/task now holds a LIST of files (SS-card front + back, a multi-page
+  // form, …) — a new upload always APPENDS. HR/admin may delete any file, at any time.
+  async function viewDocumentFile(t: Task, f: DocFile) {
+    try { const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/task/${t.id}/document/${f.id}`); if (r?.url) window.open(r.url, '_blank') }
+    catch (e: any) { flash(e?.message || 'Could not open that file') }
+  }
+  async function deleteDocumentFile(t: Task, f: DocFile) {
+    if (!window.confirm(`Remove ${f.name}? This cannot be undone.`)) return
+    try {
+      await api(`/api/v1/hr/onboarding/employee/${employeeId}/task/${t.id}/document/${f.id}?actor=${encodeURIComponent(user?.full_name || user?.email || 'HR')}`, { method: 'DELETE' })
+      flash(`Removed ${f.name}`); load()
+    } catch (e: any) { flash(e?.message || 'Could not remove that file') }
   }
   async function mintToken() {
     if (!gen.value.trim()) { flash(gen.kind === 'dob' ? 'Enter the date of birth' : 'Enter the last 4 of SSN'); return }
@@ -349,6 +383,27 @@ export default function EmployeeOnboardingPage() {
           </div>
         </div>
 
+        {/* migration 402 recovery tool: files a PRE-fix re-upload silently overwrote weren't destroyed
+            (nothing in the upload path ever deletes the storage object) — just orphaned. HR can look and
+            re-attach one by filename to the right document below. */}
+        <div style={{ border: '1px dashed var(--border)', borderRadius: 10, padding: 12, marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)' }}>🗄 Recoverable files</span>
+            <span style={{ fontSize: 11, color: 'var(--text3)' }}>Before this fix, a re-upload could silently replace an earlier file. Check here for anything of this employee&apos;s that&apos;s still in storage but no longer attached to a document.</span>
+            <div style={{ flex: 1 }} />
+            <button style={{ ...btn, fontSize: 11 }} disabled={orphanBusy} onClick={checkOrphans}>{orphanBusy ? 'Checking…' : 'Check for recoverable files'}</button>
+          </div>
+          {orphans && (
+            orphans.length === 0
+              ? <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>Nothing recoverable found — every stored file is already attached to a document.</div>
+              : <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {orphans.map(o => (
+                    <OrphanRow key={o.path} orphan={o} tasks={d.categories.flatMap(c => c.tasks)} onReattach={reattachOrphan} />
+                  ))}
+                </div>
+          )}
+        </div>
+
         {/* checklist by collapsible category */}
         {d.categories.map(c => {
           const isOpen = open[c.id] ?? true
@@ -392,17 +447,33 @@ export default function EmployeeOnboardingPage() {
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
                     {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ ...btn, color: 'var(--accent,#2563eb)', textDecoration: 'none' }}>🔗 {t.doc_label || 'Open form'}</a>}
                     {t.sample_url && <a href={t.sample_url} target="_blank" rel="noreferrer" style={{ ...btn, color: 'var(--accent,#2563eb)', textDecoration: 'none' }} title="Compare this submission against a correctly completed example">👁 Completed sample</a>}
-                    {t.has_document
+                    {/* migration 402: a pre-402 row (or one that's never had documents[] populated) falls
+                        back to the old single-file view button — never a regression for untouched data */}
+                    {t.has_document && (!t.documents || t.documents.length === 0)
                       ? <button style={btn} onClick={() => viewDoc(t)}>📄 View {t.document_name ? `(${t.document_name})` : 'upload'}</button>
-                      : <span style={{ fontSize: 12, color: 'var(--text3)' }}>{t.requires_upload ? 'no document yet' : ''}</span>}
+                      : (!t.has_document && <span style={{ fontSize: 12, color: 'var(--text3)' }}>{t.requires_upload ? 'no document yet' : ''}</span>)}
                     {t.has_signature && <button style={btn} onClick={() => viewSignature(t)}>✍️ View signature</button>}
-                    <label style={{ ...btn }}>⬆ Upload<input type="file" accept={acceptAttr(d?.tenant_config?.upload_allowed_formats)} style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadDoc(t, f); e.currentTarget.value = '' }} /></label>
+                    <label style={{ ...btn }}>{t.has_document ? '+ Add file' : '⬆ Upload'}<input type="file" accept={acceptAttr(d?.tenant_config?.upload_allowed_formats)} style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadDoc(t, f); e.currentTarget.value = '' }} /></label>
                     {t.status !== 'verified' && <button style={{ ...btn, color: '#059669' }} onClick={() => setStatus(t, 'verified')}>✓ Verify</button>}
                     {(t.status === 'submitted' || t.status === 'verified') && <button style={{ ...btn, color: '#dc2626' }} onClick={() => returnTask(t)}>↩ Return for fixes</button>}
                     {t.status !== 'na' && <button style={btn} onClick={() => setStatus(t, 'na')}>N/A</button>}
                     {(t.status === 'verified' || t.status === 'na') && <button style={btn} onClick={() => setStatus(t, 'pending')}>↺ Reset</button>}
                     {t.verified_by && t.status === 'verified' && <span style={{ fontSize: 11, color: 'var(--text3)' }}>by {t.verified_by}{t.verified_at ? ` · ${String(t.verified_at).slice(0, 10)}` : ''}</span>}
                   </div>
+                  {/* migration 402: every file on this document, each independently viewable — HR/admin
+                      may delete any of them, at any time (unlike the employee's own portal, which is
+                      gated to only-while-pending, self-uploaded files). */}
+                  {(t.documents || []).length > 1 && (
+                    <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      {(t.documents || []).map(f => (
+                        <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                          <button onClick={() => viewDocumentFile(t, f)} style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent,#2563eb)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}>📄 {f.name}</button>
+                          <span style={{ fontSize: 10, color: 'var(--text3)' }}>{f.uploaded_role === 'admin' ? 'HR' : f.uploaded_role === 'recovered' ? 'recovered' : 'employee'}{f.uploaded_at ? ` · ${String(f.uploaded_at).slice(0, 10)}` : ''}</span>
+                          <button onClick={() => deleteDocumentFile(t, f)} title="Remove this file" style={{ background: 'none', border: 'none', padding: 0, color: '#dc2626', cursor: 'pointer', fontSize: 12 }}>✕ remove</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -426,6 +497,25 @@ export default function EmployeeOnboardingPage() {
           </div>
         )}
       </>}
+    </div>
+  )
+}
+
+// migration 402 recovery tool: one recoverable file + a "which document is this" picker + a Reattach
+// button. A tiny local component so its own pending taskId selection doesn't clutter the parent state.
+function OrphanRow({ orphan, tasks, onReattach }: { orphan: { path: string; name: string; last_modified?: string; url?: string }; tasks: Task[]; onReattach: (path: string, taskId: string) => void }) {
+  const [taskId, setTaskId] = useState('')
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, flexWrap: 'wrap' }}>
+      {orphan.url
+        ? <a href={orphan.url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent,#2563eb)' }}>📄 {orphan.name}</a>
+        : <span>📄 {orphan.name}</span>}
+      <span style={{ fontSize: 10, color: 'var(--text3)' }}>{orphan.last_modified ? String(orphan.last_modified).slice(0, 10) : ''}</span>
+      <select style={inp} value={taskId} onChange={e => setTaskId(e.target.value)}>
+        <option value="">Which document is this?</option>
+        {tasks.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+      </select>
+      <button style={btnP} onClick={() => onReattach(orphan.path, taskId)}>Re-attach</button>
     </div>
   )
 }

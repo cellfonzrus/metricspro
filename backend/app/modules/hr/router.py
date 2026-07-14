@@ -399,6 +399,37 @@ def _format_allowed(data: bytes, filename: str, allowed):
     return sniffed in allow, sniffed
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# MULTI-FILE DOCUMENTS (migration 402, people-4) — a document/task holds a LIST of files (SS-card
+# front + back, a multi-page form, …). New uploads APPEND; nothing is ever auto-deleted. Delete is a
+# separate, explicit, always-audited action with two permission tiers:
+#   ADMIN/HR  — may delete any file, any time.
+#   EMPLOYEE  — may delete only a file THEY uploaded, and only while the owning task is still 'pending'
+#               (never once it has moved to submitted/returned/verified/na). This is deliberately the
+#               ONLY status that counts as "still in their editable in-progress state" — it is not
+#               vacuous: a task legitimately sits at 'pending' with files still attached whenever HR
+#               uses the existing "↺ Reset" action, or before the very first file of a task lands. The
+#               day-to-day "I picked the wrong photo" case is handled client-side (the portal stages
+#               picked files locally and lets the employee drop one from the batch BEFORE it's ever
+#               POSTed — nothing to delete server-side because nothing was sent yet); this gate is the
+#               server-enforced backstop for the case where a file genuinely IS already on the server
+#               and the task hasn't left 'pending'. Flagged for Gate 2 exactly like the compliance
+#               pack's override-hatch call: if the owner wants employees to also self-delete out of a
+#               freshly-'submitted' (not yet reviewed) task, that is a bigger state-machine change and
+#               deliberately NOT what this package builds — tell us at Gate 2 and we'll widen it.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _employee_can_delete_document(task_status, file_uploaded_role):
+    """Pure function — the one and only rule an employee-initiated delete is judged against. Kept
+    separate from any DB/HTTP concern so it's directly provable (see the proof harness)."""
+    return task_status == "pending" and file_uploaded_role == "employee"
+
+
+def _doc_row(org_id, employee_id, task_id):
+    rows = (_so().table("employee_onboarding").select("*").eq("org_id", org_id)
+            .eq("employee_id", employee_id).eq("task_id", task_id).limit(1).execute().data) or []
+    return rows[0] if rows else {}
+
+
 def _check_upload_format(org_id, data, filename):
     allowed = _tenant_config(org_id)["upload_allowed_formats"]
     ok, fmt = _format_allowed(data, filename, allowed)
@@ -722,8 +753,17 @@ def onboarding_for_employee(employee_id: str, org_id: str = ORG_ID):
                     continue   # other-state (or unset) — hide until the work state is chosen
             rec = st.get(t["id"]) or {}
             status = rec.get("status") or "pending"
+            # migration 402: the full multi-file list, each entry annotated with whether the EMPLOYEE (as
+            # opposed to HR/admin) may delete it right now — see _employee_can_delete_document. Computed
+            # here, once, server-side, so every caller (this HR-side payload AND _onboarding_bundle's
+            # employee-facing trim of it below) renders the identical rule instead of re-deriving it.
+            docs_raw = rec.get("documents") or []
+            documents = [{**f, "employee_can_delete": _employee_can_delete_document(status, f.get("uploaded_role"))}
+                        for f in docs_raw]
             tasks.append({**t, "status": status, "note": rec.get("note"),
-                          "document_name": rec.get("document_name"), "has_document": bool(rec.get("document_path")),
+                          "document_name": rec.get("document_name"),
+                          "has_document": bool(rec.get("document_path")) or bool(documents),
+                          "documents": documents,
                           "verified_by": rec.get("verified_by"), "verified_at": rec.get("verified_at"),
                           "submitted_at": rec.get("submitted_at"),
                           # mig 082 doc flow (None-safe on a pre-082 database)
@@ -936,7 +976,7 @@ def onboarding_update_status(employee_id: str, task_id: str, body: dict, org_id:
     return {"ok": True}
 
 
-async def _do_onboard_upload(org_id, employee_id, task_id, file, who):
+async def _do_onboard_upload(org_id, employee_id, task_id, file, who, uploaded_role="employee"):
     data = await file.read()
     safe = (file.filename or "file").replace("/", "_")
     # Item 2: server-side format enforcement (magic bytes, not just extension), tenant-configurable
@@ -966,8 +1006,18 @@ async def _do_onboard_upload(org_id, employee_id, task_id, file, who):
             missing.insert(0, "The form came back blank — please fill it out")
         if task.get("requires_signature", True) and check.get("signed") is False:
             missing.append("Signature")
+    # migration 402: APPEND to the task's document list — this is the fix for the "uploading a new file
+    # deletes the previous one" bug. Read-modify-write on the existing row (same low-concurrency posture
+    # every other upsert in this file already has — a per-task upload isn't a high-contention path).
+    existing = _doc_row(org_id, employee_id, task_id)
+    docs_list = list(existing.get("documents") or [])
+    file_id = uuid.uuid4().hex
+    docs_list.append({"id": file_id, "path": path, "name": safe,
+                      "content_type": file.content_type or "application/octet-stream",
+                      "uploaded_at": _now_iso(), "uploaded_by": who, "uploaded_role": uploaded_role})
     row = {"org_id": org_id, "employee_id": employee_id, "task_id": task_id, "status": "submitted",
-           "document_path": path, "document_name": safe, "submitted_at": _now_iso(), "updated_at": _now_iso(),
+           "document_path": path, "document_name": safe, "documents": docs_list,
+           "submitted_at": _now_iso(), "updated_at": _now_iso(),
            "note": (f"uploaded by {who}" if who else None),
            "validation": {**check, "missing": missing},
            "missing_fields": None, "returned_reason": None, "returned_at": None, "returned_by": None}
@@ -978,23 +1028,31 @@ async def _do_onboard_upload(org_id, employee_id, task_id, file, who):
     try:
         _so().table("employee_onboarding").upsert(row, on_conflict="org_id,employee_id,task_id").execute()
     except Exception:
-        # pre-082 database — fall back to the legacy row shape so uploads never break
-        legacy = {k: row[k] for k in ("org_id", "employee_id", "task_id", "document_path",
-                                      "document_name", "submitted_at", "updated_at", "note")}
-        legacy["status"] = "submitted"
+        # migration 402 not yet applied (no `documents` column) — degrade to the pre-402 single-document
+        # behavior: the row still upserts, just without the file list (the LAST upload replaces
+        # document_path, exactly like before this package). Multi-file/delete only activate once 402 runs.
+        row_pre402 = {k: v for k, v in row.items() if k != "documents"}
         try:
-            _so().table("employee_onboarding").upsert(legacy, on_conflict="org_id,employee_id,task_id").execute()
-        except Exception as e:
-            raise HTTPException(400, f"Could not record upload — is migration 073 applied? {e}")
-        return {"ok": True, "document_name": safe, "status": "submitted"}
+            _so().table("employee_onboarding").upsert(row_pre402, on_conflict="org_id,employee_id,task_id").execute()
+        except Exception:
+            # pre-082 database — fall back further to the legacy row shape so uploads never break
+            legacy = {k: row[k] for k in ("org_id", "employee_id", "task_id", "document_path",
+                                          "document_name", "submitted_at", "updated_at", "note")}
+            legacy["status"] = "submitted"
+            try:
+                _so().table("employee_onboarding").upsert(legacy, on_conflict="org_id,employee_id,task_id").execute()
+            except Exception as e:
+                raise HTTPException(400, f"Could not record upload — is migration 073 applied? {e}")
+            return {"ok": True, "document_name": safe, "status": "submitted"}
     if missing:
         _log_event(org_id, employee_id, "doc_returned", actor="system",
                    detail={"task": task.get("label"), "missing": missing, "auto": True})
         emailed = await _notify_return(org_id, employee_id, task, missing, row["returned_reason"])
         return {"ok": True, "document_name": safe, "status": "returned", "missing": missing, "emailed": emailed,
+                "file_id": file_id, "documents_count": len(docs_list),
                 "note": "This document looks incomplete — it was returned with the missing items listed."}
     return {"ok": True, "document_name": safe, "status": "submitted",
-            "checked": bool(check.get("checkable")),
+            "checked": bool(check.get("checkable")), "file_id": file_id, "documents_count": len(docs_list),
             "note": None if check.get("checkable") else
             "Not machine-checkable (scan/photo or flat PDF) — HR will review the signature by eye."}
 
@@ -1002,13 +1060,17 @@ async def _do_onboard_upload(org_id, employee_id, task_id, file, who):
 @router.post("/onboarding/employee/{employee_id}/upload")
 async def onboarding_upload(employee_id: str, task_id: str = Form(...), file: UploadFile = File(...),
                             uploader: str = Form(""), org_id: str = ORG_ID):
-    """HR uploads a completed document on the employee's behalf (status → submitted)."""
-    return await _do_onboard_upload(org_id, employee_id, task_id, file, uploader or "HR")
+    """HR uploads a completed document on the employee's behalf (status → submitted, appended to the
+    task's file list — migration 402)."""
+    return await _do_onboard_upload(org_id, employee_id, task_id, file, uploader or "HR", uploaded_role="admin")
 
 
 @router.get("/onboarding/employee/{employee_id}/task/{task_id}/doc")
 def onboarding_doc_url(employee_id: str, task_id: str, org_id: str = ORG_ID):
-    """A 1-hour signed URL so HR can view/verify the uploaded document."""
+    """A 1-hour signed URL to the MOST RECENT file on this task (back-compat single-file view — a
+    pre-402 caller, or a task that only ever had one file, still works exactly as before). A task with
+    multiple files should use GET .../document/{file_id} per file instead — see the `documents` list on
+    onboarding_for_employee's task payload."""
     rows = (_so().table("employee_onboarding").select("document_path").eq("org_id", org_id)
             .eq("employee_id", employee_id).eq("task_id", task_id).limit(1).execute().data) or []
     if not rows or not rows[0].get("document_path"):
@@ -1019,6 +1081,143 @@ def onboarding_doc_url(employee_id: str, task_id: str, org_id: str = ORG_ID):
         return {"url": url}
     except Exception as e:
         raise HTTPException(500, f"could not sign url: {e}")
+
+
+@router.get("/onboarding/employee/{employee_id}/task/{task_id}/document/{file_id}")
+def onboarding_document_url(employee_id: str, task_id: str, file_id: str, org_id: str = ORG_ID):
+    """A 1-hour signed URL for ONE file in a multi-file document list (migration 402) — HR review side."""
+    row = _doc_row(org_id, employee_id, task_id)
+    target = next((f for f in (row.get("documents") or []) if str(f.get("id")) == str(file_id)), None)
+    if not target or not target.get("path"):
+        raise HTTPException(404, "no such file")
+    url = _sign_onboard_path(target["path"])
+    if not url:
+        raise HTTPException(500, "could not sign url")
+    return {"url": url, "name": target.get("name")}
+
+
+async def _do_onboard_delete_document(org_id, employee_id, task_id, file_id, actor, actor_role):
+    """Shared delete core for the admin ('always') and employee ('only-while-pending') surfaces —
+    migration 402. Removes the file from the task's `documents` list, mirrors document_path/document_name
+    to whatever remains (or clears them if none), best-effort removes the storage object (the DB list is
+    the source of truth for what's officially on file — a storage remove failure never blocks the delete,
+    same posture as the existing template/sample delete endpoints), and always logs an audited
+    onboarding_event regardless of who did it or whether the underlying storage remove succeeded."""
+    row = _doc_row(org_id, employee_id, task_id)
+    if not row:
+        raise HTTPException(404, "no such document task for this employee")
+    docs = list(row.get("documents") or [])
+    target = next((f for f in docs if str(f.get("id")) == str(file_id)), None)
+    if not target:
+        raise HTTPException(404, "file not found")
+    if actor_role == "employee" and not _employee_can_delete_document(row.get("status") or "pending", target.get("uploaded_role")):
+        raise HTTPException(403, "This item has already been submitted — HR can remove a file for you from "
+                                  "here on, but you can still add a replacement file yourself.")
+    remaining = [f for f in docs if str(f.get("id")) != str(file_id)]
+    latest = sorted(remaining, key=lambda f: f.get("uploaded_at") or "")[-1] if remaining else None
+    upd = {"documents": remaining, "document_path": (latest or {}).get("path"),
+           "document_name": (latest or {}).get("name"), "updated_at": _now_iso()}
+    try:
+        _so().table("employee_onboarding").update(upd).eq("org_id", org_id) \
+            .eq("employee_id", employee_id).eq("task_id", task_id).execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not delete — is migration 402 applied? {e}")
+    path = target.get("path")
+    if path:
+        try:
+            get_supabase().storage.from_(ONBOARD_BUCKET).remove([path])
+        except Exception:
+            pass   # best-effort — the DB list (already updated above) is the source of truth
+    task = _task_row(org_id, task_id)
+    _log_event(org_id, employee_id, "doc_deleted", actor=actor,
+               detail={"task": task.get("label"), "file_name": target.get("name"), "file_id": str(file_id),
+                       "deleted_by_role": actor_role, "originally_uploaded_by": target.get("uploaded_by"),
+                       "originally_uploaded_role": target.get("uploaded_role")})
+    return {"ok": True, "documents_count": len(remaining)}
+
+
+@router.delete("/onboarding/employee/{employee_id}/task/{task_id}/document/{file_id}")
+async def onboarding_delete_document(employee_id: str, task_id: str, file_id: str, actor: str = "", org_id: str = ORG_ID):
+    """ADMIN/HR: delete any uploaded file on this task, at any time (migration 402)."""
+    return await _do_onboard_delete_document(org_id, employee_id, task_id, file_id, actor or "HR", "admin")
+
+
+# ── Root-cause recovery tool (migration 402) — the PRE-fix bug overwrote employee_onboarding.document_path
+# on every re-upload without ever deleting the storage object, so a pre-402 "replaced" file is orphaned
+# (unreferenced), not destroyed. The storage path convention (`{org}/{employee}/{uuid}_{filename}`) carries
+# no task_id, so which task an orphan belonged to can't be inferred automatically — these two endpoints are
+# the human-in-the-loop half: find candidate lost files by listing what's in an employee's storage folder
+# that no current row points to, then let HR re-attach one to the right task by looking at its filename.
+@router.get("/onboarding/employee/{employee_id}/orphaned-files")
+def onboarding_orphaned_files(employee_id: str, org_id: str = ORG_ID):
+    """Files sitting in this employee's onboarding-docs storage folder that no current employee_onboarding
+    row references — almost always pre-402 uploads a later re-upload silently overwrote. Best-effort: a
+    person still has to look at the filename to know which document it was."""
+    prefix = f"{org_id}/{employee_id}"
+    try:
+        objects = get_supabase().storage.from_(ONBOARD_BUCKET).list(prefix) or []
+    except Exception as e:
+        raise HTTPException(400, f"Could not list storage — {e}")
+    referenced = set()
+    try:
+        rows = (_so().table("employee_onboarding").select("document_path,documents,signature_path")
+                .eq("org_id", org_id).eq("employee_id", employee_id).execute().data) or []
+    except Exception:
+        rows = []
+    for r in rows:
+        if r.get("document_path"):
+            referenced.add(r["document_path"])
+        if r.get("signature_path"):
+            referenced.add(r["signature_path"])
+        for f in (r.get("documents") or []):
+            if f.get("path"):
+                referenced.add(f["path"])
+    out = []
+    for o in (objects or []):
+        name = o.get("name") if isinstance(o, dict) else None
+        if not name or not (o.get("id") or o.get("metadata")):
+            continue   # skip pseudo-folder placeholder entries the storage API can include
+        full_path = f"{prefix}/{name}"
+        if full_path in referenced:
+            continue
+        out.append({"path": full_path, "name": name,
+                    "last_modified": o.get("updated_at") or o.get("created_at"),
+                    "size": (o.get("metadata") or {}).get("size"),
+                    "url": _sign_onboard_path(full_path)})
+    out.sort(key=lambda x: x.get("last_modified") or "", reverse=True)
+    return {"ok": True, "orphaned": out, "count": len(out)}
+
+
+@router.post("/onboarding/employee/{employee_id}/task/{task_id}/reattach-orphan")
+def onboarding_reattach_orphan(employee_id: str, task_id: str, body: dict, org_id: str = ORG_ID):
+    """HR manually re-attaches a recovered orphaned file (see GET .../orphaned-files) to a task's
+    document list. Never moves/deletes the storage object — just adds a `documents[]` entry pointing at
+    it, exactly like a normal upload would; recorded as its own audited event (doc_recovered), distinct
+    from an ordinary upload, so the trail is honest about what happened. Body: {path, name?, actor?}."""
+    path = (body.get("path") or "").strip()
+    prefix = f"{org_id}/{employee_id}/"
+    if not path.startswith(prefix):
+        raise HTTPException(400, "that file doesn't belong to this employee")
+    row = _doc_row(org_id, employee_id, task_id)
+    docs = list(row.get("documents") or [])
+    if any(f.get("path") == path for f in docs):
+        raise HTTPException(400, "already attached to this task")
+    raw_name = path.rsplit("/", 1)[-1]
+    default_name = raw_name.split("_", 1)[-1] if "_" in raw_name else raw_name
+    entry = {"id": uuid.uuid4().hex, "path": path, "name": (body.get("name") or "").strip() or default_name,
+             "content_type": None, "uploaded_at": _now_iso(),
+             "uploaded_by": (body.get("actor") or "HR") + " (recovered)", "uploaded_role": "recovered"}
+    docs.append(entry)
+    upd = {"org_id": org_id, "employee_id": employee_id, "task_id": task_id,
+           "documents": docs, "document_path": path, "document_name": entry["name"], "updated_at": _now_iso()}
+    try:
+        _so().table("employee_onboarding").upsert(upd, on_conflict="org_id,employee_id,task_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not attach — is migration 402 applied? {e}")
+    task = _task_row(org_id, task_id)
+    _log_event(org_id, employee_id, "doc_recovered", actor=(body.get("actor") or "HR"),
+               detail={"task": task.get("label"), "path": path, "file_name": entry["name"]})
+    return {"ok": True, "file_id": entry["id"]}
 
 
 # ── Credential-less QR access (token + DOB/last-4 gate) ─────────────────────────────────────────────
@@ -1124,9 +1323,32 @@ async def public_onboarding_upload(token: str, value: str = Form(...), task_id: 
           .eq("org_id", prof["org_id"]).eq("id", task_id).limit(1).execute().data) or []
     if not tk or tk[0].get("owner_role") != "employee":
         raise HTTPException(403, "That item can't be uploaded from this portal.")
-    res = await _do_onboard_upload(prof["org_id"], prof["employee_id"], task_id, file, "employee")
+    res = await _do_onboard_upload(prof["org_id"], prof["employee_id"], task_id, file, "employee", uploaded_role="employee")
     _recompute_status(_so(), prof["org_id"], prof["employee_id"], actor="employee")
     return res
+
+
+@router.get("/public/onboarding/{token}/task/{task_id}/document/{file_id}")
+def public_onboarding_document_url(token: str, task_id: str, file_id: str, value: str = ""):
+    """Step 3 companion: a signed URL for ONE previously-uploaded file (migration 402)."""
+    prof = _profile_by_token(token)
+    if not _token_valid(prof):
+        raise HTTPException(404, "This onboarding link is invalid or has expired.")
+    if not _check_gate(prof, value):
+        raise HTTPException(403, "Identity check failed.")
+    return onboarding_document_url(prof["employee_id"], task_id, file_id, org_id=prof["org_id"])
+
+
+@router.delete("/public/onboarding/{token}/task/{task_id}/document/{file_id}")
+async def public_onboarding_delete_document(token: str, task_id: str, file_id: str, value: str = ""):
+    """Step 3 companion: the employee deletes a file THEY uploaded, only while the task is still
+    'pending' (migration 402) — same rule as the logged-in portal, see _employee_can_delete_document."""
+    prof = _profile_by_token(token)
+    if not _token_valid(prof):
+        raise HTTPException(404, "This onboarding link is invalid or has expired.")
+    if not _check_gate(prof, value):
+        raise HTTPException(403, "Identity check failed.")
+    return await _do_onboard_delete_document(prof["org_id"], prof["employee_id"], task_id, file_id, "employee", "employee")
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1856,6 +2078,12 @@ def _onboarding_bundle(org_id, employee_id):
                   "doc_url": t.get("doc_url"), "doc_label": t.get("doc_label"),
                   "requires_upload": t.get("requires_upload"), "status": t.get("status"),
                   "has_document": t.get("has_document"), "document_name": t.get("document_name"),
+                  # migration 402: the file list this task holds, each entry trimmed to what the portal
+                  # needs to render + act on (id/name/uploaded_at + the server-computed delete permission —
+                  # never re-derive that rule client-side).
+                  "documents": [{"id": f.get("id"), "name": f.get("name"), "uploaded_at": f.get("uploaded_at"),
+                                "employee_can_delete": f.get("employee_can_delete")}
+                               for f in (t.get("documents") or [])],
                   "template_name": t.get("template_name"),
                   "template_url": _sign_onboard_path(t.get("template_path")),
                   # mig 082: online fill & sign + returned-for-corrections (None-safe pre-082)
@@ -1911,7 +2139,24 @@ async def onboarding_me_upload(task_id: str = Form(...), file: UploadFile = File
           .eq("org_id", me["org_id"]).eq("id", task_id).limit(1).execute().data) or []
     if not tk or tk[0].get("owner_role") != "employee":
         raise HTTPException(403, "That item can't be uploaded here.")
-    res = await _do_onboard_upload(me["org_id"], me["employee_id"], task_id, file, "employee")
+    res = await _do_onboard_upload(me["org_id"], me["employee_id"], task_id, file, "employee", uploaded_role="employee")
+    _recompute_status(_so(), me["org_id"], me["employee_id"], actor="employee")
+    return res
+
+
+@router.get("/onboarding/me/task/{task_id}/document/{file_id}")
+def onboarding_me_document_url(task_id: str, file_id: str, authorization: str = Header(default="")):
+    """Logged-in portal: a signed URL for ONE previously-uploaded file (migration 402)."""
+    me = _me_from_token(authorization)
+    return onboarding_document_url(me["employee_id"], task_id, file_id, org_id=me["org_id"])
+
+
+@router.delete("/onboarding/me/task/{task_id}/document/{file_id}")
+async def onboarding_me_delete_document(task_id: str, file_id: str, authorization: str = Header(default="")):
+    """Logged-in portal: the employee deletes a file THEY uploaded, only while the task is still
+    'pending' (migration 402) — server-enforced, see _employee_can_delete_document."""
+    me = _me_from_token(authorization)
+    res = await _do_onboard_delete_document(me["org_id"], me["employee_id"], task_id, file_id, "employee", "employee")
     _recompute_status(_so(), me["org_id"], me["employee_id"], actor="employee")
     return res
 
@@ -2312,23 +2557,31 @@ def _accounting_settings(org_id):
 
 def _completed_docs_for(org_id, employee_id, expires=604800):
     """Secure (7-day) download links to every uploaded onboarding document for a hire, labelled by task.
-    Used to forward the completed packet to accounting without giving them app access."""
+    Used to forward the completed packet to accounting without giving them app access. Migration 402:
+    a task with multiple files (SS-card front + back, …) contributes one link PER FILE, labelled
+    "Task (1/2)" / "Task (2/2)" so accounting can tell them apart."""
     tmpl = onboarding_template(org_id=org_id)
     labels = {t["id"]: t["label"] for c in tmpl.get("categories", []) for t in c.get("tasks", [])}
     try:
         rows = (_so().table("employee_onboarding")
-                .select("task_id,status,document_path,document_name,signed_at")
+                .select("task_id,status,document_path,document_name,documents,signed_at")
                 .eq("org_id", org_id).eq("employee_id", employee_id).execute().data) or []
     except Exception:
         rows = []
     docs = []
     for r in rows:
-        p = r.get("document_path")
-        if not p:
-            continue
-        docs.append({"label": labels.get(r.get("task_id"), "Document"),
-                     "name": r.get("document_name"), "signed_at": r.get("signed_at"),
-                     "url": _sign_onboard_path(p, expires=expires)})
+        file_list = list(r.get("documents") or [])
+        if not file_list and r.get("document_path"):
+            file_list = [{"path": r.get("document_path"), "name": r.get("document_name")}]
+        n = len(file_list)
+        label = labels.get(r.get("task_id"), "Document")
+        for i, f in enumerate(file_list):
+            p = f.get("path")
+            if not p:
+                continue
+            docs.append({"label": f"{label} ({i + 1}/{n})" if n > 1 else label,
+                         "name": f.get("name"), "signed_at": r.get("signed_at"),
+                         "url": _sign_onboard_path(p, expires=expires)})
     return docs
 
 
@@ -2459,10 +2712,13 @@ async def onboarding_forward_accounting(employee_id: str, body: dict, org_id: st
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 @router.get("/onboarding/compliance-documents")
 def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_id: str = ""):
-    """One row per uploaded/signed onboarding document, across the whole roster, sorted by employee
-    name then document label. Filter with q (name/id/email substring) or employee_id (exact). Does NOT
-    eagerly sign a URL per row (could be hundreds) — click-through uses the existing per-task
-    /onboarding/employee/{id}/task/{task_id}/doc and .../signature endpoints, already org-scoped."""
+    """One row per uploaded/signed onboarding FILE, across the whole roster, sorted by employee name
+    then document label then file order. Migration 402: a task with multiple files (SS-card front +
+    back, …) now contributes one row per file (file_index/file_count so the UI can label them "1 of 2"),
+    instead of collapsing to whichever file happened to be most recent. Filter with q (name/id/email
+    substring) or employee_id (exact). Does NOT eagerly sign a URL per row (could be hundreds) —
+    click-through uses /onboarding/employee/{id}/task/{task_id}/document/{file_id} and .../signature,
+    already org-scoped."""
     so = _so()
     tmpl = onboarding_template(org_id=org_id, include_inactive=True)
     label_of = {t["id"]: t["label"] for c in tmpl.get("categories", []) for t in c.get("tasks", [])}
@@ -2478,7 +2734,7 @@ def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_
     rows, fetch_ok = [], True
     try:
         rows = (so.table("employee_onboarding")
-                .select("employee_id,task_id,status,document_path,document_name,signature_path,"
+                .select("employee_id,task_id,status,document_path,document_name,documents,signature_path,"
                         "signed_at,signed_name,verified_by,verified_at,submitted_at")
                 .eq("org_id", org_id).execute().data) or []
     except Exception as e:
@@ -2486,7 +2742,12 @@ def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_
         _fetch_err = str(e)[:200]
     out = []
     for r in rows:
-        if not (r.get("document_path") or r.get("signature_path")):
+        file_list = list(r.get("documents") or [])
+        if not file_list and r.get("document_path"):
+            # pre-402 row (migration hasn't backfilled it, or the tenant hasn't run 402 at all) — never a
+            # regression, this repository still shows it exactly as a single-file row.
+            file_list = [{"id": None, "path": r.get("document_path"), "name": r.get("document_name")}]
+        if not file_list and not r.get("signature_path"):
             continue   # nothing actually on file for this task yet
         eid = r.get("employee_id")
         if employee_id and eid != employee_id:
@@ -2495,15 +2756,23 @@ def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_
         name = emp.get("name") or eid
         if q and q.lower() not in f"{name} {eid} {emp.get('email') or ''}".lower():
             continue
-        out.append({
-            "employee_id": eid, "employee_name": name, "employee_email": emp.get("email"),
-            "task_id": r.get("task_id"), "document_label": label_of.get(r.get("task_id")) or "Document",
-            "category": cat_of.get(r.get("task_id")),
-            "status": r.get("status"), "document_name": r.get("document_name"),
-            "has_document": bool(r.get("document_path")), "has_signature_page": bool(r.get("signature_path")),
-            "signed_at": r.get("signed_at") or r.get("verified_at") or r.get("submitted_at"),
-            "signed_name": r.get("signed_name"), "verified_by": r.get("verified_by")})
-    out.sort(key=lambda d: (d["employee_name"] or "", d["document_label"] or ""))
+        n = len(file_list)
+        base = {"employee_id": eid, "employee_name": name, "employee_email": emp.get("email"),
+                "task_id": r.get("task_id"), "document_label": label_of.get(r.get("task_id")) or "Document",
+                "category": cat_of.get(r.get("task_id")), "status": r.get("status"),
+                "verified_by": r.get("verified_by")}
+        for i, f in enumerate(file_list):
+            out.append({**base, "file_id": f.get("id"), "file_index": (i + 1) if n > 1 else None, "file_count": n,
+                        "document_name": f.get("name") or r.get("document_name"),
+                        "has_document": True, "has_signature_page": False,
+                        "signed_at": f.get("uploaded_at") or r.get("verified_at") or r.get("submitted_at"),
+                        "signed_name": r.get("signed_name")})
+        if r.get("signature_path"):
+            out.append({**base, "file_id": None, "file_index": None, "file_count": n,
+                        "document_name": "Signed online", "has_document": False, "has_signature_page": True,
+                        "signed_at": r.get("signed_at") or r.get("verified_at") or r.get("submitted_at"),
+                        "signed_name": r.get("signed_name")})
+    out.sort(key=lambda d: (d["employee_name"] or "", d["document_label"] or "", d.get("file_index") or 0))
     resp = {"ready": tmpl.get("ready", True), "documents": out, "count": len(out)}
     if not fetch_ok:
         # Surface the failure instead of a silent empty-looking page — "0 documents" and "the query
@@ -2527,7 +2796,7 @@ def onboarding_compliance_export(org_id: str = ORG_ID, employee_id: str = ""):
             .eq("org_id", org_id).execute().data) or [])}
     try:
         q = so.table("employee_onboarding").select(
-            "employee_id,task_id,document_path,document_name,signature_path").eq("org_id", org_id)
+            "employee_id,task_id,document_path,document_name,documents,signature_path").eq("org_id", org_id)
         if employee_id:
             q = q.eq("employee_id", employee_id)
         rows = (q.execute().data) or []
@@ -2543,12 +2812,23 @@ def onboarding_compliance_export(org_id: str = ORG_ID, employee_id: str = ""):
             safe_emp = re.sub(r"[^A-Za-z0-9 _.-]+", "_", emp_name).strip() or (eid or "unknown")
             doc_label = label_of.get(r.get("task_id")) or "Document"
             safe_doc = re.sub(r"[^A-Za-z0-9 _.-]+", "_", doc_label).strip() or "document"
-            if r.get("document_path"):
+            # migration 402: a task with N files writes DocName-1.ext … DocName-N.ext (numbered only when
+            # there's more than one, so a single-file task's export name is unchanged from before this
+            # package — no regression for the common case).
+            file_list = list(r.get("documents") or [])
+            if not file_list and r.get("document_path"):
+                file_list = [{"path": r.get("document_path"), "name": r.get("document_name")}]
+            n = len(file_list)
+            for i, f in enumerate(file_list):
+                p = f.get("path")
+                if not p:
+                    continue
                 try:
-                    file_bytes = bucket.download(r["document_path"])
-                    dn = r.get("document_name") or ""
+                    file_bytes = bucket.download(p)
+                    dn = f.get("name") or ""
                     ext = dn.rsplit(".", 1)[-1] if "." in dn else "pdf"
-                    zf.writestr(f"{safe_emp}/{safe_doc}.{ext}", file_bytes)
+                    suffix = f"-{i + 1}" if n > 1 else ""
+                    zf.writestr(f"{safe_emp}/{safe_doc}{suffix}.{ext}", file_bytes)
                     included += 1
                 except Exception:
                     continue   # a single unreadable file shouldn't fail the whole export

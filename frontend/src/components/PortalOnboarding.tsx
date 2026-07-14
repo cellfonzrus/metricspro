@@ -23,7 +23,8 @@ function extLooksAllowed(name: string, formats?: string[]): boolean {
   return allow.some(e => name.toLowerCase().endsWith(e))
 }
 
-type Task = { id: string; label: string; description?: string; doc_url?: string; doc_label?: string; requires_upload?: boolean; status: string; has_document?: boolean; document_name?: string; template_url?: string | null; template_name?: string | null; requires_signature?: boolean; form_fields?: { key?: string; label?: string; required?: boolean }[] | null; missing_fields?: string[] | null; returned_reason?: string | null; signed_at?: string | null; work_auth?: boolean; sample_name?: string | null; sample_url?: string | null }
+type DocFile = { id: string; name: string; uploaded_at?: string; employee_can_delete?: boolean }
+type Task = { id: string; label: string; description?: string; doc_url?: string; doc_label?: string; requires_upload?: boolean; status: string; has_document?: boolean; document_name?: string; documents?: DocFile[]; template_url?: string | null; template_name?: string | null; requires_signature?: boolean; form_fields?: { key?: string; label?: string; required?: boolean }[] | null; missing_fields?: string[] | null; returned_reason?: string | null; signed_at?: string | null; work_auth?: boolean; sample_name?: string | null; sample_url?: string | null }
 type Cat = { key: string; label: string; tasks: Task[] }
 type Field = { key: string; label: string; section: string; field_type: string; options?: string[]; required?: boolean; sensitive?: boolean; help_text?: string }
 
@@ -95,6 +96,20 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
     if (!signing) return
     await api('/api/v1/hr/onboarding/me/sign', { method: 'POST', body: JSON.stringify({ task_id: signing.id, ...payload }) })
     setSigning(null); setNote('✓ Signed and submitted — thank you!'); await load()
+  }
+  // migration 402: multiple files per document (front + back of an ID, a multi-page form, …) — a new
+  // upload APPENDS, never replaces. Delete is server-enforced: only while employee_can_delete is true
+  // (the task hasn't been submitted for review yet) can the employee remove one of THEIR OWN files.
+  async function viewFile(t: Task, f: DocFile) {
+    try { const r = await api(`/api/v1/hr/onboarding/me/task/${t.id}/document/${f.id}`); if (r?.url) window.open(r.url, '_blank') }
+    catch (e: any) { setNote(e?.message || 'Could not open that file') }
+  }
+  async function deleteFile(t: Task, f: DocFile) {
+    if (!window.confirm(`Remove ${f.name}? This cannot be undone.`)) return
+    setBusy(true)
+    try { await api(`/api/v1/hr/onboarding/me/task/${t.id}/document/${f.id}`, { method: 'DELETE' }); await load() }
+    catch (e: any) { setNote(e?.message || 'Could not remove that file') }
+    setBusy(false)
   }
 
   if (err) return <div style={{ ...card, color: '#991b1b' }}>{err}</div>
@@ -207,12 +222,23 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
                 {t.sample_url && <a href={t.sample_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>👁 View completed sample</a>}
                 <button onClick={() => setSigning(t)} disabled={busy} style={{ padding: '7px 12px', borderRadius: 8, border: 'none', background: '#059669', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>✍️ Fill &amp; sign online</button>
                 {t.requires_upload && <label style={{ padding: '7px 12px', borderRadius: 8, background: t.has_document ? '#f8fafc' : '#2563eb', color: t.has_document ? '#334155' : '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', border: t.has_document ? '1px solid #cbd5e1' : 'none' }}>
-                  {t.has_document ? '↻ Replace upload' : '⬆ Upload signed copy'}
+                  {t.has_document ? '+ Add another file' : '⬆ Upload signed copy'}
                   <input type="file" accept={acceptAttr(d?.tenant_config?.upload_allowed_formats)} style={{ display: 'none' }} disabled={busy} onChange={e => { const f = e.target.files?.[0]; if (f) upload(t, f); e.currentTarget.value = '' }} />
                 </label>}
                 {t.signed_at && <span style={{ fontSize: 12, color: '#059669' }}>✍️ signed online</span>}
-                {t.has_document && !t.signed_at && <span style={{ fontSize: 12, color: '#059669' }}>received</span>}
               </div>
+              {/* migration 402: every file on this document, each independently viewable — and, only
+                  while employee_can_delete says the task is still editable, individually removable. */}
+              {(t.documents || []).length > 0 && (
+                <div style={{ margin: '6px 0 0 23px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {(t.documents || []).map(f => (
+                    <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                      <button onClick={() => viewFile(t, f)} style={{ background: 'none', border: 'none', padding: 0, color: '#2563eb', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}>📄 {f.name}</button>
+                      {f.employee_can_delete && <button onClick={() => deleteFile(t, f)} disabled={busy} title="Remove this file" style={{ background: 'none', border: 'none', padding: 0, color: '#dc2626', cursor: 'pointer', fontSize: 12 }}>✕ remove</button>}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>

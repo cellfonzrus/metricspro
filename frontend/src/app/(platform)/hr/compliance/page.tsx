@@ -19,6 +19,9 @@ type Doc = {
   employee_id: string; employee_name?: string; employee_email?: string
   task_id: string; document_label: string; category?: string; status?: string; document_name?: string
   has_document?: boolean; has_signature_page?: boolean; signed_at?: string | null; signed_name?: string | null; verified_by?: string | null
+  // migration 402: a task with multiple files now contributes one row per file (file_id + 1-based
+  // file_index/file_count so "1 of 2" can be shown) instead of collapsing to just the latest.
+  file_id?: string | null; file_index?: number | null; file_count?: number
 }
 
 async function authedFetch(path: string) {
@@ -62,8 +65,15 @@ export default function CompliancePage() {
   useEffect(() => { const t = setTimeout(load, 300); return () => clearTimeout(t) }, [q])  // eslint-disable-line react-hooks/exhaustive-deps
 
   async function viewDoc(d: Doc) {
-    try { const r = await api(`/api/v1/hr/onboarding/employee/${encodeURIComponent(d.employee_id)}/task/${encodeURIComponent(d.task_id)}/doc`); if (r?.url) window.open(r.url, '_blank') }
-    catch (e: any) { setMsg(e?.message || 'No document') }
+    try {
+      // migration 402: a file-level row (file_id set) opens exactly that file; a legacy/pre-402 row
+      // (file_id null) falls back to the old "most recent file" endpoint — no regression.
+      const path = d.file_id
+        ? `/api/v1/hr/onboarding/employee/${encodeURIComponent(d.employee_id)}/task/${encodeURIComponent(d.task_id)}/document/${encodeURIComponent(d.file_id)}`
+        : `/api/v1/hr/onboarding/employee/${encodeURIComponent(d.employee_id)}/task/${encodeURIComponent(d.task_id)}/doc`
+      const r = await api(path)
+      if (r?.url) window.open(r.url, '_blank')
+    } catch (e: any) { setMsg(e?.message || 'No document') }
   }
   async function viewSignature(d: Doc) {
     try { const r = await api(`/api/v1/hr/onboarding/employee/${encodeURIComponent(d.employee_id)}/task/${encodeURIComponent(d.task_id)}/signature`); if (r?.url) window.open(r.url, '_blank') }
@@ -112,8 +122,8 @@ export default function CompliancePage() {
             </button>
           </div>
           {g.docs.map(d => (
-            <div key={d.task_id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderTop: '1px solid var(--border)', fontSize: 13 }}>
-              <span style={{ flex: 1 }}>{d.document_label}{d.category ? <span style={{ color: 'var(--text3)', fontSize: 11 }}> · {d.category}</span> : ''}</span>
+            <div key={`${d.task_id}-${d.file_id || (d.has_signature_page ? 'sig' : 'x')}`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderTop: '1px solid var(--border)', fontSize: 13 }}>
+              <span style={{ flex: 1 }}>{d.document_label}{d.file_index ? <span style={{ color: 'var(--text3)', fontSize: 11 }}> ({d.file_index} of {d.file_count})</span> : ''}{d.category ? <span style={{ color: 'var(--text3)', fontSize: 11 }}> · {d.category}</span> : ''}</span>
               <span style={{ fontSize: 11, color: 'var(--text3)', width: 130 }}>{d.signed_at ? String(d.signed_at).slice(0, 10) : ''}</span>
               {d.has_document && <button style={{ ...btn, fontSize: 11, padding: '3px 8px' }} onClick={() => viewDoc(d)}>📄 View {d.document_name ? `(${d.document_name})` : ''}</button>}
               {d.has_signature_page && <button style={{ ...btn, fontSize: 11, padding: '3px 8px' }} onClick={() => viewSignature(d)}>✍️ Signature page</button>}
