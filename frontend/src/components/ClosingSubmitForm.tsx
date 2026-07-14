@@ -1,6 +1,7 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
+import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 
 // Rep-facing in-app closing form — one row per rep per day. Posts to /closing/row (source='manual').
 // Money is captured by the 6 tender types that mirror the POS X-report (cash / credit / external CC /
@@ -64,6 +65,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [tv, setTv] = useState<Record<string, string>>({})   // amount per configured tender_key
   const [cdefs, setCdefs] = useState<any[] | null>(null)      // configured count fields (null = built-in 3, static)
   const [cv, setCv] = useState<Record<string, string>>({})    // value per configured field_key
+  const [emps, setEmps] = useState<any[]>([])                 // employee roster (RULE THREE picker, see below)
 
   const set = (patch: Partial<State>) => setF(p => ({ ...p, ...patch }))
 
@@ -100,7 +102,19 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // Configured count fields (mig 501): render the tenant's own activation-count fields; null → the
   // built-in 3 (static), so an un-opted tenant's form is byte-identical to today.
   useEffect(() => { api('/api/v1/closing/count-config').then((d: any) => setCdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setCdefs(null)) }, [])
-  useEffect(() => { if (defaultEmployeeName && !f.employee_name) set({ employee_name: defaultEmployeeName }) }, [defaultEmployeeName]) // eslint-disable-line
+  // Employee roster for the "Employee" picker (RULE THREE §3b — pick, don't type): company-wide,
+  // same fetch/shape cash-config already uses for the store-closer picker. id === label = the
+  // employee's name (daily_closing.employee_name stays a NAME STRING this wave — see handoff).
+  useEffect(() => { api('/api/v1/storeops/employees?all_company=true').then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {}) }, [])
+  // Prefill from the logged-in user's own name — but ONLY once the roster has loaded and it's an
+  // EXACT (case-insensitive) match to a real roster entry. allowCreate is false on this picker, so a
+  // default that doesn't match anything must NOT be silently carried in state (it would look blank in
+  // the picker yet still be submitted) — better to leave it unset and make the rep actively pick.
+  useEffect(() => {
+    if (!defaultEmployeeName || f.employee_name || !emps.length) return
+    const hit = emps.find((e: any) => (e.name || '').trim().toLowerCase() === defaultEmployeeName.trim().toLowerCase())
+    if (hit) set({ employee_name: hit.name })
+  }, [defaultEmployeeName, emps]) // eslint-disable-line
 
   const loadRecent = useCallback(() => {
     if (!f.close_date) return
@@ -181,6 +195,12 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     finally { setBusy(false) }
   }
 
+  // Employee options: id === label (the name) — matches the byte-identical daily_closing.employee_name
+  // storage contract this wave. sublabel = email; EntityPicker auto-appends it only on a same-name clash.
+  const empOptions: EntityOption[] = useMemo(
+    () => emps.filter((e: any) => (e.name || '').trim()).map((e: any) => ({ id: e.name, label: e.name, sublabel: e.email || undefined })),
+    [emps])
+
   const storeIdx = stores.findIndex(s => (f.sfid && s.sfid === f.sfid) || (!f.sfid && f.store_code && s.store_code === f.store_code))
   const total = tdefs
     ? tdefs.reduce((a, d) => a + (parseFloat(tv[d.tender_key] || '') || 0), 0)
@@ -206,7 +226,10 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
               {stores.map((s, i) => <option key={i} value={i}>{s.store_address || s.store_code}{s.market ? ` · ${s.market}` : ''}</option>)}
             </select>
           </Field>
-          <Field label="Employee"><input style={inp} value={f.employee_name} onChange={e => set({ employee_name: e.target.value })} placeholder="Your name" /></Field>
+          <Field label="Employee">
+            <EntityPicker options={empOptions} value={f.employee_name || null}
+              onChange={v => set({ employee_name: v || '' })} placeholder="Your name" width="100%" />
+          </Field>
         </Row>
 
         <SectionLabel>Money collected — by tender (matches the X-report)</SectionLabel>

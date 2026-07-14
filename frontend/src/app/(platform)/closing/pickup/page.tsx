@@ -1,10 +1,11 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 
 // DM cash pickup — see the day's cash envelopes, check off the ones collected with a note, confirm.
 // On confirm, the assigned recipient gets an email + WhatsApp summary.
@@ -30,6 +31,8 @@ export default function CashPickupPage() {
   const [cfgMsg, setCfgMsg] = useState('')
   const [dep, setDep] = useState<any>(null)   // { e, disposition, deposit_amount, handed_to, slip } when depositing
   const [depBusy, setDepBusy] = useState(false)
+  const [pStores, setPStores] = useState<any[]>([])   // store roster (RULE THREE picker — see below)
+  const [pEmps, setPEmps] = useState<any[]>([])        // employee roster (RULE THREE picker — see below)
 
   function fileToDataUrl(f: File): Promise<string> {
     return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(f) })
@@ -73,6 +76,13 @@ export default function CashPickupPage() {
 
   useEffect(() => { if (user?.market && permissions?.scope === 'market') setMarket(user.market) }, [user, permissions])
   useEffect(() => { api('/api/v1/closing/pickup-config').then(setCfg).catch(() => setCfg({})) }, [])
+  // RULE THREE (§3b) pickers for the store/rep filters + the "handed to" field below: the SAME
+  // rosters ClosingSubmitForm/cash-config already fetch elsewhere in this module — not derived from
+  // the day's (possibly already-filtered) envelope rows, so the pickers stay full even on a slow day.
+  useEffect(() => {
+    api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {})
+    api('/api/v1/storeops/employees?all_company=true').then((r: any) => setPEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
+  }, [])
 
   const load = useCallback(() => {
     if (!date) return
@@ -82,6 +92,16 @@ export default function CashPickupPage() {
     api(`/api/v1/closing/pickups?${qs}`).then(setData).catch(console.error).finally(() => setLoading(false))
   }, [date, market, fStore, fEmp, fDm])
   useEffect(() => { load() }, [load])
+
+  // Filters/id use exact server-side matching (store_code exact-match; employee/dm substring on the
+  // name) — the SAME query params as before, just picked instead of typed (id === label for the
+  // employee/dm name fields; store's id is already the canonical store_code, not a hack).
+  const storeOptions: EntityOption[] = useMemo(
+    () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, sublabel: s.market || undefined })),
+    [pStores])
+  const empOptions: EntityOption[] = useMemo(
+    () => pEmps.filter((e: any) => (e.name || '').trim()).map((e: any) => ({ id: e.name, label: e.name, sublabel: e.email || undefined })),
+    [pEmps])
 
   const envelopes: any[] = data?.envelopes || []
   const key = (e: any) => `${e.store_code || ''}|${e.employee_name || ''}`
@@ -146,9 +166,9 @@ export default function CashPickupPage() {
       {/* Filters */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <input type="date" style={sel} value={date} onChange={e => setDate(e.target.value)} />
-        <input style={{ ...sel, width: 110 }} placeholder="Store" value={fStore} onChange={e => setFStore(e.target.value)} />
-        <input style={{ ...sel, width: 140 }} placeholder="Sales rep" value={fEmp} onChange={e => setFEmp(e.target.value)} />
-        <input style={{ ...sel, width: 140 }} placeholder="DM (picked up by)" value={fDm} onChange={e => setFDm(e.target.value)} />
+        <EntityPicker options={storeOptions} value={fStore || null} onChange={v => setFStore(v || '')} placeholder="Store" width={160} />
+        <EntityPicker options={empOptions} value={fEmp || null} onChange={v => setFEmp(v || '')} placeholder="Sales rep" width={180} />
+        <EntityPicker options={empOptions} value={fDm || null} onChange={v => setFDm(v || '')} placeholder="DM (picked up by)" width={200} />
         {(fStore || fEmp || fDm) && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 9px' }} onClick={() => { setFStore(''); setFEmp(''); setFDm('') }}>Clear</button>}
         {market && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Market: {market}</span>}
         {data && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{data.ready} ready · {data.collected} collected{data.flagged ? ` · ${data.flagged} ⚠ flagged` : ''}</span>}
@@ -261,7 +281,11 @@ export default function CashPickupPage() {
               </>
             ) : (
               <label style={{ fontSize: 12, fontWeight: 600 }}>Handed to<br />
-                <input style={{ ...inp, marginTop: 4 }} placeholder="Manager name" value={dep.handed_to || ''} onChange={e => setDep({ ...dep, handed_to: e.target.value })} /></label>
+                <div style={{ marginTop: 4 }}>
+                  <EntityPicker options={empOptions} value={dep.handed_to || null}
+                    onChange={v => setDep({ ...dep, handed_to: v || '' })} placeholder="Manager name" width="100%" />
+                </div>
+              </label>
             )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
               <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={depBusy} onClick={() => setDep(null)}>Cancel</button>
