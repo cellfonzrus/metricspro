@@ -4,6 +4,7 @@ export type Scope = 'all' | 'market' | 'store' | 'self'
 export type Permissions = {
   modules?: Record<string, boolean>
   reports?: Record<string, boolean>   // per-AREA report access (separate from the operational module)
+  data?: Record<string, boolean>      // per-KEY sensitive-data grants (e.g. carrier_residual) — see DATA_GRANTS
   pages?: Record<string, boolean>     // per-FUNCTION override (by nav href): explicit true/false wins over module
   scope?: Scope
   home?: string
@@ -53,6 +54,29 @@ export function hasReport(perms: Permissions, area: string): boolean {
   return (perms.scope || 'all') === 'all'
 }
 
+// ── Sensitive-data grants (separate from module/report access) ────────────────────────────────────
+// Some data is carrier/finance-sensitive and gated by its OWN per-key grant, independent of whether a
+// role can open the operational module. `carrier_residual` is the first: the raw_mi-derived carrier
+// residual reports (backend commcalc `_can_view_carrier_residual`, commission-0 P1) are visible to
+// everyone by default (tenant setting residual_visibility='all'), but a tenant that flips it to
+// 'permissioned' requires this grant. Company-wide leadership (scope 'all') and admins always pass;
+// grant it here to let a scoped manager see it too. Register a new sensitive-data key by adding a row
+// AND gating the matching backend read (same contract as REPORT_AREAS + settings).
+export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
+  { key: 'carrier_residual', label: 'Carrier residual (raw carrier data)',
+    help: 'Raw carrier/processor residual reports (raw_mi-derived). Only enforced when the tenant sets residual visibility to "permissioned".' },
+]
+// Frontend mirror of backend commcalc `_can_view_carrier_residual` — KEEP IN SYNC. Super-admins /
+// company-wide ('all') roles / admins always pass; otherwise the grant is honored under either the
+// `data` bucket (what the roles UI writes) or a `modules` key of the same name (backend also accepts it).
+export function hasDataGrant(perms: Permissions, key: string): boolean {
+  if (isSuperAdmin(perms)) return true
+  if ((perms.scope || 'all') === 'all') return true
+  if (perms.modules?.[key]) return true
+  if (perms.data?.[key]) return true
+  return false
+}
+
 // `cap` (optional) is a tenant CAPABILITY gate, separate from RBAC: the sidebar hides the item only when
 // the tenant's capability is explicitly false (e.g. asset_lending=false → no consignment distributor).
 // Unknown/true → shown, so it never hides anything by default. RBAC (module/scopes) still applies first.
@@ -98,6 +122,7 @@ export const NAV: NavGroup[] = [
   { group: 'Commission Payout Plans', module: 'commissions', items: [
     { href: '/commcalc/payout-plans', label: 'Overview', icon: '💳', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/commission-plans', label: 'Commission Plans', icon: '🧮', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/plan-installments', label: 'Multi‑Month Installments', icon: '🗓️', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/payout-schedules', label: 'Payout Schedules', icon: '📆', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/settings', label: 'Boost Rates (KPI‑tier)', icon: '⚙️', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/carrier-mapping', label: 'Carrier Mapping', icon: '📡', module: 'commissions', scopes: ['all'] },

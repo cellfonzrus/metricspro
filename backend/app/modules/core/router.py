@@ -22,6 +22,12 @@ from app.modules.core.entitlements import (
     MODULE_CATALOG, ROLE_GATE_KEYS, load_module_catalog,
     sync_tenant, sync_all_tenants, needs_sync,
 )
+# Canonical tenant-membership primitives — the ONE rule for "which tenant is this login acting as",
+# shared so every module (e.g. storeops._caller_identity) resolves it identically (no drift).
+from app.modules.core.membership import (
+    list_memberships as _memberships,
+    pick_membership as _pick_membership,
+)
 
 router = APIRouter(prefix="/core", tags=["Core / RBAC"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -105,36 +111,12 @@ def _uid_from_token(authorization: str):
 
 # ── Multi-tenant membership (platform-core-9) ──────────────────────────────────────────
 # One Supabase login (auth_id) may hold an app_users row PER tenant it belongs to (mig 706). These
-# helpers pick the membership row for the tenant the request is ACTING AS. The active tenant is
-# declared by the client via the `x-active-org` header — UNTRUSTED, so it is honored ONLY when it
-# names one of the login's memberships; otherwise the login's default membership is used. This
+# `_memberships` (= list_memberships) and `_pick_membership` (= pick_membership) are imported from
+# app.modules.core.membership at the top of this file — the single source of truth for the membership
+# selection rule. They pick the membership row for the tenant the request is ACTING AS: the active
+# tenant is declared by the client via the `x-active-org` header — UNTRUSTED, so it is honored ONLY
+# when it names one of the login's memberships; otherwise the login's default membership is used. This
 # mirrors the tenant-middleware rule exactly (single source of truth for "which tenant am I").
-def _memberships(client, uid):
-    """All app_users rows for this auth_id, earliest-first. Tolerant of mig 706 being un-run
-    (is_default_org / created_at may be absent → at most one row exists anyway)."""
-    if not uid:
-        return []
-    tbl = client.schema("storeops").table("app_users")
-    try:
-        return (tbl.select("*").eq("auth_id", uid).order("created_at").execute().data) or []
-    except Exception:
-        try:
-            return (tbl.select("*").eq("auth_id", uid).execute().data) or []
-        except Exception:
-            return []
-
-
-def _pick_membership(rows, active_org=None):
-    """The membership row for the tenant the request acts as. `active_org` (the x-active-org header)
-    wins only if it is one of the memberships; else the row flagged is_default_org, else the first
-    (earliest). Returns None if the login has no memberships (unprovisioned)."""
-    if not rows:
-        return None
-    if active_org:
-        for r in rows:
-            if r.get("org_id") == active_org:
-                return r
-    return next((r for r in rows if r.get("is_default_org")), rows[0])
 
 
 @router.get("/my-tenants")

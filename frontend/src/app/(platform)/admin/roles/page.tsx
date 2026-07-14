@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, Fragment } from 'react'
 import { api } from '@/lib/client'
-import { REPORT_AREAS, NAV, reportAreaForPath } from '@/lib/rbac'
+import { REPORT_AREAS, DATA_GRANTS, NAV, reportAreaForPath } from '@/lib/rbac'
 import { ExportButtons } from '@/lib/export'
 
 // One-click templates for the roles most tenants need but the base 4 don't include.
@@ -469,6 +469,28 @@ export default function RolesAdminPage() {
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, maxWidth: 220 }}>
                       Market/store managers default to <b>no</b> reports; company-wide roles keep them. Set explicitly here to override.
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Data visibility</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6, maxWidth: 240 }}>
+                      Sensitive data gated by its own grant, separate from the module. Company-wide roles (scope =
+                      whole company) see it by default — grant a specific key to a scoped manager, or untick to lock it.
+                    </div>
+                    <div style={{ display: 'grid', gap: 2 }}>
+                      {DATA_GRANTS.map(d => {
+                        const dv = (p.data || {})[d.key]
+                        const adminDefault = (p.scope || 'all') === 'all'
+                        const checked = dv === undefined ? adminDefault : !!dv
+                        return (
+                          <label key={d.key} title={d.help || ''} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                            <input type="checkbox" checked={checked}
+                              onChange={ev => setPerm(r.id, pp => ({ ...pp, data: { ...(pp.data || {}), [d.key]: ev.target.checked } }))} />
+                            {d.label}
+                          </label>
+                        )
+                      })}
+                      {DATA_GRANTS.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>—</span>}
                     </div>
                   </div>
                   <div>
