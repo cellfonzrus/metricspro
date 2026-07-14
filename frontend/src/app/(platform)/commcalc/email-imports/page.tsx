@@ -134,14 +134,20 @@ export default function EmailImportsPage() {
     try {
       const r: any = await api(`/api/v1/commcalc/email-sweep/run-now?account=${encodeURIComponent(cfg.account || 'default')}`, { method: 'POST', body: '{}' })
       const errs = (r.files || []).filter((f: any) => f.status === 'error')
-      const skips = (r.files || []).filter((f: any) => f.status === 'skipped')
+      const allSkips = (r.files || []).filter((f: any) => f.status === 'skipped')
+      // Two distinct 'skipped' kinds land here: a price-guard refusal, and an Inventory-Aging (or other)
+      // 0-row parse. Report each honestly rather than blaming everything on the price guard.
+      const guardSkips = allSkips.filter((f: any) => String(f.skipped || '').startsWith('price_guard'))
+      const otherSkips = allSkips.filter((f: any) => !String(f.skipped || '').startsWith('price_guard'))
       // A PARTIAL price-guard ingest comes back status='ok' (rows saved) with skipped='price_guard_partial'.
       const partials = (r.files || []).filter((f: any) => f.skipped === 'price_guard_partial')
-      const skipNote = skips.length ? ` · ⚠️ ${skips.length} refused by the price guard (fuller data already stored — existing dollars kept)` : ''
+      const skipNote = guardSkips.length ? ` · ⚠️ ${guardSkips.length} refused by the price guard (fuller data already stored — existing dollars kept)` : ''
+      const otherNote = otherSkips.length ? ` · ⚠️ ${otherSkips.length} skipped: ${otherSkips.slice(0, 2).map((f: any) => `${f.file}: ${f.detail || 'parsed 0 rows'}`).join(' · ')}` : ''
       const partNote = partials.length ? ` · ⚠️ ${partials.length} partial (ingested fresh day(s), kept existing data for degraded day(s))` : ''
       setMsg(!r.ok ? `❌ ${r.error}`
-        : r.ingested > 0 ? `✅ Ingested ${r.ingested} attachment(s).${skipNote}${partNote}`
-        : skips.length ? `⚠️ 0 ingested — ${skips.length} file(s) refused by the price guard: a degraded/price-less export arrived and the fuller data already stored for that day was kept. Re-send the full "Sales Transaction Details" (with Ext Price + GP).`
+        : r.ingested > 0 ? `✅ Ingested ${r.ingested} attachment(s).${skipNote}${otherNote}${partNote}`
+        : guardSkips.length ? `⚠️ 0 ingested — ${guardSkips.length} file(s) refused by the price guard: a degraded/price-less export arrived and the fuller data already stored for that day was kept. Re-send the full "Sales Transaction Details" (with Ext Price + GP).${otherNote}`
+        : otherSkips.length ? `⚠️ 0 ingested — ${otherSkips.length} file(s) skipped: ${otherSkips.slice(0, 2).map((f: any) => `${f.file}: ${f.detail || 'parsed 0 rows'}`).join(' · ')}`
         : errs.length ? `⚠️ 0 ingested — ${errs.length} file(s) errored: ${errs.slice(0, 2).map((e: any) => `${e.file}: ${e.detail}`).join(' · ')}`
         : !(cfg.patterns || []).some((p: any) => (p.pattern || '').trim())
           ? '⚠️ 0 ingested — this mailbox has NO filename rules, so nothing can match. Add the rules below and Save.'
@@ -461,7 +467,10 @@ export default function EmailImportsPage() {
                         ? <span style={{ color: '#b45309' }} title={p.detail}>⚠ {p.rows_saved} rows — ingested fresh day(s); kept existing data for degraded day(s) (price guard)</span>
                         : <span style={{ color: '#16794a' }}>✓ {p.rows_saved} rows</span>)
                     : p.status === 'skipped'
-                      ? <span style={{ color: '#b45309' }} title={p.detail || ''}>⚠ 0 rows — refused: fuller data already stored for that day (price guard)</span>
+                      // Show the honest per-file reason (`detail`) directly — a price-guard refusal AND an
+                      // Inventory-Aging 0-store parse both land here as 'skipped', so a hard-coded price-guard
+                      // label would mislabel the latter. Fall back to the price-guard wording if no detail.
+                      ? <span style={{ color: '#b45309' }} title={p.detail || ''}>⚠ 0 rows — {p.detail || 'refused: fuller data already stored for that day (price guard)'}</span>
                       : <span style={{ color: '#dc2626' }}>✕ {p.detail}</span>
                 }</td>
                 <td style={{ ...cell, fontSize: 11, color: 'var(--text3)' }}>{p.processed_at ? new Date(p.processed_at).toLocaleString() : ''}</td>

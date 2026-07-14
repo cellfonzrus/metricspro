@@ -390,10 +390,25 @@ async def upload_file(
                  'filename': getattr(file, 'filename', None), 'rows_saved': saved}).execute()
         except Exception:
             pass
-        return {'success': True, 'file_type': 'inventory_aging', 'stores': saved,
-                'as_of': as_of, 'rows_read': len(rows),
-                'note': (None if saved else "No per-store inventory value found — check the file has a store "
-                         "column + a value/cost column (or map it on Column Mapping).")}
+        # HONEST-ZERO: a 0-store parse USED to return success:True with a soft note → the email sweep
+        # recorded status='ok', rows_saved=0 (a silent green ✓ on a file that ingested NOTHING — every
+        # one of luxelink's 9 hourly Inventory Aging.csv ingests, 2026-07-14). Return a DISTINCT
+        # skipped outcome that names exactly which columns we looked for vs what the file actually has,
+        # so the email-imports history (which renders skipped/error) shows what's wrong instead of a ✓.
+        # `saved` is carried on BOTH branches so the sweep's rows_saved read is honest (a successful
+        # ingest now records N, not 0, so its dedup finally marks it done instead of re-pulling hourly).
+        if not saved:
+            diag = b2b_sweep.inventory_diagnostics(rows)
+            found = ', '.join(str(c) for c in diag['columns'][:25]) or '(no columns — empty/misread file)'
+            note = (f"parsed 0 stores from {diag['n_rows']} row(s) — need a STORE column "
+                    f"(Store / Store Name / Location / Site / Branch) and a VALUE column "
+                    f"(Cost / Ext Cost / Total Value). Found columns: {found}."
+                    + (" A grouped 'Store:' header was seen but no priced detail rows followed it."
+                       if diag['grouped'] else ""))
+            return {'success': False, 'file_type': 'inventory_aging', 'stores': 0, 'saved': 0,
+                    'skipped': 'inventory_no_stores', 'as_of': as_of, 'rows_read': len(rows), 'note': note}
+        return {'success': True, 'file_type': 'inventory_aging', 'stores': saved, 'saved': saved,
+                'as_of': as_of, 'rows_read': len(rows)}
 
     # POS "X report": daily takings BY TENDER TYPE per store → commcalc.pos_tender_summary, for the tender
     # reconciliation against the daily closing sheet. Flexible column detection (any POS). Periodless.
@@ -8229,6 +8244,16 @@ async def _run_email_sweep(org_id, account='default'):
                 _gd = (res or {}).get('guarded_dates') or []
                 detail = ((shrink[0].get('reason') if shrink else None)
                           or f"ingested fresh day(s); kept existing data for {', '.join(map(str, _gd))} (price guard)")[:300]
+            elif (res or {}).get('skipped') == 'inventory_no_stores':
+                # HONEST-ZERO for Inventory Aging: the attachment WAS read but produced 0 per-store values
+                # (renamed/unknown store or value column, or a layout we don't yet flatten). This used to be
+                # recorded as status='ok' + 0 rows — a green ✓ on a file that ingested nothing (luxelink,
+                # 2026-07-14). Record a distinct 'skipped' carrying the parser's honest reason (expected
+                # columns vs the columns actually found) so the history shows WHAT is wrong. rows_saved stays
+                # 0, so the sweep dedup keeps auto-retrying → it self-heals the moment a synonym/flatten
+                # matches or the source report is corrected. Not a money path (no daily_sales promote/recalc).
+                status = 'skipped'
+                detail = (str((res or {}).get('note') or 'Inventory Aging parsed 0 stores'))[:300]
         except HTTPException as he:
             status, detail = "error", str(he.detail)[:300]
         except Exception as e:

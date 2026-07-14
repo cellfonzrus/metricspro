@@ -44,6 +44,15 @@ export function readUploadOutcome(r: any, unit = 'row(s)'): UploadOutcome {
             `${guarded.join(', ') || 'the degraded day(s)'}. ${reason}`,
     }
   }
+  if (r?.skipped === 'inventory_no_stores') {
+    // HONEST-ZERO for an Inventory Aging upload: the file was read but produced 0 per-store values
+    // (renamed/unknown store or value column, or an unhandled layout). Show it as a refusal, not a
+    // green "✓ 0 rows" — the backend `note` names the columns we expected vs the ones actually found.
+    const reason = (r?.note as string) ||
+      'Parsed 0 stores — the file needs a store column (Store / Store Name / Location / Site) and a ' +
+      'value column (Cost / Ext Cost / Total Value). Nothing was written (existing data kept).'
+    return { tone: 'guard', reason, saved: 0, text: 'Inventory Aging parsed 0 stores. ' + reason }
+  }
   if (shrink.length) {
     const s = shrink[0]
     const reason = (s?.reason as string) ||

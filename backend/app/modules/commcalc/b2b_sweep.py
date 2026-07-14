@@ -68,26 +68,89 @@ def fetch_inventory_aging(session, **kwargs):
 
 # ── normalize (REAL — store-agnostic; the only portal-specific bit is the column names) ───────
 # Override these by passing store_field / value_field once the real report columns are known.
-DEFAULT_STORE_FIELDS = ("store", "Store", "location", "Location", "store_name", "StoreName", "Site")
-DEFAULT_VALUE_FIELDS = ("inventory_value", "InventoryValue", "value", "Value", "cost", "Cost",
-                        "ext_cost", "ExtCost", "total_cost", "TotalCost", "amount", "Amount")
+# The candidate lists are matched EXACTLY first, then case/space/punctuation-insensitively (see
+# _first_field), so 'Store Name' / 'STORE NAME' / 'store_name' all resolve without enumerating every
+# spelling. Kept broad on purpose — a b2bsoft / generic-POS Inventory Aging export uses many spellings.
+DEFAULT_STORE_FIELDS = ("store", "Store", "Store Name", "StoreName", "Store #", "Store No",
+                        "Store Number", "Store Code", "location", "Location", "Location Name",
+                        "store_name", "Site", "Site Name", "Branch", "Branch Name", "Dealer",
+                        "Outlet", "Shop", "Store Address", "Billing Address 1")
+DEFAULT_VALUE_FIELDS = ("inventory_value", "InventoryValue", "Inventory Value", "value", "Value",
+                        "cost", "Cost", "Unit Cost", "UnitCost", "ext_cost", "ExtCost", "Ext Cost",
+                        "Extended Cost", "total_cost", "TotalCost", "Total Cost", "Total Value",
+                        "Inventory Cost", "On Hand Value", "Stock Value", "Item Cost", "amount",
+                        "Amount", "Ext Price", "Extended Price", "Retail", "Retail Value")
+
+# Grouped-layout header prefixes. b2bsoft can only SCHEDULE its GROUPED exports, where the store is a
+# HEADER ROW ("Store: <addr>" in the first cell), not a per-line column — the exact same convention as
+# the grouped "Sales Transaction Details" export (_flatten_grouped_sales in router.py). We fill that
+# store DOWN onto the item/detail rows and skip the per-store SUBTOTAL rows (empty first cell) so a
+# grouped Inventory Aging file parses instead of yielding 0 stores.
+_GROUP_STORE_PREFIXES = ("store:", "store name:", "location:", "location name:", "site:", "branch:")
+
+
+def _norm_key(s):
+    """Case/space/punctuation-insensitive column-name key: 'Store Name'→'storename'."""
+    return "".join(ch for ch in str(s).strip().lower() if ch.isalnum())
 
 
 def _first_field(row, candidates):
+    # Exact header match first (fast, unambiguous), then a normalized match so renamed-case/spacing
+    # variants of a known column still resolve without listing every spelling.
     for c in candidates:
         if c in row and row[c] not in (None, ""):
             return row[c]
+    cand_norm = {_norm_key(c) for c in candidates}
+    for k, v in row.items():
+        if v in (None, "") or _norm_key(k) not in cand_norm:
+            continue
+        return v
+    return None
+
+
+def _group_header_store(row):
+    """If this row is a grouped 'Store: <addr>' header row, return the store name; else None.
+    Only the FIRST non-empty cell is inspected (mirrors the grouped-sales flatten)."""
+    for v in (row or {}).values():
+        s = str(v).strip()
+        if not s:
+            continue
+        low = s.lower()
+        for pfx in _GROUP_STORE_PREFIXES:
+            if low.startswith(pfx):
+                return s[len(pfx):].strip(" :")
+        return None  # first non-empty cell isn't a 'Store:' header → this is a normal data row
     return None
 
 
 def normalize_inventory(raw_rows, store_field=None, value_field=None):
     """Aggregate raw Inventory Aging rows → {store: total_value}. Sums value across all rows
-    (devices / categories / aging buckets) for each store."""
+    (devices / categories / aging buckets) for each store.
+
+    Handles BOTH layouts b2bsoft/POS emit: (a) FLAT — every row carries a store column; and
+    (b) GROUPED — the store is a 'Store: <addr>' header row and the following item rows have no store
+    column (subtotal rows, with an empty first cell, are skipped so the value isn't double-counted)."""
     store_keys = (store_field,) if store_field else DEFAULT_STORE_FIELDS
     value_keys = (value_field,) if value_field else DEFAULT_VALUE_FIELDS
+    rows = list(raw_rows or [])
+    first_col = next((next(iter(r.keys())) for r in rows if isinstance(r, dict) and r), None)
     out = {}
-    for r in raw_rows or []:
-        store = _first_field(r, store_keys)
+    grouped = False
+    cur_store = None
+    for r in rows:
+        gh = _group_header_store(r)
+        if gh is not None:
+            grouped = True
+            cur_store = gh or cur_store
+            continue  # a header row carries no inventory value
+        if grouped:
+            # In a grouped file, a row with an empty FIRST cell is a per-store SUBTOTAL / blank —
+            # skip it so its value isn't added on top of the detail rows it summarises.
+            if not (str(r.get(first_col, "")).strip() if first_col else ""):
+                continue
+            store = _first_field(r, store_keys) or cur_store
+        else:
+            store = _first_field(r, store_keys)
         if store is None:
             continue
         store = str(store).strip()
@@ -95,6 +158,22 @@ def normalize_inventory(raw_rows, store_field=None, value_field=None):
             continue
         out[store] = round(out.get(store, 0.0) + _num(_first_field(r, value_keys)), 2)
     return out
+
+
+def inventory_diagnostics(raw_rows, store_field=None, value_field=None):
+    """Explain a 0-store parse honestly: the columns the file actually has, which store/value column
+    (if any) we could match, and whether a grouped 'Store:' header was present. Used ONLY to build an
+    actionable message for the ingest history — it never changes what is written."""
+    rows = list(raw_rows or [])
+    columns = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else []
+    store_keys = (store_field,) if store_field else DEFAULT_STORE_FIELDS
+    value_keys = (value_field,) if value_field else DEFAULT_VALUE_FIELDS
+    col_norm = {_norm_key(c) for c in columns}
+    store_hit = next((c for c in store_keys if c in columns or _norm_key(c) in col_norm), None)
+    value_hit = next((c for c in value_keys if c in columns or _norm_key(c) in col_norm), None)
+    grouped = any(_group_header_store(r) is not None for r in rows)
+    return {"columns": columns, "n_rows": len(rows), "grouped": grouped,
+            "store_col": store_hit, "value_col": value_hit}
 
 
 # ── orchestration (REAL — writes commcalc.inventory_value, preserving manual overrides) ───────
