@@ -25,6 +25,10 @@ read 0 (with a note) under a company/store filter — honest beats mis-attribute
 """
 from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc import carrier_map
+from app.modules.account import _period
+# Canonical finance period parser lives in _period; re-exported here so existing
+# `coa.parse_period` callers (recon, engine, router) keep resolving unchanged.
+from app.modules.account._period import parse_period  # noqa: F401
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -74,20 +78,6 @@ BS_LABEL = {k: lbl for k, lbl, *_ in BS_SPEC}
 
 def _norm_store(s):
     return (str(s or "").strip()) or None
-
-
-def parse_period(period: str):
-    """'June 2026' -> (6, 2026). Also accepts 'YYYY-MM'."""
-    months = {"january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
-              "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12}
-    p = (period or "").strip().lower()
-    if "-" in p and p.split("-")[0].isdigit():
-        y, m = p.split("-")[:2]
-        return int(m), int(y)
-    parts = p.split()
-    mo = months.get(parts[0], 0) if parts else 0
-    yr = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-    return mo, yr
 
 
 def _in_period(date_str, pm, py):
@@ -256,11 +246,10 @@ def build_inputs(client, org_id, period):
        'detail' carries drill-down sub-lines (e.g. each expense name)."""
     pm, py = parse_period(period)
     # Upload paths store the period inconsistently — the daily-sales upload writes the month-name
-    # form ("June 2026") while compute is invoked with "2026-06". Query BOTH spellings so the
-    # period-string sources (raw_sales/raw_mi/comp/rep_commissions/...) aren't silently empty.
-    _MONTHS = ["", "January", "February", "March", "April", "May", "June", "July",
-               "August", "September", "October", "November", "December"]
-    period_keys = list({period} | ({f"{_MONTHS[pm]} {py}"} if 1 <= pm <= 12 and py else set()))
+    # form ("June 2026") while compute is invoked with "2026-06". Query BOTH spellings (via the
+    # shared finance helper) so the period-string sources (raw_sales/raw_mi/comp/rep_commissions/...)
+    # aren't silently empty. See _period.period_keys for the single source of truth.
+    period_keys = _period.period_keys(period)
     code2addr = store_code_to_address(client, org_id)
     resolve_store = store_resolver(client, org_id)
 

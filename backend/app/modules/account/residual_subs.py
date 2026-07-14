@@ -17,15 +17,16 @@ page always works — running migration 101 just makes it fast over full history
 import re
 from datetime import datetime, timezone
 
-from app.modules.commcalc.calculator import parse_period, safe_float
-
-_MONTHS = ["", "January", "February", "March", "April", "May", "June",
-           "July", "August", "September", "October", "November", "December"]
+from app.modules.commcalc.calculator import safe_float
+from app.modules.account._period import parse_period, recent_period_keys
 
 
 def _pkey(period):
-    p = parse_period(period or "")
-    return (p["year"], p["month"])
+    # (year, month) sort key. parse_period is now the shared finance helper (returns (month, year),
+    # robust across both spellings). Byte-identical to the prior month-name-only parse for the
+    # month-name period labels raw_mi actually stores; numeric 'YYYY-MM' now sorts correctly too.
+    mo, yr = parse_period(period or "")
+    return (yr, mo)
 
 
 def _street_num(addr):
@@ -34,19 +35,9 @@ def _street_num(addr):
 
 
 def _recent_labels(latest_y, latest_m, n):
-    """The last `n` months ending at (latest_y, latest_m), as both 'Month YYYY' and 'YYYY-MM' variants."""
-    out = []
-    y, m = latest_y, latest_m
-    for _ in range(max(1, n)):
-        out.append((y, m))
-        m -= 1
-        if m == 0:
-            m, y = 12, y - 1
-    variants = []
-    for (yy, mm) in out:
-        variants.append(f"{_MONTHS[mm]} {yy}")
-        variants.append(f"{yy}-{mm:02d}")
-    return variants
+    """The last `n` months ending at (latest_y, latest_m), as both 'Month YYYY' and 'YYYY-MM'
+    spellings — delegated to the shared finance helper (single source of truth)."""
+    return recent_period_keys(latest_y, latest_m, n)
 
 
 def _latest_period(client, org_id):

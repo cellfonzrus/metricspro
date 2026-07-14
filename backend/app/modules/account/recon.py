@@ -12,12 +12,12 @@ over-payment = warning). When ANTHROPIC_API_KEY is set, flagged stores get a Cla
 note that buckets MI/ATU by day (mi_activation_date) against the memo's date range.
 """
 import re
-import calendar
 from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.modules.commcalc.calculator import safe_float
 from app.modules.account import coa
+from app.modules.account import _period
 
 DEFAULT_TOLERANCE = 1.0
 DEFAULT_DATE_COL = "mi_activation_date"
@@ -25,13 +25,9 @@ DEFAULT_DATE_COL = "mi_activation_date"
 
 def _period_keys(period):
     """Both period spellings — 'June 2026' AND '2026-06' — so a period-string filter never silently
-    returns empty. raw_sales/raw_mi store the month-NAME form; reconcile was called with one spelling
-    and got $0 on the other (the recurring period-spelling bug). Mirrors coa.build_inputs."""
-    pm, py = coa.parse_period(period)
-    keys = {period}
-    if 1 <= pm <= 12 and py:
-        keys.add(f"{calendar.month_name[pm]} {py}")
-    return list(keys)
+    returns empty. Thin alias over the shared finance helper (single source of truth); kept so the
+    existing `_period_keys(period)` call sites read unchanged."""
+    return _period.period_keys(period)
 
 
 def _norm(s):
