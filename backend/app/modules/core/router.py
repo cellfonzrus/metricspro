@@ -578,6 +578,23 @@ FAILURE_TYPES = {
         "remediation": ("An automated import run failed. Check /commcalc/email-imports last_status + Test "
                         "connection; verify the mailbox credentials and the filename patterns."),
     },
+    # Raised by core.run_for_tenant (the shared background-job guard):
+    "tenant_guard": {
+        "label": "Background job refused — bad/inactive tenant",
+        "severity": "error",
+        "remediation": ("A background job fired for an org_id that has no tenant row, or a deactivated one. "
+                        "Confirm the connector / subscription / plan is filed under a REAL, active tenant at "
+                        "/admin/tenants (this is the tenant-misfiling guard) — or remove the stale row."),
+    },
+    "money_write_refused": {
+        "label": "Org-wide money write blocked (anomaly guard)",
+        "severity": "error",
+        "remediation": ("A background job tried to replace a whole tenant's money rows with an anomalous total "
+                        "(all-$0, or a near-total wipe of an existing balance) — the 2026-07-13 $0-incident "
+                        "shape. The tenant's data was LEFT AS-IS. A $0 result is almost always missing input "
+                        "(no plan assignment / empty source file), not a real zero — fix the input then re-run. "
+                        "If the write is legitimately zero, adjust storeops.tenants.money_guard_config."),
+    },
     "other": {"label": "Other", "severity": "warning",
               "remediation": "Review the detail and resolve manually."},
 }

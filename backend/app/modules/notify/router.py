@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Header
 
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.modules.core.run_for_tenant import run_for_tenant_async, TenantNotRunnable
 from . import report_registry, render
 from .channels import email_resend, whatsapp_meta
 
@@ -463,15 +464,25 @@ async def run_due(x_notify_secret: str = Header(default="")):
         body = {"recipient_ids": s.get("recipient_ids") or [],
                 "emails": s.get("ad_hoc_emails") or [],
                 "phones": s.get("ad_hoc_phones") or []}
-        emails, phones = _resolve_targets(sb(), org_id, body)
         result = {"error": None}
+
+        # Each subscription runs under the central tenant guard: it asserts the subscription's tenant
+        # exists + is active (a deactivated tenant is skipped, not sent to) and records a core.job_run
+        # audit row + a core.failure_log entry on dispatch failure. money_scope="none" — notify sends a
+        # report, it writes no money. See core.run_for_tenant.
+        async def _job(ctx, _s=s, _body=body):
+            emails, phones = _resolve_targets(sb(), ctx.org_id, _body)
+            return await _dispatch(
+                ctx.org_id, _s["report_key"], _s.get("filters") or {}, _s.get("channels"),
+                _s.get("formats"), emails, phones, None,
+                subscription_id=_s.get("id"), triggered_by="schedule")
         try:
-            result = await _dispatch(
-                org_id, s["report_key"], s.get("filters") or {}, s.get("channels"),
-                s.get("formats"), emails, phones, None,
-                subscription_id=s.get("id"), triggered_by="schedule")
+            result = await run_for_tenant_async(org_id, "notify.subscription", _job)
+        except TenantNotRunnable as e:
+            result = {"error": str(e), "sent": 0, "failed": 0, "skipped": True}
         except Exception as e:
             result = {"error": str(e), "sent": 0, "failed": 0}
+
         nxt = _compute_next_run(s.get("frequency"), s.get("day_of_week"),
                                 s.get("day_of_month"), s.get("hour"), s.get("timezone"))
         sb().table("subscriptions").update(
