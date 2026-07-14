@@ -8,19 +8,27 @@ import { safeHomeFor } from '@/lib/rbac'
 export default function LoginPage() {
   const router = useRouter()
   const { session, permissions, loading, provisioned, active, user, signOut,
-          tenants, needsTenantChoice, switchTenant } = useAuth()
+          tenants, needsTenantChoice, switchTenant,
+          pendingConnections, connectTenant, disableAndSwitch, dismissPending } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [picking, setPicking] = useState('')
+  // Pending account-link invite panel (platform-core-11):
+  const [code, setCode] = useState('')
+  const [panelBusy, setPanelBusy] = useState(false)
+  const [panelErr, setPanelErr] = useState('')
+  const [disabledInfo, setDisabledInfo] = useState<any>(null)
 
-  // Already signed in → bounce to the role's home (or password reset if required).
+  // Already signed in → bounce to the role's home (or password reset if required). Pause the redirect
+  // while a pending account-link invite is unresolved (the panel below handles it first).
   useEffect(() => {
     if (loading || !session || !provisioned || !active) return
+    if (pendingConnections.length) return
     if (user?.must_reset_password) router.replace('/account/password')
     else router.replace(safeHomeFor(permissions))
-  }, [loading, session, provisioned, active, permissions, user, router])
+  }, [loading, session, provisioned, active, permissions, user, router, pendingConnections])
 
   // Credentials accepted but the login belongs to MORE THAN ONE tenant and none is chosen yet →
   // show a tenant picker (platform-core-9). Picking one loads that tenant's profile, and the effect
@@ -63,6 +71,81 @@ export default function LoginPage() {
           </button>
         </div>
       </div>
+    )
+  }
+
+  // Signed in and there's a pending invitation to CONNECT another company (platform-core-11). Shows
+  // ONLY the inviting tenant's name (zero cross-tenant disclosure). The user can connect it onto this
+  // login, take a separate login instead, or defer. Single-tenant users without an invite never see this.
+  const invite = (!loading && session && !needsTenantChoice && pendingConnections[0]) || null
+  if (invite) {
+    if (disabledInfo) {
+      return (
+        <Shell>
+          <div style={{ textAlign: 'center', fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}>
+            Your new login is ready
+          </div>
+          <div style={{ fontSize: 13, color: '#334155', margin: '4px 0 14px' }}>
+            Sign in with the login and access code below for <strong>{invite.tenant_name}</strong>.
+          </div>
+          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: 14, fontFamily: 'monospace', fontSize: 13 }}>
+            <div>Login: <strong>{disabledInfo.new_login_email}</strong></div>
+            <div>Access code: <strong>{disabledInfo.access_code || disabledInfo.temp_password}</strong></div>
+          </div>
+          <div style={{ fontSize: 12, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a',
+            borderRadius: 8, padding: 10, marginTop: 12 }}>
+            {disabledInfo.policy}
+          </div>
+          <button onClick={() => signOut()} style={primaryBtn}>Sign out & sign in with the new login</button>
+        </Shell>
+      )
+    }
+    return (
+      <Shell>
+        <div style={{ textAlign: 'center', fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}>
+          Connect a company
+        </div>
+        <div style={{ fontSize: 13, color: '#334155', margin: '4px 0 14px' }}>
+          <strong>{invite.tenant_name}</strong> has invited this email to access MetricsPro. Enter the
+          access code your administrator gave you to connect it to your current login — you'll switch
+          between companies from the top bar.
+        </div>
+        <label style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Access code</label>
+        <input value={code} onChange={e => setCode(e.target.value)} autoFocus style={inp} placeholder="Paste the access code" />
+        {panelErr && <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>{panelErr}</div>}
+        <button disabled={panelBusy || !code.trim()} style={{ ...primaryBtn, opacity: (panelBusy || !code.trim()) ? 0.6 : 1 }}
+          onClick={async () => {
+            setPanelErr(''); setPanelBusy(true)
+            try { await connectTenant(invite.org_id, code.trim()); setCode('') }
+            catch (e: any) { setPanelErr(e?.message || 'Could not connect') }
+            finally { setPanelBusy(false) }
+          }}>
+          {panelBusy ? 'Connecting…' : `Connect ${invite.tenant_name}`}
+        </button>
+        <details style={{ marginTop: 14 }}>
+          <summary style={{ fontSize: 12, color: '#64748b', cursor: 'pointer' }}>
+            This isn't the right account — use a separate login instead
+          </summary>
+          <div style={{ fontSize: 12, color: '#64748b', margin: '8px 0' }}>
+            Disable your current login and get a brand-new, separate login for {invite.tenant_name}.
+            A disabled login can only be restored by a MetricsPro super-admin.
+          </div>
+          <button disabled={panelBusy || !code.trim()} style={{ ...secondaryBtn, opacity: (panelBusy || !code.trim()) ? 0.6 : 1 }}
+            onClick={async () => {
+              if (!confirm('Disable your current login and start fresh for this company? Only a super-admin can restore it.')) return
+              setPanelErr(''); setPanelBusy(true)
+              try { setDisabledInfo(await disableAndSwitch(invite.org_id, code.trim())) }
+              catch (e: any) { setPanelErr(e?.message || 'Could not switch logins') }
+              finally { setPanelBusy(false) }
+            }}>
+            Disable old login & start fresh
+          </button>
+        </details>
+        <button onClick={() => dismissPending(invite.org_id)} style={{ marginTop: 16, width: '100%', background: 'none',
+          border: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer' }}>
+          Not now — continue to my current company
+        </button>
+      </Shell>
     )
   }
 
@@ -131,4 +214,26 @@ export default function LoginPage() {
 const inp: React.CSSProperties = {
   width: '100%', marginTop: 5, padding: '10px 12px', borderRadius: 9,
   border: '1px solid #cbd5e1', fontSize: 14, boxSizing: 'border-box',
+}
+
+const primaryBtn: React.CSSProperties = {
+  width: '100%', marginTop: 16, padding: '11px 0', borderRadius: 9, border: 'none',
+  background: '#1e3a5f', color: 'white', fontSize: 15, fontWeight: 600, cursor: 'pointer',
+}
+const secondaryBtn: React.CSSProperties = {
+  width: '100%', padding: '9px 0', borderRadius: 9, border: '1px solid #cbd5e1',
+  background: 'white', color: '#1e3a5f', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+}
+
+// The centered white card used by every login-page state.
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%)', padding: 20 }}>
+      <div style={{ width: '100%', maxWidth: 420, background: 'white', borderRadius: 14, padding: '30px',
+        boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        {children}
+      </div>
+    </div>
+  )
 }

@@ -1086,6 +1086,27 @@ async def list_employees(org_id: str = ORG_ID):
             .eq("org_id", org_id).order("name").execute().data or []
     by_email = {(u.get("email") or "").lower(): u for u in users if u.get("email")}
     by_emp = {u.get("employee_id"): u for u in users if u.get("employee_id")}
+    # Pending account-link invites for THIS tenant (the admin's own data — no cross-tenant read). Used
+    # to show a UNIFORM "invited" state (platform-core-11): a pending invite and a freshly-created
+    # login that hasn't signed in yet both render "invited" until the user completes access, so the
+    # roster never reveals whether an email already exists in another tenant (anti-enumeration).
+    pending_emails = set()
+    try:
+        pinv = (client.schema("core").table("account_link_invite").select("email")
+                .eq("org_id", org_id).eq("status", "pending").execute().data) or []
+        pending_emails = {(r.get("email") or "").lower() for r in pinv if r.get("email")}
+    except Exception:
+        pending_emails = set()
+
+    def _login_state(u, email):
+        """Uniform status: 'active' once the person has actually signed in for this tenant; else
+        'invited' if a login was created OR an invite is pending; else '' (no login/invite)."""
+        auth = bool((u or {}).get("auth_id"))
+        active = auth and bool((u or {}).get("last_login"))
+        invited = auth or ((email or "").lower() in pending_emails)
+        return {"has_login": auth, "login_active": active,
+                "login_status": ("active" if active else ("invited" if invited else ""))}
+
     out = []
     matched = set()
     for e in emps:
@@ -1095,7 +1116,7 @@ async def list_employees(org_id: str = ORG_ID):
         out.append({
             **e,
             "app_role": (u or {}).get("role"),
-            "has_login": bool((u or {}).get("auth_id")),
+            **_login_state(u, e.get("email")),
             "app_market": (u or {}).get("market"),
             "app_store": (u or {}).get("store_code"),
             "app_store_codes": (u or {}).get("store_codes"),   # floaters: full store set
@@ -1116,7 +1137,7 @@ async def list_employees(org_id: str = ORG_ID):
             "email": u.get("email"),
             "is_active": u.get("is_active", True),
             "app_role": u.get("role"),
-            "has_login": bool(u.get("auth_id")),
+            **_login_state(u, u.get("email")),
             "app_market": u.get("market"),
             "app_store": u.get("store_code"),
             "app_store_codes": u.get("store_codes"),   # floaters: full store set
@@ -1279,40 +1300,55 @@ def _alias_email(email: str, slug: str, n: int = 0) -> str:
     return f"{local}+{tag if n == 0 else f'{tag}{n}'}@{domain}"
 
 
-def _provision_login(client, admin, cur_row, org_id, email, temp_pw, separate_login=False):
-    """Bind an auth login to this tenant's app_users row. Returns
-    (login_email, auth_id, created, aliased, shared).
+# ── Consent-based account linking (platform-core-11) ──────────────────────────────────────────────
+# When an admin provisions an email that ALREADY has a MetricsPro login in another tenant we must NOT
+# (a) create a second login, (b) mint a mig-088 alias, or (c) silently bind a shared membership (the
+# wave-4 default). Instead we enter a PENDING-CONNECTION state and the create-login response is made
+# BYTE-IDENTICAL to a brand-new email (anti-enumeration). The user resolves it themselves on next
+# sign-in: CONNECT the tenant onto their existing login (mig 706 shared membership → the switcher
+# applies) or DISABLE the old login and take a fresh one. Fresh emails keep today's direct-create path.
+class PendingConnectionRequired(Exception):
+    """Raised inside _provision_login when the email already has a MetricsPro login in ANOTHER tenant
+    and separate_login was not requested. create_login catches it and records a pending invite
+    instead of minting/binding anything — zero side effects on the existing account."""
 
-    Multi-tenant (platform-core-9): if the person ALREADY has a login in a DIFFERENT tenant, the
-    DEFAULT is now to give THIS tenant a membership on the SAME auth_id — ONE credential spanning
-    both tenants (mig 706 makes app_users.auth_id unique per (auth_id, org_id), so this is allowed).
-    The person keeps their existing password (no forced reset — resetting would change the shared
-    credential). Set `separate_login=True` to force the legacy behaviour instead: mint a distinct
-    tenant-aliased login (local+slug@domain), a SEPARATE auth account for this tenant.
 
-    BACK-COMPAT: pre-mig-706 the global auth_id UNIQUE still stands, so a shared bind raises a
-    conflict — we catch it and fall back to aliasing, exactly today's behaviour until 706 runs."""
-    auth_id, created, err = _create_or_link_auth(admin, email, temp_pw)
-    if not auth_id:
-        raise HTTPException(500, f"could not create login: {err}")
-    clash = (client.schema("storeops").table("app_users").select("id").eq("auth_id", auth_id)
-             .neq("org_id", org_id).limit(1).execute().data) or []
-    if not clash:
-        # First login anywhere for this auth_id → bind directly (unchanged behaviour).
-        client.schema("storeops").table("app_users").update(
-            {"auth_id": auth_id, "must_reset_password": True}).eq("id", cur_row["id"]).execute()
-        return email, auth_id, created, False, False
-    # auth_id already belongs to another tenant.
-    if not separate_login:
-        # PREFER a shared credential across tenants (the multi-tenant login feature). must_reset only
-        # if we just minted the account; a person reusing an existing credential keeps it as-is.
-        try:
-            client.schema("storeops").table("app_users").update(
-                {"auth_id": auth_id, "must_reset_password": bool(created)}).eq("id", cur_row["id"]).execute()
-            return email, auth_id, created, False, True
-        except Exception:
-            pass  # pre-mig-706 global-unique conflict → fall through to the alias fallback
-    # Aliasing: explicit separate_login, OR the shared bind conflicted pre-mig-706.
+def _email_login_state(client, email, org_id):
+    """Read-only (NO side effects): does this email already have a bound login here / elsewhere?
+    Returns (member_here, member_elsewhere). DB-first (indexed email lookup) → constant-ish time
+    regardless of existence, so it is not a timing oracle, and — unlike _create_or_link_auth — it
+    never touches the Supabase auth account (which would reset the existing user's password)."""
+    email = (email or "").strip().lower()
+    if not email:
+        return (False, False)
+    rows = (client.schema("storeops").table("app_users").select("org_id,auth_id")
+            .eq("email", email).execute().data) or []
+    member_here = any(r.get("auth_id") and r.get("org_id") == org_id for r in rows)
+    member_elsewhere = any(r.get("auth_id") and r.get("org_id") != org_id for r in rows)
+    return (member_here, member_elsewhere)
+
+
+def _provision_decision(*, member_here, member_elsewhere, separate_login):
+    """PURE decision for what create-login should do (unit-proven in prove_account_linking.py):
+      'reset'   — email already has a login in THIS tenant → just (re)set its password.
+      'fresh'   — email has no login anywhere → mint a new account + bind (today's direct path).
+      'alias'   — email has a login elsewhere AND separate_login=True → mint a mig-088 tenant alias.
+      'pending' — email has a login elsewhere, default → record a consent invite, mint/bind NOTHING.
+    The enumeration-sensitive pair is fresh vs pending (both separate_login=False, differing only by
+    member_elsewhere): create_login returns a byte-identical response shape for both."""
+    if member_here:
+        return "reset"
+    if not member_elsewhere:
+        return "fresh"
+    if separate_login:
+        return "alias"
+    return "pending"
+
+
+def _mint_tenant_alias(client, admin, cur_row, org_id, email, temp_pw):
+    """Mint a distinct tenant-aliased login (local+slug@domain) and bind it to cur_row — the mig-088
+    isolated per-tenant credential. The explicit escape hatch (separate_login=True) AND the fresh
+    login the DISABLE flow hands out. Returns (alias_email, auth_id, created, aliased=True, shared=False)."""
     ten = (client.schema("storeops").table("tenants").select("slug,name").eq("org_id", org_id)
            .limit(1).execute().data) or [{}]
     slug = (ten[0].get("slug") or ten[0].get("name") or "t")
@@ -1331,13 +1367,147 @@ def _provision_login(client, admin, cur_row, org_id, email, temp_pw, separate_lo
     raise HTTPException(409, "could not mint a distinct login for this tenant — try a different email")
 
 
+def _provision_login(client, admin, cur_row, org_id, email, temp_pw, separate_login=False):
+    """Bind an auth login to this tenant's app_users row. Returns
+    (login_email, auth_id, created, aliased, shared).
+
+    Consent-based (platform-core-11): if the email already has a login in a DIFFERENT tenant and
+    separate_login is not set, raise PendingConnectionRequired — create_login records a consent
+    invite; the user CONNECTs or DISABLEs on their own next sign-in. NO second login, NO alias, NO
+    silent shared bind (the rejected wave-4 default). separate_login=True keeps the mig-088 alias
+    escape hatch (isolated per-tenant credential). Fresh emails keep today's direct-create path."""
+    email = (email or "").strip().lower()
+    member_here, member_elsewhere = _email_login_state(client, email, org_id)
+    decision = _provision_decision(member_here=member_here, member_elsewhere=member_elsewhere,
+                                   separate_login=separate_login)
+    if decision == "pending":
+        raise PendingConnectionRequired()
+    if decision in ("fresh", "reset"):
+        # fresh → create_user mints a new account; reset → _create_or_link_auth finds the existing
+        # IN-TENANT account and resets its password (the "Reset pw" button). Both bind cur_row.
+        auth_id, created, err = _create_or_link_auth(admin, email, temp_pw)
+        if not auth_id:
+            raise HTTPException(500, f"could not create login: {err}")
+        client.schema("storeops").table("app_users").update(
+            {"auth_id": auth_id, "must_reset_password": True}).eq("id", cur_row["id"]).execute()
+        return email, auth_id, created, False, False
+    # decision == "alias": explicit separate_login escape hatch.
+    return _mint_tenant_alias(client, admin, cur_row, org_id, email, temp_pw)
+
+
+def _login_ready_response(email, access_code):
+    """The UNIFORM create-login response. Fresh, reset AND pending all return this identical shape and
+    message, so the admin cannot tell whether the email already exists in another tenant (the access
+    code is a new temp password for fresh/reset, a connect token for pending — indistinguishable).
+    `temp_password` is kept = access_code for back-compat with the existing Roles & Access UI."""
+    return {"email": email, "access_code": access_code, "temp_password": access_code,
+            "status": "login_ready", "aliased": False, "shared": False,
+            "note": ("Access has been set up for this person — hand them the access code. When they "
+                     "sign in: if they're new to MetricsPro they'll use it to set their password; if "
+                     "they already use MetricsPro, they sign in with their existing password and "
+                     "confirm connecting this company. The code confirms it's really them.")}
+
+
+def _audit_auth_event(client, event, *, email=None, auth_id=None, org_id=None, actor=None, detail=None):
+    """Best-effort identity-level audit into core.auth_event. NEVER raises (mig 707 may be un-run)."""
+    try:
+        client.schema("core").table("auth_event").insert({
+            "event": event, "email": ((email or "").strip().lower() or None),
+            "auth_id": auth_id, "org_id": org_id, "actor": actor, "detail": detail,
+        }).execute()
+    except Exception:
+        pass
+
+
+def _create_pending_invite(client, org_id, email, invited_by=None, role=None):
+    """Record (or refresh) a pending account-link invite for (email, this tenant). Returns the connect
+    token (the access code). Refreshes any prior pending invite so the newest code wins. Raises 500
+    only if the invite table is unavailable (mig 707 un-run) — so create-login degrades LOUDLY there
+    rather than silently binding a shared membership (the rejected behaviour)."""
+    email = (email or "").strip().lower()
+    code = "Cx" + secrets.token_urlsafe(9)
+    now = datetime.now(timezone.utc)
+    row = {"org_id": org_id, "email": email, "connect_token": code,
+           "invited_by": (invited_by or None), "role": role, "status": "pending",
+           "created_at": now.isoformat(), "expires_at": (now + timedelta(days=30)).isoformat()}
+    try:
+        client.schema("core").table("account_link_invite").update({"status": "revoked"}) \
+            .eq("org_id", org_id).eq("email", email).eq("status", "pending").execute()
+        client.schema("core").table("account_link_invite").insert(row).execute()
+    except Exception as e:
+        raise HTTPException(500, f"invite could not be recorded — run migration 707 first: {str(e)[:200]}")
+    _audit_auth_event(client, "invite_created", email=email, org_id=org_id,
+                      actor=(f"admin:{invited_by}" if invited_by else "admin"), detail={"role": role})
+    return code
+
+
+def _find_pending_invite(client, email, org_id, code=None):
+    """The live (pending, unexpired) invite for (email, org), optionally requiring a matching code."""
+    email = (email or "").strip().lower()
+    try:
+        rows = (client.schema("core").table("account_link_invite").select("*")
+                .eq("email", email).eq("org_id", org_id).eq("status", "pending").execute().data) or []
+    except Exception:
+        return None
+    now = datetime.now(timezone.utc)
+    for r in rows:
+        exp = r.get("expires_at")
+        try:
+            if exp and datetime.fromisoformat(str(exp).replace("Z", "+00:00")) < now:
+                continue
+        except Exception:
+            pass
+        if code is not None and (r.get("connect_token") or "") != code:
+            continue
+        return r
+    return None
+
+
+def _resolve_invite(client, inv, status, auth_id):
+    try:
+        client.schema("core").table("account_link_invite").update(
+            {"status": status, "resolved_auth_id": auth_id,
+             "resolved_at": datetime.now(timezone.utc).isoformat()}).eq("id", inv["id"]).execute()
+    except Exception:
+        pass
+
+
+def _email_for_uid(client, uid):
+    """The authenticated login's own email — from its app_users row, else the Supabase auth account."""
+    rows = (client.schema("storeops").table("app_users").select("email")
+            .eq("auth_id", uid).limit(1).execute().data) or []
+    if rows and rows[0].get("email"):
+        return (rows[0]["email"] or "").strip().lower()
+    try:
+        resp = get_supabase_admin().auth.admin.get_user_by_id(uid)
+        user = getattr(resp, "user", None) or resp
+        em = getattr(user, "email", None) or (user.get("email") if isinstance(user, dict) else None)
+        return (em or "").strip().lower() or None
+    except Exception:
+        return None
+
+
+def _set_auth_ban(admin, auth_id, banned):
+    """Ban (disable) or un-ban a Supabase Auth account. DISABLE semantics: a banned account's token
+    stops verifying, so the tenant middleware rejects it (its _resolve_identity fails → 401) —
+    enforcement at the auth boundary the middleware already runs, so NO tenant_middleware.py change is
+    needed. Returns True on success. ban_duration '876000h' ≈ 100y (indefinite); 'none' un-bans."""
+    try:
+        admin.auth.admin.update_user_by_id(auth_id, {"ban_duration": ("876000h" if banned else "none")})
+        return True
+    except Exception:
+        return False
+
+
 @router.post("/users/create-login")
 async def create_login(body: dict, org_id: str = ORG_ID):
-    """Create (or relink) the Supabase Auth account for ONE assigned user and store auth_id.
-    Returns the temp password so the admin can hand it out (user resets on first login). If the
-    person already has a login in ANOTHER tenant, they get a SHARED membership on their existing
-    credential (ONE login, both tenants) — pass {separate_login:true} to mint a distinct
-    tenant-aliased login instead (the legacy behaviour)."""
+    """Create (or relink) the Supabase Auth account for ONE assigned user and store auth_id. Returns
+    an ACCESS CODE to hand out (user resets on first login). Consent-based (platform-core-11): if the
+    email ALREADY has a MetricsPro login in another tenant, NO second login / alias / shared bind is
+    minted — a pending account-link invite is recorded and the response is BYTE-IDENTICAL to a
+    brand-new email (the admin can't learn the email exists elsewhere). The user then CONNECTs or
+    DISABLEs on their own next sign-in. Pass {separate_login:true} to force a distinct tenant-aliased
+    login (the isolated-per-tenant escape hatch, e.g. kiosk clock-punching reps)."""
     email = (body.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
@@ -1349,18 +1519,180 @@ async def create_login(body: dict, org_id: str = ORG_ID):
     admin = get_supabase_admin()
     temp_pw = body.get("temp_password") or ("Mp" + secrets.token_urlsafe(6))
     separate_login = bool(body.get("separate_login"))
-    login_email, auth_id, created, aliased, shared = _provision_login(
-        client, admin, cur[0], org_id, email, temp_pw, separate_login=separate_login)
-    note = None
+    try:
+        login_email, auth_id, created, aliased, shared = _provision_login(
+            client, admin, cur[0], org_id, email, temp_pw, separate_login=separate_login)
+    except PendingConnectionRequired:
+        # Email already has a login elsewhere → record a consent invite; the access code IS the
+        # connect token. Same shape/note as the fresh path below ⇒ no enumeration signal.
+        code = _create_pending_invite(client, org_id, email, invited_by=body.get("invited_by"),
+                                      role=cur[0].get("role"))
+        return _login_ready_response(email, code)
     if aliased:
-        note = (f"This person already has a login in another company, so a separate login "
-                f"“{login_email}” was created for this tenant (it reaches the same inbox).")
-    elif shared:
-        note = ("This person already has a login in another company, so they were added to this "
-                "tenant on their EXISTING credential — after they sign in they'll see a tenant "
-                "picker and can switch between companies. No new password was set.")
-    return {"email": login_email, "created": created, "temp_password": (None if shared and not created else temp_pw),
-            "auth_id": auth_id, "aliased": aliased, "shared": shared, "note": note}
+        # Reached ONLY via explicit {separate_login:true}, so it carries no enumeration signal — the
+        # admin already asked for a separate login. Uniform shape + an honest alias note.
+        return {**_login_ready_response(login_email, temp_pw), "aliased": True,
+                "note": (f"A separate, isolated login “{login_email}” was created for this tenant "
+                         f"(it reaches the same inbox). Hand out the access code below.")}
+    return _login_ready_response(email, temp_pw)
+
+
+# ── Account linking — the user resolves a pending invite on their own next sign-in ────────────────
+@router.get("/pending-connections")
+async def pending_connections(authorization: str = Header(default="")):
+    """Pending account-link invites addressed to the AUTHENTICATED caller's OWN email. Returns ONLY
+    the inviting tenant's name per invite (zero cross-tenant disclosure — never the caller's other
+    tenants, never who else an email belongs to). Empty for everyone without an invite, so the vast
+    majority of logins never see this. Drives the post-login connect/disable prompt."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    email = _email_for_uid(client, uid)
+    if not email:
+        return {"pending": []}
+    try:
+        rows = (client.schema("core").table("account_link_invite").select("*")
+                .eq("email", email).eq("status", "pending").execute().data) or []
+    except Exception:
+        return {"pending": []}   # mig 707 un-run → no invites surfaced
+    now = datetime.now(timezone.utc)
+    out = []
+    for r in rows:
+        exp = r.get("expires_at")
+        try:
+            if exp and datetime.fromisoformat(str(exp).replace("Z", "+00:00")) < now:
+                continue
+        except Exception:
+            pass
+        org = r.get("org_id")
+        tname = "a company"
+        try:
+            t = _tenant_row(client, org)
+            if t and t.get("name"):
+                tname = t["name"]
+        except Exception:
+            pass
+        out.append({"org_id": org, "tenant_name": tname, "invited_at": r.get("created_at")})
+    return {"pending": out}
+
+
+@router.post("/connect-tenant")
+async def connect_tenant(body: dict, authorization: str = Header(default="")):
+    """The authenticated user ACCEPTS a pending invite: attach the inviting tenant as a membership on
+    their EXISTING login (mig 706 shared model → the top-bar tenant switcher then applies). Requires
+    the access code the admin gave them (consent). Idempotent. org_id comes from the BODY (the invite
+    target), NOT a query param — the tenant middleware rewrites a query-param org_id to the caller's
+    default tenant, which would clobber the target; the body value is validated against the invite."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    target_org = (body.get("org_id") or "").strip()
+    code = (body.get("code") or body.get("connect_token") or "").strip()
+    if not target_org or not code:
+        raise HTTPException(400, "org_id and access code required")
+    client = sb()
+    email = _email_for_uid(client, uid)
+    if not email:
+        raise HTTPException(400, "no email on this login")
+    inv = _find_pending_invite(client, email, target_org, code)
+    if not inv:
+        raise HTTPException(403, "that access code doesn't match a pending invitation for your account")
+    existing = (client.schema("storeops").table("app_users").select("id,auth_id")
+                .eq("org_id", target_org).eq("email", email).limit(1).execute().data) or []
+    if not existing:
+        raise HTTPException(409, "the invitation's account is no longer set up — ask the admin to re-add you")
+    row = existing[0]
+    if row.get("auth_id") == uid:
+        _resolve_invite(client, inv, "accepted", uid)   # idempotent: already connected
+        return {"ok": True, "connected": True, "already": True, "org_id": target_org}
+    if row.get("auth_id"):
+        raise HTTPException(409, "this tenant already has a login for that email")
+    try:
+        client.schema("storeops").table("app_users").update(
+            {"auth_id": uid, "must_reset_password": False}).eq("id", row["id"]).execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not connect (run migration 706?): {str(e)[:200]}")
+    _resolve_invite(client, inv, "accepted", uid)
+    _audit_auth_event(client, "connect", email=email, auth_id=uid, org_id=target_org, actor=f"self:{email}")
+    return {"ok": True, "connected": True, "org_id": target_org}
+
+
+@router.post("/disable-and-switch")
+async def disable_and_switch(body: dict, authorization: str = Header(default="")):
+    """The authenticated user chooses to DISABLE their existing/old login and take a FRESH, isolated
+    login for the inviting tenant instead (the stale-old-account case). Requires the access code.
+    Mints the new tenant-aliased login FIRST, then bans the old auth account (Supabase ban → its token
+    stops verifying, enforced at the auth boundary the middleware already runs) + marks its app_users
+    rows inactive. The disabled login can be reinstated ONLY by a super-admin (policy text returned)."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    target_org = (body.get("org_id") or "").strip()
+    code = (body.get("code") or body.get("connect_token") or "").strip()
+    if not target_org or not code:
+        raise HTTPException(400, "org_id and access code required")
+    client = sb()
+    admin = get_supabase_admin()
+    email = _email_for_uid(client, uid)
+    if not email:
+        raise HTTPException(400, "no email on this login")
+    inv = _find_pending_invite(client, email, target_org, code)
+    if not inv:
+        raise HTTPException(403, "that access code doesn't match a pending invitation for your account")
+    target_row = (client.schema("storeops").table("app_users").select("*")
+                  .eq("org_id", target_org).eq("email", email).limit(1).execute().data) or []
+    if not target_row:
+        raise HTTPException(409, "the invitation's account is no longer set up — ask the admin to re-add you")
+    # 1) mint the fresh isolated login for the inviting tenant FIRST (email X is held by the old acct
+    #    → a tenant alias). If this fails we abort BEFORE disabling anything.
+    new_pw = "Mp" + secrets.token_urlsafe(6)
+    new_email, new_auth, created, aliased, shared = _mint_tenant_alias(
+        client, admin, target_row[0], target_org, email, new_pw)
+    # 2) disable the OLD login everywhere it is bound.
+    _set_auth_ban(admin, uid, True)
+    try:
+        client.schema("storeops").table("app_users").update({"is_active": False}) \
+            .eq("auth_id", uid).execute()
+    except Exception:
+        pass
+    _resolve_invite(client, inv, "disabled_switch", new_auth)
+    _audit_auth_event(client, "disable_switch", email=email, auth_id=uid, org_id=target_org,
+                      actor=f"self:{email}", detail={"new_login": new_email, "new_auth_id": new_auth})
+    return {"ok": True, "disabled": True, "new_login_email": new_email,
+            "access_code": new_pw, "temp_password": new_pw,
+            "policy": ("Your previous login has been disabled. For security, only a MetricsPro "
+                       "super-admin can reinstate it — email support@metricspro.tech or open a "
+                       "helpdesk ticket. Sign in with your new login and the access code above.")}
+
+
+@router.post("/reinstate-login")
+async def reinstate_login(body: dict, authorization: str = Header(default="")):
+    """Super-admin ONLY: reinstate a login disabled via disable-and-switch (un-ban the auth account +
+    re-activate its app_users rows). This is the sole reinstatement path — no tenant-admin or
+    self-service (policy). Identify the login by {email} (its real email) or {auth_id}."""
+    caller = _require_super_admin(authorization)
+    email = (body.get("email") or "").strip().lower()
+    auth_id = (body.get("auth_id") or "").strip()
+    client = sb()
+    admin = get_supabase_admin()
+    if not auth_id:
+        if not email:
+            raise HTTPException(400, "email or auth_id required")
+        rows = (client.schema("storeops").table("app_users").select("auth_id")
+                .eq("email", email).limit(1).execute().data) or []
+        auth_id = (rows[0].get("auth_id") if rows else None) or _find_auth_user_by_email(admin, email)
+    if not auth_id:
+        raise HTTPException(404, "no login found for that email")
+    unbanned = _set_auth_ban(admin, auth_id, False)
+    try:
+        client.schema("storeops").table("app_users").update({"is_active": True}) \
+            .eq("auth_id", auth_id).execute()
+    except Exception:
+        pass
+    _audit_auth_event(client, "reinstate", email=(email or None), auth_id=auth_id,
+                      actor=f"super_admin:{(caller or {}).get('email') or ''}")
+    return {"ok": True, "reinstated": True, "auth_id": auth_id, "unbanned": unbanned}
 
 
 @router.post("/users/reset-password")

@@ -25,6 +25,10 @@ export type TenantMembership = {
   is_default: boolean; super_admin: boolean; is_active: boolean
 }
 
+// A pending account-link invite addressed to THIS login's email (platform-core-11). Shows ONLY the
+// inviting tenant's name (zero cross-tenant disclosure). The user chooses connect / disable / not-now.
+export type PendingConnection = { org_id: string; tenant_name: string; invited_at?: string | null }
+
 type AuthState = {
   loading: boolean
   session: any | null
@@ -40,6 +44,11 @@ type AuthState = {
   activeOrg: string | null           // the tenant currently being acted as
   needsTenantChoice: boolean         // >1 membership and none chosen yet ⇒ show the picker
   switchTenant: (orgId: string) => Promise<void>
+  // Consent-based account linking (platform-core-11):
+  pendingConnections: PendingConnection[]                       // unresolved invites to this login's email
+  connectTenant: (orgId: string, code: string) => Promise<void> // attach the tenant onto this login
+  disableAndSwitch: (orgId: string, code: string) => Promise<any> // disable old login, take a fresh one
+  dismissPending: (orgId: string) => void                       // "not now" — proceed, invite stays pending
   signOut: () => Promise<void>
   refresh: () => Promise<void>
 }
@@ -47,7 +56,9 @@ type AuthState = {
 const Ctx = createContext<AuthState>({
   loading: true, session: null, user: null, permissions: {}, carriers: [], provisioned: false,
   active: false, tenant: null, token: null, tenants: [], activeOrg: null, needsTenantChoice: false,
-  switchTenant: async () => {}, signOut: async () => {}, refresh: async () => {},
+  switchTenant: async () => {}, pendingConnections: [], connectTenant: async () => {},
+  disableAndSwitch: async () => ({}), dismissPending: () => {},
+  signOut: async () => {}, refresh: async () => {},
 })
 
 export const useAuth = () => useContext(Ctx)
@@ -64,6 +75,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [tenants, setTenants] = useState<TenantMembership[]>([])
   const [activeOrg, setActiveOrgState] = useState<string | null>(null)
   const [needsTenantChoice, setNeedsTenantChoice] = useState(false)
+  const [pendingConnections, setPendingConnections] = useState<PendingConnection[]>([])
+  const [dismissed, setDismissed] = useState<string[]>([])
 
   const resetProfile = useCallback(() => {
     setUser(null); setPermissions({}); setProvisioned(false); setActive(false)
@@ -107,6 +120,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch { mems = [] }
     setTenants(mems)
 
+    // Any pending account-link invites addressed to this login's email (platform-core-11). Almost
+    // always empty; when present, the login page shows a connect/disable prompt before entering the app.
+    try {
+      const pr = await fetch(`${API_URL}/api/v1/core/pending-connections`, { headers: { Authorization: `Bearer ${token}` } })
+      setPendingConnections(pr.ok ? ((await pr.json()).pending || []) : [])
+    } catch { setPendingConnections([]) }
+
     if (mems.length > 1) {
       const stored = getActiveOrg()
       const valid = mems.find(t => t.org_id === stored)
@@ -136,6 +156,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await loadMe(session.access_token, orgId)
   }, [session, loadMe])
 
+  // Accept a pending invite: attach the inviting tenant onto THIS login. Reloads the profile so the
+  // new tenant appears in the top-bar switcher. The access code (from the admin) is the consent proof.
+  const connectTenant = useCallback(async (orgId: string, code: string) => {
+    if (!session?.access_token) return
+    const res = await fetch(`${API_URL}/api/v1/core/connect-tenant`, {
+      method: 'POST', headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ org_id: orgId, code }),
+    })
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Could not connect this company')
+    setPendingConnections(p => p.filter(x => x.org_id !== orgId))
+    await loadProfile(session)   // re-fetch memberships → the switcher now shows both tenants
+  }, [session, loadProfile])
+
+  // Disable the old login and take a fresh one for the inviting tenant. Returns the new credentials
+  // + policy text so the caller can show them; the current session is banned, so the caller signs out.
+  const disableAndSwitch = useCallback(async (orgId: string, code: string) => {
+    if (!session?.access_token) throw new Error('not signed in')
+    const res = await fetch(`${API_URL}/api/v1/core/disable-and-switch`, {
+      method: 'POST', headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ org_id: orgId, code }),
+    })
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Could not switch logins')
+    return res.json()
+  }, [session])
+
+  const dismissPending = useCallback((orgId: string) => {
+    setDismissed(d => (d.includes(orgId) ? d : [...d, orgId]))
+  }, [])
+
   useEffect(() => {
     let mounted = true
     supabase.auth.getSession().then(async ({ data }) => {
@@ -157,6 +206,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await supabase.auth.signOut()
     setActiveOrg(null)
     resetProfile(); setSession(null); setTenants([]); setActiveOrgState(null); setNeedsTenantChoice(false)
+    setPendingConnections([]); setDismissed([])
   }, [resetProfile])
 
   const refresh = useCallback(async () => {
@@ -165,11 +215,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await loadProfile(data.session)
   }, [loadProfile])
 
+  const visiblePending = pendingConnections.filter(p => !dismissed.includes(p.org_id))
+
   return (
     <Ctx.Provider value={{
       loading, session, user, permissions, carriers, provisioned, active, tenant,
       token: session?.access_token || null, tenants, activeOrg, needsTenantChoice,
-      switchTenant, signOut, refresh,
+      switchTenant, pendingConnections: visiblePending, connectTenant, disableAndSwitch,
+      dismissPending, signOut, refresh,
     }}>
       {children}
     </Ctx.Provider>

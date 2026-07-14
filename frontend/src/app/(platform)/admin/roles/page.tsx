@@ -46,7 +46,8 @@ type Emp = {
   id: number; employee_id: string | null; name: string; home_store: string | null
   email: string | null; role: string | null; is_active: boolean
   phone?: string | null; pay_rate?: number | null
-  app_role: string | null; has_login: boolean; app_market: string | null; app_store: string | null
+  app_role: string | null; has_login: boolean; login_status?: '' | 'invited' | 'active'
+  app_market: string | null; app_store: string | null
   app_store_codes?: string[] | null   // floaters cover several stores (app_users.store_codes)
   widget_overrides?: Record<string, boolean> | null
   manual?: boolean
@@ -260,9 +261,11 @@ export default function RolesAdminPage() {
     try {
       await assign(e)
       const res = await api('/api/v1/core/users/create-login', { method: 'POST', body: JSON.stringify({ email: e.email }) })
-      setTempPw(p => ({ ...p, [e.email!]: res.temp_password }))
-      setEmp(e.id, { has_login: true })
-      setMsg(`Login created for ${e.name}`)
+      setTempPw(p => ({ ...p, [e.email!]: res.access_code ?? res.temp_password }))
+      // Optimistic UNIFORM state — "invited" until the user completes access, identical for a fresh
+      // login and a pending cross-tenant invite (no enumeration signal).
+      setEmp(e.id, { login_status: 'invited' })
+      setMsg(`Access set up for ${e.name} — hand out the access code below.`)
     } catch (err: any) { setMsg('Create-login failed: ' + (err?.message || err)) }
   }
   async function provisionAll() {
@@ -561,7 +564,7 @@ export default function RolesAdminPage() {
                 { header: 'App role', get: (e: Emp) => e.app_role || '' },
                 { header: 'Market', get: (e: Emp) => e.app_market || '' },
                 { header: 'Store(s)', get: (e: Emp) => (e.app_store_codes && e.app_store_codes.length ? e.app_store_codes.join(', ') : (e.app_store || '')) },
-                { header: 'Login', get: (e: Emp) => e.has_login ? 'Yes' : 'No' },
+                { header: 'Login', get: (e: Emp) => e.login_status === 'active' ? 'Active' : ((e.login_status === 'invited' || e.has_login) ? 'Invited' : 'No') },
                 { header: 'Active', get: (e: Emp) => e.is_active ? 'Yes' : 'No' },
               ] }],
             })} />
@@ -603,7 +606,9 @@ export default function RolesAdminPage() {
           {tempList.length > 0 && (
             <div className="card" style={{ padding: 14, marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>
-                🔑 Temporary passwords — hand these out; users reset on first sign-in
+                🔑 Access codes — hand each to the person. New users set a password on first sign-in;
+                anyone who already uses MetricsPro signs in with their existing password and enters this
+                code to connect this company.
               </div>
               <div style={{ maxHeight: 180, overflowY: 'auto', fontFamily: 'monospace', fontSize: 12 }}>
                 {tempList.map(([em, pw]) => <div key={em}>{em} → <strong>{pw}</strong></div>)}
@@ -655,7 +660,14 @@ export default function RolesAdminPage() {
                           onChange={codes => setEmp(e.id, { app_store_codes: codes, app_store: codes[0] || null })} />
                       </td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>
-                        {e.has_login ? <span className="badge badge-blue" style={{ fontSize: 11 }}>✓ has login</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
+                        {/* Uniform status (platform-core-11): a pending invite and a just-created
+                            login that hasn't signed in both show "invited" — the roster never reveals
+                            whether an email already exists in another tenant. */}
+                        {e.login_status === 'active'
+                          ? <span className="badge badge-blue" style={{ fontSize: 11 }}>✓ active</span>
+                          : (e.login_status === 'invited' || e.has_login)
+                            ? <span className="badge" style={{ fontSize: 11, background: '#fef3c7', color: '#92400e' }}>⏳ invited</span>
+                            : <span style={{ color: 'var(--text3)' }}>—</span>}
                       </td>
                       <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
                         <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => assign(e)}>Save</button>{' '}
