@@ -4388,21 +4388,23 @@ async def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret:
 async def calculate(
     period: str,
     background_tasks: BackgroundTasks,
-    org_id: str = "00000000-0000-0000-0000-000000000001"
+    org_id: str = "00000000-0000-0000-0000-000000000001",
+    force: bool = False
 ):
-    """Trigger commission calculation for a period"""
+    """Trigger commission calculation for a period. force=true bypasses the zero-wipe guard
+    (deliberately overwrite a paying snapshot with an all-$0 plan-mode result)."""
     require_org(org_id)
-    
+
     client = sb()
-    
+
     # Mark as pending
     try:
         client.schema('commcalc').table('calc_status').upsert({
             'org_id': org_id, 'period': period, 'calc_status': 'running'
         }, on_conflict='org_id,period').execute()
     except: pass
-    
-    background_tasks.add_task(_run_calculation, period, org_id)
+
+    background_tasks.add_task(_run_calculation, period, org_id, force)
     return {"status": "started", "period": period, "message": "Calculation running in background"}
 
 
@@ -4565,8 +4567,8 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost'):
         return comms
 
 
-async def _run_calculation(period: str, org_id: str):
-    """Background calculation task"""
+async def _run_calculation(period: str, org_id: str, force: bool = False):
+    """Background calculation task. force=True bypasses the zero-wipe guard."""
     client = sb()
     save_errors = []
     
@@ -4651,14 +4653,41 @@ async def _run_calculation(period: str, org_id: str):
         )
         
         # Save commissions
+        comms = result['commissions']
+        for row in comms:
+            row['org_id'] = org_id
+        # ADDITIVE: layer the new configurable engines (multi-month payout + commission plans) on top.
+        # Boost-safe: with no schedule/plan configured this returns comms byte-identical (see helper).
+        # Applied BEFORE the delete so the zero-wipe guard below inspects the FINAL rows while the
+        # existing snapshot is still intact.
+        comms = _apply_new_engines(client, org_id, period, comms, carrier_mode)
+
+        # ZERO-WIPE GUARD (2026-07-14, owner-approved): in plan mode, an all-$0 result computed FROM
+        # real sales must never replace a snapshot that currently pays someone. On 2026-07-13 a
+        # transiently-defaulted non-Boost carrier flipped this org to plan mode with nothing configured
+        # to pay from, and the 7am DLAR sweep silently zeroed every Boost rep's open month. Config-count
+        # checks don't catch this (the house org holds 14 Total payout schedules that resolve to $0) —
+        # only the OUTCOME does. Fail loudly into calc_status instead; ?force=true overwrites deliberately.
+        if (not force and carrier_mode != 'boost' and sales and comms
+                and all(safe_float(c.get('total_payout')) == 0 for c in comms)):
+            try:
+                prior_paid = (client.schema('commcalc').table('rep_commissions')
+                              .select('org_id', count='exact').eq('org_id', org_id)
+                              .in_('period', _pvariants(period)).neq('total_payout', 0)
+                              .execute().count) or 0
+            except Exception:
+                prior_paid = 0
+            if prior_paid:
+                raise Exception(
+                    f"REFUSED to overwrite {period}: plan-mode calc produced $0 for all {len(comms)} reps "
+                    f"while {prior_paid} stored rows currently pay non-zero — the 2026-07-13 zero-wipe "
+                    f"signature (non-Boost default carrier with nothing configured to pay from). Kept the "
+                    f"existing snapshot. Fix the default carrier on the Carriers page or configure "
+                    f"Commission Plan assignments, then recalculate; or POST /calculate/{period}"
+                    f"?force=true to overwrite deliberately.")
+
         try:
             client.schema('commcalc').table('rep_commissions').delete().eq('org_id', org_id).in_('period', _pvariants(period)).execute()
-            comms = result['commissions']
-            for row in comms:
-                row['org_id'] = org_id
-            # ADDITIVE: layer the new configurable engines (multi-month payout + commission plans) on top.
-            # Boost-safe: with no schedule/plan configured this returns comms byte-identical (see helper).
-            comms = _apply_new_engines(client, org_id, period, comms, carrier_mode)
             for i in range(0, len(comms), 500):
                 client.schema('commcalc').table('rep_commissions').insert(comms[i:i+500]).execute()
         except Exception as e:
