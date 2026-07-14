@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { api, ORG_ID } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 
 export default function NewTicket() {
   const { user } = useAuth()
@@ -13,6 +14,9 @@ export default function NewTicket() {
   const [categoryId, setCategoryId] = useState('')
   const [priorityId, setPriorityId] = useState('')
   const [storeCode, setStoreCode] = useState('')
+  // Store roster — "pick, don't type" (RULE THREE §3b). id===store_code (the byte-identical string the
+  // ticket already stores); label adds the address for recognition. allowCreate stays false.
+  const [stores, setStores] = useState<EntityOption[]>([])
   const [cf, setCf] = useState<Record<string, any>>({})
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -23,6 +27,17 @@ export default function NewTicket() {
       const normal = (d.priorities || []).find((p: any) => p.key === 'normal') || (d.priorities || [])[0]
       if (normal) setPriorityId(normal.id)
     }).catch(e => setErr(e?.message || 'Failed to load form'))
+  }, [])
+
+  useEffect(() => {
+    api(`/api/v1/storeops/stores`).then((rows: any) => {
+      const opts = ((rows || []) as any[])
+        .map(s => ({ id: String(s.store_code || '').trim(),
+          label: `${s.store_code}${s.address ? ' — ' + String(s.address).substring(0, 32) : ''}` }))
+        .filter(o => o.id)
+        .sort((a, b) => a.id.localeCompare(b.id)) as EntityOption[]
+      setStores(opts)
+    }).catch(() => {})
   }, [])
 
   async function submit() {
@@ -68,7 +83,8 @@ export default function NewTicket() {
             </select></div>
         </div>
         <div><label style={lbl}>Store (optional)</label>
-          <input className="input" style={{ width: '100%' }} value={storeCode} onChange={e => setStoreCode(e.target.value)} placeholder="Store code / address" /></div>
+          <EntityPicker options={stores} value={storeCode || null} onChange={v => setStoreCode(v || '')}
+            placeholder="Search store…" ariaLabel="Store" width="100%" /></div>
 
         {(cfg.custom_fields || []).filter((f: any) => f.is_active).map((f: any) => (
           <div key={f.id}>

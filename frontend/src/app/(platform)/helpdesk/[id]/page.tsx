@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { api, apiUpload, ORG_ID } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 
 const enc = encodeURIComponent
 function Badge({ label, color }: { label?: string; color?: string }) {
@@ -24,6 +25,8 @@ export default function TicketDetail() {
   const [comment, setComment] = useState('')
   const [internal, setInternal] = useState(false)
   const [busy, setBusy] = useState(false)
+  // Assignee roster — "pick, don't type" (RULE THREE §3b): org app_users as First-Last + email options.
+  const [agents, setAgents] = useState<EntityOption[]>([])
 
   const load = useCallback(async () => {
     try { setData(await api(`/api/v1/helpdesk/tickets/${id}?org_id=${ORG_ID}&agent=${isAgent}`)) }
@@ -31,6 +34,21 @@ export default function TicketDetail() {
   }, [id, isAgent])
   useEffect(() => { load() }, [load])
   useEffect(() => { api(`/api/v1/helpdesk/config/bootstrap?org_id=${ORG_ID}`).then(setCfg).catch(() => {}) }, [])
+  useEffect(() => {
+    // Agent roster for the Assignee picker. Only agents can (re)assign, so only they fetch the roster —
+    // a self-scope requester never pulls the org user list. DATA-COMPAT: id===label===the display name
+    // (the string the `assignee` column already stores) → byte-identical writes, no migration. email is a
+    // sublabel that auto-disambiguates two same-name agents. Canonical-ID (user id/email) = flagged follow-up.
+    if (!isAgent) return
+    api(`/api/v1/core/users?org_id=${ORG_ID}`).then((d: any) => {
+      const opts = (((d && d.users) || []) as any[]).map(u => {
+        const name = String(u.full_name || u.email || '').trim()
+        const email = String(u.email || '').trim()
+        return name ? { id: name, label: name, sublabel: email && email !== name ? email : undefined } : null
+      }).filter(Boolean) as EntityOption[]
+      setAgents(opts)
+    }).catch(() => {})
+  }, [isAgent])
 
   async function patch(body: any) {
     setBusy(true)
@@ -62,6 +80,11 @@ export default function TicketDetail() {
   const t = data.ticket
   const cf = t.custom_fields || {}
   const sel = { padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13 }
+  // Keep an already-set assignee that isn't in the roster selectable/visible (no display regression,
+  // no accidental wipe) — allowCreate stays false so no NEW off-roster value can be typed.
+  const assigneeOptions: EntityOption[] = t.assignee && !agents.some(a => a.id === t.assignee)
+    ? [{ id: t.assignee, label: t.assignee }, ...agents]
+    : agents
 
   return (
     <div style={{ padding: 24, maxWidth: 860 }}>
@@ -92,9 +115,9 @@ export default function TicketDetail() {
           {(cfg.teams || []).length > 0 && <label style={{ fontSize: 12, color: 'var(--text3)' }}>Team
             <select style={{ ...sel, marginLeft: 6 }} disabled={busy} value={t.team_id || ''} onChange={e => patch({ team_id: e.target.value })}>
               <option value="">—</option>{(cfg.teams || []).map((tm: any) => <option key={tm.id} value={tm.id}>{tm.name}</option>)}</select></label>}
-          <label style={{ fontSize: 12, color: 'var(--text3)' }}>Assignee
-            <input style={{ ...sel, marginLeft: 6, width: 140 }} disabled={busy} defaultValue={t.assignee || ''}
-              onBlur={e => { if (e.target.value !== (t.assignee || '')) patch({ assignee: e.target.value || null }) }} placeholder="name / email" /></label>
+          <label style={{ fontSize: 12, color: 'var(--text3)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>Assignee
+            <EntityPicker options={assigneeOptions} value={t.assignee || null} disabled={busy}
+              onChange={v => patch({ assignee: v })} placeholder="Unassigned" ariaLabel="Assignee" width={180} /></label>
         </div>
       )}
 
