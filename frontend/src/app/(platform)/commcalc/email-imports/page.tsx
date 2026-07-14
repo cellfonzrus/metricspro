@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
+import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 
 // Generic email (IMAP) inbox sweep — sibling of the FTP sweep. Configure a mailbox (host/creds) and
 // attachment-filename → upload-type patterns; the backend polls the inbox on a schedule and routes
@@ -328,11 +329,15 @@ export default function EmailImportsPage() {
   return (
     <div>
       <div style={{ marginBottom: 14 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📧 Email Auto-Import</h1>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📧 Email Auto-Import</h1>
+          <WhereAreMyRowsButton />
+        </div>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Poll a mailbox a vendor (e.g. B2B Soft) emails reports to, and route each attachment to its upload parser.
           Add <strong>more than one mailbox</strong> when reports arrive in different inboxes (e.g. the B2B feed at one
           address, Total Wireless at another) — each has its own creds, patterns and schedule.
+          Swept a file but a page shows nothing? <strong>Where are my rows?</strong> traces every ingest (incl. which org it landed in).
         </p>
       </div>
 

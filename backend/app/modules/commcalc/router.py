@@ -50,6 +50,62 @@ def require_org(org_id: str):
     if not org_id:
         raise HTTPException(400, "org_id required")
 
+
+# ── UNIVERSAL UPLOAD TRACE (mig 202) ─────────────────────────────────────────────────────────────
+# Which table each upload_type lands in — so a trace record can name the target table without threading
+# the local TABLE_MAP through every caller. Kept in sync with upload_file's TABLE_MAP.
+_TRACE_TARGET_TABLE = {
+    "sales": "raw_sales", "daily_sales": "daily_sales_feed", "payment_detail": "raw_payment_detail",
+    "mi_report": "raw_mi", "dlar_rep": "raw_dlar_rep", "dlar_store": "raw_dlar_store",
+    "catalog": "raw_catalog", "master_cats": "raw_categories", "comp_report": "raw_comp_report",
+    "ma_commission": "raw_ma_commission", "ma_daily_tx": "raw_ma_daily_tx",
+    "ma_fulfillment": "raw_ma_fulfillment", "x_report": "pos_tender_summary",
+    "inventory_aging": "inventory_aging",
+}
+
+
+def _write_upload_trace(org_id, *, source="manual", filename=None, upload_type=None, period="",
+                        result=None, duration_ms=None, error=None):
+    """Record ONE row in commcalc.upload_trace for an ingest attempt (the owner's debug-first surface).
+    Best-effort and NON-RAISING: any failure (mig 202 unrun, transient DB error) is swallowed so it can
+    never break an upload. `result` is the dict the ingest returned; a rich `result['_trace']`
+    ({rows_in,target_table,periods,date_counts}) is used when present (the sales/daily money-path attaches
+    it), otherwise coarse fields are derived from the result. `error` set ⇒ status='error'."""
+    try:
+        res = result if isinstance(result, dict) else {}
+        tr = res.get("_trace") if isinstance(res.get("_trace"), dict) else {}
+        # rows saved: the sales/daily path returns 'saved'; x_report 'tenants'; inventory 'saved'; custom 'rows'.
+        rows_saved = res.get("saved")
+        if rows_saved is None:
+            rows_saved = res.get("tenants", res.get("stores", res.get("rows")))
+        skipped = res.get("skipped") or (None if res.get("success", True) else res.get("skipped"))
+        if error:
+            status = "error"
+        elif res.get("skipped") == "price_guard_partial":
+            status = "partial"
+        elif res.get("skipped") or res.get("success") is False:
+            status = "skipped"
+        else:
+            status = "ok"
+        guard = res.get("shrink") or res.get("guarded_dates") or res.get("note")
+        row = {
+            "org_id": org_id, "source": source, "filename": filename,
+            "upload_type": upload_type,
+            "target_table": tr.get("target_table") or _TRACE_TARGET_TABLE.get(upload_type),
+            "rows_in": tr.get("rows_in"),
+            "rows_saved": (int(rows_saved) if isinstance(rows_saved, (int, float)) else None),
+            "status": status, "skipped": (str(skipped) if skipped else None),
+            "guard": guard if isinstance(guard, (list, dict)) else ({"note": guard} if guard else None),
+            "periods": tr.get("periods"), "date_counts": tr.get("date_counts"),
+            "duration_ms": (int(duration_ms) if duration_ms is not None else None),
+            "note": (str(res.get("note"))[:500] if res.get("note") else None),
+            "error": (str(error)[:800] if error else None),
+        }
+        sb().schema("commcalc").table("upload_trace").insert(row).execute()
+    except Exception as e:
+        print(f"WARN upload_trace insert skipped (run mig 202?): {e}")
+
+
 def _month_year(period: str):
     """Parse either 'June 2026' or '2026-06' → (month, year). (0,0) if unrecognized.
     calculator.parse_period only handles the month-name form and silently returns January
@@ -286,6 +342,45 @@ async def upload_file(
     period: str = "",
     force: bool = False,
     close_date: str = "",
+    org_id: str = "00000000-0000-0000-0000-000000000001",
+    trace_source: str = "manual",
+):
+    """Upload a data file (sales, payment_detail, mi, dlar_rep, dlar_store, catalog).
+
+    THIN TRACED WRAPPER (mig 202): the real work is in `_upload_file_impl`; this records exactly ONE
+    `upload_trace` row per call — for the manual route AND for the email/FTP sweeps that call this
+    directly — capturing which org the rows landed in, rows-in vs saved, per-period/per-day counts, the
+    guard outcome, duration, and any exception (so a failed upload is traced too). `trace_source` is a
+    harmless optional query param the sweeps set ('email_sweep'/'ftp_sweep'); the UI never sends it →
+    stays 'manual'. Never lets a trace failure affect the upload result."""
+    import time as _t_up
+    _t0 = _t_up.monotonic()
+    _fname = getattr(file, "filename", None)
+    _res = None
+    _err = None
+    try:
+        _res = await _upload_file_impl(file_type, file, period, force, close_date, org_id)
+        # Return a clean copy WITHOUT the internal `_trace` payload; `_write_upload_trace` (finally) still
+        # sees the rich `_trace` because it reads `_res`, not the returned copy.
+        return {k: v for k, v in _res.items() if k != "_trace"} if isinstance(_res, dict) else _res
+    except HTTPException as he:
+        _err = f"{getattr(he, 'status_code', 500)}: {str(he.detail)[:400]}"
+        raise
+    except Exception as e:
+        _err = str(e)[:400]
+        raise
+    finally:
+        _write_upload_trace(org_id, source=trace_source, filename=_fname, upload_type=file_type,
+                            period=period, result=_res,
+                            duration_ms=int((_t_up.monotonic() - _t0) * 1000), error=_err)
+
+
+async def _upload_file_impl(
+    file_type: str,
+    file: UploadFile = File(...),
+    period: str = "",
+    force: bool = False,
+    close_date: str = "",
     org_id: str = "00000000-0000-0000-0000-000000000001"
 ):
     """Upload a data file (sales, payment_detail, mi, dlar_rep, dlar_store, catalog).
@@ -294,7 +389,7 @@ async def upload_file(
     belong to (their Begin Date); a mismatch is rejected (pass force=true to override) so a file
     can't be mislabeled into the wrong month — the bug that wiped a month's residual trend."""
     require_org(org_id)
-    
+
     SUPPORTED = BUILTIN_UPLOAD_TYPES
     if file_type not in SUPPORTED:
         # Self-serve custom sheet (report_definitions, target_table=raw_custom_import / upload_endpoint=
@@ -872,7 +967,9 @@ async def upload_file(
                         "shrink": [{"key": "price-guard", "prior": int(_g_ex), "new": int(_g_inc),
                                     "reason": "refused: far fewer priced (Ext Price) rows than already stored — "
                                               "a degraded/price-less export. Kept existing dollars. Ensure the "
-                                              "scheduled b2bsoft report keeps the Ext Price + GP columns."}]}
+                                              "scheduled b2bsoft report keeps the Ext Price + GP columns."}],
+                        "_trace": {"rows_in": len(mapped), "target_table": table, "periods": {},
+                                   "date_counts": {str(d): int(_inc_by_date.get(d, 0)) for d in _pg_dates}}}
             # SOME days degraded, others fresh/better → PARTIAL. Drop the degraded days' rows so the per-date
             # delete-then-insert below never clears them (their stored rows survive untouched); the file's
             # remaining days ingest normally. The marker is merged into the final response and its shrink
@@ -1013,6 +1110,18 @@ async def upload_file(
         out["skipped"] = "price_guard_partial"
         out["guarded_dates"] = price_guard_partial["guarded_dates"]
         out["shrink"] = [price_guard_partial["shrink"]] + shrink
+    # Rich trace payload (mig 202) — per-period + per-day SAVED counts, computed from the rows actually
+    # written (`mapped`), plus rows-in and the target table. Consumed + stripped by the traced wrapper.
+    _tr_periods, _tr_dates = {}, {}
+    for _m in mapped:
+        _p = _m.get("period")
+        if _p:
+            _tr_periods[_p] = _tr_periods.get(_p, 0) + 1
+        _d = _m.get("trans_date")
+        if _d:
+            _tr_dates[str(_d)] = _tr_dates.get(str(_d), 0) + 1
+    out["_trace"] = {"rows_in": len(rows), "target_table": table,
+                     "periods": _tr_periods, "date_counts": _tr_dates}
     return out
 
 
@@ -6435,24 +6544,17 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
     if not period:
         n = datetime.now(timezone.utc)
         period = f"{n.year}-{n.month:02d}"
-    cols = "trans_id,trans_date,store,salesperson,department,category,product_desc,contract_type,ext_price,gp,voided,trans_type"
+    cols = _SALES_DISPLAY_COLS
     acfg = _accessory_config(client, org_id)
 
-    def _q(table):
-        return (client.schema("commcalc").table(table).select(cols)
-                .eq("org_id", org_id).in_("period", _pvariants(period))
-                .limit(200000).execute().data) or []
-    # ONE processed source, same preference as the targets: the OPEN month reads the daily feed (freshest
-    # + complete — the monthly raw_sales lags/promotes late even with 'auto' on), a closed month reads the
-    # authoritative raw_sales; each falls back to the other. This is why July always shows.
-    primary, other = _open_month_source(client, org_id, period)
-    rows = _q(primary)
-    source = primary
-    if not rows:
-        try:
-            rows = _q(other); source = other
-        except Exception:
-            rows = []
+    # THE canonical display source: a per-day UNION of the daily feed and raw_sales (feed-wins-per-day for
+    # the open month, exactly promotion's merge). This is what makes a hand-uploaded raw_sales month
+    # VISIBLE even while a partial feed exists (the luxelink July incident) — where the old single-source
+    # pick showed only the feed's days and silently hid the rest of raw_sales. `_sales_rows_union` never
+    # raises (each side reads under try/except), so the primary-read 500 that rendered as a blank page is
+    # gone. `src_meta` drives the report's transparency line.
+    rows, src_meta = _sales_rows_union(client, org_id, period, cols)
+    source = src_meta['primary'] if src_meta['primary_rows'] else src_meta['other']
 
     # Distinct periods available (both tables) so the UI can offer a month picker.
     periods = set()
@@ -6513,8 +6615,11 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
     # Resolve each store to its market (store_mapping) so the report can filter by market —
     # keyed by address, store_code, or leading store-number, matching commission-trend's resolver.
     import re as _re_sr
-    sm_rows = (client.schema("commcalc").table("store_mapping")
-               .select("store_code,store_address,market").eq("org_id", org_id).execute().data) or []
+    try:
+        sm_rows = (client.schema("commcalc").table("store_mapping")
+                   .select("store_code,store_address,market").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        sm_rows = []   # market resolution is optional — never 500 the report over a store_mapping read
     def _lead_sr(s):
         m = _re_sr.match(r"\s*(\d+)", str(s or "")); return m.group(1) if m else ""
     mkt_by_code, mkt_by_addr, mkt_by_num = {}, {}, {}
@@ -6547,10 +6652,13 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
         a["market"] = _market_for(a["store"])
         out.append(a)
     out.sort(key=lambda r: (r["store"], r["trans_date"], r["salesperson"]))
-    from app.modules.storeops.router import scope_keyset, in_keyset
-    ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
-    if ks is not None:
-        out = [r for r in out if in_keyset(ks, r.get("store"))]
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
+        if ks is not None:
+            out = [r for r in out if in_keyset(ks, r.get("store"))]
+    except Exception:
+        pass   # a span-scope resolution error must not blank the report (fail open to unrestricted)
     totals = {
         "txns": sum(r["txns"] for r in out), "lines": sum(r["lines"] for r in out),
         "activations": sum(r["activations"] for r in out), "byod": sum(r["byod"] for r in out),
@@ -6558,8 +6666,14 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
         "accessory_rev": round(sum(r["accessory_rev"] for r in out), 2),
         "revenue": round(sum(r["revenue"] for r in out), 2), "gp": round(sum(r["gp"] for r in out), 2),
     }
-    return {"period": period, "source": source, "rows": out, "totals": totals,
-            "periods": sorted(periods, reverse=True)}
+    return {"period": period, "source": source, "org_id": org_id, "rows": out, "totals": totals,
+            "periods": sorted(periods, reverse=True),
+            # Transparency (owner's debug-first mandate): exactly what this read used, so a truncated or
+            # wrong-tenant view is self-evident. `org_id` above surfaces the super-admin org-resolution
+            # default (a no-org_id request reads the HOUSE org). `source_meta` explains the union.
+            "source_meta": src_meta,
+            "feed_rows": src_meta.get("feed_rows"), "raw_rows": src_meta.get("raw_rows"),
+            "shown_rows": src_meta.get("shown_rows"), "filled_days": src_meta.get("filled_days")}
 
 
 @router.get("/sales-report/detail")
@@ -6691,6 +6805,40 @@ def sales_diagnostics(period: str = "", org_id: str = ORG_ID):
             'daily_sales_feed': _scan('daily_sales_feed'), 'raw_sales': _scan('raw_sales'),
             'computed_actuals_totals': tot,
             'accessory_config': {'departments': acfg['departments_list'], 'categories': acfg['categories_list']}}
+
+
+@router.get("/upload-trace")
+def upload_trace(period: str = "", upload_type: str = "", source: str = "",
+                 status: str = "", limit: int = 100, org_id: str = ORG_ID):
+    """WHERE ARE MY ROWS? (mig 202) — the debug-first trace for THIS org: one record per ingest attempt
+    (manual upload, email sweep, FTP sweep, feed→raw_sales promotion), newest first. Each row says which
+    ORG the data landed in, rows-in vs saved, per-period + per-day saved counts, the guard/shrink outcome,
+    duration, and any error — so 'I uploaded a file and the page shows nothing' is answered from data.
+    Optional filters: upload_type, source, status, and period (matched against the periods JSONB, spelling
+    -agnostic). Read-only + org-scoped. Degrades gracefully (returns ok=false + a hint) if mig 202 is
+    unrun. The echoed `org_id` is deliberate: it exposes the super-admin org-resolution default (a request
+    with no org_id reads the HOUSE org) so a wrong-tenant view is self-evident."""
+    require_org(org_id)
+    client = sb()
+    try:
+        q = (client.schema("commcalc").table("upload_trace").select("*")
+             .eq("org_id", org_id).order("created_at", desc=True).limit(max(1, min(limit, 1000))))
+        if upload_type:
+            q = q.eq("upload_type", upload_type)
+        if source:
+            q = q.eq("source", source)
+        if status:
+            q = q.eq("status", status)
+        rows = q.execute().data or []
+    except Exception as e:
+        return {"ok": False, "org_id": org_id, "records": [],
+                "hint": f"upload_trace unavailable — run migration 202 first ({e})."}
+    # Period filter is applied in Python against the periods JSONB so it matches either spelling.
+    if period:
+        pv = set(_pvariants(period))
+        rows = [r for r in rows if not r.get("periods") or (set((r.get("periods") or {}).keys()) & pv)
+                or str(r.get("period") or "") in pv]
+    return {"ok": True, "org_id": org_id, "count": len(rows), "records": rows}
 
 
 @router.get("/accessory-config")
@@ -7237,6 +7385,67 @@ def _open_month_source(client, org_id, period):
     except Exception:
         pass
     return primary, other
+
+
+# Default column projection for the display sales resolver — the exact set every reader agrees on and
+# that exists in BOTH raw_sales and daily_sales_feed (selecting a feed-absent column like `sku` throws;
+# see the sales-report/detail note). Callers may pass their own `cols`.
+_SALES_DISPLAY_COLS = ("trans_id,trans_date,store,salesperson,department,category,product_desc,"
+                       "contract_type,ext_price,gp,voided,trans_type")
+
+
+def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
+    """THE canonical DISPLAY sales source: a per-DAY UNION of daily_sales_feed and raw_sales.
+
+    The open-month PRIMARY source (per `_open_month_source`) wins every day it has rows for; the OTHER
+    source fills only the days the primary lacks. This is promotion's feed-wins merge (see
+    `_promote_feed_to_raw_sales`) applied at day grain to READS, so a manually-uploaded raw_sales month
+    can NEVER be invisible behind a partial feed (the luxelink July 2026 incident: feed days 1-8 + a
+    hand-uploaded raw_sales 1-13 → the union shows 1-13, not a truncated 1-8), and a promoted raw_sales
+    month is never masked by a stale feed. Closed month → raw_sales leads, feed fills gaps.
+
+    NEVER raises: a failed read on either table degrades to whatever the other returned (so a column
+    drift on one side can't 500 the page). Returns `(rows, meta)`; `meta` carries the per-source counts,
+    which source led, and which days were filled from the other — for the report's transparency line.
+
+    DISPLAY ONLY. The commission CALC path (`_run_calculation`/`_fetch_sales_unified`,
+    `commission_engine._read_sales`) is deliberately NOT wired to this — that is money and gets its own
+    gate; this function must not be called from a payout path."""
+    primary, other = _open_month_source(client, org_id, period)
+
+    def _q(table):
+        try:
+            return (client.schema('commcalc').table(table).select(cols)
+                    .eq('org_id', org_id).in_('period', _pvariants(period))
+                    .limit(200000).execute().data) or []
+        except Exception as e:
+            print(f"WARN _sales_rows_union read of {table} failed: {e}")
+            return []
+
+    prows = _q(primary)
+    orows = _q(other)
+
+    def _day(r):
+        return str(r.get('trans_date') or '')[:10]
+
+    if not prows:
+        # Primary empty → the entire other source shows (no masking, nothing to merge against).
+        merged, fill = list(orows), list(orows)
+    else:
+        pdays = {_day(r) for r in prows if _day(r)}
+        fill = [r for r in orows if _day(r) and _day(r) not in pdays]
+        merged = list(prows) + fill
+
+    feed_rows = len(prows) if primary == 'daily_sales_feed' else len(orows)
+    raw_rows = len(prows) if primary == 'raw_sales' else len(orows)
+    meta = {
+        'primary': primary, 'other': other,
+        'primary_rows': len(prows), 'other_rows': len(orows),
+        'feed_rows': feed_rows, 'raw_rows': raw_rows,
+        'filled_rows': len(fill), 'filled_days': sorted({_day(r) for r in fill if _day(r)}),
+        'shown_rows': len(merged),
+    }
+    return merged, meta
 
 
 def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
@@ -8418,7 +8627,10 @@ async def _run_ftp_sweep(org_id):
         status, detail, rows_saved = "ok", None, 0
         try:
             uf = _UF(io.BytesIO(f['bytes']), filename=name)
-            res = await upload_file(ut, uf, period, False, org_id)
+            # org_id passed as a KEYWORD (was the 5th positional, which landed in `close_date` while org_id
+            # silently defaulted to the house org — a latent multi-tenant misroute, inert today because
+            # sweeps run as the house org; see PARKED note). trace_source tags the mig-202 upload_trace.
+            res = await upload_file(ut, uf, period, force=False, org_id=org_id, trace_source='ftp_sweep')
             rows_saved = (res or {}).get('saved', 0)
         except HTTPException as he:
             status, detail = "error", str(he.detail)[:300]
@@ -8677,7 +8889,11 @@ async def _run_email_sweep(org_id, account='default'):
         status, detail, rows_saved, shrink, skipped_flag = "ok", None, 0, [], None
         try:
             uf = _UF(io.BytesIO(f['bytes']), filename=name)
-            res = await upload_file(ut, uf, period, False, org_id)
+            # org_id passed as a KEYWORD (was the 5th positional, which landed in `close_date` while org_id
+            # silently defaulted to the house org — a latent multi-tenant misroute that would send a tenant
+            # mailbox's swept sales into Boost the moment that mailbox is filed under its own org; inert
+            # today because sweeps run as the house org). trace_source tags the mig-202 upload_trace.
+            res = await upload_file(ut, uf, period, force=False, org_id=org_id, trace_source='email_sweep')
             rows_saved = (res or {}).get('saved', 0)
             shrink = (res or {}).get('shrink') or []
             skipped_flag = (res or {}).get('skipped')
@@ -8869,20 +9085,41 @@ def _promote_feed_to_raw_sales(client, org_id, period, dry_run=False, force=Fals
         "result_lines": len(new_rows), "result_trans": len({r.get('trans_id') for r in new_rows}),
         "existing_amount": _amt(existing), "result_amount": _amt(new_rows),
     }
+    def _trace_promo(saved, skipped=None, error=None):
+        # mig 202: trace the promotion (feed→raw_sales) like any other ingest. dry_run previews aren't
+        # traced (no write). Best-effort — never affects the promotion.
+        if dry_run:
+            return
+        _write_upload_trace(org_id, source="promotion", filename=None, upload_type="sales",
+                            period=canon,
+                            result={"saved": saved, "skipped": skipped, "note": skipped,
+                                    "_trace": {"rows_in": summary.get("feed_lines"),
+                                               "target_table": "raw_sales",
+                                               "periods": {canon: summary.get("result_lines", 0)},
+                                               "date_counts": {}}},
+                            error=error)
+
     if not new_rows:
         summary["skipped"] = "no feed or monthly rows for this period"
+        _trace_promo(0, skipped=summary["skipped"])
         return summary
     if existing and not force and len(new_rows) < retain * len(existing):
         summary["skipped"] = (f"guard: result {len(new_rows)} lines < {int(retain * 100)}% of existing "
                               f"{len(existing)} — feed looks incomplete (use force to override)")
+        _trace_promo(0, skipped=summary["skipped"])
         return summary
     if dry_run:
         return summary
 
-    client.schema('commcalc').table('raw_sales').delete().eq('org_id', org_id).in_('period', pv).execute()
-    for i in range(0, len(new_rows), 500):
-        client.schema('commcalc').table('raw_sales').insert(new_rows[i:i + 500]).execute()
+    try:
+        client.schema('commcalc').table('raw_sales').delete().eq('org_id', org_id).in_('period', pv).execute()
+        for i in range(0, len(new_rows), 500):
+            client.schema('commcalc').table('raw_sales').insert(new_rows[i:i + 500]).execute()
+    except Exception as e:
+        _trace_promo(0, error=str(e))
+        raise
     summary["written"] = len(new_rows)
+    _trace_promo(len(new_rows))
     return summary
 
 

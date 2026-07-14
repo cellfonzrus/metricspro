@@ -1,9 +1,17 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
-import { api, fmt } from '@/lib/client'
+import { api, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import { MultiSelect } from '@/lib/multiselect'
+import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
+
+// Targeted super-admin org-resolution mitigation (see NEEDS CORE): the sales-report reads carry NO org_id
+// in the URL, so for a super-admin (whom the tenant middleware does NOT rewrite) the backend defaults to
+// the HOUSE org and the tenant's data looks empty. Appending the active tenant fixes THIS page until the
+// universal client.ts fix lands. Harmless for normal users (the middleware overrides org_id to their own
+// membership regardless) and a no-op when no tenant is selected.
+const orgParam = () => { const o = getActiveOrg(); return o ? `&org_id=${encodeURIComponent(o)}` : '' }
 
 // The sales actually done across all stores, from the imported Sales Transaction Details
 // (raw_sales, falling back to the daily email feed). One row per store + rep + day; ReportShell
@@ -32,13 +40,13 @@ export default function SalesReportPage() {
 
   function openDiag() {
     setDiag({}); setDiagBusy(true)
-    api(`/api/v1/commcalc/sales-diagnostics?period=${encodeURIComponent(period)}`)
+    api(`/api/v1/commcalc/sales-diagnostics?period=${encodeURIComponent(period)}${orgParam()}`)
       .then(setDiag).catch(e => setDiag({ error: String(e?.message || e) }))
       .finally(() => setDiagBusy(false))
   }
   function openAccCfg() {
     setAccOpen(true); setAccFields(null); setAccMsg(''); setKwInput('')
-    api(`/api/v1/commcalc/sales-fields?period=${encodeURIComponent(period)}`).then((f: any) => {
+    api(`/api/v1/commcalc/sales-fields?period=${encodeURIComponent(period)}${orgParam()}`).then((f: any) => {
       setAccFields(f)
       setAccSel({ d: f.accessory_departments || [], c: f.accessory_categories || [], p: f.accessory_product_keywords || [], a: f.acima_tenders || [] })
     }).catch(e => setAccMsg('❌ ' + (e?.message || e)))
@@ -58,14 +66,14 @@ export default function SalesReportPage() {
   function openDrill(r: any) {
     setDrill(r); setDetail(null); setOpenTxn({}); setDrillBusy(true)
     const qs = new URLSearchParams({ period, store: r.store || '', salesperson: r.salesperson || '', date: r.trans_date || '' })
-    api(`/api/v1/commcalc/sales-report/detail?${qs.toString()}`)
+    api(`/api/v1/commcalc/sales-report/detail?${qs.toString()}${orgParam()}`)
       .then(setDetail).catch(e => setDetail({ transactions: [], error: String(e?.message || e) }))
       .finally(() => setDrillBusy(false))
   }
 
   const load = useCallback(() => {
     setLoading(true)
-    api(`/api/v1/commcalc/sales-report?period=${encodeURIComponent(period)}`)
+    api(`/api/v1/commcalc/sales-report?period=${encodeURIComponent(period)}${orgParam()}`)
       .then(setData).catch(e => setData({ rows: [], totals: {}, error: String(e?.message || e) }))
       .finally(() => setLoading(false))
   }, [period])
@@ -137,9 +145,31 @@ export default function SalesReportPage() {
         {filtered && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => { setSelMarkets([]); setSelStores([]) }}>Clear filters</button>}
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openDiag}>🔍 Data diagnostics</button>
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openAccCfg}>⚙️ Classification settings</button>
+        <WhereAreMyRowsButton period={period} />
         {data?.source === 'daily_sales_feed' && <span style={{ fontSize: 11, color: '#b45309' }}>source: daily email feed (raw_sales not promoted yet — enable ‘auto’ on Connectors)</span>}
-        {data?.error && <span style={{ fontSize: 12, color: '#dc2626' }}>❌ {data.error}</span>}
       </div>
+
+      {/* PROMINENT error banner (was a tiny inline span that read as "no data"). A read failure now says so. */}
+      {data?.error && (
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>
+          <b>❌ Sales Report could not read this month.</b> {data.error}
+          <div style={{ marginTop: 6 }}><WhereAreMyRowsButton period={period} /></div>
+        </div>
+      )}
+
+      {/* TRANSPARENCY LINE (owner's debug-first mandate): exactly which source(s) this read used, how many
+          rows each side holds, and — critically — which ORG it read from (a super-admin viewing a tenant
+          whose reads default to the HOUSE org sees the mismatch here instead of a silent blank page). */}
+      {data?.source_meta && (
+        <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 14, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ background: 'var(--surface2)', borderRadius: 8, padding: '4px 10px' }}>
+            Reading <b>{data.source_meta.primary === 'daily_sales_feed' ? 'daily email feed' : 'monthly raw_sales'}</b>
+            {' '}({data.shown_rows ?? 0} rows shown · feed {data.feed_rows ?? 0} · raw_sales {data.raw_rows ?? 0})
+            {(data.filled_days || []).length > 0 && <> · pulled <b>{(data.filled_days || []).length}</b> extra day(s) from raw_sales that the feed didn’t have</>}
+          </span>
+          {data.org_id && <span style={{ color: 'var(--text3)' }}>org <code style={{ fontSize: 11 }}>{String(data.org_id).slice(0, 8)}…</code></span>}
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
         <Tile label="Revenue" value={fmt(t.revenue || 0)} />
