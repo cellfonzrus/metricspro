@@ -30,6 +30,20 @@ export function readUploadOutcome(r: any, unit = 'row(s)'): UploadOutcome {
       'unchanged. Ensure the scheduled b2bsoft report keeps the Ext Price + GP columns.'
     return { tone: 'guard', reason, saved: 0, text: 'Upload refused to protect existing data. ' + reason }
   }
+  if (r?.skipped === 'price_guard_partial') {
+    // PARTIAL guard: some day(s) in a multi-day file were refused (kept as stored) while the file's fresh
+    // day(s) DID ingest. Report both halves honestly — a warn, not a hard refusal (rows were saved).
+    const guarded: string[] = Array.isArray(r?.guarded_dates) ? r.guarded_dates.map(String) : []
+    const reason = (shrink[0]?.reason as string) ||
+      (`Kept existing data for ${guarded.join(', ') || 'some day(s)'} — a degraded / price-less export carried ` +
+       'far fewer priced (Ext Price) rows for those day(s) than already stored. The file\'s fresh day(s) were ' +
+       'ingested. Ensure the scheduled b2bsoft report keeps the Ext Price + GP columns.')
+    return {
+      tone: 'warn', reason, saved,
+      text: `Ingested ${saved.toLocaleString()} ${unit} for the file's fresh day(s); kept existing data for ` +
+            `${guarded.join(', ') || 'the degraded day(s)'}. ${reason}`,
+    }
+  }
   if (shrink.length) {
     const s = shrink[0]
     const reason = (s?.reason as string) ||

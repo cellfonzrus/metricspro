@@ -802,30 +802,78 @@ async def upload_file(
     # day and a monthly file only shrinks on a bad/partial export (June arrived ~1/6th complete). A big
     # shrink is recorded in `shrink` so the email sweep can alert. Best-effort — NEVER blocks the upload.
     shrink = []
-    # PRICE-COVERAGE GUARD (2026-07-08): the hourly feed sometimes re-delivers a DEGRADED "Sales Transaction
-    # Details" export that dropped the Ext Price/GP columns (the price-less "for Metrics pro"/.csv variant).
-    # Because daily_sales does a delete-then-insert per day, ingesting it WIPES the real dollars. If the
-    # incoming file carries far fewer PRICED rows than what's already stored for the same day(s), refuse it
-    # so a bad export can never clobber good money data. (Only blocks when priced data actually exists to
-    # protect; a fresh priced re-pull has >= the priced rows and passes.)
+    # PRICE-COVERAGE GUARD (2026-07-08; made PER-DATE 2026-07-14): the hourly feed sometimes re-delivers a
+    # DEGRADED "Sales Transaction Details" export that dropped the Ext Price/GP columns (the price-less
+    # "for Metrics pro"/.csv variant). Because daily_sales does a delete-then-insert PER DAY, ingesting it
+    # WIPES the real dollars for the days it covers. Evaluate EACH trans_date on its own: refuse only the
+    # day(s) whose incoming priced-row count collapses below half of what's already stored for that same
+    # day (and only when >= 50 priced rows exist there to protect), while still ingesting the file's fresh /
+    # better days. This unblocks a multi-day SUBSET feed that is fuller on early days but is the ONLY copy of
+    # later days (luxelink July 1-13, 2026-07-14): the early days are kept as stored, the later days flow
+    # through — where the old per-file guard refused the WHOLE file and discarded those only-copies with it.
+    # (Boost/house files are single-source day-to-date pulls, so every day is fresh and this never trips —
+    # path byte-identical. Thresholds unchanged: protect at existing_priced >= 50, refuse a day at
+    # incoming_priced < 0.5 x existing_priced.)
+    price_guard_partial = None   # set when SOME (not all) of the file's days were refused → PARTIAL ingest
     if file_type == 'daily_sales' and mapped:
         _pg_dates = sorted({m.get('trans_date') for m in mapped if m.get('trans_date')})
-        _inc_priced = sum(1 for m in mapped if safe_float(m.get('ext_price')) != 0)
+        _inc_by_date = {}
+        for _m in mapped:
+            _d = _m.get('trans_date')
+            if _d and safe_float(_m.get('ext_price')) != 0:
+                _inc_by_date[_d] = _inc_by_date.get(_d, 0) + 1
+        # ONE batched lookup of existing priced rows across the whole date set, counted PER DAY in Python —
+        # NOT one count query per day. PostgREST can't GROUP BY without an RPC, so fetch just the trans_date
+        # column for the file's dates where ext_price != 0 and tally locally (the date set is small). The
+        # explicit high .limit mirrors the established pattern in this module (email_processed dedup fetch);
+        # under-fetching here would silently UNDER-count existing dollars and weaken the guard, so pull all.
+        _ex_by_date = {}
         try:
-            _ex_priced = ((client.schema('commcalc').table('daily_sales_feed').select('id', count='exact')
-                           .eq('org_id', org_id).in_('trans_date', _pg_dates).neq('ext_price', 0)
-                           .execute().count) or 0) if _pg_dates else 0
-        except Exception:
-            _ex_priced = 0
-        if _ex_priced >= 50 and _inc_priced < _ex_priced * 0.5:
-            print(f'PRICE GUARD: refused degraded daily_sales file — incoming_priced={_inc_priced} vs '
-                  f'existing_priced={_ex_priced} for dates {_pg_dates}; kept existing dollars')
-            return {"saved": 0, "file_type": file_type, "period": period, "fraud": None, "recon": None,
-                    "skipped": "price_guard",
-                    "shrink": [{"key": "price-guard", "prior": int(_ex_priced), "new": int(_inc_priced),
-                                "reason": "refused: far fewer priced (Ext Price) rows than already stored — "
-                                          "a degraded/price-less export. Kept existing dollars. Ensure the "
-                                          "scheduled b2bsoft report keeps the Ext Price + GP columns."}]}
+            if _pg_dates:
+                _pg_rows = ((client.schema('commcalc').table('daily_sales_feed').select('trans_date')
+                             .eq('org_id', org_id).in_('trans_date', _pg_dates).neq('ext_price', 0)
+                             .limit(1000000).execute().data) or [])
+                for _r in _pg_rows:
+                    _d = _r.get('trans_date')
+                    if _d:
+                        _ex_by_date[_d] = _ex_by_date.get(_d, 0) + 1
+        except Exception as _pge:
+            print(f'WARN price-guard existing-priced lookup skipped: {_pge}')
+            _ex_by_date = {}
+        _guarded = [d for d in _pg_dates
+                    if _ex_by_date.get(d, 0) >= 50 and _inc_by_date.get(d, 0) < _ex_by_date.get(d, 0) * 0.5]
+        if _guarded:
+            _g_ex = sum(_ex_by_date.get(d, 0) for d in _guarded)
+            _g_inc = sum(_inc_by_date.get(d, 0) for d in _guarded)
+            _g_list = ', '.join(str(d) for d in _guarded)
+            if set(_guarded) == set(_pg_dates):
+                # EVERY day the file covers is degraded → unchanged FULL-refusal shape (drop the whole file,
+                # keeping the shipped `skipped:'price_guard'` UI/sweep handling working byte-for-byte).
+                print(f'PRICE GUARD: refused degraded daily_sales file — incoming_priced={_g_inc} vs '
+                      f'existing_priced={_g_ex} for dates {_pg_dates}; kept existing dollars')
+                return {"saved": 0, "file_type": file_type, "period": period, "fraud": None, "recon": None,
+                        "skipped": "price_guard",
+                        "shrink": [{"key": "price-guard", "prior": int(_g_ex), "new": int(_g_inc),
+                                    "reason": "refused: far fewer priced (Ext Price) rows than already stored — "
+                                              "a degraded/price-less export. Kept existing dollars. Ensure the "
+                                              "scheduled b2bsoft report keeps the Ext Price + GP columns."}]}
+            # SOME days degraded, others fresh/better → PARTIAL. Drop the degraded days' rows so the per-date
+            # delete-then-insert below never clears them (their stored rows survive untouched); the file's
+            # remaining days ingest normally. The marker is merged into the final response and its shrink
+            # entry rides the existing partial-export alert path in the email sweep.
+            _g_set = set(_guarded)
+            print(f'PRICE GUARD (partial): refused {len(_guarded)} degraded day(s) [{_g_list}] — '
+                  f'incoming_priced={_g_inc} vs existing_priced={_g_ex}; kept existing dollars for those '
+                  f'day(s); ingesting the file\'s fresh day(s)')
+            mapped = [m for m in mapped if m.get('trans_date') not in _g_set]
+            price_guard_partial = {
+                "guarded_dates": [str(d) for d in _guarded],
+                "shrink": {"key": "price-guard-partial", "prior": int(_g_ex), "new": int(_g_inc),
+                           "reason": (f"kept existing data for {_g_list} — a degraded/price-less export carried "
+                                      f"far fewer priced (Ext Price) rows for those day(s) than already stored, "
+                                      f"so those day(s) were left as-is; ingested the file's fresh day(s) only. "
+                                      f"Ensure the scheduled b2bsoft report keeps the Ext Price + GP columns.")},
+            }
     if mapped:
         if file_type in DATE_KEYED:
             # Date-grain feeds are keyed by DAY, not month. Make a re-pull of the same day(s)
@@ -939,8 +987,17 @@ async def upload_file(
             except Exception as e:
                 print(f'WARN sales-recon flag sync after {file_type} upload failed (run 047?): {e}')
 
-    return {"saved": saved, "file_type": file_type, "period": period, "fraud": fraud, "recon": recon,
-            "shrink": shrink}
+    out = {"saved": saved, "file_type": file_type, "period": period, "fraud": fraud, "recon": recon,
+           "shrink": shrink}
+    if price_guard_partial:
+        # PARTIAL price-guard outcome: SOME day(s) were refused (kept as stored) while the file's fresh
+        # day(s) ingested. Say so explicitly. The guard entry is prepended so readUploadOutcome/shrink[0]
+        # surfaces the "kept existing data for <days>" reason first; row-count shrink entries (if any) ride
+        # behind it, and every entry still flows to the email sweep's partial-export alert.
+        out["skipped"] = "price_guard_partial"
+        out["guarded_dates"] = price_guard_partial["guarded_dates"]
+        out["shrink"] = [price_guard_partial["shrink"]] + shrink
+    return out
 
 
 @router.get("/whatif/activation-baseline")
@@ -8143,12 +8200,13 @@ async def _run_email_sweep(org_id, account='default'):
     for f in files:
         name, size, ut, mid = f['name'], f['size'], f.get('upload_type'), f.get('message_id')
         period = "" if ut in ("daily_sales", "ma_commission", "ma_daily_tx", "ma_fulfillment") else _ftp_current_period()
-        status, detail, rows_saved, shrink = "ok", None, 0, []
+        status, detail, rows_saved, shrink, skipped_flag = "ok", None, 0, [], None
         try:
             uf = _UF(io.BytesIO(f['bytes']), filename=name)
             res = await upload_file(ut, uf, period, False, org_id)
             rows_saved = (res or {}).get('saved', 0)
             shrink = (res or {}).get('shrink') or []
+            skipped_flag = (res or {}).get('skipped')
             # The PRICE-COVERAGE GUARD refuses a degraded/price-less re-delivery with
             # {saved:0, skipped:'price_guard', shrink:[{reason}]} (HTTP 200, not an error). Record it as
             # a distinct 'skipped' status carrying the guard's reason so the history shows an honest amber
@@ -8161,6 +8219,16 @@ async def _run_email_sweep(org_id, account='default'):
                 status = 'skipped'
                 detail = ((shrink[0].get('reason') if shrink else None)
                           or 'refused: fuller priced data already stored for that day (price guard)')[:300]
+            elif (res or {}).get('skipped') == 'price_guard_partial':
+                # PARTIAL price-guard: the file's fresh day(s) DID ingest (rows_saved > 0) while degraded
+                # day(s) were kept as stored. It's a real ingest with a warning, NOT a full refusal — leave
+                # status='ok' so the sweep dedup treats the file as done (its useful data is in) and so the
+                # money-writing auto-promote/recalc below runs on the fresh days. Carry the guard reason in
+                # `detail` so the history row can flag it amber, and the shrink entry still rides the
+                # partial-export alert path below. guarded_dates is available on `res` for callers that want it.
+                _gd = (res or {}).get('guarded_dates') or []
+                detail = ((shrink[0].get('reason') if shrink else None)
+                          or f"ingested fresh day(s); kept existing data for {', '.join(map(str, _gd))} (price guard)")[:300]
         except HTTPException as he:
             status, detail = "error", str(he.detail)[:300]
         except Exception as e:
@@ -8176,7 +8244,7 @@ async def _run_email_sweep(org_id, account='default'):
         for s in shrink:
             shrinks.append({'file': name, 'upload_type': ut, **s})
         results.append({"file": name, "upload_type": ut, "status": status, "rows_saved": rows_saved,
-                        "detail": detail, "shrink": shrink})
+                        "detail": detail, "shrink": shrink, "skipped": skipped_flag})
     ok = sum(1 for r in results if r['status'] == 'ok')
     # A truncated/partial emailed export (far fewer rows than the day/period it replaced) would silently
     # corrupt reports — alert the connector recipients (same scope as connector-health) so it's caught.

@@ -135,9 +135,12 @@ export default function EmailImportsPage() {
       const r: any = await api(`/api/v1/commcalc/email-sweep/run-now?account=${encodeURIComponent(cfg.account || 'default')}`, { method: 'POST', body: '{}' })
       const errs = (r.files || []).filter((f: any) => f.status === 'error')
       const skips = (r.files || []).filter((f: any) => f.status === 'skipped')
+      // A PARTIAL price-guard ingest comes back status='ok' (rows saved) with skipped='price_guard_partial'.
+      const partials = (r.files || []).filter((f: any) => f.skipped === 'price_guard_partial')
       const skipNote = skips.length ? ` · ⚠️ ${skips.length} refused by the price guard (fuller data already stored — existing dollars kept)` : ''
+      const partNote = partials.length ? ` · ⚠️ ${partials.length} partial (ingested fresh day(s), kept existing data for degraded day(s))` : ''
       setMsg(!r.ok ? `❌ ${r.error}`
-        : r.ingested > 0 ? `✅ Ingested ${r.ingested} attachment(s).${skipNote}`
+        : r.ingested > 0 ? `✅ Ingested ${r.ingested} attachment(s).${skipNote}${partNote}`
         : skips.length ? `⚠️ 0 ingested — ${skips.length} file(s) refused by the price guard: a degraded/price-less export arrived and the fuller data already stored for that day was kept. Re-send the full "Sales Transaction Details" (with Ext Price + GP).`
         : errs.length ? `⚠️ 0 ingested — ${errs.length} file(s) errored: ${errs.slice(0, 2).map((e: any) => `${e.file}: ${e.detail}`).join(' · ')}`
         : !(cfg.patterns || []).some((p: any) => (p.pattern || '').trim())
@@ -451,7 +454,12 @@ export default function EmailImportsPage() {
                 <td style={{ ...cell, fontSize: 12 }}>{p.upload_type}</td>
                 <td style={cell}>{
                   p.status === 'ok'
-                    ? <span style={{ color: '#16794a' }}>✓ {p.rows_saved} rows</span>
+                    // A price-guard PARTIAL ingest is recorded status='ok' (rows WERE saved) but carries a
+                    // `detail` reason — flag it amber so a "kept existing data for some days" ingest isn't
+                    // shown as a clean green ✓ (a clean ok has no detail).
+                    ? (p.detail
+                        ? <span style={{ color: '#b45309' }} title={p.detail}>⚠ {p.rows_saved} rows — ingested fresh day(s); kept existing data for degraded day(s) (price guard)</span>
+                        : <span style={{ color: '#16794a' }}>✓ {p.rows_saved} rows</span>)
                     : p.status === 'skipped'
                       ? <span style={{ color: '#b45309' }} title={p.detail || ''}>⚠ 0 rows — refused: fuller data already stored for that day (price guard)</span>
                       : <span style={{ color: '#dc2626' }}>✕ {p.detail}</span>
