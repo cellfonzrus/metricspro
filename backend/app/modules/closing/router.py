@@ -858,13 +858,14 @@ def update_row(row_id: str, updates: dict, org_id: str = ORG_ID):
             else:
                 body[k] = updates[k]
     body["updated_at"] = _now()
-    r = sb().schema("commcalc").table("daily_closing").update(body).eq("id", row_id).execute()
+    r = (sb().schema("commcalc").table("daily_closing").update(body)
+         .eq("id", row_id).eq("org_id", org_id).execute())
     return r.data[0] if r.data else body
 
 
 @router.delete("/row/{row_id}")
-def delete_row(row_id: str):
-    sb().schema("commcalc").table("daily_closing").delete().eq("id", row_id).execute()
+def delete_row(row_id: str, org_id: str = ORG_ID):
+    sb().schema("commcalc").table("daily_closing").delete().eq("id", row_id).eq("org_id", org_id).execute()
     return {"deleted": row_id}
 
 

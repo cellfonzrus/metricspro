@@ -85,6 +85,14 @@ def _pvariants(period):
         return [p]
     return list({p, f"{_calendar.month_name[mo]} {yr}", f"{yr}-{mo:02d}"})
 
+def _canon_period(period):
+    """The SINGLE canonical 'Month YYYY' spelling of a month-period — what the sweeps and the existing
+    May/June calc_status + rep_commissions rows use. So '2026-07' and 'July 2026' collapse to one key
+    (calc_status upserts key on this to avoid two divergent status rows for the same month). Reuses the
+    file's _month_year helper; anything that can't be parsed as a month-period passes through unchanged."""
+    mo, yr = _month_year(period)
+    return f"{_calendar.month_name[mo]} {yr}" if (1 <= mo <= 12 and yr) else str(period or "").strip()
+
 def _flatten_grouped_sales(df):
     """Flatten a B2B Soft GROUPED 'Sales Transaction Details (Legacy)' export. In the grouped layout
     Store and Trans ID are GROUP-HEADER rows — the first column reads 'Store: <addr>' / 'Trans ID:
@@ -4397,10 +4405,13 @@ async def calculate(
 
     client = sb()
 
-    # Mark as pending
+    # Mark as pending. Key calc_status on the SINGLE canonical 'Month YYYY' spelling so '2026-07' and
+    # 'July 2026' don't maintain two divergent status rows for the same month (the read path
+    # /calc-status/{period} already resolves via _pvariants). The calc itself still runs on the raw
+    # `period` string — only the status key is normalized.
     try:
         client.schema('commcalc').table('calc_status').upsert({
-            'org_id': org_id, 'period': period, 'calc_status': 'running'
+            'org_id': org_id, 'period': _canon_period(period), 'calc_status': 'running'
         }, on_conflict='org_id,period').execute()
     except: pass
 
@@ -4580,7 +4591,10 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
             # leak). All tables fetched here carry org_id.
             q = client.schema('commcalc').table(table).select('*').eq('org_id', org_id)
             for k, v in filters.items():
-                q = q.eq(k, v)
+                # A LIST filter value → .in_ so the read is period-spelling tolerant: the sweeps store
+                # 'July 2026' while a manual /calculate passes '2026-07', and an exact .eq('period', …)
+                # then loads ZERO rows and silently underpays. Callers pass _pvariants(period) for period.
+                q = q.in_(k, v) if isinstance(v, (list, tuple, set)) else q.eq(k, v)
             try:
                 r = q.limit(50000).execute()
                 return r.data or []
@@ -4602,20 +4616,29 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
             _rows = _q(_primary)
             return _rows if _rows else _q(_other)
         sales      = _fetch_sales_unified(period)
-        pay_detail = fetch('raw_payment_detail', {'period': period})
-        mi_rows    = fetch('raw_mi', {'period': period})
-        dlar_rep   = fetch('raw_dlar_rep', {'period': period})
-        dlar_store = fetch('raw_dlar_store', {'period': period})
+        # Period-spelling tolerant (_pvariants): the sweeps stamp 'July 2026' but a manual
+        # /calculate/2026-07 passes '2026-07'; an exact .eq('period', …) loaded ZERO KPI/MI/pay rows
+        # → empty kpi_values, flat 0.5 tier, boost_commission=None (silent underpay, 2026-07-14).
+        pay_detail = fetch('raw_payment_detail', {'period': _pvariants(period)})
+        mi_rows    = fetch('raw_mi', {'period': _pvariants(period)})
+        dlar_rep   = fetch('raw_dlar_rep', {'period': _pvariants(period)})
+        dlar_store = fetch('raw_dlar_store', {'period': _pvariants(period)})
         catalog    = fetch('raw_catalog')
         pay_cats   = fetch('payment_categories')
-        cfg_rows   = fetch('payout_config', {'period': period})
+        cfg_rows   = fetch('payout_config', {'period': _pvariants(period)})
         store_map  = fetch('store_mapping')
         name_map   = fetch('name_map')
         shifts     = fetch('storeops_shifts') if False else []  # use storeops schema when migrated
         employees  = fetch('employees')
         stores     = fetch('stores')
         
-        cfg = cfg_rows[0] if cfg_rows else {}
+        # payout_config is now period-spelling tolerant (.in_ above), so a month could return rows under
+        # BOTH 'July 2026' and '2026-07'. cfg_rows[0] wins, but dedupe defensively: if both spellings have
+        # a row, prefer the one stored under the sweep-canonical 'Month YYYY' spelling (what May/June + the
+        # sweeps write) so the winner is deterministic regardless of row order.
+        _cfg_canon = _canon_period(period)
+        cfg = (next((r for r in cfg_rows if str(r.get('period', '')).strip() == _cfg_canon), None)
+               or (cfg_rows[0] if cfg_rows else {}))
         # Thread the configurable accessory classification (mig 092) into the money path so commission
         # accessory pay uses the same department/category rules as the reports (default 'Ondigo').
         _acfg = _accessory_config(client, org_id)
@@ -4802,18 +4825,19 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
         except Exception as e:
             save_errors.append(f'chargebacks: {e}')
 
-        # Update calc status
+        # Update calc status — keyed on the canonical 'Month YYYY' spelling (see /calculate) so a month
+        # has exactly ONE status row regardless of which spelling triggered the calc.
         client.schema('commcalc').table('calc_status').upsert({
-            'org_id': org_id, 'period': period,
+            'org_id': org_id, 'period': _canon_period(period),
             'calc_status': 'done',
             'calc_finished_at': 'now()',
             'save_errors': save_errors or None,
         }, on_conflict='org_id,period').execute()
-        
+
     except Exception as e:
         try:
             client.schema('commcalc').table('calc_status').upsert({
-                'org_id': org_id, 'period': period,
+                'org_id': org_id, 'period': _canon_period(period),
                 'calc_status': 'error',
                 'save_errors': [str(e)],
             }, on_conflict='org_id,period').execute()
@@ -8225,6 +8249,21 @@ def _promote_feed_to_raw_sales(client, org_id, period, dry_run=False, force=Fals
     feed_trans = {r.get('trans_id') for r in feed if r.get('trans_id')}
     raw_cols = set(existing[0].keys()) if existing else None
     DROP = {'id', 'created_at'}
+    if raw_cols is None and feed:
+        # First promotion for this org: raw_sales has no row to learn its columns from, and the feed
+        # carries feed-only columns raw_sales lacks — inserting them 500s the whole promotion (hit by
+        # luxelink 2026-07-14; the house org never hit it because its raw_sales was never empty).
+        # Probe each feed column against raw_sales once; unknown columns are dropped. org_id/period
+        # are re-stamped explicitly below, so they survive even if a probe hiccups.
+        raw_cols = set()
+        for c in feed[0].keys():
+            if c in DROP:
+                continue
+            try:
+                client.schema('commcalc').table('raw_sales').select(c).limit(1).execute()
+                raw_cols.add(c)
+            except Exception:
+                continue
 
     new_rows = []
     for r in feed:

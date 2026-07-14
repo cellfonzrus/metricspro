@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { api, fmt, ORG_ID } from '@/lib/client'
+import { api, apiUpload, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 
@@ -159,11 +159,7 @@ export default function AssetPage() {
     try {
       const form = new FormData()
       form.append('file', file)
-      const res = await fetch(`https://metricspro-production.up.railway.app/api/v1/asset/upload?org_id=${ORG_ID}`, {
-        method: 'POST', body: form,
-      })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.detail || 'Upload failed')
+      const d = await apiUpload(`/api/v1/asset/upload?org_id=${ORG_ID}`, form)
       setUploadMsg(`✅ Imported ${d.rows_imported.toLocaleString()} rows`)
       setOpenCat(null)
       setDetail(null)
@@ -178,9 +174,7 @@ export default function AssetPage() {
   async function handleRefreshPrices() {
     setUploading(true); setUploadMsg('')
     try {
-      const res = await fetch(`https://metricspro-production.up.railway.app/api/v1/asset/backfill-selling-price?org_id=${ORG_ID}`, { method: 'POST' })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.detail || 'Refresh failed')
+      const d = await api(`/api/v1/asset/backfill-selling-price?org_id=${ORG_ID}`, { method: 'POST' })
       setUploadMsg(`✅ Priced ${(/*rows_priced*/d.rows_priced ?? 0).toLocaleString()} devices · ${(/*flags*/d.undercharge_flags_written ?? 0).toLocaleString()} undercharge flags`)
       setOpenCat(null); setDetail(null)
       await loadSummary()

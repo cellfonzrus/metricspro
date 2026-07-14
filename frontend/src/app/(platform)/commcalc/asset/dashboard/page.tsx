@@ -72,10 +72,8 @@ export default function AssetDashboard() {
   async function pushFlags() {
     setSyncing(true); setSyncMsg('')
     try {
-      const a = await fetch(`https://metricspro-production.up.railway.app/api/v1/asset/sync-appeal-flags?org_id=${ORG_ID}`, { method:'POST' })
-      const ad = await a.json()
-      const m = await fetch(`https://metricspro-production.up.railway.app/api/v1/asset/sync-rma-flags?org_id=${ORG_ID}`, { method:'POST' })
-      const md = await m.json()
+      const ad = await api(`/api/v1/asset/sync-appeal-flags?org_id=${ORG_ID}`, { method:'POST' })
+      const md = await api(`/api/v1/asset/sync-rma-flags?org_id=${ORG_ID}`, { method:'POST' })
       setSyncMsg(`✅ ${ad.appeal_flags_written} appeals + ${md.rma_flags_written} RMA flags pushed`)
     } catch(e:any) { setSyncMsg(`❌ ${e.message}`) }
     setSyncing(false)

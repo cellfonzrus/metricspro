@@ -174,11 +174,11 @@ def update_visit(visit_id: str, payload: dict, org_id: str = ORG_ID):
     updates = {k: payload[k] for k in header if k in payload}
     if updates:
         updates["updated_at"] = _now()
-        sb().table("store_visits").update(updates).eq("id", visit_id).execute()
+        sb().table("store_visits").update(updates).eq("id", visit_id).eq("org_id", org_id).execute()
 
     # Checklist answers: full replace for this visit (delete-then-insert).
     if "responses" in payload:
-        sb().table("store_visit_responses").delete().eq("visit_id", visit_id).execute()
+        sb().table("store_visit_responses").delete().eq("visit_id", visit_id).eq("org_id", org_id).execute()
         rows = [{
             "org_id": org_id, "visit_id": visit_id,
             "item_key": r.get("item_key"),
@@ -193,7 +193,7 @@ def update_visit(visit_id: str, payload: dict, org_id: str = ORG_ID):
 
     # Accessories-to-order: full replace.
     if "accessories" in payload:
-        sb().table("store_visit_accessories").delete().eq("visit_id", visit_id).execute()
+        sb().table("store_visit_accessories").delete().eq("visit_id", visit_id).eq("org_id", org_id).execute()
         rows = []
         for a in (payload["accessories"] or []):
             name = (a.get("accessory_name") or "").strip()
@@ -208,15 +208,15 @@ def update_visit(visit_id: str, payload: dict, org_id: str = ORG_ID):
         if rows:
             sb().table("store_visit_accessories").insert(rows).execute()
 
-    return get_visit(visit_id)
+    return get_visit(visit_id, org_id)
 
 
 @router.post("/visits/{visit_id}/submit")
-def submit_visit(visit_id: str):
+def submit_visit(visit_id: str, org_id: str = ORG_ID):
     sb().table("store_visits").update({
         "status": "submitted", "submitted_at": _now(), "updated_at": _now(),
-    }).eq("id", visit_id).execute()
-    return get_visit(visit_id)
+    }).eq("id", visit_id).eq("org_id", org_id).execute()
+    return get_visit(visit_id, org_id)
 
 
 # ── Photo upload (clean-store photo or a per-item photo) ──────────────────────────────────
@@ -271,7 +271,7 @@ def get_visit_action(visit_id: str, org_id: str = ORG_ID):
 @router.put("/visits/{visit_id}/action-items")
 def save_action_items(visit_id: str, payload: dict, org_id: str = ORG_ID):
     """Full replace of the DM's discussion overlay for this visit (delete-then-insert)."""
-    sb().table("visit_action_items").delete().eq("visit_id", visit_id).execute()
+    sb().table("visit_action_items").delete().eq("visit_id", visit_id).eq("org_id", org_id).execute()
     rows = []
     for it in (payload.get("items") or []):
         key = (it.get("item_key") or "").strip()
@@ -286,13 +286,13 @@ def save_action_items(visit_id: str, payload: dict, org_id: str = ORG_ID):
         })
     if rows:
         sb().table("visit_action_items").insert(rows).execute()
-    return get_visit_action(visit_id)
+    return get_visit_action(visit_id, org_id)
 
 
 @router.put("/visits/{visit_id}/action-plan")
 def save_action_plan(visit_id: str, payload: dict, org_id: str = ORG_ID):
     """Full replace of the agreed rep action plan for this visit (delete-then-insert)."""
-    sb().table("visit_action_plan").delete().eq("visit_id", visit_id).execute()
+    sb().table("visit_action_plan").delete().eq("visit_id", visit_id).eq("org_id", org_id).execute()
     rows = []
     for p in (payload.get("plan") or []):
         desc = (p.get("description") or "").strip()
@@ -306,11 +306,11 @@ def save_action_plan(visit_id: str, payload: dict, org_id: str = ORG_ID):
         })
     if rows:
         sb().table("visit_action_plan").insert(rows).execute()
-    return get_visit_action(visit_id)
+    return get_visit_action(visit_id, org_id)
 
 
 @router.post("/visits/{visit_id}/signoff")
-def signoff(visit_id: str, payload: dict):
+def signoff(visit_id: str, payload: dict, org_id: str = ORG_ID):
     """Record a rep or DM sign-off on the agreed action plan."""
     who = (payload.get("who") or "").lower()
     name = payload.get("name") or ""
@@ -321,8 +321,8 @@ def signoff(visit_id: str, payload: dict):
     upd = {f"{pre}_signed": bool(signed), "updated_at": _now()}
     upd[f"{pre}_signed_by"] = name if signed else None
     upd[f"{pre}_signed_at"] = _now() if signed else None
-    sb().table("store_visits").update(upd).eq("id", visit_id).execute()
-    return get_visit_action(visit_id)
+    sb().table("store_visits").update(upd).eq("id", visit_id).eq("org_id", org_id).execute()
+    return get_visit_action(visit_id, org_id)
 
 
 @router.get("/health")
