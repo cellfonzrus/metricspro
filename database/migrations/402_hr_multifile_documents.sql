@@ -51,7 +51,7 @@ UPDATE storeops.employee_onboarding
            'path', document_path,
            'name', document_name,
            'content_type', NULL,
-           'uploaded_at', COALESCE(submitted_at, updated_at, now()::text),
+           'uploaded_at', COALESCE(submitted_at::text, updated_at::text, now()::text),
            'uploaded_by', NULL,
            'uploaded_role', 'unknown'
          )
