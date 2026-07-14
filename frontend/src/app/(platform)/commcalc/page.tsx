@@ -25,6 +25,7 @@ export default function CommCalcDashboard() {
   const [reps, setReps] = useState<RepRow[]>([])
   const [loading, setLoading] = useState(true)
   const [calcStatus, setCalcStatus] = useState<string>('')
+  const [calcError, setCalcError] = useState<string>('')
 
   useEffect(() => {
     loadData()
@@ -40,6 +41,11 @@ export default function CommCalcDashboard() {
       ])
       setReps(comms || [])
       setCalcStatus(status?.calc_status || 'not_run')
+      // Surface a REFUSED / error calc (e.g. the R1 unconfigured-tenant guard) instead of a silent
+      // "0 reps" — save_errors carries the actionable message.
+      const errs = status?.save_errors
+      setCalcError(status?.calc_status === 'error'
+        ? (Array.isArray(errs) ? errs.join(' ') : (errs || 'Calculation failed.')) : '')
     } catch (e) {
       console.error(e)
     }
@@ -72,6 +78,7 @@ export default function CommCalcDashboard() {
             {period} · {reps.length} reps
             {calcStatus === 'done' && <span style={{ color: 'var(--green)', marginLeft: 8 }}>✓ Calculated</span>}
             {calcStatus === 'running' && <span style={{ color: 'var(--amber)', marginLeft: 8 }}>⏳ Running...</span>}
+            {calcStatus === 'error' && <span style={{ color: 'var(--red)', marginLeft: 8 }}>⚠ Calculation refused</span>}
             {calcStatus === 'not_run' && <span style={{ color: 'var(--text3)', marginLeft: 8 }}>Not calculated yet</span>}
           </p>
         </div>
@@ -88,6 +95,24 @@ export default function CommCalcDashboard() {
           ⚡ Run Calculation
         </button>
       </div>
+
+      {/* Calc refused / error banner — surfaces the R1 unconfigured-tenant guard with a fix link */}
+      {calcError && (
+        <div className="card" style={{ borderLeft: '4px solid var(--red)', background: 'var(--surface2)', marginBottom: 24 }}>
+          <div style={{ fontWeight: 700, color: 'var(--red)', marginBottom: 6 }}>⚠ Commission calculation refused — last good snapshot kept</div>
+          <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>{calcError}</div>
+          {/REFUSED|no commission source|plan mode/i.test(calcError) && (
+            <div style={{ marginTop: 10, display: 'flex', gap: 12, alignItems: 'center' }}>
+              <a href="/commcalc/commission-plans" className="btn btn-primary" style={{ textDecoration: 'none' }}>
+                Configure Commission Plans →
+              </a>
+              <a href="/commcalc/plan-installments" style={{ color: 'var(--accent)', fontSize: 13 }}>
+                Multi-month schedules & pay settings
+              </a>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>

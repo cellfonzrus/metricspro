@@ -18,6 +18,7 @@ from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
 from app.modules.commcalc import installment_engine
 from app.modules.commcalc import commission_engine
+from app.modules.commcalc import sale_installment_engine
 from app.modules.commcalc import b2b_sweep
 from app.modules.commcalc import sales_analyzer
 from app.modules.commcalc import sales_recon
@@ -1024,10 +1025,11 @@ def whatif_activation_baseline(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/whatif/byod-residual")
-def whatif_byod_residual(months: int = 6, org_id: str = ORG_ID):
+def whatif_byod_residual(months: int = 6, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """What-If tool #2 — residual (MI+ATU) trend + avg residual/sub + BYOD activation counts per period,
     to model BYOD's contribution to recurring residual."""
     require_org(org_id)
+    _require_carrier_residual(authorization, org_id)   # carrier-residual visibility gate (mig 201)
     return whatif.byod_residual(sb(), org_id, max(1, min(months, 24)))
 
 
@@ -4509,6 +4511,87 @@ def _resolve_carrier_mode(carriers):
     return 'plan'
 
 
+def _commission_org_config(client, org_id):
+    """Per-tenant commission posture (mig 201, commission-0 §7b). Degrades to safe defaults if the table
+    is absent (pre-mig-201): {'pay_disabled': False, 'residual_visibility': 'all'}."""
+    default = {"pay_disabled": False, "residual_visibility": "all"}
+    try:
+        rows = (client.schema('commcalc').table('commission_org_config').select('*')
+                .eq('org_id', org_id).limit(1).execute().data) or []
+    except Exception:
+        return default
+    if not rows:
+        return default
+    r = rows[0]
+    return {"pay_disabled": bool(r.get("pay_disabled")),
+            "residual_visibility": (r.get("residual_visibility") or "all").strip().lower()}
+
+
+def _can_view_carrier_residual(authorization, org_id):
+    """Permission gate for CARRIER-RESIDUAL (raw_mi-derived) visibility (commission-0 §7b decision 6).
+    Carrier-agnostic. Default posture 'all' → always visible (byte-identical to today). A tenant that sets
+    residual_visibility='permissioned' requires the 'carrier_residual' RBAC grant: super-admins / scope-all
+    admins always pass; a role passes if permissions.modules contains 'carrier_residual' OR
+    permissions.data.carrier_residual is true. Degrades OPEN on any resolution error (never 500s a read)."""
+    try:
+        cfg = _commission_org_config(sb(), org_id)
+    except Exception:
+        return True
+    if cfg.get("residual_visibility") != "permissioned":
+        return True  # 'all' — unchanged
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid) if uid else None
+        if not caller:
+            return False
+        if caller.get("super_admin"):
+            return True
+        perms = caller.get("perms") or {}
+        if (perms.get("scope") == "all") or ((caller.get("role") or "").lower() == "admin"):
+            return True
+        if "carrier_residual" in (perms.get("modules") or []):
+            return True
+        if bool((perms.get("data") or {}).get("carrier_residual")):
+            return True
+        return False
+    except Exception:
+        return True
+
+
+def _require_carrier_residual(authorization, org_id):
+    """Raise 403 (carrier-agnostic message) when the caller may not see carrier-residual data."""
+    if not _can_view_carrier_residual(authorization, org_id):
+        raise HTTPException(403, "Carrier residual data is restricted for this tenant — you need the "
+                                 "'carrier_residual' permission to view it.")
+
+
+def _has_any_pay_source(client, org_id, period):
+    """True if this org has ANYTHING configured to pay reps from for the period: active commission-plan
+    ASSIGNMENTS, an active payout_schedule (raw_mi installments), an active plan_installment_schedule
+    (sale-triggered installments), or carrier_commission statement rows for the period. Used by the R1
+    refuse-to-pay guard — carrier-name-agnostic (asks 'is there anything to pay from', not 'which carrier')."""
+    def _count(table, extra=None):
+        # select org_id (present on EVERY commcalc table) so a table without an 'id' column can't be
+        # miscounted as empty and wrongly trip the refusal.
+        try:
+            q = (client.schema('commcalc').table(table).select('org_id', count='exact').eq('org_id', org_id))
+            if extra:
+                q = extra(q)
+            return (q.limit(1).execute().count) or 0
+        except Exception:
+            return 0
+    if _count('commission_plan_assignment') > 0:
+        return True
+    if _count('payout_schedule', lambda q: q.eq('is_active', True)) > 0:
+        return True
+    if _count('plan_installment_schedule', lambda q: q.eq('is_active', True)) > 0:
+        return True
+    if _count('carrier_commission', lambda q: q.in_('period', _pvariants(period))) > 0:
+        return True
+    return False
+
+
 def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost'):
     """ADDITIVE layer of the new configurable payout engines on top of the standard (Boost) calc.
 
@@ -4532,6 +4615,18 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost'):
                     inst_by_rep[str(rep).strip().upper()] = safe_float(amt)
         except Exception:
             inst_by_rep = {}
+        # SALE-TRIGGERED multi-month installments (mig 201, doctrine commission-0): rep pay from the SALE
+        # LINE, paid-gated on the line being active + receiving residual. Separate component column
+        # (installment_comm_sale) from the raw_mi path above. Boost/house has no schedule → returns {} →
+        # byte-identical. Flags for sold-but-unpaid are synced separately in _run_calculation.
+        sale_inst_by_rep = {}
+        try:
+            sr = sale_installment_engine.compute_sale_installments(client, org_id, period, persist=True)
+            for rep, amt in (sr.get("by_rep") or {}).items():
+                if rep:
+                    sale_inst_by_rep[str(rep).strip().upper()] = safe_float(amt)
+        except Exception:
+            sale_inst_by_rep = {}
         plan_by_rep = {}
         try:
             pr = commission_engine.preview(client, org_id, period)
@@ -4561,11 +4656,11 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost'):
             stmt_by_rep = {}
 
         # BOOST PATH: nothing configured → comms returned exactly as-is.
-        if not inst_by_rep and not plan_by_rep and not stmt_by_rep:
+        if not inst_by_rep and not plan_by_rep and not stmt_by_rep and not sale_inst_by_rep:
             return comms
 
         cols = {}
-        for c in ("residual_installment_comm", "plan_comm", "plan_name", "carrier_statement_comm"):
+        for c in ("residual_installment_comm", "installment_comm_sale", "plan_comm", "plan_name", "carrier_statement_comm"):
             try:
                 client.schema('commcalc').table('rep_commissions').select(c).limit(1).execute()
                 cols[c] = True
@@ -4580,10 +4675,13 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost'):
         for row in comms:
             ks = _keys(row)
             inst = next((inst_by_rep[k] for k in ks if k in inst_by_rep), 0.0)
+            sale_inst = next((sale_inst_by_rep[k] for k in ks if k in sale_inst_by_rep), 0.0)
             stmt = next((stmt_by_rep[k] for k in ks if k in stmt_by_rep), 0.0)
             pv = next((plan_by_rep[k] for k in ks if k in plan_by_rep), None)
             if cols["residual_installment_comm"]:
                 row["residual_installment_comm"] = inst
+            if cols["installment_comm_sale"]:
+                row["installment_comm_sale"] = sale_inst
             # carrier_statement_comm = what the CARRIER paid the dealer for this rep (dealer revenue).
             # Recorded for VISIBILITY / recon — NOT auto-added to rep pay. The rep's commission comes from
             # the configured plan / multi-month %MRC schedule, not the dealer-level statement totals.
@@ -4598,7 +4696,7 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost'):
                 base = safe_float(pv["amount"])                       # a plan REPLACES the spiff subtotal
             else:
                 base = safe_float(row.get("total_payout"))            # keep the standard calc
-            row["total_payout"] = round(base + inst, 2)               # plan + installments = rep pay
+            row["total_payout"] = round(base + inst + sale_inst, 2)   # plan + raw_mi + sale installments
 
         # reps with a PLAN but no standard row → add them (statement-only reps are captured in
         # commcalc.carrier_commission for recon, not paid here)
@@ -4607,18 +4705,21 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost'):
             if rn in plan_matched:
                 continue
             inst = inst_by_rep.get(rn, 0.0)
+            sale_inst = sale_inst_by_rep.get(rn, 0.0)
             base = safe_float(pv["amount"])
             newrow = {"org_id": org_id, "period": period,
                       "period_month": pm.get("month"), "period_year": pm.get("year"),
                       "storeops_name": rn.title(), "epay_salesperson": rn,
                       "subtotal": base, "tier": 1,
-                      "total_payout": round(base + inst, 2)}
+                      "total_payout": round(base + inst + sale_inst, 2)}
             if cols["plan_comm"]:
                 newrow["plan_comm"] = pv["amount"]
             if cols["plan_name"]:
                 newrow["plan_name"] = pv.get("plan_name")
             if cols["residual_installment_comm"]:
                 newrow["residual_installment_comm"] = inst
+            if cols["installment_comm_sale"]:
+                newrow["installment_comm_sale"] = sale_inst
             if cols["carrier_statement_comm"]:
                 newrow["carrier_statement_comm"] = stmt_by_rep.get(rn, 0.0)
             comms.append(newrow)
@@ -4630,20 +4731,24 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost'):
             represented = set()
             for row in comms:
                 represented |= _keys(row)
-            for rn in (set(inst_by_rep) | set(stmt_by_rep)) - represented:
+            for rn in (set(inst_by_rep) | set(stmt_by_rep) | set(sale_inst_by_rep)) - represented:
                 inst = inst_by_rep.get(rn, 0.0)
+                sale_inst = sale_inst_by_rep.get(rn, 0.0)
                 newrow = {"org_id": org_id, "period": period,
                           "period_month": pm.get("month"), "period_year": pm.get("year"),
                           "storeops_name": rn.title(), "epay_salesperson": rn,
                           "subtotal": 0.0, "tier": 1, "tier_source": "plan",
-                          "total_payout": round(safe_float(inst), 2)}
+                          "total_payout": round(safe_float(inst) + safe_float(sale_inst), 2)}
                 if cols["residual_installment_comm"]:
                     newrow["residual_installment_comm"] = safe_float(inst)
+                if cols["installment_comm_sale"]:
+                    newrow["installment_comm_sale"] = safe_float(sale_inst)
                 if cols["carrier_statement_comm"]:
                     newrow["carrier_statement_comm"] = stmt_by_rep.get(rn, 0.0)
                 comms.append(newrow)
         print(f"INFO new-engines applied org={org_id} period={period}: "
-              f"plan_reps={len(plan_by_rep)} statement_reps={len(stmt_by_rep)} installment_reps={len(inst_by_rep)}")
+              f"plan_reps={len(plan_by_rep)} statement_reps={len(stmt_by_rep)} installment_reps={len(inst_by_rep)} "
+              f"sale_installment_reps={len(sale_inst_by_rep)}")
         return comms
     except Exception as e:
         print(f"WARN new-engine wiring skipped (standard calc kept): {e}")
@@ -4757,6 +4862,26 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
         # existing snapshot is still intact.
         comms = _apply_new_engines(client, org_id, period, comms, carrier_mode)
 
+        # R1 UNCONFIGURED-TENANT REFUSAL (commission-0 §7b decision 7, doctrine): a non-Boost tenant with
+        # REAL sales but NOTHING configured to pay from must not silently produce a $0 (or accidental)
+        # snapshot — REFUSE loudly and preserve the last good snapshot (raise before the delete/insert),
+        # with an actionable message the frontend turns into a link to /commcalc/commission-plans. This is
+        # CONFIG-based (fires even with no prior paid snapshot), complementing the OUTCOME-based zero-wipe
+        # guard below. Silenced by: force=true, or a tenant that DELIBERATELY runs no commissions
+        # (commission_org_config.pay_disabled — the permission-gated override). Boost path untouched.
+        _org_cfg = _commission_org_config(client, org_id)
+        if (not force and carrier_mode != 'boost' and sales
+                and not _org_cfg["pay_disabled"]
+                and not _has_any_pay_source(client, org_id, period)):
+            raise Exception(
+                f"REFUSED to calculate {period}: this tenant is in PLAN mode with {len(sales)} sale line(s) "
+                f"but has NO commission source configured (no Commission Plan assignments, no payout "
+                f"schedules, no sale-triggered installment schedules, no carrier statement for the period). "
+                f"Refusing to write an unconfigured snapshot and keeping the last good one. Configure pay at "
+                f"/commcalc/commission-plans and assign reps, then recalculate. If this tenant intentionally "
+                f"pays no commissions, enable 'pay disabled' in commission settings (needs permission); or "
+                f"POST /calculate/{period}?force=true to override once.")
+
         # ZERO-WIPE GUARD (2026-07-14, owner-approved): in plan mode, an all-$0 result computed FROM
         # real sales must never replace a snapshot that currently pays someone. On 2026-07-13 a
         # transiently-defaulted non-Boost carrier flipped this org to plan mode with nothing configured
@@ -4826,6 +4951,25 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
                     client.schema('commcalc').table('flags').insert(flag_list[i:i+500]).execute()
         except Exception as e:
             save_errors.append(f'flags: {e}')
+
+        # SALE-TRIGGERED INSTALLMENT flags (mig 201 / doctrine §7b decision 2): a sold line whose paid
+        # gate FAILED (line not active / not receiving residual) emits TWO flags — 'commission_rebate_tracking'
+        # + 'employee_miss'. Written AFTER the full-period flags wipe above (so they survive) with the
+        # delete-first-BY-SOURCE pattern (like the asset flag sync), so they're idempotent on recalc and
+        # never touch the other flag sources. No-op for Boost (no schedules → engine returns no flags).
+        try:
+            si_flags = (sale_installment_engine.compute_sale_installments(client, org_id, period, persist=False)
+                        .get('flags') or [])
+            _INSTALLMENT_FLAG_SOURCES = ['commission_rebate_tracking', 'employee_miss']
+            (client.schema('commcalc').table('flags').delete().eq('org_id', org_id)
+             .in_('period', _pvariants(period)).in_('source', _INSTALLMENT_FLAG_SOURCES).execute())
+            if si_flags:
+                for row in si_flags:
+                    row['org_id'] = org_id
+                for i in range(0, len(si_flags), 500):
+                    client.schema('commcalc').table('flags').insert(si_flags[i:i+500]).execute()
+        except Exception as e:
+            save_errors.append(f'installment_flags: {e}')
 
         # ── Detect potential chargebacks per rep ─────────────────
         try:
@@ -4983,6 +5127,244 @@ async def save_config(period: str, config: dict, org_id: str = "00000000-0000-00
     config.update({'period': period, 'org_id': org_id})
     r = client.schema('commcalc').table('payout_config').upsert(config, on_conflict='org_id,period').execute()
     return r.data[0] if r.data else config
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# COMMISSION-0 doctrine (mig 201): sale-triggered multi-month rep-pay under Commission Plans, the
+# per-tenant commission posture (R1 override + residual visibility), and the classification-first
+# MRC-mapping flow. All degrade gracefully to a code default before mig 201 runs.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+def _require_commission_admin(authorization, org_id):
+    """Money-posture writes (pay_disabled, residual_visibility) are admin-only. Degrades OPEN when the
+    caller can't be resolved (RBAC off / house admin) so it never locks out the house org."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid) if uid else None
+        if caller is None:
+            return  # unresolved (no token / rbac off) — allow, same posture as the rest of the module
+        if caller.get("super_admin"):
+            return
+        perms = caller.get("perms") or {}
+        if (perms.get("scope") == "all") or ((caller.get("role") or "").lower() == "admin"):
+            return
+        raise HTTPException(403, "Only an administrator may change commission pay posture for this tenant.")
+    except HTTPException:
+        raise
+    except Exception:
+        return  # never 500 a settings save on a resolution error
+
+
+@router.get("/commission-settings")
+async def get_commission_settings(org_id: str = ORG_ID):
+    """Per-tenant commission posture (mig 201): pay_disabled (the R1 refuse-to-pay override) +
+    residual_visibility ('all' | 'permissioned'). Code default before mig 201 runs."""
+    require_org(org_id)
+    return _commission_org_config(sb(), org_id)
+
+
+@router.put("/commission-settings")
+async def put_commission_settings(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Admin-only. Sets pay_disabled and/or residual_visibility for the tenant. pay_disabled=true means
+    'this tenant INTENTIONALLY pays no commissions' → silences the R1 unconfigured-tenant refusal."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    row = {"org_id": org_id, "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    if "pay_disabled" in body:
+        row["pay_disabled"] = bool(body.get("pay_disabled"))
+    if "residual_visibility" in body:
+        rv = (body.get("residual_visibility") or "all").strip().lower()
+        row["residual_visibility"] = rv if rv in ("all", "permissioned") else "all"
+    try:
+        client = sb()
+        client.schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not save commission settings (is migration 201 applied?): {e}")
+    return _commission_org_config(sb(), org_id)
+
+
+# ── SALE-TRIGGERED installment SCHEDULES (mig 201) — attach to a Commission Plan, triggered by the sale line
+@router.get("/plan-installments")
+async def list_plan_installments(org_id: str = ORG_ID):
+    """All sale-triggered installment schedules + their month lines, grouped by plan. [] (not 500) if
+    migration 201 isn't applied yet."""
+    require_org(org_id)
+    client = sb()
+    try:
+        scheds = (client.schema('commcalc').table('plan_installment_schedule').select('*')
+                  .eq('org_id', org_id).execute().data) or []
+        lines = (client.schema('commcalc').table('plan_installment_line').select('*')
+                 .eq('org_id', org_id).execute().data) or []
+    except Exception:
+        return {"schedules": [], "ready": False, "note": "Run migration 201_commission_sale_installments.sql to enable."}
+    by_sched = {}
+    for ln in lines:
+        by_sched.setdefault(ln.get('schedule_id'), []).append(ln)
+    for s in scheds:
+        s['lines'] = sorted(by_sched.get(s['id'], []), key=lambda x: x.get('month_index') or 0)
+    return {"schedules": scheds, "ready": True}
+
+
+@router.post("/plan-installments")
+async def save_plan_installment(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Create/replace a sale-triggered schedule + its month lines (money config → admin-only). Body:
+    {id?, plan_id (required), name?, num_months, trigger_match_field?, trigger_match_op?, trigger_match_value?,
+     gate_mode?, gate_from_month?, clawback_enabled?, effective_from?, effective_to?, eligible_sale_periods?[],
+     is_active?, lines:[{month_index, payout_kind, flat_amount?, mrc_pct?, mrc_source?}]}. Replaces the lines
+    (delete-then-insert). Does NOT recompute pay (that waits for POST /calculate)."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    if not body.get("plan_id"):
+        raise HTTPException(400, "plan_id is required (a sale-triggered schedule attaches to a Commission Plan).")
+    client = sb()
+    head = {
+        "org_id": org_id, "plan_id": body["plan_id"],
+        "name": (body.get("name") or None),
+        "num_months": max(1, min(12, int(body.get("num_months") or 1))),
+        "trigger_match_field": (body.get("trigger_match_field") or "any").strip() or "any",
+        "trigger_match_op": (body.get("trigger_match_op") or "equals").strip() or "equals",
+        "trigger_match_value": body.get("trigger_match_value"),
+        "gate_mode": (body.get("gate_mode") or "paid_residual").strip() or "paid_residual",
+        "gate_from_month": max(1, int(body.get("gate_from_month") or 1)),
+        "clawback_enabled": bool(body.get("clawback_enabled", False)),
+        "effective_from": (body.get("effective_from") or None),
+        "effective_to": (body.get("effective_to") or None),
+        "eligible_sale_periods": [str(p).strip() for p in (body.get("eligible_sale_periods") or []) if str(p).strip()],
+        "is_active": bool(body.get("is_active", True)),
+        "notes": body.get("notes"),
+    }
+    try:
+        if body.get("id"):
+            client.schema('commcalc').table('plan_installment_schedule').update(head).eq('id', body['id']).eq('org_id', org_id).execute()
+            sid = body['id']
+        else:
+            r = client.schema('commcalc').table('plan_installment_schedule').insert(head).execute()
+            sid = (r.data or [{}])[0].get('id')
+        if not sid:
+            raise HTTPException(500, "could not save installment schedule header")
+        client.schema('commcalc').table('plan_installment_line').delete().eq('org_id', org_id).eq('schedule_id', sid).execute()
+        lines = []
+        for ln in (body.get("lines") or []):
+            lines.append({
+                "org_id": org_id, "schedule_id": sid,
+                "month_index": max(1, int(ln.get("month_index") or 1)),
+                "payout_kind": (ln.get("payout_kind") or "flat").strip() or "flat",
+                "flat_amount": safe_float(ln.get("flat_amount")),
+                "mrc_pct": safe_float(ln.get("mrc_pct")),
+                "mrc_source": (ln.get("mrc_source") or "product_catalog").strip() or "product_catalog",
+            })
+        if lines:
+            client.schema('commcalc').table('plan_installment_line').insert(lines).execute()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"could not save installment schedule (is migration 201 applied?): {e}")
+    return {"id": sid, "saved": True}
+
+
+@router.delete("/plan-installments/{sid}")
+async def delete_plan_installment(sid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    client = sb()
+    try:
+        client.schema('commcalc').table('plan_installment_schedule').delete().eq('id', sid).eq('org_id', org_id).execute()
+    except Exception as e:
+        raise HTTPException(500, f"delete failed: {e}")
+    return {"deleted": True}
+
+
+@router.get("/plan-installments/preview/{period}")
+async def preview_plan_installments(period: str, org_id: str = ORG_ID):
+    """READ-ONLY preview of what the sale-triggered installment engine WOULD pay for a pay period,
+    incl. the paid-gate outcome per line and the two-flag list for sold-but-unpaid lines. Writes nothing."""
+    require_org(org_id)
+    try:
+        return sale_installment_engine.compute_sale_installments(sb(), org_id, period, persist=False)
+    except Exception as e:
+        raise HTTPException(500, f"installment preview failed: {type(e).__name__}: {e}")
+
+
+# ── Classification-first MRC MAPPING (§7b decision 1): classify imported plan lines + prefill $ MRC ──
+@router.get("/mrc-mapping/candidates")
+async def mrc_mapping_candidates(period: str, org_id: str = ORG_ID):
+    """Scan a period's sale lines for distinct PLAN/product descriptions, AUTO-CLASSIFY each (reusing the
+    existing accessory/carrier-category config), AUTO-PREFILL the $ MRC from the description text, and
+    cross-reference the product_mrc catalog to show which are already CONFIRMED. Read-only — the user
+    confirms/overwrites via POST /mrc-mapping/confirm. This is the classification-first flow."""
+    require_org(org_id)
+    client = sb()
+    acc = sale_installment_engine._acc_sets(client, org_id)
+    ccmap = sale_installment_engine._load_ccmap(client, org_id)
+    catalog = installment_engine._load_product_mrc(client, org_id)
+    # existing confirmed mappings keyed by lowered plan pattern
+    confirmed = {}
+    for r in catalog:
+        confirmed[str(r.get('plan_pattern') or '').strip().lower()] = {
+            "mrc": safe_float(r.get('mrc')), "confirmed": bool(r.get('confirmed')),
+            "classification": r.get('classification')}
+    sales = commission_engine._read_sales(client, org_id, period)
+    seen = {}
+    for row in sales:
+        if str(row.get('voided', '') or '').upper().strip() == 'YES':
+            continue
+        key = str(row.get('customer_plan') or row.get('product_desc') or '').strip()
+        if not key:
+            continue
+        lk = key.lower()
+        e = seen.get(lk)
+        if not e:
+            e = seen[lk] = {"plan": key, "count": 0,
+                            "classification": sale_installment_engine.classify_line(row, acc, ccmap),
+                            "prefill_mrc": sale_installment_engine.extract_mrc_from_desc(
+                                row.get('product_desc') or row.get('customer_plan')),
+                            "confirmed": False, "confirmed_mrc": None}
+        e["count"] += 1
+        c = confirmed.get(lk)
+        if c:
+            e["confirmed"] = c["confirmed"]
+            e["confirmed_mrc"] = c["mrc"]
+            if c.get("classification"):
+                e["classification"] = c["classification"]
+    out = sorted(seen.values(), key=lambda x: (x["confirmed"], -x["count"]))
+    return {"period": period, "candidates": out, "count": len(out)}
+
+
+@router.post("/mrc-mapping/confirm")
+async def mrc_mapping_confirm(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Upsert user-confirmed product_mrc rows (money config → admin-only). Body: {carrier_id?, match_op?,
+    items:[{plan, mrc, classification?}]}. Marks each row confirmed=true. Reuses the existing product_mrc
+    table (mig 074) — never a new mapping table."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    client = sb()
+    carrier_id = body.get("carrier_id") or None
+    match_op = (body.get("match_op") or "equals").strip() or "equals"
+    saved = 0
+    for it in (body.get("items") or []):
+        plan = str(it.get("plan") or "").strip()
+        if not plan:
+            continue
+        row = {"org_id": org_id, "carrier_id": carrier_id, "plan_pattern": plan, "match_op": match_op,
+               "mrc": safe_float(it.get("mrc")), "is_active": True, "confirmed": True,
+               "classification": it.get("classification"), "source_desc": it.get("source_desc"),
+               "prefill_mrc": (safe_float(it.get("prefill_mrc")) if it.get("prefill_mrc") is not None else None)}
+        try:
+            client.schema('commcalc').table('product_mrc').upsert(
+                row, on_conflict='org_id,carrier_id,plan_pattern,match_op').execute()
+            saved += 1
+        except Exception:
+            # pre-mig-201 (no confirmed/classification cols): retry without them so the MRC still saves
+            for k in ("confirmed", "classification", "source_desc", "prefill_mrc"):
+                row.pop(k, None)
+            try:
+                client.schema('commcalc').table('product_mrc').upsert(
+                    row, on_conflict='org_id,carrier_id,plan_pattern,match_op').execute()
+                saved += 1
+            except Exception:
+                pass
+    return {"saved": saved}
 
 
 # ── Multi-month payout SCHEDULES (migration 057) — generic per-carrier installment payouts ────────
@@ -6707,12 +7089,13 @@ async def get_sales_analyzer(period: str, window_days: int = 90, rep: str = "",
 @router.get("/comp/residual-trend")
 async def get_comp_residual_trend(months: int = 6, store: str = "", market: str = "",
                                   min_drop_pct: float = 20.0, min_drop_amt: float = 1.0,
-                                  org_id: str = ORG_ID):
+                                  authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Month-over-month carrier residual (Comprehensive Comp) trend. Returns total residual per
     month with deltas, plus per-account DIPS (residual fell or the account vanished from the
     report = likely cancellation) labeled by the month each dip occurred — so you can see which
     month a residual dropped and why."""
     require_org(org_id)
+    _require_carrier_residual(authorization, org_id)   # carrier-residual visibility gate (mig 201)
     try:
         return comp_trend.compute_residual_trend(
             sb(), org_id, months=months, store=store, market=market,
