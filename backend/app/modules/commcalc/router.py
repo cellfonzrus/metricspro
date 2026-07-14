@@ -28,6 +28,7 @@ from app.modules.commcalc import column_mapping
 from app.modules.commcalc import commission_catalog
 from app.modules.commcalc import target_registry
 from app.modules.commcalc import commission_ledger
+from app.modules.commcalc import device_history
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 # Plain names too: 45+ call sites across this router use bare datetime/timezone/timedelta (all the
@@ -4675,6 +4676,22 @@ def _require_carrier_residual(authorization, org_id):
                                  "'carrier_residual' permission to view it.")
 
 
+def _can_view_device_commission(authorization, org_id):
+    """Gate for the device-history MONEY table (commission-16). ADMIN-ONLY BY DEFAULT, grantable via the
+    DATA_GRANTS 'device_commission' key — same resolution shape as `_can_view_carrier_residual` but
+    DEFAULT-CLOSED (device commission $ is not open-by-default). Frontend mirror: `hasDataGrant(
+    'device_commission')`. Degrades CLOSED on any resolution error — it can only ever hide $ behind the
+    lock note, never leak it. (No tenant toggle: unlike carrier_residual there is no 'all' posture — the
+    money table is restricted until the grant is registered + assigned.)"""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid) if uid else None
+        return device_history.device_commission_allowed(caller)
+    except Exception:
+        return False
+
+
 def _has_any_pay_source(client, org_id, period):
     """True if this org has ANYTHING configured to pay reps from for the period: active commission-plan
     ASSIGNMENTS, an active payout_schedule (raw_mi installments), an active plan_installment_schedule
@@ -7225,6 +7242,119 @@ async def get_top_sellers(period: str, limit: int = 10, org_id: str = ORG_ID):
 
     ranked = sorted(models.values(), key=lambda x: x["units"], reverse=True)[:limit]
     return {"period": period, "top_sellers": ranked}
+
+
+@router.get("/device-history")
+async def get_device_history(q: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """DEVICE HISTORY LOOKUP (commission-16) — employee-portal widget backend. Enter an IMEI OR a phone
+    number (one box; the shape is auto-detected but BOTH keys are searched). Returns, org-scoped and
+    carrier-agnostic:
+      • device + sale from the B2B sales data (raw_sales -> daily_sales_feed fallback): model, sold
+        date, sale price. Match IMEI->serial_1, phone->mdn.
+      • activation + tenure from the tenant's RESIDUAL data (raw_mi): first residual period =
+        activation; months active = COUNT of DISTINCT residual periods (residual-months, NOT calendar).
+      • a salesperson-facing prompt: NOT sold by us -> sell a NEW phone; sold by us -> offer an UPGRADE.
+      • (admin-only, gated by the 'device_commission' DATA_GRANT) a per-period MONEY table with
+        COMMISSION (raw_mi residual MI+ATU) and REBATE (raw_payment_detail reimbursement classes) as
+        SEPARATE categories, each with a subtotal + a grand total.
+    READ-ONLY: DISPLAY of already-recorded data, no pay-path change."""
+    require_org(org_id)
+    q = (q or "").strip()
+    if not q:
+        raise HTTPException(400, "Enter an IMEI or phone number.")
+    client = sb()
+    cands = device_history.query_candidates(q)
+    shape = device_history.detect_shape(q)
+
+    def _rows(table, cols, key_cols):
+        out = []
+        for kc in key_cols:
+            try:
+                out += (client.schema("commcalc").table(table).select(cols)
+                        .eq("org_id", org_id).in_(kc, cands).limit(2000).execute().data) or []
+            except Exception as e:
+                print(f"WARN device-history {table}.{kc} read failed: {e}")
+        return out
+
+    # ── B2B SALE (raw_sales authoritative, daily_sales_feed fallback) ──────────────────────────────
+    sale_cols = "trans_id,trans_date,store,salesperson,product_desc,contract_type,ext_price,mdn,serial_1"
+    sale_rows = [r for r in _rows("raw_sales", sale_cols, ("serial_1", "mdn"))
+                 if device_history.keys_match(cands, r.get("serial_1"), r.get("mdn"))]
+    sale_source = "raw_sales" if sale_rows else None
+    if not sale_rows:
+        feed = [r for r in _rows("daily_sales_feed", sale_cols, ("serial_1", "mdn"))
+                if device_history.keys_match(cands, r.get("serial_1"), r.get("mdn"))]
+        if feed:
+            sale_rows, sale_source = feed, "daily_sales_feed"
+
+    sold_by_us = bool(sale_rows)
+    device = None
+    if sale_rows:
+        # the DEVICE line: prefer a row carrying a serial (the handset line), else the biggest-ticket line.
+        dev = max(sale_rows, key=lambda r: (1 if str(r.get("serial_1") or "").strip() else 0,
+                                            safe_float(r.get("ext_price"))))
+        dates = sorted(str(r.get("trans_date"))[:10] for r in sale_rows if r.get("trans_date"))
+        device = {
+            "phone_model": (dev.get("product_desc") or "").strip() or None,
+            "sold_by_us": True,
+            "sold_date": dates[0] if dates else (str(dev.get("trans_date"))[:10] if dev.get("trans_date") else None),
+            "sale_price": round(safe_float(dev.get("ext_price")), 2),
+            "store": (dev.get("store") or "").strip() or None,
+            "salesperson": (dev.get("salesperson") or "").strip() or None,
+            "contract_type": (dev.get("contract_type") or "").strip() or None,
+            "sale_source": sale_source,
+            "mdn": (dev.get("mdn") or "").strip() or None,
+            "imei": (dev.get("serial_1") or "").strip() or None,
+        }
+
+    # ── RESIDUAL / MI (raw_mi across ALL periods → activation + tenure + commission rows) ──────────
+    mi_cols = "period,device_serial,phone_number,actual_mi_payout,actual_atu_payout,customer_plan,subscriber_status"
+    mi_rows = [r for r in _rows("raw_mi", mi_cols, ("device_serial", "phone_number"))
+               if device_history.keys_match(cands, r.get("device_serial"), r.get("phone_number"))]
+    tenure = device_history.tenure_from_periods([r.get("period") for r in mi_rows])
+    mi_matches = [{"period": r.get("period"),
+                   "amount": safe_float(r.get("actual_mi_payout")) + safe_float(r.get("actual_atu_payout"))}
+                  for r in mi_rows]
+
+    # ── REBATES (raw_payment_detail across ALL periods) ───────────────────────────────────────────
+    pay_cols = "imei,mdn,payment_type,amount,period_month,period_year,payment_date"
+    pay_rows = [r for r in _rows("raw_payment_detail", pay_cols, ("imei", "mdn"))
+                if device_history.keys_match(cands, r.get("imei"), r.get("mdn"))]
+
+    def _pay_period(r):
+        try:
+            mo, yr = int(r.get("period_month") or 0), int(r.get("period_year") or 0)
+            if 1 <= mo <= 12 and yr:
+                return device_history.canon_display_period(f"{yr}-{mo:02d}")
+        except Exception:
+            pass
+        return str(r.get("payment_date"))[:7] if r.get("payment_date") else ""
+    payment_matches = [{"period": _pay_period(r), "amount": safe_float(r.get("amount")),
+                        "payment_type": r.get("payment_type")} for r in pay_rows]
+
+    # ── MONEY TABLE (gated: admin-only by default via the 'device_commission' grant) ───────────────
+    from app.modules.commcalc.discrepancy_engine import parse_payment_type
+    can_money = _can_view_device_commission(authorization, org_id)
+    money, money_locked = None, None
+    if can_money:
+        money = device_history.build_money_table(
+            mi_matches, payment_matches, lambda pt: parse_payment_type(pt)[0])
+    else:
+        money_locked = {"note": "Commission details are restricted — this requires the "
+                                "'device_commission' data grant (admin-only by default)."}
+
+    return {
+        "query": q, "detected": shape, "org_id": org_id,
+        "found": bool(sale_rows or mi_rows or pay_rows),
+        "device": device,
+        "sold_by_us": sold_by_us,
+        "prompt": device_history.prompt_for(sold_by_us, device.get("sold_date") if device else None),
+        "tenure": tenure,
+        "residual_periods": tenure["months_active"],
+        "commission_visible": can_money,
+        "money": money,
+        "money_locked": money_locked,
+    }
 
 
 @router.get("/sales-analyzer/{period}")
