@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from app.core.database import get_supabase
 from app.core.config import settings
-from app.modules.account import coa, engine
+from app.modules.account import coa, engine, autocompute
 
 router = APIRouter(prefix="/account", tags=["Account"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -242,6 +242,21 @@ async def compute(period: str, org_id: str = ORG_ID):
         raise HTTPException(500, f"compute failed: {type(e).__name__}: {e}")
 
 
+# ── scheduled auto-recompute (called by Supabase pg_cron via pg_net) ───────────────────────────
+@router.post("/run-due")
+async def run_due(x_notify_secret: str = Header(default=""), only_org: str = "", force: bool = False):
+    """Recompute the current + prior period statements for every tenant with account data, but only
+    where STALE (never computed, or a fresh upload landed since) — so a new tenant's books stop
+    reading {"computed": false} and existing tenants' statements track their own uploads. Idempotent
+    and cheap on a quiet tick. Secret-guarded (same x-notify-secret / NOTIFY_RUN_SECRET as
+    /notify/run-due); each tenant runs under core.run_for_tenant (money_scope="none"). `only_org`
+    targets a single tenant; `force=true` recomputes regardless of staleness. This changes WHEN
+    compute runs, never WHAT it computes."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    return autocompute.recompute_due(sb(), only_org=(only_org or None), force=force)
+
+
 # ── read snapshots ────────────────────────────────────────────────────────────────────────────
 def _read(period, st_type, scope, org_id):
     rows = (sb().schema("commcalc").table("account_statements").select("*")
@@ -254,24 +269,26 @@ def _read(period, st_type, scope, org_id):
 async def get_pl(period: str, scope: str = "consolidated", org_id: str = ORG_ID):
     require_org(org_id)
     row = _read(period, "pl", scope, org_id)
+    # Staleness banner: computed_at + the newest relevant ingest so the page can prompt a recompute
+    # when a fresh upload has landed since (or the books were never computed). Never changes numbers.
+    stale = autocompute.staleness(sb(), org_id, period, computed_at=(row.get("computed_at") if row else None))
     if not row:
-        return {"period": period, "scope": scope, "computed": False}
+        return {"period": period, "scope": scope, "computed": False, **stale}
     return {"period": period, "scope": scope, "computed": True,
             "statement": row["payload"], "narrative": row.get("narrative"),
-            "model": row.get("model"), "computed_at": row.get("computed_at"),
-            "crosscheck_ok": row.get("crosscheck_ok")}
+            "model": row.get("model"), "crosscheck_ok": row.get("crosscheck_ok"), **stale}
 
 
 @router.get("/balance-sheet/{period}")
 async def get_bs(period: str, scope: str = "consolidated", org_id: str = ORG_ID):
     require_org(org_id)
     row = _read(period, "balance_sheet", scope, org_id)
+    stale = autocompute.staleness(sb(), org_id, period, computed_at=(row.get("computed_at") if row else None))
     if not row:
-        return {"period": period, "scope": scope, "computed": False}
+        return {"period": period, "scope": scope, "computed": False, **stale}
     return {"period": period, "scope": scope, "computed": True,
             "statement": row["payload"], "narrative": row.get("narrative"),
-            "model": row.get("model"), "computed_at": row.get("computed_at"),
-            "crosscheck_ok": row.get("crosscheck_ok")}
+            "model": row.get("model"), "crosscheck_ok": row.get("crosscheck_ok"), **stale}
 
 
 @router.get("/overview/{period}")

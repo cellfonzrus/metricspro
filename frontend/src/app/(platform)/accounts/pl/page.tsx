@@ -6,6 +6,7 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { StalenessBanner } from '../_components/StalenessBanner'
 
 const SECTION_TITLE: Record<string, string> = { revenue: 'Revenue', cogs: 'Cost of Goods Sold', opex: 'Operating Expenses', other: 'Other' }
 
@@ -17,17 +18,18 @@ function PLInner() {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState<Record<string, boolean>>({})
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     api(`/api/v1/account/overview/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
       .then((o: any) => setScopes(o.scopes || [])).catch(() => setScopes([]))
-  }, [period])
+  }, [period, reloadKey])
 
   useEffect(() => {
     setLoading(true)
     api(`/api/v1/account/pl/${encodeURIComponent(period)}?scope=${encodeURIComponent(scope)}&org_id=${ORG_ID}`)
       .then(setData).catch(console.error).finally(() => setLoading(false))
-  }, [period, scope])
+  }, [period, scope, reloadKey])
 
   const st = data?.statement
   const sec = (t: string) => (st?.sections || []).find((s: any) => s.type === t)
@@ -68,6 +70,9 @@ function PLInner() {
           {data?.computed && <SendReportButton reportKey="account_pl" filters={{ period, scope }} />}
         </div>
       </div>
+
+      <StalenessBanner period={period} computed={data?.computed} computedAt={data?.computed_at}
+        newestIngestAt={data?.newest_ingest_at} stale={data?.stale} onRecomputed={() => setReloadKey(k => k + 1)} />
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
