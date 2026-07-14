@@ -43,6 +43,7 @@ export default function CompliancePage() {
   const [ready, setReady] = useState(true)
   const [q, setQ] = useState('')
   const [msg, setMsg] = useState('')
+  const [fetchError, setFetchError] = useState('')
   const [loading, setLoading] = useState(false)
 
   async function load() {
@@ -50,6 +51,10 @@ export default function CompliancePage() {
     try {
       const r = await api(`/api/v1/hr/onboarding/compliance-documents${q ? `?q=${encodeURIComponent(q)}` : ''}`)
       setReady(r?.ready !== false); setDocs(r?.documents || [])
+      // Truth-telling: a failed read on the backend now comes back as ready:false + an explicit error
+      // message rather than a silent empty list — show it instead of letting the page look like an
+      // empty-but-healthy repository.
+      setFetchError(r?.ready === false ? (r?.error || '') : '')
     } catch (e: any) { setMsg(e?.message || 'Load failed') }
     setLoading(false)
   }
@@ -83,7 +88,7 @@ export default function CompliancePage() {
       </p>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>{msg}</div>}
       {!ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}>
-        Run migration <b>073_hr_onboarding.sql</b> to activate onboarding before this repository has anything to show.
+        {fetchError || 'Run migration 073_hr_onboarding.sql to activate onboarding before this repository has anything to show.'}
       </div>}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>

@@ -737,7 +737,18 @@ def onboarding_for_employee(employee_id: str, org_id: str = ORG_ID):
                           "work_auth": bool(t.get("work_auth")),
                           "sample_name": t.get("sample_name"), "sample_url": _sign_onboard_path(t.get("sample_path"))})
             total += 1
-            is_mand = t.get("is_mandatory", True) is not False
+            # DEFECT FIX (2026-07-14): "mandatory-DOC reconcile" (below, and this mandatory_progress) must
+            # only count tasks the EMPLOYEE can act on. Before this fix, is_mand ignored owner_role, so
+            # every HR/DM/market_manager checklist step (never individually toggled 'verified' for the
+            # existing roster) counted as an outstanding "mandatory document" for literally every hire —
+            # this is the actual root cause of the reconcile dry-run showing everyone as missing
+            # everything, including employees (e.g. Jose Utero) whose real paperwork was 100% complete.
+            # onboarding_doc_status (the Documents board, same file) already scopes this identical concept
+            # to owner_role == 'employee'; this brings mandatory_progress + the reconcile join in line with
+            # that precedent. A task's own "is_mandatory" flag (shown per-row above) is UNCHANGED — an
+            # admin can still mark any task optional regardless of owner — this only narrows what counts
+            # toward the aggregate "document" total/done and what the reconcile treats as a real gap.
+            is_mand = (t.get("is_mandatory", True) is not False) and t.get("owner_role") == "employee"
             if is_mand:
                 mandatory_total += 1
             ok_done = status in ("verified", "na")
@@ -1793,9 +1804,13 @@ async def onboarding_reconcile(body: dict, org_id: str = ORG_ID):
         data = onboarding_for_employee(eid, org_id=org_id)
         if not data.get("ready"):
             continue
+        # DEFECT FIX (2026-07-14): same owner_role == 'employee' scope as mandatory_progress above — a
+        # reconcile that emails an employee "you're missing X" must never name an HR/DM/market_manager
+        # checklist step they have no way to complete (that was the false-missing-for-everyone bug).
         missing = [{"task_id": t["id"], "key": t.get("key"), "label": t.get("label"), "category": c.get("label")}
                    for c in data.get("categories", []) for t in c.get("tasks", [])
-                   if (t.get("is_mandatory", True) is not False) and t.get("status") not in ("verified", "na")]
+                   if (t.get("is_mandatory", True) is not False) and t.get("owner_role") == "employee"
+                   and t.get("status") not in ("verified", "na")]
         state_undetermined = bool(data.get("needs_work_state"))
         if not missing and not state_undetermined:
             continue
@@ -2454,13 +2469,21 @@ def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_
     cat_of = {t["id"]: c["label"] for c in tmpl.get("categories", []) for t in c.get("tasks", [])}
     emps = {e["employee_id"]: e for e in ((so.table("employees").select("employee_id,name,email")
             .eq("org_id", org_id).execute().data) or [])}
+    # DEFECT FIX (2026-07-14, symptom 2): a swallowed exception here used to look identical to "this
+    # tenant genuinely has zero documents on file" — the page would render an empty "No documents on
+    # file yet" state with no indication the read itself failed (e.g. migration 082's signature_path/
+    # signed_at/signed_name columns not applied yet). Track success explicitly so the page can tell the
+    # two apart, per the same "never a silent 500, but never a silent lie either" degrade pattern the
+    # rest of this file uses (see onboarding_update_status's "is migration 073 applied?" 400s).
+    rows, fetch_ok = [], True
     try:
         rows = (so.table("employee_onboarding")
                 .select("employee_id,task_id,status,document_path,document_name,signature_path,"
                         "signed_at,signed_name,verified_by,verified_at,submitted_at")
                 .eq("org_id", org_id).execute().data) or []
-    except Exception:
-        rows = []
+    except Exception as e:
+        fetch_ok = False
+        _fetch_err = str(e)[:200]
     out = []
     for r in rows:
         if not (r.get("document_path") or r.get("signature_path")):
@@ -2481,7 +2504,13 @@ def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_
             "signed_at": r.get("signed_at") or r.get("verified_at") or r.get("submitted_at"),
             "signed_name": r.get("signed_name"), "verified_by": r.get("verified_by")})
     out.sort(key=lambda d: (d["employee_name"] or "", d["document_label"] or ""))
-    return {"ready": tmpl.get("ready", True), "documents": out, "count": len(out)}
+    resp = {"ready": tmpl.get("ready", True), "documents": out, "count": len(out)}
+    if not fetch_ok:
+        # Surface the failure instead of a silent empty-looking page — "0 documents" and "the query
+        # failed" must never render identically.
+        resp["ready"] = False
+        resp["error"] = f"Could not load onboarding documents — is migration 082 applied? {_fetch_err}"
+    return resp
 
 
 @router.get("/onboarding/compliance-documents/export")
