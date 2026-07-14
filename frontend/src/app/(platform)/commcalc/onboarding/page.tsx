@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 
 // Onboarding wizard (A3): one guided flow to bring a NEW carrier/company online end-to-end —
 // company → carrier → connector + reports → upload a sample + map its columns → map comp categories
@@ -240,6 +241,7 @@ function ColumnsStep({ reportKey, targetTable, carrierId, setMsg }: { reportKey:
   const importRef = useRef<HTMLInputElement>(null)
   const [period, setPeriod] = useState('')
   const [importing, setImporting] = useState(false)
+  const [outcome, setOutcome] = useState<UploadOutcome | null>(null)
 
   const load = useCallback(() => {
     if (!reportKey) return
@@ -265,7 +267,7 @@ function ColumnsStep({ reportKey, targetTable, carrierId, setMsg }: { reportKey:
   // that was missing in onboarding — you could map but not actually upload the commission file here.
   async function importFile(file: File) {
     if (!period.trim()) { setMsg('⚠️ Enter the period (e.g. “June 2026”) before importing the full file.'); return }
-    setImporting(true)
+    setImporting(true); setOutcome(null)
     const fd = new FormData()
     fd.append('report_key', reportKey)
     if (carrierId) fd.append('carrier_id', carrierId)
@@ -274,7 +276,13 @@ function ColumnsStep({ reportKey, targetTable, carrierId, setMsg }: { reportKey:
     fd.append('file', file)
     try {
       const r: any = await api('/api/v1/commcalc/upload-mapped', { method: 'POST', body: fd })
-      setMsg(`✅ Imported ${r?.saved ?? 0} row(s) for ${period.trim()} via ${r?.rules_used ?? 0} mapping(s). The reports now compute from this data.`)
+      // The ingest guards (price-coverage refusal / row-count shrink) return HTTP-200; render them
+      // honestly instead of a green "✅ 0 row(s)" that looks identical to a broken upload.
+      const o = readUploadOutcome(r, 'row(s)')
+      setOutcome(o.tone === 'ok' ? null : o)
+      setMsg(o.tone === 'ok'
+        ? `✅ Imported ${o.saved} row(s) for ${period.trim()}. The reports now compute from this data.`
+        : `⚠️ ${o.text}`)
     } catch (e: any) { setMsg('❌ Import failed: ' + (e?.message || e)) } finally { setImporting(false) }
   }
 
@@ -299,6 +307,7 @@ function ColumnsStep({ reportKey, targetTable, carrierId, setMsg }: { reportKey:
         fields are simply skipped), <b>Save mappings</b>, then set a <b>period</b> and <b>Import the full file</b>.
         A different carrier&apos;s file doesn&apos;t need every ★ — import what you have.
       </p>
+      <UploadGuardBanner outcome={outcome} style={{ maxWidth: 640 }} />
       {fields.length === 0 && <p style={{ fontSize: 13, color: 'var(--text3)' }}>This is a new report key (no default field registry). Map its columns on the full Column Mapping page.</p>}
       {fields.length > 0 && (
         <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: 640 }}>

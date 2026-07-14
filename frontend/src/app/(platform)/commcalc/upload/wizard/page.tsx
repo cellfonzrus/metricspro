@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api, apiUpload, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { readUploadOutcome } from '../../_lib/uploadGuard'
 
 const enc = encodeURIComponent
 
@@ -129,8 +130,9 @@ export default function UploadWizardPage() {
         q = `effective_date=${enc(d)}&` + q
       }
       const res = await apiUpload(`/api/v1/${s.endpoint}?${q}`, form)
-      const rows = res?.rows_saved ?? res?.rows ?? res?.count
-      setMsg(m => ({ ...m, [s.id]: `✓ Uploaded${rows != null ? ` — ${rows} rows` : ''}.` }))
+      // A price-guard refusal / shrink warning returns HTTP-200 — tell the truth instead of "✓ Uploaded".
+      const o = readUploadOutcome(res, 'rows')
+      setMsg(m => ({ ...m, [s.id]: (o.tone === 'ok' ? '✓ ' : '⚠ ') + o.text }))
       loadHistory()
     } catch (e: any) {
       setMsg(m => ({ ...m, [s.id]: `Error: ${e?.message || e}` }))
@@ -187,7 +189,7 @@ export default function UploadWizardPage() {
                   <input type="file" hidden disabled={busy === s.id}
                     onChange={e => { const f = e.target.files?.[0]; if (f) upload(s, f); e.currentTarget.value = '' }} />
                 </label>
-                {m && <span style={{ fontSize: 12, color: m.startsWith('Error') ? '#b91c1c' : '#15803d' }}>{m}</span>}
+                {m && <span style={{ fontSize: 12, color: m.startsWith('Error') ? '#b91c1c' : m.startsWith('⚠') ? '#b45309' : '#15803d' }}>{m}</span>}
               </div>
             </div>
           )

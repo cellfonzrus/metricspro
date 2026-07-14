@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { ORG_ID, api, apiUpload } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { readUploadOutcome } from '../_lib/uploadGuard'
 
 const FILE_TYPES = [
   { id: 'sales',          label: 'Sales Transactions',    icon: '🛍️', required: true,  desc: 'POS Sales Transaction Details (78-col, all columns)' },
@@ -69,7 +70,7 @@ function fmtWhen(iso: string) {
 export default function UploadPage() {
   const { period, setPeriod } = usePeriod()
   const [uploading, setUploading] = useState<string | null>(null)
-  const [statuses, setStatuses] = useState<Record<string, 'idle'|'uploading'|'done'|'error'>>({})
+  const [statuses, setStatuses] = useState<Record<string, 'idle'|'uploading'|'done'|'error'|'warn'>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})
   const [history, setHistory] = useState<UploadRecord[]>([])
   const [showHistory, setShowHistory] = useState(false)
@@ -129,8 +130,11 @@ export default function UploadPage() {
       const data = await apiUpload(
         `/api/v1/commcalc/upload/${fileType}?${!rowDated ? 'period=' + encodeURIComponent(period) + '&' : ''}org_id=${ORG_ID}`,
         form)
-      setStatuses(s => ({ ...s, [fileType]: 'done' }))
-      setMessages(m => ({ ...m, [fileType]: `✅ ${data.saved} rows saved` }))
+      // A price-guard refusal (saved:0, skipped:'price_guard') or a shrink warning comes back HTTP-200 —
+      // surface it honestly instead of a green "✅ 0 rows saved" that looks like a broken upload.
+      const o = readUploadOutcome(data, 'rows')
+      setStatuses(s => ({ ...s, [fileType]: o.tone === 'ok' ? 'done' : 'warn' }))
+      setMessages(m => ({ ...m, [fileType]: (o.tone === 'ok' ? '✅ ' : '⚠️ ') + o.text }))
       loadHistory()
     } catch (e: any) {
       setStatuses(s => ({ ...s, [fileType]: 'error' }))
@@ -254,7 +258,7 @@ export default function UploadPage() {
         {FILE_TYPES.map(({ id, label, icon, required, desc }) => {
           const status = statuses[id] || 'idle'; const msg = messages[id] || ''; const prior = lastUpload(id)
           return (
-            <div key={id} className="card" style={{ border: status === 'done' ? '1px solid #86efac' : status === 'error' ? '1px solid #fca5a5' : undefined, background: status === 'done' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : undefined }}>
+            <div key={id} className="card" style={{ border: status === 'done' ? '1px solid #86efac' : status === 'error' ? '1px solid #fca5a5' : status === 'warn' ? '1px solid #fcd34d' : undefined, background: status === 'done' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : status === 'warn' ? '#fffbeb' : undefined }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                 <span style={{ fontSize: 28 }}>{icon}</span>
                 <div style={{ flex: 1 }}>
@@ -273,7 +277,7 @@ export default function UploadPage() {
                     </label>
                   )}
                   {prior && status !== 'done' && <div style={{ marginTop: 8, fontSize: 12, color: '#15803d' }}>✓ Uploaded {fmtWhen(prior.uploaded_at)} · {prior.rows_saved.toLocaleString()} rows{PERIODLESS.has(id) && prior.period ? ` · ${prior.period}` : ''}</div>}
-                  {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? '#16a34a' : '#dc2626' }}>{msg}</div>}
+                  {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? '#16a34a' : status === 'warn' ? '#b45309' : '#dc2626' }}>{msg}</div>}
                 </div>
               </div>
             </div>

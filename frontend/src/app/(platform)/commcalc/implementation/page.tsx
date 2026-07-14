@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { api, apiUpload, ORG_ID } from '@/lib/client'
+import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 
 // Implementation Wizard — onboard a new company's data end-to-end: map EVERY source report they
 // upload (auto-detect columns from a sample) → see exactly which DESIRED OUTPUT reports (Commissions,
@@ -105,6 +106,7 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
   const importRef = useRef<HTMLInputElement>(null)
   const [importing, setImporting] = useState(false)
   const [period, setPeriod] = useState('')
+  const [outcome, setOutcome] = useState<UploadOutcome | null>(null)
   const displayName = info?.label || REPORT_LABELS[reportKey] || reportKey
 
   // Rename / label this report. PATCH the existing definition (safe — touches only the label) or
@@ -155,7 +157,7 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
   // wizard only ever sampled + saved rules, so mapped files never actually ingested). Feeds GP/comm.
   async function importFile(file: File) {
     if (!period.trim()) { setMsg('⚠️ Enter the period (e.g. “June 2026”) for this file before importing.'); return }
-    setImporting(true)
+    setImporting(true); setOutcome(null)
     const fd = new FormData()
     fd.append('report_key', reportKey)
     if (carrierId) fd.append('carrier_id', carrierId)
@@ -163,7 +165,13 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
     fd.append('file', file)
     try {
       const r: any = await apiUpload('/api/v1/commcalc/upload-mapped', fd)
-      setMsg(`✅ ${reportKey}: imported ${r?.saved ?? 0} row(s) for ${period.trim()} via ${r?.rules_used ?? 0} mapping(s). The reports above now compute from this data.`)
+      // The ingest guards (price-coverage refusal / row-count shrink) return HTTP-200; render them
+      // honestly instead of a green "✅ 0 row(s)" that looks identical to a broken upload.
+      const o = readUploadOutcome(r, 'row(s)')
+      setOutcome(o.tone === 'ok' ? null : o)
+      setMsg(o.tone === 'ok'
+        ? `✅ ${reportKey}: imported ${o.saved} row(s) for ${period.trim()}. The reports above now compute from this data.`
+        : `⚠️ ${reportKey}: ${o.text}`)
       onSaved()
     } catch (e: any) { setMsg('❌ Import failed: ' + (e?.message || e)) } finally { setImporting(false) }
   }
@@ -216,6 +224,7 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
             Two steps: (1) upload a sample → confirm the columns → <b>Save mappings</b>; then (2) set the period and
             <b> Import file → load data</b> to load the full file. {info?.ready ? '' : 'Map the required (*) fields first.'}
           </p>
+          <UploadGuardBanner outcome={outcome} style={{ maxWidth: 620 }} />
           {fields.length === 0
             ? <p style={{ fontSize: 13, color: 'var(--text3)' }}>No default field registry for this report — map it on the full Column Mapping page.</p>
             : <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: 620 }}>

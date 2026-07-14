@@ -8149,6 +8149,18 @@ async def _run_email_sweep(org_id, account='default'):
             res = await upload_file(ut, uf, period, False, org_id)
             rows_saved = (res or {}).get('saved', 0)
             shrink = (res or {}).get('shrink') or []
+            # The PRICE-COVERAGE GUARD refuses a degraded/price-less re-delivery with
+            # {saved:0, skipped:'price_guard', shrink:[{reason}]} (HTTP 200, not an error). Record it as
+            # a distinct 'skipped' status carrying the guard's reason so the history shows an honest amber
+            # "refused to protect existing data" instead of a green "✓ 0 rows" (indistinguishable from a
+            # broken upload — the luxelink incident 2026-07-14). NO behavior change: rows_saved is still 0
+            # so the dedup at the top of this sweep keeps auto-retrying, the price-guard `shrink` entry
+            # still rides the row-count alert path below, and the money-writing auto-promote/recalc trigger
+            # further down treats 'skipped' the same as it treated this row before (it was 'ok' + 0 rows).
+            if (res or {}).get('skipped') == 'price_guard':
+                status = 'skipped'
+                detail = ((shrink[0].get('reason') if shrink else None)
+                          or 'refused: fuller priced data already stored for that day (price guard)')[:300]
         except HTTPException as he:
             status, detail = "error", str(he.detail)[:300]
         except Exception as e:
@@ -8184,10 +8196,13 @@ async def _run_email_sweep(org_id, account='default'):
         except Exception as e:
             print(f"WARN row-count guardrail alert failed: {e}")
     errs = [r for r in results if r['status'] == 'error']
+    skipped = [r for r in results if r['status'] == 'skipped']
     status_msg = (f"{ok}/{len(results)} attachments ingested" if results
                   else "no new attachments to import — matched files already imported OK, or none match your rules (use Test connection)")
     if errs:
         status_msg += " · errors: " + "; ".join(f"{e['file']}: {e['detail']}" for e in errs[:2])[:240]
+    if skipped:
+        status_msg += f" ⚠️ {len(skipped)} refused by price guard (kept existing data)"
     if shrinks:
         status_msg += f" ⚠️ {len(shrinks)} partial-export drop(s)"
     _email_status_update(client, org_id, account,
@@ -8197,7 +8212,11 @@ async def _run_email_sweep(org_id, account='default'):
     # the row the house has, so their raw_sales silently stayed empty and plan-mode pay was $0
     # (luxelink, 2026-07-14). An explicit auto=false row still opts a tenant out.
     try:
-        if (any(r['upload_type'] == 'daily_sales' and r['status'] == 'ok' for r in results)
+        # 'skipped' is treated the same as 'ok' here ONLY to keep this money-writing trigger byte-identical
+        # to before the honest-history change above: a price-guard skip used to be recorded as status='ok'
+        # (with 0 rows) and thus reached this promote/recalc exactly as it does now. The promote reads the
+        # unchanged (guard-protected) feed, so it is a no-op on the same data either way.
+        if (any(r['upload_type'] == 'daily_sales' and r['status'] in ('ok', 'skipped') for r in results)
                 and _registry_auto_map(client, org_id).get('sales', True)):
             _pr = _promote_feed_to_raw_sales(client, org_id, _ftp_current_period())
             # Plan-mode tenants have no other automatic recompute (the DLAR auto-recalc is Boost-only),
