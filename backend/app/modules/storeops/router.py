@@ -87,13 +87,19 @@ def create_shift(shift: dict, org_id: str = ORG_ID):
     return r.data[0] if r.data else shift
 
 @router.patch("/shifts/{shift_id}")
-def update_shift(shift_id: int, updates: dict):
-    r = sb().table("shifts").update(updates).eq("id", shift_id).execute()
-    return r.data[0] if r.data else updates
+def update_shift(shift_id: int, updates: dict, org_id: str = ORG_ID):
+    """Update a shift. org_id-scoped so a foreign (guessable BIGSERIAL) shift_id is a no-op instead
+    of a cross-tenant write — this previously took NO org filter at all."""
+    updates = {k: v for k, v in updates.items() if k not in ("org_id", "id")}
+    r = sb().table("shifts").update(updates).eq("id", shift_id).eq("org_id", org_id).execute()
+    if not r.data:
+        raise HTTPException(404, "shift not found")
+    return r.data[0]
 
 @router.delete("/shifts/{shift_id}")
-def delete_shift(shift_id: int):
-    sb().table("shifts").delete().eq("id", shift_id).execute()
+def delete_shift(shift_id: int, org_id: str = ORG_ID):
+    """org_id-scoped so a foreign shift_id is a no-op instead of a cross-tenant delete."""
+    sb().table("shifts").delete().eq("id", shift_id).eq("org_id", org_id).execute()
     return {"deleted": shift_id}
 
 @router.get("/time-off")
@@ -139,8 +145,11 @@ def create_time_off(request: dict, org_id: str = ORG_ID):
 
 @router.patch("/time-off/{request_id}")
 def update_time_off(request_id: int, updates: dict, org_id: str = ORG_ID):
+    """org_id-scoped so a foreign request_id is a no-op. The org_id query param was already present
+    but wasn't actually applied to this UPDATE — a cross-tenant write hole."""
     client = sb()
-    r = client.table("time_off_requests").update(updates).eq("id", request_id).execute()
+    updates = {k: v for k, v in updates.items() if k not in ("org_id", "id")}
+    r = client.table("time_off_requests").update(updates).eq("id", request_id).eq("org_id", org_id).execute()
     row = (r.data or [None])[0]
     new_status = str(updates.get("status") or (row or {}).get("status") or "").lower()
     # Voiding/revoking must clear the WHOLE block: a duplicate 'approved' copy for the same
@@ -347,17 +356,20 @@ def create_employee(emp: dict, org_id: str = ORG_ID):
 
 
 @router.patch("/employees/{emp_id}")
-def update_employee(emp_id: str, updates: dict):
+def update_employee(emp_id: str, updates: dict, org_id: str = ORG_ID):
     """Update an employee (name/role/home_store/pay_rate/active/contact). StoreOps Admin.
     emp_id is str (not int) so a UUID or numeric id both work — a typed int rejected UUID ids
-    with a 422, which read as 'cannot edit' in the UI."""
+    with a 422, which read as 'cannot edit' in the UI.
+
+    org_id-scoped so a foreign (guessable BIGSERIAL) emp_id is a no-op instead of a cross-tenant
+    write — this previously took NO org filter at all, and it's the pay_rate write path."""
     row = {k: updates[k] for k in EMP_FIELDS if k in updates}
     if not row:
         raise HTTPException(400, "no valid fields to update")
     # Clearing the Emp ID must store NULL, not '' (TEXT UNIQUE → '' collides across people).
     if "employee_id" in row and not (row.get("employee_id") or "").strip():
         row["employee_id"] = None
-    r = sb().table("employees").update(row).eq("id", emp_id).execute()
+    r = sb().table("employees").update(row).eq("id", emp_id).eq("org_id", org_id).execute()
     if not r.data:
         raise HTTPException(404, "employee not found")
     return _ensure_employee_id(r.data[0])
@@ -375,7 +387,7 @@ def delete_employee(emp_id: str, org_id: str = ORG_ID):
         raise HTTPException(404, "employee not found")
     e = existing[0]
     try:
-        sb().table("employees").delete().eq("id", emp_id).execute()
+        sb().table("employees").delete().eq("id", emp_id).eq("org_id", org_id).execute()
     except Exception as ex:
         raise HTTPException(409, f"cannot delete (linked records exist — try deactivating): {ex}")
     login = {}
@@ -406,20 +418,23 @@ def merge_employees(body: dict, org_id: str = ORG_ID):
         if not val:
             continue
         try:
-            r = sb().table("shifts").update(reassign).eq(field, val).execute()
+            # org_id-scoped: matching by employee_NAME is not globally unique, so an unscoped
+            # match could reassign another tenant's shift onto this tenant's target employee.
+            r = sb().table("shifts").update(reassign).eq(field, val).eq("org_id", org_id).execute()
             moved["shifts"] += len(r.data or [])
         except Exception:
             pass
     try:
-        r = sb().table("time_off_requests").update({"employee_id": str(tgt["id"])}).eq("employee_id", str(dup["id"])).execute()
+        r = (sb().table("time_off_requests").update({"employee_id": str(tgt["id"])})
+             .eq("employee_id", str(dup["id"])).eq("org_id", org_id).execute())
         moved["time_off"] += len(r.data or [])
     except Exception:
         pass
     deleted = True
     try:
-        sb().table("employees").delete().eq("id", dup_id).execute()
+        sb().table("employees").delete().eq("id", dup_id).eq("org_id", org_id).execute()
     except Exception:
-        sb().table("employees").update({"is_active": False}).eq("id", dup_id).execute()
+        sb().table("employees").update({"is_active": False}).eq("id", dup_id).eq("org_id", org_id).execute()
         deleted = False
     # Cascade the duplicate's login too (delete it if the row was deleted, else deactivate) so the
     # merged-away person doesn't linger in Roles & Access.
@@ -454,7 +469,7 @@ def bulk_payscale(body: dict, org_id: str = ORG_ID):
         if not match:
             errors.append({"row": i + 1, "error": "employee not found", "ref": eid or rw.get("name")})
             continue
-        sb().table("employees").update({"pay_rate": rate}).eq("id", match["id"]).execute()
+        sb().table("employees").update({"pay_rate": rate}).eq("id", match["id"]).eq("org_id", org_id).execute()
         updated += 1
     return {"updated": updated, "errors": errors, "total": len(rows)}
 
@@ -528,12 +543,13 @@ def create_store(store: dict, org_id: str = ORG_ID):
 
 
 @router.patch("/stores/{store_id}")
-def update_store(store_id: int, updates: dict):
-    """Update a store (StoreOps Admin)."""
+def update_store(store_id: int, updates: dict, org_id: str = ORG_ID):
+    """Update a store (StoreOps Admin). org_id-scoped so a foreign (guessable BIGSERIAL) store_id
+    is a no-op instead of a cross-tenant write — this previously took NO org filter at all."""
     row = {k: updates[k] for k in STORE_FIELDS if k in updates}
     if not row:
         raise HTTPException(400, "no valid fields to update")
-    r = sb().table("stores").update(row).eq("id", store_id).execute()
+    r = sb().table("stores").update(row).eq("id", store_id).eq("org_id", org_id).execute()
     if not r.data:
         raise HTTPException(404, "store not found")
     return r.data[0]
@@ -569,7 +585,9 @@ def save_week_as_template(body: dict, org_id: str = ORG_ID):
         raise HTTPException(400, "No shifts in that week to save as a template.")
     emp_ids = list({str(s.get("employee_id")) for s in shifts if s.get("employee_id")})
     for eid in emp_ids:
-        sb().table("shift_templates").delete().eq("employee_id", eid).execute()
+        # org_id-scoped: employee_id here isn't guaranteed globally unique (numeric-vs-business-id
+        # ambiguity noted below), so an unscoped delete could wipe another tenant's template.
+        sb().table("shift_templates").delete().eq("employee_id", eid).eq("org_id", org_id).execute()
     by_key = {}
     for s in shifts:
         try:
@@ -672,10 +690,10 @@ def _apply_swap(swap, org_id: str = ORG_ID):
     tgt, reqr = swap.get("target_id"), swap.get("requester_id")
     if swap.get("shift_id") and tgt:
         sb().table("shifts").update({"employee_id": tgt, "employee_name": names.get(str(tgt))}) \
-            .eq("id", swap["shift_id"]).execute()
+            .eq("id", swap["shift_id"]).eq("org_id", org_id).execute()
     if swap.get("target_shift_id") and reqr:
         sb().table("shifts").update({"employee_id": reqr, "employee_name": names.get(str(reqr))}) \
-            .eq("id", swap["target_shift_id"]).execute()
+            .eq("id", swap["target_shift_id"]).eq("org_id", org_id).execute()
 
 
 @router.patch("/shift-swaps/{swap_id}")
@@ -689,7 +707,7 @@ def update_shift_swap(swap_id: int, updates: dict, org_id: str = ORG_ID):
         raise HTTPException(404, "swap not found")
     if status == "approved":
         _apply_swap(cur[0], org_id)
-    r = sb().table("shift_swap_requests").update({"status": status}).eq("id", swap_id).execute()
+    r = sb().table("shift_swap_requests").update({"status": status}).eq("id", swap_id).eq("org_id", org_id).execute()
     return r.data[0] if r.data else {"id": swap_id, "status": status}
 
 
@@ -1869,8 +1887,8 @@ def org_build_standard(org_id: str = ORG_ID):
     if unit_ids:
         for i in range(0, len(unit_ids), 100):
             chunk = unit_ids[i:i + 100]
-            c.table("stores").update({"org_unit_id": None}).in_("org_unit_id", chunk).execute()
-            c.table("employees").update({"org_unit_id": None}).in_("org_unit_id", chunk).execute()
+            c.table("stores").update({"org_unit_id": None}).eq("org_id", org_id).in_("org_unit_id", chunk).execute()
+            c.table("employees").update({"org_unit_id": None}).eq("org_id", org_id).in_("org_unit_id", chunk).execute()
     # 2. wipe units (cascades managers + children) then levels
     c.table("org_units").delete().eq("org_id", org_id).execute()
     c.table("org_levels").delete().eq("org_id", org_id).execute()
@@ -1904,7 +1922,7 @@ def org_build_standard(org_id: str = ORG_ID):
             reg = mk(f"{mkt} Region", "Regional Manager", sales, f"region:{mkt.lower()}")
             district_by_market[mkt] = mk(f"{mkt} District", "District Manager", reg, f"district:{mkt.lower()}")
         store_node = mk(s.get("address") or code, "Store Manager", district_by_market[mkt])
-        c.table("stores").update({"org_unit_id": store_node}).eq("store_code", code).execute()
+        c.table("stores").update({"org_unit_id": store_node}).eq("store_code", code).eq("org_id", org_id).execute()
         placed += 1
 
     return {"ok": True, "levels": _STD_LEVELS, "departments": _STD_DEPTS,
@@ -1933,22 +1951,24 @@ def org_level_create(body: dict, org_id: str = ORG_ID):
 
 @router.put("/org/levels/{level_id}")
 def org_level_update(level_id: int, body: dict, org_id: str = ORG_ID):
+    """org_id-scoped so a foreign level_id is a no-op instead of a cross-tenant write."""
     upd = {}
     if "name" in body:
         upd["name"] = (body.get("name") or "").strip()
     if "rank" in body:
         upd["rank"] = int(body.get("rank"))
     if upd:
-        sb().table("org_levels").update(upd).eq("id", level_id).execute()
+        sb().table("org_levels").update(upd).eq("id", level_id).eq("org_id", org_id).execute()
     return {"ok": True}
 
 
 @router.delete("/org/levels/{level_id}")
 def org_level_delete(level_id: int, org_id: str = ORG_ID):
+    """org_id-scoped so a foreign level_id is a no-op instead of a cross-tenant delete."""
     used = sb().table("org_units").select("id").eq("org_id", org_id).eq("level_id", level_id).limit(1).execute().data or []
     if used:
         raise HTTPException(409, "This level is in use by one or more units — reassign them first.")
-    sb().table("org_levels").delete().eq("id", level_id).execute()
+    sb().table("org_levels").delete().eq("id", level_id).eq("org_id", org_id).execute()
     return {"ok": True}
 
 
@@ -1982,20 +2002,23 @@ def org_unit_update(unit_id: str, body: dict, org_id: str = ORG_ID):
         if any(n.get("id") == new_parent for n in sub):
             raise HTTPException(400, "Can't move a unit under its own descendant.")
     upd["updated_at"] = datetime.now(timezone.utc).isoformat()
-    sb().table("org_units").update(upd).eq("id", unit_id).execute()
+    sb().table("org_units").update(upd).eq("id", unit_id).eq("org_id", org_id).execute()
     return {"ok": True}
 
 
 @router.delete("/org/units/{unit_id}")
 def org_unit_delete(unit_id: str, org_id: str = ORG_ID):
     """Delete a unit + its descendants (cascade). Stores/employees in the subtree are detached
-    (org_unit_id -> NULL) FIRST so they become 'unassigned' rather than violating the FK."""
+    (org_unit_id -> NULL) FIRST so they become 'unassigned' rather than violating the FK.
+    org_id-scoped throughout so a foreign unit_id is a no-op instead of a cross-tenant delete —
+    the RPC already filters by org, but the final delete previously ran unconditionally even when
+    the subtree resolved empty (i.e. the id wasn't the caller's)."""
     sub = sb().rpc("org_subtree", {"p_org_id": org_id, "p_unit_id": unit_id}).execute().data or []
     ids = [n["id"] for n in sub if n.get("id")]
     if ids:
-        sb().table("stores").update({"org_unit_id": None}).in_("org_unit_id", ids).execute()
-        sb().table("employees").update({"org_unit_id": None}).in_("org_unit_id", ids).execute()
-    sb().table("org_units").delete().eq("id", unit_id).execute()
+        sb().table("stores").update({"org_unit_id": None}).eq("org_id", org_id).in_("org_unit_id", ids).execute()
+        sb().table("employees").update({"org_unit_id": None}).eq("org_id", org_id).in_("org_unit_id", ids).execute()
+    sb().table("org_units").delete().eq("id", unit_id).eq("org_id", org_id).execute()
     return {"ok": True}
 
 
@@ -2016,14 +2039,17 @@ def org_unit_add_manager(unit_id: str, body: dict, org_id: str = ORG_ID):
 
 @router.delete("/org/units/{unit_id}/managers/{employee_id}")
 def org_unit_remove_manager(unit_id: str, employee_id: str, org_id: str = ORG_ID):
-    sb().table("org_managers").delete().eq("unit_id", unit_id).eq("employee_id", employee_id).execute()
+    """org_id-scoped so a foreign unit_id/employee_id pair is a no-op instead of a cross-tenant delete."""
+    sb().table("org_managers").delete().eq("unit_id", unit_id).eq("employee_id", employee_id).eq("org_id", org_id).execute()
     return {"ok": True}
 
 
 # ── attach a store to a unit (or unassign with unit_id=null) ─────────────────────────────────────
 @router.put("/org/stores/{store_code}/unit")
 def org_assign_store(store_code: str, body: dict, org_id: str = ORG_ID):
-    sb().table("stores").update({"org_unit_id": body.get("unit_id")}).eq("store_code", store_code).execute()
+    """org_id-scoped so a foreign store_code is a no-op instead of a cross-tenant write — this
+    previously took NO org filter at all."""
+    sb().table("stores").update({"org_unit_id": body.get("unit_id")}).eq("store_code", store_code).eq("org_id", org_id).execute()
     return {"ok": True}
 
 

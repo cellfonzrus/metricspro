@@ -157,7 +157,7 @@ async def hr_update_employee(emp_id: str, body: dict, org_id: str = ORG_ID):
     from app.modules.storeops.router import EMP_FIELDS, update_employee
     res = None
     if any(k in body for k in EMP_FIELDS):
-        res = update_employee(emp_id, body)   # sync handler; raises 404 if missing
+        res = update_employee(emp_id, body, org_id)   # sync handler; raises 404 if missing; org-scoped
     email = (body.get("email") or (res or {}).get("email") or "").strip().lower()
     role = (body.get("role_name") or body.get("app_role") or "").strip()
     has_scope = any(k in body for k in ("market", "store_code", "store_codes"))
