@@ -8,20 +8,150 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"
 def sb():
     return get_supabase()
 
+
+# ── asset-2: transactional staging-swap for the ledger upload (mig 300) ───────────────────────
+# Today's wipe-and-replace is a plain DELETE-then-batched-INSERT straight into the LIVE
+# commcalc.asset_ledger with no try/except around the insert loop — if (say) batch 3 of 9 fails,
+# the org's old rows are already gone and the remaining batches never run, leaving a PARTIAL
+# ledger. Fix: stage every row into an org-scoped scratch table first (same batched-insert code,
+# so a failure there never touches the live table), then swap it into asset_ledger with ONE
+# Postgres function call (mig 300's commcalc.asset_ledger_swap_from_staging) — PostgREST wraps a
+# single RPC call in one transaction, so the function's internal delete+insert either both land
+# or neither does. Degrades to today's exact direct-write behavior (loudly logged) if mig 300
+# hasn't been run yet — see _staging_available().
+_ASSET_STAGING_TABLE = "asset_ledger_staging"
+_ASSET_SWAP_RPC = "asset_ledger_swap_from_staging"
+# PostgREST's "this relation/function doesn't exist" error signatures (schema-cache miss because
+# the migration hasn't been run) — used to tell "mig 300 not applied yet" apart from a real data
+# error surfaced by the swap function itself (which must NOT be swallowed).
+_MISSING_SCHEMA_MARKERS = ("PGRST202", "PGRST205", "PGRST203", "schema cache", "does not exist")
+
+
+def _is_missing_schema_error(exc: Exception) -> bool:
+    s = str(exc)
+    return any(m in s for m in _MISSING_SCHEMA_MARKERS)
+
+
+def _staging_available(client) -> bool:
+    """Cheap probe: does commcalc.asset_ledger_staging exist (i.e. was mig 300 run)? Returns
+    False on ANY error — a transient probe failure just means this one upload takes the already-
+    proven legacy path; the next upload probes again, so we never hard-fail an upload over a
+    flaky check."""
+    try:
+        client.schema("commcalc").table(_ASSET_STAGING_TABLE).select("org_id").limit(1).execute()
+        return True
+    except Exception:
+        return False
+
+
+def _log_degraded_upload_mode(client, org_id: str, reason: str):
+    """Loud, best-effort warning that this upload used the non-atomic legacy path (mig 300 missing
+    or its RPC unreachable). Never raises — logging must not be able to fail an otherwise-good
+    upload."""
+    msg = (
+        "Asset ledger upload used the LEGACY non-atomic delete+insert path "
+        f"({reason}) — run migration 300_asset_ledger_staging_swap.sql in the Supabase SQL "
+        "Editor to enable the atomic staging-swap (until then, a failed batch mid-upload can "
+        "leave a PARTIAL ledger)."
+    )
+    print(f"[asset upload] WARNING org={org_id}: {msg}")
+    try:
+        client.schema("core").table("failure_log").insert({
+            "org_id": org_id,
+            "category": "asset_upload_degraded_mode",
+            "severity": "warning",
+            "source": "asset/upload",
+            "message": msg,
+            "remediation": "Run migration 300_asset_ledger_staging_swap.sql (Supabase SQL Editor).",
+        }).execute()
+    except Exception as _e:
+        # core.failure_log itself may not exist (mig 112 not run) — the print above is the floor.
+        print(f"[asset upload] failure_log write also failed: {_e}")
+
+
+def _stage_and_swap_ledger(client, org_id: str, rows: list[dict]) -> str:
+    """Ingest `rows` into the org-scoped staging table (same 500-row batches as before), then
+    atomically swap them into commcalc.asset_ledger via the mig-300 RPC. If any staging batch
+    raises, the LIVE ledger is never touched — this only cleans up the partial stage and
+    re-raises so the caller (upload endpoint) reports the failure loudly. Falls back to the
+    legacy direct-write path (with a loud log) if the RPC specifically doesn't exist yet."""
+    # Clear any stale rows left by a previous failed attempt for this org before restaging.
+    client.schema("commcalc").table(_ASSET_STAGING_TABLE).delete().eq("org_id", org_id).execute()
+    try:
+        for i in range(0, len(rows), 500):
+            client.schema("commcalc").table(_ASSET_STAGING_TABLE) \
+                .insert(rows[i:i + 500]).execute()
+    except Exception:
+        # Partial stage — the LIVE ledger was NEVER touched. Clean the scratch rows so a retry
+        # starts clean, then re-raise: this is a real data/parse problem, not a missing-migration
+        # one, so it must surface to the caller, not be silently downgraded.
+        try:
+            client.schema("commcalc").table(_ASSET_STAGING_TABLE) \
+                .delete().eq("org_id", org_id).execute()
+        except Exception:
+            pass
+        raise
+
+    try:
+        resp = client.schema("commcalc").rpc(_ASSET_SWAP_RPC, {
+            "p_org_id": org_id,
+            "p_expected_rows": len(rows),
+        }).execute()
+    except Exception as e:
+        if _is_missing_schema_error(e):
+            # mig 300's table exists (we just staged into it) but the function doesn't — an
+            # inconsistent/partial migration apply. Fall back to legacy so the upload still
+            # completes; staged rows are orphaned scratch data, harmless, cleared on next attempt.
+            _log_degraded_upload_mode(client, org_id, f"asset_ledger_swap_from_staging RPC missing: {e}")
+            client.schema("commcalc").table("asset_ledger").delete().eq("org_id", org_id).execute()
+            for i in range(0, len(rows), 500):
+                client.schema("commcalc").table("asset_ledger").insert(rows[i:i + 500]).execute()
+            try:
+                client.schema("commcalc").table(_ASSET_STAGING_TABLE) \
+                    .delete().eq("org_id", org_id).execute()
+            except Exception:
+                pass
+            return "legacy_direct"
+        # A real failure INSIDE the swap function (e.g. its own row-count guard) rolls back its
+        # own transaction automatically — the live ledger is untouched. Surface it; do not
+        # silently fall back to a raw write over real data trouble.
+        raise
+
+    data = resp.data
+    swapped = None
+    if isinstance(data, list) and data:
+        swapped = data[0].get("rows_swapped")
+    elif isinstance(data, dict):
+        swapped = data.get("rows_swapped")
+    if swapped is not None and int(swapped) != len(rows):
+        raise RuntimeError(
+            f"asset_ledger swap row-count mismatch: staged {len(rows)}, swapped {swapped}"
+        )
+    return "staged_swap"
+
+
 def process_asset_ledger_bytes(file_bytes: bytes, org_id: str) -> dict:
-    """Parse Asset_Lending.xlsx bytes → refresh commcalc.asset_ledger (delete+insert) → backfill
-    market + selling price + sync appeal/RMA/undercharge flags. Shared by the manual upload AND
-    the VIP auto-sweep. Raises ValueError if the file parses to zero rows (so an empty/bad
-    download never wipes the ledger)."""
+    """Parse Asset_Lending.xlsx bytes → refresh commcalc.asset_ledger via an org-scoped
+    STAGING-TABLE + ATOMIC-SWAP (mig 300; see _stage_and_swap_ledger) → backfill market +
+    selling price + sync appeal/RMA/undercharge flags. Shared by the manual upload AND the VIP
+    auto-sweep — signature is a load-bearing cross-module import (commcalc/vip_sweep.py) and must
+    not change. Raises ValueError if the file parses to zero rows (so an empty/bad download never
+    wipes the ledger). Falls back to the pre-mig-300 direct delete+insert (loudly logged) if the
+    staging infra hasn't been migrated in yet — see _staging_available()."""
     from app.modules.asset.asset_parser import parse_asset_ledger
     rows = parse_asset_ledger(file_bytes, org_id)
     if not rows:
         raise ValueError("No rows parsed from Asset_Lending file")
 
     client = sb()
-    client.schema("commcalc").table("asset_ledger").delete().eq("org_id", org_id).execute()
-    for i in range(0, len(rows), 500):
-        client.schema("commcalc").table("asset_ledger").insert(rows[i:i + 500]).execute()
+    if _staging_available(client):
+        swap_mode = _stage_and_swap_ledger(client, org_id, rows)
+    else:
+        _log_degraded_upload_mode(client, org_id, "commcalc.asset_ledger_staging table missing")
+        client.schema("commcalc").table("asset_ledger").delete().eq("org_id", org_id).execute()
+        for i in range(0, len(rows), 500):
+            client.schema("commcalc").table("asset_ledger").insert(rows[i:i + 500]).execute()
+        swap_mode = "legacy_direct"
 
     _backfill_market(client, org_id)
     try:
@@ -40,19 +170,20 @@ def process_asset_ledger_bytes(file_bytes: bytes, org_id: str) -> dict:
         _sync_undercharge_flags(client, org_id)
     except Exception as _e:
         print(f"undercharge flag sync failed: {_e}")
-    return {"rows_imported": len(rows)}
+    return {"rows_imported": len(rows), "swap_mode": swap_mode}
 
 
 @router.post("/upload")
 async def upload_asset_ledger(file: UploadFile = File(...), org_id: str = ORG_ID):
-    """Upload Asset_Lending.xlsx — clears existing rows for org then re-inserts."""
+    """Upload Asset_Lending.xlsx — stages then atomically swaps into the org's ledger (mig 300;
+    falls back to legacy clear-then-reinsert if that migration hasn't run yet)."""
     file_bytes = await file.read()
     try:
         res = process_asset_ledger_bytes(file_bytes, org_id)
     except Exception as e:
         import traceback
         raise HTTPException(status_code=400, detail=f"Parse error: {e}\n{traceback.format_exc()}")
-    return {"status": "ok", "rows_imported": res["rows_imported"]}
+    return {"status": "ok", "rows_imported": res["rows_imported"], "swap_mode": res.get("swap_mode")}
 
 
 # Stores whose asset address differs from store_mapping, plus the two not in it.
