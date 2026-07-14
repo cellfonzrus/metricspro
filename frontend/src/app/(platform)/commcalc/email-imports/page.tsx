@@ -38,6 +38,7 @@ export default function EmailImportsPage() {
   const [pwd, setPwd] = useState('')
   const [test, setTest] = useState<any>(null)
   const [processed, setProcessed] = useState<any[]>([])
+  const [health, setHealth] = useState<any>(null)   // per-day ingest health (mig 200)
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
   const [sources, setSources] = useState<any[]>([])
@@ -88,6 +89,13 @@ export default function EmailImportsPage() {
   }, [])
   useEffect(() => { refresh() }, [refresh])
 
+  // Per-day ingest health for the selected mailbox — reloads when the mailbox or its import history changes.
+  useEffect(() => {
+    const acct = cfg.account || 'default'
+    api(`/api/v1/commcalc/email-sweep/ingest-health?account=${encodeURIComponent(acct)}&days=14`)
+      .then((r: any) => setHealth(r)).catch(() => setHealth(null))
+  }, [cfg.account, processed])
+
   const set = (patch: any) => setCfg((c: any) => ({ ...c, ...patch }))
   const setPat = (i: number, patch: any) => setCfg((c: any) => ({ ...c, patterns: c.patterns.map((p: any, j: number) => j === i ? { ...p, ...patch } : p) }))
   const addPat = () => setCfg((c: any) => ({ ...c, patterns: [...(c.patterns || []), { pattern: '', upload_type: 'daily_sales', note: '' }] }))
@@ -114,10 +122,35 @@ export default function EmailImportsPage() {
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
 
-  async function save() {
+  async function save(acknowledge = false) {
     setBusy('save')
-    try { const r: any = await api('/api/v1/commcalc/email-sweep/config', { method: 'PUT', body: JSON.stringify(body()) }); setPwd(''); setMsg('✅ Saved.'); refresh(r.account || cfg.account) }
+    try {
+      const payload = acknowledge ? { ...body(), acknowledge_cross_org: true } : body()
+      const r: any = await api('/api/v1/commcalc/email-sweep/config', { method: 'PUT', body: JSON.stringify(payload) })
+      // MISFILE GUARD: the backend refuses to persist an ENABLED save when the same address is already
+      // enabled under another tenant (both would ingest the same inbox). Confirm-to-override.
+      if (r && r.ok === false && r.warning === 'cross_org_mailbox') {
+        const others = (r.conflicts || []).map((c: any) => c.label || c.account || c.org_id).join(', ')
+        if (confirm(`⚠️ MISFILE RISK\n\n${r.message}\n\nAlready enabled under: ${others}\n\nSave anyway? Both tenants will then ingest this inbox.`)) { setBusy(''); return save(true) }
+        setMsg('⚠️ Not saved — this mailbox is enabled under another tenant (cross-tenant misfile risk).'); return
+      }
+      setPwd(''); setMsg(r?.warning === 'cross_org_mailbox' ? '✅ Saved · ⚠️ note: this address is also configured under another tenant.' : '✅ Saved.'); refresh(r.account || cfg.account)
+    }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
+  }
+
+  // One-click: bring this mailbox's filename rules + schedule to the b2bsoft POS standard (mig 200).
+  // Strictly additive on the backend — adds any missing standard rule, fills blank defaults, seeds the
+  // report registry; never clobbers creds or an existing rule. The tenant still enters host + password.
+  async function applyStandard() {
+    setBusy('apply')
+    try {
+      const r: any = await api(`/api/v1/commcalc/pos-profiles/b2bsoft/apply?account=${encodeURIComponent(cfg.account || 'default')}`, { method: 'POST', body: '{}' })
+      setMsg(r?.ok
+        ? `✅ Applied the b2bsoft standard — ${r.rules_added} rule(s) added (${r.rules_total} total)${r.reports_seeded ? `, ${r.reports_seeded} report(s) registered` : ''}.${r.needs_credentials ? ' Now enter the IMAP host + password below and enable it.' : ''}`
+        : `❌ ${r?.error || 'could not apply the standard profile'}`)
+      refresh(cfg.account)
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
   }
   async function testConn() {
     setBusy('test'); setTest(null)
@@ -312,6 +345,7 @@ export default function EmailImportsPage() {
             {cfg.account && !accounts.some(a => a.account === cfg.account) && <option value={cfg.account}>{(cfg.label || cfg.account)} — new (unsaved)</option>}
           </select>
           <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={addMailbox}>＋ Add mailbox</button>
+          <button className="btn btn-secondary" style={{ fontSize: 12 }} disabled={busy === 'apply'} onClick={applyStandard} title="Set this mailbox's filename rules + schedule to the standard b2bsoft profile. Adds any missing rule and fills blank defaults; never clobbers your host/credentials or an existing rule.">{busy === 'apply' ? 'Applying…' : '✨ Apply b2bsoft standard'}</button>
           {cfg.account && cfg.account !== 'default' && <button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={delMailbox}>Delete this mailbox</button>}
           <span style={{ fontSize: 11, color: 'var(--text3)' }}>key: <code>{cfg.account || 'default'}</code></span>
         </div>
@@ -369,7 +403,7 @@ export default function EmailImportsPage() {
         <button className="btn btn-secondary" style={{ fontSize: 12, marginTop: 6 }} onClick={addPat}>+ Add pattern</button>
 
         <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button className="btn btn-primary" disabled={busy === 'save'} onClick={save}>Save</button>
+          <button className="btn btn-primary" disabled={busy === 'save'} onClick={() => save()}>Save</button>
           <button className="btn btn-secondary" disabled={busy === 'test'} onClick={testConn}>{busy === 'test' ? 'Testing…' : 'Test connection'}</button>
           <button className="btn btn-secondary" disabled={busy === 'run'} onClick={runNow}>{busy === 'run' ? 'Running…' : 'Run now'}</button>
           {cfg.last_status && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Last: {cfg.last_status} {cfg.last_run_at ? `· ${new Date(cfg.last_run_at).toLocaleString()}` : ''}</span>}
@@ -446,6 +480,47 @@ export default function EmailImportsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ── Per-day ingest health (mig 200): answers "is my file ingesting?" with 3 distinct honest states ── */}
+      {health && (
+        <div className="card" style={{ padding: 16, marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>🩺 Ingest health — last {health.window_days} days</div>
+          <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>
+            Per-day sales-feed coverage for this mailbox. <b style={{ color: '#16794a' }}>ingested</b> = priced rows landed ·{' '}
+            <b style={{ color: '#b45309' }}>zero-priced</b> = rows landed but every Ext Price is $0 (a degraded/price-less export) ·{' '}
+            <b style={{ color: '#dc2626' }}>missing</b> = no file delivered/ingested that day (b2bsoft didn’t send it, or the guard refused it).
+          </p>
+          {health.cross_org_warning && (
+            <div style={{ padding: 10, marginBottom: 10, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, fontSize: 12.5 }}>
+              ⚠️ <b>Misfile risk:</b> this mailbox address is also configured under another tenant
+              {health.cross_org_conflicts?.some((c: any) => c.enabled) ? ' and ENABLED there' : ''} — both tenants would ingest the same emails. Keep it enabled under only ONE tenant.
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 10, fontSize: 12 }}>
+            {([['ok', 'ingested clean', '#16794a'], ['partial', 'partial', '#b45309'], ['refused', 'refused (guard)', '#b45309'], ['parse_skip', '0-row parse', '#b45309'], ['error', 'errored', '#dc2626']] as [string, string, string][]).map(([k, lbl, c]) => (
+              <span key={k} style={{ color: c }}>{lbl}: <b>{health.recent_counts?.[k] ?? 0}</b></span>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+            {(health.days || []).map((d: any) => {
+              const bg = d.state === 'ingested' ? '#dcfce7' : d.state === 'zero_priced' ? '#fef3c7' : '#fee2e2'
+              const bd = d.state === 'ingested' ? '#86efac' : d.state === 'zero_priced' ? '#fde68a' : '#fecaca'
+              return (
+                <div key={d.date} title={`${d.date}: ${d.rows} row(s), ${d.priced} priced, $${d.amount} — ${d.state}`}
+                  style={{ background: bg, border: `1px solid ${bd}`, borderRadius: 6, padding: '4px 6px', fontSize: 10.5, minWidth: 58, textAlign: 'center' }}>
+                  <div style={{ fontWeight: 600 }}>{String(d.date).slice(5)}</div>
+                  <div style={{ color: 'var(--text3)' }}>{d.state === 'missing' ? '—' : `${d.priced}✓`}</div>
+                </div>
+              )
+            })}
+          </div>
+          {(health.days || []).every((d: any) => d.state === 'missing') && (
+            <div style={{ marginTop: 8, fontSize: 12, color: '#b45309' }}>
+              No sales ingested for any day in the window. Check: mailbox Enabled + correct password (Test connection), a rule for <code>*Sales*Transaction*Details*</code>, and that b2bsoft is actually delivering the report to this address.
+            </div>
+          )}
         </div>
       )}
 

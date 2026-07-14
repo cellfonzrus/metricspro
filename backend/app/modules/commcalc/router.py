@@ -8143,6 +8143,82 @@ async def ftp_run_due(x_notify_secret: str = Header(default="")):
 from app.modules.commcalc import email_sweep as _email
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# b2bsoft POS "standard profile" (mig 200) — one config-driven standard for any tenant whose POS is
+# b2bsoft, so a new tenant's sales-ingest setup is IDENTICAL to house BY CONSTRUCTION (not hand-copied).
+# The standard lives in commcalc.pos_profile (per-tenant, UI-editable — SAP-configurable rule); this code
+# default mirrors the migration seed so the endpoints DEGRADE GRACEFULLY before mig 200 is applied.
+# ═══════════════════════════════════════════════════════════════════════════════
+_B2BSOFT_POS_DEFAULT = {
+    "pos_key": "b2bsoft",
+    "label": "B2B Soft (standard)",
+    "imap_defaults": {"imap_port": 993, "use_ssl": True, "mailbox": "INBOX", "since_days": 14},
+    "filename_rules": [
+        {"pattern": "*Sales*Transaction*Details*", "upload_type": "daily_sales",
+         "note": "daily B2B sales export — use the full-column \"for Metrics pro\" report (Ext Price + GP)"},
+        {"pattern": "*Inventory*Aging*", "upload_type": "inventory_aging",
+         "note": "b2bsoft inventory aging → Balance-Sheet inventory value"},
+        {"pattern": "*X-Report*", "upload_type": "x_report",
+         "note": "POS X-report tender summary → daily-closing cash/credit recon"},
+    ],
+    "schedule_defaults": {"frequency": "hourly", "hour": 7},
+    "report_defs": [
+        {"report_key": "sales", "label": "Sales Transactions",
+         "source_name": "Sales Transaction Details (78-col)", "target_table": "raw_sales",
+         "upload_endpoint": "commcalc/upload/sales", "period_mode": "current", "auto": True, "sort_order": 10},
+        {"report_key": "inventory", "label": "Inventory Aging", "source_name": "Inventory Aging",
+         "target_table": "inventory_value", "upload_endpoint": None, "period_mode": "snapshot",
+         "auto": False, "sort_order": 20},
+    ],
+}
+
+
+def _pos_profile(client, org_id, pos_key="b2bsoft"):
+    """This tenant's editable POS standard profile, else the code default (so it works before mig 200).
+    Org-scoped read — never reaches into another tenant's row."""
+    try:
+        rows = (client.schema("commcalc").table("pos_profile").select("*")
+                .eq("org_id", org_id).eq("pos_key", pos_key).limit(1).execute().data) or []
+        if rows:
+            r = rows[0]
+            # Fill any blank column from the code default so a partially-edited row still applies cleanly.
+            for k in ("imap_defaults", "schedule_defaults"):
+                if not r.get(k):
+                    r[k] = _B2BSOFT_POS_DEFAULT[k]
+            if not r.get("filename_rules"):
+                r["filename_rules"] = _B2BSOFT_POS_DEFAULT["filename_rules"]
+            if not r.get("report_defs"):
+                r["report_defs"] = _B2BSOFT_POS_DEFAULT["report_defs"]
+            return r
+    except Exception:
+        pass
+    return {"org_id": org_id, **_B2BSOFT_POS_DEFAULT}
+
+
+def _mailbox_cross_org(client, username, exclude_org):
+    """Every OTHER tenant that has a mailbox configured at the same address `username`. This is the
+    misfile detector: the Luxelink mailbox was filed under the HOUSE org and would have ingested Total
+    sales into Boost. Case-insensitive; uses the service client (crosses orgs on purpose — a safety
+    check), and returns only org_id/account/label/enabled (no creds), never another tenant's data."""
+    u = (username or "").strip()
+    if not u:
+        return []
+    try:
+        rows = (client.schema("commcalc").table("email_sweep_config")
+                .select("org_id,account,label,enabled,username").ilike("username", u).execute().data) or []
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        if str(r.get("org_id") or "") == str(exclude_org or ""):
+            continue
+        if (r.get("username") or "").strip().lower() != u.lower():
+            continue
+        out.append({"org_id": r.get("org_id"), "account": r.get("account"),
+                    "label": r.get("label"), "enabled": bool(r.get("enabled"))})
+    return out
+
+
 def _email_cfg(client, org_id, account='default'):
     """One mailbox config for (org, account). Tolerant of pre-075 schema (no 'account' column) so the
     single-mailbox setup keeps working before the migration is applied."""
@@ -8478,13 +8554,31 @@ def put_email_config(body: dict, org_id: str = ORG_ID):
         row["password"] = body["password"]
     if body.get("enabled"):
         row["next_run_at"] = _vip_next_run(row["frequency"], None, None, row["hour"], "America/New_York")
+    # MISFILE GUARD (the cross-org class has bitten twice — the Luxelink mailbox filed under the HOUSE
+    # org would ingest Total sales into Boost, and the same physical inbox enabled under two orgs makes
+    # BOTH tenants sweep it → double-ingest). If this address is already ENABLED under a DIFFERENT tenant,
+    # refuse to PERSIST an enabled save until the caller explicitly acknowledges. A disabled save (or a
+    # save with acknowledge_cross_org) goes through but still carries the warning so the UI can surface it.
+    conflicts = _mailbox_cross_org(sb(), row.get("username"), org_id)
+    enabled_conflicts = [c for c in conflicts if c.get("enabled")]
+    if row.get("enabled") and enabled_conflicts and not body.get("acknowledge_cross_org"):
+        return {"ok": False, "account": account, "warning": "cross_org_mailbox",
+                "message": (f"The mailbox '{row.get('username')}' is already configured and ENABLED under "
+                            f"another tenant. Enabling it here too would make BOTH tenants ingest the same "
+                            f"emails — a cross-tenant misfile. If this inbox truly belongs to THIS tenant, "
+                            f"disable/delete it on the other tenant first; otherwise re-save to acknowledge."),
+                "conflicts": enabled_conflicts}
     try:
         sb().schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id,account").execute()
     except Exception:
         # pre-075 fallback: no 'account' column yet → save the single mailbox on org_id
         row.pop("account", None); row.pop("label", None)
         sb().schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id").execute()
-    return {"ok": True, "account": account}
+    resp = {"ok": True, "account": account}
+    if conflicts:
+        resp["warning"] = "cross_org_mailbox"
+        resp["conflicts"] = conflicts
+    return resp
 
 
 @router.delete("/email-sweep/account/{account}")
@@ -8540,6 +8634,214 @@ def email_processed(org_id: str = ORG_ID, limit: int = 100):
     require_org(org_id)
     return (sb().schema("commcalc").table("email_processed").select("*").eq("org_id", org_id)
             .order("processed_at", desc=True).limit(limit).execute().data) or []
+
+
+# ── b2bsoft POS standard-profile endpoints (mig 200) ──────────────────────────────────────────────
+@router.get("/pos-profiles")
+def list_pos_profiles(org_id: str = ORG_ID, pos_key: str = "b2bsoft"):
+    """This tenant's editable POS standard profile (falls back to the code default before mig 200 runs,
+    so the page never breaks). Drives the 'Apply … standard' button + the editable template."""
+    require_org(org_id)
+    return {"profile": _pos_profile(sb(), org_id, pos_key)}
+
+
+@router.put("/pos-profiles")
+def put_pos_profile(body: dict, org_id: str = ORG_ID):
+    """Edit this tenant's POS standard profile (SAP-configurable — the standard is a config row, not code).
+    Degrades gracefully: if mig 200 isn't applied yet, returns ok=False with a hint instead of 500."""
+    require_org(org_id)
+    pos_key = (body.get("pos_key") or "b2bsoft").strip() or "b2bsoft"
+    row = {"org_id": org_id, "pos_key": pos_key,
+           "label": (body.get("label") or "").strip() or None,
+           "imap_defaults": body.get("imap_defaults") or {},
+           "filename_rules": body.get("filename_rules") or [],
+           "schedule_defaults": body.get("schedule_defaults") or {},
+           "report_defs": body.get("report_defs") or [],
+           "is_active": body.get("is_active", True) is not False,
+           "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    try:
+        sb().schema("commcalc").table("pos_profile").upsert(row, on_conflict="org_id,pos_key").execute()
+    except Exception as e:
+        return {"ok": False, "error": f"Could not save profile (run migration 200): {e}"}
+    return {"ok": True, "pos_key": pos_key}
+
+
+@router.post("/pos-profiles/{pos_key}/apply")
+def apply_pos_profile(pos_key: str, org_id: str = ORG_ID, account: str = "default"):
+    """One-click: make this tenant's mailbox + report registry match the POS standard, BY CONSTRUCTION.
+
+    Strictly ADDITIVE / merge (never money-touching): it (1) creates or updates the (org, account) mailbox
+    row — filling BLANK imap/schedule defaults + label, and adding any STANDARD filename rule that isn't
+    already present — but NEVER clobbers a saved password, host, username, enabled flag, or an existing
+    rule; and (2) seeds the standard report_definitions (ON CONFLICT DO NOTHING, so a tenant's existing
+    auto toggle is untouched) under a b2bsoft connector. The tenant still enters host + credentials and
+    flips Enabled — this just guarantees the RULES/SCHEDULE are the house standard, not hand-typed."""
+    require_org(org_id)
+    account = (account or "default").strip() or "default"
+    client = sb()
+    prof = _pos_profile(client, org_id, pos_key)
+    imapd = prof.get("imap_defaults") or {}
+    sched = prof.get("schedule_defaults") or {}
+    std_rules = prof.get("filename_rules") or []
+
+    existing = _email_cfg(client, org_id, account) or {}
+    created = not existing
+    # Union the standard rules onto whatever's there, keyed by (lowercased pattern) so a re-apply is a no-op.
+    cur_rules = list(existing.get("patterns") or [])
+    have = {str(p.get("pattern") or "").strip().lower() for p in cur_rules if isinstance(p, dict)}
+    added = 0
+    for r in std_rules:
+        pat = str(r.get("pattern") or "").strip().lower()
+        if pat and pat not in have:
+            cur_rules.append(dict(r)); have.add(pat); added += 1
+
+    row = {"org_id": org_id, "account": account,
+           "label": existing.get("label") or prof.get("label"),
+           "imap_host": existing.get("imap_host"),          # tenant-supplied — never overwritten
+           "imap_port": existing.get("imap_port") or int(imapd.get("imap_port") or 993),
+           "username": existing.get("username"),
+           "use_ssl": existing.get("use_ssl") if "use_ssl" in existing else (imapd.get("use_ssl", True) is not False),
+           "mailbox": existing.get("mailbox") or imapd.get("mailbox") or "INBOX",
+           "from_filter": existing.get("from_filter"),
+           "since_days": existing.get("since_days") or int(imapd.get("since_days") or 14),
+           "patterns": cur_rules,
+           "enabled": bool(existing.get("enabled")),        # never auto-enable a mailbox with no creds
+           "frequency": existing.get("frequency") or sched.get("frequency") or "hourly",
+           "hour": existing.get("hour") if existing.get("hour") is not None else int(sched.get("hour") or 7),
+           "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    try:
+        client.schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id,account").execute()
+    except Exception:
+        row.pop("account", None); row.pop("label", None)
+        client.schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id").execute()
+
+    # Seed the report registry so the Data Imports / Connectors page shows the same reports house has.
+    # Best-effort + non-destructive: ensure a b2bsoft connector, then INSERT each report_def ON CONFLICT
+    # DO NOTHING (an existing report_definitions.auto toggle — a money-adjacent setting — is left as-is).
+    reports_seeded = 0
+    try:
+        conn_id = None
+        try:
+            crow = {"org_id": org_id, "vendor_name": "B2B Soft", "label": "B2B Soft wsreports",
+                    "sweep_kind": "b2b", "portal_url": "https://wsreports.b2bsoft.com",
+                    "config_table": "b2b_sweep_config", "updated_at": _datetime.now(_timezone.utc).isoformat()}
+            client.schema("commcalc").table("connector_instances").upsert(
+                crow, on_conflict="org_id,vendor_name").execute()
+            got = (client.schema("commcalc").table("connector_instances").select("id")
+                   .eq("org_id", org_id).eq("vendor_name", "B2B Soft").limit(1).execute().data) or []
+            conn_id = got[0]["id"] if got else None
+        except Exception:
+            conn_id = None
+        have_defs = {r.get("report_key") for r in
+                     ((client.schema("commcalc").table("report_definitions").select("report_key")
+                       .eq("org_id", org_id).execute().data) or [])}
+        for rd in (prof.get("report_defs") or []):
+            rk = rd.get("report_key")
+            if not rk or rk in have_defs:
+                continue
+            client.schema("commcalc").table("report_definitions").insert({
+                "org_id": org_id, "connector_id": conn_id, "report_key": rk,
+                "label": rd.get("label"), "source_name": rd.get("source_name"),
+                "period_mode": rd.get("period_mode") or "current", "target_table": rd.get("target_table"),
+                "upload_endpoint": rd.get("upload_endpoint"), "source_url": "https://wsreports.b2bsoft.com",
+                "auto": bool(rd.get("auto")), "sort_order": rd.get("sort_order") or 100}).execute()
+            reports_seeded += 1
+    except Exception as e:
+        print(f"WARN apply_pos_profile report_definitions seed skipped: {e}")
+
+    return {"ok": True, "account": account, "created": created, "rules_added": added,
+            "rules_total": len(cur_rules), "reports_seeded": reports_seeded,
+            "needs_credentials": not (row.get("imap_host") and existing.get("username")),
+            "pos_key": pos_key}
+
+
+@router.get("/email-sweep/ingest-health")
+def email_ingest_health(org_id: str = ORG_ID, account: str = "", days: int = 14):
+    """Per-day ingest health for the last N days so "my file isn't ingesting" is answerable from the page.
+    Three DISTINCT, honest states per day (no more silent green ✓):
+      • ingested  — the daily feed has PRICED rows for that business date (healthy);
+      • zero_priced — rows landed but every Ext Price is 0 (a degraded/price-less export → parse issue);
+      • missing   — no feed rows for that date at all (b2bsoft didn't deliver, or the guard refused it).
+    Plus the recent processing outcomes (ok / partial / refused / parse-skip / error) and the mailbox's
+    last run + any cross-org misfile warning. All org-scoped reads; falls back to a Python tally if the
+    aggregate RPC (mig 200) isn't applied yet."""
+    require_org(org_id)
+    client = sb()
+    days = max(1, min(int(days or 14), 60))
+    try:
+        from zoneinfo import ZoneInfo
+        today = _datetime.now(_timezone.utc).astimezone(ZoneInfo(settings.BUSINESS_TZ or "America/New_York")).date()
+    except Exception:
+        today = _datetime.now(_timezone.utc).date()
+    start = today - _timedelta(days=days - 1)
+
+    # Per-day feed tally — aggregate in Postgres (RPC), fall back to a bounded Python tally.
+    by_date = {}
+    try:
+        rpc = client.schema("commcalc").rpc("sales_feed_daily_health", {
+            "p_org": org_id, "p_from": start.isoformat(), "p_to": today.isoformat()}).execute().data or []
+        for r in rpc:
+            by_date[str(r.get("trans_date"))[:10]] = {
+                "rows": int(r.get("n_rows") or 0), "priced": int(r.get("n_priced") or 0),
+                "amount": float(r.get("amount") or 0)}
+    except Exception:
+        try:
+            rows = (client.schema("commcalc").table("daily_sales_feed").select("trans_date,ext_price")
+                    .eq("org_id", org_id).gte("trans_date", start.isoformat())
+                    .lte("trans_date", today.isoformat()).limit(1000000).execute().data) or []
+            for r in rows:
+                d = str(r.get("trans_date") or "")[:10]
+                if not d:
+                    continue
+                b = by_date.setdefault(d, {"rows": 0, "priced": 0, "amount": 0.0})
+                b["rows"] += 1
+                if safe_float(r.get("ext_price")) != 0:
+                    b["priced"] += 1
+                    b["amount"] = round(b["amount"] + safe_float(r.get("ext_price")), 2)
+        except Exception:
+            by_date = {}
+
+    day_list = []
+    d = start
+    while d <= today:
+        ds = d.isoformat()
+        b = by_date.get(ds) or {"rows": 0, "priced": 0, "amount": 0}
+        state = ("ingested" if b["priced"] > 0 else ("zero_priced" if b["rows"] > 0 else "missing"))
+        day_list.append({"date": ds, "rows": b["rows"], "priced": b["priced"],
+                         "amount": round(float(b["amount"]), 2), "state": state})
+        d += _timedelta(days=1)
+
+    # Recent processing outcomes, classified into distinct honest states (org-scoped, optional account).
+    q = (client.schema("commcalc").table("email_processed").select("*").eq("org_id", org_id)
+         .order("processed_at", desc=True).limit(60))
+    if account.strip():
+        try:
+            q = q.eq("account", account.strip())
+        except Exception:
+            pass
+    proc = q.execute().data or []
+    counts = {"ok": 0, "partial": 0, "refused": 0, "parse_skip": 0, "error": 0}
+    for p in proc:
+        st = (p.get("status") or "").lower()
+        if st == "ok":
+            counts["partial" if p.get("detail") else "ok"] += 1
+        elif st == "skipped":
+            # 'skipped' covers a price-guard refusal AND an Inventory-Aging 0-store parse — keep them distinct.
+            counts["parse_skip" if "parsed 0" in (p.get("detail") or "").lower() else "refused"] += 1
+        elif st == "error":
+            counts["error"] += 1
+
+    # Mailbox status + the cross-org misfile warning for the selected mailbox.
+    cfg = _email_cfg(client, org_id, account.strip() or "default") or {}
+    conflicts = _mailbox_cross_org(client, cfg.get("username"), org_id)
+
+    return {"days": day_list, "window_days": days, "from": start.isoformat(), "to": today.isoformat(),
+            "recent_counts": counts, "recent": proc[:20],
+            "mailbox": {"account": cfg.get("account") or account.strip() or "default",
+                        "username": cfg.get("username"), "enabled": bool(cfg.get("enabled")),
+                        "last_run_at": cfg.get("last_run_at"), "last_status": cfg.get("last_status"),
+                        "next_run_at": cfg.get("next_run_at")},
+            "cross_org_warning": bool(conflicts), "cross_org_conflicts": conflicts}
 
 
 # ── Connector-health alerts (user 2026-07-04): if a data source/sweep ERRORS or goes STALE, WhatsApp/
