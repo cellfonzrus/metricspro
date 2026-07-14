@@ -19,7 +19,8 @@ from fastapi import APIRouter, HTTPException, Header
 from app.core.database import get_supabase, get_supabase_admin
 from app.core.config import settings
 from app.modules.core.entitlements import (
-    MODULE_CATALOG, sync_tenant, sync_all_tenants, needs_sync,
+    MODULE_CATALOG, ROLE_GATE_KEYS, load_module_catalog,
+    sync_tenant, sync_all_tenants, needs_sync,
 )
 
 router = APIRouter(prefix="/core", tags=["Core / RBAC"])
@@ -196,7 +197,11 @@ def _require_super_admin(authorization: str):
 
 
 def _mods(**on):
-    base = {k: False for k in ("commissions", "targets", "asset", "vip", "storeops", "notify", "helpdesk", "hr", "admin", "ai_assistant")}
+    # ONE key universe (platform-core-3): canonical entitlement modules (MODULE_CATALOG) + role-gate
+    # keys (admin). A module key present with False is equivalent to ABSENT for every RBAC consumer
+    # (canSeeItem/canAccessPath do `!modules[m]`), so widening the base to the full catalog is
+    # behavior-neutral — it only removes the drift between this seed list and the catalog.
+    base = {k: False for k in (*MODULE_CATALOG.keys(), *ROLE_GATE_KEYS)}
     base.update(on)
     return base
 
@@ -343,9 +348,11 @@ async def revoke_super_admin(email: str = "", authorization: str = Header(defaul
 
 @router.get("/modules")
 async def list_modules():
-    """PUBLIC: the canonical module registry (module_key → label). Drives the billing plan
-    editor's per-module picker and the tenant entitlement view."""
-    return {"modules": [{"key": k, "label": v} for k, v in MODULE_CATALOG.items()]}
+    """PUBLIC: the canonical module registry (module_key → label). Single source of truth is
+    core.module_catalog (mig 700), with an in-code fallback so an unrun migration is a no-op.
+    Drives the billing plan editor's per-module picker and the tenant entitlement view."""
+    cat = load_module_catalog(sb())
+    return {"modules": [{"key": k, "label": v} for k, v in cat.items()]}
 
 
 @router.post("/tenants/sync")
@@ -808,7 +815,9 @@ def _level_role_perms(rank: int) -> dict:
     tunes them on the Role Permissions tab. RBAC is gated OFF until enforce-login is on, so these
     grant nothing until the admin both assigns the role AND turns enforcement on."""
     def M(**on):
-        base = {k: False for k in ("commissions", "targets", "asset", "vip", "storeops", "hr", "notify", "admin")}
+        # Same ONE key universe as _mods (platform-core-3): canonical modules + role-gate keys. A key
+        # present with False ≡ absent for every RBAC consumer, so this is behavior-neutral.
+        base = {k: False for k in (*MODULE_CATALOG.keys(), *ROLE_GATE_KEYS)}
         base.update(on)
         return base
     def R(on):  # per-area REPORT access (separate from the operational module)

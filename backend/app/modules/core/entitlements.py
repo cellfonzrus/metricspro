@@ -17,7 +17,11 @@ seed_tenant_defaults() changes. /core/me compares the tenant's storeops.tenants.
 SEED_VERSION and re-runs sync_tenant() when it is behind — so every existing tenant self-provisions
 the new feature on its next login, with no further migration or manual step.
 """
+from fastapi import HTTPException
+
 from app.core.database import get_supabase
+
+ORG_ID = "00000000-0000-0000-0000-000000000001"   # house org (middleware rewrites the query param)
 
 # Bump whenever ALL_MODULES changes OR commcalc.seed_tenant_defaults() gains new content, so every
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
@@ -25,7 +29,12 @@ from app.core.database import get_supabase
 # seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
 SEED_VERSION = 4   # bumped: added "ai_assistant" capability (auto-provisions to every tenant on next login)
 
-# Canonical module registry. tenant_modules + billing_plan.modules key off these module_keys.
+# ── ONE canonical module registry (platform-core-3) ────────────────────────────────────────────
+# The DB table core.module_catalog (migration 700) is the SINGLE SOURCE OF TRUTH. This in-code dict
+# is (a) the seed source that migration mirrors and (b) the FALLBACK used whenever the table is
+# absent/empty — so an unrun migration is a no-op (the app is byte-identical either way). Every other
+# module list (seeded role perms, org-level role perms, rbac.ts nav tags) reconciles to these keys.
+# tenant_modules + billing_plan.modules key off these CANONICAL module_keys.
 MODULE_CATALOG = {
     "commissions": "Commissions",
     "targets": "Daily Targets",
@@ -41,10 +50,87 @@ MODULE_CATALOG = {
 }
 ALL_MODULES = list(MODULE_CATALOG.keys())
 
+# Legacy / frontend key → CANONICAL module_key. The frontend historically tagged Finance nav + roles
+# with `accounts`; the backend canonical entitlement key is `account`. Any inbound alias normalizes to
+# canonical (mirrors core.module_alias, mig 700). Keep the backend key as the winner.
+MODULE_ALIASES = {"accounts": "account"}
+
+# Role-permission GATE keys that are NOT tenant-entitlement modules (they gate RBAC visibility, not
+# billing). `admin` = the super-admin/role-management gate (isSuperAdmin in rbac.ts). Kept OUT of the
+# entitlement catalog so effective_modules() / tenant_modules never treat `admin` as a billable module.
+ROLE_GATE_KEYS = ("admin",)
+
+
+def canonical_module_key(key: str) -> str:
+    """Normalize a possibly-aliased module key to its canonical form (e.g. 'accounts' → 'account')."""
+    return MODULE_ALIASES.get(key, key)
+
+
+def load_module_catalog(client=None) -> dict:
+    """Canonical module registry {key: label}. Reads core.module_catalog (mig 700) when present;
+    falls back to the in-code MODULE_CATALOG so an unrun migration is a no-op. Best-effort, never
+    raises. Aliases are collapsed to canonical."""
+    try:
+        client = client or get_supabase()
+        rows = (client.schema("core").table("module_catalog")
+                .select("key,label,sort_order").order("sort_order").execute().data) or []
+        cat = {r["key"]: (r.get("label") or r["key"]) for r in rows if r.get("key")}
+        if cat:
+            return cat
+    except Exception:
+        pass
+    return dict(MODULE_CATALOG)
+
+
+def all_modules(client=None) -> list:
+    """Canonical module_keys in registry order (DB-backed with in-code fallback)."""
+    return list(load_module_catalog(client).keys())
+
+
+# ── Entitlement enforcement (shared, adoptable by every module) ─────────────────────────────────
+def module_enabled(org_id: str, key: str, client=None) -> bool:
+    """True if `key` (canonical or aliased) is enabled for the tenant per storeops.tenant_modules.
+    Fails OPEN if tenant_modules is unreachable (mig 053 unrun) — a missing migration must never
+    black-hole a whole module. A tenant with no row for the module = NOT enabled (entitlement gate)."""
+    key = canonical_module_key(key)
+    try:
+        client = client or get_supabase()
+        rows = (client.schema("storeops").table("tenant_modules").select("is_enabled")
+                .eq("org_id", org_id).eq("module_key", key).limit(1).execute().data or [])
+    except Exception:
+        return True   # tenant_modules table/infra unreachable → degrade gracefully (fail open)
+    return bool(rows and rows[0].get("is_enabled"))
+
+
+def assert_module_enabled(org_id: str, key: str, client=None) -> None:
+    """Imperative gate: raise 403 unless `key` is enabled for the tenant. Drop-in for a module's own
+    _require_module()."""
+    if not module_enabled(org_id, key, client):
+        raise HTTPException(403, f"{canonical_module_key(key)} not enabled for this tenant")
+
+
+def require_module(key: str):
+    """FastAPI dependency factory — the shared entitlement gate modules can adopt. Usage:
+
+        from app.modules.core.entitlements import require_module
+        router = APIRouter(prefix="/account", dependencies=[Depends(require_module("account"))])
+
+    or per-endpoint: `dependencies=[Depends(require_module("closing"))]`. It resolves org_id from the
+    (tenant-middleware-rewritten) `org_id` query param and 403s if the module is not enabled for that
+    tenant. Carrier-/tenant-neutral: it only reads the entitlement, never branches on a tenant name."""
+    canon = canonical_module_key(key)
+
+    async def _guard(org_id: str = ORG_ID):
+        assert_module_enabled(org_id, canon)
+
+    _guard.__name__ = f"require_module_{canon}"
+    return _guard
+
 
 def effective_modules(client, org_id: str) -> set:
     """Modules a tenant is ENTITLED to. All-access unless an explicit pay-per-module plan restricts.
     A billing_plan with modules NULL/empty (or no plan at all) = all-access = every module."""
+    catalog = load_module_catalog(client)
     try:
         rows = (client.schema("storeops").table("billing_plan")
                 .select("modules").eq("org_id", org_id).limit(1).execute().data) or []
@@ -52,9 +138,9 @@ def effective_modules(client, org_id: str) -> set:
         rows = []
     if rows:
         mods = rows[0].get("modules")
-        if mods:  # a non-empty list = pay-per-module → only these (ignore any unknown keys)
-            return {m for m in mods if m in MODULE_CATALOG}
-    return set(ALL_MODULES)  # no plan / NULL / empty modules = all-access
+        if mods:  # a non-empty list = pay-per-module → only these (aliases normalized; unknown dropped)
+            return {canonical_module_key(m) for m in mods if canonical_module_key(m) in catalog}
+    return set(catalog.keys())  # no plan / NULL / empty modules = all-access
 
 
 def sync_tenant(client, org_id: str) -> dict:
@@ -62,7 +148,7 @@ def sync_tenant(client, org_id: str) -> dict:
     safe to re-run. Only stamps seed_version once the content seed actually succeeded, so a tenant
     keeps retrying on each /core/me until migration 076 has been run."""
     mods = effective_modules(client, org_id)
-    rows = [{"org_id": org_id, "module_key": m, "is_enabled": (m in mods)} for m in ALL_MODULES]
+    rows = [{"org_id": org_id, "module_key": m, "is_enabled": (m in mods)} for m in all_modules(client)]
     try:
         client.schema("storeops").table("tenant_modules").upsert(
             rows, on_conflict="org_id,module_key").execute()

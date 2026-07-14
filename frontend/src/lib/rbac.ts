@@ -336,6 +336,16 @@ export function canManage(perms: Permissions, href: string): boolean {
   return (perms.scope || 'all') === 'all'
 }
 
+// Canonical module keys mirror the backend core.module_catalog (mig 700). The frontend historically
+// tagged Finance nav + roles with `accounts`; the backend canonical entitlement key is `account`.
+// This read-side alias map treats them as ONE module so a grant under either key is honored — no data
+// migration of stored role permissions. Behavior-neutral today (no role stores `account`), forward-safe.
+export const MODULE_ALIASES: Record<string, string> = { accounts: 'account', account: 'accounts' }
+export function moduleGranted(mods: Record<string, boolean> | undefined, key: string): boolean {
+  if (!mods) return false
+  return !!(mods[key] || mods[MODULE_ALIASES[key]])
+}
+
 export function canSeeItem(perms: Permissions, item: NavItem): boolean {
   if (isSuperAdmin(perms)) return true
   if (MGMT_ONLY.has(item.href)) return canManage(perms, item.href)
@@ -343,8 +353,8 @@ export function canSeeItem(perms: Permissions, item: NavItem): boolean {
   // Per-function override wins (either direction) — lets an admin grant/deny each function per role.
   const ov = perms.pages?.[item.href]
   if (typeof ov === 'boolean') return ov
-  // Default: operational module gate + (for report pages) the report-area gate.
-  if (!perms?.modules?.[item.module]) return false
+  // Default: operational module gate (alias-aware) + (for report pages) the report-area gate.
+  if (!moduleGranted(perms.modules, item.module)) return false
   const area = reportAreaForPath(item.href)
   if (area && !hasReport(perms, area)) return false
   return true
@@ -386,7 +396,7 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
   if (typeof ov === 'boolean') return ov
   const area = reportAreaForPath(path)   // report pages need the separate report permission
   if (area && !hasReport(perms, area)) return false
-  return !!perms?.modules?.[moduleForPath(path)]
+  return moduleGranted(perms.modules, moduleForPath(path))
 }
 
 export function homeFor(perms: Permissions): string {

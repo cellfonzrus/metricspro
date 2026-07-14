@@ -31,16 +31,22 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-# ── Module entitlement ────────────────────────────────────────────────────────────────────────
+# ── Module entitlement (reference consumer of the shared core gate — platform-core-3) ───────────
+# The logic now lives in app.modules.core.entitlements (single source: canonical module_keys,
+# alias-aware, graceful degradation). These thin wrappers preserve the "helpdesk" default key so the
+# ~30 imperative call sites below stay byte-identical, while every module now enforces identically.
+from app.modules.core.entitlements import (
+    module_enabled as _core_module_enabled,
+    assert_module_enabled as _core_require_module,
+)
+
+
 def _module_enabled(org_id: str, key: str = "helpdesk") -> bool:
-    rows = (db("tenant_modules").select("is_enabled")
-            .eq("org_id", org_id).eq("module_key", key).limit(1).execute().data or [])
-    return bool(rows and rows[0].get("is_enabled"))
+    return _core_module_enabled(org_id, key)
 
 
 def _require_module(org_id: str, key: str = "helpdesk"):
-    if not _module_enabled(org_id, key):
-        raise HTTPException(403, f"{key} not enabled for this tenant")
+    _core_require_module(org_id, key)
 
 
 # ── Defaults (seeded on first bootstrap so a freshly-enabled org is usable immediately) ─────────
