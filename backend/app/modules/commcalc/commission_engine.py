@@ -125,20 +125,27 @@ def _pvariants(period):
 
 
 def _read_sales(client, org_id, period):
-    """Paginated raw_sales for a period (REST 1000-row cap). select * so a missing column never errors."""
-    out, start, page = [], 0, 1000
-    while True:
-        try:
-            rows = (client.schema("commcalc").table("raw_sales").select("*")
-                    .eq("org_id", org_id).in_("period", _pvariants(period))
-                    .range(start, start + page - 1).execute().data) or []
-        except Exception:
-            break
-        out.extend(rows)
-        if len(rows) < page:
-            break
-        start += page
-    return out
+    """Paginated sales for a period (REST 1000-row cap). select * so a missing column never errors.
+
+    raw_sales first, FALLING BACK to daily_sales_feed when raw_sales has no rows. The calculator's
+    rep roster already reads the feed for the open month, so without this fallback a tenant whose
+    feed→raw_sales promotion hasn't run yet gets reps LISTED but paid $0 — the roster and the money
+    disagreed on what "sales" means (luxelink, 2026-07-14). When raw_sales exists it wins unchanged."""
+    def _page(table):
+        out, start, page = [], 0, 1000
+        while True:
+            try:
+                rows = (client.schema("commcalc").table(table).select("*")
+                        .eq("org_id", org_id).in_("period", _pvariants(period))
+                        .range(start, start + page - 1).execute().data) or []
+            except Exception:
+                break
+            out.extend(rows)
+            if len(rows) < page:
+                break
+            start += page
+        return out
+    return _page("raw_sales") or _page("daily_sales_feed")
 
 
 def _read_mi_mrc(client, org_id, period):

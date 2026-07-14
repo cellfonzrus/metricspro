@@ -8192,13 +8192,26 @@ async def _run_email_sweep(org_id, account='default'):
         status_msg += f" ⚠️ {len(shrinks)} partial-export drop(s)"
     _email_status_update(client, org_id, account,
         {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': status_msg})
-    # Auto-derive the monthly commission basis (raw_sales) from the feed when 'sales' is set to auto
-    # on the Connectors page — best-effort + guarded, never breaks the sweep. This is what lets the
-    # user stop uploading the monthly Sales file by hand. OFF until 'sales' auto is enabled.
+    # Auto-derive the monthly commission basis (raw_sales) from the feed — best-effort + guarded,
+    # never breaks the sweep. DEFAULT ON when the registry has no 'sales' row: new tenants never had
+    # the row the house has, so their raw_sales silently stayed empty and plan-mode pay was $0
+    # (luxelink, 2026-07-14). An explicit auto=false row still opts a tenant out.
     try:
         if (any(r['upload_type'] == 'daily_sales' and r['status'] == 'ok' for r in results)
-                and _registry_auto_map(client, org_id).get('sales')):
-            _promote_feed_to_raw_sales(client, org_id, _ftp_current_period())
+                and _registry_auto_map(client, org_id).get('sales', True)):
+            _pr = _promote_feed_to_raw_sales(client, org_id, _ftp_current_period())
+            # Plan-mode tenants have no other automatic recompute (the DLAR auto-recalc is Boost-only),
+            # so a promotion that actually wrote rows recalculates the period — sales flow to pay every
+            # sweep with nobody pressing Run Calculation. Best-effort; the zero-wipe guard protects the
+            # snapshot, and Boost orgs are excluded (their recompute cadence stays the daily DLAR sweep).
+            try:
+                if (_pr or {}).get('written'):
+                    _carriers = (client.schema('commcalc').table('carrier').select('*')
+                                 .eq('org_id', org_id).execute().data) or []
+                    if _resolve_carrier_mode(_carriers) != 'boost':
+                        await _run_calculation(_ftp_current_period(), org_id)
+            except Exception as e2:
+                print(f"WARN auto-recalc after promote failed: {e2}")
     except Exception as e:
         print(f"WARN auto-promote feed->raw_sales failed: {e}")
     return {"ok": True, "account": account, "ingested": ok, "files": results}
