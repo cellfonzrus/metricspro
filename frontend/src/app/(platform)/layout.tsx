@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
-import { api } from '@/lib/client'
+import { api, setActiveOrg } from '@/lib/client'
 import { NAV, canSeeItem, canAccessPath, carrierOK, safeHomeFor, applyNavLayout, type NavItem, type NavLayout } from '@/lib/rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -51,7 +51,7 @@ function SetupBanner() {
 
 function PlatformShell({ children, open }: { children: React.ReactNode; open: boolean }) {
   const { period, setPeriod, periods } = usePeriod()
-  const { user, permissions, carriers, signOut } = useAuth()
+  const { user, permissions, carriers, signOut, tenants, activeOrg } = useAuth()
   const [collapsed, setCollapsed] = useState(false)
   const [openGroup, setOpenGroup] = useState<string | null>(null)  // accordion: only one group's items shown at a time
   const [menuOpen, setMenuOpen] = useState(false)
@@ -178,6 +178,16 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                 ⚙️ Settings
               </Link>
             )}
+            {/* Multi-tenant login switcher (platform-core-9): only for a login that belongs to >1 tenant.
+                Persist the choice + hard-reload so every page refetches under the new active tenant. */}
+            {tenants.length > 1 && (
+              <select value={activeOrg || ''} title="Switch company"
+                onChange={e => { setActiveOrg(e.target.value); window.location.reload() }}
+                style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', background: 'white',
+                  border: '1px solid var(--border)', borderRadius: 8, padding: '5px 10px', cursor: 'pointer' }}>
+                {tenants.map(t => <option key={t.org_id} value={t.org_id}>🏢 {t.name}</option>)}
+              </select>
+            )}
           </div>
           {open ? (
             <span style={{ fontSize: 12, color: 'var(--text3)' }}>🔓 Login not enforced</span>
@@ -219,7 +229,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
 }
 
 function Guard({ children }: { children: React.ReactNode }) {
-  const { loading, session, user, permissions, provisioned, active, signOut } = useAuth()
+  const { loading, session, user, permissions, provisioned, active, signOut, needsTenantChoice } = useAuth()
   const pathname = usePathname()
   const router = useRouter()
   // Master switch: until the admin turns enforcement ON, the app stays fully open (today's
@@ -237,13 +247,15 @@ function Guard({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (enforce !== true || loading) return
     if (!session) { router.replace('/login'); return }
+    // Login belongs to >1 tenant and none chosen yet → the picker lives on /login.
+    if (needsTenantChoice) { router.replace('/login'); return }
     if (!provisioned || !active) return
     if (user?.must_reset_password) { router.replace('/account/password'); return }
     if (!canAccessPath(permissions, pathname)) {
       const dest = safeHomeFor(permissions)
       if (dest !== pathname) router.replace(dest)   // guard against redirecting to a gated-off home (loop)
     }
-  }, [enforce, loading, session, provisioned, active, user, permissions, pathname, router])
+  }, [enforce, loading, session, provisioned, active, user, permissions, pathname, router, needsTenantChoice])
 
   if (enforce === null) return <Splash text="Loading…" />
   if (enforce === false) return <PlatformShell open>{children}</PlatformShell>  // app open
@@ -251,6 +263,7 @@ function Guard({ children }: { children: React.ReactNode }) {
   // enforcement ON ↓
   if (loading) return <Splash text="Loading…" />
   if (!session) return <Splash text="Redirecting to sign-in…" />
+  if (needsTenantChoice) return <Splash text="Choose a company…" />
   if (!provisioned) return <Notice title="Account not set up"
     body="Your login exists but no role has been assigned yet. Please contact your administrator."
     onSignOut={() => signOut().then(() => router.replace('/login'))} />

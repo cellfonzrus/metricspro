@@ -25,6 +25,17 @@ Supabase token is REJECTED (401 `{"detail":"authentication required"}`) instead 
   • KILL SWITCH: env REQUIRE_AUTH (default ON when unset). Set REQUIRE_AUTH=0 to revert to the old
     pass-through (client org_id honored on tokenless requests) via a single Railway env change — no
     code rollback. The authenticated rewrite still runs regardless.
+
+2026-07-14 multi-tenant login switcher (platform-core-9) — ONE login may belong to MANY tenants:
+A login's org is no longer a single app_users.org_id; it is the SET of tenants the auth_id is a
+member of (one storeops.app_users row per tenant, mig 706). The caller declares which tenant it is
+acting as via the `x-active-org` request header. The middleware VERIFIES that choice against the
+membership set (never trusts a bare client value): if the header names a tenant the login belongs to,
+org_id is rewritten to it; otherwise it falls back to the login's DEFAULT membership (is_default_org,
+else earliest-created). A single-membership login (which includes every mig-088 aliased login) always
+resolves to its one org regardless of the header — so nothing changes for them. Super-admins still
+bypass (no rewrite, client org_id honored). The token→identity cache holds the whole membership set,
+so switching tenants (a new header value on the same token) needs no re-auth and no cache bust.
 """
 import os
 import time
@@ -58,8 +69,16 @@ _PUBLIC_PREFIXES = (
 # sweeps added by other modules. The full current set is enumerated in the platform-core handoff.
 _RUN_DUE_SUFFIX = "/run-due"
 
-_cache: dict = {}   # token -> ((authenticated, org_id), expiry_epoch)  — positive results only
+# token -> (identity, expiry_epoch), positive results only. identity is the 4-tuple returned by
+# _resolve_identity: (authenticated, super_admin, member_orgs, default_org). Caching the whole
+# membership SET (not a single org) lets a login switch active tenants — a new x-active-org header on
+# the SAME token — with no re-auth and no cache bust; the per-request header pick is pure/cheap.
+_cache: dict = {}
 _TTL = 60.0
+
+# Header by which the client declares which of its tenants it is acting as. Client-supplied and
+# therefore UNTRUSTED — always verified against the login's membership set before it is honored.
+_ACTIVE_ORG_HEADER = "x-active-org"
 
 
 def _enabled() -> bool:
@@ -82,15 +101,33 @@ def _is_public(path: str) -> bool:
     return False
 
 
-def _resolve_token(token: str):
-    """Verify the Supabase JWT and resolve (authenticated, org_id). Cached (positive only).
+def _fetch_memberships(client, uid):
+    """Every (org_id, super_admin, is_default_org) app_users row for this auth_id, earliest first.
+    Tolerant of mig 706 being un-run: is_default_org is a post-706 column, so fall back to the lean
+    columns when it (or created_at ordering) is absent — pre-706 there is at most one row anyway."""
+    tbl = client.schema("storeops").table("app_users")
+    try:
+        return (tbl.select("org_id,super_admin,is_default_org")
+                .eq("auth_id", uid).order("created_at").execute().data) or []
+    except Exception:
+        try:
+            return (tbl.select("org_id,super_admin")
+                    .eq("auth_id", uid).execute().data) or []
+        except Exception:
+            return []
 
-    Returns:
-      (True,  "<uuid>") — verified normal user → REWRITE org_id to this tenant.
-      (True,  None)     — verified SUPER-ADMIN (or a verified user with no app_users row yet) → NO
-                          rewrite, client-supplied org_id honored (this is what makes cross-tenant
-                          admin work — behavior UNCHANGED from before this hardening).
-      (False, None)     — token missing/expired/unverifiable → caller must REJECT (401).
+
+def _resolve_identity(token: str):
+    """Verify the Supabase JWT and resolve the login's MEMBERSHIP set. Cached (positive only).
+
+    Returns (authenticated, super_admin, member_orgs, default_org):
+      (True,  True,  (...),      _)     — verified SUPER-ADMIN → NO rewrite, client org_id honored
+                                          (cross-tenant admin; behaviour UNCHANGED).
+      (True,  False, (orgs...),  org)   — verified normal user → rewrite org_id to the ACTIVE member
+                                          org (chosen via x-active-org, else `default_org`).
+      (True,  False, (),         None)  — verified user with NO app_users row yet → member set empty
+                                          ⇒ no rewrite (client org honored). UNCHANGED behaviour.
+      (False, False, (),         None)  — token missing/expired/unverifiable → caller must REJECT.
 
     Blocking — call via to_thread. Negative results are NOT cached, so a transient Supabase hiccup
     never pins a good user out for the TTL, and an expired token re-checks on refresh."""
@@ -104,18 +141,27 @@ def _resolve_token(token: str):
         user = getattr(resp, "user", None) or resp
         uid = getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else None)
         if not uid:
-            return (False, None)   # token did not resolve to a user → not authenticated
-        org = None
-        rows = (get_supabase().schema("storeops").table("app_users")
-                .select("org_id,super_admin").eq("auth_id", uid).limit(1).execute().data) or []
-        if rows and not rows[0].get("super_admin"):
-            org = rows[0].get("org_id")
-        # super-admin (or no app_users row) → org stays None ⇒ no rewrite (query org_id honored)
-        result = (True, org)
+            return (False, False, (), None)   # token did not resolve to a user → not authenticated
+        rows = _fetch_memberships(get_supabase(), uid)
+        super_admin = any(r.get("super_admin") for r in rows)
+        member_orgs = tuple(r.get("org_id") for r in rows if r.get("org_id"))
+        # default membership: the row flagged is_default_org, else the earliest (rows are ordered).
+        default_org = next((r.get("org_id") for r in rows if r.get("is_default_org")),
+                           (member_orgs[0] if member_orgs else None))
+        result = (True, super_admin, member_orgs, default_org)
         _cache[token] = (result, now + _TTL)
         return result
     except Exception:
-        return (False, None)   # verification error / bad token → treat as unauthenticated
+        return (False, False, (), None)   # verification error / bad token → treat as unauthenticated
+
+
+def _pick_active_org(member_orgs, default_org, requested):
+    """Resolve the tenant this request acts as. `requested` is the UNTRUSTED x-active-org header:
+    honored ONLY if it names a tenant the login belongs to; otherwise fall back to the default
+    membership. Empty member set (unprovisioned) ⇒ None ⇒ no rewrite (client org honored)."""
+    if requested and requested in member_orgs:
+        return requested
+    return default_org
 
 
 async def _reject_401(send):
@@ -141,7 +187,8 @@ class TenantScopeMiddleware:
         headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
         auth = headers.get("authorization", "")
         token = auth.split(" ", 1)[1].strip() if auth.lower().startswith("bearer ") else ""
-        ok, org = (await asyncio.to_thread(_resolve_token, token)) if token else (False, None)
+        ok, super_admin, member_orgs, default_org = (
+            (await asyncio.to_thread(_resolve_identity, token)) if token else (False, False, (), None))
         if not ok:
             # No valid identity. Kill switch OFF (REQUIRE_AUTH=0) ⇒ old pass-through (client org_id
             # honored). Kill switch ON (default) ⇒ reject — no request reaches a tenant's data
@@ -149,8 +196,15 @@ class TenantScopeMiddleware:
             if _require_auth():
                 return await _reject_401(send)
             return await self.app(scope, receive, send)
+        if super_admin:
+            # Super-admin ⇒ no rewrite; the client-supplied org_id is honored (cross-tenant admin).
+            return await self.app(scope, receive, send)
+        # Normal login: honor the caller's chosen tenant ONLY if it is one of their memberships,
+        # else fall back to their default membership. Empty membership ⇒ no rewrite (unprovisioned).
+        requested = (headers.get(_ACTIVE_ORG_HEADER, "") or "").strip()
+        org = _pick_active_org(member_orgs, default_org, requested)
         if org:
             qs = parse_qs(scope.get("query_string", b"").decode(), keep_blank_values=True)
-            qs["org_id"] = [org]   # override any client-supplied org_id with the authenticated tenant
+            qs["org_id"] = [org]   # override any client-supplied org_id with the resolved active tenant
             scope = {**scope, "query_string": urlencode(qs, doseq=True).encode()}
         return await self.app(scope, receive, send)

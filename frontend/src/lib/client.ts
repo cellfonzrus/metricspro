@@ -25,6 +25,30 @@ function scopeOrg(path: string): string {
     : path
 }
 
+// ── Active tenant (multi-tenant login switcher, platform-core-9) ─────────────────────────────────
+// A login may belong to >1 tenant. The chosen ("active") tenant is persisted in localStorage and sent
+// on EVERY request as the `x-active-org` header. The header is UNTRUSTED: the tenant middleware honors
+// it only when it names a tenant the login is a member of, else it falls back to the login's default
+// membership. Single-tenant logins never set it and are entirely unaffected. Kept in localStorage (not
+// a signed cookie) because the server re-verifies membership on every request — the header is a hint,
+// not the authority.
+const ACTIVE_ORG_KEY = 'mp_active_org'
+export function getActiveOrg(): string | null {
+  try { return typeof window !== 'undefined' ? (window.localStorage.getItem(ACTIVE_ORG_KEY) || null) : null }
+  catch { return null }
+}
+export function setActiveOrg(id: string | null | undefined) {
+  try {
+    if (typeof window === 'undefined') return
+    if (id) window.localStorage.setItem(ACTIVE_ORG_KEY, id)
+    else window.localStorage.removeItem(ACTIVE_ORG_KEY)
+  } catch { /* ignore */ }
+}
+export function activeOrgHeader(): Record<string, string> {
+  const o = getActiveOrg()
+  return o ? { 'x-active-org': o } : {}
+}
+
 // Render a FastAPI error body as a readable string. `detail` may be a string, an ARRAY of
 // validation errors (422 → [{loc,msg,...}]), or an object — coercing those with `+`/template
 // strings is what produced the "[object Object]" error users saw on upload.
@@ -52,7 +76,7 @@ export async function api(path: string, opts: RequestInit = {}) {
   const authHeader = await bearer()
   const res = await fetch(`${API_URL}${scopeOrg(path)}`, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', ...authHeader, ...opts.headers },
+    headers: { 'Content-Type': 'application/json', ...authHeader, ...activeOrgHeader(), ...opts.headers },
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -66,7 +90,8 @@ export async function api(path: string, opts: RequestInit = {}) {
 // token too (needed once enforcement is on).
 export async function apiUpload(path: string, form: FormData) {
   const authHeader = await bearer()
-  const res = await fetch(`${API_URL}${scopeOrg(path)}`, { method: 'POST', body: form, headers: authHeader })
+  const res = await fetch(`${API_URL}${scopeOrg(path)}`, { method: 'POST', body: form,
+    headers: { ...authHeader, ...activeOrgHeader() } })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(errMsg(err, res.status))

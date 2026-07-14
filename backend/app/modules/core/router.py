@@ -103,18 +103,106 @@ def _uid_from_token(authorization: str):
         return None
 
 
-@router.get("/me")
-async def whoami(authorization: str = Header(default="")):
-    """The logged-in user's profile + resolved role permissions. Token-verified — the frontend
-    sends the Supabase session access token as `Authorization: Bearer <token>`."""
+# ── Multi-tenant membership (platform-core-9) ──────────────────────────────────────────
+# One Supabase login (auth_id) may hold an app_users row PER tenant it belongs to (mig 706). These
+# helpers pick the membership row for the tenant the request is ACTING AS. The active tenant is
+# declared by the client via the `x-active-org` header — UNTRUSTED, so it is honored ONLY when it
+# names one of the login's memberships; otherwise the login's default membership is used. This
+# mirrors the tenant-middleware rule exactly (single source of truth for "which tenant am I").
+def _memberships(client, uid):
+    """All app_users rows for this auth_id, earliest-first. Tolerant of mig 706 being un-run
+    (is_default_org / created_at may be absent → at most one row exists anyway)."""
+    if not uid:
+        return []
+    tbl = client.schema("storeops").table("app_users")
+    try:
+        return (tbl.select("*").eq("auth_id", uid).order("created_at").execute().data) or []
+    except Exception:
+        try:
+            return (tbl.select("*").eq("auth_id", uid).execute().data) or []
+        except Exception:
+            return []
+
+
+def _pick_membership(rows, active_org=None):
+    """The membership row for the tenant the request acts as. `active_org` (the x-active-org header)
+    wins only if it is one of the memberships; else the row flagged is_default_org, else the first
+    (earliest). Returns None if the login has no memberships (unprovisioned)."""
+    if not rows:
+        return None
+    if active_org:
+        for r in rows:
+            if r.get("org_id") == active_org:
+                return r
+    return next((r for r in rows if r.get("is_default_org")), rows[0])
+
+
+@router.get("/my-tenants")
+async def my_tenants(authorization: str = Header(default="")):
+    """The tenants this ONE login belongs to (drives the post-login tenant picker + the top-bar
+    switcher). Resolves purely from the token's auth_id, so it works BEFORE an active tenant is
+    chosen. A single-membership login returns exactly one row ⇒ the frontend shows no picker."""
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
     client = sb()
-    rows = client.schema("storeops").table("app_users").select("*").eq("auth_id", uid).limit(1).execute().data or []
+    rows = _memberships(client, uid)
     if not rows:
+        return {"tenants": [], "count": 0}
+    # tenant display names + per-membership role display (roles are per-org)
+    orgs = [r.get("org_id") for r in rows if r.get("org_id")]
+    tmap = {}
+    try:
+        tens = (client.schema("storeops").table("tenants").select("org_id,name,slug")
+                .in_("org_id", orgs).execute().data) or []
+        tmap = {t["org_id"]: t for t in tens}
+    except Exception:
+        pass
+    default_org = next((r.get("org_id") for r in rows if r.get("is_default_org")), (orgs[0] if orgs else None))
+    out = []
+    for r in rows:
+        o = r.get("org_id")
+        if not o:
+            continue
+        t = tmap.get(o, {})
+        rdisp = r.get("role")
+        try:
+            if r.get("role"):
+                rr = (client.schema("storeops").table("roles").select("display_name")
+                      .eq("org_id", o).eq("name", r["role"]).limit(1).execute().data) or []
+                if rr:
+                    rdisp = rr[0].get("display_name") or r.get("role")
+        except Exception:
+            pass
+        out.append({
+            "org_id": o,
+            "name": t.get("name") or "Tenant",
+            "slug": t.get("slug"),
+            "role": r.get("role"),
+            "role_display": rdisp,
+            "is_default": (o == default_org),
+            "super_admin": bool(r.get("super_admin")),
+            "is_active": bool(r.get("is_active", True)),
+        })
+    return {"tenants": out, "count": len(out), "default_org": default_org,
+            "super_admin": any(r.get("super_admin") for r in rows)}
+
+
+@router.get("/me")
+async def whoami(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """The logged-in user's profile + resolved role permissions FOR THE ACTIVE TENANT. Token-verified
+    — the frontend sends the Supabase session access token as `Authorization: Bearer <token>` and, for
+    a login that belongs to >1 tenant, the chosen tenant as `x-active-org`. The active tenant is
+    membership-checked (an x-active-org the login doesn't belong to falls back to the default
+    membership) so a single-tenant login is entirely unaffected."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    rows = _memberships(client, uid)
+    u = _pick_membership(rows, (x_active_org or "").strip() or None)
+    if not u:
         return {"provisioned": False, "user": None, "permissions": {}}
-    u = rows[0]
     perms = {}
     if u.get("role"):
         rr = client.schema("storeops").table("roles").select("display_name,permissions") \
@@ -178,22 +266,27 @@ async def password_changed(authorization: str = Header(default="")):
 # A tenant = an org_id + metadata. Super-admins create tenants and provision each tenant's first
 # admin login; that admin then manages their own company's users. ADDITIVE — single-tenant app
 # is unaffected (org_id-from-session is a later phase). Backend is the guard (super_admin gate).
-def _app_user_from_token(authorization: str):
+def _app_user_from_token(authorization: str, active_org: str = ""):
+    """The caller's app_users row for the ACTIVE tenant (x-active-org). A single-membership login
+    resolves to its one row regardless of active_org (today's behaviour)."""
     uid = _uid_from_token(authorization)
     if not uid:
         return None
-    rows = sb().schema("storeops").table("app_users").select("*").eq("auth_id", uid).limit(1).execute().data or []
-    return rows[0] if rows else None
+    return _pick_membership(_memberships(sb(), uid), (active_org or "").strip() or None)
 
 
-def _require_super_admin(authorization: str):
-    """Super-admin = the super_admin flag, OR (bootstrap) a house-org admin — so the very first
-    operator is never locked out before the flag is seeded."""
-    u = _app_user_from_token(authorization)
-    ok = u and (u.get("super_admin") or (u.get("org_id") == ORG_ID and u.get("role") == "admin"))
-    if not ok:
-        raise HTTPException(403, "super-admin only")
-    return u
+def _require_super_admin(authorization: str, active_org: str = ""):
+    """Super-admin = the super_admin flag on ANY of the login's memberships (super_admin is a
+    login-level bypass, not a per-tenant grant), OR (bootstrap) a house-org admin — so the very
+    first operator is never locked out before the flag is seeded."""
+    uid = _uid_from_token(authorization)
+    rows = _memberships(sb(), uid) if uid else []
+    if any(r.get("super_admin") for r in rows):
+        return _pick_membership(rows, (active_org or "").strip() or None)
+    u = _pick_membership(rows, (active_org or "").strip() or None)
+    if u and u.get("org_id") == ORG_ID and u.get("role") == "admin":
+        return u
+    raise HTTPException(403, "super-admin only")
 
 
 def _mods(**on):
@@ -506,14 +599,15 @@ SETTING_AREAS = [
 ]
 
 
-def _resolve_caller(client, uid):
-    """Resolve the signed-in user to {org_id, role, super_admin, perms}. perms is the role's
-    permissions JSONB (scope / modules / settings / ...). None if the login has no tenant."""
-    urow = (client.schema("storeops").table("app_users").select("org_id,role,super_admin")
-            .eq("auth_id", uid).limit(1).execute().data) or []
-    if not urow:
+def _resolve_caller(client, uid, active_org=None):
+    """Resolve the signed-in user to {org_id, role, super_admin, perms} FOR THE ACTIVE TENANT.
+    `active_org` is the (untrusted) x-active-org header — it selects which membership row when the
+    login belongs to >1 tenant, and is honored only if it names one of the memberships. A
+    single-membership login resolves to its one row regardless (today's behaviour). perms is the
+    role's permissions JSONB (scope / modules / settings / ...). None if the login has no tenant."""
+    u = _pick_membership(_memberships(client, uid), (active_org or "").strip() or None)
+    if not u:
         return None
-    u = urow[0]
     org_id = u.get("org_id") or ORG_ID
     perms = {}
     if u.get("role"):
@@ -543,11 +637,11 @@ def _can_edit_setting(caller, area):
 
 
 @router.get("/setting-areas")
-async def list_setting_areas(authorization: str = Header(default="")):
+async def list_setting_areas(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The registry of permission-controlled settings areas (drives the Roles UI toggles). Also returns
     which areas the CALLER can edit, so pages can gate their own edit affordances if they prefer."""
     uid = _uid_from_token(authorization)
-    caller = _resolve_caller(sb(), uid) if uid else None
+    caller = _resolve_caller(sb(), uid, x_active_org) if uid else None
     return {"areas": SETTING_AREAS,
             "can_edit": {a["key"]: _can_edit_setting(caller, a["key"]) for a in SETTING_AREAS}}
 
@@ -628,13 +722,13 @@ async def failure_types(authorization: str = Header(default="")):
 
 
 @router.post("/failures")
-async def record_failure(body: dict, authorization: str = Header(default="")):
+async def record_failure(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Record a failure (best-effort — never raises). Any authed surface may call it; org comes from the
     caller (falls back to body/house org for system callers). Remediation is auto-filled by category, and a
     category the tenant has DISABLED is silently skipped (configurable)."""
     uid = _uid_from_token(authorization)
     client = sb()
-    caller = _resolve_caller(client, uid) if uid else None
+    caller = _resolve_caller(client, uid, x_active_org) if uid else None
     org_id = (caller["org_id"] if caller else None) or body.get("org_id") or ORG_ID
     category = (body.get("category") or "other").strip().lower()
     try:
@@ -664,12 +758,12 @@ async def record_failure(body: dict, authorization: str = Header(default="")):
 
 
 @router.get("/failures")
-async def list_failures(authorization: str = Header(default=""), status: str = "", category: str = "", limit: int = 300):
+async def list_failures(authorization: str = Header(default=""), x_active_org: str = Header(default=""), status: str = "", category: str = "", limit: int = 300):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
     client = sb()
-    caller = _resolve_caller(client, uid)
+    caller = _resolve_caller(client, uid, x_active_org)
     if not _can_view_failures(caller):
         raise HTTPException(403, "Failure Logs are admin-only. Grant the /failures page to a role to share it.")
     q = client.schema("core").table("failure_log").select("*").eq("org_id", caller["org_id"])
@@ -686,12 +780,12 @@ async def list_failures(authorization: str = Header(default=""), status: str = "
 
 
 @router.patch("/failures/{fid}")
-async def update_failure(fid: str, body: dict, authorization: str = Header(default="")):
+async def update_failure(fid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
     client = sb()
-    caller = _resolve_caller(client, uid)
+    caller = _resolve_caller(client, uid, x_active_org)
     if not _can_view_failures(caller):
         raise HTTPException(403, "admin only")
     patch = {}
@@ -708,12 +802,12 @@ async def update_failure(fid: str, body: dict, authorization: str = Header(defau
 
 
 @router.get("/failures/config")
-async def get_failures_config(authorization: str = Header(default="")):
+async def get_failures_config(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
     client = sb()
-    caller = _resolve_caller(client, uid)
+    caller = _resolve_caller(client, uid, x_active_org)
     if not _can_view_failures(caller):
         raise HTTPException(403, "admin only")
     t = _tenant_row(client, caller["org_id"]) or {}
@@ -727,12 +821,12 @@ async def get_failures_config(authorization: str = Header(default="")):
 
 
 @router.put("/failures/config")
-async def put_failures_config(body: dict, authorization: str = Header(default="")):
+async def put_failures_config(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
     client = sb()
-    caller = _resolve_caller(client, uid)
+    caller = _resolve_caller(client, uid, x_active_org)
     if not _can_edit_setting(caller, "failures"):
         raise HTTPException(403, "you don't have permission to configure Failure Logs")
     patch = {}
@@ -752,14 +846,14 @@ async def put_failures_config(body: dict, authorization: str = Header(default=""
 
 
 @router.get("/tenant-settings")
-async def get_tenant_settings(authorization: str = Header(default="")):
+async def get_tenant_settings(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The signed-in user's OWN tenant pay-period settings + a worked example of upcoming periods.
     Any signed-in user may read; only an admin may write (PUT)."""
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
     client = sb()
-    caller = _resolve_caller(client, uid)
+    caller = _resolve_caller(client, uid, x_active_org)
     if not caller:
         raise HTTPException(403, "no tenant for this login")
     org_id = caller["org_id"]
@@ -772,7 +866,7 @@ async def get_tenant_settings(authorization: str = Header(default="")):
 
 
 @router.put("/tenant-settings")
-async def put_tenant_settings(body: dict, authorization: str = Header(default="")):
+async def put_tenant_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The tenant ADMIN defines/updates the pay period (captured at onboarding). Saving a complete,
     valid definition marks the tenant setup_complete (clears the setup banner). Super-admins may pass
     org_id to set it for any tenant; otherwise it targets the caller's own tenant."""
@@ -780,7 +874,7 @@ async def put_tenant_settings(body: dict, authorization: str = Header(default=""
     if not uid:
         raise HTTPException(401, "not authenticated")
     client = sb()
-    caller = _resolve_caller(client, uid)
+    caller = _resolve_caller(client, uid, x_active_org)
     if not caller:
         raise HTTPException(403, "no tenant for this login")
     org_id = (body.get("org_id") if caller["super_admin"] else None) or caller["org_id"] or ORG_ID
@@ -1185,21 +1279,40 @@ def _alias_email(email: str, slug: str, n: int = 0) -> str:
     return f"{local}+{tag if n == 0 else f'{tag}{n}'}@{domain}"
 
 
-def _provision_login(client, admin, cur_row, org_id, email, temp_pw):
-    """Bind an auth login to this tenant's app_users row. If the person ALREADY has a login in a
-    DIFFERENT tenant (app_users.auth_id is UNIQUE = one login per person per tenant), auto-mint a
-    tenant-aliased login (local+slug@domain) so they get a SEPARATE login for THIS tenant — never
-    reusing the credential they used elsewhere. Returns (login_email, auth_id, created, aliased)."""
+def _provision_login(client, admin, cur_row, org_id, email, temp_pw, separate_login=False):
+    """Bind an auth login to this tenant's app_users row. Returns
+    (login_email, auth_id, created, aliased, shared).
+
+    Multi-tenant (platform-core-9): if the person ALREADY has a login in a DIFFERENT tenant, the
+    DEFAULT is now to give THIS tenant a membership on the SAME auth_id — ONE credential spanning
+    both tenants (mig 706 makes app_users.auth_id unique per (auth_id, org_id), so this is allowed).
+    The person keeps their existing password (no forced reset — resetting would change the shared
+    credential). Set `separate_login=True` to force the legacy behaviour instead: mint a distinct
+    tenant-aliased login (local+slug@domain), a SEPARATE auth account for this tenant.
+
+    BACK-COMPAT: pre-mig-706 the global auth_id UNIQUE still stands, so a shared bind raises a
+    conflict — we catch it and fall back to aliasing, exactly today's behaviour until 706 runs."""
     auth_id, created, err = _create_or_link_auth(admin, email, temp_pw)
     if not auth_id:
         raise HTTPException(500, f"could not create login: {err}")
     clash = (client.schema("storeops").table("app_users").select("id").eq("auth_id", auth_id)
              .neq("org_id", org_id).limit(1).execute().data) or []
     if not clash:
+        # First login anywhere for this auth_id → bind directly (unchanged behaviour).
         client.schema("storeops").table("app_users").update(
             {"auth_id": auth_id, "must_reset_password": True}).eq("id", cur_row["id"]).execute()
-        return email, auth_id, created, False
-    # Already a login in another tenant → mint a distinct aliased login for this one.
+        return email, auth_id, created, False, False
+    # auth_id already belongs to another tenant.
+    if not separate_login:
+        # PREFER a shared credential across tenants (the multi-tenant login feature). must_reset only
+        # if we just minted the account; a person reusing an existing credential keeps it as-is.
+        try:
+            client.schema("storeops").table("app_users").update(
+                {"auth_id": auth_id, "must_reset_password": bool(created)}).eq("id", cur_row["id"]).execute()
+            return email, auth_id, created, False, True
+        except Exception:
+            pass  # pre-mig-706 global-unique conflict → fall through to the alias fallback
+    # Aliasing: explicit separate_login, OR the shared bind conflicted pre-mig-706.
     ten = (client.schema("storeops").table("tenants").select("slug,name").eq("org_id", org_id)
            .limit(1).execute().data) or [{}]
     slug = (ten[0].get("slug") or ten[0].get("name") or "t")
@@ -1214,7 +1327,7 @@ def _provision_login(client, admin, cur_row, org_id, email, temp_pw):
             continue  # alias already belongs to yet another org — try the next suffix
         client.schema("storeops").table("app_users").update(
             {"email": alias, "auth_id": a_id, "must_reset_password": True}).eq("id", cur_row["id"]).execute()
-        return alias, a_id, a_created, True
+        return alias, a_id, a_created, True, False
     raise HTTPException(409, "could not mint a distinct login for this tenant — try a different email")
 
 
@@ -1222,7 +1335,9 @@ def _provision_login(client, admin, cur_row, org_id, email, temp_pw):
 async def create_login(body: dict, org_id: str = ORG_ID):
     """Create (or relink) the Supabase Auth account for ONE assigned user and store auth_id.
     Returns the temp password so the admin can hand it out (user resets on first login). If the
-    person is already a login in ANOTHER tenant, a distinct tenant-aliased login is auto-minted."""
+    person already has a login in ANOTHER tenant, they get a SHARED membership on their existing
+    credential (ONE login, both tenants) — pass {separate_login:true} to mint a distinct
+    tenant-aliased login instead (the legacy behaviour)."""
     email = (body.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
@@ -1233,12 +1348,19 @@ async def create_login(body: dict, org_id: str = ORG_ID):
         raise HTTPException(400, "assign a role to this email first (/users/assign)")
     admin = get_supabase_admin()
     temp_pw = body.get("temp_password") or ("Mp" + secrets.token_urlsafe(6))
-    login_email, auth_id, created, aliased = _provision_login(client, admin, cur[0], org_id, email, temp_pw)
-    return {"email": login_email, "created": created, "temp_password": temp_pw, "auth_id": auth_id,
-            "aliased": aliased,
-            "note": (f"This person already has a login in another company, so a separate login "
-                     f"“{login_email}” was created for this tenant (it reaches the same inbox)."
-                     if aliased else None)}
+    separate_login = bool(body.get("separate_login"))
+    login_email, auth_id, created, aliased, shared = _provision_login(
+        client, admin, cur[0], org_id, email, temp_pw, separate_login=separate_login)
+    note = None
+    if aliased:
+        note = (f"This person already has a login in another company, so a separate login "
+                f"“{login_email}” was created for this tenant (it reaches the same inbox).")
+    elif shared:
+        note = ("This person already has a login in another company, so they were added to this "
+                "tenant on their EXISTING credential — after they sign in they'll see a tenant "
+                "picker and can switch between companies. No new password was set.")
+    return {"email": login_email, "created": created, "temp_password": (None if shared and not created else temp_pw),
+            "auth_id": auth_id, "aliased": aliased, "shared": shared, "note": note}
 
 
 @router.post("/users/reset-password")
