@@ -40,6 +40,14 @@ const MONEY_KEYS: (keyof State)[] = ['t_cash', 't_credit', 't_ext_cc', 't_gift',
 // The 7 built-in tender_keys that map to physical t_* columns; anything else is a custom tender (mig 111).
 const STD_KEYS = ['cash', 'credit', 'ext_cc', 'gift', 'store_acct', 'zelle', 'acima']
 
+// The 3 built-in activation-count fields, in display order (mig 501). field_key IS the physical
+// daily_closing column name for these three.
+const COUNTS: { key: 'upgrade_count' | 'new_line_count' | 'postpaid_count'; label: string }[] = [
+  { key: 'upgrade_count', label: 'Upgrades #' },
+  { key: 'new_line_count', label: 'New Lines #' },
+  { key: 'postpaid_count', label: 'Postpaid #' },
+]
+
 export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitted }:
   { defaultEmployeeName?: string; onSubmitted?: () => void }) {
   const [f, setF] = useState<State>(blank())
@@ -54,6 +62,8 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [ocrBusy, setOcrBusy] = useState(false)
   const [tdefs, setTdefs] = useState<any[] | null>(null)     // configured tenders (null = built-in 7, static)
   const [tv, setTv] = useState<Record<string, string>>({})   // amount per configured tender_key
+  const [cdefs, setCdefs] = useState<any[] | null>(null)      // configured count fields (null = built-in 3, static)
+  const [cv, setCv] = useState<Record<string, string>>({})    // value per configured field_key
 
   const set = (patch: Partial<State>) => setF(p => ({ ...p, ...patch }))
 
@@ -87,6 +97,9 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   useEffect(() => { api('/api/v1/closing/stores').then(s => setStores(s || [])).catch(() => {}) }, [])
   // Configured tenders (mig 111): render the tenant's own tender fields; null → the built-in 7 (static).
   useEffect(() => { api('/api/v1/closing/tender-config').then((d: any) => setTdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setTdefs(null)) }, [])
+  // Configured count fields (mig 501): render the tenant's own activation-count fields; null → the
+  // built-in 3 (static), so an un-opted tenant's form is byte-identical to today.
+  useEffect(() => { api('/api/v1/closing/count-config').then((d: any) => setCdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setCdefs(null)) }, [])
   useEffect(() => { if (defaultEmployeeName && !f.employee_name) set({ employee_name: defaultEmployeeName }) }, [defaultEmployeeName]) // eslint-disable-line
 
   const loadRecent = useCallback(() => {
@@ -122,6 +135,15 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
       tenderFields = { t_cash: f.t_cash, t_credit: f.t_credit, t_ext_cc: f.t_ext_cc,
         t_gift: f.t_gift, t_store_acct: f.t_store_acct, t_zelle: f.t_zelle, t_acima: f.t_acima }
     }
+    // Build the count fields: configured count fields (mig 501) → a single `counts` map keyed by
+    // field_key (standard field_keys route to the physical column server-side, custom ones to jsonb);
+    // no config → the static upgrade_count/new_line_count/postpaid_count fields (unchanged behaviour).
+    let countFields: any
+    if (cdefs) {
+      countFields = { counts: Object.fromEntries(cdefs.map((d: any) => [d.field_key, cv[d.field_key] || '0'])) }
+    } else {
+      countFields = { upgrade_count: f.upgrade_count, new_line_count: f.new_line_count, postpaid_count: f.postpaid_count }
+    }
     try {
       const r = await api('/api/v1/closing/row', { method: 'POST', body: JSON.stringify({
         close_date: f.close_date, sfid: f.sfid, store_code: f.store_code, store_name: f.store_name,
@@ -130,7 +152,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         epay_on_cash: f.epay_on_cash, epay_on_credit: f.epay_on_credit, epay_on_acima: f.epay_on_acima,
         acc_sale: f.acc_sale,
         expense_amount: f.expense_amount, expense_description: f.expense_description.trim(),
-        upgrade_count: f.upgrade_count, new_line_count: f.new_line_count, postpaid_count: f.postpaid_count,
+        ...countFields,
         envelope_picture: f.envelope_picture, remarks: f.remarks,
         ocr_cash: ocrCash || undefined,
       }) })
@@ -151,7 +173,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
       setF(p => ({ ...p, t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', epay_on_cash: '', epay_on_credit: '', epay_on_acima: '', acc_sale: '',
         expense_amount: '', expense_description: '',
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))
-      setTv({})
+      setTv({}); setCv({})
       setEnvPreview(''); setOcrCash(''); setOcrAmounts([])
       loadRecent()
       onSubmitted?.()
@@ -163,6 +185,15 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const total = tdefs
     ? tdefs.reduce((a, d) => a + (parseFloat(tv[d.tender_key] || '') || 0), 0)
     : MONEY_KEYS.reduce((a, k) => a + (parseFloat(f[k] as string) || 0), 0)
+  // The "recent submissions" columns: configured count fields (mig 501), else the built-in 3.
+  const countCols = cdefs
+    ? cdefs.map((d: any) => ({ key: d.field_key as string, label: d.label || d.field_key }))
+    : COUNTS.map(c => ({ key: c.key as string, label: c.label.replace(' #', '') }))
+  // A row's value for one count field_key: a standard key is a physical column, a custom one lives
+  // in the `counts` jsonb (mig 501).
+  function countVal(r: any, key: string) {
+    return key in r ? r[key] : (r.counts?.[key] ?? 0)
+  }
 
   return (
     <>
@@ -214,11 +245,21 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         </Row>
 
         <SectionLabel>Transaction counts</SectionLabel>
-        <Row>
-          <Field label="Upgrades #"><input style={inp} inputMode="numeric" value={f.upgrade_count} onChange={e => set({ upgrade_count: e.target.value })} placeholder="0" /></Field>
-          <Field label="New Lines #"><input style={inp} inputMode="numeric" value={f.new_line_count} onChange={e => set({ new_line_count: e.target.value })} placeholder="0" /></Field>
-          <Field label="Postpaid #"><input style={inp} inputMode="numeric" value={f.postpaid_count} onChange={e => set({ postpaid_count: e.target.value })} placeholder="0" /></Field>
-        </Row>
+        {cdefs ? (
+          <Row>
+            {cdefs.map((d: any) => (
+              <Field key={d.field_key} label={`${d.label || d.field_key} #`}>
+                <input style={inp} inputMode="numeric" value={cv[d.field_key] || ''} onChange={e => setCv(v => ({ ...v, [d.field_key]: e.target.value }))} placeholder="0" />
+              </Field>
+            ))}
+          </Row>
+        ) : (
+          <Row>
+            {COUNTS.map(c => (
+              <Field key={c.key} label={c.label}><input style={inp} inputMode="numeric" value={f[c.key]} onChange={e => set({ [c.key]: e.target.value } as Partial<State>)} placeholder="0" /></Field>
+            ))}
+          </Row>
+        )}
 
         <SectionLabel>Expense incurred (reimbursement — DM approves)</SectionLabel>
         <Row>
@@ -279,7 +320,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           <div className="card table-wrapper" style={{ padding: 0 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['Employee', 'Store', 'Cash', 'Credit', 'Ext CC', 'Gift', 'Acct', 'Zelle', 'Acc', 'Upg', 'New', 'Post', ''].map((h, i) =>
+                {['Employee', 'Store', 'Cash', 'Credit', 'Ext CC', 'Gift', 'Acct', 'Zelle', 'Acc', ...countCols.map(c => c.label), ''].map((h, i) =>
                   <th key={i} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -294,9 +335,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
                     <td style={cell}>{fmt(r.t_store_acct)}</td>
                     <td style={cell}>{fmt(r.t_zelle ?? r.other_account)}</td>
                     <td style={cell}>{fmt(r.acc_sale)}</td>
-                    <td style={cell}>{r.upgrade_count}</td>
-                    <td style={cell}>{r.new_line_count}</td>
-                    <td style={cell}>{r.postpaid_count}</td>
+                    {countCols.map(c => <td key={c.key} style={cell}>{countVal(r, c.key)}</td>)}
                     <td style={cell}>{r.auto_accepted ? <span title="accepted after 3 tries — under management review" style={{ fontSize: 11, color: '#b42318' }}>⚑ review</span> : <span style={{ fontSize: 11, color: 'var(--text3)' }}>{r.source === 'manual' ? 'form' : 'sheet'}</span>}</td>
                   </tr>
                 ))}

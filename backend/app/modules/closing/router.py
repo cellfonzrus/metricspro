@@ -338,6 +338,12 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
     rows = (client.schema("commcalc").table("daily_closing").select("*")
             .eq("org_id", org_id).eq("close_date", date).execute().data) or []
 
+    # Configurable activation-count fields (mig 501): empty config -> the hardcoded 3 fields
+    # (upgrade_count/new_line_count/postpaid_count), so an un-opted tenant is byte-identical.
+    from . import count_config
+    _cdefs = count_config.load_count_config(client, org_id)
+    _ckeys, _clabels, _crclass = count_config.count_axis(_cdefs)
+
     # Store + market context.
     stores = (client.schema("storeops").table("stores")
               .select("store_code,address,market").eq("org_id", org_id).execute().data) or []
@@ -421,6 +427,10 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
             "new_line_count": sum(int(r.get("new_line_count") or 0) for r in reps),
             "postpaid_count": sum(int(r.get("postpaid_count") or 0) for r in reps),
             "rep_count": len(reps),
+            # Config-driven count fields (mig 501) — the DM verify view + submit form render off this
+            # list instead of the 3 hardcoded keys above (which stay populated for backward-compat).
+            "counts": [{"field_key": k, "label": _clabels.get(k, k),
+                        "value": sum(count_config.row_value(r, k) for r in reps)} for k in _ckeys],
         }
         submitted_names = {(r.get("employee_name") or "").strip().lower() for r in reps}
         submitted_set = {sn for sn in submitted_names if sn}
@@ -462,8 +472,10 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
         cross_login.sort(key=lambda x: x["salesperson"])
 
         bb = b2b.get(code, {}) if code else {}
-        closing_acts = totals["new_line_count"] + totals["postpaid_count"]
-        closing_upg = totals["upgrade_count"]
+        # Sum by recon_class (config-driven, mig 501) instead of the 2 hardcoded field names — with an
+        # empty config _ckeys/_crclass fall back to the hardcoded 3, so this is unchanged by default.
+        closing_acts = sum(sum(count_config.row_value(r, k) for r in reps) for k in _ckeys if _crclass.get(k) == "activation")
+        closing_upg = sum(sum(count_config.row_value(r, k) for r in reps) for k in _ckeys if _crclass.get(k) == "upgrade")
         recon = None
         if bb:
             act_var = closing_acts - int(bb.get("activations", 0))
@@ -721,11 +733,34 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
         "store_address": sm.get("store_address"),
         "employee_name": payload.get("employee_name"),
         "acc_sale": _money(payload.get("acc_sale")),
-        "upgrade_count": _int(payload.get("upgrade_count")), "new_line_count": _int(payload.get("new_line_count")),
-        "postpaid_count": _int(payload.get("postpaid_count")),
         "envelope_picture": (payload.get("envelope_picture") or "").strip() or None,
         "remarks": payload.get("remarks"), "source": "manual",
     }
+    # ── Activation-count fields (mig 501). Configured tenants send `counts: {field_key: value}` for
+    #    every field on their axis; standard field_keys still write the physical column (backward-compat
+    #    with the rollup dashboard + sheet-upload ingestion), custom ones go to daily_closing.counts
+    #    jsonb. No config sent (or no tenant config at all) -> the legacy upgrade_count/new_line_count/
+    #    postpaid_count keys, byte-identical to today. ──
+    from . import count_config
+    _payload_counts = payload.get("counts")
+    if isinstance(_payload_counts, dict) and _payload_counts:
+        _cdefs = count_config.load_count_config(client, org_id)
+        _ckeys, _clabels, _crclass = count_config.count_axis(_cdefs)
+        _custom_counts = {}
+        for _k in _ckeys:
+            _v = _int(_payload_counts.get(_k))
+            if _k in count_config.STD_FIELD_KEYS:
+                body[_k] = _v
+            else:
+                _custom_counts[_k] = _v
+        for _k in count_config.STD_FIELD_KEYS:
+            body.setdefault(_k, 0)
+        if _custom_counts:
+            body["counts"] = _custom_counts
+    else:
+        body["upgrade_count"] = _int(payload.get("upgrade_count"))
+        body["new_line_count"] = _int(payload.get("new_line_count"))
+        body["postpaid_count"] = _int(payload.get("postpaid_count"))
     # Rep expense (reimbursement) — the rep enters an amount + a REQUIRED description; a positive
     # amount with no description is rejected. Starts unapproved; the DM approves it on the verify screen.
     exp_amt = _money(payload.get("expense_amount"))
@@ -807,7 +842,7 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
         # Tolerate not-yet-run additive migrations (t_acima=mig104, epay_on_*=mig106,
         # expense_*=mig109): drop the new keys + retry.
         for _k in ("t_acima", "epay_on_cash", "epay_on_credit", "epay_on_acima",
-                   "expense_amount", "expense_description", "expense_approved"):
+                   "expense_amount", "expense_description", "expense_approved", "counts"):
             body.pop(_k, None)
         r = client.schema("commcalc").table("daily_closing").insert(body).execute()
     saved = r.data[0] if r.data else body
@@ -1185,6 +1220,61 @@ async def detect_tenders(file: UploadFile = File(None), org_id: str = ORG_ID):
             "x_report": suggest_for_labels(sorted(x_labels), keys, labels, _canon_tender)}
 
 
+# ── Configurable activation-count fields (mig 501): standard-or-custom count fields on the closing ──
+# sheet, mirroring the tender-config endpoints above. Empty defs -> the app uses the built-in 3
+# (upgrade_count/new_line_count/postpaid_count); the wizard shows those as the starting point.
+@router.get("/count-config")
+def get_count_config(org_id: str = ORG_ID):
+    """The tenant's activation-count field definitions + the built-in standard template. Empty defs
+    means the rep form / DM verify view / recon all use the hardcoded 3 fields."""
+    require_org(org_id)
+    client = sb()
+    from . import count_config
+    defs = count_config.load_count_config(client, org_id)
+    standard = [{"field_key": k, "label": lbl, "recon_class": rc, "sort_order": so, "is_standard": True}
+                for (k, lbl, rc, so) in count_config.STANDARD_DEFS]
+    return {"defs": defs, "standard": standard}
+
+
+@router.put("/count-config")
+def put_count_config(payload: dict, org_id: str = ORG_ID):
+    """Save the tenant's count-field defs. Body {defs:[...]}. Full replace (delete-then-insert) — the
+    wizard always sends the complete set. Saving an EMPTY list reverts the tenant to the hardcoded 3."""
+    require_org(org_id)
+    client = sb()
+    defs = payload.get("defs") or []
+    try:
+        client.schema("commcalc").table("closing_count_field_def").delete().eq("org_id", org_id).execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — run migration 501_closing_count_field_registry.sql first. [{e}]")
+    rows = []
+    for i, dd in enumerate(defs):
+        key = (dd.get("field_key") or "").strip()
+        if not key:
+            continue
+        rows.append({"org_id": org_id, "field_key": key, "label": dd.get("label") or key,
+                     "sort_order": dd.get("sort_order", i), "is_standard": bool(dd.get("is_standard")),
+                     "is_active": dd.get("is_active", True) is not False,
+                     "recon_class": dd.get("recon_class") or "other"})
+    if rows:
+        client.schema("commcalc").table("closing_count_field_def").insert(rows).execute()
+    return {"ok": True, "defs": len(rows)}
+
+
+@router.post("/count-config/seed-standard")
+def seed_standard_counts(org_id: str = ORG_ID):
+    """Seed the 3 built-in count fields as editable defs — the starting point for a customized tenant."""
+    require_org(org_id)
+    client = sb()
+    from . import count_config
+    client.schema("commcalc").table("closing_count_field_def").delete().eq("org_id", org_id).execute()
+    rows = [{"org_id": org_id, "field_key": k, "label": lbl, "sort_order": so,
+             "is_standard": True, "is_active": True, "recon_class": rc}
+            for (k, lbl, rc, so) in count_config.STANDARD_DEFS]
+    client.schema("commcalc").table("closing_count_field_def").insert(rows).execute()
+    return {"ok": True, "seeded": len(rows)}
+
+
 # ── Reconciliation sheet: every day's closing-vs-B2B errors over a period ────────────────────
 # ── ePay bill-payment reconciliation: declared (closing) vs sales (by tender) vs bank-deposited ──────
 _EPAY_CATS = {"bill payments", "other carr. payments", "other carr payments", "bill payment"}
@@ -1370,6 +1460,10 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
                .eq("org_id", org_id).eq("period", period).limit(50000).execute().data) or []
     stores = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
     store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
+    # Configurable activation-count fields (mig 501) — same fallback-to-hardcoded-3 as closing_summary.
+    from . import count_config
+    _cdefs = count_config.load_count_config(client, org_id)
+    _ckeys, _clabels, _crclass = count_config.count_axis(_cdefs)
 
     by_date = {}
     for r in closing:
@@ -1408,8 +1502,8 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
             # store-level count recon
             if code and day["has_data"] and code in day["counts"]:
                 cnt = day["counts"][code]
-                cl_act = sum(int(x.get("new_line_count") or 0) + int(x.get("postpaid_count") or 0) for x in reps)
-                cl_upg = sum(int(x.get("upgrade_count") or 0) for x in reps)
+                cl_act = sum(sum(count_config.row_value(x, k) for x in reps) for k in _ckeys if _crclass.get(k) == "activation")
+                cl_upg = sum(sum(count_config.row_value(x, k) for x in reps) for k in _ckeys if _crclass.get(k) == "upgrade")
                 for metric, dv, bv in (("activations", cl_act, cnt["activations"]), ("upgrades", cl_upg, cnt["upgrades"])):
                     if dv != bv:
                         flags += 1

@@ -14,6 +14,12 @@ const cell: React.CSSProperties = { padding: '6px 9px', borderBottom: '1px solid
 
 type Form = { dm_store_cash: string; dm_store_cc: string; dm_epay_cash: string; dm_epay_cc: string; dm_acc_sale: string; dm_other: string; note: string }
 
+// A rep row's value for one activation-count field_key (mig 501): a standard field_key is a physical
+// column on the row, a custom one lives in the `counts` jsonb.
+function countVal(r: any, key: string) {
+  return key in r ? r[key] : (r.counts?.[key] ?? 0)
+}
+
 export default function DailyClosingVerify() {
   const { user, permissions } = useAuth()
   const [date, setDate] = useState(localToday())
@@ -154,6 +160,9 @@ export default function DailyClosingVerify() {
         const recon = s.recon
         const expTotal = (s.reps || []).reduce((a: number, r: any) => a + (Number(r.expense_amount) || 0), 0)
         const expPending = (s.reps || []).filter((r: any) => (Number(r.expense_amount) || 0) > 0 && !r.expense_approved).length
+        // Config-driven activation-count fields (mig 501) — from totals.counts, so an un-opted tenant
+        // still shows exactly the 3 built-in fields (Upgrades / New Lines / Postpaid).
+        const countCols: { key: string; label: string }[] = (t.counts || []).map((c: any) => ({ key: c.field_key, label: c.label }))
         return (
           <div key={k} className="card" style={{ padding: 16, marginBottom: 14, borderLeft: `4px solid ${ver ? 'var(--green, #16794a)' : recon?.discrepancy ? 'var(--amber, #b45309)' : 'var(--border)'}` }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
@@ -201,7 +210,9 @@ export default function DailyClosingVerify() {
               <Stat label="Acc sale" value={fmt(t.acc_sale)} />
               <Stat label="Other" value={fmt(t.other_account)} />
               {expTotal > 0 && <Stat label="Rep expenses" value={fmt(expTotal)} />}
-              <Stat label="Upg / New / Post" value={`${t.upgrade_count} / ${t.new_line_count} / ${t.postpaid_count}`} />
+              {countCols.length > 0
+                ? countCols.map(c => <Stat key={c.key} label={c.label} value={String((t.counts || []).find((x: any) => x.field_key === c.key)?.value ?? 0)} />)
+                : <Stat label="Upg / New / Post" value={`${t.upgrade_count} / ${t.new_line_count} / ${t.postpaid_count}`} />}
             </div>
 
             {expPending > 0 && (
@@ -230,8 +241,10 @@ export default function DailyClosingVerify() {
               <div className="table-wrapper" style={{ marginTop: 8 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead><tr style={{ background: 'var(--surface2)' }}>
-                    {['Employee', 'Store cash', 'Store CC', 'ePay cash', 'ePay CC', 'Acc', 'Other', 'Upg', 'New', 'Post', 'Env', 'Expense', 'Approve exp.'].map(h =>
-                      <th key={h} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
+                    {['Employee', 'Store cash', 'Store CC', 'ePay cash', 'ePay CC', 'Acc', 'Other',
+                      ...(countCols.length > 0 ? countCols.map(c => c.label) : ['Upg', 'New', 'Post']),
+                      'Env', 'Expense', 'Approve exp.'].map((h, i) =>
+                      <th key={i} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
                   </tr></thead>
                   <tbody>
                     {s.reps.map((r: any) => (
@@ -243,9 +256,8 @@ export default function DailyClosingVerify() {
                         <td style={cell}>{fmt(r.epay_cc)}</td>
                         <td style={cell}>{fmt(r.acc_sale)}</td>
                         <td style={cell}>{fmt(r.other_account)}</td>
-                        <td style={cell}>{r.upgrade_count}</td>
-                        <td style={cell}>{r.new_line_count}</td>
-                        <td style={cell}>{r.postpaid_count}</td>
+                        {(countCols.length > 0 ? countCols : [{ key: 'upgrade_count', label: 'Upg' }, { key: 'new_line_count', label: 'New' }, { key: 'postpaid_count', label: 'Post' }])
+                          .map(c => <td key={c.key} style={cell}>{countVal(r, c.key)}</td>)}
                         <td style={cell}>{(r.envelope_url || r.envelope_picture) ? <a href={r.envelope_url || r.envelope_picture} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>📷</a> : '—'}</td>
                         <td style={cell}>
                           {(Number(r.expense_amount) || 0) > 0
