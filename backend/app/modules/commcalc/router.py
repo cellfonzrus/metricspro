@@ -6875,26 +6875,35 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID):
 def sales_fields(period: str = "", org_id: str = ORG_ID):
     """Populate the accessory-settings pickers: the distinct Department + Category values in the sales
     data, plus the top PRODUCT descriptions on the non-phone (blank Contract Type) lines — that's where
-    accessories live when a POS carries no dept/category — as keyword suggestions. `period` blank = all."""
+    accessories live when a POS carries no dept/category — as keyword suggestions. `period` blank = all.
+    Also returns the distinct Contract Type + Transaction Type values so the Commission-Plan `match_value`
+    picker can offer the OBSERVED values for the selected match_field (RULE THREE §3b — pick, don't type).
+    READ-ONLY; adds keys only (never removes) so existing accessory-settings callers are unaffected."""
     client = sb()
-    depts, cats, tenders = set(), set(), set()
+    depts, cats, tenders, ctypes, ttypes = set(), set(), set(), set(), set()
     prod = {}
     for tbl in ("daily_sales_feed", "raw_sales"):
         try:
-            q = client.schema("commcalc").table(tbl).select("department,category,product_desc,contract_type,tender_type").eq("org_id", org_id)
+            q = client.schema("commcalc").table(tbl).select("department,category,product_desc,contract_type,tender_type,trans_type").eq("org_id", org_id)
             if period:
                 q = q.in_("period", _pvariants(period))
             for r in (q.limit(200000).execute().data or []):
                 d = (r.get("department") or "").strip()
                 c = (r.get("category") or "").strip()
                 t = (r.get("tender_type") or "").strip()
+                ct = (r.get("contract_type") or "").strip()
+                tt = (r.get("trans_type") or "").strip()
                 if d:
                     depts.add(d)
                 if c:
                     cats.add(c)
                 if t:
                     tenders.add(t)
-                if not (r.get("contract_type") or "").strip():   # non-phone line → candidate accessory
+                if ct:
+                    ctypes.add(ct)
+                if tt:
+                    ttypes.add(tt)
+                if not ct:   # non-phone line → candidate accessory
                     p = (r.get("product_desc") or "").strip()
                     if p:
                         prod[p] = prod.get(p, 0) + 1
@@ -6903,7 +6912,7 @@ def sales_fields(period: str = "", org_id: str = ORG_ID):
     top_products = [p for p, _ in sorted(prod.items(), key=lambda kv: -kv[1])[:60]]
     cur = _accessory_config(client, org_id)
     return {"departments": sorted(depts), "categories": sorted(cats), "products": top_products,
-            "tenders": sorted(tenders),
+            "tenders": sorted(tenders), "contract_types": sorted(ctypes), "trans_types": sorted(ttypes),
             "accessory_departments": cur["departments_list"], "accessory_categories": cur["categories_list"],
             "accessory_product_keywords": cur["products_list"], "acima_tenders": cur["acima_tenders_list"]}
 

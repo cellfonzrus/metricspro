@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { api, apiUpload, ORG_ID } from '@/lib/client'
 import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
+import EntityPicker from '@/components/EntityPicker'
 
 // Implementation Wizard — onboard a new company's data end-to-end: map EVERY source report they
 // upload (auto-detect columns from a sample) → see exactly which DESIRED OUTPUT reports (Commissions,
@@ -233,12 +234,19 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
                   {fields.map(f => (
                     <tr key={f.target_field}>
                       <td style={cell}>{f.label}{f.required && <span style={{ color: '#b42318' }}> *</span>}</td>
-                      <td style={cell}><input list={`hdr-${reportKey}`} style={{ ...sel, width: '100%' }} placeholder="(unmapped)" value={src[f.target_field] || ''} onChange={e => setSrc(p => ({ ...p, [f.target_field]: e.target.value }))} /></td>
+                      {/* RULE THREE §3b: pick the detected column; allowCreate keeps manual entry pre-detect. */}
+                      <td style={cell}>
+                        <EntityPicker
+                          options={(() => { const o = headers.map(h => ({ id: h, label: h })); const cur = src[f.target_field]; if (cur && !o.some(x => x.id === cur)) o.unshift({ id: cur, label: cur }); return o })()}
+                          value={src[f.target_field] || null} allowCreate width="100%"
+                          onChange={v => setSrc(p => ({ ...p, [f.target_field]: v || '' }))}
+                          onCreate={v => setSrc(p => ({ ...p, [f.target_field]: v }))}
+                          placeholder="(unmapped)" ariaLabel="Your column" />
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>}
-          {headers.length > 0 && <datalist id={`hdr-${reportKey}`}>{headers.map(h => <option key={h} value={h} />)}</datalist>}
         </div>
       )}
     </div>

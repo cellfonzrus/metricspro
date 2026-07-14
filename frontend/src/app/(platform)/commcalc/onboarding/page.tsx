@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { api } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
+import EntityPicker from '@/components/EntityPicker'
 
 // Onboarding wizard (A3): one guided flow to bring a NEW carrier/company online end-to-end —
 // company → carrier → connector + reports → upload a sample + map its columns → map comp categories
@@ -316,13 +317,20 @@ function ColumnsStep({ reportKey, targetTable, carrierId, setMsg }: { reportKey:
             {fields.map(f => (
               <tr key={f.target_field}>
                 <td style={cell}>{f.label}{f.required && <span style={{ color: '#b45309' }} title="Used by the standard reports — recommended, but not required to import"> ★</span>}</td>
-                <td style={cell}><input list="ob-headers" style={{ ...sel, width: '100%' }} placeholder="(unmapped)" value={src[f.target_field] || ''} onChange={e => setSrc(p => ({ ...p, [f.target_field]: e.target.value }))} /></td>
+                {/* RULE THREE §3b: pick the detected source column; allowCreate keeps manual entry pre-detect. */}
+                <td style={cell}>
+                  <EntityPicker
+                    options={(() => { const o = headers.map(h => ({ id: h, label: h })); const cur = src[f.target_field]; if (cur && !o.some(x => x.id === cur)) o.unshift({ id: cur, label: cur }); return o })()}
+                    value={src[f.target_field] || null} allowCreate width="100%"
+                    onChange={v => setSrc(p => ({ ...p, [f.target_field]: v || '' }))}
+                    onCreate={v => setSrc(p => ({ ...p, [f.target_field]: v }))}
+                    placeholder="(unmapped)" ariaLabel="Source column" />
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
-      {headers.length > 0 && <datalist id="ob-headers">{headers.map(h => <option key={h} value={h} />)}</datalist>}
     </div>
   )
 }

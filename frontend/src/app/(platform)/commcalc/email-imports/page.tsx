@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
+import EntityPicker from '@/components/EntityPicker'
 
 // Generic email (IMAP) inbox sweep — sibling of the FTP sweep. Configure a mailbox (host/creds) and
 // attachment-filename → upload-type patterns; the backend polls the inbox on a schedule and routes
@@ -612,13 +613,16 @@ export default function EmailImportsPage() {
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Label<br />
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="VidaPay — login 1 (NY stores)" value={srcDraft.label || ''} onChange={e => setSrcDraft({ ...srcDraft, label: e.target.value })} /></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Processor<br />
-                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} list="processors" value={srcDraft.processor || ''} onChange={e => {
-                  const proc = e.target.value
-                  const patch: any = { processor: proc }
-                  if (!srcDraft.portal_url && proc === 'b2bsoft') patch.portal_url = 'https://wsreports.b2bsoft.com'
-                  setSrcDraft({ ...srcDraft, ...patch })
-                }} />
-                <datalist id="processors"><option value="vidapay" /><option value="total_access" /><option value="b2bsoft" /><option value="epay" /><option value="other" /></datalist></label>
+                {/* RULE THREE §3b: pick a KNOWN processor (mis-filing a tenant/processor routes data wrong);
+                    a genuinely new processor stays available via the explicit create affordance. */}
+                <div style={{ marginTop: 4 }}>
+                  <EntityPicker
+                    options={(() => { const o = ['vidapay', 'total_access', 'b2bsoft', 'epay', 'other'].map(p => ({ id: p, label: p })); if (srcDraft.processor && !o.some(x => x.id === srcDraft.processor)) o.unshift({ id: srcDraft.processor, label: srcDraft.processor }); return o })()}
+                    value={srcDraft.processor || null} allowCreate width="100%"
+                    onChange={proc => { const patch: any = { processor: proc || '' }; if (proc === 'b2bsoft' && !srcDraft.portal_url) patch.portal_url = 'https://wsreports.b2bsoft.com'; setSrcDraft({ ...srcDraft, ...patch }) }}
+                    onCreate={proc => { const patch: any = { processor: proc }; if (proc === 'b2bsoft' && !srcDraft.portal_url) patch.portal_url = 'https://wsreports.b2bsoft.com'; setSrcDraft({ ...srcDraft, ...patch }) }}
+                    placeholder="pick or type a processor…" ariaLabel="Processor" />
+                </div></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Distributor<br />
                 <select style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.distributor_id || ''} onChange={e => setSrcDraft({ ...srcDraft, distributor_id: e.target.value })}>
                   <option value="">—</option>

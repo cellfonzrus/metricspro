@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, apiUpload, fmt } from '@/lib/client'
+import EntityPicker from '@/components/EntityPicker'
 
 // Multi-month payout schedules (migration 057). A schedule spreads one activation's commission over
 // N months (flat or %MRC); months 2..N pay only if the bill was paid + residual received that month.
@@ -246,8 +247,16 @@ export default function PayoutSchedulesPage() {
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12 }}>
           <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Plan name<br />
-            <input style={{ ...sel, marginTop: 4, width: 220 }} list="seen-plans" placeholder={seenPlans.length ? 'pick or type a plan…' : 'e.g. Total Unlimited $60'} value={mrcDraft.plan_pattern} onChange={e => setMrcDraft({ ...mrcDraft, plan_pattern: e.target.value })} />
-            <datalist id="seen-plans">{seenPlans.map(p => <option key={p} value={p} />)}</datalist>
+            {/* RULE THREE §3b: pick an OBSERVED plan (from the statements) instead of free-typing; a
+                genuine new/contains pattern stays available via the explicit create affordance. */}
+            <div style={{ marginTop: 4 }}>
+              <EntityPicker
+                options={(() => { const o = seenPlans.map(p => ({ id: p, label: p })); if (mrcDraft.plan_pattern && !o.some(x => x.id === mrcDraft.plan_pattern)) o.unshift({ id: mrcDraft.plan_pattern, label: mrcDraft.plan_pattern }); return o })()}
+                value={mrcDraft.plan_pattern || null} allowCreate width={220}
+                onChange={v => setMrcDraft({ ...mrcDraft, plan_pattern: v || '' })}
+                onCreate={v => setMrcDraft({ ...mrcDraft, plan_pattern: v })}
+                placeholder={seenPlans.length ? 'pick or type a plan…' : 'e.g. Total Unlimited $60'} ariaLabel="Plan name" />
+            </div>
             {!seenPlans.length && <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text3)', display: 'block' }}>Tip: run “Check plans” below to fill this dropdown with the plans on your statements.</span>}
           </label>
           <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Match<br />

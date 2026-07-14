@@ -4,6 +4,7 @@ import { api, fmt } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import EntityPicker from '@/components/EntityPicker'
 
 // Chargeback & fraud bucket — candidates (VIP file now; fraud detectors next) ASSIGNED to the rep
 // who did the sale, which writes the employee's chargeback. Fraud-review rows can be dismissed
@@ -28,6 +29,9 @@ export default function ChargebacksPage() {
   const [fStore, setFStore] = useState('')
   const [fMonth, setFMonth] = useState('')
   const [q, setQ] = useState('')
+  const [emps, setEmps] = useState<any[]>([])   // roster: gives the rep picker its email sublabels
+
+  useEffect(() => { api('/api/v1/storeops/employees?all_company=true').then((r: any) => setEmps(Array.isArray(r) ? r : [])).catch(() => {}) }, [])
 
   const load = useCallback(() => {
     setLoading(true)
@@ -75,6 +79,19 @@ export default function ChargebacksPage() {
   const dateOf = (r: any) => String(r.occurred_date || r.period || '')
   const reps = useMemo(() => Array.from(new Set(rows.map(repOf).filter(Boolean))).sort(), [rows])
   const stores = useMemo(() => Array.from(new Set(rows.map(storeOf).filter(Boolean))).sort(), [rows])
+  // name -> email (best-effort) so two same-name reps auto-disambiguate in the assign picker
+  const empEmail = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const e of emps) {
+      const nm = String(e.name || '').trim().toLowerCase().replace(/\s+/g, ' ')
+      const em = e.email || e.work_email || ''
+      if (nm && em && !m[nm]) m[nm] = em
+    }
+    return m
+  }, [emps])
+  // RULE THREE §3b: assign to an EXISTING rep (allowCreate=false). id===name string so the stored
+  // value is byte-identical to what the old free-text box saved; email shows only to disambiguate.
+  const repOptions = useMemo(() => reps.map(r => ({ id: r, label: r, sublabel: empEmail[r.trim().toLowerCase().replace(/\s+/g, ' ')] || undefined })), [reps, empEmail])
   const months = useMemo(() => Array.from(new Set(rows.map(r => dateOf(r).slice(0, 7)).filter(m => /^\d{4}-\d{2}/.test(m)))).sort().reverse(), [rows])
   const filtered = useMemo(() => rows.filter(r => {
     if (fRep && repOf(r) !== fRep) return false
@@ -181,7 +198,10 @@ export default function ChargebacksPage() {
                       {done
                         ? <span style={{ fontSize: 12 }}>{r.assigned_rep ? `→ ${r.assigned_rep}` : <span style={{ color: 'var(--text3)' }}>{r.status}</span>}{r.reason ? <span style={{ color: 'var(--text3)' }}> · {r.reason}</span> : ''}</span>
                         : <>
-                            <input style={tin} list={`reps-${r.id}`} placeholder="rep" value={e.rep} onChange={ev => set(r.id, { rep: ev.target.value })} />
+                            <EntityPicker
+                              options={e.rep && !repOptions.some(o => o.id === e.rep) ? [{ id: e.rep, label: e.rep }, ...repOptions] : repOptions}
+                              value={e.rep || null} width={130} placeholder="Assign rep…" ariaLabel="Assign rep"
+                              onChange={v => set(r.id, { rep: v || '' })} />
                             {r.suggested_rep && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>suggested: {r.suggested_rep}</div>}
                             <input style={{ ...tin, marginTop: 4 }} placeholder="reason" value={e.reason} onChange={ev => set(r.id, { reason: ev.target.value })} />
                           </>}

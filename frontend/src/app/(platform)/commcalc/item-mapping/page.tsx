@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
+import EntityPicker from '@/components/EntityPicker'
 
 // The "SU sheet": each sales item (SKU / description) → type (accessory|phone|other|unclassified)
 // + phone model. Seeds from the Product Catalog; auto-grows as new items appear in sales. item_type
@@ -100,7 +101,6 @@ export default function ItemMappingPage() {
 
   return (
     <div>
-      <datalist id="phone-models">{models.map(m => <option key={m} value={m} />)}</datalist>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧩 Item / Model Mapping</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
@@ -153,7 +153,11 @@ export default function ItemMappingPage() {
             <option value="">(keep)</option>{TYPES.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
           <span style={{ fontSize: 12 }}>set model</span>
-          <input list="phone-models" style={{ ...sel, width: 200, borderColor: bulkType === 'phone' && !bulkModel.trim() ? '#dc2626' : 'var(--border)' }} placeholder={bulkType === 'phone' ? 'required for phone' : '(keep)'} value={bulkModel} onChange={e => setBulkModel(e.target.value)} />
+          <EntityPicker
+            options={(() => { const o = models.map(m => ({ id: m, label: m })); if (bulkModel && !o.some(x => x.id === bulkModel)) o.unshift({ id: bulkModel, label: bulkModel }); return o })()}
+            value={bulkModel || null} allowCreate width={200}
+            onChange={v => setBulkModel(v || '')} onCreate={v => setBulkModel(v)}
+            placeholder={bulkType === 'phone' ? 'required for phone' : '(keep)'} ariaLabel="Set phone model" />
           <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={applyBulk}>Apply to {picked.size}</button>
           <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => setPicked(new Set())}>Clear</button>
         </div>
@@ -181,7 +185,11 @@ export default function ItemMappingPage() {
                     </select>
                   </td>
                   <td style={cell}>
-                    <input list="phone-models" style={{ ...sel, width: 200, borderColor: needsModel ? '#dc2626' : 'var(--border)' }} value={i.device_model || ''} placeholder={needsModel ? 'required' : '—'} onChange={e => setItem(i.id, { device_model: e.target.value })} />
+                    <EntityPicker
+                      options={(() => { const o = models.map(m => ({ id: m, label: m })); if (i.device_model && !o.some(x => x.id === i.device_model)) o.unshift({ id: i.device_model, label: i.device_model }); return o })()}
+                      value={i.device_model || null} allowCreate width={200}
+                      onChange={v => setItem(i.id, { device_model: v || '' })} onCreate={v => setItem(i.id, { device_model: v })}
+                      placeholder={needsModel ? 'required' : '—'} ariaLabel="Phone model" />
                   </td>
                   <td style={{ ...cell, fontSize: 11, color: 'var(--text3)' }}>{i.source || '—'}</td>
                   <td style={{ ...cell, whiteSpace: 'nowrap' }}>

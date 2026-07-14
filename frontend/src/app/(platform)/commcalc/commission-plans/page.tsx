@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, fmt } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import EntityPicker from '@/components/EntityPicker'
 
 // Configurable commission PLAN engine (migration 059). A PLAN is a set of RULES the user creates — each
 // rule matches sale lines on any sales-transaction field (contract_type/tender_type/department/category/
@@ -54,6 +55,9 @@ export default function CommissionPlansPage() {
   const [carriers, setCarriers] = useState<any[]>([])
   const [employees, setEmployees] = useState<any[]>([])
   const [stores, setStores] = useState<any[]>([])
+  // OBSERVED raw-data values per match_field (RULE THREE §3b) — powers the match_value picker so a
+  // rule references a REAL sales value instead of a typo that silently never matches ($0 pay).
+  const [observed, setObserved] = useState<Record<string, string[]>>({})
   const [ready, setReady] = useState(true)
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
@@ -70,6 +74,13 @@ export default function CommissionPlansPage() {
       setCarriers(await api('/api/v1/commcalc/carriers').catch(() => []))
       setEmployees(await api('/api/v1/storeops/employees?all_company=true').catch(() => []))
       setStores(await api('/api/v1/storeops/stores').catch(() => []))
+      // distinct observed values for the match_value picker (all periods; read-only)
+      const sf: any = await api('/api/v1/commcalc/sales-fields').catch(() => ({}))
+      setObserved({
+        contract_type: sf.contract_types || [], tender_type: sf.tenders || [],
+        department: sf.departments || [], category: sf.categories || [],
+        product_desc: sf.products || [], trans_type: sf.trans_types || [], sku: [],
+      })
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
   }
   useEffect(() => { load() }, [])
@@ -220,7 +231,24 @@ export default function CommissionPlansPage() {
                       </select>
                     </td>
                     <td style={td}>
-                      <input style={{ ...sel, width: 150 }} placeholder={r.match_field === 'any' ? '(any line)' : FIELD_HELP[r.match_field] || 'value'} value={r.match_value} disabled={r.match_field === 'any'} onChange={e => updRule(i, { match_value: e.target.value })} />
+                      {(() => {
+                        // RULE THREE §3b: pick an OBSERVED value for the selected match_field instead of
+                        // free-typing (a typo silently never matches → $0 pay). allowCreate keeps the
+                        // legitimate op=contains PATTERN + rules that pre-date the data as an EXPLICIT
+                        // choice. The picker emits the raw string (id===value) — byte-identical to typing.
+                        const isAny = r.match_field === 'any'
+                        const opts = (observed[r.match_field] || []).map(v => ({ id: v, label: v }))
+                        if (r.match_value && !opts.some(o => o.id === r.match_value)) opts.unshift({ id: r.match_value, label: r.match_value })
+                        return (
+                          <EntityPicker
+                            options={opts} value={r.match_value || null} allowCreate disabled={isAny} width={168}
+                            onChange={v => updRule(i, { match_value: v || '' })}
+                            onCreate={v => updRule(i, { match_value: v })}
+                            createLabel={v => `Use “${v}” (${r.match_op === 'contains' ? 'pattern' : r.match_op === 'in' ? 'comma list' : 'exact'})`}
+                            placeholder={isAny ? '(any line)' : r.match_op === 'contains' ? 'pick or type a pattern…' : r.match_op === 'in' ? 'pick or type (comma list)…' : FIELD_HELP[r.match_field] || 'pick or type a value…'}
+                            ariaLabel="Match value" />
+                        )
+                      })()}
                     </td>
                     <td style={{ ...td, textAlign: 'center' }}><input type="checkbox" checked={r.qualifies} onChange={e => updRule(i, { qualifies: e.target.checked })} /></td>
                     <td style={td}>

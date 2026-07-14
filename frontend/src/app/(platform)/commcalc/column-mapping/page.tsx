@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '@/lib/client'
+import EntityPicker from '@/components/EntityPicker'
 
 // Generic column mapping (A2): map a carrier's spreadsheet column headers to our canonical DB
 // fields — config-driven, so a NEW carrier's report is ingested with zero code. Seed the Boost
@@ -154,9 +155,14 @@ export default function ColumnMappingPage() {
                     <div style={{ fontSize: 10, color: 'var(--text3)' }}>{tf}</div>
                   </td>
                   <td style={cell}>
-                    <input list={`hdrs-${tf}`} style={{ ...sel, width: '100%', borderColor: r.confidence ? CONF_COLOR[r.confidence] : 'var(--border)' }}
-                      placeholder="(unmapped)" value={r.source_header} onChange={e => setRow(tf, { source_header: e.target.value, confidence: '' })} />
-                    {headers.length > 0 && <datalist id={`hdrs-${tf}`}>{headers.map(h => <option key={h} value={h} />)}</datalist>}
+                    {/* RULE THREE §3b: pick the file's actual detected column; allowCreate keeps manual
+                        entry when a sample hasn't been uploaded yet ("actual headers where available"). */}
+                    <EntityPicker
+                      options={(() => { const o = headers.map(h => ({ id: h, label: h })); if (r.source_header && !o.some(x => x.id === r.source_header)) o.unshift({ id: r.source_header, label: r.source_header }); return o })()}
+                      value={r.source_header || null} allowCreate width="100%"
+                      onChange={v => setRow(tf, { source_header: v || '', confidence: '' })}
+                      onCreate={v => setRow(tf, { source_header: v, confidence: '' })}
+                      placeholder="(unmapped)" ariaLabel="Source column header" />
                     {r.confidence && <span style={{ fontSize: 10, color: CONF_COLOR[r.confidence] }}>{r.confidence} match</span>}
                   </td>
                   <td style={cell}>
