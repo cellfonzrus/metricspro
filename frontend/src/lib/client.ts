@@ -49,6 +49,42 @@ export function activeOrgHeader(): Record<string, string> {
   return o ? { 'x-active-org': o } : {}
 }
 
+// ── org_id APPEND (super-admin house-default hole — NEEDS CORE from mod-commission, 2026-07-14) ────
+// The tenant middleware does NOT rewrite org_id for a super-admin (their client-supplied org_id is
+// honored — that is what makes cross-tenant admin work). But ~17 commcalc/report READ pages call api()
+// with NO org_id in the URL, so for a super-admin those fall through to the backend's `org_id = ORG_ID`
+// default = the HOUSE org → a super-admin "acting as" a tenant via the switcher sees HOUSE data
+// mislabeled (or empty-looking pages once client-side store filters apply). scopeOrg() only SUBSTITUTES
+// an org_id already present — it never APPENDS one, so it can't fix an org-less URL.
+//
+// Fix: when a request carries NO org_id AND an active tenant is known (`mp_active_org`, maintained by
+// the switcher / auth-context after /core/me resolves), APPEND `org_id=<active>` to the query string.
+//   • Normal user  → HARMLESS: the middleware overrides org_id with their VERIFIED membership regardless
+//                     of what the client sends, so the appended value is discarded server-side.
+//   • Super-admin   → CLOSES the hole: their bypass trusts the client org_id, so the switcher's active
+//                     org now drives org-less reads (the intended "acting as tenant" behavior).
+//   • URL already carries org_id (e.g. /admin/billing?org_id=<specific tenant>, or a page that hardcodes
+//     org_id=ORG_ID) → LEFT UNTOUCHED: append never double-adds and never overrides a deliberate
+//     cross-tenant admin query. Those keep scopeOrg's existing substitute behavior.
+//   • Before /core/me resolves (no active org known yet) → getActiveOrg() is null → append nothing.
+// A fragment (rare for API paths) is carried through so org_id lands in the query, not the hash.
+function appendActiveOrg(path: string): string {
+  const active = getActiveOrg()
+  if (!active) return path
+  const hashIdx = path.indexOf('#')
+  const base = hashIdx >= 0 ? path.slice(0, hashIdx) : path
+  const frag = hashIdx >= 0 ? path.slice(hashIdx) : ''
+  if (/[?&]org_id=/.test(base)) return path            // already scoped → don't double-add / don't fight it
+  const sep = base.includes('?') ? '&' : '?'
+  return `${base}${sep}org_id=${encodeURIComponent(active)}${frag}`
+}
+// Compose substitute-then-append: scopeOrg rewrites an existing org_id (legacy P2, gated), appendActiveOrg
+// adds one when absent. They are mutually exclusive by construction (one acts iff org_id present, the other
+// iff absent), so they never conflict.
+function withOrgScope(path: string): string {
+  return appendActiveOrg(scopeOrg(path))
+}
+
 // Render a FastAPI error body as a readable string. `detail` may be a string, an ARRAY of
 // validation errors (422 → [{loc,msg,...}]), or an object — coercing those with `+`/template
 // strings is what produced the "[object Object]" error users saw on upload.
@@ -74,7 +110,7 @@ async function bearer(): Promise<Record<string, string>> {
 // An explicit Authorization in opts.headers still wins (spread last).
 export async function api(path: string, opts: RequestInit = {}) {
   const authHeader = await bearer()
-  const res = await fetch(`${API_URL}${scopeOrg(path)}`, {
+  const res = await fetch(`${API_URL}${withOrgScope(path)}`, {
     ...opts,
     headers: { 'Content-Type': 'application/json', ...authHeader, ...activeOrgHeader(), ...opts.headers },
   })
@@ -90,7 +126,7 @@ export async function api(path: string, opts: RequestInit = {}) {
 // token too (needed once enforcement is on).
 export async function apiUpload(path: string, form: FormData) {
   const authHeader = await bearer()
-  const res = await fetch(`${API_URL}${scopeOrg(path)}`, { method: 'POST', body: form,
+  const res = await fetch(`${API_URL}${withOrgScope(path)}`, { method: 'POST', body: form,
     headers: { ...authHeader, ...activeOrgHeader() } })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
