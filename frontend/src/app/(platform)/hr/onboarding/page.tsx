@@ -14,6 +14,8 @@ type Task = {
   applies_state?: string | null; sort_order?: number; is_active?: boolean
   template_name?: string | null
   requires_signature?: boolean; form_fields?: { key?: string; label?: string; required?: boolean }[] | string | null
+  // migration 401 (items 1 / 4 / 6)
+  is_mandatory?: boolean; work_auth?: boolean; sample_name?: string | null
 }
 type Cat = { id: string; key: string; label: string; sort_order?: number; is_active?: boolean; tasks: Task[] }
 type IField = { id?: string; key?: string; label: string; section?: string; field_type?: string; options?: string[] | null; required?: boolean; propagate_to?: string | null; sensitive?: boolean; help_text?: string; sort_order?: number; is_active?: boolean }
@@ -28,7 +30,7 @@ const btnP: React.CSSProperties = { ...btn, background: 'var(--accent,#2563eb)',
 const chip = (role: string): React.CSSProperties => ({ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, color: '#fff', background: ROLE_COLOR[role] || '#64748b' })
 
 export default function OnboardingAdminPage() {
-  const [tab, setTab] = useState<'docs' | 'done' | 'setup'>('docs')
+  const [tab, setTab] = useState<'docs' | 'done' | 'setup' | 'reconcile'>('docs')
   const [cats, setCats] = useState<Cat[]>([])
   const [ready, setReady] = useState(true)
   const [states, setStates] = useState<string[]>([])
@@ -119,6 +121,21 @@ export default function OnboardingAdminPage() {
     try { await api(`/api/v1/hr/onboarding/tasks/${t.id}/template`, { method: 'DELETE' }); load() }
     catch (e: any) { flash(e?.message || 'Remove failed') }
   }
+  // item 6: completed-sample document — same upload/download/remove pattern as the blank template above
+  async function uploadSample(t: Task, file: File) {
+    const fd = new FormData(); fd.append('file', file)
+    try { const r = await apiUpload(`/api/v1/hr/onboarding/tasks/${t.id}/sample`, fd); flash(`👁 Sample "${r.sample_name}" attached to "${t.label}"`); load() }
+    catch (e: any) { flash(e?.message || 'Upload failed — is migration 401 applied?') }
+  }
+  async function downloadSample(t: Task) {
+    try { const r = await api(`/api/v1/hr/onboarding/tasks/${t.id}/sample`); if (r?.url) window.open(r.url, '_blank') }
+    catch (e: any) { flash(e?.message || 'Could not open sample') }
+  }
+  async function removeSample(t: Task) {
+    if (!window.confirm(`Remove the completed-sample document from "${t.label}"?`)) return
+    try { await api(`/api/v1/hr/onboarding/tasks/${t.id}/sample`, { method: 'DELETE' }); load() }
+    catch (e: any) { flash(e?.message || 'Remove failed') }
+  }
   const upd = (patch: Partial<Task>) => setEditing(v => ({ ...v, ...patch }))
 
   return (
@@ -127,7 +144,8 @@ export default function OnboardingAdminPage() {
       <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
         The template HR runs for every new hire. Group items into collapsible categories and assign each to whoever owns it
         (Employee, HR, the DM, or the Market Manager). Add a live form link — or 📎 upload a default template document (a blank W-4, a policy PDF, the handbook) that every new hire downloads from their onboarding portal.
-        Open a person&apos;s checklist from <a href="/hr/people" style={{ color: 'var(--accent,#2563eb)' }}>HR · People</a>.
+        Open a person&apos;s checklist from <a href="/hr/people" style={{ color: 'var(--accent,#2563eb)' }}>HR · People</a>, or browse every
+        uploaded/signed document across the roster in the <a href="/hr/compliance" style={{ color: 'var(--accent,#2563eb)' }}>Compliance Document Repository</a>.
       </p>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>{msg}</div>}
       {!ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}>
@@ -136,7 +154,7 @@ export default function OnboardingAdminPage() {
 
       {/* tabs: the operational Documents board vs the checklist/intake template setup */}
       <div style={{ display: 'flex', gap: 6, borderBottom: '1px solid var(--border)', marginBottom: 16 }}>
-        {([['docs', '📤 Documents'], ['done', '✅ Completed'], ['setup', '🧩 Checklist setup']] as const).map(([k, l]) => (
+        {([['docs', '📤 Documents'], ['done', '✅ Completed'], ['reconcile', '🔁 Reconcile mandatory docs'], ['setup', '🧩 Checklist setup']] as const).map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} style={{ padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none', borderBottom: tab === k ? '2px solid var(--accent,#2563eb)' : '2px solid transparent', color: tab === k ? 'var(--accent,#2563eb)' : 'var(--text2)' }}>{l}</button>
         ))}
       </div>
@@ -144,6 +162,8 @@ export default function OnboardingAdminPage() {
       {tab === 'docs' && <DocumentsBoard />}
 
       {tab === 'done' && <CompletedDocuments />}
+
+      {tab === 'reconcile' && <ReconcilePanel />}
 
       {tab === 'setup' && <>
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
@@ -177,6 +197,8 @@ export default function OnboardingAdminPage() {
                         {t.applies_state && <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: 'var(--border)', color: 'var(--text2)' }}>{t.applies_state}</span>}
                         {t.requires_upload && <span style={{ fontSize: 11, color: 'var(--text3)' }}>⬆ upload</span>}
                         {t.is_fillable && <span style={{ fontSize: 11, color: 'var(--text3)' }}>✎ fillable</span>}
+                        {t.is_mandatory === false && <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 20, background: 'var(--border)', color: 'var(--text3)' }}>optional</span>}
+                        {t.work_auth && <span title="Blocking: cannot advance to provisioned/active until complete" style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b' }}>⛔ work-auth</span>}
                       </div>
                       {t.description && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{t.description}</div>}
                       {t.doc_url && <div><a href={t.doc_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--accent,#2563eb)' }}>🔗 {t.doc_label || 'Document link'}</a></div>}
@@ -191,6 +213,20 @@ export default function OnboardingAdminPage() {
                         ) : (
                           <label style={{ fontSize: 12, color: 'var(--text3)', cursor: 'pointer' }}>📎 Upload template document
                             <input type="file" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadTemplate(t, f); e.currentTarget.value = '' }} /></label>
+                        )}
+                      </div>
+                      {/* item 6: completed sample (what a correctly filled-out submission looks like) */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                        {t.sample_name ? (
+                          <>
+                            <button onClick={() => downloadSample(t)} style={{ fontSize: 12, color: 'var(--accent,#2563eb)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>👁 {t.sample_name}</button>
+                            <label style={{ fontSize: 11, color: 'var(--text3)', cursor: 'pointer', textDecoration: 'underline' }}>replace
+                              <input type="file" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadSample(t, f); e.currentTarget.value = '' }} /></label>
+                            <button onClick={() => removeSample(t)} style={{ fontSize: 11, color: '#b91c1c', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>remove</button>
+                          </>
+                        ) : (
+                          <label style={{ fontSize: 12, color: 'var(--text3)', cursor: 'pointer' }}>👁 Upload completed sample
+                            <input type="file" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadSample(t, f); e.currentTarget.value = '' }} /></label>
                         )}
                       </div>
                     </div>
@@ -296,6 +332,14 @@ export default function OnboardingAdminPage() {
                 <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={!!editing.requires_upload} onChange={e => upd({ requires_upload: e.target.checked })} /> Requires upload</label>
                 <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={!!editing.is_fillable} onChange={e => upd({ is_fillable: e.target.checked })} /> Fillable online</label>
                 <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={editing.requires_signature !== false} onChange={e => upd({ requires_signature: e.target.checked })} /> Requires signature</label>
+              </div>
+              <div style={{ display: 'flex', gap: 16, fontSize: 13, flexWrap: 'wrap', padding: 8, background: 'var(--surface)', borderRadius: 8 }}>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center' }} title="Uncheck to make this item optional — it stops counting toward checklist completion">
+                  <input type="checkbox" checked={editing.is_mandatory !== false} onChange={e => upd({ is_mandatory: e.target.checked })} /> Mandatory
+                </label>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', color: '#991b1b' }} title="Blocking: the hire cannot be provisioned/marked active while this is outstanding — server-enforced, not just a UI hint">
+                  <input type="checkbox" checked={!!editing.work_auth} onChange={e => upd({ work_auth: e.target.checked })} /> ⛔ Work-authorization (blocking)
+                </label>
               </div>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Online sign form fields (optional, comma-separated)
                 <input style={inp} value={Array.isArray(editing.form_fields) ? editing.form_fields.map((f: any) => f.label || f.key).join(', ') : (editing.form_fields || '')}
@@ -549,6 +593,94 @@ function CompletedDocuments() {
         })}
         {shown.length === 0 && <div style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text3)' }}>No completed packets yet. An employee appears here once every assigned document is back (nothing pending or returned).</div>}
       </div>
+    </div>
+  )
+}
+
+
+// ── 🔁 Reconcile mandatory docs — item 1's backfill path. The checklist total/done is ALREADY computed
+// live against the current template (see the migration 401 header in hr/router.py for why the reported
+// "5/5 without the IL W-4" bug was a state-matching bug, not a snapshot bug) — this panel is the
+// PROACTIVE half: scan the whole roster now, review a dry-run report, then apply + notify.
+type ReconcileRow = {
+  employee_id: string; employee_name?: string; workflow_status?: string
+  missing_mandatory: { task_id: string; key?: string; label: string; category?: string }[]
+  state_undetermined?: boolean; notified?: boolean
+}
+function ReconcilePanel() {
+  const [report, setReport] = useState<ReconcileRow[]>([])
+  const [meta, setMeta] = useState<{ employees_scanned?: number; employees_affected?: number; dry_run?: boolean; generated_at?: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [notifyOnApply, setNotifyOnApply] = useState(true)
+
+  async function runDryRun() {
+    setBusy(true); setMsg(''); setReport([]); setMeta(null)
+    try {
+      const r = await api('/api/v1/hr/onboarding/reconcile', { method: 'POST', body: JSON.stringify({ dry_run: true }) })
+      setReport(r?.report || []); setMeta(r)
+      if (!r?.employees_affected) setMsg('✓ Nothing to reconcile — every mandatory document in the current template is accounted for.')
+    } catch (e: any) { setMsg(e?.message || 'Dry run failed') }
+    setBusy(false)
+  }
+  async function applyAndNotify() {
+    if (!meta || meta.dry_run === false) return
+    if (!window.confirm(`Reopen ${meta.employees_affected} employee(s)' checklists and ${notifyOnApply ? 'EMAIL each of them' : 'log it without emailing'}? This cannot be undone (though it never revokes a login or deletes data).`)) return
+    setBusy(true); setMsg('')
+    try {
+      const r = await api('/api/v1/hr/onboarding/reconcile', { method: 'POST', body: JSON.stringify({ dry_run: false, notify: notifyOnApply }) })
+      setReport(r?.report || []); setMeta(r)
+      setMsg(`✓ Reconciled ${r?.employees_affected || 0} employee(s)${notifyOnApply ? ` — ${r?.report?.filter((x: ReconcileRow) => x.notified).length || 0} emailed` : ' (not notified)'}.`)
+    } catch (e: any) { setMsg(e?.message || 'Apply failed') }
+    setBusy(false)
+  }
+
+  return (
+    <div>
+      <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 12px' }}>
+        When a document is made <b>mandatory</b> in the checklist setup below (or a state-gated form should now apply
+        but an employee&apos;s work state was never confirmed), their checklist total already updates automatically —
+        but nobody is proactively told. Run a <b>dry run</b> first to see exactly who is affected and what they&apos;re
+        missing; nothing is written or emailed until you explicitly apply it.
+      </p>
+      {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>{msg}</div>}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <button style={btnP} disabled={busy} onClick={runDryRun}>{busy ? 'Scanning…' : '🔍 Run dry run'}</button>
+        {meta && meta.dry_run !== false && (
+          <>
+            <label style={{ fontSize: 12, display: 'flex', gap: 5, alignItems: 'center' }}>
+              <input type="checkbox" checked={notifyOnApply} onChange={e => setNotifyOnApply(e.target.checked)} /> Email affected employees
+            </label>
+            <button style={{ ...btn, color: '#fff', background: '#059669', border: 'none', fontWeight: 600, opacity: (meta.employees_affected || 0) > 0 ? 1 : 0.5 }}
+              disabled={busy || !(meta.employees_affected && meta.employees_affected > 0)} onClick={applyAndNotify}>
+              ✅ Apply — reopen &amp; {notifyOnApply ? 'notify' : 'log'} ({meta.employees_affected || 0})
+            </button>
+          </>
+        )}
+        {meta && <span style={{ fontSize: 12, color: 'var(--text3)' }}>{meta.employees_scanned} scanned · {meta.employees_affected} affected{meta.dry_run === false ? ' · APPLIED' : ' · dry run only'}</span>}
+      </div>
+
+      {report.length > 0 && (
+        <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 2fr 0.7fr', gap: 8, padding: '8px 12px', background: 'var(--surface)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)' }}>
+            <span>Employee</span><span>Status</span><span>Missing mandatory</span><span>Notified</span>
+          </div>
+          {report.map(r => (
+            <div key={r.employee_id} style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 2fr 0.7fr', gap: 8, padding: '9px 12px', borderTop: '1px solid var(--border)', fontSize: 13, alignItems: 'flex-start' }}>
+              <div>
+                <a href={`/hr/onboarding/${r.employee_id}`} style={{ fontWeight: 600, color: 'var(--accent,#2563eb)', textDecoration: 'none' }}>{r.employee_name || r.employee_id}</a>
+                <div style={{ fontSize: 11, color: 'var(--text3)' }}>{r.employee_id}</div>
+              </div>
+              <span style={{ fontSize: 12, color: 'var(--text2)' }}>{r.workflow_status}</span>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {r.missing_mandatory.map(m => <span key={m.task_id} style={{ fontSize: 11, padding: '1px 7px', borderRadius: 12, background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b' }}>{m.label}</span>)}
+                {r.state_undetermined && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 12, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>work state not confirmed</span>}
+              </div>
+              <span style={{ fontSize: 12 }}>{meta?.dry_run === false ? (r.notified ? '✓ emailed' : 'no email on file') : '—'}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

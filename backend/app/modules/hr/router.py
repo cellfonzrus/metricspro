@@ -14,6 +14,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Header, HTTPException, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.core import crypto
@@ -265,7 +266,175 @@ ONBOARD_STATUSES = ["pending", "submitted", "verified", "na", "returned"]
 SEED_STATES = ["NY", "NJ", "DE", "PA", "IL", "CT", "MA", "IN"]
 TASK_FIELDS = ["category_id", "key", "label", "description", "owner_role", "doc_url", "doc_label",
                "is_fillable", "requires_upload", "applies_state", "sort_order", "is_active",
-               "requires_signature", "form_fields"]
+               "requires_signature", "form_fields", "is_mandatory", "work_auth"]
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# COMPLIANCE PACK (migration 401) — mandatory-doc reopen/reconcile (item 1), upload format enforcement
+# (item 2), direct-deposit disclaimer + ABA routing lookup (item 3), work-auth blocking gate (item 4).
+# Every threshold/text/provider is config-driven off storeops.tenants (SAP-configurable rule) with a safe
+# in-code default when 401 hasn't run yet — nothing here 500s on a pre-401 database.
+#
+# ROOT CAUSE (item 1): the checklist total/done was ALREADY computed live against the current template
+# every time (onboarding_for_employee below joins the live onboarding_task rows with per-employee status —
+# there is no per-employee snapshot anywhere in this file). The Brenda Romero / Eduardo Brito "5/5 without
+# the IL W-4" vs Jose Utero "6/6 with it" split is a STATE-MATCHING bug, not a snapshot bug:
+# onboarding_task.applies_state is an exact 2-letter code, but the intake 'state' field is free text — an
+# employee who typed "Illinois" (or any non-2-letter variant) never string-matches 'IL', so the task is
+# excluded from BOTH the numerator and denominator of their checklist instead of showing as outstanding.
+# _normalize_state below closes that. The second half of the fix is _blocking_gate + onboarding_reconcile:
+# there was no MANDATORY flag independent of "is this task currently visible for this employee", and
+# nothing proactively reopened/notified a hire whose live total changed after they looked "done".
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_STATE_ABBR = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA",
+    "colorado": "CO", "connecticut": "CT", "delaware": "DE", "florida": "FL", "georgia": "GA",
+    "hawaii": "HI", "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+    "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD", "massachusetts": "MA",
+    "michigan": "MI", "minnesota": "MN", "mississippi": "MS", "missouri": "MO", "montana": "MT",
+    "nebraska": "NE", "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM",
+    "new york": "NY", "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+    "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT",
+    "virginia": "VA", "washington": "WA", "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+    "district of columbia": "DC", "washington dc": "DC", "washington d c": "DC", "puerto rico": "PR",
+}
+
+
+def _normalize_state(val):
+    """Free-text 'which state do you work in' -> a 2-letter code, so 'Illinois' / 'illinois' / 'IL' /
+    'Washington D.C.' all resolve the same way a <select> would have. Falls back to the raw uppercased
+    input (the OLD behavior) when nothing matches, so an unrecognized value is never worse than before —
+    it just still won't match a state-gated task, which is now surfaced via needs_work_state /
+    _blocking_gate rather than silently dropped."""
+    v = (val or "").strip()
+    if not v:
+        return None
+    up = v.upper()
+    if len(up) == 2 and up.isalpha():
+        return up
+    # strip punctuation (periods in "D.C.", etc.) before collapsing whitespace, so the dict key matches
+    key = re.sub(r"[^a-z]+", " ", v.strip().lower()).strip()
+    key = re.sub(r"\s+", " ", key)
+    return _STATE_ABBR.get(key, up)
+
+
+def _aba_checksum_valid(routing) -> bool:
+    """Standard ABA routing-number checksum (pure function, no I/O, no network): 9 digits, weights
+    3-7-1 repeating three times, valid iff the weighted sum is a multiple of 10."""
+    d = re.sub(r"\D", "", routing or "")
+    if len(d) != 9:
+        return False
+    n = [int(c) for c in d]
+    total = 3 * (n[0] + n[3] + n[6]) + 7 * (n[1] + n[4] + n[7]) + 1 * (n[2] + n[5] + n[8])
+    return total % 10 == 0
+
+
+_DEFAULT_DD_DISCLAIMER = (
+    "By providing bank account information for direct deposit, I certify the routing and account numbers "
+    "above are correct. If I submit incorrect information, my employer and the payroll processing company "
+    "are NOT liable for any loss, delay, or misdirection of my wages that results.")
+_DEFAULT_WORK_AUTH_NOTICE = (
+    "Your work-authorization documents (Form I-9 support documents) are still outstanding. "
+    "Your payroll will be delayed until these documents are submitted.")
+_DEFAULT_UPLOAD_FORMATS = ["pdf", "jpeg"]
+_DEFAULT_ROUTING_URL = "https://www.routingnumbers.info/api/data.json?rn={routing}"
+
+
+def _tenant_row(org_id):
+    try:
+        rows = (_so().table("tenants").select(
+            "onboarding_upload_formats,dd_disclaimer_text,work_auth_notice_text,"
+            "routing_lookup_enabled,routing_lookup_url").eq("org_id", org_id).limit(1).execute().data) or []
+        return rows[0] if rows else {}
+    except Exception:
+        return {}   # migration 401 (or storeops.tenants itself) not applied yet — degrade to defaults
+
+
+def _tenant_config(org_id):
+    """Every onboarding config value this pack introduces, org-scoped (SAP-configurable rule), with a
+    hardcoded fallback ONLY when migration 401 hasn't run — never a silent divergence once it has."""
+    t = _tenant_row(org_id)
+    return {
+        "upload_allowed_formats": t.get("onboarding_upload_formats") or list(_DEFAULT_UPLOAD_FORMATS),
+        "dd_disclaimer_text": t.get("dd_disclaimer_text") or _DEFAULT_DD_DISCLAIMER,
+        "work_auth_notice_text": t.get("work_auth_notice_text") or _DEFAULT_WORK_AUTH_NOTICE,
+        "routing_lookup_enabled": t.get("routing_lookup_enabled", True) is not False,
+    }
+
+
+_MAGIC = {
+    "pdf": (lambda b: b[:5] == b"%PDF-"),
+    "jpeg": (lambda b: b[:3] == b"\xff\xd8\xff"),
+    "png": (lambda b: b[:8] == b"\x89PNG\r\n\x1a\n"),
+}
+_EXT_ALIASES = {"jpg": "jpeg", "jpeg": "jpeg", "pdf": "pdf", "png": "png"}
+
+
+def _sniff_format(data: bytes):
+    """The REAL format of an uploaded file, from its magic bytes — a renamed .exe never passes as a PDF.
+    Returns a normalized format key ('pdf'|'jpeg'|'png') or None if unrecognized."""
+    head = (data or b"")[:16]
+    for fmt, test in _MAGIC.items():
+        try:
+            if test(head):
+                return fmt
+        except Exception:
+            continue
+    return None
+
+
+def _format_allowed(data: bytes, filename: str, allowed):
+    """(ok, detected_format) — ok iff the MAGIC BYTES sniff to a format in the tenant's allow-list.
+    The extension is used ONLY to label an unrecognized file in the error message — it can never grant
+    access on its own. This is deliberate: a renamed .exe (or anything whose header doesn't match a
+    known signature) must be rejected even when its filename says ".pdf" — an extension-only check is
+    exactly the hole "not just extension" (item 2) closes. A .txt renamed to .pdf, a zip bomb, a script
+    — none of these have a PDF/JPEG/PNG magic header, so none of them pass regardless of filename."""
+    allow = {_EXT_ALIASES.get(a.strip().lower(), a.strip().lower()) for a in (allowed or _DEFAULT_UPLOAD_FORMATS)}
+    sniffed = _sniff_format(data)
+    if not sniffed:
+        ext = (filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
+        return False, (_EXT_ALIASES.get(ext, ext) or None)   # unrecognized header — reject regardless of name
+    return sniffed in allow, sniffed
+
+
+def _check_upload_format(org_id, data, filename):
+    allowed = _tenant_config(org_id)["upload_allowed_formats"]
+    ok, fmt = _format_allowed(data, filename, allowed)
+    return ok, fmt, allowed
+
+
+def _routing_lookup(org_id, routing):
+    """ABA checksum (always, local) + an OPTIONAL online bank-name lookup (config-driven provider,
+    gracefully degrades to checksum-only when disabled / unreachable / migration 401 not run). Never
+    blocks on the network — a slow/dead provider just means no bank-name suggestion, not a failed
+    submission. The lookup happens on ENTRY, before storage; nothing here writes to the database."""
+    valid = _aba_checksum_valid(routing)
+    out = {"routing": re.sub(r"\D", "", routing or ""), "valid_checksum": valid,
+           "bank_name": None, "source": "checksum"}
+    if not valid:
+        return out
+    t = _tenant_row(org_id)
+    if t.get("routing_lookup_enabled") is False:
+        return out
+    url_tpl = t.get("routing_lookup_url") or _DEFAULT_ROUTING_URL
+    try:
+        import requests
+        resp = requests.get(url_tpl.replace("{routing}", out["routing"]), timeout=4)
+        if resp.ok:
+            body = resp.json()
+            data = body.get("data") if isinstance(body, dict) else None
+            name = (data or {}).get("customer_name") if isinstance(data, dict) else None
+            if not name and isinstance(body, dict):
+                name = body.get("customer_name") or body.get("bank") or body.get("name")
+            if name:
+                out["bank_name"] = str(name).strip()
+                out["source"] = "lookup"
+    except Exception:
+        pass   # provider down/unreachable/misconfigured — checksum-only result stands
+    return out
+
 
 
 def _now_iso():
@@ -449,6 +618,67 @@ def onboarding_delete_template(task_id: str, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+# ── Item 6: per-item COMPLETED SAMPLE (migration 401) — mirrors the template pattern above exactly, one
+# column pair (sample_path/sample_name) instead of (template_path/template_name). The employee sees "view
+# completed sample" before filling; HR reviews a submission side-by-side with it (frontend link-through —
+# the completeness check from mig 082 is unchanged, this is a human-review aid layered on top).
+@router.post("/onboarding/tasks/{task_id}/sample")
+async def onboarding_upload_sample(task_id: str, file: UploadFile = File(...), org_id: str = ORG_ID):
+    """Attach (or replace) a COMPLETED SAMPLE for this item — what a correctly filled-out submission
+    looks like, uploaded once per tenant by an admin."""
+    data = await file.read()
+    safe = (file.filename or "sample").replace("/", "_")
+    path = f"templates/{org_id}/{task_id}/sample_{uuid.uuid4().hex}_{safe}"
+    c = _ensure_onboard_bucket()
+    try:
+        c.storage.from_(ONBOARD_BUCKET).upload(path, data, {"content-type": file.content_type or "application/octet-stream"})
+    except Exception as e:
+        raise HTTPException(500, f"upload failed: {e}")
+    try:
+        r = (_so().table("onboarding_task").update({"sample_path": path, "sample_name": safe})
+             .eq("org_id", org_id).eq("id", task_id).execute())
+    except Exception as e:
+        raise HTTPException(400, f"Could not attach sample — is migration 401 applied? {str(e)[:140]}")
+    if not (r.data or []):
+        raise HTTPException(404, "task not found")
+    return {"ok": True, "sample_name": safe, "sample_url": _sign_onboard_path(path)}
+
+
+@router.get("/onboarding/tasks/{task_id}/sample")
+def onboarding_get_sample(task_id: str, org_id: str = ORG_ID):
+    """A 1-hour signed URL to view an item's completed-sample document."""
+    try:
+        rows = (_so().table("onboarding_task").select("sample_path,sample_name")
+                .eq("org_id", org_id).eq("id", task_id).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    if not rows or not rows[0].get("sample_path"):
+        raise HTTPException(404, "no sample document")
+    url = _sign_onboard_path(rows[0]["sample_path"])
+    if not url:
+        raise HTTPException(500, "could not sign url")
+    return {"url": url, "sample_name": rows[0].get("sample_name")}
+
+
+@router.delete("/onboarding/tasks/{task_id}/sample")
+def onboarding_delete_sample(task_id: str, org_id: str = ORG_ID):
+    """Detach an item's completed sample (clears the pointer + best-effort deletes the stored object)."""
+    rows = (_so().table("onboarding_task").select("sample_path")
+            .eq("org_id", org_id).eq("id", task_id).limit(1).execute().data) or []
+    path = rows[0].get("sample_path") if rows else None
+    try:
+        _so().table("onboarding_task").update({"sample_path": None, "sample_name": None}) \
+            .eq("org_id", org_id).eq("id", task_id).execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not remove sample: {str(e)[:140]}")
+    if path:
+        try:
+            get_supabase().storage.from_(ONBOARD_BUCKET).remove([path])
+        except Exception:
+            pass
+    return {"ok": True}
+
+
 def so_upsert(table, row, on_conflict):
     return _so().table(table).upsert(row, on_conflict=on_conflict).execute().data
 
@@ -481,6 +711,7 @@ def onboarding_for_employee(employee_id: str, org_id: str = ORG_ID):
     st = {r["task_id"]: r for r in ((so.table("employee_onboarding").select("*")
           .eq("org_id", org_id).eq("employee_id", employee_id).execute().data) or [])}
     cats, total, done, has_state_tasks = [], 0, 0, False
+    mandatory_total, mandatory_done, wa_pending = 0, 0, []
     for c in tmpl["categories"]:
         tasks = []
         for t in c["tasks"]:
@@ -500,10 +731,22 @@ def onboarding_for_employee(employee_id: str, org_id: str = ORG_ID):
                           "returned_at": rec.get("returned_at"), "returned_by": rec.get("returned_by"),
                           "signed_at": rec.get("signed_at"), "signed_name": rec.get("signed_name"),
                           "has_signature": bool(rec.get("signature_path")),
-                          "form_data": rec.get("form_data"), "validation": rec.get("validation")})
+                          "form_data": rec.get("form_data"), "validation": rec.get("validation"),
+                          # migration 401: mandatory flag + work-auth blocking flag + completed-sample link
+                          "is_mandatory": t.get("is_mandatory", True) is not False,
+                          "work_auth": bool(t.get("work_auth")),
+                          "sample_name": t.get("sample_name"), "sample_url": _sign_onboard_path(t.get("sample_path"))})
             total += 1
-            if status in ("verified", "na"):
+            is_mand = t.get("is_mandatory", True) is not False
+            if is_mand:
+                mandatory_total += 1
+            ok_done = status in ("verified", "na")
+            if ok_done:
                 done += 1
+                if is_mand:
+                    mandatory_done += 1
+            elif t.get("work_auth"):
+                wa_pending.append(t.get("label"))
         if tasks:
             cats.append({**{k: c[k] for k in c if k != "tasks"}, "tasks": tasks})
     emp = (so.table("employees").select("name,home_store").eq("org_id", org_id)
@@ -513,6 +756,7 @@ def onboarding_for_employee(employee_id: str, org_id: str = ORG_ID):
     pub_fields = _public_intake_fields(org_id)
     intake_values = {f["key"]: stored.get(f["key"], "") for f in pub_fields if not f["sensitive"]}
     sensitive_on_file = [f["label"] for f in pub_fields if f["sensitive"] and str(stored.get(f["key"], "")).strip()]
+    tenant_cfg = _tenant_config(org_id)
     return {"ready": True, "employee_id": employee_id, "employee_name": emp[0].get("name"),
             "work_state": work_state, "profile": _public_profile(prof),
             "needs_work_state": bool(has_state_tasks and not work_state),
@@ -523,6 +767,13 @@ def onboarding_for_employee(employee_id: str, org_id: str = ORG_ID):
             "intake_fields": pub_fields, "intake_values": intake_values,
             "sensitive_on_file": sensitive_on_file,
             "categories": cats, "progress": {"total": total, "done": done},
+            # migration 401 (items 1 / 3 / 4): mandatory-only progress, work-auth blocking notice,
+            # DD-disclaimer status, and the tenant's configurable text/format settings in one place so
+            # every portal surface (HR view, logged-in employee, credential-less token) can show them.
+            "mandatory_progress": {"total": mandatory_total, "done": mandatory_done},
+            "work_auth_pending": wa_pending, "work_auth_notice": tenant_cfg["work_auth_notice_text"] if wa_pending else None,
+            "dd_disclaimer_signed": bool((prof or {}).get("dd_disclaimer_signed_at")),
+            "tenant_config": tenant_cfg,
             "owner_labels": OWNER_ROLE_LABELS, "states": SEED_STATES}
 
 
@@ -531,7 +782,7 @@ def onboarding_set_profile(employee_id: str, body: dict, org_id: str = ORG_ID):
     """Set the employee's work_state (drives which state tax form shows)."""
     upd = {"org_id": org_id, "employee_id": employee_id}
     if "work_state" in body:
-        upd["work_state"] = (body.get("work_state") or "").strip().upper() or None
+        upd["work_state"] = _normalize_state(body.get("work_state"))
     try:
         _so().table("employee_onboarding_profile").upsert(upd, on_conflict="org_id,employee_id").execute()
     except Exception as e:
@@ -677,6 +928,17 @@ def onboarding_update_status(employee_id: str, task_id: str, body: dict, org_id:
 async def _do_onboard_upload(org_id, employee_id, task_id, file, who):
     data = await file.read()
     safe = (file.filename or "file").replace("/", "_")
+    # Item 2: server-side format enforcement (magic bytes, not just extension), tenant-configurable
+    # allow-list (default pdf/jpeg — storeops.tenants.onboarding_upload_formats). Applies to every
+    # onboarding upload (driver's license, every filled/signed document) since they all funnel through
+    # this one function regardless of which of the 3 upload endpoints (HR / logged-in employee / public
+    # token) was called.
+    ok_fmt, detected_fmt, allowed_fmts = _check_upload_format(org_id, data, safe)
+    if not ok_fmt:
+        allowed_label = "/".join(a.upper() for a in allowed_fmts)
+        raise HTTPException(400, f"Only {allowed_label} files are accepted here"
+                                  + (f" — this looks like a {detected_fmt.upper()} file" if detected_fmt else
+                                     " — this file's format could not be recognized") + f". Please upload a {allowed_label} file.")
     path = f"{org_id}/{employee_id}/{uuid.uuid4().hex}_{safe}"
     c = _ensure_onboard_bucket()
     try:
@@ -1033,6 +1295,18 @@ def _apply_intake(org_id, employee_id, data: dict, actor="employee"):
     if missing:
         raise HTTPException(400, "Please fill in: " + ", ".join(missing))
     prof = _get_profile(so, org_id, employee_id) or {}
+    # Item 3a: direct-deposit disclaimer gate. If this submission carries a value for any field in the
+    # direct_deposit section, the employee must have initialed the disclaimer — either already on file,
+    # or included in THIS submission as data['dd_disclaimer_initials'] (a protocol-level key, not a
+    # configured onboarding_intake_field — always accepted, never propagated/stored as a regular field).
+    dd_keys_present = [k for k in (data or {}) if by_key.get(k, {}).get("section") == "direct_deposit"
+                       and str(data.get(k, "")).strip()]
+    if dd_keys_present and not prof.get("dd_disclaimer_signed_at"):
+        initials = (data.get("dd_disclaimer_initials") or "").strip()
+        if not initials:
+            raise HTTPException(400, "Please type your initials to acknowledge the direct-deposit "
+                                      "disclaimer before saving your bank details.")
+        _sign_dd_disclaimer(org_id, employee_id, initials, actor=actor)
     stored = dict(prof.get("intake_data") or {})
     emp_upd, propagated = {}, []
     for k, v in (data.items() if isinstance(data, dict) else []):
@@ -1048,13 +1322,16 @@ def _apply_intake(org_id, employee_id, data: dict, actor="employee"):
         stored[k] = val
         col = f.get("propagate_to")
         if col and col in _PROPAGATABLE and val != "":
-            emp_upd[col] = val.upper() if col == "state" else val
+            emp_upd[col] = _normalize_state(val) if col == "state" else val
             propagated.append(col)
     # persist intake_data + timestamp
     pupd = {"org_id": org_id, "employee_id": employee_id, "intake_data": stored,
             "intake_submitted_at": _now_iso()}
-    # "which state are you in?" also drives the tax-form filter (work_state)
-    state_val = (data.get("state") or data.get("work_state") or "").strip().upper()
+    # "which state are you in?" also drives the tax-form filter (work_state). NORMALIZED (item 1 root
+    # cause fix) so "Illinois"/"illinois"/"IL" all resolve to the same 2-letter code onboarding_task.
+    # applies_state expects — a raw free-text mismatch used to make a mandated state form silently
+    # disappear from BOTH the numerator and denominator of the checklist instead of showing as outstanding.
+    state_val = _normalize_state(data.get("state") or data.get("work_state") or "")
     if state_val:
         pupd["work_state"] = state_val
     try:
@@ -1084,12 +1361,69 @@ def _apply_intake(org_id, employee_id, data: dict, actor="employee"):
 
 
 def _set_work_state(org_id, employee_id, state, actor="employee"):
-    st = (state or "").strip().upper() or None
+    st = _normalize_state(state)
     _so().table("employee_onboarding_profile").upsert(
         {"org_id": org_id, "employee_id": employee_id, "work_state": st},
         on_conflict="org_id,employee_id").execute()
     _log_event(org_id, employee_id, "state_set", actor=actor, detail={"work_state": st})
     return st
+
+
+# ── Direct-deposit disclaimer (item 3a) + ABA routing-number lookup (item 3b) ───────────────────────
+def _sign_dd_disclaimer(org_id, employee_id, initials, actor="employee"):
+    """Store the employee's typed initials + a timestamp in the audit trail (onboarding_event) AND on
+    the profile (dd_disclaimer_initials/signed_at — queryable without decrypting anything). Called either
+    directly (dedicated endpoint) or inline from _apply_intake when DD fields are submitted for the
+    first time."""
+    initials = (initials or "").strip()
+    if not initials:
+        raise HTTPException(400, "Type your initials to confirm the direct-deposit disclaimer.")
+    now = _now_iso()
+    try:
+        _so().table("employee_onboarding_profile").upsert(
+            {"org_id": org_id, "employee_id": employee_id,
+             "dd_disclaimer_initials": initials[:12], "dd_disclaimer_signed_at": now},
+            on_conflict="org_id,employee_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — is migration 401 applied? {e}")
+    _log_event(org_id, employee_id, "dd_disclaimer_signed", actor=actor,
+               detail={"initials": initials[:12], "at": now})
+    return {"ok": True, "signed_at": now, "initials": initials[:12]}
+
+
+@router.post("/onboarding/me/dd-disclaimer")
+def onboarding_me_dd_disclaimer(body: dict, authorization: str = Header(default="")):
+    me = _me_from_token(authorization)
+    return _sign_dd_disclaimer(me["org_id"], me["employee_id"], (body or {}).get("initials"), actor="employee")
+
+
+@router.post("/public/onboarding/{token}/dd-disclaimer")
+def public_onboarding_dd_disclaimer(token: str, body: dict):
+    prof = _profile_by_token(token)
+    if not _token_valid(prof):
+        raise HTTPException(404, "This onboarding link is invalid or has expired.")
+    if not _check_gate(prof, (body or {}).get("value")):
+        raise HTTPException(403, "Identity check failed.")
+    return _sign_dd_disclaimer(prof["org_id"], prof["employee_id"], (body or {}).get("initials"), actor="employee")
+
+
+@router.get("/onboarding/me/routing-lookup")
+def onboarding_me_routing_lookup(routing: str, authorization: str = Header(default="")):
+    """ABA checksum + an optional bank-name lookup so the employee can confirm 'You're entering an
+    account at CHASE — correct?' before submitting. Never blocks on a slow/dead provider (see
+    _routing_lookup) — this is a UX confirmation aid, not a validation gate on submission."""
+    me = _me_from_token(authorization)
+    return _routing_lookup(me["org_id"], routing)
+
+
+@router.get("/public/onboarding/{token}/routing-lookup")
+def public_onboarding_routing_lookup(token: str, routing: str, value: str = ""):
+    prof = _profile_by_token(token)
+    if not _token_valid(prof):
+        raise HTTPException(404, "This onboarding link is invalid or has expired.")
+    if not _check_gate(prof, value):
+        raise HTTPException(403, "Identity check failed.")
+    return _routing_lookup(prof["org_id"], routing)
 
 
 # ── Invite engine (way 1 = token link · way 2 = temp portal login) ───────────────────────────────
@@ -1262,20 +1596,66 @@ async def onboarding_invite_bulk(body: dict, org_id: str = ORG_ID):
     return {"invited": ok, "emailed": emailed, "total": len(results), "results": results}
 
 
+# ── Item 4: work-authorization blocking gate — a HARD compliance floor, distinct from the general HR
+# "override" the rest of the workflow allows. Server-enforced: the checks below run on EVERY path that
+# can reach 'provisioned'/'active' (onboarding_advance + onboarding_provision), not just the UI. A hire
+# needs an explicit, separately-audited compliance_override to bypass it (see each call site) — the
+# general docs_verified `override` flag on /provision does NOT bypass this.
+def _blocking_gate(org_id, employee_id):
+    """Returns (blocked: bool, reasons: dict). reasons['work_auth'] = outstanding work_auth=true task
+    labels (I-9 support docs — item 4). reasons['state_undetermined'] = True when the current template
+    has a mandatory state-gated task and this employee's work_state is still unknown, so we genuinely
+    cannot tell yet whether a required state form applies (item 1's other root-cause thread — see the
+    migration 401 header)."""
+    data = onboarding_for_employee(employee_id, org_id=org_id)
+    if not data.get("ready"):
+        return False, {}
+    reasons = {}
+    wa = [t.get("label") for c in data.get("categories", []) for t in c.get("tasks", [])
+          if t.get("work_auth") and t.get("status") not in ("verified", "na")]
+    if wa:
+        reasons["work_auth"] = wa
+    if data.get("needs_work_state"):
+        reasons["state_undetermined"] = True
+    return bool(reasons), reasons
+
+
+def _compliance_block_message(reasons):
+    parts = []
+    if reasons.get("work_auth"):
+        parts.append("work-authorization document(s) outstanding: " + ", ".join(reasons["work_auth"]))
+    if reasons.get("state_undetermined"):
+        parts.append("the employee's work state hasn't been confirmed yet (a state tax form may still be required)")
+    return ("Cannot advance to provisioned/active — " + "; ".join(parts) + ". This is a hard compliance "
+            "floor (item 4) — pass override_compliance=true with compliance_override_reason to bypass it "
+            "(separately audited from the general docs override).")
+
+
 # ── Workflow transitions + provisioning ──────────────────────────────────────────────────────────
 @router.post("/onboarding/employee/{employee_id}/advance")
 def onboarding_advance(employee_id: str, body: dict, org_id: str = ORG_ID):
     """HR moves the workflow to a specific status. An out-of-order move is recorded as an OVERRIDE
-    (with reason) but always allowed — the flow stays in the system, HR stays in control."""
+    (with reason) but always allowed — the flow stays in the system, HR stays in control. EXCEPTION
+    (item 4): moving to provisioned/active is hard-gated on work-authorization docs + a known work
+    state; see _blocking_gate."""
     to = (body.get("to_status") or "").strip()
     if to not in WORKFLOW_STATUSES:
         raise HTTPException(400, f"to_status must be one of {WORKFLOW_STATUSES}")
+    gate_reasons = {}
+    if to in ("provisioned", "active"):
+        blocked, gate_reasons = _blocking_gate(org_id, employee_id)
+        if blocked and not (body.get("override_compliance") and (body.get("compliance_override_reason") or "").strip()):
+            raise HTTPException(400, {"code": "compliance_blocked",
+                                      "message": _compliance_block_message(gate_reasons), "reasons": gate_reasons})
     so = _so()
     prof = _get_profile(so, org_id, employee_id) or {}
     cur = prof.get("workflow_status") or "invited"
     is_override = STATUS_ORDER.get(to, 0) != STATUS_ORDER.get(cur, 0) + 1
     st = _set_status(so, org_id, employee_id, to, actor=(body.get("actor") or "HR"),
                      reason=(body.get("reason") or None), is_override=is_override)
+    if gate_reasons:   # the gate was blocked above and explicitly overridden to get here
+        _log_event(org_id, employee_id, "compliance_override", actor=(body.get("actor") or "HR"),
+                   reason=(body.get("compliance_override_reason") or None), is_override=True, detail=gate_reasons)
     return {"ok": True, "workflow_status": st, "was_override": is_override}
 
 
@@ -1300,6 +1680,12 @@ async def onboarding_provision(employee_id: str, body: dict, org_id: str = ORG_I
         raise HTTPException(400, {"code": "docs_incomplete",
                                   "message": f"Documents aren't verified yet (status: {STATUS_LABELS.get(cur, cur)}). "
                                              "Verify the checklist first, or override with a reason."})
+    # Item 4: work-auth blocking gate — NOT bypassed by the general docs `override` above. Needs its own
+    # explicit, separately-audited override_compliance + reason.
+    gate_blocked, gate_reasons = _blocking_gate(org_id, employee_id)
+    if gate_blocked and not (body.get("override_compliance") and (body.get("compliance_override_reason") or "").strip()):
+        raise HTTPException(400, {"code": "compliance_blocked",
+                                  "message": _compliance_block_message(gate_reasons), "reasons": gate_reasons})
     from app.modules.core.router import assign_role, create_login as core_create_login
     role = (body.get("role_name") or "sales_rep").strip()
     await assign_role({"email": email, "full_name": emp[0].get("name"), "role": role,
@@ -1314,6 +1700,9 @@ async def onboarding_provision(employee_id: str, body: dict, org_id: str = ORG_I
     _log_event(org_id, employee_id, "provisioned", actor=(body.get("actor") or "HR"),
                reason=(body.get("reason") or None), is_override=override,
                detail={"role": role, "email": email})
+    if gate_blocked:   # the compliance gate was blocked above and explicitly overridden to get here
+        _log_event(org_id, employee_id, "compliance_override", actor=(body.get("actor") or "HR"),
+                   reason=(body.get("compliance_override_reason") or None), is_override=True, detail=gate_reasons)
     emailed = False
     if body.get("send_email", True):
         try:
@@ -1339,6 +1728,90 @@ def onboarding_events(employee_id: str, org_id: str = ORG_ID):
     except Exception:
         rows = []
     return {"events": rows, "status_labels": STATUS_LABELS}
+
+
+# ── Item 1: mandatory-document reconciliation / backfill ────────────────────────────────────────────
+async def _notify_mandatory_added(org_id, employee_id, missing_labels, state_undetermined):
+    """Email a hire that a NEW mandatory document now applies to their checklist ('reopen & notify').
+    Mirrors _notify_return's shape/posture; best-effort (returns False, never raises, if email isn't
+    configured or the employee has no address on file)."""
+    emp = _employee_row(org_id, employee_id)
+    email = (emp.get("email") or "").strip()
+    if not email:
+        return False
+    first = (str(emp.get("name") or "").split() or [""])[0]
+    url = _portal_link(org_id, employee_id)
+    items = "".join(f"<li>{m}</li>" for m in (missing_labels or [])[:30])
+    if state_undetermined:
+        items += "<li>Please confirm your work state — a state tax form may now be required</li>"
+    html = (f"<div style='font-family:system-ui,Arial,sans-serif;max-width:560px;margin:auto;color:#111'>"
+            f"<p>Hi {first or 'there'},</p>"
+            f"<p>Your onboarding checklist has a new required item:</p>"
+            f"<ul style='margin:0 0 12px 18px'>{items or '<li>see your onboarding portal</li>'}</ul>"
+            f"<p style='margin:18px 0'><a href='{url}' style='display:inline-block;background:#111;color:#fff;"
+            f"padding:11px 20px;border-radius:8px;text-decoration:none'>Complete it now</a></p>"
+            f"<p style='font-size:12px;color:#888'>If the button doesn't work, copy this link:<br>{url}</p></div>")
+    try:
+        from app.modules.notify.channels.email_resend import send_email, is_configured
+        if is_configured():
+            await send_email(email, "Action needed: a new onboarding document is required", html)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+@router.post("/onboarding/reconcile")
+async def onboarding_reconcile(body: dict, org_id: str = ORG_ID):
+    """Item 1's backfill path. The checklist total/done is ALREADY computed live against the CURRENT
+    template every time (see onboarding_for_employee — no per-employee snapshot exists anywhere in this
+    file), so a newly mandatory task automatically shows up as outstanding for every in-flight AND
+    completed hire the next time anyone loads their page. What this endpoint adds is the PROACTIVE half:
+    scan the whole active roster now, report who is affected, and (when not a dry run) log an audited
+    'mandatory_reopened' event + email each one — rather than waiting for someone to notice a checklist
+    that used to read 100%.
+
+    dry_run (default True) returns the report ONLY — nothing is written, nobody is emailed. Review this
+    before running with dry_run=false. notify (default True, only consulted when dry_run=false) controls
+    whether affected employees are emailed the missing item(s). Never regresses a provisioned/active
+    hire's workflow_status (matches _recompute_status's existing 'never move backward' invariant) — this
+    surfaces + notifies, it does not revoke a login."""
+    dry_run = body.get("dry_run", True) is not False
+    notify = body.get("notify", True) is not False
+    actor = (body.get("actor") or "HR").strip()
+    so = _so()
+    try:
+        emps = (so.table("employees").select("employee_id,name").eq("org_id", org_id)
+                .eq("is_active", True).order("name").execute().data) or []
+    except Exception as e:
+        raise HTTPException(400, f"Could not load the roster: {e}")
+    report, affected = [], 0
+    for e in emps:
+        eid = e.get("employee_id")
+        if not eid:
+            continue
+        data = onboarding_for_employee(eid, org_id=org_id)
+        if not data.get("ready"):
+            continue
+        missing = [{"task_id": t["id"], "key": t.get("key"), "label": t.get("label"), "category": c.get("label")}
+                   for c in data.get("categories", []) for t in c.get("tasks", [])
+                   if (t.get("is_mandatory", True) is not False) and t.get("status") not in ("verified", "na")]
+        state_undetermined = bool(data.get("needs_work_state"))
+        if not missing and not state_undetermined:
+            continue
+        affected += 1
+        row = {"employee_id": eid, "employee_name": e.get("name"),
+               "workflow_status": data.get("workflow_status"),
+               "missing_mandatory": missing, "state_undetermined": state_undetermined, "notified": False}
+        if not dry_run:
+            _log_event(org_id, eid, "mandatory_reopened", actor=actor,
+                       detail={"missing": [m["label"] for m in missing], "state_undetermined": state_undetermined})
+            if notify:
+                row["notified"] = await _notify_mandatory_added(
+                    org_id, eid, [m["label"] for m in missing], state_undetermined)
+        report.append(row)
+    return {"ok": True, "dry_run": dry_run, "generated_at": _now_iso(),
+            "employees_scanned": len(emps), "employees_affected": affected, "report": report}
 
 
 # ── Self-service portal (way 2: the logged-in employee completes their own onboarding) ───────────
@@ -1374,7 +1847,9 @@ def _onboarding_bundle(org_id, employee_id):
                   "requires_signature": t.get("requires_signature", True),
                   "form_fields": t.get("form_fields"),
                   "missing_fields": t.get("missing_fields"), "returned_reason": t.get("returned_reason"),
-                  "signed_at": t.get("signed_at")}
+                  "signed_at": t.get("signed_at"),
+                  # migration 401 (items 4 / 6): work-auth badge + "view completed sample" link
+                  "work_auth": t.get("work_auth"), "sample_name": t.get("sample_name"), "sample_url": t.get("sample_url")}
                  for t in c.get("tasks", []) if t.get("owner_role") == "employee"]
         if tasks:
             emp_cats.append({"key": c["key"], "label": c["label"], "tasks": tasks})
@@ -1385,7 +1860,13 @@ def _onboarding_bundle(org_id, employee_id):
             "workflow_status": prof.get("workflow_status") or "invited",
             "intake_fields": fields, "intake_values": values,
             "intake_submitted": bool(prof.get("intake_submitted_at")),
-            "categories": emp_cats, "progress": data.get("progress"), "states": SEED_STATES}
+            "categories": emp_cats, "progress": data.get("progress"), "states": SEED_STATES,
+            # migration 401: mandatory-only progress, work-auth persistent notice (item 4), DD-disclaimer
+            # ack status (item 3a), and the tenant's configurable text/upload-format settings (items 2/3/4)
+            "mandatory_progress": data.get("mandatory_progress"),
+            "work_auth_pending": data.get("work_auth_pending"), "work_auth_notice": data.get("work_auth_notice"),
+            "dd_disclaimer_signed": data.get("dd_disclaimer_signed"),
+            "tenant_config": data.get("tenant_config")}
 
 
 @router.get("/onboarding/me")
@@ -1952,3 +2433,105 @@ async def onboarding_forward_accounting(employee_id: str, body: dict, org_id: st
     if not sent:
         raise HTTPException(400, f"Forward failed for all recipients: {errors}")
     return {"ok": True, "sent_to": sent, "docs": len(docs), "errors": errors}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# ITEM 5 — Compliance document repository. A VIEW + bulk export over the SAME onboarding-docs bucket
+# and employee_onboarding rows the Documents board (mig 082) already tracks — no second store, no new
+# table. Lists every uploaded/signed document across the roster, employee-grouped, filterable, each row
+# carrying its own file AND (when the item was signed online) its signature page. Bulk "pick up at once"
+# export = one ZIP, organized /EmployeeName/DocumentLabel.ext (+ _signature.png alongside it).
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+@router.get("/onboarding/compliance-documents")
+def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_id: str = ""):
+    """One row per uploaded/signed onboarding document, across the whole roster, sorted by employee
+    name then document label. Filter with q (name/id/email substring) or employee_id (exact). Does NOT
+    eagerly sign a URL per row (could be hundreds) — click-through uses the existing per-task
+    /onboarding/employee/{id}/task/{task_id}/doc and .../signature endpoints, already org-scoped."""
+    so = _so()
+    tmpl = onboarding_template(org_id=org_id, include_inactive=True)
+    label_of = {t["id"]: t["label"] for c in tmpl.get("categories", []) for t in c.get("tasks", [])}
+    cat_of = {t["id"]: c["label"] for c in tmpl.get("categories", []) for t in c.get("tasks", [])}
+    emps = {e["employee_id"]: e for e in ((so.table("employees").select("employee_id,name,email")
+            .eq("org_id", org_id).execute().data) or [])}
+    try:
+        rows = (so.table("employee_onboarding")
+                .select("employee_id,task_id,status,document_path,document_name,signature_path,"
+                        "signed_at,signed_name,verified_by,verified_at,submitted_at")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows = []
+    out = []
+    for r in rows:
+        if not (r.get("document_path") or r.get("signature_path")):
+            continue   # nothing actually on file for this task yet
+        eid = r.get("employee_id")
+        if employee_id and eid != employee_id:
+            continue
+        emp = emps.get(eid) or {}
+        name = emp.get("name") or eid
+        if q and q.lower() not in f"{name} {eid} {emp.get('email') or ''}".lower():
+            continue
+        out.append({
+            "employee_id": eid, "employee_name": name, "employee_email": emp.get("email"),
+            "task_id": r.get("task_id"), "document_label": label_of.get(r.get("task_id")) or "Document",
+            "category": cat_of.get(r.get("task_id")),
+            "status": r.get("status"), "document_name": r.get("document_name"),
+            "has_document": bool(r.get("document_path")), "has_signature_page": bool(r.get("signature_path")),
+            "signed_at": r.get("signed_at") or r.get("verified_at") or r.get("submitted_at"),
+            "signed_name": r.get("signed_name"), "verified_by": r.get("verified_by")})
+    out.sort(key=lambda d: (d["employee_name"] or "", d["document_label"] or ""))
+    return {"ready": tmpl.get("ready", True), "documents": out, "count": len(out)}
+
+
+@router.get("/onboarding/compliance-documents/export")
+def onboarding_compliance_export(org_id: str = ORG_ID, employee_id: str = ""):
+    """Bulk 'pick up at once' export: one ZIP built live from the SAME storage bucket the Documents
+    board already uses — no second copy of the files is kept anywhere. Pass employee_id to export just
+    one person's folder; omit it for the whole org (one zip of all, organized /EmployeeName/Doc.ext)."""
+    import io as _io
+    import zipfile
+    so = _so()
+    tmpl = onboarding_template(org_id=org_id, include_inactive=True)
+    label_of = {t["id"]: t["label"] for c in tmpl.get("categories", []) for t in c.get("tasks", [])}
+    emps = {e["employee_id"]: e for e in ((so.table("employees").select("employee_id,name")
+            .eq("org_id", org_id).execute().data) or [])}
+    try:
+        q = so.table("employee_onboarding").select(
+            "employee_id,task_id,document_path,document_name,signature_path").eq("org_id", org_id)
+        if employee_id:
+            q = q.eq("employee_id", employee_id)
+        rows = (q.execute().data) or []
+    except Exception:
+        rows = []
+    bucket = get_supabase().storage.from_(ONBOARD_BUCKET)
+    buf = _io.BytesIO()
+    included = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for r in rows:
+            eid = r.get("employee_id")
+            emp_name = (emps.get(eid) or {}).get("name") or eid or "unknown"
+            safe_emp = re.sub(r"[^A-Za-z0-9 _.-]+", "_", emp_name).strip() or (eid or "unknown")
+            doc_label = label_of.get(r.get("task_id")) or "Document"
+            safe_doc = re.sub(r"[^A-Za-z0-9 _.-]+", "_", doc_label).strip() or "document"
+            if r.get("document_path"):
+                try:
+                    file_bytes = bucket.download(r["document_path"])
+                    dn = r.get("document_name") or ""
+                    ext = dn.rsplit(".", 1)[-1] if "." in dn else "pdf"
+                    zf.writestr(f"{safe_emp}/{safe_doc}.{ext}", file_bytes)
+                    included += 1
+                except Exception:
+                    continue   # a single unreadable file shouldn't fail the whole export
+            if r.get("signature_path"):
+                try:
+                    sig_bytes = bucket.download(r["signature_path"])
+                    zf.writestr(f"{safe_emp}/{safe_doc}_signature.png", sig_bytes)
+                except Exception:
+                    pass
+    if included == 0:
+        raise HTTPException(404, "No documents found to export.")
+    buf.seek(0)
+    fname = f"onboarding-documents-{employee_id or 'all'}.zip"
+    return StreamingResponse(buf, media_type="application/zip",
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})

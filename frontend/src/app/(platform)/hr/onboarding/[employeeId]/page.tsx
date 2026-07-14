@@ -16,6 +16,8 @@ type Task = {
   missing_fields?: string[] | null; returned_reason?: string | null; returned_by?: string | null
   signed_at?: string | null; signed_name?: string | null; has_signature?: boolean
   form_data?: Record<string, string> | null; validation?: { checkable?: boolean; missing?: string[]; empty?: string[]; filled?: number; fields?: number; signed?: boolean | null; online?: boolean } | null
+  // migration 401 (items 1 / 4 / 6)
+  is_mandatory?: boolean; work_auth?: boolean; sample_name?: string | null; sample_url?: string | null
 }
 type Cat = { id: string; key: string; label: string; tasks: Task[] }
 type Field = { key: string; label: string; sensitive?: boolean }
@@ -27,6 +29,11 @@ type Data = {
   workflow_status?: string; workflow_label?: string; workflow_statuses?: { key: string; label: string }[]
   invite_method?: string | null; intake_submitted?: boolean
   intake_fields?: Field[]; intake_values?: Record<string, string>; sensitive_on_file?: string[]
+  // migration 401
+  mandatory_progress?: { total: number; done: number }
+  work_auth_pending?: string[]; work_auth_notice?: string | null
+  dd_disclaimer_signed?: boolean
+  tenant_config?: { upload_allowed_formats?: string[]; dd_disclaimer_text?: string; work_auth_notice_text?: string; routing_lookup_enabled?: boolean }
 }
 const WF_COLOR: Record<string, string> = { invited: '#64748b', in_progress: '#d97706', docs_submitted: '#2563eb', docs_verified: '#7c3aed', provisioned: '#059669', active: '#059669' }
 const ROLE_LABELS: Record<string, string> = { employee: 'Employee', hr: 'HR', dm: 'District Manager', market_manager: 'Market Manager' }
@@ -35,6 +42,15 @@ const ST_COLOR: Record<string, string> = { pending: '#64748b', submitted: '#d977
 const ST_LABEL: Record<string, string> = { pending: 'Pending', submitted: 'Submitted', verified: 'Verified', na: 'N/A', returned: 'Returned' }
 const inp: React.CSSProperties = { padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const btn: React.CSSProperties = { padding: '5px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, cursor: 'pointer', background: 'var(--surface)' }
+// Item 2: client-side format hint (real enforcement is server-side, magic-byte sniffed — this is just a
+// fast friendly error + the file input's `accept` attribute). Config-driven off tenant_config.upload_allowed_formats.
+const EXT_FOR: Record<string, string[]> = { pdf: ['.pdf'], jpeg: ['.jpg', '.jpeg'], png: ['.png'] }
+function acceptAttr(formats?: string[]): string { return (formats && formats.length ? formats : ['pdf', 'jpeg']).flatMap(f => EXT_FOR[f] || []).join(',') }
+function extLooksAllowed(name: string, formats?: string[]): boolean {
+  const allow = (formats && formats.length ? formats : ['pdf', 'jpeg']).flatMap(f => EXT_FOR[f] || [])
+  const lower = name.toLowerCase()
+  return allow.some(e => lower.endsWith(e))
+}
 const btnP: React.CSSProperties = { ...btn, background: 'var(--accent,#2563eb)', color: '#fff', border: 'none', fontWeight: 600 }
 
 export default function EmployeeOnboardingPage() {
@@ -48,7 +64,7 @@ export default function EmployeeOnboardingPage() {
   const [events, setEvents] = useState<any[]>([])
   const [revealed, setRevealed] = useState<Record<string, { label: string; value: string; encrypted?: boolean }> | null>(null)
   const [revealMsg, setRevealMsg] = useState('')
-  const [prov, setProv] = useState<{ role_name: string; override: boolean; reason: string } | null>(null)
+  const [prov, setProv] = useState<{ role_name: string; override: boolean; reason: string; override_compliance: boolean; compliance_reason: string } | null>(null)
   const [inviteRes, setInviteRes] = useState<any>(null)
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
 
@@ -71,19 +87,32 @@ export default function EmployeeOnboardingPage() {
       flash(r.emailed ? 'Invite emailed ✓' : (r.email_note || 'Invite prepared')); load()
     } catch (e: any) { flash(e?.message || 'Invite failed') }
   }
-  async function advance(to_status: string) {
-    try { await api(`/api/v1/hr/onboarding/employee/${employeeId}/advance`, { method: 'POST', body: JSON.stringify({ to_status, actor: user?.full_name || user?.email || 'HR' }) }); load() }
-    catch (e: any) { flash(e?.message || 'Update failed') }
+  async function advance(to_status: string, override_compliance?: boolean, compliance_override_reason?: string) {
+    try {
+      await api(`/api/v1/hr/onboarding/employee/${employeeId}/advance`, { method: 'POST',
+        body: JSON.stringify({ to_status, actor: user?.full_name || user?.email || 'HR', override_compliance, compliance_override_reason }) })
+      load()
+    } catch (e: any) {
+      const m = e?.message || 'Update failed'
+      if (m.includes('override_compliance') && !override_compliance) {
+        const reason = window.prompt(m + '\n\nType a reason to override and continue (leave blank to cancel):')
+        if (reason && reason.trim()) { advance(to_status, true, reason.trim()); return }
+      }
+      flash(m)
+    }
   }
   async function doProvision() {
     if (!prov) return
     try {
       const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/provision`, { method: 'POST',
-        body: JSON.stringify({ role_name: prov.role_name || undefined, override: prov.override, reason: prov.reason || undefined, actor: user?.full_name || user?.email || 'HR', send_email: true }) })
+        body: JSON.stringify({ role_name: prov.role_name || undefined, override: prov.override, reason: prov.reason || undefined,
+          override_compliance: prov.override_compliance, compliance_override_reason: prov.compliance_reason || undefined,
+          actor: user?.full_name || user?.email || 'HR', send_email: true }) })
       setProv(null); setInviteRes(r)
       flash(r.emailed ? `Provisioned + credentials emailed ✓ (temp pw: ${r.temp_password})` : `Provisioned ✓ — temp password: ${r.temp_password}`); load()
     } catch (e: any) {
       const m = e?.message || 'Provision failed'
+      if (m.includes('override_compliance')) { flash(m); return }
       flash(m.includes('docs_incomplete') || m.includes("aren't verified") ? 'Documents aren’t verified yet — tick the override box with a reason to provision anyway.' : m)
     }
   }
@@ -109,6 +138,8 @@ export default function EmployeeOnboardingPage() {
     } catch (e: any) { flash(e?.message || 'Update failed') }
   }
   async function uploadDoc(t: Task, file: File) {
+    const formats = d?.tenant_config?.upload_allowed_formats
+    if (!extLooksAllowed(file.name, formats)) { flash(`Only ${(formats || ['pdf', 'jpeg']).join('/').toUpperCase()} files are accepted here.`); return }
     try {
       const fd = new FormData(); fd.append('file', file); fd.append('task_id', t.id); fd.append('uploader', user?.full_name || user?.email || 'HR')
       await apiUpload(`/api/v1/hr/onboarding/employee/${employeeId}/upload`, fd); flash(`Uploaded ${file.name}`); load()
@@ -159,12 +190,25 @@ export default function EmployeeOnboardingPage() {
       </div>}
 
       {d?.ready && <>
+        {/* migration 401 (item 4): persistent work-auth notice — shown at the top so it's visible on
+            every visit to this hire's checklist, not just tucked into one task row */}
+        {(d.work_auth_pending || []).length > 0 && (
+          <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: 8, padding: '10px 14px', fontSize: 13, margin: '8px 0' }}>
+            ⛔ {d.work_auth_notice || 'Work-authorization documents are still outstanding — payroll will be delayed until they are submitted.'}
+            {' '}Outstanding: <b>{(d.work_auth_pending || []).join(', ')}</b>
+          </div>
+        )}
+
         {/* progress */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0 4px' }}>
           <div style={{ flex: 1, height: 8, background: 'var(--border)', borderRadius: 8, overflow: 'hidden' }}>
             <div style={{ width: `${pct}%`, height: '100%', background: '#059669' }} />
           </div>
           <span style={{ fontSize: 12, color: 'var(--text2)' }}>{d.progress?.done}/{d.progress?.total} complete</span>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 12px' }}>
+          {d.mandatory_progress && (d.mandatory_progress.total !== d.progress?.total || d.mandatory_progress.done !== d.progress?.done)
+            ? <>of which <b>{d.mandatory_progress.done}/{d.mandatory_progress.total} mandatory</b></> : ' '}
         </div>
 
         {/* workflow status + provisioning */}
@@ -175,7 +219,7 @@ export default function EmployeeOnboardingPage() {
             {d.invite_method && <span style={{ fontSize: 11, color: 'var(--text3)' }}>invited via {d.invite_method === 'login' ? 'portal login' : 'link'}</span>}
             <div style={{ flex: 1 }} />
             {(d.workflow_status !== 'provisioned' && d.workflow_status !== 'active')
-              ? <button style={{ ...btnP, background: '#059669' }} onClick={() => setProv({ role_name: '', override: false, reason: '' })}>🚀 Provision login</button>
+              ? <button style={{ ...btnP, background: '#059669' }} onClick={() => setProv({ role_name: '', override: false, reason: '', override_compliance: false, compliance_reason: '' })}>🚀 Provision login</button>
               : <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>✓ Login provisioned</span>}
           </div>
           {/* stepper */}
@@ -196,6 +240,15 @@ export default function EmployeeOnboardingPage() {
                 </label>
               </div>
               {prov.override && <input style={{ ...inp, marginTop: 8, width: '100%' }} placeholder="Reason for overriding (recorded in the audit trail)" value={prov.reason} onChange={e => setProv(p => p && { ...p, reason: e.target.value })} />}
+              {(d.work_auth_pending || []).length > 0 || d.needs_work_state ? (
+                <div style={{ marginTop: 8, padding: 8, background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8 }}>
+                  <label style={{ fontSize: 12, display: 'flex', gap: 5, alignItems: 'center', color: '#991b1b', fontWeight: 600 }}>
+                    <input type="checkbox" checked={prov.override_compliance} onChange={e => setProv(p => p && { ...p, override_compliance: e.target.checked })} />
+                    ⛔ Compliance override (work-authorization / state) — a hard floor, separately audited from the docs override above
+                  </label>
+                  {prov.override_compliance && <input style={{ ...inp, marginTop: 6, width: '100%' }} placeholder="Reason for the compliance override (required)" value={prov.compliance_reason} onChange={e => setProv(p => p && { ...p, compliance_reason: e.target.value })} />}
+                </div>
+              ) : null}
               <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
                 <button style={{ ...btnP, background: '#059669' }} onClick={doProvision}>Provision & email credentials</button>
                 <button style={btn} onClick={() => setProv(null)}>Cancel</button>
@@ -217,6 +270,11 @@ export default function EmployeeOnboardingPage() {
                 <div key={f.key} style={{ fontSize: 12 }}><span style={{ color: 'var(--text3)' }}>{f.label}: </span><b>{(d.intake_values || {})[f.key]}</b></div>
               ))}
             </div>
+            {(d.sensitive_on_file || []).some(l => l.toLowerCase().includes('bank') || l.toLowerCase().includes('routing') || l.toLowerCase().includes('account')) && (
+              <div style={{ marginTop: 8, fontSize: 12, color: d.dd_disclaimer_signed ? '#059669' : '#9a3412' }}>
+                {d.dd_disclaimer_signed ? '✓ Direct-deposit disclaimer initialed by the employee (see History below for the timestamp).' : '⚠️ Direct-deposit disclaimer not yet initialed.'}
+              </div>
+            )}
             {d.sensitive_on_file && d.sensitive_on_file.length > 0 && (
               <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
                 {!revealed ? (
@@ -309,6 +367,8 @@ export default function EmployeeOnboardingPage() {
                     <span style={{ fontSize: 13, fontWeight: 600 }}>{t.label}</span>
                     <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, color: '#fff', background: ROLE_COLOR[t.owner_role] || '#64748b' }}>{ROLE_LABELS[t.owner_role] || t.owner_role}</span>
                     {t.applies_state && <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: 'var(--border)', color: 'var(--text2)' }}>{t.applies_state}</span>}
+                    {t.is_mandatory === false && <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 20, background: 'var(--border)', color: 'var(--text3)' }}>optional</span>}
+                    {t.work_auth && <span title="Blocks provisioning/active until complete (item 4)" style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b' }}>⛔ work-auth</span>}
                   </div>
                   {t.description && <div style={{ fontSize: 12, color: 'var(--text3)', margin: '3px 0' }}>{t.description}</div>}
                   {t.status === 'returned' && (
@@ -331,11 +391,12 @@ export default function EmployeeOnboardingPage() {
                   )}
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
                     {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ ...btn, color: 'var(--accent,#2563eb)', textDecoration: 'none' }}>🔗 {t.doc_label || 'Open form'}</a>}
+                    {t.sample_url && <a href={t.sample_url} target="_blank" rel="noreferrer" style={{ ...btn, color: 'var(--accent,#2563eb)', textDecoration: 'none' }} title="Compare this submission against a correctly completed example">👁 Completed sample</a>}
                     {t.has_document
                       ? <button style={btn} onClick={() => viewDoc(t)}>📄 View {t.document_name ? `(${t.document_name})` : 'upload'}</button>
                       : <span style={{ fontSize: 12, color: 'var(--text3)' }}>{t.requires_upload ? 'no document yet' : ''}</span>}
                     {t.has_signature && <button style={btn} onClick={() => viewSignature(t)}>✍️ View signature</button>}
-                    <label style={{ ...btn }}>⬆ Upload<input type="file" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadDoc(t, f); e.currentTarget.value = '' }} /></label>
+                    <label style={{ ...btn }}>⬆ Upload<input type="file" accept={acceptAttr(d?.tenant_config?.upload_allowed_formats)} style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadDoc(t, f); e.currentTarget.value = '' }} /></label>
                     {t.status !== 'verified' && <button style={{ ...btn, color: '#059669' }} onClick={() => setStatus(t, 'verified')}>✓ Verify</button>}
                     {(t.status === 'submitted' || t.status === 'verified') && <button style={{ ...btn, color: '#dc2626' }} onClick={() => returnTask(t)}>↩ Return for fixes</button>}
                     {t.status !== 'na' && <button style={btn} onClick={() => setStatus(t, 'na')}>N/A</button>}

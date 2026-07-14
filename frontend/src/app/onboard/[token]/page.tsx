@@ -14,10 +14,19 @@ const inp: React.CSSProperties = { padding: '10px 12px', borderRadius: 8, border
 const btnP: React.CSSProperties = { padding: '10px 16px', borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' }
 const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: '#334155', display: 'block', margin: '0 0 4px' }
 
-type Task = { id: string; label: string; description?: string; doc_url?: string; doc_label?: string; requires_upload?: boolean; status: string; has_document?: boolean; document_name?: string; template_url?: string | null; template_name?: string | null; requires_signature?: boolean; form_fields?: { key?: string; label?: string; required?: boolean }[] | null; missing_fields?: string[] | null; returned_reason?: string | null; signed_at?: string | null }
+type Task = { id: string; label: string; description?: string; doc_url?: string; doc_label?: string; requires_upload?: boolean; status: string; has_document?: boolean; document_name?: string; template_url?: string | null; template_name?: string | null; requires_signature?: boolean; form_fields?: { key?: string; label?: string; required?: boolean }[] | null; missing_fields?: string[] | null; returned_reason?: string | null; signed_at?: string | null; work_auth?: boolean; sample_name?: string | null; sample_url?: string | null }
 type Cat = { key: string; label: string; tasks: Task[] }
 type Field = { key: string; label: string; section: string; field_type: string; options?: string[]; required?: boolean; sensitive?: boolean; help_text?: string }
+type TenantConfig = { upload_allowed_formats?: string[]; dd_disclaimer_text?: string; work_auth_notice_text?: string; routing_lookup_enabled?: boolean }
 const SECTION_LABEL: Record<string, string> = { personal: 'Your details', address: 'Home address', emergency: 'Emergency contact', work_eligibility: 'Work eligibility (I-9)', tax: 'Tax withholding (W-4)', direct_deposit: 'Direct deposit', policies: 'Policy acknowledgements', custom: 'Additional info' }
+// Item 2: client-side format hint (real enforcement is server-side, magic-byte sniffed — see
+// hr/router.py _format_allowed). Config-driven off tenant_config.upload_allowed_formats.
+const EXT_FOR: Record<string, string[]> = { pdf: ['.pdf'], jpeg: ['.jpg', '.jpeg'], png: ['.png'] }
+function acceptAttr(formats?: string[]): string { return (formats && formats.length ? formats : ['pdf', 'jpeg']).flatMap(f => EXT_FOR[f] || []).join(',') }
+function extLooksAllowed(name: string, formats?: string[]): boolean {
+  const allow = (formats && formats.length ? formats : ['pdf', 'jpeg']).flatMap(f => EXT_FOR[f] || [])
+  return allow.some(e => name.toLowerCase().endsWith(e))
+}
 
 export default function PublicOnboardPage() {
   const { token } = useParams<{ token: string }>()
@@ -37,6 +46,13 @@ export default function PublicOnboardPage() {
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [signing, setSigning] = useState<Task | null>(null)
+  const [tenantConfig, setTenantConfig] = useState<TenantConfig>({})
+  const [workAuthPending, setWorkAuthPending] = useState<string[]>([])
+  const [workAuthNotice, setWorkAuthNotice] = useState<string | null>(null)
+  const [ddSigned, setDdSigned] = useState(false)
+  const [ddInitials, setDdInitials] = useState('')
+  const [routingInfo, setRoutingInfo] = useState<{ valid_checksum?: boolean; bank_name?: string | null } | null>(null)
+  const [routingBusy, setRoutingBusy] = useState(false)
 
   useEffect(() => {
     fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}`)
@@ -50,6 +66,23 @@ export default function PublicOnboardPage() {
     setFields(d.intake_fields || []); setIntakeDone(!!d.intake_submitted)
     setWorkState(d.work_state || ''); setNeedsState(!!d.needs_work_state); setStates(d.states || [])
     setVals(v => ({ ...(d.intake_values || {}), ...v }))
+    setTenantConfig(d.tenant_config || {}); setWorkAuthPending(d.work_auth_pending || [])
+    setWorkAuthNotice(d.work_auth_notice || null); setDdSigned(!!d.dd_disclaimer_signed)
+  }
+  async function checkRouting(routing: string) {
+    setRoutingInfo(null)
+    const digits = routing.replace(/\D/g, '')
+    if (digits.length !== 9) return
+    setRoutingBusy(true)
+    try {
+      const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/routing-lookup?routing=${digits}&value=${encodeURIComponent(value)}`)
+      if (r.ok) {
+        const d = await r.json()
+        setRoutingInfo(d)
+        if (d?.bank_name && !vals['dd_bank_name']) setVals(v => ({ ...v, dd_bank_name: d.bank_name }))
+      }
+    } catch { /* lookup is a UX aid only — never blocks the form */ }
+    setRoutingBusy(false)
   }
   async function loadChecklist() {
     setErr(''); setBusy(true)
@@ -75,8 +108,9 @@ export default function PublicOnboardPage() {
   async function saveIntake() {
     setBusy(true); setNote('')
     try {
+      const dd = ddInitials.trim() ? { dd_disclaimer_initials: ddInitials.trim() } : {}
       const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/intake`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, ...vals }) })
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, ...vals, ...dd }) })
       const d = await r.json()
       if (!r.ok) throw new Error(typeof d?.detail === 'string' ? d.detail : 'Could not save your information')
       setNote('✓ Your information was saved'); await loadChecklist()
@@ -93,6 +127,10 @@ export default function PublicOnboardPage() {
     setSigning(null); setNote('✓ Signed and submitted — thank you!'); loadChecklist()
   }
   async function upload(t: Task, file: File) {
+    if (!extLooksAllowed(file.name, tenantConfig.upload_allowed_formats)) {
+      setNote(`Only ${(tenantConfig.upload_allowed_formats || ['pdf', 'jpeg']).join('/').toUpperCase()} files are accepted here.`)
+      return
+    }
     setNote(''); setBusy(true)
     try {
       const fd = new FormData(); fd.append('value', value); fd.append('task_id', t.id); fd.append('file', file)
@@ -129,6 +167,12 @@ export default function PublicOnboardPage() {
         </div>
       ) : (
         <div style={{ maxWidth: 560, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* item 4: persistent notice, shown on every visit while any work-auth doc is outstanding */}
+          {workAuthPending.length > 0 && (
+            <div style={{ ...card, background: '#fef2f2', borderColor: '#fca5a5', color: '#991b1b', fontSize: 14 }}>
+              ⛔ {workAuthNotice || 'Your work-authorization documents are still outstanding. Your payroll will be delayed until these documents are submitted.'}
+            </div>
+          )}
           {progress && <div style={{ ...card, padding: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ flex: 1, height: 8, background: '#e2e8f0', borderRadius: 8, overflow: 'hidden' }}><div style={{ width: `${progress.total ? Math.round(progress.done / progress.total * 100) : 0}%`, height: '100%', background: '#059669' }} /></div>
             <span style={{ fontSize: 13, color: '#475569' }}>{progress.done}/{progress.total} done</span>
@@ -156,6 +200,12 @@ export default function PublicOnboardPage() {
               {sections.map(sec => (
                 <div key={sec} style={{ marginBottom: 14 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4, margin: '0 0 8px' }}>{SECTION_LABEL[sec] || sec}</div>
+                  {/* item 3a: bold disclaimer above the bank-details fields */}
+                  {sec === 'direct_deposit' && (
+                    <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 12px', marginBottom: 10, fontSize: 13, fontWeight: 700, color: '#92400e' }}>
+                      {tenantConfig.dd_disclaimer_text || 'By providing bank account information for direct deposit, I certify the routing and account numbers above are correct. If I submit incorrect information, my employer and the payroll processing company are NOT liable for any loss, delay, or misdirection of my wages that results.'}
+                    </div>
+                  )}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                     {fields.filter(f => (f.section || 'personal') === sec).map(f => (
                       <div key={f.key} style={{ gridColumn: f.field_type === 'select' || f.key === 'address_line1' ? 'span 2' : 'auto' }}>
@@ -168,10 +218,28 @@ export default function PublicOnboardPage() {
                           : <input style={inp} type={f.field_type === 'date' ? 'date' : f.field_type === 'number' ? 'number' : 'text'}
                               inputMode={f.field_type === 'tel' ? 'tel' : undefined}
                               value={vals[f.key] || ''} onChange={e => setVals(v => ({ ...v, [f.key]: e.target.value }))}
+                              onBlur={f.key === 'dd_routing' ? (e => checkRouting(e.target.value)) : undefined}
                               placeholder={f.help_text || ''} />}
+                        {/* item 3b: ABA checksum + bank-name confirmation */}
+                        {f.key === 'dd_routing' && routingBusy && <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>Checking…</div>}
+                        {f.key === 'dd_routing' && !routingBusy && routingInfo && (
+                          routingInfo.valid_checksum ? (
+                            <div style={{ fontSize: 12, color: '#059669', marginTop: 4 }}>
+                              ✓ Valid routing number{routingInfo.bank_name ? <> — you&apos;re entering an account at <b>{routingInfo.bank_name}</b>. Correct?</> : ''}
+                            </div>
+                          ) : <div style={{ fontSize: 12, color: '#dc2626', marginTop: 4 }}>⚠️ That doesn&apos;t look like a valid routing number — please double-check it.</div>
+                        )}
                       </div>
                     ))}
                   </div>
+                  {/* item 3a: typed-initials acknowledgment (server also gates this) */}
+                  {sec === 'direct_deposit' && !ddSigned && (
+                    <div style={{ marginTop: 10 }}>
+                      <label style={lbl}>Type your initials to confirm the disclaimer above<span style={{ color: '#ef4444' }}> *</span></label>
+                      <input style={{ ...inp, maxWidth: 120 }} maxLength={6} value={ddInitials} onChange={e => setDdInitials(e.target.value)} placeholder="e.g. JB" />
+                    </div>
+                  )}
+                  {sec === 'direct_deposit' && ddSigned && <div style={{ marginTop: 8, fontSize: 12, color: '#059669' }}>✓ Disclaimer acknowledged</div>}
                 </div>
               ))}
               <button style={{ ...btnP, marginTop: 4, opacity: busy ? 0.6 : 1 }} disabled={busy} onClick={saveIntake}>{busy ? 'Saving…' : (intakeDone ? 'Update my information' : 'Save my information')}</button>
@@ -187,6 +255,7 @@ export default function PublicOnboardPage() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 15 }}>{t.status === 'returned' ? '⚠️' : (t.has_document || t.status === 'verified' ? '✅' : '⬜')}</span>
                     <span style={{ fontSize: 15, fontWeight: 600, color: '#0f172a' }}>{t.label}</span>
+                    {t.work_auth && <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b' }}>required for payroll</span>}
                   </div>
                   {t.description && <div style={{ fontSize: 13, color: '#64748b', margin: '2px 0 0 23px' }}>{t.description}</div>}
                   {t.status === 'returned' && (
@@ -199,10 +268,11 @@ export default function PublicOnboardPage() {
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '8px 0 0 23px' }}>
                     {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📄 Open {t.doc_label || 'form'}</a>}
                     {t.template_url && <a href={t.template_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📎 {t.template_name || 'Download template'}</a>}
+                    {t.sample_url && <a href={t.sample_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>👁 View completed sample</a>}
                     <button onClick={() => setSigning(t)} disabled={busy} style={{ padding: '7px 12px', borderRadius: 8, border: 'none', background: '#059669', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>✍️ Fill &amp; sign online</button>
                     {t.requires_upload && <label style={{ padding: '7px 12px', borderRadius: 8, background: t.has_document ? '#f8fafc' : '#2563eb', color: t.has_document ? '#334155' : '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', border: t.has_document ? '1px solid #cbd5e1' : 'none' }}>
                       {t.has_document ? '↻ Replace upload' : '⬆ Upload signed copy'}
-                      <input type="file" style={{ display: 'none' }} disabled={busy} onChange={e => { const f = e.target.files?.[0]; if (f) upload(t, f); e.currentTarget.value = '' }} />
+                      <input type="file" accept={acceptAttr(tenantConfig.upload_allowed_formats)} style={{ display: 'none' }} disabled={busy} onChange={e => { const f = e.target.files?.[0]; if (f) upload(t, f); e.currentTarget.value = '' }} />
                     </label>}
                     {t.signed_at && <span style={{ fontSize: 12, color: '#059669' }}>✍️ signed online</span>}
                     {t.has_document && !t.signed_at && <span style={{ fontSize: 12, color: '#059669' }}>received</span>}
