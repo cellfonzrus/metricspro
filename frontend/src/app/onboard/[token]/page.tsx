@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import OnboardSignModal from '@/components/OnboardSignModal'
+import EntityPicker, { US_STATES } from '@/components/EntityPicker'
 
 // PUBLIC onboarding portal — reached by scanning the QR / clicking the emailed link HR generated. NO
 // login: the opaque token in the URL + a date-of-birth / last-4-SSN gate are the only credentials, so a
@@ -183,11 +184,9 @@ export default function PublicOnboardPage() {
           <div style={{ ...card, borderColor: needsState ? '#fca5a5' : '#e5e7eb' }}>
             <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 6px' }}>Which state will you work in?</h2>
             <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 8px' }}>We&apos;ll show you only the tax forms for that state.</p>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <select style={{ ...inp, width: 'auto', minWidth: 140 }} value={workState} onChange={e => saveState(e.target.value)} disabled={busy}>
-                <option value="">Select state…</option>
-                {states.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <EntityPicker options={US_STATES} value={workState || null} width={200} disabled={busy}
+                onChange={v => { if (v) saveState(v) }} placeholder="Select state…" clearable={false} />
               {workState && <span style={{ alignSelf: 'center', fontSize: 13, color: '#059669' }}>✓ {workState}</span>}
             </div>
           </div>

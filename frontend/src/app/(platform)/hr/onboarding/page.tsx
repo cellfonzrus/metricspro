@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { api, apiUpload } from '@/lib/client'
+import EntityPicker, { US_STATES } from '@/components/EntityPicker'
 
 // HR · Onboarding Checklist (admin) — the CONFIGURABLE template every new hire is onboarded against.
 // Items group under collapsible CATEGORIES; each item has an OWNER role (Employee / HR / DM / Market
@@ -321,8 +322,9 @@ export default function OnboardingAdminPage() {
                     {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                   </select></label>
                 <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', flex: 1 }}>Applies to state
-                  <input style={inp} list="states" value={editing.applies_state || ''} onChange={e => upd({ applies_state: e.target.value })} placeholder="all" />
-                  <datalist id="states">{states.map(s => <option key={s} value={s} />)}</datalist></label>
+                  <EntityPicker options={US_STATES} value={editing.applies_state || null}
+                    onChange={v => upd({ applies_state: v })} placeholder="All states" clearable width="100%" />
+                  </label>
               </div>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Live document link (URL)
                 <input style={inp} value={editing.doc_url || ''} onChange={e => upd({ doc_url: e.target.value })} placeholder="https://www.irs.gov/pub/irs-pdf/fw4.pdf" /></label>

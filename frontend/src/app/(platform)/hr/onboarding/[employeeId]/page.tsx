@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation'
 import { QRCodeSVG } from 'qrcode.react'
 import { api, apiUpload } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import EntityPicker, { US_STATES } from '@/components/EntityPicker'
 
 // HR · Employee Onboarding — one new hire's checklist. HR verifies items, views/uploads documents, sets
 // the work state (so the right state tax form appears), and generates the credential-less QR a pre-start
@@ -303,9 +304,8 @@ export default function EmployeeOnboardingPage() {
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
           <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, flex: 1, minWidth: 260 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Work state</div>
-            <input style={{ ...inp, width: 120 }} list="states" defaultValue={d.work_state || ''} placeholder="e.g. NY"
-              onBlur={e => { const v = e.target.value.trim().toUpperCase(); if (v !== (d.work_state || '')) setState(v) }} />
-            <datalist id="states">{(d.states || []).map(s => <option key={s} value={s} />)}</datalist>
+            <EntityPicker options={US_STATES} value={d.work_state || null} width={160}
+              onChange={v => { if (v && v !== (d.work_state || '')) setState(v) }} placeholder="Work state…" clearable={false} />
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>Sets which state withholding form appears.</div>
             {d.needs_work_state && <div style={{ fontSize: 12, color: '#9a3412', marginTop: 4 }}>⚠️ Set the work state to show the state tax form.</div>}
           </div>

@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { api, apiUpload, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import EntityPicker from '@/components/EntityPicker'
 
 const VACCESSORIZE_URL = 'https://www.vaccessorize.com'
 const sel: React.CSSProperties = { padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 14, background: 'var(--surface)' }
@@ -23,6 +24,7 @@ export default function NewVisitPage() {
 
   const [stores, setStores] = useState<any[]>([])
   const [items, setItems] = useState<any[]>([])
+  const [emps, setEmps] = useState<any[]>([])
   const [market, setMarket] = useState('')
   const [storeCode, setStoreCode] = useState('')
   const [visitDate, setVisitDate] = useState(localToday())
@@ -48,8 +50,21 @@ export default function NewVisitPage() {
     Promise.all([
       api('/api/v1/storevisit/stores').catch(() => []),
       api('/api/v1/storevisit/checklist-items').catch(() => []),
-    ]).then(([s, it]) => { setStores(s || []); setItems(it || []) }).catch(console.error)
+      // full company roster (not just the visiting DM's span) — a floater can be working a store
+      // outside the DM's own scope; same all_company pattern the schedule picker uses.
+      api('/api/v1/storeops/employees?all_company=true').catch(() => []),
+    ]).then(([s, it, e]) => { setStores(s || []); setItems(it || []); setEmps(e || []) }).catch(console.error)
   }, [])
+
+  // RULE THREE (§3b): actual-rep options come from the real employee roster, not free text — an
+  // unmatched typed name used to silently store rep-name drift (never joins back to the roster).
+  // id === label (the name STRING) because storevisit.actual_rep + shifts.employee_name are both
+  // plain name strings today (no employee_id FK on the visit) — see handoff for the canonical-ID
+  // follow-up. Two employees sharing a name get the email appended automatically (sublabel).
+  const repOptions = useMemo(
+    () => emps.filter((e: any) => e.name).map((e: any) => ({ id: e.name, label: e.name, sublabel: e.email || undefined })),
+    [emps],
+  )
 
   // Auto-load the scheduled rep when store + date are set.
   useEffect(() => {
@@ -197,8 +212,8 @@ export default function NewVisitPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
               <div>
                 <label style={labelStyle}>Actual rep present</label>
-                <input style={input} list="sched-reps" value={actualRep} onChange={e => setActualRep(e.target.value)} placeholder="Who was actually working?" />
-                <datalist id="sched-reps">{schedReps.map(r => <option key={r} value={r} />)}</datalist>
+                <EntityPicker options={repOptions} value={actualRep || null} width="100%"
+                  onChange={v => setActualRep(v || '')} placeholder="Who was actually working?" />
               </div>
               {mismatch && (
                 <div>

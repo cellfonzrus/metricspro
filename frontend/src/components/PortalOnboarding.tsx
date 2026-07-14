@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api, apiUpload } from '@/lib/client'
 import OnboardSignModal from '@/components/OnboardSignModal'
+import EntityPicker, { US_STATES } from '@/components/EntityPicker'
 
 // Employee self-service onboarding (way 2): a logged-in new hire completes their own onboarding from
 // the /portal kiosk — picks their work state, fills the structured intake form (which propagates into
@@ -102,7 +103,6 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
 
   const fields: Field[] = d.intake_fields || []
   const cats: Cat[] = d.categories || []
-  const states: string[] = d.states || []
   const sections = Array.from(new Set(fields.map(f => f.section || 'personal')))
 
   return (
@@ -123,10 +123,8 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
         <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Which state will you work in?</div>
         <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8 }}>We&apos;ll show only your state&apos;s tax forms.</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <select style={{ ...inp, width: 'auto', minWidth: 140 }} value={d.work_state || ''} onChange={e => saveState(e.target.value)} disabled={busy}>
-            <option value="">Select state…</option>
-            {states.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
+          <EntityPicker options={US_STATES} value={d.work_state || null} width={200} disabled={busy}
+            onChange={v => { if (v) saveState(v) }} placeholder="Select state…" clearable={false} />
           {d.work_state && <span style={{ fontSize: 13, color: '#059669' }}>✓ {d.work_state}</span>}
         </div>
       </div>
