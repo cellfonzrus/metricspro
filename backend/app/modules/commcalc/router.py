@@ -1151,45 +1151,95 @@ def whatif_accessory_byod(months: int = 4, org_id: str = ORG_ID):
     return whatif.accessory_byod_correlation(sb(), org_id, months)
 
 
+def _store_market_resolver(client, org_id):
+    """(resolve_market, all_markets) from store_mapping — keyed by address, store_code, or leading store
+    number (same resolver the Sales Report / commission-trend use). Never raises."""
+    import re as _re_mk
+    try:
+        sm = (client.schema('commcalc').table('store_mapping')
+              .select('store_code,store_address,market').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        sm = []
+    by_code, by_addr, by_num, markets = {}, {}, {}, set()
+
+    def _lead(s):
+        m = _re_mk.match(r"\s*(\d+)", str(s or "")); return m.group(1) if m else ""
+    for s in sm:
+        mk = (s.get('market') or '').strip()
+        if not mk:
+            continue
+        markets.add(mk)
+        code = str(s.get('store_code') or '').strip()
+        addr = str(s.get('store_address') or '').strip()
+        if code:
+            by_code[code] = mk
+        if addr:
+            by_addr[addr.lower()] = mk
+        n = _lead(addr)
+        if n:
+            by_num.setdefault(n, mk)
+
+    def resolve(store):
+        st = str(store or '').strip()
+        return (by_addr.get(st.lower()) or by_code.get(st) or by_num.get(_lead(st)) or '')
+    return resolve, sorted(markets)
+
+
 @router.get("/tax-collected")
-def tax_collected(period: str, org_id: str = ORG_ID):
-    """Retail SALES TAX collected per store for a period (from the sales export's Tax column, mig 105).
-    Populated once a Sales Transaction Details file WITH a Tax column is ingested. Also returns the
-    effective tax rate (tax ÷ pre-tax merchandise) per store."""
+def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG_ID):
+    """Retail SALES TAX collected, per store WITH a per-day drill-down, for a period (from the sales
+    export's Tax column, mig 105). Sourced from the UNIFIED sales set (raw_sales ∪ daily_sales_feed deduped
+    by trans_id — `_sales_rows_union_txn`) so a tenant on the daily feed (no monthly upload) still gets a
+    tax report and a promoted month is never masked by a stale feed. `start`/`end` (YYYY-MM-DD, optional)
+    narrow to a date range WITHIN the period. Each store row carries its `market` (store_mapping) and a
+    `days` array so the frontend can drill store → day and multi-select by store / market. Also returns
+    `effective_rate` (tax ÷ pre-tax merchandise)."""
     require_org(org_id)
     client = sb()
-
-    def _q(tbl):
-        rows, pg = [], 0
-        while True:
-            try:
-                chunk = (client.schema('commcalc').table(tbl).select('store,ext_price,tax,voided,trans_type')
-                         .eq('org_id', org_id).in_('period', _pvariants(period))
-                         .range(pg * 1000, pg * 1000 + 999).execute().data) or []
-            except Exception:
-                chunk = []
-            rows.extend(chunk)
-            if len(chunk) < 1000 or pg > 60:
-                break
-            pg += 1
-        return rows
-
-    rows = _q('raw_sales') or _q('daily_sales_feed')
+    rows, _meta = _sales_rows_union_txn(
+        client, org_id, period,
+        cols='trans_id,trans_date,store,ext_price,tax,voided,trans_type')
+    resolve_market, all_markets = _store_market_resolver(client, org_id)
+    s0 = (start or '').strip()[:10]
+    s1 = (end or '').strip()[:10]
     by_store = {}
     for r in rows:
         if str(r.get('voided') or '').strip().lower() in ('true', 'yes', '1', 'voided', 'void'):
             continue
         if str(r.get('trans_type') or '').strip() == 'Return':
             continue
-        s = by_store.setdefault((r.get('store') or '?').strip() or '?', {'tax': 0.0, 'revenue': 0.0})
-        s['tax'] += safe_float(r.get('tax'))
-        s['revenue'] += safe_float(r.get('ext_price'))
-    out = [{'store': k, 'tax': round(v['tax'], 2), 'revenue': round(v['revenue'], 2),
-            'effective_rate': round(100 * v['tax'] / v['revenue'], 2) if v['revenue'] else 0.0}
-           for k, v in by_store.items()]
+        day = str(r.get('trans_date') or '')[:10]
+        if s0 and day and day < s0:
+            continue
+        if s1 and day and day > s1:
+            continue
+        store = (r.get('store') or '?').strip() or '?'
+        s = by_store.get(store)
+        if not s:
+            s = by_store[store] = {'store': store, 'market': resolve_market(store),
+                                   'tax': 0.0, 'revenue': 0.0, '_days': {}}
+        tx = safe_float(r.get('tax'))
+        ext = safe_float(r.get('ext_price'))
+        s['tax'] += tx
+        s['revenue'] += ext
+        if day:
+            d = s['_days'].setdefault(day, {'date': day, 'tax': 0.0, 'revenue': 0.0})
+            d['tax'] += tx
+            d['revenue'] += ext
+    out = []
+    for s in by_store.values():
+        days = sorted(s['_days'].values(), key=lambda d: d['date'])
+        for d in days:
+            d['tax'] = round(d['tax'], 2)
+            d['revenue'] = round(d['revenue'], 2)
+            d['effective_rate'] = round(100 * d['tax'] / d['revenue'], 2) if d['revenue'] else 0.0
+        out.append({'store': s['store'], 'market': s['market'],
+                    'tax': round(s['tax'], 2), 'revenue': round(s['revenue'], 2),
+                    'effective_rate': round(100 * s['tax'] / s['revenue'], 2) if s['revenue'] else 0.0,
+                    'days': days})
     out.sort(key=lambda x: -x['tax'])
     total_tax = round(sum(x['tax'] for x in out), 2)
-    return {'period': period, 'stores': out,
+    return {'period': period, 'start': s0, 'end': s1, 'stores': out, 'markets': all_markets,
             'totals': {'tax': total_tax, 'revenue': round(sum(x['revenue'] for x in out), 2)},
             'has_tax': total_tax > 0,
             'note': (None if total_tax > 0 else
@@ -3618,19 +3668,60 @@ def _flag_rules(client, org_id):
 
 
 def _accessory_config(client, org_id):
-    """Configurable accessory classification (mig 092): which POS departments and/or categories count as
-    accessory sales. Empty config → the historical default department 'Ondigo', so nothing changes until
-    the user sets it on Sales Report → ⚙️ Accessory settings. Returns normalized sets + the raw lists."""
+    """Configurable accessory classification, resolved PER-ORG (mig 208 commcalc.accessory_config, keyed on
+    org_id — REPLACES the flag_rules singleton, which could physically hold only ONE org's config because
+    of its id=1 PK + CHECK(id=1), so _accessory_config(<non-house org>) fell through to the house default
+    'Ondigo' and a tenant's real accessory categories never matched — the luxelink Sales-Report $0 bug).
+
+    Resolution (empty at every step → the historical default department 'Ondigo', i.e. byte-identical Boost):
+      1. commcalc.accessory_config for this org — the per-tenant source (admin-edited via Sales Report →
+         Accessory settings → put_accessory_config).
+      2. else the legacy flag_rules singleton — backward-compat for the house/Boost org BEFORE mig 208 runs
+         (keeps Boost byte-identical during the transition; after 208 the house is backfilled into #1).
+      3. PLUS any commcalc.gp_category_map department mapped to category 'accessory' (REUSE of the mig-069
+         GP map so the Sales Report and the GP report agree on accessory DEPARTMENTS; additive + empty-safe,
+         the house GP map is empty → no effect).
+    Returns normalized sets + the raw lists."""
     depts, cats, kws, acima = [], [], [], []
+    got = False
     try:
-        rows = (client.schema("commcalc").table("flag_rules")
-                .select("accessory_departments,accessory_categories,accessory_product_keywords,acima_tenders")
-                .eq("org_id", org_id).eq("id", 1).limit(1).execute().data) or []
+        rows = (client.schema("commcalc").table("accessory_config")
+                .select("departments,categories,product_keywords,acima_tenders")
+                .eq("org_id", org_id).limit(1).execute().data) or []
         if rows:
-            depts = [d for d in (rows[0].get("accessory_departments") or []) if d]
-            cats = [c for c in (rows[0].get("accessory_categories") or []) if c]
-            kws = [k for k in (rows[0].get("accessory_product_keywords") or []) if k]
+            got = True
+            depts = [d for d in (rows[0].get("departments") or []) if d]
+            cats = [c for c in (rows[0].get("categories") or []) if c]
+            kws = [k for k in (rows[0].get("product_keywords") or []) if k]
             acima = [t for t in (rows[0].get("acima_tenders") or []) if t]
+    except Exception:
+        got = False
+    if not got:
+        # Pre-mig-208 fallback: the legacy flag_rules singleton (serves only whichever org owns the single
+        # row — the house). Preserves the exact pre-208 result so nothing regresses until 208 is applied.
+        try:
+            rows = (client.schema("commcalc").table("flag_rules")
+                    .select("accessory_departments,accessory_categories,accessory_product_keywords,acima_tenders")
+                    .eq("org_id", org_id).eq("id", 1).limit(1).execute().data) or []
+            if rows:
+                depts = [d for d in (rows[0].get("accessory_departments") or []) if d]
+                cats = [c for c in (rows[0].get("accessory_categories") or []) if c]
+                kws = [k for k in (rows[0].get("accessory_product_keywords") or []) if k]
+                acima = [t for t in (rows[0].get("acima_tenders") or []) if t]
+        except Exception:
+            pass
+    # REUSE gp_category_map (mig 069): a department the tenant mapped to 'accessory' there is ALSO an
+    # accessory department here. Empty-safe (the house map is empty → byte-identical); never raises.
+    try:
+        gp = (client.schema("commcalc").table("gp_category_map")
+              .select("department,category").eq("org_id", org_id)
+              .eq("category", "accessory").limit(1000).execute().data) or []
+        have = {d.strip().lower() for d in depts}
+        for r in gp:
+            d = str(r.get("department") or "").strip()
+            if d and d.lower() not in have:
+                depts.append(d)
+                have.add(d.lower())
     except Exception:
         pass
     if not depts and not cats and not kws:
@@ -6873,18 +6964,25 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID):
     department OR category is listed OR its product description contains a keyword. ACIMA commission =
     distinct transactions whose Tender Type contains any acima_tenders value × acima_spiff. Drives the
     Sales Report, the Action-Plan accessory tile, and (on recalc) commission accessory + ACIMA pay.
-    Needs migrations 092 + 093 + 094. Only the keys present in the body are updated."""
-    row = {"id": 1, "org_id": org_id, "updated_at": _cb_now()}
+    Persists PER-ORG in commcalc.accessory_config (mig 208) — NOT the flag_rules singleton, whose id=1 PK
+    meant a non-house save overwrote the house row's org_id. Only the keys present in the body are updated
+    (a partial save reads the current per-org row and re-writes the untouched lists)."""
+    require_org(org_id)
+    client = sb()
+    cur = _accessory_config(client, org_id)
+    row = {"org_id": org_id, "updated_at": _cb_now(),
+           "departments": cur["departments_list"], "categories": cur["categories_list"],
+           "product_keywords": cur["products_list"], "acima_tenders": cur["acima_tenders_list"]}
     if "departments" in body or "categories" in body or "product_keywords" in body:
-        row["accessory_departments"] = [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()]
-        row["accessory_categories"] = [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()]
-        row["accessory_product_keywords"] = [str(x).strip() for x in (body.get("product_keywords") or []) if str(x).strip()]
+        row["departments"] = [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()]
+        row["categories"] = [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()]
+        row["product_keywords"] = [str(x).strip() for x in (body.get("product_keywords") or []) if str(x).strip()]
     if "acima_tenders" in body:
         row["acima_tenders"] = [str(x).strip() for x in (body.get("acima_tenders") or []) if str(x).strip()]
     try:
-        sb().schema("commcalc").table("flag_rules").upsert(row, on_conflict="id").execute()
+        client.schema("commcalc").table("accessory_config").upsert(row, on_conflict="org_id").execute()
     except Exception as e:
-        raise HTTPException(500, f"save failed — run migrations 092 + 093 + 094 first: {e}")
+        raise HTTPException(500, f"save failed — run migration 208_commission_accessory_config.sql first: {e}")
     return get_accessory_config(org_id)
 
 
@@ -7587,7 +7685,53 @@ def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
     return merged, meta
 
 
-def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
+def _sales_rows_union_txn(client, org_id, period, cols=_SALES_DISPLAY_COLS):
+    """TRANSACTION-grain union of daily_sales_feed and raw_sales, deduped by trans_id — the READ-side
+    mirror of `_promote_feed_to_raw_sales`'s merge. The open-month PRIMARY source (`_open_month_source`;
+    the feed for the open month) wins a WHOLE trans_id; the OTHER source contributes only transactions the
+    primary lacks (`monthly_only` in promotion). Every LINE ITEM of a kept transaction is preserved
+    (raw_sales/feed are line-item grain), so accessory / tax ext_price sums stay correct, and a trans_id
+    present in BOTH tables is counted ONCE — never double-counted across sources.
+
+    Differs from `_sales_rows_union` (per-DAY): this keeps a raw_sales transaction the feed doesn't have
+    even on a day the feed also sold — the completeness the Daily-Targets actuals + Tax drill-down need.
+    In the healthy feed-only state (raw_sales empty or fully promoted from the feed) the result is the feed
+    verbatim → byte-identical to reading the feed alone. NEVER raises. Returns (rows, meta)."""
+    primary, other = _open_month_source(client, org_id, period)
+
+    def _q(table):
+        try:
+            return (client.schema('commcalc').table(table).select(cols)
+                    .eq('org_id', org_id).in_('period', _pvariants(period))
+                    .limit(200000).execute().data) or []
+        except Exception as e:
+            print(f"WARN _sales_rows_union_txn read of {table} failed: {e}")
+            return []
+
+    prows = _q(primary)
+    orows = _q(other)
+    ptids = {str(r.get('trans_id')).strip() for r in prows if str(r.get('trans_id') or '').strip()}
+    # `monthly_only`: other-source transactions whose trans_id isn't in the primary (blank trans_id → ''
+    # → not in ptids → kept, exactly as promotion keeps a blank-trans_id monthly row).
+    extra = [r for r in orows if str(r.get('trans_id') or '').strip() not in ptids]
+    merged = list(prows) + extra
+    feed_rows = len(prows) if primary == 'daily_sales_feed' else len(orows)
+    raw_rows = len(prows) if primary == 'raw_sales' else len(orows)
+    meta = {
+        'primary': primary, 'other': other,
+        'primary_rows': len(prows), 'other_rows': len(orows),
+        'feed_rows': feed_rows, 'raw_rows': raw_rows,
+        'other_only_rows': len(extra), 'shown_rows': len(merged),
+        'primary_trans': len(ptids),
+    }
+    return merged, meta
+
+
+_ACTUALS_COLS = ("trans_id,trans_date,store,salesperson,user_login,contract_type,department,category,"
+                 "product_desc,gp,ext_price,voided,trans_type")
+
+
+def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed', rows=None):
     """The ONE processed sales source, computed in Python so the whole targets/recon system agrees.
 
     Mirrors the daily_sales_feed_actuals RPC BUT (a) is period-spelling agnostic (_pvariants), and
@@ -7595,19 +7739,21 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
     any other non-empty Contract Type is an activation — instead of a rigid hardcoded label list. That
     is what fixes "activations/accessories show 0" when B2B's Contract Type labels drift from the exact
     strings the SQL function hardcodes (the July Action-Plan bug). Reads `source` (the daily feed),
-    falling back to raw_sales. Returns the same shape targets_engine expects."""
-    cols = ("trans_id,trans_date,store,salesperson,user_login,contract_type,department,category,"
-            "product_desc,gp,ext_price,voided,trans_type")
+    falling back to raw_sales — UNLESS the caller passes a pre-built `rows` set (e.g. the trans-id-deduped
+    feed∪raw_sales union from _fetch_actuals), in which case those rows are aggregated as-is. Returns the
+    same shape targets_engine expects."""
+    cols = _ACTUALS_COLS
 
-    def _q(table):
-        return (client.schema('commcalc').table(table).select(cols)
-                .eq('org_id', org_id).in_('period', _pvariants(period)).limit(200000).execute().data) or []
-    rows = _q(source)
-    if not rows and source != 'raw_sales':
-        try:
-            rows = _q('raw_sales')
-        except Exception:
-            rows = []
+    if rows is None:
+        def _q(table):
+            return (client.schema('commcalc').table(table).select(cols)
+                    .eq('org_id', org_id).in_('period', _pvariants(period)).limit(200000).execute().data) or []
+        rows = _q(source)
+        if not rows and source != 'raw_sales':
+            try:
+                rows = _q('raw_sales')
+            except Exception:
+                rows = []
     if not rows:
         return []
     acfg = _accessory_config(client, org_id)
@@ -7679,16 +7825,16 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed'):
 
 
 def _fetch_actuals(client, org_id, period):
-    """MTD 'achieved' actuals for Daily Targets — from the ONE processed sales source with ONE tolerant
-    classification (_compute_feed_actuals_py), no rigid SQL label lists. Open month → the daily feed is
-    freshest; a closed month → the authoritative monthly raw_sales; each falls back to the other when
-    empty. Display-only (targets), never commission payout, so making it MORE accurate is safe. The old
-    daily_sales_actuals / daily_sales_feed_actuals SQL functions are no longer on the critical path (they
-    dropped activations whose Contract Type labels weren't in their hardcoded list — the July zeros)."""
-    primary, other = _open_month_source(client, org_id, period)
-    rows = _compute_feed_actuals_py(client, org_id, period, source=primary)
-    if not rows:
-        rows = _compute_feed_actuals_py(client, org_id, period, source=other)
+    """MTD 'achieved' actuals for Daily Targets — from the UNIFIED sales set (raw_sales ∪ daily_sales_feed,
+    deduped by trans_id via `_sales_rows_union_txn`) with ONE tolerant classification
+    (_compute_feed_actuals_py), no rigid SQL label lists. Previously this read ONLY the open-month primary
+    (the feed), falling back to the other source only when the primary was entirely empty — so a tenant
+    whose raw_sales carried transactions the partial feed lacked (luxelink July 2026: ~1,939 raw_sales
+    July trans) saw those sales missing from its targets. The union now includes them, feed-wins on the
+    overlap (no double count). Display-only (targets), never commission payout, so making it MORE accurate
+    is safe; in the healthy feed-only state the union is the feed verbatim → Boost unchanged."""
+    rows, _umeta = _sales_rows_union_txn(client, org_id, period, cols=_ACTUALS_COLS)
+    rows = _compute_feed_actuals_py(client, org_id, period, rows=rows)
     cmap = _rep_canon_map(client, org_id)
     for r in rows:
         if r.get('rep_name'):
