@@ -1432,11 +1432,226 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
             browser.close()
 
 
-# ── session health check + report pull ─────────────────────────────────────────────────────────
-def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrier_id=None, proxy_url=None):
-    """Restore the authenticated session and verify it's still alive (login + 2FA + persistence —
-    the hard part), reporting what the authenticated portal exposes so report auto-download can be
-    pinned in one calibration pass. Raises VidaPayAuthError if the session is missing/expired."""
+# ── report-pull engine (config-driven; select report → fill → Submit → Export → parse → ingest) ──
+# The report→table→column MAPPING is NOT hard-coded here: it comes from commcalc.report_pull_map via
+# report_pull.resolve_report_specs (org override > house default > Python default). This driver only
+# knows how to DRIVE the ASP.NET Reports page for whatever specs it's handed, and returns a per-report
+# summary + a DOM diagnostic on any report whose page didn't match (so the un-screenshotted SIM/PR
+# reports self-calibrate on the first live run).
+def _open_reports_page(page):
+    """Find the frame holding the Report <select>. If we're not on the Reports page yet, click a
+    'Reports' / 'Billing Manager' nav link and settle. Returns the frame (or the main page)."""
+    def _report_select_frame():
+        for fr in _frames(page):
+            try:
+                for s in fr.query_selector_all("select"):
+                    if not s.is_visible():
+                        continue
+                    opts = " ".join([(o.inner_text() or "") for o in s.query_selector_all("option")]).lower()
+                    hay = ((s.get_attribute("name") or "") + (s.get_attribute("id") or "")).lower()
+                    if "report" in hay or any(k in opts for k in
+                                              ("commission details", "daily tx", "fulfillment",
+                                               "sim assignment", "activation details")):
+                        return fr
+            except Exception:
+                continue
+        return None
+    fr = _report_select_frame()
+    if fr:
+        return fr
+    # navigate: click a Reports / Billing Manager link
+    for want in ("reports", "billing manager", "report"):
+        for f in _frames(page):
+            try:
+                if _click_submit(f, (want,)):
+                    page.wait_for_timeout(2500)
+                    _wait_settle(page)
+                    break
+            except Exception:
+                continue
+        fr = _report_select_frame()
+        if fr:
+            return fr
+    return _report_select_frame() or page
+
+
+def _select_report(frame, display_name):
+    """Select the report by its display name in the Report <select> and wait for the ASP.NET postback
+    that renders that report's parameter fields. Returns True if selected."""
+    target = (display_name or "").strip().lower()
+    for s in frame.query_selector_all("select"):
+        try:
+            if not s.is_visible():
+                continue
+            for o in s.query_selector_all("option"):
+                t = (o.inner_text() or "").strip().lower()
+                if t == target or (target and (target in t or t in target)) and t:
+                    val = o.get_attribute("value")
+                    if val is not None:
+                        s.select_option(value=val)
+                    else:
+                        s.select_option(label=(o.inner_text() or "").strip())
+                    try:
+                        frame.page.wait_for_load_state("networkidle", timeout=20000)
+                    except Exception:
+                        pass
+                    frame.page.wait_for_timeout(1500)
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def _fill_param_fields(frame, fields, win_start, win_end, source_row):
+    """Fill each param field per its spec: date fields get the month-window boundary formatted; static
+    fields (Account_ID/SessionId) come from the data_source row; select fields pick the configured
+    literal. Heuristic finders (by name/id/label/placeholder) so it survives small DOM drift."""
+    from app.modules.commcalc import report_pull as rp
+    filled = []
+    for f in (fields or []):
+        name = f.get("name") or ""
+        kind = f.get("kind")
+        toks = [w for w in name.lower().replace("_", " ").split() if len(w) > 1]
+        try:
+            if kind == "date":
+                fmt = f.get("format") or "%m/%d/%Y"
+                val = (win_start if f.get("role") == "start" else win_end).strftime(fmt)
+                el = _find_input(frame, kinds=("text", "date", "datetime-local"), want=toks) \
+                    or _find_input(frame, kinds=("text",), want=("date", "start", "end"))
+                if el:
+                    el.click(); el.fill(""); el.type(val, delay=8); filled.append(name)
+            elif kind == "select":
+                lit = (f.get("literal") or "").strip().lower()
+                for s in frame.query_selector_all("select"):
+                    if not s.is_visible():
+                        continue
+                    hay = ((s.get_attribute("name") or "") + (s.get_attribute("id") or "")).lower()
+                    if not (any(t in hay for t in toks) or lit):
+                        continue
+                    for o in s.query_selector_all("option"):
+                        if (o.inner_text() or "").strip().lower() == lit:
+                            v = o.get_attribute("value")
+                            s.select_option(value=v) if v is not None else s.select_option(label=o.inner_text())
+                            filled.append(name)
+                            break
+            else:  # static
+                val = rp.resolve_static(f.get("source"), source_row)
+                if val == "" and f.get("optional"):
+                    continue
+                el = _find_input(frame, kinds=("text", "number", "hidden"), want=toks) \
+                    or _find_input(frame, kinds=("text", "number"), want=("account", "session"))
+                if el:
+                    try:
+                        el.fill(str(val))
+                    except Exception:
+                        el.evaluate("(e,v)=>{e.value=v;}", str(val))
+                    filled.append(name)
+        except Exception:
+            continue
+    return filled
+
+
+def _submit_and_export(page, frame, export_pref, timeout_s=300):
+    """Click Submit, wait (up to the report's timeout) for results, then click the preferred
+    'Export to: CSV|Excel' link and capture the download. Returns (bytes, filename)."""
+    _click_submit(frame, ("submit", "run", "view report", "generate", "search", "go"))
+    try:
+        page.wait_for_load_state("networkidle", timeout=min(timeout_s, 300) * 1000)
+    except Exception:
+        pass
+    page.wait_for_timeout(2000)
+    pref = (export_pref or "csv").lower()
+    order = ("csv", "excel") if pref == "csv" else ("excel", "csv")
+    for want in order:
+        for f in _frames(page):
+            try:
+                cands = f.query_selector_all("a, button, input[type=button], input[type=submit]")
+            except Exception:
+                continue
+            for c in cands:
+                try:
+                    if not c.is_visible():
+                        continue
+                    label = ((c.get_attribute("value") or c.inner_text() or "") + " " +
+                             (c.get_attribute("href") or "")).strip().lower()
+                    if want in label and ("export" in label or want in label):
+                        with page.expect_download(timeout=120000) as dl:
+                            c.click()
+                        d = dl.value
+                        import tempfile, os
+                        path = d.path()
+                        with open(path, "rb") as fh:
+                            content = fh.read()
+                        try:
+                            os.unlink(path)
+                        except Exception:
+                            pass
+                        return content, (d.suggested_filename or ("export." + want))
+                except Exception:
+                    continue
+    return None, None
+
+
+def _pull_one_report(page, client, org_id, source_id, carrier_id, source_row, spec, start_dt, end_dt):
+    """Drive one report end-to-end across its month windows. Returns a summary dict (never raises)."""
+    from app.modules.commcalc import report_pull as rp
+    rk = spec.get("report_key")
+    ps = spec.get("param_spec") or {}
+    target = spec.get("target_table")
+    date_col = ps.get("date_col")
+    frame = _open_reports_page(page)
+    if not _select_report(frame, spec.get("display_name")):
+        return {"report_key": rk, "ok": False,
+                "error": "report not found in the Reports dropdown — calibrate the display_name",
+                "diag": _snapshot(page)}
+    # month iteration, capped at the report's max_months_back and VidaPay's ≤1-year hard limit
+    max_back = min(int(ps.get("max_months_back") or 12), 12)
+    floor = end_dt.replace(hour=0, minute=0)
+    from datetime import datetime as _dt
+    y, m = floor.year, floor.month - max_back
+    while m <= 0:
+        m += 12; y -= 1
+    range_start = max(start_dt, _dt(y, m, 1))
+    wins = rp.month_windows(range_start, end_dt, ps.get("interval_months", 1)) if ps.get("iterate_months") \
+        else [(range_start, end_dt)]
+    total, months, win_diag = 0, [], None
+    for (ws, we) in wins:
+        try:
+            _select_report(frame, spec.get("display_name"))     # each postback resets the form
+            _fill_param_fields(frame, ps.get("fields"), ws, we, source_row)
+            content, fn = _submit_and_export(page, frame, spec.get("export_pref"),
+                                             ps.get("submit_timeout_s", 300))
+            if content is None:
+                win_diag = win_diag or {"window": ws.strftime("%Y-%m"), "note": "no export produced",
+                                        "diag": _snapshot(page)}
+                continue
+            rows = rp.parse_export_bytes(content, fn)
+            mapped = rp.apply_column_map(rows, spec, org_id, source_id, carrier_id)
+            n = rp.ingest_report_rows(client, org_id, target, mapped, source_id=source_id,
+                                      date_col=date_col, win_start=ws, win_end=we)
+            total += n
+            months.append(ws.strftime("%Y-%m"))
+        except Exception as e:
+            win_diag = win_diag or {"window": ws.strftime("%Y-%m"), "error": str(e)[:200],
+                                    "diag": _snapshot(page)}
+            continue
+    out = {"report_key": rk, "target_table": target, "ok": True,
+           "rows_ingested": total, "months_covered": months}
+    if ps.get("calibration"):
+        out["calibration"] = True
+        out["diag"] = _snapshot(page)   # pin the un-screenshotted SIM/PR params from this
+    if win_diag:
+        out["window_diag"] = win_diag
+    return out
+
+
+def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrier_id=None,
+                      proxy_url=None, account_id=None, months_back=2, source_row=None):
+    """Restore the authenticated session and pull EVERY enabled report in report_pull_map for this org
+    (config-driven), month-by-month across the last `months_back` months (respecting each report's
+    ≤1-month window + ≤1-year-back caps), mapping + ingesting each export idempotently into its target
+    table. Returns a per-report summary; raises VidaPayAuthError if the session is missing/expired."""
+    from app.modules.commcalc import report_pull as rp
     try:
         from playwright.sync_api import sync_playwright
     except Exception:
@@ -1444,6 +1659,13 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
     if not session_state:
         raise VidaPayAuthError("Not authenticated yet — click “Log in” and complete 2FA first.")
     base_url = _norm_url(url, DEFAULT_URL)
+    src = dict(source_row or {})
+    if account_id and not src.get("account_id"):
+        src["account_id"] = account_id
+    specs = rp.resolve_report_specs(client, org_id, processor="vidapay", only_enabled=True)
+    from datetime import datetime as _dt, timedelta as _td
+    end_dt = _dt.now()
+    start_dt = end_dt - _td(days=31 * max(1, int(months_back or 1)))
     with sync_playwright() as p:
         browser = _launch(p)
         ctx = _new_context(browser, storage_state=session_state, proxy=_proxy_arg(proxy_url))
@@ -1456,22 +1678,18 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
             if state in ("login", "twofa", "botwall"):
                 raise VidaPayAuthError(
                     "The VidaPay session has expired — please re-authenticate (Log in + 2FA).")
-            diag = _snapshot(page)
-            links = []
-            for fr in _frames(page):
-                try:
-                    links += fr.evaluate(
-                        """() => Array.from(document.querySelectorAll('a,button,span.k-link,li'))
-                                 .map(e => (e.innerText||'').trim())
-                                 .filter(t => /commission|report|daily|device|residual|activation|fulfil|download|export/i.test(t))
-                                 .filter((v,i,a)=>a.indexOf(v)===i).slice(0,25)""")
-                except Exception:
-                    continue
-            return {
-                "status": "session verified — logged in OK; report auto-download pending one live "
-                          "calibration (import the MA reports via Data Imports / email sweep for now)",
-                "authenticated": True, "report_links_seen": links[:25], "diag": diag,
-            }
+            reports = []
+            for spec in specs:
+                reports.append(_pull_one_report(page, client, org_id, source_id, carrier_id,
+                                                src, spec, start_dt, end_dt))
+            ok_rows = sum(r.get("rows_ingested", 0) for r in reports)
+            ok_reports = [r["report_key"] for r in reports if r.get("ok") and r.get("rows_ingested")]
+            calib = [r["report_key"] for r in reports if not r.get("ok") or r.get("calibration")]
+            status = (f"pulled {ok_rows} rows across {len(ok_reports)} report(s): "
+                      f"{', '.join(ok_reports) or '—'}"
+                      + (f"; calibration/diagnostic needed: {', '.join(calib)}" if calib else ""))
+            return {"status": status, "authenticated": True, "reports": reports,
+                    "rows_ingested": ok_rows, "months_back": months_back}
         finally:
             browser.close()
 

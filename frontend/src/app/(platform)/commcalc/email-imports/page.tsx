@@ -632,6 +632,7 @@ export default function EmailImportsPage() {
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>📡 Payment-processor sources</div>
           <div style={{ flex: 1 }} />
+          <a href="/commcalc/report-mappings" className="btn btn-secondary" style={{ fontSize: 12 }} title="Which portal report lands in which table + column mapping — configurable, not hard-coded">🗺️ Report mapping</a>
           <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: 'b2bsoft', portal_url: 'https://wsreports.b2bsoft.com', enabled: false })}>＋ Add b2bsoft (sales)</button>
           <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft({ processor: 'vidapay', enabled: false })}>＋ Add login</button>
         </div>
