@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
 
 // Phones flagged "physically missing" during Inventory Aging investigation — show in aging but not in
@@ -50,7 +51,7 @@ export default function MissingPhonesPage() {
             The list to investigate, with the distributor exposure at risk.
           </p>
         </div>
-        {allRows.length > 0 && <ExportButtons payload={buildPayload} />}
+        {allRows.length > 0 && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
       </div>
 
       {loading ? (
