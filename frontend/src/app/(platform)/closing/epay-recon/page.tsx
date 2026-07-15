@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, Fragment } from 'react'
+import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 
@@ -11,32 +12,39 @@ export default function EpayReconPage() {
   const [flaggedOnly, setFlaggedOnly] = useState(false)
   const [open, setOpen] = useState<Record<string, boolean>>({})
   const [stores, setStores] = useState<any[]>([])
-  // bank-deposit entry
-  const [dep, setDep] = useState<{ store_code: string; amount: string; employee_name: string; note: string; receipt_path?: string }>({ store_code: '', amount: '', employee_name: '', note: '' })
+  // bank-deposit entry (mig 502: inline slip -> OCR-verified against the tenant's configured basis)
+  const [dep, setDep] = useState<{ store_code: string; amount: string; employee_name: string; note: string; slip?: string; manual_confirmed?: boolean }>({ store_code: '', amount: '', employee_name: '', note: '' })
   const [depMsg, setDepMsg] = useState('')
   const [depBusy, setDepBusy] = useState(false)
+  const [depCfg, setDepCfg] = useState<any>(null)
 
   function load() {
     setLoading(true)
     api(`/api/v1/closing/epay-recon?date=${date}`).then(setData).catch(e => setData({ error: e?.message || String(e) })).finally(() => setLoading(false))
   }
   useEffect(() => { load() }, [date])
-  useEffect(() => { api('/api/v1/closing/stores').then((s: any) => setStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
+  useEffect(() => {
+    api('/api/v1/closing/stores').then((s: any) => setStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {})
+    api('/api/v1/closing/deposit-config').then(setDepCfg).catch(() => {})
+  }, [])
 
-  async function uploadReceipt(f: File) {
+  function pickSlip(f: File) {
     const r = new FileReader()
-    r.onload = async () => {
-      try { const u: any = await api('/api/v1/closing/envelope-photo', { method: 'POST', body: JSON.stringify({ image: r.result }) }); setDep(d => ({ ...d, receipt_path: u.path })); setDepMsg('📎 Receipt attached') }
-      catch (e: any) { setDepMsg('❌ receipt upload failed: ' + (e?.message || e)) }
-    }
+    r.onload = () => { setDep(d => ({ ...d, slip: String(r.result) })); setDepMsg('📎 Slip attached — will be OCR-verified on save.') }
     r.readAsDataURL(f)
   }
   async function saveDeposit() {
-    if (!dep.store_code || !dep.amount) { setDepMsg('❌ Pick a store and enter the amount.'); return }
+    if (!dep.store_code || (!dep.amount && !dep.slip)) { setDepMsg('❌ Pick a store, and enter the amount or attach a slip.'); return }
     setDepBusy(true); setDepMsg('')
     try {
-      await api('/api/v1/closing/bank-deposit', { method: 'POST', body: JSON.stringify({ ...dep, close_date: date, store_name: stores.find(s => s.store_code === dep.store_code)?.store_address }) })
-      setDepMsg('✅ Bank deposit recorded'); setDep({ store_code: '', amount: '', employee_name: '', note: '' }); load()
+      const r: any = await api('/api/v1/closing/bank-deposit', { method: 'POST', body: JSON.stringify({ ...dep, close_date: date, store_name: stores.find((s: any) => s.store_code === dep.store_code)?.store_address }) })
+      const badge = r.ocr_match === 'matched' ? '✅ OCR matched declared cash.'
+        : r.ocr_match === 'mismatch' ? `⚠️ OCR MISMATCH — slip vs ${String(r.match_target || '').replace('_', ' ')} (${fmt(r.declared_amount)}). Management alerted.`
+        : r.ocr_match === 'ocr_unavailable' ? 'ℹ️ OCR not configured on this server — recorded as entered.'
+        : r.ocr_match === 'unreadable' ? '⚠️ Slip uploaded but the amount couldn’t be read — recorded as entered.'
+        : ''
+      setDepMsg(`✅ Bank deposit recorded. ${badge}`)
+      setDep({ store_code: '', amount: '', employee_name: '', note: '' }); load()
     } catch (e: any) { setDepMsg('❌ ' + (e?.message || e)) }
     setDepBusy(false)
   }
@@ -85,11 +93,24 @@ export default function EpayReconPage() {
         </select>
         <input style={{ ...inp, width: 110 }} inputMode="decimal" placeholder="Amount $" value={dep.amount} onChange={e => setDep(d => ({ ...d, amount: e.target.value }))} />
         <input style={{ ...inp, width: 130 }} placeholder="Deposited by" value={dep.employee_name} onChange={e => setDep(d => ({ ...d, employee_name: e.target.value }))} />
-        <label className="btn" style={{ cursor: 'pointer' }}>{dep.receipt_path ? '📎 Receipt ✓' : '📎 Receipt'}
-          <input type="file" accept="image/*,.pdf" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadReceipt(f) }} />
+        <label className="btn" style={{ cursor: 'pointer' }}>{dep.slip ? '📎 Slip ✓' : '📎 Deposit slip'}
+          <input type="file" accept="image/*,.pdf" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) pickSlip(f) }} />
         </label>
+        {depCfg && depCfg.anthropic_configured === false && (
+          <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
+            <input type="checkbox" checked={!!dep.manual_confirmed} onChange={e => setDep(d => ({ ...d, manual_confirmed: e.target.checked }))} />
+            I've verified this slip manually
+          </label>
+        )}
         <button className="btn" disabled={depBusy} onClick={saveDeposit} style={{ background: 'var(--accent)', color: '#fff' }}>{depBusy ? 'Saving…' : 'Save'}</button>
         {depMsg && <span style={{ fontSize: 12, color: depMsg.startsWith('❌') ? '#b91c1c' : 'var(--text2)' }}>{depMsg}</span>}
+        {depCfg && (
+          <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+            Slip checked against: <b>{String(depCfg.match_target || 'total_cash').replace('_', ' ')}</b>
+            {depCfg.anthropic_configured === false ? ' · OCR unavailable (server key not set)' : ''}
+            {' · '}<Link href="/closing/cash-config" style={{ color: 'var(--accent)' }}>change</Link>
+          </span>
+        )}
       </div>
 
       {loading ? (
@@ -147,7 +168,12 @@ export default function EpayReconPage() {
                       )), ...(r.deposits || []).map((x: any, i: number) => (
                         <tr key={r.store_code + '_d' + i} style={{ background: 'var(--surface2)', fontSize: 12 }}>
                           <td style={{ padding: '4px 12px 4px 30px', color: '#16a34a' }}>bank deposit · {x.employee_name || ''}{x.receipt_path ? ' 📎' : ''}</td>
-                          <td colSpan={4} style={{ padding: '4px 12px', color: 'var(--text3)' }}>{x.note || ''}</td>
+                          <td colSpan={4} style={{ padding: '4px 12px', color: 'var(--text3)' }}>
+                            {x.note || ''}
+                            {x.ocr_match === 'mismatch' && <span style={{ color: '#b91c1c', fontWeight: 700, marginLeft: 6 }}>⚠ OCR MISMATCH{x.ocr_amount != null ? ` (slip read ${fmt(x.ocr_amount)})` : ''}</span>}
+                            {x.ocr_match === 'matched' && <span style={{ color: '#16a34a', marginLeft: 6 }}>✓ OCR matched</span>}
+                            {x.ocr_match === 'unreadable' && <span style={{ color: '#b45309', marginLeft: 6 }}>OCR unreadable</span>}
+                          </td>
                           <td style={{ padding: '4px 12px', textAlign: 'right', color: '#16a34a' }}>{fmt(x.amount)}</td>
                           <td colSpan={2} />
                         </tr>

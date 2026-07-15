@@ -50,6 +50,8 @@ export default function ClosingDashboard() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Link href="/closing/submit" className="btn btn-primary" style={{ fontSize: 13 }}>➕ Submit closing</Link>
           <Link href="/closing/verify" className="btn btn-secondary" style={{ fontSize: 13 }}>✅ DM verify</Link>
+          <Link href="/closing/cash-position" className="btn btn-secondary" style={{ fontSize: 13 }}>💰 Cash Position</Link>
+          <Link href="/closing/duplicates" className="btn btn-secondary" style={{ fontSize: 13 }}>🧾 Duplicates</Link>
           <Link href="/closing/count-config" className="btn btn-secondary" style={{ fontSize: 13 }}>🔢 Count fields</Link>
         </div>
       </div>

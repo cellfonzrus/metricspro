@@ -397,6 +397,16 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
     except Exception as e:
         print("closing X-report tender load failed:", e)
         xreport_tenders = {}
+    # Distinguish "no X-report EVER for this tenant" (config/delivery — mailbox rule or the b2bsoft
+    # schedule never set up) from "just today's file hasn't landed yet" (2026-07-15 luxelink diagnosis)
+    # -> a sharper, more actionable honest-empty message on the money_recon note below.
+    x_report_ever = bool(xreport_tenders)
+    if not x_report_ever:
+        try:
+            x_report_ever = bool((client.schema("commcalc").table("pos_tender_summary").select("close_date")
+                                  .eq("org_id", org_id).limit(1).execute().data) or [])
+        except Exception:
+            x_report_ever = False
 
     # Verifications for that day.
     vers = (client.schema("commcalc").table("daily_closing_verification").select("*")
@@ -531,10 +541,17 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
                 "tender_source": tender_src, "tenders_available": tenders_ok, "dept_available": dept_ok,
             }
             if not tenders_ok:
-                money_recon["note"] = ("No POS X-report tender data for this day (and the sales feed has no "
-                                       "Tender Type), so cash & credit can't be reconciled yet — make sure the "
-                                       "daily X-report is emailed to the mailbox and imported. Shown as pending, "
-                                       "not flagged.")
+                if x_report_ever:
+                    money_recon["note"] = ("No POS X-report tender data for THIS DAY (and the sales feed has "
+                                           "no Tender Type), so cash & credit can't be reconciled yet — this "
+                                           "tenant has had X-reports before, so check today's file specifically. "
+                                           "Shown as pending, not flagged.")
+                else:
+                    money_recon["note"] = ("This tenant has NEVER had a POS X-report imported (and the sales "
+                                           "feed has no Tender Type), so cash & credit can't be reconciled — "
+                                           "check (1) the mailbox has an *X*Report* -> x_report rule and "
+                                           "(2) b2bsoft is actually scheduled to email an X-Report for this "
+                                           "tenant. Shown as pending, not flagged.")
             money_recon["any_flag"] = any(money_recon[k].get("flag") for k in ("accessory", "cash", "credit"))
 
         out.append({
@@ -736,6 +753,41 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
         "envelope_picture": (payload.get("envelope_picture") or "").strip() or None,
         "remarks": payload.get("remarks"), "source": "manual",
     }
+
+    # ── Duplicate-submission guard (mig 502): ONE ACTIVE row per (org, store_code, employee_name,
+    #    close_date). A rep double-submitting used to create a SECOND daily_closing row that
+    #    closing_summary/recon summed straight into the store's totals, silently DOUBLING declared
+    #    cash/credit — this is the fix. A second submit for the same combo is refused with a clear
+    #    message unless a manager has RELEASED the existing row (POST /closing/row/{id}/release,
+    #    Management Review page) — a release unlocks it for exactly ONE corrected resubmit, which
+    #    UPDATES that same row (never inserts a second) and re-locks it, fully audited
+    #    (released_by/released_at/release_note + corrected_at/correction_count on the row).
+    _dupe_store, _dupe_emp = body.get("store_code"), (body.get("employee_name") or "").strip()
+    _update_id = None
+    if _dupe_store and _dupe_emp:
+        try:
+            _existing = (client.schema("commcalc").table("daily_closing")
+                         .select("id,released_at,correction_count")
+                         .eq("org_id", org_id).eq("close_date", d).eq("store_code", _dupe_store)
+                         .ilike("employee_name", _dupe_emp)
+                         .order("submitted_at").execute().data) or []
+        except Exception:
+            _existing = []
+        if len(_existing) > 1 and not any(r.get("released_at") for r in _existing):
+            raise HTTPException(409, f"Multiple existing submissions found for {_dupe_emp} at this store "
+                                 f"on {d} (likely from the double-submit bug) — ask a manager to review "
+                                 f"/closing/duplicates and release the correct row before resubmitting.")
+        if _existing:
+            _row0 = _existing[0]
+            if not _row0.get("released_at"):
+                raise HTTPException(409, f"Already submitted for {d} — ask a manager to release it before resubmitting.")
+            _update_id = _row0.get("id")
+            body["correction_count"] = int(_row0.get("correction_count") or 0) + 1
+            body["corrected_at"] = _now()
+            body["released_at"] = None
+            body["released_by"] = None
+            body.pop("submitted_at", None)   # keep the ORIGINAL submitted_at on a corrected resubmit
+        body["dedup_key"] = f"{org_id}|{_dupe_store}|{_dupe_emp.lower()}|{d}"
     # ── Activation-count fields (mig 501). Configured tenants send `counts: {field_key: value}` for
     #    every field on their axis; standard field_keys still write the physical column (backward-compat
     #    with the rollup dashboard + sheet-upload ingestion), custom ones go to daily_closing.counts
@@ -836,15 +888,28 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
     body["attempts"] = attempt_no
     body["auto_accepted"] = auto_accepted
     body["mgmt_flag"] = auto_accepted
+
+    def _write(b):
+        # A release→corrected-resubmit UPDATEs the SAME row (mig 502) — never a second INSERT.
+        if _update_id:
+            return (client.schema("commcalc").table("daily_closing").update(b)
+                    .eq("org_id", org_id).eq("id", _update_id).execute())
+        return client.schema("commcalc").table("daily_closing").insert(b).execute()
     try:
-        r = client.schema("commcalc").table("daily_closing").insert(body).execute()
-    except Exception:
+        r = _write(body)
+    except Exception as e:
+        if "daily_closing_one_active_per_rep_day" in str(e) or "duplicate key" in str(e).lower():
+            # A race: two near-simultaneous submits both passed the pre-check above. The DB-level
+            # partial unique index (mig 502) is the safety net — same refusal message either way.
+            raise HTTPException(409, f"Already submitted for {d} — ask a manager to release it before resubmitting.")
         # Tolerate not-yet-run additive migrations (t_acima=mig104, epay_on_*=mig106,
-        # expense_*=mig109): drop the new keys + retry.
+        # expense_*=mig109, dedup_key/corrected_at/correction_count/released_*=mig502): drop the new
+        # keys + retry. (mig 502 not run -> dedup guard above already no-op'd via empty `_existing`.)
         for _k in ("t_acima", "epay_on_cash", "epay_on_credit", "epay_on_acima",
-                   "expense_amount", "expense_description", "expense_approved", "counts"):
+                   "expense_amount", "expense_description", "expense_approved", "counts",
+                   "dedup_key", "corrected_at", "correction_count", "released_at", "released_by"):
             body.pop(_k, None)
-        r = client.schema("commcalc").table("daily_closing").insert(body).execute()
+        r = _write(body)
     saved = r.data[0] if r.data else body
 
     # 3-way envelope recon: OCR'd cash (the rep's OWN photo) vs entered cash — this is the rep's own
@@ -904,6 +969,80 @@ def delete_row(row_id: str, org_id: str = ORG_ID):
     return {"deleted": row_id}
 
 
+@router.post("/row/{row_id}/release")
+def release_closing_row(row_id: str, payload: dict = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """MANAGEMENT OVERRIDE (mig 502): unlock a submitted daily_closing row for exactly ONE corrected
+    resubmit. Gated to the same management-review permission as /closing/attempts (DMs excluded) — a
+    DM cannot self-release a duplicate. Body: {released: bool (default true), released_by?, note?}.
+    Toggling released=false re-locks a row without requiring a resubmit (undo a mistaken release).
+    Never deletes/merges rows — the next POST /closing/row for that store+employee+day UPDATES this
+    exact row (see create_row); releasing never creates a second row."""
+    require_org(org_id)
+    client = sb()
+    if not _can_mgmt_review(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Releasing a closing is permission-restricted (not available to DMs).")
+    payload = payload or {}
+    released = bool(payload.get("released", True))
+    by = (payload.get("released_by") or "").strip() or "management"
+    upd = ({"released_at": _now(), "released_by": by, "release_note": (payload.get("note") or "").strip() or None}
+           if released else {"released_at": None, "released_by": None, "release_note": None})
+    try:
+        r = (client.schema("commcalc").table("daily_closing").update(upd)
+             .eq("org_id", org_id).eq("id", row_id).execute())
+    except Exception:
+        raise HTTPException(400, "run migration 502 first (commcalc.daily_closing release columns)")
+    if not r.data:
+        raise HTTPException(404, "row not found")
+    return {"ok": True, "row_id": row_id, "released": released, **upd}
+
+
+@router.get("/duplicates")
+def closing_duplicates(period: str = None, date: str = None, store: str = None,
+                       authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """READ-ONLY report of suspected duplicate daily_closing submissions — 2+ rows sharing the same
+    (org, store, employee, close_date), the exact fingerprint of the double-submit bug mig 502 fixes.
+    NEVER auto-deletes or auto-merges; the owner/management reviews each group and uses
+    POST /row/{id}/release + a corrected resubmit (or DELETE /row/{id} for a true throwaway dupe) to
+    resolve. Gated the same as /closing/attempts (management only, DMs excluded)."""
+    require_org(org_id)
+    client = sb()
+    if not _can_mgmt_review(_caller_perms(client, authorization)):
+        raise HTTPException(403, "The duplicates report is permission-restricted (not available to DMs).")
+    q = (client.schema("commcalc").table("daily_closing")
+         .select("id,store_code,store_address,store_name,employee_name,close_date,submitted_at,"
+                 "t_cash,t_credit,store_cash,store_cc,released_at,released_by,source"))
+    q = q.eq("org_id", org_id)
+    if period:
+        q = q.eq("period", period)
+    if date:
+        q = q.eq("close_date", _date(date) or date)
+    if store:
+        q = q.eq("store_code", store)
+    rows = q.limit(50000).execute().data or []
+    groups = {}
+    for r in rows:
+        k = (r.get("store_code") or "", (r.get("employee_name") or "").strip().lower(), str(r.get("close_date") or ""))
+        groups.setdefault(k, []).append(r)
+    out = []
+    for (code, emp_key, d), rs in groups.items():
+        if len(rs) < 2:
+            continue
+        rs.sort(key=lambda x: str(x.get("submitted_at") or ""))
+        out.append({
+            "store_code": code or None, "store_address": rs[0].get("store_address") or rs[0].get("store_name"),
+            "employee_name": rs[0].get("employee_name"), "close_date": d, "row_count": len(rs),
+            "any_released": any(r.get("released_at") for r in rs),
+            "rows": [{"id": r.get("id"), "submitted_at": r.get("submitted_at"),
+                      "cash": _f(r.get("t_cash")) or _f(r.get("store_cash")),
+                      "credit": _f(r.get("t_credit")) or _f(r.get("store_cc")),
+                      "source": r.get("source"), "released_at": r.get("released_at"),
+                      "released_by": r.get("released_by")} for r in rs],
+        })
+    out.sort(key=lambda g: (g["close_date"] or "", g["store_address"] or ""), reverse=True)
+    return {"period": period, "date": date, "groups": out, "total_groups": len(out),
+            "total_duplicate_rows": sum(g["row_count"] for g in out)}
+
+
 # ── Management review (permission-gated, DMs excluded): the 3-try close-attempt log ──────────────
 @router.get("/attempts")
 def closing_attempts(period: str = None, date: str = None, store: str = None, only_review: bool = False,
@@ -928,6 +1067,28 @@ def closing_attempts(period: str = None, date: str = None, store: str = None, on
     for r in rows:
         k = (r.get("close_date"), r.get("store_code"), r.get("employee_name"))
         groups.setdefault(k, []).append(r)
+
+    # Match each group to its daily_closing row (mig 502 release/dedup state), so Management Review can
+    # RELEASE a row for correction right from this list — without a separate lookup. Best-effort: if
+    # mig 502 hasn't run, released_at/correction_count just come back null and the release button on the
+    # frontend degrades to "not available yet".
+    dc_by_key = {}
+    try:
+        dcq = client.schema("commcalc").table("daily_closing").select(
+            "id,close_date,store_code,employee_name,released_at,released_by,correction_count").eq("org_id", org_id)
+        if period:
+            dcq = dcq.eq("period", period)
+        if date:
+            dcq = dcq.eq("close_date", _date(date) or date)
+        if store:
+            dcq = dcq.eq("store_code", store)
+        for dcr in (dcq.limit(50000).execute().data or []):
+            dk = (dcr.get("close_date"), dcr.get("store_code"), dcr.get("employee_name"))
+            dc_by_key[dk] = dcr   # last one wins if duplicates exist — the report/duplicates endpoint is
+                                  # the tool for reviewing a duplicate group in full
+    except Exception:
+        pass
+
     out = []
     for (dt, sc, emp), tries in groups.items():
         tries.sort(key=lambda x: x.get("attempt_no") or 0)
@@ -935,11 +1096,14 @@ def closing_attempts(period: str = None, date: str = None, store: str = None, on
         auto = any(t.get("auto_accepted") for t in tries)
         if only_review and not (len(tries) > 1 or auto):
             continue
+        dc = dc_by_key.get((dt, sc, emp)) or {}
         out.append({
             "close_date": dt, "store_code": sc, "store_address": last.get("store_address"),
             "employee_name": emp, "attempts": len(tries), "auto_accepted": auto,
             "final_dir": {"cash": last.get("cash_dir"), "credit": last.get("credit_dir")},
             "b2b": {"cash": last.get("b2b_cash"), "credit": last.get("b2b_credit")},
+            "row_id": dc.get("id"), "released_at": dc.get("released_at"),
+            "released_by": dc.get("released_by"), "correction_count": dc.get("correction_count") or 0,
             "tries": [{"attempt_no": t.get("attempt_no"), "entered_cash": t.get("entered_cash"),
                        "entered_credit": t.get("entered_credit"), "cash_dir": t.get("cash_dir"),
                        "credit_dir": t.get("credit_dir"), "blocked": t.get("blocked"),
@@ -1058,11 +1222,69 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
             "tenders": per,
             "totals": {"closing": round(sum(c.values()), 2), "x_report": round(sum(x.values()), 2),
                        "sales": round(sum(s.values()), 2)}})
+    # x_report_ever: has this tenant EVER had ANY X-report imported (vs just missing for THIS day)?
+    # Sharpens the honest-empty message below — a tenant that's never had one needs its mailbox rule /
+    # b2bsoft schedule checked (config/delivery); a tenant that normally has one just needs today's file.
+    x_report_ever = bool(xrep)
+    if not x_report_ever:
+        try:
+            x_report_ever = bool((client.schema("commcalc").table("pos_tender_summary").select("close_date")
+                                  .eq("org_id", org_id).limit(1).execute().data) or [])
+        except Exception:
+            x_report_ever = False
+
+    # ── 4TH LEG (mig 502, retail-ops-7 item 4): BANK DEPOSIT, additive-only. The 3 legs above
+    #    (closing/x_report/sales — `tenders`, `totals`) are computed EXACTLY as before this change;
+    #    this block only APPENDS a new `bank_deposit` key per store, nothing upstream is re-touched. ──
+    dep_cfg = _deposit_config(client, org_id)
+    bank_by_store = {}
+    def _bank_rows_3way(cols):
+        bq = client.schema("commcalc").table("bank_deposit").select(cols).eq("org_id", org_id).eq("close_date", d)
+        return (bq.eq("store_code", store) if store else bq).limit(5000).execute().data or []
+    try:
+        _brows3 = _bank_rows_3way("store_code,amount,ocr_amount,ocr_match,receipt_path")
+    except Exception:
+        try:
+            _brows3 = _bank_rows_3way("store_code,amount,receipt_path")   # OCR columns (mig 502) not run yet
+        except Exception:
+            _brows3 = []   # bank_deposit table (mig 107) not run yet -> no 4th leg, 3-way unaffected
+    for r in _brows3:
+        code = r.get("store_code") or "?"
+        b = bank_by_store.setdefault(code, {"amount": 0.0, "n": 0, "any_mismatch": False, "any_receipt": False})
+        b["amount"] += _f(r.get("amount"))
+        b["n"] += 1
+        if r.get("ocr_match") == "mismatch":
+            b["any_mismatch"] = True
+        if r.get("receipt_path"):
+            b["any_receipt"] = True
+    for s in stores_out:
+        code = s.get("store_code")
+        declared_basis = None
+        if code and code != "?":
+            declared_basis, _n = _bank_deposit_declared(client, org_id, code, d, dep_cfg["match_target"])
+        bk = bank_by_store.get(code)
+        deposited = round(bk["amount"], 2) if bk else None
+        var = round((declared_basis or 0) - deposited, 2) if (bk and declared_basis is not None) else None
+        s["bank_deposit"] = {
+            "match_target": dep_cfg["match_target"], "declared": declared_basis, "deposited": deposited,
+            "var": var, "flag": bool(var is not None and abs(var) > 1),
+            "has_deposit": bool(bk), "deposit_count": bk["n"] if bk else 0,
+            "any_mismatch_flag": bool(bk and bk.get("any_mismatch")),
+        }
+
+    note = ("X-report tender amounts include tax; sales-transaction figures are merchandise "
+            "(ext price), so small deltas between those two are expected. Bank Deposit is compared "
+            f"against the tenant's configured basis ({dep_cfg['match_target'].replace('_', ' ')}).")
+    if not x_report_ever:
+        note += (" This tenant has NEVER had a POS X-report imported — check (1) the mailbox has an "
+                 "*X*Report* -> x_report rule and (2) b2bsoft is actually scheduled to email an "
+                 "X-Report for this tenant.")
     return {"date": d, "tenders": [{"key": t, "label": tlabel.get(t, t)} for t in keys],
             "stores": stores_out,
-            "sources_present": {"closing": bool(closing), "x_report": bool(xrep), "sales": bool(sales)},
-            "note": ("X-report tender amounts include tax; sales-transaction figures are merchandise "
-                     "(ext price), so small deltas between those two are expected.")}
+            "sources_present": {"closing": bool(closing), "x_report": bool(xrep), "sales": bool(sales),
+                                "bank_deposit": bool(bank_by_store)},
+            "x_report_ever": x_report_ever,
+            "note": note}
 
 
 @router.get("/tender-drilldown")
@@ -1317,24 +1539,196 @@ def _epay_sales_by_store(client, org_id, date, store=None):
     return out
 
 
+# ── Bank-deposit slip OCR + configurable match target (mig 502, retail-ops-7 item 3) ─────────────
+_DEPOSIT_MATCH_TARGETS = ("bill_payment_cash", "store_cash", "total_cash")
+_DEFAULT_OCR_MODEL = "claude-haiku-4-5-20251001"   # cheap vision model; tenant-overridable (never hard-wired
+                                                    # into a payout/money-COMPUTATION path — display/verify only)
+
+
+def _deposit_config(client, org_id: str) -> dict:
+    """Per-tenant bank-deposit OCR settings (mig 502). Missing table/row -> the documented default
+    (total_cash / the coded default model), so an un-configured tenant still gets OCR verification."""
+    try:
+        rows = (client.schema("commcalc").table("closing_deposit_config").select("*")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    c = rows[0] if rows else {}
+    target = (c.get("match_target") or "total_cash").strip()
+    if target not in _DEPOSIT_MATCH_TARGETS:
+        target = "total_cash"
+    return {"match_target": target, "ocr_model": (c.get("ocr_model") or "").strip() or _DEFAULT_OCR_MODEL}
+
+
+def _bank_deposit_declared(client, org_id: str, store_code: str, close_date: str, target: str):
+    """The declared-cash basis a bank deposit is checked against, per the tenant's configured
+    match_target — computed from the SAME daily_closing tender figures every other closing recon
+    surface already uses (never re-derives/adjusts a dollar amount, only picks WHICH already-computed
+    figure to compare):
+      bill_payment_cash = sum(epay_on_cash)          — ePay/bill-payment cash only (a subset)
+      store_cash        = sum(t_cash) - sum(epay_on_cash) — register cash, excluding the epay portion
+      total_cash        = sum(t_cash)                — everything declared as cash (the full envelope; DEFAULT)
+    Returns (amount, rep_row_count)."""
+    try:
+        rows = (client.schema("commcalc").table("daily_closing")
+                .select("t_cash,store_cash,epay_on_cash").eq("org_id", org_id)
+                .eq("store_code", store_code).eq("close_date", close_date).limit(5000).execute().data) or []
+    except Exception:
+        rows = []
+    total = 0.0
+    for r in rows:
+        cash = _f(r.get("t_cash"))
+        if not cash:
+            cash = _f(r.get("store_cash"))   # pre-mig-103 tenants never populated t_cash
+        epay = _f(r.get("epay_on_cash"))
+        if target == "bill_payment_cash":
+            total += epay
+        elif target == "store_cash":
+            total += max(cash - epay, 0.0)
+        else:
+            total += cash
+    return round(total, 2), len(rows)
+
+
+def _ocr_bank_deposit_slip(raw: bytes, ext: str, model: str):
+    """Read {amount, date, bank_name} off a bank DEPOSIT SLIP with Claude vision (reuses the account
+    module's Anthropic client pattern — see account/engine.py). Returns (amount_or_None, detail_dict,
+    status) where status is one of: 'ocr_unavailable' (no key / lib missing — degrade to manual entry),
+    'unreadable' (ran but couldn't extract an amount), or None (amount extracted; caller classifies
+    matched/mismatch/pending once it knows the declared basis)."""
+    if not settings.ANTHROPIC_API_KEY or not raw:
+        return None, {"skipped": "ANTHROPIC_API_KEY not set — enter the deposit amount manually"}, "ocr_unavailable"
+    try:
+        from anthropic import Anthropic
+    except Exception as e:
+        return None, {"skipped": f"anthropic library not installed: {e}"}, "ocr_unavailable"
+    try:
+        import json as _json
+        cli = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        media = "image/png" if ext == "png" else "image/jpeg"
+        b64 = base64.b64encode(raw).decode("ascii")
+        msg = cli.messages.create(
+            model=model, max_tokens=300,
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}},
+                {"type": "text", "text": "This is a bank DEPOSIT SLIP. Return ONLY compact JSON: "
+                 '{"amount": <number|null>, "date": "<YYYY-MM-DD|null>", "bank_name": "<string|null>"}. '
+                 "amount is the TOTAL amount deposited (no $ or commas). If any field is unreadable, use null."}]}])
+        text = "".join(getattr(b, "text", "") for b in msg.content) if msg.content else ""
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.strip("`").split("\n", 1)[-1]
+        data = _json.loads(text[text.find("{"): text.rfind("}") + 1])
+        amt = data.get("amount")
+        return (float(amt) if amt is not None else None), data, (None if amt is not None else "unreadable")
+    except Exception as e:
+        return None, {"error": str(e)[:200]}, "unreadable"
+
+
+@router.get("/deposit-config")
+def get_deposit_config(org_id: str = ORG_ID):
+    cfg = _deposit_config(sb(), org_id)
+    cfg["anthropic_configured"] = bool(settings.ANTHROPIC_API_KEY)
+    cfg["match_targets"] = list(_DEPOSIT_MATCH_TARGETS)
+    return cfg
+
+
+@router.put("/deposit-config")
+def put_deposit_config(body: dict, org_id: str = ORG_ID):
+    target = (body.get("match_target") or "total_cash").strip()
+    if target not in _DEPOSIT_MATCH_TARGETS:
+        raise HTTPException(400, f"match_target must be one of {_DEPOSIT_MATCH_TARGETS}")
+    row = {"org_id": org_id, "match_target": target, "updated_at": _now()}
+    model = (body.get("ocr_model") or "").strip()
+    if model:
+        row["ocr_model"] = model
+    try:
+        sb().schema("commcalc").table("closing_deposit_config").upsert(row, on_conflict="org_id").execute()
+    except Exception:
+        raise HTTPException(400, "run migration 502 first (commcalc.closing_deposit_config)")
+    return get_deposit_config(org_id)
+
+
 @router.post("/bank-deposit")
-def bank_deposit(body: dict, org_id: str = ORG_ID):
-    """Record a bank deposit of ePay cash (bill-payment cash reps collected and deposited). One row per
-    deposit; reconciled vs declared ePay + sales bill-payments. Receipt image path comes from the shared
-    /closing/envelope-photo uploader."""
+async def bank_deposit(body: dict, org_id: str = ORG_ID):
+    """Record a bank deposit (ePay cash / store cash reps collected and deposited). One row per
+    deposit; reconciled vs the tenant's CONFIGURED declared-cash basis (bill_payment_cash | store_cash |
+    total_cash — see /closing/deposit-config). Accepts EITHER an already-uploaded `receipt_path` OR an
+    inline `slip` (data URL) to upload now — if a slip is provided and no `amount`, Claude vision OCRs
+    it (mig 502). OCR NEVER blocks the deposit from saving and NEVER silently swallows a mismatch — a
+    mismatch is stored honestly on the row (`ocr_match`) and alerted (scope 'deposit_mismatch'), for
+    management review, never auto-corrected. Missing key/lib -> 'ocr_unavailable', with `manual_confirmed`
+    as the degrade path (a human checks the box after eyeballing the slip themselves)."""
     require_org(org_id)
     client = sb()
     d = _date(body.get("close_date")) or body.get("close_date")
+    store = (body.get("store_code") or "").strip() or None
     row = {"org_id": org_id, "close_date": d, "period": (str(d)[:7] if d else None),
-           "store_code": (body.get("store_code") or "").strip() or None,
+           "store_code": store,
            "store_address": body.get("store_name") or body.get("store_address"),
            "employee_name": (body.get("employee_name") or "").strip() or None,
            "amount": _money(body.get("amount")),
            "receipt_path": body.get("receipt_path") or body.get("receipt") or None,
            "handed_to": (body.get("handed_to") or "").strip() or None,
            "note": (body.get("note") or "").strip() or None}
-    r = client.schema("commcalc").table("bank_deposit").insert(row).execute()
-    return {"ok": True, "row": (r.data or [row])[0]}
+
+    cfg = _deposit_config(client, org_id)
+    ocr_amount, ocr_detail, ocr_status = None, None, "pending"
+    slip = body.get("slip")
+    if slip and "," in str(slip):
+        try:
+            header, b64 = str(slip).split(",", 1)
+            raw = base64.b64decode(b64)
+            ext = "png" if "png" in header else "jpg"
+            path = _upload_envelope(org_id, slip)   # reuse the private closing-envelopes bucket
+            if path:
+                row["receipt_path"] = path
+            ocr_amount, ocr_detail, ocr_status = _ocr_bank_deposit_slip(raw, ext, cfg["ocr_model"])
+        except Exception as e:
+            ocr_detail, ocr_status = {"error": str(e)[:200]}, "unreadable"
+    elif body.get("manual_confirmed"):
+        ocr_status = "manual_confirmed"
+
+    declared_amount, _rep_n = (None, 0)
+    if store and d:
+        declared_amount, _rep_n = _bank_deposit_declared(client, org_id, store, d, cfg["match_target"])
+
+    if ocr_amount is not None:
+        if row["amount"] <= 0:
+            row["amount"] = round(ocr_amount, 2)   # OCR fills the amount when the caller didn't type one
+        ocr_status = ("matched" if abs(ocr_amount - declared_amount) <= 1.0 else "mismatch") \
+            if declared_amount is not None else "pending"   # nothing to compare against yet -> honest pending, not a verdict
+
+    row.update({
+        "ocr_amount": ocr_amount,
+        "ocr_date": (ocr_detail or {}).get("date") if isinstance(ocr_detail, dict) else None,
+        "ocr_bank_name": (ocr_detail or {}).get("bank_name") if isinstance(ocr_detail, dict) else None,
+        "ocr_match": ocr_status, "ocr_detail": ocr_detail, "match_target": cfg["match_target"],
+        "declared_amount": declared_amount, "manual_confirmed": bool(body.get("manual_confirmed")),
+    })
+    try:
+        r = client.schema("commcalc").table("bank_deposit").insert(row).execute()
+    except Exception:
+        # mig 502 not yet run -> the new OCR/config columns don't exist on bank_deposit. Degrade to the
+        # pre-502 row shape (receipt_path / amount / handed_to / note still save).
+        for k in ("ocr_amount", "ocr_date", "ocr_bank_name", "ocr_match", "ocr_detail",
+                  "match_target", "declared_amount", "manual_confirmed"):
+            row.pop(k, None)
+        r = client.schema("commcalc").table("bank_deposit").insert(row).execute()
+    saved = (r.data or [row])[0]
+
+    if ocr_status == "mismatch":
+        summary = (f"Bank deposit MISMATCH — {row.get('store_address') or store or '—'} on {d}: the slip "
+                   f"reads {_usd(ocr_amount)} but {cfg['match_target'].replace('_', ' ')} was "
+                   f"{_usd(declared_amount)} (off by {_usd(round((ocr_amount or 0) - (declared_amount or 0), 2))}). "
+                   f"Needs management review — never auto-corrected.")
+        try:
+            await _send_alert(client, org_id, "deposit_mismatch", "⚠️ Bank deposit mismatch", summary,
+                              ref_key=f"bankdep|{store}|{d}|{saved.get('id')}", store_code=store)
+        except Exception:
+            pass
+    return {"ok": True, "row": saved, "ocr": ocr_detail, "ocr_match": ocr_status,
+            "declared_amount": declared_amount, "match_target": cfg["match_target"]}
 
 
 @router.get("/epay-recon")
@@ -1366,18 +1760,28 @@ def epay_recon(date: str, store: str = None, tolerance: float = 1.0, org_id: str
         s["reps"].append({"employee_name": r.get("employee_name"), "cash": round(c, 2), "credit": round(cr, 2), "acima": round(a, 2)})
 
     bank = {}
+    _BANK_COLS_BASE = "store_code,amount,receipt_path,employee_name,handed_to,note"
+    _BANK_COLS_OCR = _BANK_COLS_BASE + ",ocr_amount,ocr_match,ocr_date,ocr_bank_name,match_target,declared_amount"
+
+    def _bq(cols):
+        q = client.schema("commcalc").table("bank_deposit").select(cols).eq("org_id", org_id).eq("close_date", d)
+        return q.eq("store_code", store) if store else q
     try:
-        bq = client.schema("commcalc").table("bank_deposit").select("store_code,amount,receipt_path,employee_name,handed_to,note").eq("org_id", org_id).eq("close_date", d)
-        if store:
-            bq = bq.eq("store_code", store)
-        for r in (bq.limit(50000).execute().data or []):
-            code = r.get("store_code") or "?"
-            b = bank.setdefault(code, {"amount": 0.0, "deposits": []})
-            b["amount"] += _f(r.get("amount"))
-            b["deposits"].append({"amount": round(_f(r.get("amount")), 2), "receipt_path": r.get("receipt_path"),
-                                  "employee_name": r.get("employee_name"), "handed_to": r.get("handed_to"), "note": r.get("note")})
+        _brows = _bq(_BANK_COLS_OCR).limit(50000).execute().data or []
     except Exception:
-        pass   # mig 107 not run yet
+        try:
+            _brows = _bq(_BANK_COLS_BASE).limit(50000).execute().data or []   # mig 502 OCR columns not run yet
+        except Exception:
+            _brows = []   # mig 107 not run yet
+    for r in _brows:
+        code = r.get("store_code") or "?"
+        b = bank.setdefault(code, {"amount": 0.0, "deposits": []})
+        b["amount"] += _f(r.get("amount"))
+        b["deposits"].append({"amount": round(_f(r.get("amount")), 2), "receipt_path": r.get("receipt_path"),
+                              "employee_name": r.get("employee_name"), "handed_to": r.get("handed_to"), "note": r.get("note"),
+                              "ocr_amount": r.get("ocr_amount"), "ocr_match": r.get("ocr_match"),
+                              "ocr_date": r.get("ocr_date"), "ocr_bank_name": r.get("ocr_bank_name"),
+                              "match_target": r.get("match_target"), "declared_amount": r.get("declared_amount")})
 
     sales = _epay_sales_by_store(client, org_id, d, store)
     codes = [store] if store else sorted(set(declared) | set(bank) | set(sales))
@@ -1866,10 +2270,16 @@ async def cash_alerts_run_now(org_id: str = ORG_ID):
 
 @router.get("/pickups")
 def closing_pickups(date: str = "", start: str = "", end: str = "", market: str = None,
-                    store: str = "", employee: str = "", dm: str = "", org_id: str = ORG_ID):
-    """Cash envelopes + their pickup/deposit status, FILTERABLE by date (or start..end range), store,
-    sales rep (employee), and the DM who collected. An envelope = a rep's closing row with cash to
-    collect (store_cash + epay_cash > 0) or an envelope photo."""
+                    store: str = "", employee: str = "", dm: str = "",
+                    stores: str = "", employees: str = "", org_id: str = ORG_ID):
+    """Cash envelopes + their pickup/deposit status, FILTERABLE by date (or start..end range), store(s),
+    sales rep/employee(s), and the DM who collected. An envelope = a rep's closing row with cash to
+    collect (store_cash + epay_cash > 0) or an envelope photo. `stores`/`employees` (mig-502-era,
+    retail-ops-7 item 2) are comma-separated MULTI-select lists, additive to the original singular
+    `store`/`employee` (kept for backward compat — a lone `store`/`employee` still narrows exactly as
+    before). `stores` is exact-match (store_code) like the original `store`; `employees` is EXACT match
+    (the picker on the frontend supplies real roster names) while the legacy `employee` stays a
+    substring match, unchanged."""
     if not (date or (start and end)):
         raise HTTPException(400, "date, or start+end, required (YYYY-MM-DD)")
     client = sb()
@@ -1897,6 +2307,10 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
         picks = []
     pick_by = {((p.get("store_code") or ""), (p.get("employee_name") or ""), str(p.get("close_date"))): p for p in picks}
     store_f, emp_f, dm_f = store.strip().upper(), employee.strip().lower(), dm.strip().lower()
+    store_set = {s.strip().upper() for s in stores.split(",") if s.strip()}
+    if store_f:
+        store_set.add(store_f)
+    emp_set = {e.strip().lower() for e in employees.split(",") if e.strip()}
 
     out = []
     for r in rows:
@@ -1908,9 +2322,12 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
         mk = (meta.get("market") or "").strip() or sm_market.get(code, "")
         if market and mk.strip().lower() != market.strip().lower():
             continue
-        if store_f and (code or "").upper() != store_f:
+        if store_set and (code or "").upper() not in store_set:
             continue
-        if emp_f and emp_f not in (r.get("employee_name") or "").lower():
+        _rname = (r.get("employee_name") or "").lower()
+        if emp_f and emp_f not in _rname:
+            continue
+        if emp_set and _rname not in emp_set:
             continue
         p = pick_by.get((code, (r.get("employee_name") or ""), str(r.get("close_date"))))
         if dm_f and dm_f not in ((p or {}).get("picked_up_by") or "").lower():
@@ -1961,6 +2378,144 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "collected_cash": round(sum(e["cash"] for e in out if e["picked_up"]), 2),
             "ready_cash": round(sum(e["cash"] for e in out if not e["picked_up"]), 2),
             "not_closed": not_closed}
+
+
+# ── Cash-position report (retail-ops-7 item 5): per-store cash on hand, as of a chosen day or over a
+#    range, as a running ledger (declared cash accumulated MINUS cash actually picked up). Never
+#    re-derives a dollar figure — reads the SAME t_cash/store_cash (daily_closing) and amount
+#    (cash_pickup, picked_up=true) values every other closing surface already uses. ──
+@router.get("/cash-position")
+def cash_position(date: str = "", start: str = "", end: str = "",
+                  stores: str = "", employees: str = "", org_id: str = ORG_ID):
+    """Per store: cash on hand AS OF a chosen day (all declared cash to date minus all cash actually
+    picked up to date — a store not swept in a few days shows its TRUE uncollected balance, not just
+    today's own figure), last pickup at, last deposited at (cash_pickup.deposited_at ∪
+    bank_deposit.created_at). `date` alone -> one row per store, the running balance as of that day.
+    `start`+`end` -> one row per (store, day-in-range) that had activity, with a CUMULATIVE column
+    carried from an opening balance computed from all history before `start` (so day 1 of the range
+    never falsely resets to zero). `stores`/`employees` are comma-separated multi-select filters
+    (store_code exact / employee_name exact — same convention as GET /closing/pickups)."""
+    require_org(org_id)
+    if not date and not (start and end):
+        raise HTTPException(400, "date, or start+end, required (YYYY-MM-DD)")
+    client = sb()
+    store_list = [s.strip().upper() for s in stores.split(",") if s.strip()]
+    emp_list = [e.strip().lower() for e in employees.split(",") if e.strip()]
+    as_of = _date(date) if date else _date(end)
+    range_start = _date(start) if start else None
+    if not as_of:
+        raise HTTPException(400, "valid date required (YYYY-MM-DD)")
+
+    smeta_rows = (client.schema("storeops").table("stores").select("store_code,address,market")
+                  .eq("org_id", org_id).execute().data) or []
+    smeta = {s.get("store_code"): s for s in smeta_rows if s.get("store_code")}
+
+    dq = (client.schema("commcalc").table("daily_closing")
+          .select("store_code,employee_name,close_date,t_cash,store_cash")
+          .eq("org_id", org_id).lte("close_date", as_of))
+    if store_list:
+        dq = dq.in_("store_code", store_list)
+    drows = dq.limit(200000).execute().data or []
+    if emp_list:
+        drows = [r for r in drows if (r.get("employee_name") or "").strip().lower() in emp_list]
+
+    pq = (client.schema("commcalc").table("cash_pickup")
+          .select("store_code,employee_name,close_date,amount,picked_up,picked_up_at,deposited_at")
+          .eq("org_id", org_id).lte("close_date", as_of))
+    if store_list:
+        pq = pq.in_("store_code", store_list)
+    try:
+        prows = pq.limit(200000).execute().data or []
+    except Exception:
+        prows = []
+    if emp_list:
+        prows = [r for r in prows if (r.get("employee_name") or "").strip().lower() in emp_list]
+
+    bq = (client.schema("commcalc").table("bank_deposit").select("store_code,close_date,created_at")
+          .eq("org_id", org_id).lte("close_date", as_of))
+    if store_list:
+        bq = bq.in_("store_code", store_list)
+    try:
+        brows = bq.limit(200000).execute().data or []
+    except Exception:
+        brows = []
+
+    def _cash_amt(r):
+        v = _f(r.get("t_cash"))
+        return v if v else _f(r.get("store_cash"))
+
+    decl_by_store_day, pick_by_store_day = {}, {}
+    last_pickup_at, last_deposited_at = {}, {}
+    for r in drows:
+        code = r.get("store_code") or "?"
+        dday = str(r.get("close_date") or "")
+        decl_by_store_day.setdefault(code, {}).setdefault(dday, 0.0)
+        decl_by_store_day[code][dday] += _cash_amt(r)
+    for r in prows:
+        code = r.get("store_code") or "?"
+        dday = str(r.get("close_date") or "")
+        if r.get("picked_up"):
+            pick_by_store_day.setdefault(code, {}).setdefault(dday, 0.0)
+            pick_by_store_day[code][dday] += _f(r.get("amount"))
+            pu = r.get("picked_up_at")
+            if pu and str(pu) > str(last_pickup_at.get(code) or ""):
+                last_pickup_at[code] = pu
+        dep = r.get("deposited_at")
+        if dep and str(dep) > str(last_deposited_at.get(code) or ""):
+            last_deposited_at[code] = dep
+    for r in brows:
+        code = r.get("store_code") or "?"
+        c = r.get("created_at")
+        if c and str(c) > str(last_deposited_at.get(code) or ""):
+            last_deposited_at[code] = c
+
+    codes = sorted({c for c in (set(decl_by_store_day) | set(pick_by_store_day) | set(store_list)) if c and c != "?"})
+
+    def _label(code):
+        m = smeta.get(code, {})
+        return m.get("address") or code
+
+    if not range_start:
+        out = []
+        for code in codes:
+            declared_total = round(sum(decl_by_store_day.get(code, {}).values()), 2)
+            picked_total = round(sum(pick_by_store_day.get(code, {}).values()), 2)
+            out.append({
+                "store_code": code, "store_name": _label(code), "market": smeta.get(code, {}).get("market"),
+                "as_of": as_of, "declared_cumulative": declared_total, "picked_up_cumulative": picked_total,
+                "cash_on_hand": round(declared_total - picked_total, 2),
+                "cumulative_cash_on_hand": round(declared_total - picked_total, 2),
+                "last_pickup_at": last_pickup_at.get(code), "last_deposited_at": last_deposited_at.get(code),
+            })
+        out.sort(key=lambda r: -r["cash_on_hand"])
+        return {"mode": "single_day", "date": as_of, "rows": out}
+
+    day_before_start = (dateparser.parse(range_start) - timedelta(days=1)).date().isoformat()
+    out = []
+    for code in codes:
+        opening = round(
+            sum(v for dd, v in decl_by_store_day.get(code, {}).items() if dd <= day_before_start) -
+            sum(v for dd, v in pick_by_store_day.get(code, {}).items() if dd <= day_before_start), 2)
+        store_days = sorted({dd for dd in decl_by_store_day.get(code, {}) if range_start <= dd <= as_of} |
+                            {dd for dd in pick_by_store_day.get(code, {}) if range_start <= dd <= as_of})
+        if not store_days:
+            continue
+        running = opening
+        for dd in store_days:
+            day_declared = round(decl_by_store_day.get(code, {}).get(dd, 0.0), 2)
+            day_picked = round(pick_by_store_day.get(code, {}).get(dd, 0.0), 2)
+            running = round(running + day_declared - day_picked, 2)
+            out.append({
+                "store_code": code, "store_name": _label(code), "market": smeta.get(code, {}).get("market"),
+                "close_date": dd, "day_declared": day_declared, "day_picked_up": day_picked,
+                "day_net": round(day_declared - day_picked, 2), "opening_balance": opening,
+                "cumulative_cash_on_hand": running,
+                "last_pickup_at": last_pickup_at.get(code), "last_deposited_at": last_deposited_at.get(code),
+            })
+    out.sort(key=lambda r: (r["store_name"], r["close_date"]))
+    return {"mode": "range", "start": range_start, "end": as_of,
+            "opening_note": "cumulative carries an opening balance computed from all history before the range start",
+            "rows": out}
 
 
 def _ocr_deposit_amount(raw: bytes, ext: str):
@@ -2048,26 +2603,34 @@ def record_deposit(payload: dict, org_id: str = ORG_ID):
 
 @router.post("/pickup")
 async def confirm_pickup(payload: dict, org_id: str = ORG_ID):
-    """Confirm the DM picked up the selected cash envelopes, then notify the assigned recipient."""
+    """Confirm the DM picked up the selected cash envelopes, then notify the assigned recipient.
+    `date` is the single-day-page's date (kept for backward compat — every item defaults to it when it
+    doesn't carry its own `close_date`). Since the pickup page now supports a DATE RANGE (retail-ops-7
+    item 2), a batch can span multiple days — each item's OWN `close_date` (if sent) wins, so a
+    multi-day selection is never mis-stamped with one shared date."""
     client = sb()
-    date = _date(payload.get("date") or payload.get("close_date"))
-    if not date:
-        raise HTTPException(400, "valid date required")
+    top_date = _date(payload.get("date") or payload.get("close_date"))
     items = payload.get("items") or []
     if not items:
         raise HTTPException(400, "Select at least one envelope.")
     dm = (payload.get("picked_up_by") or "DM").strip()
     total = 0.0
     for it in items:
+        item_date = _date(it.get("close_date")) or top_date
+        if not item_date:
+            raise HTTPException(400, "valid date required (on the request or each item)")
         amt = _f(it.get("amount") or it.get("cash"))
         total += amt
-        row = {"org_id": org_id, "close_date": date, "store_code": it.get("store_code") or "",
+        row = {"org_id": org_id, "close_date": item_date, "store_code": it.get("store_code") or "",
                "store_name": it.get("store_name"), "employee_name": (it.get("employee_name") or ""),
                "amount": amt, "picked_up": True, "picked_up_by": dm, "picked_up_at": _now(),
                "note": (it.get("note") or "").strip() or None}
         client.schema("commcalc").table("cash_pickup").upsert(
             row, on_conflict="org_id,close_date,store_code,employee_name").execute()
-    notify = await _notify_pickup(client, org_id, dm, date, items, round(total, 2))
+    item_dates = sorted({_date(it.get("close_date")) or top_date for it in items} - {None})
+    notify_label = top_date or (item_dates[0] if len(item_dates) == 1 else
+                                f"{item_dates[0]}..{item_dates[-1]}" if item_dates else "—")
+    notify = await _notify_pickup(client, org_id, dm, notify_label, items, round(total, 2))
     return {"ok": True, "count": len(items), "total": round(total, 2), "notify": notify}
 
 
@@ -2414,20 +2977,39 @@ def _b2b_sales_rows(client, org_id: str, date: str, cols: str) -> list:
     freshest + complete source — the monthly raw_sales lags / promotes late even with 'auto' on); for a
     closed month it reads the authoritative raw_sales first; each falls back to the other. This is why the
     closing / X-tender recon was showing "b2b sales not loaded" for July — raw_sales was empty/partial and
-    it didn't fall to the feed which HAD the data. Either/or per day, so no double counting."""
+    it didn't fall to the feed which HAD the data.
+
+    UNION at (day, STORE) grain, not just day grain (2026-07-15 luxelink fix): if the primary source has
+    rows for this exact day but is missing a particular STORE the other source DOES have (e.g. a manually-
+    uploaded raw_sales month covers stores the automated daily feed's connector doesn't push for that
+    day), the other source's rows for that missing store are pulled in too — a "primary has ANY row today"
+    check used to make the entire OTHER source invisible for the day, even for stores primary never had
+    anything for. A read failing outright on ONE table (schema hiccup, connectivity) now degrades to the
+    other table instead of raising — previously an uncaught primary-query exception (only the fallback
+    branch was wrapped) silently blanked the recon for EVERY store that day, not just the affected one.
+    Byte-identical to before whenever the primary source already has every relevant store's data for the
+    day (the common/house case: fill=[] and this returns exactly `prows`, unchanged)."""
     def _q(table):
-        return (client.schema("commcalc").table(table).select(cols)
-                .eq("org_id", org_id).in_("period", [_period_label(date), date[:7]])
-                .eq("trans_date", date).limit(100000).execute().data) or []
+        try:
+            return (client.schema("commcalc").table(table).select(cols)
+                    .eq("org_id", org_id).in_("period", [_period_label(date), date[:7]])
+                    .eq("trans_date", date).limit(100000).execute().data) or []
+        except Exception as e:
+            print(f"WARN _b2b_sales_rows read of {table} for {date} failed: {e}")
+            return []
     open_month = str(date)[:7] == _biz_today_iso()[:7]
     primary, other = ("daily_sales_feed", "raw_sales") if open_month else ("raw_sales", "daily_sales_feed")
-    rows = _q(primary)
-    if not rows:
-        try:
-            rows = _q(other)
-        except Exception:
-            pass
-    return rows
+    prows = _q(primary)
+    if not prows:
+        return _q(other)
+    if "store" not in [c.strip() for c in cols.split(",")]:
+        return prows   # can't key a safe per-store union without the store column — primary-only (unchanged)
+    orows = _q(other)
+    if not orows:
+        return prows
+    pstores = {(r.get("store") or "").strip().lower() for r in prows}
+    fill = [r for r in orows if (r.get("store") or "").strip().lower() not in pstores]
+    return prows + fill
 
 
 def _acc_cfg(client, org_id):

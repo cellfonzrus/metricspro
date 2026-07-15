@@ -128,6 +128,7 @@ export default function TenderRecon3WayPage() {
         <Src label="Daily Closing" ok={sp.closing} />
         <Src label="POS X-report" ok={sp.x_report} />
         <Src label="Sales Transactions" ok={sp.sales} />
+        <Src label="Bank Deposit" ok={sp.bank_deposit} />
       </div>
 
       {loading ? (
@@ -154,6 +155,16 @@ export default function TenderRecon3WayPage() {
                 <span style={{ fontWeight: 700, fontSize: 14 }}>{s.store_address}</span>
                 <span style={{ fontSize: 12, color: 'var(--text3)' }}>
                   totals — closing {fmt(s.totals.closing)} · X-report {fmt(s.totals.x_report)} · sales {fmt(s.totals.sales)}
+                  {s.bank_deposit?.has_deposit && (
+                    <> · bank deposit {fmt(s.bank_deposit.deposited)}
+                      {s.bank_deposit.declared != null && <> vs {s.bank_deposit.match_target.replace('_', ' ')} {fmt(s.bank_deposit.declared)}</>}
+                      {s.bank_deposit.flag
+                        ? <span style={{ color: '#b91c1c', fontWeight: 700 }}> ⚠ {s.bank_deposit.var! >= 0 ? '+' : ''}{fmt(s.bank_deposit.var)}</span>
+                        : <span style={{ color: '#15803d' }}> ✓</span>}
+                      {s.bank_deposit.any_mismatch_flag && <span style={{ color: '#b91c1c' }}> · OCR flagged</span>}
+                    </>
+                  )}
+                  {!s.bank_deposit?.has_deposit && <span> · bank deposit — not recorded</span>}
                 </span>
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>

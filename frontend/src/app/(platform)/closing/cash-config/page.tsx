@@ -13,21 +13,39 @@ const SCOPES = [
   { key: 'all', label: 'All alerts' },
 ]
 
+const MATCH_TARGETS = [
+  { key: 'total_cash', label: 'Total cash (whole envelope — declared cash + ePay cash combined)' },
+  { key: 'store_cash', label: 'Store cash only (excludes the ePay/bill-payment portion)' },
+  { key: 'bill_payment_cash', label: 'ePay bill-payment cash only' },
+]
+
 export default function CashConfigPage() {
   const [cfg, setCfg] = useState<any>(null)
   const [emps, setEmps] = useState<any[]>([])
   const [stores, setStores] = useState<any[]>([])
   const [rec, setRec] = useState<any>({ scope: 'all', via_email: true, via_whatsapp: false, include_dm: true })
   const [msg, setMsg] = useState('')
+  const [depCfg, setDepCfg] = useState<any>(null)
+  const [depMsg, setDepMsg] = useState('')
 
   const load = useCallback(() => {
     api('/api/v1/closing/cash-config').then(setCfg).catch((e: any) => setMsg('❌ ' + (e?.message || e)))
   }, [])
+  const loadDepCfg = useCallback(() => {
+    api('/api/v1/closing/deposit-config').then(setDepCfg).catch(() => {})
+  }, [])
   useEffect(() => {
     load()
+    loadDepCfg()
     api('/api/v1/storeops/employees').then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
     api('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : (r?.stores || []))).catch(() => {})
-  }, [load])
+  }, [load, loadDepCfg])
+
+  async function saveDepCfg(match_target: string) {
+    setDepMsg('')
+    try { const r: any = await api('/api/v1/closing/deposit-config', { method: 'PUT', body: JSON.stringify({ match_target }) }); setDepCfg(r); setDepMsg('✅ Saved.') }
+    catch (e: any) { setDepMsg('❌ ' + (e?.message || e)) }
+  }
 
   async function saveCfg(patch: any) {
     try { const r: any = await api('/api/v1/closing/cash-config', { method: 'PUT', body: JSON.stringify(patch) }); setCfg(r); setMsg('✅ Saved.') }
@@ -132,6 +150,34 @@ export default function CashConfigPage() {
           <label style={{ fontSize: 12, display: 'flex', gap: 4, alignItems: 'center' }}><input type="checkbox" checked={!!rec.include_dm} onChange={e => setRec({ ...rec, include_dm: e.target.checked })} />include DM</label>
           <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={addRecipient}>Add</button>
         </div>
+      </div>
+
+      <div className="card" style={card}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>🏦 Bank deposit slip — OCR verification</div>
+        <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 10px' }}>
+          When a deposit slip photo is attached (Cash Pickup or the ePay Bank-Deposit Recon page), the amount is
+          read automatically and compared against your chosen basis below. A mismatch never blocks anything — it
+          just flags loudly for management review (the &quot;Deposit mismatch&quot; alert scope above).
+        </p>
+        {depCfg && (
+          <>
+            {depCfg.anthropic_configured === false && (
+              <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8 }}>
+                ⚠️ OCR is not configured on this server (no API key) — deposits still save; managers confirm the amount manually.
+              </div>
+            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {MATCH_TARGETS.map(t => (
+                <label key={t.key} style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="radio" name="match_target" checked={(depCfg.match_target || 'total_cash') === t.key} onChange={() => saveDepCfg(t.key)} />
+                  {t.label}
+                </label>
+              ))}
+            </div>
+            {depMsg && <div style={{ fontSize: 12, marginTop: 8 }}>{depMsg}</div>}
+          </>
+        )}
+        {!depCfg && <div style={{ fontSize: 12, color: 'var(--text3)' }}>Loading…</div>}
       </div>
     </div>
   )

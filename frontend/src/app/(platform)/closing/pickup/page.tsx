@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/auth-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
+import { EntityPickerChips } from '../_lib/EntityPickerChips'
 
 // DM cash pickup — see the day's cash envelopes, check off the ones collected with a note, confirm.
 // On confirm, the assigned recipient gets an email + WhatsApp summary.
@@ -15,10 +16,14 @@ const cell: React.CSSProperties = { padding: '8px 10px', borderTop: '1px solid v
 
 export default function CashPickupPage() {
   const { user, permissions } = useAuth()
+  const [rangeMode, setRangeMode] = useState(false)   // Day | Range (retail-ops-7 item 2)
   const [date, setDate] = useState(localToday())
+  const [rangeStart, setRangeStart] = useState(localToday())
+  const [rangeEnd, setRangeEnd] = useState(localToday())
   const [market, setMarket] = useState('')
-  const [fStore, setFStore] = useState('')
-  const [fEmp, setFEmp] = useState('')
+  const [fStores, setFStores] = useState<string[]>([])   // multi-select stores (chips)
+  const [fEmps, setFEmps] = useState<string[]>([])       // multi-select employees (chips) — one store,
+                                                          // many closers/day
   const [fDm, setFDm] = useState('')
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -85,12 +90,17 @@ export default function CashPickupPage() {
   }, [])
 
   const load = useCallback(() => {
-    if (!date) return
+    if (rangeMode ? !(rangeStart && rangeEnd) : !date) return
     setLoading(true); setSel({}); setNotes({})
-    const qs = [`date=${date}`, market && `market=${encodeURIComponent(market)}`, fStore && `store=${encodeURIComponent(fStore)}`,
-      fEmp && `employee=${encodeURIComponent(fEmp)}`, fDm && `dm=${encodeURIComponent(fDm)}`].filter(Boolean).join('&')
+    const qs = [
+      rangeMode ? `start=${rangeStart}&end=${rangeEnd}` : `date=${date}`,
+      market && `market=${encodeURIComponent(market)}`,
+      fStores.length && `stores=${encodeURIComponent(fStores.join(','))}`,
+      fEmps.length && `employees=${encodeURIComponent(fEmps.join(','))}`,
+      fDm && `dm=${encodeURIComponent(fDm)}`,
+    ].filter(Boolean).join('&')
     api(`/api/v1/closing/pickups?${qs}`).then(setData).catch(console.error).finally(() => setLoading(false))
-  }, [date, market, fStore, fEmp, fDm])
+  }, [rangeMode, date, rangeStart, rangeEnd, market, fStores, fEmps, fDm])
   useEffect(() => { load() }, [load])
 
   // Filters/id use exact server-side matching (store_code exact-match; employee/dm substring on the
@@ -104,7 +114,10 @@ export default function CashPickupPage() {
     [pEmps])
 
   const envelopes: any[] = data?.envelopes || []
-  const key = (e: any) => `${e.store_code || ''}|${e.employee_name || ''}`
+  // key includes close_date (2026-07-15, range mode): the same store+employee can have a pending
+  // envelope on SEVERAL different days when viewing a range — without the date in the key, checking
+  // one day's envelope would also (de)select another day's for the same store+rep.
+  const key = (e: any) => `${e.close_date || ''}|${e.store_code || ''}|${e.employee_name || ''}`
   const ready = envelopes.filter(e => !e.picked_up)
   const selectedKeys = ready.filter(e => sel_[key(e)])
   const selTotal = selectedKeys.reduce((s, e) => s + (e.cash || 0), 0)
@@ -114,8 +127,10 @@ export default function CashPickupPage() {
     setBusy(true); setMsg('')
     try {
       const r = await api('/api/v1/closing/pickup', { method: 'POST', body: JSON.stringify({
-        date, picked_up_by: user?.full_name || 'DM',
-        items: selectedKeys.map(e => ({ store_code: e.store_code, store_name: e.store_name, employee_name: e.employee_name, amount: e.cash, note: notes[key(e)] || '' })),
+        date: rangeMode ? undefined : date, picked_up_by: user?.full_name || 'DM',
+        // close_date PER ITEM (mig-502-era backend, retail-ops-7 item 2) so a range-mode multi-day
+        // selection is never mis-stamped with one shared date.
+        items: selectedKeys.map(e => ({ store_code: e.store_code, store_name: e.store_name, employee_name: e.employee_name, close_date: e.close_date, amount: e.cash, note: notes[key(e)] || '' })),
       }) })
       const n = (r.notify || []) as any[]
       const sent = n.filter(x => x.ok).map(x => x.channel)
@@ -164,16 +179,28 @@ export default function CashPickupPage() {
       </div>
 
       {/* Filters */}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
-        <input type="date" style={sel} value={date} onChange={e => setDate(e.target.value)} />
-        <EntityPicker options={storeOptions} value={fStore || null} onChange={v => setFStore(v || '')} placeholder="Store" width={160} />
-        <EntityPicker options={empOptions} value={fEmp || null} onChange={v => setFEmp(v || '')} placeholder="Sales rep" width={180} />
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+            <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: !rangeMode ? 'var(--accent)' : 'transparent', color: !rangeMode ? 'white' : 'var(--text2)' }} onClick={() => setRangeMode(false)}>Day</button>
+            <button className="btn" style={{ borderRadius: 0, border: 'none', fontSize: 12, background: rangeMode ? 'var(--accent)' : 'transparent', color: rangeMode ? 'white' : 'var(--text2)' }} onClick={() => setRangeMode(true)}>Range</button>
+          </div>
+          {!rangeMode
+            ? <input type="date" style={sel} value={date} onChange={e => setDate(e.target.value)} />
+            : <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                <input type="date" style={sel} value={rangeStart} onChange={e => setRangeStart(e.target.value)} />
+                →<input type="date" style={sel} value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} />
+              </span>}
+        </div>
+        <EntityPickerChips options={storeOptions} value={fStores} onChange={setFStores} placeholder="Add a store…" width={170} />
+        <EntityPickerChips options={empOptions} value={fEmps} onChange={setFEmps} placeholder="Add a rep…" width={180} />
         <EntityPicker options={empOptions} value={fDm || null} onChange={v => setFDm(v || '')} placeholder="DM (picked up by)" width={200} />
-        {(fStore || fEmp || fDm) && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 9px' }} onClick={() => { setFStore(''); setFEmp(''); setFDm('') }}>Clear</button>}
+        {(fStores.length > 0 || fEmps.length > 0 || fDm) && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 9px' }} onClick={() => { setFStores([]); setFEmps([]); setFDm('') }}>Clear</button>}
         {market && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Market: {market}</span>}
         {data && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{data.ready} ready · {data.collected} collected{data.flagged ? ` · ${data.flagged} ⚠ flagged` : ''}</span>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
           {(data?.envelopes || []).length > 0 && <><ExportButtons payload={exportPayload} compact /><SendReportButton exportPayload={exportPayload} compact /></>}
+          <Link href="/closing/cash-position" style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>💰 Cash Position</Link>
           <Link href="/closing/cash-config" style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>⚙️ Setup</Link>
         </div>
       </div>
@@ -187,8 +214,8 @@ export default function CashPickupPage() {
         </div>
       )}
 
-      {/* Stores that did NOT submit a daily closing for the selected day */}
-      {data && date && (
+      {/* Stores that did NOT submit a daily closing for the selected day (single-day only — ambiguous over a range) */}
+      {data && !rangeMode && date && (
         (data.not_closed || []).length > 0 ? (
           <div className="card" style={{ padding: 14, marginBottom: 16, borderLeft: '3px solid #dc2626' }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: '#dc2626' }}>
@@ -210,13 +237,13 @@ export default function CashPickupPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : envelopes.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No cash envelopes for {date}.</div>
+        <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No cash envelopes for {rangeMode ? `${rangeStart} → ${rangeEnd}` : date}.</div>
       ) : (
         <>
           <div className="card table-wrapper" style={{ padding: 0 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['', 'Store', 'Rep', 'Cash', 'Envelope', 'Note / status', 'Deposit'].map((h, i) =>
+                {[...(rangeMode ? ['Date'] : []), '', 'Store', 'Rep', 'Cash', 'Envelope', 'Note / status', 'Deposit'].map((h, i) =>
                   <th key={i} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -224,6 +251,7 @@ export default function CashPickupPage() {
                   const k = key(e); const done = e.picked_up
                   return (
                     <tr key={k} style={{ background: done ? 'var(--surface2)' : undefined }}>
+                      {rangeMode && <td style={{ ...cell, fontSize: 12, color: 'var(--text3)' }}>{e.close_date}</td>}
                       <td style={cell}>{done ? '✅' : <input type="checkbox" checked={!!sel_[k]} onChange={ev => setSel(s => ({ ...s, [k]: ev.target.checked }))} />}</td>
                       <td style={cell}>{e.store_name || e.store_code || '—'}</td>
                       <td style={cell}>{e.employee_name || '—'}</td>

@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 
 // Management Review (permission-gated: super-admin / company-wide scope / explicit /closing/management
@@ -15,6 +16,8 @@ export default function ClosingManagementPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [open, setOpen] = useState<Record<string, boolean>>({})
+  const [relBusy, setRelBusy] = useState<Record<string, boolean>>({})
+  const [relMsg, setRelMsg] = useState<Record<string, string>>({})
 
   function load() {
     setLoading(true); setErr('')
@@ -25,6 +28,21 @@ export default function ClosingManagementPage() {
       .finally(() => setLoading(false))
   }
   useEffect(() => { load() }, [mode, date, period, onlyReview])
+
+  // MANAGEMENT OVERRIDE (mig 502, retail-ops-7 item 1): unlock a submitted closing row for ONE
+  // corrected resubmit. Never creates a second row — the rep's next submit for that store/day UPDATES
+  // this exact row. Every release is audited (released_by/at) on the row itself.
+  async function toggleRelease(g: any, released: boolean) {
+    const key = `${g.close_date}|${g.store_code}|${g.employee_name}`
+    if (!g.row_id) { setRelMsg(m => ({ ...m, [key]: '❌ no matching daily_closing row (run migration 502?)' })); return }
+    setRelBusy(b => ({ ...b, [key]: true })); setRelMsg(m => ({ ...m, [key]: '' }))
+    try {
+      await api(`/api/v1/closing/row/${g.row_id}/release`, { method: 'POST', body: JSON.stringify({ released }) })
+      setRelMsg(m => ({ ...m, [key]: released ? '✅ Released — the rep can resubmit once (corrects this row, never a duplicate).' : '✅ Re-locked.' }))
+      load()
+    } catch (e: any) { setRelMsg(m => ({ ...m, [key]: '❌ ' + (e?.message || e) })) }
+    finally { setRelBusy(b => ({ ...b, [key]: false })) }
+  }
 
   const groups: any[] = data?.groups || []
   const forbidden = /permission|403|restricted/i.test(err)
@@ -52,6 +70,7 @@ export default function ClosingManagementPage() {
           <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
             <input type="checkbox" checked={onlyReview} onChange={e => setOnlyReview(e.target.checked)} /> Needs review only
           </label>
+          <Link href="/closing/duplicates" className="btn btn-secondary" style={{ fontSize: 12 }}>🧾 Duplicate submissions</Link>
         </div>
       </div>
 
@@ -75,7 +94,8 @@ export default function ClosingManagementPage() {
             const isOpen = open[key]
             return (
               <div key={i} className="card" style={{ padding: 0, overflow: 'hidden', border: g.auto_accepted ? '1px solid #f3b4b4' : undefined }}>
-                <button onClick={() => setOpen(o => ({ ...o, [key]: !o[key] }))}
+                <div role="button" tabIndex={0} onClick={() => setOpen(o => ({ ...o, [key]: !o[key] }))}
+                  onKeyDown={e => { if (e.key === 'Enter') setOpen(o => ({ ...o, [key]: !o[key] })) }}
                   style={{ width: '100%', textAlign: 'left', background: g.auto_accepted ? '#fffafa' : 'var(--surface)', border: 'none', cursor: 'pointer', padding: '11px 14px', display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
                   <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 13, fontWeight: 700 }}>{g.store_address || g.store_code}</span>
@@ -83,9 +103,21 @@ export default function ClosingManagementPage() {
                     <span style={{ fontSize: 12, color: 'var(--text3)' }}>{g.close_date}</span>
                     <span className="badge" style={{ fontSize: 11, background: g.attempts >= 3 ? '#fbe4e4' : 'var(--surface2)', color: g.attempts >= 3 ? '#b42318' : 'var(--text2)' }}>{g.attempts} attempt{g.attempts > 1 ? 's' : ''}</span>
                     {g.auto_accepted && <span className="badge" style={{ fontSize: 11, background: '#b42318', color: '#fff' }}>⚑ auto-accepted — review</span>}
+                    {g.released_at && <span className="badge" style={{ fontSize: 11, background: '#dbeafe', color: '#1d4ed8' }}>🔓 released by {g.released_by || 'management'}{g.correction_count ? ` · corrected ${g.correction_count}×` : ''}</span>}
                   </div>
-                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>{isOpen ? '▲ hide tries' : '▼ show tries'}</span>
-                </button>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    {/* MANAGEMENT OVERRIDE (mig 502): release this exact daily_closing row so the rep can
+                        resubmit ONCE — a corrected UPDATE, never a second row. Audited on the row itself. */}
+                    <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px' }}
+                      disabled={!g.row_id || relBusy[key]}
+                      onClick={e => { e.stopPropagation(); toggleRelease(g, !g.released_at) }}
+                      title={g.row_id ? undefined : 'No matching daily_closing row found (run migration 502?)'}>
+                      {relBusy[key] ? '⏳' : g.released_at ? '🔒 Re-lock' : '🔓 Release for correction'}
+                    </button>
+                    <span style={{ fontSize: 12, color: 'var(--text3)' }}>{isOpen ? '▲ hide tries' : '▼ show tries'}</span>
+                  </div>
+                </div>
+                {relMsg[key] && <div style={{ fontSize: 11, padding: '0 14px 8px', color: relMsg[key].startsWith('❌') ? '#b91c1c' : 'var(--text2)' }}>{relMsg[key]}</div>}
                 {isOpen && (
                   <div style={{ borderTop: '1px solid var(--border)', padding: '10px 14px' }}>
                     <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>
