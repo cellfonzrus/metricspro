@@ -82,8 +82,21 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
 
   // Accordion: keep every module group collapsed and open only the one holding the current page
   // (so the user is never lost) — clicking another header opens that one and closes the rest.
-  const activeGroup = groups.find(g => g.items.some(it =>
-    pathname === it.href || pathname.startsWith(it.href + '/')))?.group || null
+  // Pick the group owning the MOST SPECIFIC (longest-href) matching nav item, not merely the FIRST
+  // group with any prefix match. The Commissions "Dashboard" item (/commcalc) is a prefix of every
+  // /commcalc/* page, so a first-match would always resolve Asset/Distributor/Targets/Mapping/
+  // Integrations sub-pages to the Commissions group (highlighting Dashboard) — the sidebar "jumps back
+  // to the dashboard" and the user has to hunt for the module they were in. Longest-prefix resolves to
+  // the real sub-module group so navigating between a module's tabs keeps that module expanded.
+  let activeGroup: string | null = null
+  {
+    let bestLen = -1
+    for (const g of groups) for (const it of g.items) {
+      if ((pathname === it.href || pathname.startsWith(it.href + '/')) && it.href.length > bestLen) {
+        activeGroup = g.group; bestLen = it.href.length
+      }
+    }
+  }
   useEffect(() => { if (activeGroup) setOpenGroup(activeGroup) }, [activeGroup])
 
   const initials = (user?.full_name || user?.email || '?').split(/[\s@.]+/).filter(Boolean)
