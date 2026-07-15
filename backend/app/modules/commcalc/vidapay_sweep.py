@@ -713,6 +713,98 @@ def _goto_login(page, base_url):
             pass
 
 
+def drive_typed_login(page, login_fr, pw_el, account_id, user, pw):
+    """Fill + submit the login form on the ALREADY-OPEN page/frame, then leave the page on whatever
+    screen the submit produced (the caller classifies). Shared by begin_login AND the live-session
+    manager (live_login.py) so the pinned VidaPay/T-CETRA selectors live in ONE place.
+
+    PINNED to the live id.vidapaycrm.com "SIGN IN" DOM (calibrated 2026-07-15): #AccountId
+    (type=number) · #Username · #Password · submit #btnClick — with REAL keystroke typing + an
+    enable-wait, because #btnClick stays disabled until the form's JS sees key events (fill() skips
+    them). Falls back to heuristic field finders for other portal variants. The Sign-In POST is what
+    makes the portal DISPATCH the 2FA code, so this must never depend on text heuristics for VidaPay."""
+    if login_fr.query_selector("#AccountId") and login_fr.query_selector("#Password"):
+        # TYPE (real keystrokes), don't fill: #btnClick is DISABLED until the form's JS validation
+        # sees key events — fill() skips them, so the click timed out on "element is not enabled"
+        # (same trait as b2bsoft's progressive form).
+        def _type_id(sel, val):
+            if val in (None, ""):
+                return
+            el = login_fr.query_selector(sel)
+            if not el:
+                return
+            try:
+                el.click()
+                el.fill("")
+                el.type(str(val), delay=25)
+            except Exception:
+                try:
+                    el.fill(str(val))
+                except Exception:
+                    pass
+        _type_id("#AccountId", account_id)
+        _type_id("#Username", user)
+        _type_id("#Password", pw or "")
+        _ENABLED = "() => { const b = document.getElementById('btnClick'); return !!b && !b.disabled; }"
+        try:
+            login_fr.wait_for_function(_ENABLED, timeout=8000)
+        except Exception:
+            # Nudge the validation listeners, then wait once more.
+            try:
+                login_fr.evaluate(
+                    """() => ['AccountId','Username','Password'].forEach(id => {
+                           const el = document.getElementById(id); if (!el) return;
+                           ['input','change','keyup','blur'].forEach(t =>
+                               el.dispatchEvent(new Event(t, {bubbles: true})));
+                       })""")
+                login_fr.wait_for_function(_ENABLED, timeout=5000)
+            except Exception:
+                pass
+        clicked = False
+        btn = login_fr.query_selector("#btnClick")
+        if btn:
+            try:
+                btn.click(timeout=8000)
+                clicked = True
+            except Exception:
+                pass
+        if not clicked:
+            # Native form-submit fallback — but Enter "succeeds" as an API call even when it
+            # submits nothing, so only count it if the login form actually went away.
+            try:
+                pw_el.press("Enter")
+                page.wait_for_timeout(1200)
+                try:
+                    clicked = not login_fr.query_selector("#Password")
+                except Exception:
+                    clicked = True   # frame detached = navigation happened = submitted
+            except Exception:
+                pass
+        if not clicked and btn:
+            try:
+                # Last resort: the fields ARE filled; the disable is stale UI state.
+                login_fr.evaluate(
+                    "() => { const b = document.getElementById('btnClick'); if (b) { b.disabled = false; b.click(); } }")
+            except Exception:
+                pass
+    else:
+        # Unknown portal variant — fill whichever of the three fields exist, heuristically.
+        acct_el = _find_input(login_fr, want=("account", "acct", "agent", "dealer", "merchant"),
+                              avoid=("user", "pass"))
+        user_el = _find_input(login_fr, want=("user", "login", "email", "userid", "username"),
+                              avoid=("account", "acct"))
+        if acct_el and account_id:
+            acct_el.fill(str(account_id))
+        if user_el and user:
+            user_el.fill(str(user))
+        pw_el.fill(str(pw or ""))
+        if not _click_submit(login_fr, ("log in", "login", "sign in", "signin", "submit", "continue")):
+            try:
+                pw_el.press("Enter")
+            except Exception:
+                pass
+
+
 # ── phase 1: start login ───────────────────────────────────────────────────────────────────────
 def begin_login(url, account_id, user, pw, proxy_url=None):
     """Launch headless Chromium, submit Account ID + User ID + Password, report where we land.
@@ -743,90 +835,9 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
                 raise VidaPayLoginError(
                     "Could not find the password field on the VidaPay login page — the form may render "
                     "differently than expected. Diagnostic: " + str(diag))
-            # VidaPay / T-CETRA SSO (id.vidapaycrm.com "SIGN IN") — PINNED selectors, calibrated
-            # 2026-07-15 against the live DOM: #AccountId (type=number) · #Username · #Password ·
-            # submit button #btnClick. The Sign-In POST is what makes the portal DISPATCH the 2FA
-            # code to the registered phone, so this click must never depend on text heuristics.
-            if login_fr.query_selector("#AccountId") and login_fr.query_selector("#Password"):
-                # TYPE (real keystrokes), don't fill: #btnClick is DISABLED until the form's JS
-                # validation sees key events — fill() skips them, so the click timed out on
-                # "element is not enabled" (same trait as b2bsoft's progressive form).
-                def _type_id(sel, val):
-                    if val in (None, ""):
-                        return
-                    el = login_fr.query_selector(sel)
-                    if not el:
-                        return
-                    try:
-                        el.click()
-                        el.fill("")
-                        el.type(str(val), delay=25)
-                    except Exception:
-                        try:
-                            el.fill(str(val))
-                        except Exception:
-                            pass
-                _type_id("#AccountId", account_id)
-                _type_id("#Username", user)
-                _type_id("#Password", pw or "")
-                _ENABLED = "() => { const b = document.getElementById('btnClick'); return !!b && !b.disabled; }"
-                try:
-                    login_fr.wait_for_function(_ENABLED, timeout=8000)
-                except Exception:
-                    # Nudge the validation listeners, then wait once more.
-                    try:
-                        login_fr.evaluate(
-                            """() => ['AccountId','Username','Password'].forEach(id => {
-                                   const el = document.getElementById(id); if (!el) return;
-                                   ['input','change','keyup','blur'].forEach(t =>
-                                       el.dispatchEvent(new Event(t, {bubbles: true})));
-                               })""")
-                        login_fr.wait_for_function(_ENABLED, timeout=5000)
-                    except Exception:
-                        pass
-                clicked = False
-                btn = login_fr.query_selector("#btnClick")
-                if btn:
-                    try:
-                        btn.click(timeout=8000)
-                        clicked = True
-                    except Exception:
-                        pass
-                if not clicked:
-                    # Native form-submit fallback — but Enter "succeeds" as an API call even when it
-                    # submits nothing, so only count it if the login form actually went away.
-                    try:
-                        pw_el.press("Enter")
-                        page.wait_for_timeout(1200)
-                        try:
-                            clicked = not login_fr.query_selector("#Password")
-                        except Exception:
-                            clicked = True   # frame detached = navigation happened = submitted
-                    except Exception:
-                        pass
-                if not clicked and btn:
-                    try:
-                        # Last resort: the fields ARE filled; the disable is stale UI state.
-                        login_fr.evaluate(
-                            "() => { const b = document.getElementById('btnClick'); if (b) { b.disabled = false; b.click(); } }")
-                    except Exception:
-                        pass
-            else:
-                # Unknown portal variant — fill whichever of the three fields exist, heuristically.
-                acct_el = _find_input(login_fr, want=("account", "acct", "agent", "dealer", "merchant"),
-                                      avoid=("user", "pass"))
-                user_el = _find_input(login_fr, want=("user", "login", "email", "userid", "username"),
-                                      avoid=("account", "acct"))
-                if acct_el and account_id:
-                    acct_el.fill(str(account_id))
-                if user_el and user:
-                    user_el.fill(str(user))
-                pw_el.fill(str(pw or ""))
-                if not _click_submit(login_fr, ("log in", "login", "sign in", "signin", "submit", "continue")):
-                    try:
-                        pw_el.press("Enter")
-                    except Exception:
-                        pass
+            # Fill + submit the (pinned VidaPay/T-CETRA or heuristic) login form. Extracted so the
+            # live-session manager (live_login.py) drives the identical login against its live page.
+            drive_typed_login(page, login_fr, pw_el, account_id, user, pw)
             try:
                 page.wait_for_load_state("networkidle", timeout=25000)
             except Exception:
