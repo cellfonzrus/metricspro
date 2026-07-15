@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
 import { api } from '@/lib/client'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Auto-remediation console. Describe an operational issue → the agent (Claude) classifies it data-vs-
 // code, and for a DATA issue picks a WHITELISTED playbook + a dry-run preview, then sends the assignee a
@@ -45,6 +46,15 @@ export default function RemediationConsole() {
 
   const card: React.CSSProperties = { border: '1px solid var(--border)', borderRadius: 12,
     background: 'var(--surface)', padding: 18, marginBottom: 18 }
+
+  // RULE FOUR (§3c) exports for the remediation request log.
+  const reqCols: ExportColumn[] = [
+    { header: 'Status', field: 'status', get: r => String(r.status || '').replace('_', ' ') },
+    { header: 'Action', field: 'action', get: r => r.proposed_action || r.title || '' },
+    { header: 'Playbook / class', field: 'playbook', get: r => r.playbook_key || r.issue_class || '' },
+    { header: 'Created', field: 'created_at', type: 'date', get: r => String(r.created_at || '').slice(0, 16).replace('T', ' ') },
+    { header: 'Result', field: 'result', get: r => r.result?.summary || '' },
+  ]
 
   return (
     <div style={{ maxWidth: 920, margin: '0 auto' }}>
@@ -96,7 +106,11 @@ export default function RemediationConsole() {
       </div>
 
       <div style={card}>
-        <div style={{ fontWeight: 700, marginBottom: 10 }}>Recent requests</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <div style={{ fontWeight: 700 }}>Recent requests</div>
+          <span style={{ flex: 1 }} />
+          {requests.length > 0 && <ReportExportBar title="Remediation requests" filename="remediation_requests" columns={reqCols} rows={requests} />}
+        </div>
         {!requests.length && <div style={{ color: 'var(--text3)', fontSize: 13 }}>None yet.</div>}
         {requests.map(r => (
           <div key={r.id} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '8px 0',
