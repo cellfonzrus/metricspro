@@ -33,6 +33,22 @@ function periodToMonth(p: string): string {
   const m = MONTHS[mon]
   return m && yr ? `${yr}-${String(m).padStart(2, '0')}` : ''
 }
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+// The month universe for "apply to other months": `anchor` ('July 2026') + `back` prior months, newest
+// first, as canonical 'Month YYYY' strings. Pure integer math (no Date()) to dodge the UTC off-by-one.
+function buildMonthPool(anchor: string, back: number): string[] {
+  const m = String(anchor || '').trim().match(/^([A-Za-z]+)\s+(\d{4})$/)
+  let mi: number, yr: number
+  if (m) { mi = (MONTHS[m[1].toLowerCase()] || 1) - 1; yr = parseInt(m[2]) }
+  else { const d = new Date(); mi = d.getMonth(); yr = d.getFullYear() }
+  const out: string[] = []
+  for (let k = 0; k <= back; k++) {
+    let mm = mi - k, yy = yr
+    while (mm < 0) { mm += 12; yy -= 1 }
+    out.push(`${MONTH_NAMES[mm]} ${yy}`)
+  }
+  return out
+}
 const COMMISSION_ROW = 'Employee Commission'
 // Matrix-upload support: map a store owner's own category labels → the canonical expense names, and the
 // rows to skip (computed totals / targets, which aren't expenses).
@@ -101,6 +117,92 @@ function StorePicker({ stores, markets, value, onChange, exclude, label }: {
   )
 }
 
+// Multi-select TARGET months (RULE THREE — a real month list, never a free-text box). Checkbox list with
+// type-to-filter, Select-all / Clear. Emits the selected 'Month YYYY' period strings.
+function MonthPicker({ months, value, onChange, label }: {
+  months: string[]; value: string[]; onChange: (v: string[]) => void; label?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const filt = months.filter(m => !q || m.toLowerCase().includes(q.toLowerCase()))
+  const sel = new Set(value)
+  const toggle = (m: string) => onChange(sel.has(m) ? value.filter(x => x !== m) : [...value, m])
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button className="btn" onClick={() => setOpen(o => !o)}>
+        {label || 'To months…'}{value.length ? ` (${value.length})` : ''} ▾
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', zIndex: 41, top: '108%', left: 0, width: 240, maxHeight: 340, overflow: 'auto', background: 'white', border: '1px solid var(--border)', borderRadius: 9, boxShadow: '0 8px 28px rgba(0,0,0,.16)', padding: 9 }}>
+            <input autoFocus style={{ ...inp, width: '100%', marginBottom: 7 }} placeholder="Filter months…" value={q} onChange={e => setQ(e.target.value)} />
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 7 }}>
+              <button className="btn" style={chip} onClick={() => onChange(Array.from(new Set([...value, ...filt])))}>Select all{q ? ' (filtered)' : ''}</button>
+              <button className="btn" style={chip} onClick={() => onChange([])} disabled={!value.length}>Clear</button>
+            </div>
+            {filt.map(m => (
+              <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 4px', fontSize: 13, cursor: 'pointer' }}>
+                <input type="checkbox" checked={sel.has(m)} onChange={() => toggle(m)} />
+                <span>{shortPeriod(m)} <span style={{ color: 'var(--text3)', fontSize: 11 }}>{m}</span></span>
+              </label>
+            ))}
+            {filt.length === 0 && <div style={{ padding: 8, color: 'var(--text3)', fontSize: 12 }}>No months match.</div>}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// Narrow WHICH expenses to copy. Non-excluded categories are checkable (default all); commission/salary
+// (whatever the org's protected token set matches) are shown LOCKED 🔒 — never copyable. Emits the checked
+// non-excluded names. `isLocked(name)` is passed in (config-driven, not a hard-coded name list here).
+function ExpensePicker({ cats, isLocked, value, onChange }: {
+  cats: { name: string; type: string }[]; isLocked: (n: string) => boolean; value: string[]; onChange: (v: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const open_cats = cats.filter(c => !isLocked(c.name))
+  const locked = cats.filter(c => isLocked(c.name))
+  const sel = new Set(value)
+  const toggle = (n: string) => onChange(sel.has(n) ? value.filter(x => x !== n) : [...value, n])
+  const allChecked = open_cats.length > 0 && open_cats.every(c => sel.has(c.name))
+  const label = allChecked ? `All expenses (${open_cats.length})` : `${value.length} of ${open_cats.length} expenses`
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button className="btn" onClick={() => setOpen(o => !o)}>{label} ▾</button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', zIndex: 41, top: '108%', left: 0, width: 260, maxHeight: 360, overflow: 'auto', background: 'white', border: '1px solid var(--border)', borderRadius: 9, boxShadow: '0 8px 28px rgba(0,0,0,.16)', padding: 9 }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 7 }}>
+              <button className="btn" style={chip} onClick={() => onChange(open_cats.map(c => c.name))}>Select all</button>
+              <button className="btn" style={chip} onClick={() => onChange([])} disabled={!value.length}>Clear</button>
+            </div>
+            {open_cats.map(c => (
+              <label key={c.name} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 4px', fontSize: 13, cursor: 'pointer' }}>
+                <input type="checkbox" checked={sel.has(c.name)} onChange={() => toggle(c.name)} />
+                <span>{c.name}</span>
+              </label>
+            ))}
+            {locked.length > 0 && (
+              <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--border)' }}>
+                <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 3 }}>🔒 Protected — never copied</div>
+                {locked.map(c => (
+                  <label key={c.name} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 4px', fontSize: 13, color: 'var(--text3)' }}>
+                    <input type="checkbox" checked={false} disabled />
+                    <span>🔒 {c.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function ExpensesPage() {
   const { period } = usePeriod()
   const [stores, setStores] = useState<any[]>([])
@@ -127,7 +229,14 @@ export default function ExpensesPage() {
   const [common, setCommon] = useState<{ name: string; type: string; amount: string }>({ name: '', type: 'Fixed', amount: '' })
   const [commonTargets, setCommonTargets] = useState<string[]>([])
   const [applyBusy, setApplyBusy] = useState(false)    // batch bulk-apply in flight
+  const [monthsOpen, setMonthsOpen] = useState(false)  // "apply to other months" panel
+  const [applySource, setApplySource] = useState('')   // source month (default = current period)
+  const [applyTargets, setApplyTargets] = useState<string[]>([])
+  const [applySel, setApplySel] = useState<string[]>([])       // which expense names to copy
+  const [excludedTokens, setExcludedTokens] = useState<string[]>(['commission', 'salary', 'salaries'])  // protected set (config)
   const cw = useColumnResize()                          // auto-fit + user-resizable columns
+  // config-driven lock test: an expense is protected if its name contains any configured token (ci).
+  const isLockedExpense = (n: string) => excludedTokens.some(t => n.toLowerCase().includes(String(t).toLowerCase()))
 
   function load() {
     setLoading(true)
@@ -167,6 +276,13 @@ export default function ExpensesPage() {
   useEffect(() => { load() }, [period])
   // Month-over-month total-expenses trend for the chart on top (cross-period, so fetched once).
   useEffect(() => { api(`/api/v1/commcalc/expenses-trend?months=6&org_id=${ORG_ID}`).then(setExpTrend).catch(() => {}) }, [])
+  // The configured PROTECTED-expense token set (commission/salary by default) — drives which categories
+  // show as locked in the "apply to other months" picker AND is re-enforced server-side.
+  useEffect(() => {
+    api(`/api/v1/commcalc/expenses/apply-config?org_id=${ORG_ID}`)
+      .then((r: any) => { if (Array.isArray(r?.tokens) && r.tokens.length) setExcludedTokens(r.tokens) })
+      .catch(() => {})
+  }, [])
 
   // Persist the auto-save preference across sessions.
   useEffect(() => { if (typeof window !== 'undefined' && localStorage.getItem('exp_autosave') === '1') setAutoSave(true) }, [])
@@ -178,6 +294,8 @@ export default function ExpensesPage() {
     return () => clearTimeout(t)
   }, [dirty, autoSave])   // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Month universe for "apply to other months" = the current period + 17 prior months (newest first).
+  const monthPool = useMemo(() => buildMonthPool(period, 17), [period])
   const markets = Array.from(new Set(stores.map(s => s.market).filter(Boolean))).sort()
   const visStores = stores.filter(s => (!market || s.market === market) &&
     (!storeSearch || `${s.store_code} ${s.address || ''}`.toLowerCase().includes(storeSearch.toLowerCase())))
@@ -260,6 +378,42 @@ export default function ExpensesPage() {
     setAmounts(map); setDirty(d => d + 1)
     await persistCells(cells, `Applied ${fmt(amt)} ${canonName} to ${commonTargets.length} store(s)`)
     setCommonOpen(false); setCommon({ name: '', type: 'Fixed', amount: '' }); setCommonTargets([])
+  }
+
+  // The on-screen grid as source cells (nonzero only) — passed when the SOURCE is the displayed month so
+  // unsaved edits are honored (WYSIWYG); for any other source the backend reads that month's SAVED matrix.
+  function gridCellsForSource() {
+    const cells: any[] = []
+    stores.forEach(s => cats.forEach(c => { const amt = getVal(s.store_code, c.name); if (amt > 0) cells.push({ store_code: s.store_code, expense_name: c.name, expense_type: c.type, amount: amt }) }))
+    return cells
+  }
+
+  // APPLY A SOURCE MONTH ACROSS TARGET MONTHS — copies every selected (store, expense) cell of the source
+  // month onto each target month, EXCEPT the protected (commission/salary) expenses. Idempotent server-side
+  // (per-cell delete-then-insert, never a whole-month wipe). Does NOT recompute — prior-month GP shifts.
+  async function applyToMonths() {
+    const source = applySource || period
+    if (!applyTargets.length) { setMsg('Pick at least one target month.'); return }
+    const openCats = cats.filter(c => !isLockedExpense(c.name))
+    const allSelected = openCats.length > 0 && openCats.every(c => applySel.includes(c.name))
+    const expense_names = allSelected ? undefined : applySel.filter(n => !isLockedExpense(n))
+    if (expense_names && !expense_names.length) { setMsg('Pick at least one expense to copy.'); return }
+    const body: any = { source_period: source, target_periods: applyTargets }
+    if (expense_names) body.expense_names = expense_names
+    if (source === period) body.source_cells = gridCellsForSource()   // WYSIWYG for the on-screen month
+    setApplyBusy(true); setMsg('')
+    try {
+      const r = await api(`/api/v1/commcalc/expenses/apply-to-months?org_id=${ORG_ID}`, { method: 'POST', body: JSON.stringify(body) })
+      if (r?.ok === false) { setMsg('Apply failed: ' + (r.error || 'unknown')); setApplyBusy(false); return }
+      const tnames = (r.target_periods || applyTargets).map((p: string) => shortPeriod(p)).join(', ')
+      const skipped: string[] = r.skipped_excluded || []
+      const nCopied = (r.copied_expenses || []).length
+      setMsg(`Applied ${nCopied} expense${nCopied === 1 ? '' : 's'} to ${r.months} month${r.months === 1 ? '' : 's'} (${tnames}) · ${r.cells} cells`
+        + (skipped.length ? ` · ${skipped.join(' & ')} not copied` : '')
+        + '. Prior-month Gross Profit shifts — re-run Calculation to refresh.')
+      setMonthsOpen(false); setApplyTargets([])
+    } catch (e: any) { setMsg('Apply failed: ' + (e?.message || e)) }
+    setApplyBusy(false)
   }
 
   // Real clipboard paste of a COLUMN of numbers (multi-row copy from Excel) into one store's column,
@@ -415,6 +569,11 @@ export default function ExpensesPage() {
         <button className="btn" onClick={() => { setCommonOpen(o => !o); setCopySource('') }}
           title="Write one common expense (same amount) to many stores in a single submit">
           {commonOpen ? '✕ Close common' : '🏢 Common expense…'}</button>
+        <button className="btn" onClick={() => {
+          const next = !monthsOpen; setMonthsOpen(next); setCommonOpen(false); setCopySource('')
+          if (next) { setApplySource(period); setApplyTargets([]); setApplySel(cats.filter(c => !isLockedExpense(c.name)).map(c => c.name)) }
+        }} title="Copy this month's expenses onto other months (commission & salary are never copied)">
+          {monthsOpen ? '✕ Close apply' : '📅 Apply to other months…'}</button>
         <span style={{ width: 1, height: 22, background: 'var(--border)' }} />
         <button className="btn" onClick={downloadTemplate}>⬇️ Template</button>
         <label className="btn" style={{ cursor: upBusy ? 'default' : 'pointer', margin: 0 }}>
@@ -456,6 +615,28 @@ export default function ExpensesPage() {
           <button className="btn btn-primary" onClick={applyCommon} disabled={applyBusy || !commonTargets.length || !common.name.trim()}>
             {applyBusy ? '…' : `Apply to ${commonTargets.length || 0} store${commonTargets.length === 1 ? '' : 's'}`}</button>
           <span style={{ fontSize: 11, color: 'var(--text3)' }}>Writes the same amount to every selected store in one request.</span>
+        </div>
+      )}
+
+      {/* APPLY A SOURCE MONTH ACROSS TARGET MONTHS — everything except commission & salary. */}
+      {monthsOpen && (
+        <div className="card" style={{ padding: 12, marginBottom: 16, background: '#fef9f0', borderLeft: '4px solid #f59e0b', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>📅 Apply expenses →</span>
+          <label style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 5 }}>From
+            <select style={inp} value={applySource || period} onChange={e => setApplySource(e.target.value)}>
+              {monthPool.map(m => <option key={m} value={m}>{m}{m === period ? ' (current)' : ''}</option>)}
+            </select>
+          </label>
+          <span style={{ fontSize: 12, color: 'var(--text2)' }}>to</span>
+          <MonthPicker months={monthPool.filter(m => m !== (applySource || period))} value={applyTargets} onChange={setApplyTargets} label="Target months…" />
+          <ExpensePicker cats={cats} isLocked={isLockedExpense} value={applySel} onChange={setApplySel} />
+          <button className="btn btn-primary" onClick={applyToMonths} disabled={applyBusy || !applyTargets.length}>
+            {applyBusy ? '…' : `Apply to ${applyTargets.length || 0} month${applyTargets.length === 1 ? '' : 's'}`}</button>
+          <button className="btn" onClick={() => setMonthsOpen(false)}>Cancel</button>
+          <span style={{ fontSize: 11, color: 'var(--text3)', flexBasis: '100%' }}>
+            🔒 <b>{excludedTokens.join(' & ')}</b> expenses are never copied. Idempotent (re-running won't double-write).
+            Writing into a <b>closed prior month shifts that month's Gross Profit / P&amp;L</b> — re-run Calculation afterward to refresh it.
+          </span>
         </div>
       )}
 

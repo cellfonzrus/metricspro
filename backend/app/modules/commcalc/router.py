@@ -8947,6 +8947,183 @@ async def bulk_apply_expenses(period: str, body: dict, org_id: str = ORG_ID):
             "stores": stores_touched, "expenses": len(by_expense), "period": period}
 
 
+# ── EXPENSES: apply a source month across many months (except commission/salary) ─────────────────
+# RULE TWO: the PROTECTED set (expenses NEVER copied across months) is CONFIG, not a magic list baked
+# into the handler. It lives in commcalc.expense_apply_config (org-scoped, admin-editable via
+# GET/PUT /expenses/apply-config) and matches an expense_name case-insensitively by SUBSTRING token.
+# The code default {commission, salary} applies until a tenant configures its own set, so protection
+# holds everywhere even before mig 205 runs.
+# Default protected tokens. 'salaries' is listed alongside 'salary' because the match is a plain substring
+# and the real category names are the PLURAL "Employee Salaries" / "Owner / Mgmt Salaries" (which 'salary'
+# alone would miss). All are lowercase; the match lowercases the expense name.
+_EXPENSE_APPLY_DEFAULT_TOKENS = ['commission', 'salary', 'salaries']
+
+
+def _expense_apply_tokens(client, org_id):
+    """The configured expense-name tokens EXCLUDED from cross-month apply (case-insensitive substring
+    match on expense_name). Read from commcalc.expense_apply_config (org-scoped); falls back to the seed
+    default {commission, salary} when the table/rows are absent — degrades gracefully before mig 205."""
+    try:
+        rows = (client.schema('commcalc').table('expense_apply_config')
+                .select('token').eq('org_id', org_id).execute().data) or []
+        toks = [str(r.get('token') or '').strip() for r in rows if str(r.get('token') or '').strip()]
+        if toks:
+            return toks
+    except Exception:
+        pass
+    return list(_EXPENSE_APPLY_DEFAULT_TOKENS)
+
+
+def _apply_to_months_expand(source_cells, target_periods, excluded_tokens=None, selection=None):
+    """Pure expansion for 'apply expenses across months' (unit-testable, no DB — mirrors _bulk_apply_expand).
+    Inputs: the SOURCE month's (store, expense) cells; a list of TARGET periods; the configured EXCLUDED
+    tokens (case-insensitive substring on expense_name — commission/salary by default); an optional
+    `selection` of expense names to copy (None/empty = all-except-excluded). Returns (rows, affected, skipped):
+      rows     — insert rows {period, store_code, expense_name, expense_type, amount} (nonzero only)
+      affected — {period: {expense_name: [store_code,...]}} the EXACT cells to delete-then-insert (never a
+                 whole-month wipe)
+      skipped  — sorted list of source expense names dropped because they matched an exclusion token
+    Excluded expenses are NEVER copied (commission/salary protection). Idempotent: re-expanding identical
+    inputs yields identical rows/affected → the endpoint's per-cell delete-then-insert is safe to re-run.
+    A target equal to a prior target (dup) is collapsed; the source cells are org-agnostic (the caller reads
+    them org-scoped and stamps org_id on the insert)."""
+    toks = [str(t).strip().lower() for t in (excluded_tokens or []) if str(t).strip()]
+    sel = None
+    if selection:
+        sel = {str(s).strip().lower() for s in selection if str(s).strip()}
+
+    def excluded(nm):
+        low = nm.lower()
+        return any(t in low for t in toks)
+
+    src = {}
+    skipped = set()
+    for c in source_cells or []:
+        sc = str((c or {}).get('store_code') or '').strip()
+        nm = str((c or {}).get('expense_name') or '').strip()
+        if not sc or not nm:
+            continue
+        if sel is not None and nm.lower() not in sel:
+            continue
+        if excluded(nm):
+            skipped.add(nm)
+            continue
+        try:
+            amt = float(c.get('amount') or 0)
+        except (TypeError, ValueError):
+            amt = 0
+        src[(nm, sc)] = {'expense_type': (c.get('expense_type') or 'Fixed'), 'amount': amt}
+
+    rows, affected = [], {}
+    for p in target_periods or []:
+        p = str(p or '').strip()
+        if not p or p in affected:
+            continue
+        affected[p] = {}
+        for (nm, sc), v in src.items():
+            lst = affected[p].setdefault(nm, [])
+            if sc not in lst:
+                lst.append(sc)
+            if v['amount'] != 0:
+                rows.append({'period': p, 'store_code': sc, 'expense_name': nm,
+                             'expense_type': v['expense_type'], 'amount': v['amount']})
+    return rows, affected, sorted(skipped)
+
+
+@router.get("/expenses/apply-config")
+async def get_expense_apply_config(org_id: str = ORG_ID):
+    """The expense-name tokens excluded from 'apply to other months' (commission/salary by default).
+    `source` = 'config' when the org has saved its own set, else 'default' (the code fallback)."""
+    require_org(org_id)
+    client = sb()
+    toks = _expense_apply_tokens(client, org_id)
+    configured = False
+    try:
+        rows = (client.schema('commcalc').table('expense_apply_config')
+                .select('token').eq('org_id', org_id).execute().data) or []
+        configured = bool(rows)
+    except Exception:
+        configured = False
+    return {"tokens": toks, "source": "config" if configured else "default",
+            "default_tokens": list(_EXPENSE_APPLY_DEFAULT_TOKENS)}
+
+
+@router.put("/expenses/apply-config")
+async def put_expense_apply_config(body: dict, org_id: str = ORG_ID):
+    """Replace the org's excluded-expense tokens (the admin-editable protected set). Body {tokens:[...]}.
+    Case-insensitively deduped. Degrades gracefully (ok=false + hint) until mig 205 creates the table."""
+    require_org(org_id)
+    toks = []
+    for t in (body.get('tokens') or []):
+        t = str(t or '').strip()
+        if t and t.lower() not in [x.lower() for x in toks]:
+            toks.append(t)
+    client = sb()
+    try:
+        client.schema('commcalc').table('expense_apply_config').delete().eq('org_id', org_id).execute()
+        if toks:
+            client.schema('commcalc').table('expense_apply_config').insert(
+                [{'org_id': org_id, 'token': t} for t in toks]).execute()
+        return {"ok": True, "tokens": toks}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "tokens": toks,
+                "hint": "run migration 205_commission_expense_apply_config.sql"}
+
+
+@router.post("/expenses/apply-to-months")
+async def apply_expenses_to_months(body: dict, org_id: str = ORG_ID):
+    """Copy a SOURCE month's store expenses onto a chosen set of TARGET months — EXCEPT the configured
+    protected expenses (commission + salary by default; see GET/PUT /expenses/apply-config). Body:
+      { source_period: 'July 2026',
+        target_periods: ['April 2026','May 2026','June 2026'],
+        expense_names:  [..optional selection; omit/empty = all-except-excluded..],
+        source_cells:   [..optional {store_code,expense_name,expense_type,amount} override so the page can
+                          pass its LIVE grid for the current month; omit = read the SAVED source month..] }
+    Idempotent: per (target period × affected (store,expense) cell) delete-then-insert — it touches ONLY
+    those cells, NEVER wipes a whole target month. org-scoped on every read AND write, _pvariants for
+    period-spelling. Does NOT recompute commissions or GP: writing expenses into a closed prior month
+    SHIFTS that month's Gross Profit / P&L — re-run Calculation (or refresh the P&L) to reflect it."""
+    require_org(org_id)
+    source_period = str(body.get('source_period') or '').strip()
+    if not source_period:
+        return {"ok": False, "error": "source_period required"}
+    targets = []
+    for p in (body.get('target_periods') or []):
+        p = str(p or '').strip()
+        if p and p != source_period and p not in targets:   # never write back onto the source month
+            targets.append(p)
+    if not targets:
+        return {"ok": False, "error": "no target_periods (after dropping the source month)"}
+    client = sb()
+    src_override = body.get('source_cells')
+    if isinstance(src_override, list) and src_override:
+        src_rows = src_override                     # LIVE grid passed by the page (WYSIWYG for the open month)
+    else:
+        src_rows = (client.schema('commcalc').table('store_expenses')
+                    .select('store_code,expense_name,expense_type,amount')
+                    .eq('org_id', org_id).in_('period', _pvariants(source_period)).execute().data) or []
+    excluded_tokens = _expense_apply_tokens(client, org_id)
+    selection = body.get('expense_names')
+    sel = selection if (isinstance(selection, list) and selection) else None
+    rows, affected, skipped = _apply_to_months_expand(src_rows, targets, excluded_tokens, sel)
+    # Idempotent per-cell delete-then-insert into each target period (never a whole-month wipe). Compound
+    # (store,expense) IN isn't one PostgREST filter, so group by expense_name (one delete per name/period).
+    for p, by_expense in affected.items():
+        pv = _pvariants(p)
+        for nm, scodes in by_expense.items():
+            for i in range(0, len(scodes), 200):
+                client.schema('commcalc').table('store_expenses').delete() \
+                    .eq('org_id', org_id).in_('period', pv).eq('expense_name', nm) \
+                    .in_('store_code', scodes[i:i + 200]).execute()
+    ins = [{'org_id': org_id, **row} for row in rows]
+    for i in range(0, len(ins), 500):
+        client.schema('commcalc').table('store_expenses').insert(ins[i:i + 500]).execute()
+    return {"ok": True, "source_period": source_period, "target_periods": targets,
+            "months": len(targets), "cells": len(ins), "saved": len(ins),
+            "copied_expenses": sorted({r['expense_name'] for r in rows}),
+            "skipped_excluded": skipped, "excluded_tokens": excluded_tokens}
+
+
 @router.get("/commission-by-store/{period}")
 async def commission_by_store(period: str, org_id: str = ORG_ID):
     """Σ rep_commissions.total_payout per STORE CODE for the period — feeds the Store Expenses
