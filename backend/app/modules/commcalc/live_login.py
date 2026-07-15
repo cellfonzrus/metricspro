@@ -394,7 +394,12 @@ class LiveLoginSession:
         except Exception:
             pass
         self._capture(page)
-        if vp._classify(page) == "authenticated":
+        # Click through the post-code "Trust This Device" page (nickname + Next) — that Next both
+        # finalizes the 90-day trust AND is what leads to the dashboard; without it the accepted code
+        # looks rejected. finalize_after_code handles it (and the trust page's misleading Sign-Out header).
+        state = vp.finalize_after_code(page)
+        self._capture(page)
+        if state == "authenticated":
             self._on_authenticated(page, ctx, vp)
             return True
         # Keep the page OPEN on the verification screen — retryable.

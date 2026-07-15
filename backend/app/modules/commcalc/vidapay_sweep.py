@@ -386,14 +386,32 @@ def _click_submit(scope, texts):
     return False
 
 
+_CODE_KWS = ("code", "otp", "pin", "verif", "token", "authenticat", "2fa", "twofactor",
+             "one-time", "onetime", "passcode", "security code")
+
+
 def _code_field(page):
-    """The visible 2FA-code input (searched across every frame), or None."""
+    """The visible 2FA-code input — STRICT keyword match on name/id/placeholder/aria/autocomplete, with
+    NO 'first text input' fallback. (The fallback wrongly flagged the 'Trust This Device' nickname box as
+    a code field.) Callers that must actually FILL a code keep their own lone-field fallback."""
     for f in _frames(page):
-        el = _find_input(f, kinds=("text", "tel", "number", "password"),
-                         want=("code", "otp", "pin", "verif", "token", "authenticat", "2fa",
-                               "one-time", "onetime", "passcode", "security code"))
-        if el:
-            return el
+        try:
+            handles = f.query_selector_all("input")
+        except Exception:
+            continue
+        for h in handles:
+            try:
+                if not h.is_visible():
+                    continue
+                if (h.get_attribute("type") or "text").lower() not in ("text", "tel", "number", "password"):
+                    continue
+                hay = " ".join(filter(None, [
+                    h.get_attribute("name"), h.get_attribute("id"), h.get_attribute("placeholder"),
+                    h.get_attribute("aria-label"), h.get_attribute("autocomplete")])).lower()
+                if any(k in hay for k in _CODE_KWS):
+                    return h
+            except Exception:
+                continue
     return None
 
 
@@ -662,6 +680,82 @@ def _advance_2fa(page):
         except Exception:
             pass
     return " → ".join(steps) if steps else None
+
+
+# The POST-code "Trust This Device" page (T-CETRA/VidaPay: nickname field + Next) — clicking Next is
+# what actually establishes the 90-day trusted session, AND it sits between the accepted code and the
+# dashboard, so without it the login stalls and looks like "code not accepted". Note its header carries
+# a "Sign Out" link (looks authenticated) — so it MUST be handled before concluding auth.
+_TRUST_PAGE_WORDS = ("trust this device", "trust this computer", "remember this as a secure device",
+                     "secure device", "won't be needed when you sign in",
+                     "wont be needed when you sign in", "nickname for reference",
+                     "give this device a nickname", "recognize this device going forward")
+
+
+def _confirm_trust_device(page):
+    """If we're on the post-code 'Trust This Device' page (nickname + Next, no code field), give the
+    device a nickname when blank and click Next to finalize the trusted session. Returns True if clicked.
+    Never clicks Sign Out / Cancel / a 'Don't trust' control."""
+    try:
+        if _code_field(page):
+            return False
+    except Exception:
+        return False
+    if not any(w in _page_text(page) for w in _TRUST_PAGE_WORDS):
+        return False
+    for fr in _frames(page):
+        try:
+            el = _find_input(fr, kinds=("text",),
+                             want=("nickname", "name", "device", "reference", "label"),
+                             avoid=("code", "otp", "user", "pass"))
+            if el and not (el.input_value() or "").strip():
+                el.fill("MetricsPro")
+        except Exception:
+            continue
+    AVOID = ("cancel", "sign out", "logout", "log out", "back", "don't", "do not", "skip", "not now")
+    for fr in _frames(page):
+        try:
+            cands = fr.query_selector_all("button, input[type=submit], input[type=button], a[role=button]")
+        except Exception:
+            continue
+        for c in cands:
+            try:
+                if not c.is_visible():
+                    continue
+                label = (c.get_attribute("value") or c.inner_text() or "").strip().lower()
+                if not label or len(label) > 30 or any(a in label for a in AVOID):
+                    continue
+                if label in ("next", "continue", "confirm", "trust", "save", "finish", "done", "ok") \
+                        or label.startswith("next") or label.startswith("trust"):
+                    c.click()
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def finalize_after_code(page):
+    """After the code is submitted, click through any post-code 'Trust This Device' page(s) until the
+    portal lands on the app. Returns the final _classify state ('authenticated' | 'twofa' | ...). The
+    trust page can LOOK authenticated (its header has 'Sign Out'), so it's handled BEFORE concluding
+    auth — otherwise the session saves without the trust actually registering (no 90-day skip)."""
+    for _ in range(3):
+        try:
+            _wait_settle(page)
+        except Exception:
+            pass
+        if _confirm_trust_device(page):
+            try:
+                page.wait_for_load_state("networkidle", timeout=20000)
+            except Exception:
+                pass
+            page.wait_for_timeout(2500)
+            continue
+        state = _classify(page)
+        if state in ("authenticated", "twofa"):
+            return state
+        page.wait_for_timeout(1500)
+    return _classify(page)
 
 
 def _twofa_result(page, ctx, extra=None):
@@ -1104,8 +1198,8 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
             except Exception:
                 pass
             page.wait_for_timeout(3500)
-            _wait_settle(page)
-            state = _classify(page)
+            # Click through the post-code "Trust This Device" page (nickname + Next) before deciding.
+            state = finalize_after_code(page)
             if state == "authenticated":
                 return {"status": "authenticated", "storage_state": ctx.storage_state(),
                         "diag": _snapshot(page), "screenshot_b64": _shot_b64(page)}
@@ -1214,7 +1308,7 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
             except Exception:
                 pass
             page.wait_for_timeout(3500)
-            _wait_settle(page)
+            finalize_after_code(page)   # click through a post-code "Trust This Device" page if shown
 
             def _storage_diag(pg):
                 try:
