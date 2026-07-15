@@ -32,6 +32,12 @@ from app.modules.account._period import parse_period  # noqa: F401
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
+# Boost taxonomy — kept ONLY as the emergency fallback for `_sales_classifier` (below). Live
+# device/accessory classification is now resolved from the SAME per-tenant config the commission side
+# uses (commcalc.accessory_config mig 208 + commcalc.gp_category_map mig 069), so a non-Boost tenant
+# whose POS departments/categories differ (luxelink: dept 'BrandedHandset' holds both the 'KittedBranded'
+# phone and the 'HandsetBranded' accessory) classifies correctly. An EMPTY config reproduces these two
+# sets exactly ⇒ Boost stays byte-identical. See `_sales_classifier`.
 DEVICE_DEPTS = {"Android - XP", "IPHONE - XP", "TABLET - XP"}
 ACCESSORY_DEPT = "Ondigo"
 VIP_FEE_CATS = {"PROCESSING FEE", "SHIPPING", "SIM KIT"}
@@ -134,7 +140,10 @@ def _sales_union_rows(client, org_id, period_keys):
     raw_sales — never pulled off the feed on top of a populated raw_sales. When raw_sales is EMPTY for
     the period (promote never ran) the whole feed is used. NEVER raises: a feed read failure degrades
     to raw_sales alone. Mirrors commcalc's `_read_sales`/`_sales_rows_union` union intent."""
-    cols = "trans_id,department,ext_price,gp,voided,store"
+    # `category` + `product_desc` are carried so the P&L device/accessory classifier can use the
+    # CATEGORY discriminator (the luxelink case) — both columns exist on raw_sales AND daily_sales_feed
+    # (only `sku` is feed-absent; see commcalc._q). A missing column on the feed degrades to raw-only.
+    cols = "trans_id,department,category,product_desc,ext_price,gp,voided,store"
     raw = _fetch_all(client, "raw_sales", cols, {"org_id": org_id, "period": period_keys})
     try:
         feed = _fetch_all(client, "daily_sales_feed", cols, {"org_id": org_id, "period": period_keys})
@@ -273,6 +282,44 @@ def store_resolver(client, org_id):
     return resolve
 
 
+def _sales_classifier(client, org_id):
+    """Device-vs-accessory classification for the P&L sales lines, resolved from the SAME per-tenant
+    config the commission side uses — converging the classifiers instead of adding a divergent one
+    (see [[accessory-flow-divergences]]). Returns (is_accessory(dept, category, product), is_device(dept)).
+
+      • accessory ← commcalc `_accessory_config` / `_is_accessory` (per-org commcalc.accessory_config,
+        mig 208, keyed on org_id; PLUS the gp_category_map 'accessory' department bridge, mig 069).
+        Matches on DEPARTMENT **or** CATEGORY **or** product keyword — CATEGORY is the discriminator
+        where a department is ambiguous (luxelink: dept 'BrandedHandset' holds the 'KittedBranded' phone
+        AND the 'HandsetBranded' accessory; dept 'Handset' holds 'SimMarketplace' + 'Accessories').
+      • device    ← commcalc `gp_report._dept_classifier` over commcalc.gp_category_map (mig 069):
+        `classify(dept) == 'device'`. For a tenant whose device rows sit in an otherwise-accessory-shared
+        department, map that DEPARTMENT → 'device' in gp_category_map — the accessory-FIRST precedence at
+        the call site lets CATEGORY peel the accessory lines off before the department is treated as device.
+
+    BOOST BYTE-IDENTICAL: an empty accessory_config falls back to department 'Ondigo' and an empty
+    gp_category_map falls back to the built-in DEVICE_DEPTS — so with NO tenant config the two resolvers
+    reproduce the old `dept == 'Ondigo'` / `dept in DEVICE_DEPTS` buckets exactly (the accessory match is
+    case-insensitive, a superset that never *loses* a Boost 'Ondigo' row). NEVER raises: any failure
+    degrades to the hard-coded Boost taxonomy so classification can never regress."""
+    try:
+        from app.modules.commcalc.router import _accessory_config, _is_accessory
+        from app.modules.commcalc.gp_report import _dept_classifier
+        acfg = _accessory_config(client, org_id)
+        try:
+            gp_map = (client.schema("commcalc").table("gp_category_map")
+                      .select("department,category").eq("org_id", org_id).limit(1000).execute().data) or []
+        except Exception:
+            gp_map = []
+        classify_dept = _dept_classifier(gp_map)
+        return (lambda dept, category, product: _is_accessory(dept, category, product, acfg),
+                lambda dept: classify_dept(dept) == "device")
+    except Exception:
+        # Hard fallback — the historical Boost taxonomy, so a resolver/import failure never regresses P&L.
+        return (lambda dept, category, product: (dept or "").strip() == ACCESSORY_DEPT,
+                lambda dept: (dept or "").strip() in DEVICE_DEPTS)
+
+
 # ── per-line aggregation: each store-keyed line → {store_address: amount}; company-wide → scalar
 def build_inputs(client, org_id, period):
     """Aggregate every chart-of-accounts line for `period`. Returns a dict:
@@ -336,17 +383,22 @@ def build_inputs(client, org_id, period):
     # sales — accessory/device revenue + cost (store). UNIFIED source: raw_sales ∪ daily_sales_feed
     # (dedup by trans_id, raw_sales wins) so GP is correct whether or not the daily feed was promoted
     # into raw_sales — see _sales_union_rows for the Boost-neutral / no-double-count proof.
+    is_accessory, is_device = _sales_classifier(client, org_id)
     try:
         for r in _sales_union_rows(client, org_id, period_keys):
             if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
                 continue
             dept = (r.get("department") or "").strip()
+            cat, prod = r.get("category"), r.get("product_desc")
             ext, gp = safe_float(r.get("ext_price")), safe_float(r.get("gp"))
             st = _norm_store(r.get("store"))
-            if dept == ACCESSORY_DEPT:
+            # Classify device vs accessory from the SAME per-tenant config the commission side uses.
+            # ACCESSORY-FIRST: CATEGORY discriminates accessory lines inside an otherwise-device
+            # department (luxelink). Empty config ⇒ Boost byte-identical (Ondigo→accessory, *-XP→device).
+            if is_accessory(dept, cat, prod):
                 add("accessory_rev", st, ext)
                 add("accessory_cost", st, ext * ACCESSORY_COGS_PCT)
-            elif dept in DEVICE_DEPTS:
+            elif is_device(dept):
                 add("device_rev", st, ext)
                 add("device_cost", st, ext - gp)
     except Exception:
