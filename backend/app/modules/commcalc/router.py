@@ -9753,9 +9753,27 @@ def _strip_source_pw(row):
     row = dict(row)
     row["has_password"] = bool(row.get("password"))
     row["has_session"] = bool(row.get("session_state"))
+    row["has_login_shot"] = bool(row.get("login_shot"))
     for k in _SOURCE_SECRETS:
         row.pop(k, None)
+    # Not secret, but ~50–100KB of base64 — the list is polled every 3s during login, so the
+    # screenshot is served only by the dedicated /login/screenshot endpoint.
+    row.pop("login_shot", None)
     return row
+
+
+def _store_login_shot(client, sid, org_id, shot):
+    """Best-effort: persist the 'what the headless browser saw' JPEG (base64) for the
+    /login/screenshot endpoint. A SEPARATE update so a missing login_shot column (migration
+    203_commission_login_screenshot.sql not applied yet) can never break the login flow itself."""
+    if not shot:
+        return
+    try:
+        client.schema("commcalc").table("data_source").update(
+            {"login_shot": shot, "login_shot_at": datetime.now(timezone.utc).isoformat()})\
+            .eq("id", sid).eq("org_id", org_id).execute()
+    except Exception:
+        pass
 
 
 @router.get("/data-sources")
@@ -9930,12 +9948,14 @@ def _do_portal_login(sid: str, org_id: str):
         client.schema("commcalc").table("data_source").update(
             {"auth_status": "error", "auth_message": msg[:400], "last_run_at": now.isoformat()})\
             .eq("id", sid).eq("org_id", org_id).execute()
+        _store_login_shot(client, sid, org_id, getattr(e, "screenshot_b64", None))
         return
     except Exception as e:
         client.schema("commcalc").table("data_source").update(
             {"auth_status": "error", "auth_message": ("Login crashed: " + str(e))[:400],
              "last_run_at": now.isoformat()})\
             .eq("id", sid).eq("org_id", org_id).execute()
+        _store_login_shot(client, sid, org_id, getattr(e, "screenshot_b64", None))
         return
     if res.get("status") == "authenticated":
         client.schema("commcalc").table("data_source").update(
@@ -9944,6 +9964,7 @@ def _do_portal_login(sid: str, org_id: str):
              "session_expires_at": (now + timedelta(hours=vp.SESSION_TTL_HOURS)).isoformat(),
              "last_run_at": now.isoformat()})\
             .eq("id", sid).eq("org_id", org_id).execute()
+        _store_login_shot(client, sid, org_id, res.get("screenshot_b64"))
         return
     hint = res.get("two_fa_hint")
     sent_via = res.get("sent_via")
@@ -9967,6 +9988,7 @@ def _do_portal_login(sid: str, org_id: str):
          "auth_message": amsg[:400],
          "last_run_at": now.isoformat()})\
         .eq("id", sid).eq("org_id", org_id).execute()
+    _store_login_shot(client, sid, org_id, res.get("screenshot_b64"))
 
 
 @router.post("/data-sources/{sid}/login/start")
@@ -10031,6 +10053,7 @@ async def data_source_login_verify(sid: str, body: dict, org_id: str = ORG_ID):
         client.schema("commcalc").table("data_source").update(
             {"auth_status": "needs_2fa", "auth_message": str(e)[:400]})\
             .eq("id", sid).eq("org_id", org_id).execute()
+        _store_login_shot(client, sid, org_id, getattr(e, "screenshot_b64", None))
         raise HTTPException(400, str(e))
     now = datetime.now(timezone.utc)
     client.schema("commcalc").table("data_source").update(
@@ -10039,8 +10062,31 @@ async def data_source_login_verify(sid: str, body: dict, org_id: str = ORG_ID):
          "session_expires_at": (now + timedelta(hours=vp.SESSION_TTL_HOURS)).isoformat(),
          "last_run_at": now.isoformat()})\
         .eq("id", sid).eq("org_id", org_id).execute()
+    _store_login_shot(client, sid, org_id, res.get("screenshot_b64"))
     return {"ok": True, "status": "authenticated",
             "message": "Signed in — the session is saved and will be reused until it expires."}
+
+
+@router.get("/data-sources/{sid}/login/screenshot")
+def data_source_login_screenshot(sid: str, org_id: str = ORG_ID):
+    """The JPEG (base64 data-URI) of the LAST page the headless login browser saw for this source —
+    the 2FA challenge, a bot-wall, or the portal's error. This is the visual debugging channel for
+    portal logins: the operator sees the actual screen instead of guessing from text diagnostics.
+    Served separately from /data-sources because the list is polled every 3s during a login."""
+    require_org(org_id)
+    try:
+        rows = (sb().schema("commcalc").table("data_source").select("id,login_shot,login_shot_at")
+                .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        return {"ready": False, "shot": None,
+                "note": "Run migration 203_commission_login_screenshot.sql to enable login screenshots."}
+    if not rows:
+        raise HTTPException(404, "unknown data source")
+    r = rows[0]
+    if not r.get("login_shot"):
+        return {"ready": True, "shot": None,
+                "note": "No screenshot captured yet — click 🔐 Log in first (screenshots are taken on every attempt)."}
+    return {"ready": True, "shot": "data:image/jpeg;base64," + r["login_shot"], "at": r.get("login_shot_at")}
 
 
 _MA_COMPONENTS = ["device_margin", "consumer_margin", "consumer_financing", "rebate",

@@ -215,6 +215,18 @@ def _snapshot(page):
             "controls": [c for c in controls if c.get("vis")][:24] or controls[:24]}
 
 
+def _shot_b64(page):
+    """Small viewport JPEG of the current page, base64 — persisted on the data_source row so the
+    operator can SEE exactly what the headless browser saw (the 2FA challenge, a bot-wall, a portal
+    error) instead of reverse-engineering it from text diagnostics. Password inputs render as dots,
+    so no credential value can appear in the capture."""
+    try:
+        import base64
+        return base64.b64encode(page.screenshot(type="jpeg", quality=45)).decode("ascii")
+    except Exception:
+        return None
+
+
 def _frames(page):
     """All frames incl. the main one — the login/2FA form may be inside an iframe."""
     try:
@@ -333,19 +345,24 @@ def _click_submit(scope, texts):
     return False
 
 
+def _code_field(page):
+    """The visible 2FA-code input (searched across every frame), or None."""
+    for f in _frames(page):
+        el = _find_input(f, kinds=("text", "tel", "number", "password"),
+                         want=("code", "otp", "pin", "verif", "token", "authenticat", "2fa",
+                               "one-time", "onetime", "passcode", "security code"))
+        if el:
+            return el
+    return None
+
+
 def _classify(page):
     """Where did we land: 'twofa' | 'authenticated' | 'login' | 'botwall' | 'unknown'."""
     if _looks_like_bot_wall(page) and not _password_frame(page)[1]:
         return "botwall"
     body = _page_text(page)
     fr, pw = _password_frame(page)
-    code_field = None
-    for f in _frames(page):
-        code_field = _find_input(f, kinds=("text", "tel", "number", "password"),
-                                 want=("code", "otp", "pin", "verif", "token", "authenticat", "2fa",
-                                       "one-time", "onetime", "passcode", "security code"))
-        if code_field:
-            break
+    code_field = _code_field(page)
     twofa_words = ("verification code", "verify your", "two-factor", "two factor", "2-step",
                    "authentication code", "code sent", "enter the code", "one-time",
                    "we sent", "security code", "otp")
@@ -415,6 +432,76 @@ def _trigger_2fa_send(page):
     return None
 
 
+# Provider keywords for the 2FA METHOD-CHOOSER step, SMS/text first (the channel the operator
+# actually receives). Deliberately excludes "call" (voice) and authenticator options.
+_METHOD_PICKS = ("sms", "text", "phone", "mobile", "cell")
+
+
+def _choose_2fa_method(page):
+    """Handle the METHOD-CHOOSER step (ASP.NET Identity's SendCode page and kin): a provider <select>
+    or radio group plus a plain Submit/Next/Continue button — and NO code input yet. _trigger_2fa_send
+    intentionally refuses generic submit/continue/next labels (on a code-ENTRY screen those would
+    submit an empty code), so on a chooser page it clicks nothing and the portal never dispatches a
+    code — the "code never arrives" symptom. Here there IS no code field, so selecting SMS/phone and
+    clicking the dispatch button is safe. Returns a 'picked → clicked' label, or None. Only clicks
+    the submit when the page is chooser-shaped (a visible select/radio exists) — never blind."""
+    picked, saw_chooser = None, False
+    for fr in _frames(page):
+        # provider <select> (ASP.NET SendCode renders SelectedProvider as a dropdown)
+        try:
+            for s in fr.query_selector_all("select"):
+                if not s.is_visible():
+                    continue
+                saw_chooser = True
+                for o in s.query_selector_all("option"):
+                    t = ((o.inner_text() or "") + " " + (o.get_attribute("value") or "")).lower()
+                    if any(k in t for k in _METHOD_PICKS):
+                        val = o.get_attribute("value")
+                        if val is not None:
+                            s.select_option(value=val)
+                        else:
+                            s.select_option(label=(o.inner_text() or "").strip())
+                        picked = ((o.inner_text() or "").strip() or val or "sms")[:30]
+                        break
+                if picked:
+                    break
+        except Exception:
+            pass
+        if picked:
+            break
+        # provider radio group ("Text me (***) ***-1234" / "Email me j***@…" choices)
+        try:
+            for r in fr.query_selector_all("input[type=radio]"):
+                if not r.is_visible():
+                    continue
+                saw_chooser = True
+                hay = " ".join(filter(None, [r.get_attribute("name"), r.get_attribute("id"),
+                                             r.get_attribute("value"), r.get_attribute("aria-label")])).lower()
+                lbl = ""
+                try:
+                    rid = r.get_attribute("id")
+                    if rid:
+                        le = fr.query_selector('label[for="%s"]' % rid)
+                        lbl = (le.inner_text() or "").strip().lower() if le else ""
+                except Exception:
+                    pass
+                if any(k in hay or k in lbl for k in _METHOD_PICKS):
+                    r.check()
+                    picked = (lbl or hay)[:30] or "sms"
+                    break
+        except Exception:
+            pass
+        if picked:
+            break
+    if not (picked or saw_chooser):
+        return None
+    # Dispatch: on a chooser page the send action is usually a bare Send/Submit/Next/Continue.
+    for fr in _frames(page):
+        if _click_submit(fr, ("send", "submit", "next", "continue")):
+            return ((picked + " → ") if picked else "") + "submitted method chooser"
+    return None
+
+
 def _twofa_result(page, ctx, extra=None):
     """Build a needs_2fa result, first CLICKING a send-code control if the portal requires one (else no
     code is dispatched). Captures sent_via + the page's clickable buttons (in diag) for calibration."""
@@ -423,6 +510,14 @@ def _twofa_result(page, ctx, extra=None):
         sent = _trigger_2fa_send(page)
     except Exception:
         sent = None
+    if not sent:
+        try:
+            if not _code_field(page):
+                # No explicit send-code control and no code input either → this is very likely the
+                # METHOD-CHOOSER step (pick SMS/Email, then a plain Submit dispatches the code).
+                sent = _choose_2fa_method(page)
+        except Exception:
+            pass
     if sent:
         try:
             page.wait_for_timeout(3000)
@@ -436,7 +531,8 @@ def _twofa_result(page, ctx, extra=None):
         except Exception:
             pass
     return {"status": "needs_2fa", "storage_state": ctx.storage_state(),
-            "two_fa_hint": _twofa_hint(page), "sent_via": sent, "diag": diag}
+            "two_fa_hint": _twofa_hint(page), "sent_via": sent, "diag": diag,
+            "screenshot_b64": _shot_b64(page)}
 
 
 def _goto_login(page, base_url):
@@ -515,7 +611,8 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             if state == "twofa":
                 return _twofa_result(page, ctx)
             if state == "authenticated":
-                return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": diag}
+                return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": diag,
+                        "screenshot_b64": _shot_b64(page)}
             if state == "botwall":
                 raise VidaPayLoginError(
                     "VidaPay served an anti-automation page after the login submit — reach it from an "
@@ -525,6 +622,13 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
                     "Login was rejected — Account ID / User ID / Password not accepted (still on the "
                     "login form). Double-check the three credentials. Diagnostic: " + str(diag))
             return _twofa_result(page, ctx, {"_note": "post-login page not recognized as 2FA or app; if no code field appears, send this diagnostic for calibration"})
+        except (VidaPayLoginError, VidaPayAuthError) as e:
+            if getattr(e, "screenshot_b64", None) is None:
+                try:
+                    e.screenshot_b64 = _shot_b64(page)
+                except Exception:
+                    pass
+            raise
         finally:
             browser.close()
 
@@ -680,7 +784,8 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
             if state == "twofa":
                 return _twofa_result(page, ctx, {"filled": _filled, "portal_error": _b2b_error(page)})
             if state == "authenticated":
-                return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": diag}
+                return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": diag,
+                        "screenshot_b64": _shot_b64(page)}
             if state == "botwall":
                 raise VidaPayLoginError(
                     "b2bsoft served an anti-automation page after login — set a residential proxy. Diagnostic: " + str(diag))
@@ -690,6 +795,13 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                     "diagnostic (filled / portal_error) — if 'filled' shows your values, the creds/Access-Code are "
                     "being refused; if empty, the form didn't accept the fill. Diagnostic: " + str(diag))
             return _twofa_result(page, ctx, {"_note": "post-login page not recognized as 2FA/app; send this diagnostic"})
+        except (VidaPayLoginError, VidaPayAuthError) as e:
+            if getattr(e, "screenshot_b64", None) is None:
+                try:
+                    e.screenshot_b64 = _shot_b64(page)
+                except Exception:
+                    pass
+            raise
         finally:
             browser.close()
 
@@ -714,7 +826,7 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
             page.wait_for_timeout(2500)
             if _classify(page) == "authenticated":
                 return {"status": "authenticated", "storage_state": ctx.storage_state(),
-                        "diag": _snapshot(page)}
+                        "diag": _snapshot(page), "screenshot_b64": _shot_b64(page)}
             code_el, code_fr = None, None
             for fr in _frames(page):
                 code_el = _find_input(fr, kinds=("text", "tel", "number", "password"),
@@ -745,13 +857,21 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
             state = _classify(page)
             if state == "authenticated":
                 return {"status": "authenticated", "storage_state": ctx.storage_state(),
-                        "diag": _snapshot(page)}
+                        "diag": _snapshot(page), "screenshot_b64": _shot_b64(page)}
             if state == "twofa":
                 raise VidaPayAuthError(
                     "2FA code was not accepted (still on the verification screen) — check the code and "
                     "try again; it may have expired, request a new one.")
             return {"status": "authenticated", "storage_state": ctx.storage_state(),
-                    "diag": {**_snapshot(page), "_note": "post-2FA page not definitively recognized"}}
+                    "diag": {**_snapshot(page), "_note": "post-2FA page not definitively recognized"},
+                    "screenshot_b64": _shot_b64(page)}
+        except (VidaPayLoginError, VidaPayAuthError) as e:
+            if getattr(e, "screenshot_b64", None) is None:
+                try:
+                    e.screenshot_b64 = _shot_b64(page)
+                except Exception:
+                    pass
+            raise
         finally:
             browser.close()
 
@@ -778,7 +898,8 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
             page.wait_for_timeout(2500)
             on_2fa = bool(page.query_selector("#TwoFactorCode")) or "twofactor" in (page.url or "").lower()
             if not on_2fa and _classify(page) == "authenticated":
-                return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": _snapshot(page)}
+                return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": _snapshot(page),
+                        "screenshot_b64": _shot_b64(page)}
             code_el = page.query_selector("#TwoFactorCode")
             if not code_el:
                 for fr in _frames(page):
@@ -868,7 +989,15 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
                 st["_sessionStorage"] = {"origin": sd.get("url") or base_url, "items": ss_dump}
             return {"status": "authenticated", "storage_state": st,
                     "diag": {**_snapshot(page), "final_url": page.url, "storage": sd,
-                             "cookie_hosts": cookie_hosts, "_note": "post-2FA landed on portal (b2bsoft)"}}
+                             "cookie_hosts": cookie_hosts, "_note": "post-2FA landed on portal (b2bsoft)"},
+                    "screenshot_b64": _shot_b64(page)}
+        except (VidaPayLoginError, VidaPayAuthError) as e:
+            if getattr(e, "screenshot_b64", None) is None:
+                try:
+                    e.screenshot_b64 = _shot_b64(page)
+                except Exception:
+                    pass
+            raise
         finally:
             browser.close()
 

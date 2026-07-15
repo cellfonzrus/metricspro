@@ -65,6 +65,7 @@ export default function EmailImportsPage() {
   const [twoFa, setTwoFa] = useState<any>(null)     // { source, hint } while a 2FA code is needed
   const [code, setCode] = useState('')
   const [authBusy, setAuthBusy] = useState('')
+  const [shotView, setShotView] = useState<any>(null)   // { label, loading, src, at, note } — last login screenshot
   const [customTypes, setCustomTypes] = useState<any[]>([])   // self-serve custom sheets (mig 099)
   const [newSheet, setNewSheet] = useState('')
   const [viewer, setViewer] = useState<any>(null)             // { report_key, label } while viewing data
@@ -307,6 +308,16 @@ export default function EmailImportsPage() {
       setSrcMsg('✅ ' + r.message); setTwoFa(null); setCode('')
     } catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)) }
     finally { setAuthBusy(''); try { const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) } catch { /* keep */ } }
+  }
+  // "What did the headless browser SEE?" — the backend stores a JPEG of the last page the Playwright
+  // login landed on (2FA challenge / bot-wall / portal error). Visual debugging beats text diagnostics.
+  async function openShot(s: any) {
+    const label = s?.label || s?.username || s?.processor || 'login'
+    setShotView({ label, loading: true })
+    try {
+      const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/login/screenshot`)
+      setShotView({ label, loading: false, src: r?.shot || null, at: r?.at || null, note: r?.note || null, id: s.id })
+    } catch (e: any) { setShotView({ label, loading: false, src: null, note: '❌ ' + (e?.message || e), id: s.id }) }
   }
   function authBadge(s: any) {
     const st = s.auth_status || 'unconfigured'
@@ -597,6 +608,7 @@ export default function EmailImportsPage() {
                   <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} disabled={authBusy === s.id} onClick={() => startLogin(s)}>{authBusy === s.id ? '…' : (s.auth_status === 'authenticated' ? '🔁 Re-auth' : '🔐 Log in')}</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => runSource(s)}>▶ Pull now</button>{' '}
+                    <button className="btn btn-secondary" title="See the page the headless login browser last saw (2FA screen / bot-wall / error)" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => openShot(s)}>📷</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setSrcDraft({ ...s, password: '' })}>Edit</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => delSource(s)}>✕</button>
                   </td>
@@ -745,10 +757,38 @@ export default function EmailImportsPage() {
             </details>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
               <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={authBusy === 'verify'} onClick={() => startLogin(twoFa.source)}>↻ Resend</button>
+              <button className="btn btn-secondary" title="See the exact 2FA screen the headless browser is on" style={{ fontSize: 13 }} onClick={() => openShot(twoFa.source)}>📷</button>
               <div style={{ flex: 1 }} />
               <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={!!authBusy} onClick={() => { setTwoFa(null); setCode('') }}>Cancel</button>
               <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={authBusy === 'verify' || !code.trim()} onClick={verify2fa}>{authBusy === 'verify' ? 'Verifying…' : 'Verify'}</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Login-screenshot viewer: the page the headless Playwright browser last saw for a source ── */}
+      {shotView && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }} onClick={() => setShotView(null)}>
+          <div className="card" style={{ padding: 18, width: 860, maxWidth: '94vw', maxHeight: '90vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>📷 What the browser saw — <span style={{ fontWeight: 400 }}>{shotView.label}</span></div>
+              {shotView.at && <span style={{ color: 'var(--text3)', fontSize: 12 }}>{new Date(shotView.at).toLocaleString()}</span>}
+              <div style={{ flex: 1 }} />
+              {shotView.id && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => openShot({ id: shotView.id, label: shotView.label })}>↻ Refresh</button>}
+              <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setShotView(null)}>Close</button>
+            </div>
+            {shotView.loading ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div>
+              : shotView.src ? (
+                <>
+                  <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 8px' }}>
+                    This is the page the <b>headless login browser</b> was on when it last stopped (2FA challenge,
+                    bot-wall, or error). If a code was never sent, this shows the button/choice the portal is waiting on.
+                  </p>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={shotView.src} alt="Last login screenshot" style={{ maxWidth: '100%', border: '1px solid var(--border)', borderRadius: 8 }} />
+                </>
+              )
+              : <div style={{ color: 'var(--text3)', fontSize: 13 }}>{shotView.note || 'No screenshot available yet.'}</div>}
           </div>
         </div>
       )}
