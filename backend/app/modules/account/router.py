@@ -59,10 +59,16 @@ async def update_company(company_id: str, body: dict, org_id: str = ORG_ID):
 # ── stores (registry + current company assignment) ────────────────────────────────────────────
 @router.get("/stores")
 async def list_stores(org_id: str = ORG_ID):
-    """Stores from store_mapping (canonical, with market) + any already-assigned addresses,
-    each with its current company assignment."""
+    """Assignable stores + each store's current company assignment. Sources, canonicalized through
+    coa.store_resolver so one physical store never appears twice:
+      1. store_mapping (canonical registry, with market),
+      2. any already-assigned store_companies address,
+      3. stores that appear in the tenant's SALES DATA (raw_sales ∪ daily_sales_feed) — so a tenant
+         whose store_mapping was never populated (e.g. a fresh non-Boost tenant like luxelink) still
+         sees stores to assign instead of an empty menu. (Was #3 missing → "Companies shows no stores".)"""
     require_org(org_id)
     client = sb()
+    resolve = coa.store_resolver(client, org_id)
     mapping = coa._fetch_all(client, "store_mapping", "store_address,market", {"org_id": org_id})
     assigns = {(_a := (r.get("store_address") or "").strip()): r.get("company_id")
                for r in coa._fetch_all(client, "store_companies", "store_address,company_id", {"org_id": org_id})}
@@ -70,18 +76,28 @@ async def list_stores(org_id: str = ORG_ID):
                  .eq("org_id", org_id).execute().data) or []
     co_name = {c["id"]: c["name"] for c in companies}
     seen, out = set(), []
-    for r in mapping:
-        sa = (r.get("store_address") or "").strip()
+
+    def _push(sa, market, source):
+        sa = (sa or "").strip()
         if not sa or sa in seen:
-            continue
+            return
         seen.add(sa)
         cid = assigns.get(sa)
-        out.append({"store_address": sa, "market": r.get("market"),
-                    "company_id": cid, "company_name": co_name.get(cid)})
-    for sa, cid in assigns.items():
-        if sa and sa not in seen:
-            out.append({"store_address": sa, "market": None,
-                        "company_id": cid, "company_name": co_name.get(cid)})
+        out.append({"store_address": sa, "market": market,
+                    "company_id": cid, "company_name": co_name.get(cid), "source": source})
+
+    for r in mapping:
+        _push(r.get("store_address"), r.get("market"), "store_mapping")
+    for sa in assigns:
+        _push(sa, None, "assigned")
+    # sales-derived stores (canonicalized) — collapses onto a mapped address when the resolver knows it,
+    # so a mapped store is never duplicated; a genuinely-unmapped store is added under its raw name.
+    for tbl in ("raw_sales", "daily_sales_feed"):
+        try:
+            for r in coa._fetch_all(client, tbl, "store", {"org_id": org_id}, cap=60000):
+                _push(resolve(coa._norm_store(r.get("store"))), None, "sales")
+        except Exception:
+            pass
     out.sort(key=lambda x: x["store_address"])
     return {"stores": out, "companies": companies}
 

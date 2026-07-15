@@ -119,6 +119,39 @@ def _fetch_all(client, table, select, eqs=None, page=1000, cap=200000):
     return out
 
 
+def _sales_union_rows(client, org_id, period_keys):
+    """The P&L's sales source: raw_sales UNION daily_sales_feed for the period, deduped by trans_id
+    (raw_sales wins). This is what makes a tenant's GP correct WHETHER OR NOT the daily feed has been
+    promoted into raw_sales yet (luxelink, 2026-07): the commission engine already reads the feed for
+    the open month, so without this the books and the payout disagreed on what "sales" means.
+
+    Boost-neutral proof: for a CLOSED / fully-promoted month every feed trans_id already exists in
+    raw_sales, so the dedup drops every feed row → the merged set == raw_sales, byte-identical to the
+    prior raw_sales-only read. A trans_id present in BOTH tables is therefore counted exactly once
+    (raw_sales' copy). Only feed rows carrying a trans_id NOT in raw_sales (the not-yet-promoted days)
+    are added, and a row with no trans_id can't be verified non-overlapping so it is only trusted from
+    raw_sales — never pulled off the feed on top of a populated raw_sales. When raw_sales is EMPTY for
+    the period (promote never ran) the whole feed is used. NEVER raises: a feed read failure degrades
+    to raw_sales alone. Mirrors commcalc's `_read_sales`/`_sales_rows_union` union intent."""
+    cols = "trans_id,department,ext_price,gp,voided,store"
+    raw = _fetch_all(client, "raw_sales", cols, {"org_id": org_id, "period": period_keys})
+    try:
+        feed = _fetch_all(client, "daily_sales_feed", cols, {"org_id": org_id, "period": period_keys})
+    except Exception:
+        feed = []
+    if not raw:
+        return feed
+    if not feed:
+        return raw
+    seen = {str(r.get("trans_id") or "").strip() for r in raw if str(r.get("trans_id") or "").strip()}
+    merged = list(raw)
+    for r in feed:
+        tid = str(r.get("trans_id") or "").strip()
+        if tid and tid not in seen:          # feed-only trans (unpromoted) — add once; never double-count
+            merged.append(r)
+    return merged
+
+
 def store_company_map(client, org_id):
     """store_address (normalized) -> company_id, plus a default-company id."""
     companies = (client.schema("commcalc").table("companies").select("id,name")
@@ -299,10 +332,11 @@ def build_inputs(client, org_id, period):
     except Exception:
         pass
 
-    # raw_sales — accessory/device revenue + cost (store)
+    # sales — accessory/device revenue + cost (store). UNIFIED source: raw_sales ∪ daily_sales_feed
+    # (dedup by trans_id, raw_sales wins) so GP is correct whether or not the daily feed was promoted
+    # into raw_sales — see _sales_union_rows for the Boost-neutral / no-double-count proof.
     try:
-        for r in _fetch_all(client, "raw_sales", "department,ext_price,gp,voided,store",
-                            {"org_id": org_id, "period": period_keys}):
+        for r in _sales_union_rows(client, org_id, period_keys):
             if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
                 continue
             dept = (r.get("department") or "").strip()
