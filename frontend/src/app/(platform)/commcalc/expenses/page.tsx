@@ -216,6 +216,10 @@ export default function ExpensesPage() {
   const [newCat, setNewCat] = useState({ name: '', type: 'Fixed' })
   const [upBusy, setUpBusy] = useState(false)
   const [carriedFrom, setCarriedFrom] = useState('')
+  // Auto/"system" expense lines (e.g. payroll's Paid Leave Accumulated): expense_name → source_key. These
+  // rows are inserted by an automated producer (mod-people's payroll run) via POST /expenses/{period}/
+  // system-line and are READ-ONLY here — never edited, never copied across stores or months.
+  const [systemCats, setSystemCats] = useState<Record<string, string>>({})
   const [autoSave, setAutoSave] = useState(false)
   const [salaryBusy, setSalaryBusy] = useState(false)
   const [salaryFrom, setSalaryFrom] = useState('')     // where the salary auto-fill came from (banner)
@@ -237,6 +241,10 @@ export default function ExpensesPage() {
   const cw = useColumnResize()                          // auto-fit + user-resizable columns
   // config-driven lock test: an expense is protected if its name contains any configured token (ci).
   const isLockedExpense = (n: string) => excludedTokens.some(t => n.toLowerCase().includes(String(t).toLowerCase()))
+  // an AUTO/system line (source_key set by an automated producer) — read-only, never copied.
+  const isSystemCat = (n: string) => !!systemCats[n]
+  // protected from the cross-month/cross-store COPY set = config-locked (commission/salary) OR auto/system.
+  const isProtectedExpense = (n: string) => isLockedExpense(n) || isSystemCat(n)
 
   function load() {
     setLoading(true)
@@ -249,12 +257,14 @@ export default function ExpensesPage() {
     ]).then(([st, ex, pay, comm]: any) => {
       setStores((st || []).filter((s: any) => s.is_active !== false))
       setCarriedFrom(ex?.carried_from || '')
-      const map: any = {}; const extra: Record<string, string> = {}
+      const map: any = {}; const extra: Record<string, string> = {}; const sysc: Record<string, string> = {}
       ;(ex.expenses || []).forEach((e: any) => {
         if (!map[e.store_code]) map[e.store_code] = {}
         map[e.store_code][e.expense_name] = parseFloat(e.amount) || 0
         if (!DEFAULT_CATS.find(c => c.name === e.expense_name)) extra[e.expense_name] = e.expense_type || 'Fixed'
+        if (e.source_key) sysc[e.expense_name] = e.source_key   // auto/system line (read-only)
       })
+      setSystemCats(sysc)
       // Auto-fill Employee Salaries (from worked hours) and Employee Commission (from calculated rep
       // commissions) when the month is fresh (carried from last month, or that row has nothing saved).
       // A month with a saved value is left alone — use the ↻ buttons to re-pull on demand.
@@ -352,6 +362,7 @@ export default function ExpensesPage() {
     copyTargets.forEach(tc => {
       map[tc] = { ...(map[tc] || {}) }
       cats.forEach(c => {
+        if (isSystemCat(c.name)) return          // never copy an auto/system line onto another store
         const v = src[c.name] || 0
         map[tc][c.name] = v
         cells.push({ store_code: tc, expense_name: c.name, expense_type: c.type, amount: v })
@@ -368,6 +379,7 @@ export default function ExpensesPage() {
     const name = common.name.trim()
     const amt = parseFloat(String(common.amount).replace(/[$,\s]/g, '')) || 0
     if (!name) { setMsg('Name the common expense first.'); return }
+    if (isSystemCat(name)) { setMsg(`“${name}” is auto-computed by payroll and can't be entered manually.`); return }
     if (!commonTargets.length) { setMsg('Pick at least one store to apply it to.'); return }
     const existing = cats.find(c => c.name.toLowerCase() === name.toLowerCase())
     const canonName = existing?.name || name
@@ -384,7 +396,8 @@ export default function ExpensesPage() {
   // unsaved edits are honored (WYSIWYG); for any other source the backend reads that month's SAVED matrix.
   function gridCellsForSource() {
     const cells: any[] = []
-    stores.forEach(s => cats.forEach(c => { const amt = getVal(s.store_code, c.name); if (amt > 0) cells.push({ store_code: s.store_code, expense_name: c.name, expense_type: c.type, amount: amt }) }))
+    // exclude auto/system lines — they're derived per-month by payroll, not copyable across months.
+    stores.forEach(s => cats.forEach(c => { if (isSystemCat(c.name)) return; const amt = getVal(s.store_code, c.name); if (amt > 0) cells.push({ store_code: s.store_code, expense_name: c.name, expense_type: c.type, amount: amt }) }))
     return cells
   }
 
@@ -394,9 +407,9 @@ export default function ExpensesPage() {
   async function applyToMonths() {
     const source = applySource || period
     if (!applyTargets.length) { setMsg('Pick at least one target month.'); return }
-    const openCats = cats.filter(c => !isLockedExpense(c.name))
+    const openCats = cats.filter(c => !isProtectedExpense(c.name))
     const allSelected = openCats.length > 0 && openCats.every(c => applySel.includes(c.name))
-    const expense_names = allSelected ? undefined : applySel.filter(n => !isLockedExpense(n))
+    const expense_names = allSelected ? undefined : applySel.filter(n => !isProtectedExpense(n))
     if (expense_names && !expense_names.length) { setMsg('Pick at least one expense to copy.'); return }
     const body: any = { source_period: source, target_periods: applyTargets }
     if (expense_names) body.expense_names = expense_names
@@ -439,7 +452,9 @@ export default function ExpensesPage() {
   async function save(silent = false) {
     setSaving(true); if (!silent) setMsg('')
     const rows: any[] = []
-    stores.forEach(s => cats.forEach(c => { const amt = getVal(s.store_code, c.name); if (amt > 0) rows.push({ store_code: s.store_code, expense_name: c.name, expense_type: c.type, amount: amt }) }))
+    // Auto/system lines (PTO accrual etc.) are owned by the payroll run — never written back through the
+    // manual save (the backend also drops any manual row that would shadow one, so GP can't double-count).
+    stores.forEach(s => cats.forEach(c => { if (isSystemCat(c.name)) return; const amt = getVal(s.store_code, c.name); if (amt > 0) rows.push({ store_code: s.store_code, expense_name: c.name, expense_type: c.type, amount: amt }) }))
     try {
       const r = await api(`/api/v1/commcalc/expenses/${encodeURIComponent(period)}?org_id=${ORG_ID}`, { method: 'PUT', body: JSON.stringify({ rows }) })
       setMsg(silent ? `Auto-saved ✓ ${new Date().toLocaleTimeString()}` : `Saved ${r.saved} expense entries. Re-run Calculation to include in Gross Profit.`)
@@ -503,7 +518,7 @@ export default function ExpensesPage() {
       const isLong = hdr.some(h => ['store_code', 'store'].includes(h)) && hdr.some(h => ['expense_name', 'expense', 'name'].includes(h)) && hdr.some(h => ['amount', 'amt'].includes(h))
       const num = (v: any) => parseFloat(String(v ?? '').replace(/[$,\s]/g, '')) || 0
       const map = { ...amounts }; const newCats: Record<string, string> = {}; let loaded = 0
-      const put = (sc: string, nm: string, amt: number) => { sc = String(sc).trim(); if (!sc || !nm) return; if (!map[sc]) map[sc] = {}; map[sc][nm] = amt; if (!cats.find(c => c.name === nm) && !newCats[nm]) newCats[nm] = typeFor(nm); loaded++ }
+      const put = (sc: string, nm: string, amt: number) => { sc = String(sc).trim(); if (!sc || !nm) return; if (isSystemCat(nm)) return; if (!map[sc]) map[sc] = {}; map[sc][nm] = amt; if (!cats.find(c => c.name === nm) && !newCats[nm]) newCats[nm] = typeFor(nm); loaded++ }
       if (isLong) {
         const idx = (keys: string[]) => hdr.findIndex(h => keys.includes(h))
         const iSC = idx(['store_code', 'store']), iNM = idx(['expense_name', 'expense', 'name']), iTP = idx(['expense_type', 'type']), iAM = idx(['amount', 'amt'])
@@ -571,7 +586,7 @@ export default function ExpensesPage() {
           {commonOpen ? '✕ Close common' : '🏢 Common expense…'}</button>
         <button className="btn" onClick={() => {
           const next = !monthsOpen; setMonthsOpen(next); setCommonOpen(false); setCopySource('')
-          if (next) { setApplySource(period); setApplyTargets([]); setApplySel(cats.filter(c => !isLockedExpense(c.name)).map(c => c.name)) }
+          if (next) { setApplySource(period); setApplyTargets([]); setApplySel(cats.filter(c => !isProtectedExpense(c.name)).map(c => c.name)) }
         }} title="Copy this month's expenses onto other months (commission & salary are never copied)">
           {monthsOpen ? '✕ Close apply' : '📅 Apply to other months…'}</button>
         <span style={{ width: 1, height: 22, background: 'var(--border)' }} />
@@ -629,12 +644,12 @@ export default function ExpensesPage() {
           </label>
           <span style={{ fontSize: 12, color: 'var(--text2)' }}>to</span>
           <MonthPicker months={monthPool.filter(m => m !== (applySource || period))} value={applyTargets} onChange={setApplyTargets} label="Target months…" />
-          <ExpensePicker cats={cats} isLocked={isLockedExpense} value={applySel} onChange={setApplySel} />
+          <ExpensePicker cats={cats} isLocked={isProtectedExpense} value={applySel} onChange={setApplySel} />
           <button className="btn btn-primary" onClick={applyToMonths} disabled={applyBusy || !applyTargets.length}>
             {applyBusy ? '…' : `Apply to ${applyTargets.length || 0} month${applyTargets.length === 1 ? '' : 's'}`}</button>
           <button className="btn" onClick={() => setMonthsOpen(false)}>Cancel</button>
           <span style={{ fontSize: 11, color: 'var(--text3)', flexBasis: '100%' }}>
-            🔒 <b>{excludedTokens.join(' & ')}</b> expenses are never copied. Idempotent (re-running won't double-write).
+            🔒 <b>{excludedTokens.join(' & ')}</b>{Object.keys(systemCats).length ? ' + auto/payroll lines' : ''} expenses are never copied. Idempotent (re-running won't double-write).
             Writing into a <b>closed prior month shifts that month's Gross Profit / P&amp;L</b> — re-run Calculation afterward to refresh it.
           </span>
         </div>
@@ -703,14 +718,25 @@ export default function ExpensesPage() {
                     <td style={{ padding: '6px 16px', fontSize: 13, fontWeight: 500, position: 'sticky', left: 0, background: ci % 2 ? '#fafbfc' : 'white', borderBottom: '1px solid var(--border)' }}>
                       {cat.name}
                       <span style={{ marginLeft: 6, fontSize: 10, color: cat.type === 'Fixed' ? '#2563eb' : '#16a34a', background: cat.type === 'Fixed' ? '#dbeafe' : '#dcfce7', padding: '1px 5px', borderRadius: 999 }}>{cat.type}</span>
+                      {isSystemCat(cat.name) && (
+                        <span title="Auto-computed by the payroll run and inserted here — read-only. Edit it in the payroll run, not on this page."
+                          style={{ marginLeft: 6, fontSize: 10, color: '#7c3aed', background: '#f3e8ff', padding: '1px 6px', borderRadius: 999, whiteSpace: 'nowrap' }}>🔒 auto — from payroll</span>
+                      )}
                     </td>
                     {visStores.map(s => (
                       <td key={s.store_code} style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>
-                        <input type="number" min="0" step="0.01" value={getVal(s.store_code, cat.name) || ''} placeholder="0"
-                          onChange={e => setVal(s.store_code, cat.name, parseFloat(e.target.value) || 0)}
-                          onPaste={e => pasteColumn(e, ci, s.store_code)}
-                          title="Paste a column of numbers here (multi-row copy from Excel) to fill this store's column down"
-                          style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 6px', fontSize: 13, textAlign: 'right', background: 'var(--surface)' }} />
+                        {isSystemCat(cat.name) ? (
+                          <div title="Auto-computed by payroll — read-only here"
+                            style={{ width: '100%', boxSizing: 'border-box', padding: '4px 6px', fontSize: 13, textAlign: 'right', color: 'var(--text2)', background: '#faf5ff', border: '1px dashed #e9d5ff', borderRadius: 4 }}>
+                            {getVal(s.store_code, cat.name) ? fmt(getVal(s.store_code, cat.name)) : '—'}
+                          </div>
+                        ) : (
+                          <input type="number" min="0" step="0.01" value={getVal(s.store_code, cat.name) || ''} placeholder="0"
+                            onChange={e => setVal(s.store_code, cat.name, parseFloat(e.target.value) || 0)}
+                            onPaste={e => pasteColumn(e, ci, s.store_code)}
+                            title="Paste a column of numbers here (multi-row copy from Excel) to fill this store's column down"
+                            style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 6px', fontSize: 13, textAlign: 'right', background: 'var(--surface)' }} />
+                        )}
                       </td>
                     ))}
                     <td style={{ padding: '6px 14px', textAlign: 'right', fontWeight: 600, fontSize: 13, borderBottom: '1px solid var(--border)', color: rowTotal > 0 ? 'var(--text)' : 'var(--text3)' }}>{rowTotal > 0 ? fmt(rowTotal) : '—'}</td>
