@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
 import { computePay, W4 } from '@/lib/payroll-tax'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Payroll with tax withholding (Part B / B3). Pulls raw inputs (clocked + manual hours, rate, W-4)
 // and computes FICA + federal + state withholding + net client-side. W-4 editable per employee; each
@@ -35,6 +36,23 @@ export default function PayrollTaxPage() {
   const lines = rows.map(r => ({ ...r, pay: computePay(r.total_hours, r.pay_rate, r.settings) }))
   const tot = lines.reduce((a, l) => ({ gross: a.gross + l.pay.gross, ded: a.ded + l.pay.deductions, net: a.net + l.pay.net, emp: a.emp + l.pay.employer_fica }), { gross: 0, ded: 0, net: 0, emp: 0 })
 
+  // RULE FOUR (§3c): export the exact rows/columns rendered on screen — a computed withholding
+  // ESTIMATE, not a stored SSN/bank field, so no masking applies here (unlike compliance PII below).
+  const cols: ExportColumn[] = [
+    { header: 'Employee', field: 'name', role: 'rep', get: l => l.name },
+    { header: 'Store', field: 'store', role: 'store', get: l => l.store || '' },
+    { header: 'Regular Hrs', field: 'regular_hours', type: 'number', get: l => l.pay.regular_hours },
+    { header: 'OT Hrs', field: 'ot_hours', type: 'number', get: l => l.pay.ot_hours },
+    { header: 'Rate', field: 'pay_rate', money: true, get: l => l.pay_rate },
+    { header: 'Gross', field: 'gross', money: true, get: l => l.pay.gross },
+    { header: 'Social Security', field: 'fica_ss', money: true, get: l => l.pay.fica_ss },
+    { header: 'Medicare', field: 'fica_medicare', money: true, get: l => l.pay.fica_medicare },
+    { header: 'Federal', field: 'federal', money: true, get: l => l.pay.federal },
+    { header: 'State', field: 'state_wh', money: true, get: l => l.pay.state },
+    { header: 'Net', field: 'net', money: true, get: l => l.pay.net },
+    { header: 'W-4 Filing/State', field: 'w4', get: l => `${l.settings.filing_status} · ${l.settings.state}${l.settings.skipped ? ' · flat' : ''}` },
+  ]
+
   return (
     <div>
       <div style={{ marginBottom: 14 }}>
@@ -50,6 +68,7 @@ export default function PayrollTaxPage() {
         <div style={{ flex: 1 }} />
         <span className="badge" style={{ fontSize: 12 }}>Gross {$(tot.gross)}</span>
         <span className="badge" style={{ fontSize: 12 }}>Net {$(tot.net)}</span>
+        <ReportExportBar title="Payroll with Tax" subtitle={`${start} → ${end}`} filename={`payroll-tax-${start}_${end}`} columns={cols} rows={lines} />
         {msg && <span style={{ fontSize: 13, width: '100%' }}>{msg}</span>}
       </div>
 

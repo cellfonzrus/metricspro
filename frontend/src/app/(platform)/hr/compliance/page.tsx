@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { api, supabase, activeOrgHeader } from '@/lib/client'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // HR · Compliance Document Repository (item 5). A VIEW + bulk export over the SAME onboarding-docs
 // bucket and employee_onboarding rows the Documents board (mig 082) already tracks — not a second
@@ -89,6 +90,26 @@ export default function CompliancePage() {
     return Object.entries(by).sort((a, b) => a[1].name.localeCompare(b[1].name))
   }, [docs])
 
+  // RULE FOUR (§3c) — TABLE-VIEW export (Excel/PDF/Print/Send), alongside the existing ZIP file
+  // export. PII SAFETY: this row shape is exactly what `onboarding_compliance_documents` returns —
+  // employee_id/name/email, document LABEL (e.g. "SS Card"), category, status, signed/upload dates,
+  // who verified/signed — sourced ONLY from `storeops.employee_onboarding` (see hr/router.py). It never
+  // reads `employee_onboarding_profile.intake_data` (the Fernet-encrypted PII table), so there is no SSN/
+  // bank/routing VALUE in this payload to mask or leak in the first place — the same "no file content in
+  // a spreadsheet cell" property the sibling ZIP export has for the underlying documents themselves.
+  const cols: ExportColumn[] = [
+    { header: 'Employee', field: 'employee_name', role: 'rep', get: (d: Doc) => d.employee_name || d.employee_id },
+    { header: 'Employee ID', field: 'employee_id', get: (d: Doc) => d.employee_id },
+    { header: 'Email', field: 'employee_email', get: (d: Doc) => d.employee_email || '' },
+    { header: 'Document', field: 'document_label', get: (d: Doc) => d.document_label + (d.file_index ? ` (${d.file_index} of ${d.file_count})` : '') },
+    { header: 'Category', field: 'category', get: (d: Doc) => d.category || '' },
+    { header: 'Status', field: 'status', get: (d: Doc) => d.status || '' },
+    { header: 'On File', field: 'on_file', get: (d: Doc) => d.has_document ? `File: ${d.document_name || ''}` : (d.has_signature_page ? 'Signed online' : 'No file') },
+    { header: 'Date', field: 'signed_at', role: 'date', type: 'date', get: (d: Doc) => (d.signed_at || '').slice(0, 10) },
+    { header: 'Signed Name', field: 'signed_name', get: (d: Doc) => d.signed_name || '' },
+    { header: 'Verified By', field: 'verified_by', get: (d: Doc) => d.verified_by || '' },
+  ]
+
   return (
     <div style={{ padding: 24, maxWidth: 1000 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🗂️ Compliance Document Repository</h1>
@@ -105,6 +126,9 @@ export default function CompliancePage() {
         <input style={{ ...inp, width: 260 }} placeholder="Search employee name / ID / email…" value={q} onChange={e => setQ(e.target.value)} />
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>{loading ? 'Loading…' : `${docs.length} document(s) · ${grouped.length} employee(s)`}</span>
         <div style={{ flex: 1 }} />
+        {/* Table-view metadata export (Excel/PDF/Print/Send) — separate from the ZIP below, which
+            bundles the actual files. Neither one ever touches Fernet-encrypted intake PII. */}
+        <ReportExportBar title="Compliance Document Repository" subtitle={q ? `filter: "${q}"` : undefined} columns={cols} rows={docs} />
         <button style={btnP} onClick={() => downloadZip('/api/v1/hr/onboarding/compliance-documents/export', 'onboarding-documents-all.zip', setMsg)}>
           📦 Export ALL (one zip)
         </button>

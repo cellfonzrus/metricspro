@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, ORG_ID, localToday } from '@/lib/client'
 import EmployeeWidgets from '@/components/EmployeeWidgets'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Manager TEAM snapshot — headline target tiles + per-store + per-rep rollup for the caller's span
 // (or a chosen org unit). Shared by the /portal "My Team" tab and the platform /storeops/team page.
@@ -87,8 +88,38 @@ export default function TeamSnapshot({ period, token, unitId, today }:
   reps.forEach((r: any) => { if (r.rep) perfByName[String(r.rep).trim().toUpperCase()] = r })
   const treeNodes: any[] = tree?.tree || []
 
+  // RULE FOUR (§3c): tiles-doctrine multi-sheet export (Metric/Value summary + the two visible detail
+  // tables) — no PII, these are already-computed KPI/target numbers this view displays, not a change
+  // to any payout calculation.
+  const summaryRows = [
+    ...catKeys.map(k => ({ k: cap(k), v: `${totals[k].achieved_mtd} / ${totals[k].monthly} (${totals[k].pct}%)` })),
+    { k: 'Money on table', v: `$${Number(data.money_on_table || 0).toLocaleString()}` },
+    { k: 'Stores', v: stores.length }, { k: 'Reps', v: reps.length },
+  ]
+  const summaryCols: ExportColumn[] = [{ header: 'Metric', get: (r: any) => r.k }, { header: 'Value', get: (r: any) => r.v }]
+  const storeCols: ExportColumn[] = [
+    { header: 'Store', field: 'store', role: 'store', get: (s: any) => s.address || s.store_code },
+    { header: 'Conversion', field: 'conversion', get: (s: any) => s.conversion?.rate != null ? `${s.conversion.rate}%` : '' },
+    ...catKeys.map(k => ({ header: cap(k), field: k, get: (s: any) => { const c = s.categories?.[k]; return c ? `${c.achieved_mtd}/${c.monthly}` : '' } } as ExportColumn)),
+  ]
+  const repCols: ExportColumn[] = [
+    { header: 'Rep', field: 'rep', role: 'rep', get: (r: any) => r.rep },
+    { header: 'Store', field: 'store', role: 'store', get: (r: any) => r.store },
+    { header: 'Tier', field: 'tier', get: (r: any) => r.tier != null ? `${r.tier}×` : '' },
+    { header: 'KPIs Met', field: 'kpis', get: (r: any) => `${r.kpis_met}/${r.total_kpis}` },
+    { header: 'Money on Table', field: 'money_on_table', money: true, get: (r: any) => r.money_on_table || 0 },
+  ]
+  const exportSheets = [
+    { name: 'Summary', columns: summaryCols, rows: summaryRows },
+    ...(stores.length > 0 ? [{ name: 'Stores', columns: storeCols, rows: stores }] : []),
+    { name: 'Reps', columns: repCols, rows: reps },
+  ]
+
   return (
     <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+        <ReportExportBar title="Team Snapshot" subtitle={period} sheets={exportSheets} />
+      </div>
       {/* headline tiles */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
         {catKeys.map(k => {

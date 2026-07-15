@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
 import { api, localToday } from '@/lib/client'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Shift-extension request → District Manager approval workflow (mig 086). A manager files a request
 // to keep an employee past their scheduled end; the DM (or an admin) approves it IN-APP — the tick
@@ -57,8 +58,26 @@ export default function ShiftExtensionsPage() {
 
   const pending = exts.filter(x => x.status === 'pending')
   const decided = exts.filter(x => x.status !== 'pending')
+  const decidedVisible = decided.slice(0, 30)
   const inp: React.CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, background: 'var(--surface)' }
   const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 4 }
+
+  // RULE FOUR (§3c): export exactly what each table shows — no PII (name/store/date/status only).
+  const pendingCols: ExportColumn[] = [
+    { header: 'Employee', field: 'employee', role: 'rep', get: x => x.employee_name || x.employee_id },
+    { header: 'Store', field: 'store_code', role: 'store', get: x => x.store_code || '' },
+    { header: 'Date', field: 'shift_date', role: 'date', type: 'date', get: x => x.shift_date },
+    { header: 'Extend To', field: 'requested_end', get: x => x.requested_end },
+    { header: 'Reason', field: 'reason', get: x => x.reason || '' },
+    { header: 'Requested By', field: 'requested_by', get: x => x.requested_by || '' },
+  ]
+  const decidedCols: ExportColumn[] = [
+    { header: 'Employee', field: 'employee', role: 'rep', get: x => x.employee_name || x.employee_id },
+    { header: 'Date', field: 'shift_date', role: 'date', type: 'date', get: x => x.shift_date },
+    { header: 'Extend To', field: 'requested_end', get: x => x.requested_end },
+    { header: 'Status', field: 'status', get: x => (badge[x.status] || badge.expired).t },
+    { header: 'Decided By', field: 'decided_by', get: x => x.decided_by || '' },
+  ]
 
   return (
     <div style={{ maxWidth: 960 }}>
@@ -93,7 +112,10 @@ export default function ShiftExtensionsPage() {
       </div>
 
       <div className="card" style={{ padding: 18, marginBottom: 18 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Pending approvals {pending.length > 0 && <span style={{ color: '#92400e' }}>· {pending.length}</span>}</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Pending approvals {pending.length > 0 && <span style={{ color: '#92400e' }}>· {pending.length}</span>}</div>
+          {pending.length > 0 && <ReportExportBar title="Shift Extensions — Pending" columns={pendingCols} rows={pending} />}
+        </div>
         {pending.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text3)' }}>Nothing waiting.</div> : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>{['Employee', 'Store', 'Date', 'Extend to', 'Reason', 'Requested by', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '7px 9px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
@@ -119,11 +141,14 @@ export default function ShiftExtensionsPage() {
 
       {decided.length > 0 && (
         <div className="card" style={{ padding: 18 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Recent decisions</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>Recent decisions</div>
+            <ReportExportBar title="Shift Extensions — Recent Decisions" columns={decidedCols} rows={decidedVisible} />
+          </div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>{['Employee', 'Date', 'Extend to', 'Status', 'Decided by'].map(h => <th key={h} style={{ textAlign: 'left', padding: '7px 9px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
             <tbody>
-              {decided.slice(0, 30).map(x => { const b = badge[x.status] || badge.expired; return (
+              {decidedVisible.map(x => { const b = badge[x.status] || badge.expired; return (
                 <tr key={x.id} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={{ padding: '7px 9px', fontWeight: 600 }}>{x.employee_name || x.employee_id}</td>
                   <td style={{ padding: '7px 9px' }}>{x.shift_date}</td>

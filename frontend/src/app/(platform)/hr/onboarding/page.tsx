@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { api, apiUpload } from '@/lib/client'
 import EntityPicker, { US_STATES } from '@/components/EntityPicker'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // HR · Onboarding Checklist (admin) — the CONFIGURABLE template every new hire is onboarded against.
 // Items group under collapsible CATEGORIES; each item has an OWNER role (Employee / HR / DM / Market
@@ -402,6 +403,19 @@ function DocumentsBoard() {
   const chips: [string, string][] = [['all', 'All'], ['not_sent', 'Not sent'], ['awaiting', 'Awaiting return'], ['returned', 'Returned for fixes'], ['complete', 'All back']]
   const count = (k: string) => rows.filter(r => (k === 'not_sent' ? !r.sent : k === 'awaiting' ? r.sent && (r.pending > 0 || r.returned > 0) : k === 'returned' ? r.returned > 0 : k === 'complete' ? r.total > 0 && r.pending === 0 && r.returned === 0 : true)).length
 
+  // RULE FOUR (§3c): export the search/filter-CHIP-visible rows — status/counts only, no document
+  // content or Fernet-encrypted intake PII (that lives on the per-employee page, HR-only reveal).
+  const cols: ExportColumn[] = [
+    { header: 'Employee', field: 'name', role: 'rep', get: (r: any) => r.name || r.employee_id },
+    { header: 'Employee ID', field: 'employee_id', get: (r: any) => r.employee_id || '' },
+    { header: 'Email', field: 'email', get: (r: any) => r.email || '' },
+    { header: 'Sent', field: 'sent', get: (r: any) => r.sent ? (r.docs_sent_at || r.invited_at || 'yes').slice(0, 10) : 'not sent' },
+    { header: 'Documents Back', field: 'back', get: (r: any) => `${(r.submitted || 0) + (r.verified || 0)}/${r.total || 0}` },
+    { header: 'Returned for Fixes', field: 'returned', type: 'number', get: (r: any) => r.returned || 0 },
+    { header: 'Outstanding', field: 'outstanding', get: (r: any) => (r.pending_labels || []).join('; ') },
+    { header: 'Last Activity', field: 'last_activity', role: 'date', type: 'date', get: (r: any) => (r.last_activity || '').slice(0, 10) },
+  ]
+
   return (
     <div>
       <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 12px' }}>
@@ -423,6 +437,7 @@ function DocumentsBoard() {
           <button key={k} onClick={() => setFilter(k)} style={{ ...btn, fontSize: 12, padding: '4px 10px', borderRadius: 20, background: filter === k ? 'var(--accent,#2563eb)' : 'var(--surface)', color: filter === k ? '#fff' : 'var(--text2)', border: filter === k ? 'none' : '1px solid var(--border)' }}>{l} ({count(k)})</button>
         ))}
         <div style={{ flex: 1 }} />
+        <ReportExportBar title="Onboarding — Documents Board" columns={cols} rows={shown} />
         <button style={{ ...btnP, opacity: selIds.length && !busy ? 1 : 0.5 }} disabled={!selIds.length || busy} onClick={sendDocs}>
           {busy ? 'Sending…' : `📤 Send onboarding documents (${selIds.length})`}
         </button>
@@ -501,6 +516,17 @@ function CompletedDocuments() {
   const fmt = (d?: string | null) => (d ? String(d).slice(0, 10) : '')
   const hasDest = emailsText.trim().length > 0 || (cfg.emails || []).length > 0
 
+  // RULE FOUR (§3c): export the visible (search-filtered) completed list — approval/forward status
+  // only, no document content or PII.
+  const cols: ExportColumn[] = [
+    { header: 'Employee', field: 'name', role: 'rep', get: (r: any) => r.name || r.employee_id },
+    { header: 'Employee ID', field: 'employee_id', get: (r: any) => r.employee_id || '' },
+    { header: 'Email', field: 'email', get: (r: any) => r.email || '' },
+    { header: 'Approval', field: 'approval', get: (r: any) => APPROVED.has(r.workflow_status) ? 'Approved' : 'Pending' },
+    { header: 'Forwarded', field: 'forwarded', get: (r: any) => r.accounting_forwarded_at ? fmt(r.accounting_forwarded_at) : '' },
+    { header: 'Forwarded To', field: 'forwarded_to', get: (r: any) => r.accounting_forwarded_to || '' },
+  ]
+
   async function saveCfg() {
     setSavingCfg(true); setMsg('')
     try {
@@ -565,6 +591,7 @@ function CompletedDocuments() {
         <input style={{ ...inp, width: 240 }} placeholder="Search completed…" value={q} onChange={e => setQ(e.target.value)} />
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>{shown.length} complete</span>
+        <ReportExportBar title="Onboarding — Completed" columns={cols} rows={shown} />
       </div>
 
       <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
@@ -616,6 +643,16 @@ function ReconcilePanel() {
   const [msg, setMsg] = useState('')
   const [notifyOnApply, setNotifyOnApply] = useState(true)
 
+  // RULE FOUR (§3c): export the dry-run/applied report — task labels + status flags only, no PII.
+  const cols: ExportColumn[] = [
+    { header: 'Employee', field: 'employee', role: 'rep', get: (r: ReconcileRow) => r.employee_name || r.employee_id },
+    { header: 'Employee ID', field: 'employee_id', get: (r: ReconcileRow) => r.employee_id },
+    { header: 'Status', field: 'workflow_status', get: (r: ReconcileRow) => r.workflow_status || '' },
+    { header: 'Missing Mandatory', field: 'missing', get: (r: ReconcileRow) => r.missing_mandatory.map(m => m.label).join('; ') },
+    { header: 'State Undetermined', field: 'state_undetermined', get: (r: ReconcileRow) => r.state_undetermined ? 'Yes' : '' },
+    { header: 'Notified', field: 'notified', get: (r: ReconcileRow) => (meta?.dry_run === false ? (r.notified ? 'Emailed' : 'No email on file') : '') },
+  ]
+
   async function runDryRun() {
     setBusy(true); setMsg(''); setReport([]); setMeta(null)
     try {
@@ -660,6 +697,7 @@ function ReconcilePanel() {
           </>
         )}
         {meta && <span style={{ fontSize: 12, color: 'var(--text3)' }}>{meta.employees_scanned} scanned · {meta.employees_affected} affected{meta.dry_run === false ? ' · APPLIED' : ' · dry run only'}</span>}
+        {report.length > 0 && <ReportExportBar title="Onboarding — Reconcile Report" columns={cols} rows={report} />}
       </div>
 
       {report.length > 0 && (

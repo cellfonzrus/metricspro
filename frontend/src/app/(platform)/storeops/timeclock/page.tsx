@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Time Clock admin (Part B / B1): review punches (clock-in/out, hours, selfie, GPS, face-match) and
 // add manual-hours adjustments. The employee-facing clock-in lives in the mobile /portal.
@@ -46,6 +47,26 @@ export default function TimeClockAdminPage() {
   const totalHours = rows.reduce((s, r) => s + (Number(r.hours) || 0), 0)
   const openCount = rows.filter(r => !r.clock_out).length
 
+  // RULE FOUR (§3c): export exactly what's rendered — no PII (selfie/GPS are already shown as
+  // plain links/thumbnails on this page, not Fernet-masked fields, so the export mirrors them as-is.
+  const cols: ExportColumn[] = [
+    { header: 'Employee', field: 'employee', role: 'rep', get: r => r.employee_name || empName(r.employee_id) },
+    { header: 'Date', field: 'work_date', role: 'date', type: 'date', get: r => r.work_date },
+    { header: 'In', field: 'clock_in', get: r => fmtTime(r.clock_in) },
+    { header: 'Out', field: 'clock_out', get: r => r.clock_out ? fmtTime(r.clock_out) : 'open' },
+    { header: 'Hours', field: 'hours', type: 'number', get: r => r.hours != null ? Number(r.hours).toFixed(2) : '' },
+    { header: 'Store', field: 'store_code', role: 'store', get: r => r.store_code || '' },
+    { header: 'Face Match', field: 'face_match_pct', get: r => r.face_match_pct != null ? `${r.face_match_pct}%` : '' },
+    { header: 'GPS', field: 'gps', get: r => r.gps_lat != null ? `https://maps.google.com/?q=${r.gps_lat},${r.gps_lng}` : '' },
+    { header: 'Selfie', field: 'selfie_url', get: r => r.selfie_url || '' },
+  ]
+  const manualCols: ExportColumn[] = [
+    { header: 'Employee', field: 'employee', role: 'rep', get: m => empName(m.employee_id) },
+    { header: 'Date', field: 'work_date', role: 'date', type: 'date', get: m => m.work_date },
+    { header: 'Hours', field: 'hours', type: 'number', get: m => Number(m.hours).toFixed(2) },
+    { header: 'Reason', field: 'reason', get: m => m.reason },
+  ]
+
   return (
     <div>
       <div style={{ marginBottom: 14 }}>
@@ -66,6 +87,7 @@ export default function TimeClockAdminPage() {
         <span className="badge" style={{ fontSize: 12 }}>{rows.length} punches</span>
         <span className="badge" style={{ fontSize: 12 }}>{totalHours.toFixed(2)} hrs</span>
         {openCount > 0 && <span className="badge" style={{ fontSize: 12, background: '#16794a', color: '#fff' }}>{openCount} clocked in</span>}
+        <ReportExportBar title="Time Clock" subtitle={`${start} → ${end}`} filename={`timeclock-${start}_${end}`} columns={cols} rows={rows} />
         {msg && <span style={{ fontSize: 13, width: '100%' }}>{msg}</span>}
       </div>
 
@@ -95,7 +117,10 @@ export default function TimeClockAdminPage() {
       </div>
 
       <div className="card" style={{ padding: 14 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>✍️ Manual hours adjustments</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>✍️ Manual hours adjustments</div>
+          {manual.length > 0 && <ReportExportBar title="Manual Hours Adjustments" subtitle={`${start} → ${end}`} columns={manualCols} rows={manual} />}
+        </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
           <select style={sel} value={mh.employee_id} onChange={e => setMh({ ...mh, employee_id: e.target.value })}>
             <option value="">Employee…</option>

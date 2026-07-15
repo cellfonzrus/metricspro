@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, parseLocalDate } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 interface Request {
   id: number; employee_id: string; employee_name?: string
@@ -70,6 +71,21 @@ export default function TimeOffPage() {
     setRequests(r => r.map(req => req.id === id ? { ...req, status, approved_by: status === 'approved' ? approver : req.approved_by } : req))
   }
 
+  // RULE FOUR (§3c): export the visible rows — no PII (dates/type/notes/status only).
+  const cols: ExportColumn[] = [
+    { header: 'Employee', field: 'employee', role: 'rep', get: r => r.employee_name || empName(r.employee_id) },
+    { header: 'Type', field: 'type', get: r => r.type },
+    { header: 'Start', field: 'start_date', role: 'date', type: 'date', get: r => r.start_date },
+    { header: 'End', field: 'end_date', type: 'date', get: r => r.end_date },
+    { header: 'Days', field: 'days', type: 'number', get: r => {
+      const s = parseLocalDate(r.start_date), e = parseLocalDate(r.end_date)
+      return Math.round((e.getTime() - s.getTime()) / 86400000) + 1
+    } },
+    { header: 'Notes', field: 'notes', get: r => r.notes || '' },
+    { header: 'Status', field: 'status', get: r => r.status },
+    { header: 'Approved By', field: 'approved_by', get: r => r.approved_by || '' },
+  ]
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
@@ -79,7 +95,10 @@ export default function TimeOffPage() {
             {requests.filter(r => r.status === 'pending').length} pending · {requests.length} total · approved time off blocks scheduling
           </p>
         </div>
-        <button className="btn btn-primary" onClick={() => { setErr(''); setShowForm(true) }}>+ New Request</button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <ReportExportBar title="Time Off Requests" columns={cols} rows={requests} />
+          <button className="btn btn-primary" onClick={() => { setErr(''); setShowForm(true) }}>+ New Request</button>
+        </div>
       </div>
 
       {showForm && (

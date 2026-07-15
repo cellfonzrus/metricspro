@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
 import { api } from '@/lib/client'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Per-store weekly hours BUDGET + DM-approved overrides (mig 087). A manager sets each store's
 // weekly hours budget; the scheduler blocks going over it and shows an alert here; to exceed, a
@@ -46,6 +47,23 @@ export default function HoursBudgetPage() {
   const pending = ovs.filter(o => o.status === 'pending')
   const inp: React.CSSProperties = { width: 90, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
+  // RULE FOUR (§3c): export the visible rows for each table — no PII in either.
+  const budgetCols: ExportColumn[] = [
+    { header: 'Store', field: 'store_code', role: 'store', get: r => r.store_code },
+    { header: 'Address', field: 'address', get: r => r.address || '' },
+    { header: 'Weekly Budget (h)', field: 'weekly_hours', type: 'number', get: r => r.weekly_hours ?? '' },
+    { header: 'Scheduled (h)', field: 'used_hours', type: 'number', get: r => r.used_hours },
+    { header: 'Status', field: 'status', get: r => r.override ? 'Override approved' : (r.over ? 'Over budget' : 'OK') },
+  ]
+  const ovCols: ExportColumn[] = [
+    { header: 'Store', field: 'store_code', role: 'store', get: o => o.store_code },
+    { header: 'Week', field: 'week_start', role: 'date', type: 'date', get: o => o.week_start },
+    { header: 'Reason', field: 'reason', get: o => o.reason || '' },
+    { header: 'Status', field: 'status', get: o => o.status },
+    { header: 'Requested By', field: 'requested_by', role: 'rep', get: o => o.requested_by || '' },
+    { header: 'Decided By', field: 'decided_by', get: o => o.decided_by || '' },
+  ]
+
   return (
     <div style={{ maxWidth: 900 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>📊 Hours budget</h1>
@@ -57,6 +75,9 @@ export default function HoursBudgetPage() {
       {msg && <div style={{ fontSize: 13, marginBottom: 12 }}>{msg}</div>}
 
       <div className="card" style={{ padding: 16, marginBottom: 18 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+          <ReportExportBar title="Hours Budget" subtitle={`Week of ${weekStart || '—'}`} filename="hours-budget" columns={budgetCols} rows={rows} />
+        </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>{['Store', 'Weekly budget (h)', 'Scheduled this week', '', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '7px 9px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
           <tbody>
@@ -89,7 +110,10 @@ export default function HoursBudgetPage() {
       </div>
 
       <div className="card" style={{ padding: 16 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Override approvals {pending.length > 0 && <span style={{ color: '#92400e' }}>· {pending.length} pending</span>}</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Override approvals {pending.length > 0 && <span style={{ color: '#92400e' }}>· {pending.length} pending</span>}</div>
+          {ovs.length > 0 && <ReportExportBar title="Hours Budget — Override Approvals" columns={ovCols} rows={ovs} />}
+        </div>
         {ovs.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text3)' }}>No override requests.</div> : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>{['Store', 'Week', 'Reason', 'Status', 'Requested by', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '7px 9px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>

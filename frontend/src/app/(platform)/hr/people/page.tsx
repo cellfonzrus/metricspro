@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api } from '@/lib/client'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // HR · People — the single front door to ADD a person. Creates the StoreOps roster row (+ a stable
 // employee_id), and — if a role/scope + email is given — assigns the RBAC role and (optionally)
@@ -93,6 +94,16 @@ export default function HRPeoplePage() {
       loadAll()
     } catch (e: any) { setBulkMsg('❌ ' + (e?.message || e)) }
   }
+
+  // RULE FOUR (§3c): export the roster list as shown — email/store/role/login/onboarding-link status
+  // only, none of it Fernet-encrypted intake PII (that lives on the onboarding detail page, HR-only).
+  const cols: ExportColumn[] = [
+    { header: 'Name', field: 'name', role: 'rep', get: (p: any) => p.name || '' },
+    { header: 'Email', field: 'email', get: (p: any) => p.email || '' },
+    { header: 'Store', field: 'store', role: 'store', get: (p: any) => p.app_store || p.home_store || '' },
+    { header: 'App Role', field: 'app_role', get: (p: any) => p.app_role || '' },
+    { header: 'Login', field: 'has_login', get: (p: any) => p.has_login ? 'Yes' : 'No' },
+  ]
 
   return (
     <div style={{ maxWidth: 920 }}>
@@ -200,6 +211,7 @@ export default function HRPeoplePage() {
           <span style={{ fontWeight: 700, fontSize: 13 }}>People ({people.length})</span>
           <div style={{ flex: 1 }} />
           {bulkMsg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{bulkMsg}</span>}
+          <ReportExportBar title="HR People" columns={cols} rows={people} />
           <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => bulkInvite()} title="Email a portal login + password to every employee who hasn't finished onboarding">📨 Invite all for onboarding</button>
         </div>
         <div style={{ overflowX: 'auto' }}>

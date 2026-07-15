@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api } from '@/lib/client'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '8px 10px', borderBottom: '1px solid var(--border)', fontSize: 13 }
@@ -61,6 +62,16 @@ export default function ShiftSwapsPage() {
     catch (e: any) { setMsg('Update failed: ' + (e?.message || e)) }
   }
 
+  // RULE FOUR (§3c): export the visible rows — no PII (names/shift labels/status/notes only).
+  const cols: ExportColumn[] = [
+    { header: 'Requester', field: 'requester', role: 'rep', get: s => s.requester_name || s.requester_id },
+    { header: 'Gives Up', field: 'shift', get: s => shiftLabel(s.shift) },
+    { header: 'Swap With', field: 'target', get: s => s.target_name || '' },
+    { header: 'Their Shift', field: 'target_shift', get: s => shiftLabel(s.target_shift) },
+    { header: 'Status', field: 'status', get: s => s.status },
+    { header: 'Notes', field: 'notes', get: s => s.notes || '' },
+  ]
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
@@ -68,7 +79,10 @@ export default function ShiftSwapsPage() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔄 Shift Swaps</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Request and approve shift swaps. Approving reassigns the shift(s).</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowForm(v => !v)}>{showForm ? '✕ Cancel' : '＋ New swap request'}</button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {swaps.length > 0 && <ReportExportBar title="Shift Swaps" columns={cols} rows={swaps} />}
+          <button className="btn btn-primary" onClick={() => setShowForm(v => !v)}>{showForm ? '✕ Cancel' : '＋ New swap request'}</button>
+        </div>
       </div>
       {msg && <div style={{ fontSize: 13, marginBottom: 12 }}>{msg}</div>}
 

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api } from '@/lib/client'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 interface Employee {
   id: number; employee_id: string | null; name: string; home_store: string | null
@@ -85,6 +86,20 @@ export default function EmployeesPage() {
     return true
   })
 
+  // RULE FOUR (§3c): export the search/active-toggle-FILTERED roster (what you see is what exports).
+  // No Fernet-encrypted PII lives on this table (that's onboarding intake_data, HR-only) — email/phone
+  // here are the same plain values already rendered inline, so nothing to mask.
+  const cols: ExportColumn[] = [
+    { header: 'Name', field: 'name', role: 'rep', get: e => e.name || '' },
+    { header: 'Emp ID', field: 'employee_id', get: e => e.employee_id || '' },
+    { header: 'Home Store', field: 'home_store', role: 'store', get: e => e.home_store || '' },
+    { header: 'Email', field: 'email', get: e => e.email || '' },
+    { header: 'Phone', field: 'phone', get: e => e.phone || '' },
+    { header: 'ePay Login', field: 'epay_login', get: e => e.epay_login || '' },
+    { header: 'ePay Salesperson', field: 'epay_salesperson', get: e => e.epay_salesperson || '' },
+    { header: 'Active', field: 'is_active', get: e => e.is_active ? 'Yes' : 'No' },
+  ]
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
@@ -102,6 +117,7 @@ export default function EmployeesPage() {
             <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
             Show inactive
           </label>
+          <ReportExportBar title="Employees" columns={cols} rows={filtered} />
         </div>
       </div>
 
