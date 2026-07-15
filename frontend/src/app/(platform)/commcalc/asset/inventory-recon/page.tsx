@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { api, localToday } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
@@ -47,14 +48,25 @@ export default function InventoryReconPage() {
       const wb = XLSX.read(await file.arrayBuffer())
       const raw: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
       const pick = (r: any, keys: string[]) => { for (const k of Object.keys(r)) if (keys.includes(k.trim().toLowerCase())) return String(r[k]).trim(); return '' }
+      // `value` is optional: most b2bsoft/POS "Inventory Aging" exports carry a $ cost/retail
+      // column alongside qty. When present, it's aggregated per store (canonicalized against
+      // store_mapping on the backend) and written into commcalc.inventory_value — the Balance
+      // Sheet inventory line (see Inventory Values) — in the SAME upload, independent of
+      // whether the row's category maps to one of the 5 recon buckets below.
       const rows = raw.map(r => ({
         store: pick(r, ['store', 'location', 'address', 'store address', 'store name']),
         category: pick(r, ['category', 'type', 'device type', 'group', 'product type', 'model', 'item']),
         qty: pick(r, ['qty', 'quantity', 'count', 'on hand', 'on-hand', 'stock', 'in stock', 'inventory']),
-      })).filter(r => r.store && r.category && r.qty !== '')
-      if (!rows.length) { setMsg('No usable rows — need store + category + qty columns.'); setBusy(false); return }
+        value: pick(r, ['value', '$ value', 'inventory value', 'on hand value', 'on-hand value',
+          'stock value', 'cost', 'unit cost', 'ext cost', 'extended cost', 'total cost',
+          'item cost', 'inventory cost', 'amount', 'retail', 'retail value', 'ext price', 'extended price']),
+      })).filter(r => r.store && (r.value !== '' || (r.category && r.qty !== '')))
+      if (!rows.length) { setMsg('No usable rows — need store + (category & qty) and/or a $ value column.'); setBusy(false); return }
       const res = await api('/api/v1/asset/b2b-inventory/upload', { method: 'POST', body: JSON.stringify({ as_of_date: upDate, rows }) })
-      setMsg(`Loaded ${res.loaded} category rows as of ${res.as_of_date}${res.skipped ? ` · ${res.skipped} skipped (unmapped category/qty)` : ''}.`)
+      const valueMsg = res.inventory_value_stores
+        ? ` · wrote $${Number(res.inventory_value_total).toLocaleString(undefined, { maximumFractionDigits: 0 })} inventory value to the Balance Sheet for ${res.inventory_value_stores} store(s).`
+        : ''
+      setMsg(`Loaded ${res.loaded} category rows as of ${res.as_of_date}${res.skipped ? ` · ${res.skipped} skipped (unmapped category/qty)` : ''}.${valueMsg}`)
       setAsOf(res.as_of_date)
       await load()
     } catch (e: any) { setMsg('Upload failed: ' + (e?.message || e)) }
@@ -119,8 +131,11 @@ export default function InventoryReconPage() {
       </div>
 
       <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>
-        ⚙️ Auto-import from <b>wsreports.b2bsoft.com</b> is pending the b2bsoft login (same as the daily-transactions report).
-        Until it's wired, upload a b2bsoft <b>inventory-quantity-by-date</b> export below (columns: <code>store</code>, <code>category</code>, <code>qty</code>).
+        ⚙️ Auto-import from <b>wsreports.b2bsoft.com</b> is pending the live b2bsoft portal sweep. Until it's wired,
+        upload a b2bsoft <b>Inventory Aging</b> export below (columns: <code>store</code>, <code>category</code>, <code>qty</code> —
+        plus an optional $ <code>value</code>/<code>cost</code> column). If the file has a $ column, this same upload also
+        populates the <Link href="/accounts/inventory" style={{ color: 'inherit', textDecoration: 'underline' }}>Balance Sheet inventory value</Link> per store —
+        no separate step needed.
       </div>
 
       {/* Upload + filters */}

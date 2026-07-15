@@ -240,6 +240,24 @@ def _backfill_market(client, org_id: str):
                 .update({"market": market}).eq("org_id", org_id).eq("store", store).execute()
 
 
+def _store_canon_map(client, org_id: str) -> dict:
+    """Lowercased store_mapping.store_address -> canonical address. Used to resolve a b2bsoft
+    export's raw store text onto the same canonical store key the rest of the app (including the
+    Account module's Balance Sheet, via coa.py's store_resolver) uses, so a $ value lands under
+    one consistent store bucket instead of a second, mis-spelled one. Never drops a store —
+    callers fall back to the raw trimmed string when there's no match (an unmapped store is still
+    worth keeping, just uncanonicalized)."""
+    sm = client.schema("commcalc").table("store_mapping") \
+        .select("store_address").eq("org_id", org_id).execute().data or []
+    return {(m.get("store_address") or "").strip().lower(): (m.get("store_address") or "").strip()
+            for m in sm if m.get("store_address")}
+
+
+def _canon_store(raw: str, addr_map: dict) -> str:
+    s = (raw or "").strip()
+    return addr_map.get(s.lower(), s) if s else s
+
+
 @router.get("/summary")
 async def get_asset_summary(org_id: str = ORG_ID, store: str = "", market: str = "",
                             date_from: str = "", date_to: str = ""):
@@ -709,28 +727,64 @@ async def inventory_recon(org_id: str = ORG_ID, store: str = "", market: str = "
 @router.post("/b2b-inventory/upload")
 async def upload_b2b_inventory(body: dict, org_id: str = ORG_ID):
     """Manual b2bsoft inventory load (until the portal sweep is wired). Body:
-    {as_of_date, rows:[{store, category, qty}]}. Category is normalized to a bucket;
-    unmappable categories are skipped + reported. Replaces that date's snapshot."""
+    {as_of_date, rows:[{store, category, qty, value?}]}. Category is normalized to a bucket;
+    unmappable categories are skipped + reported (for the qty/category recon below). Replaces
+    that date's b2b_inventory snapshot.
+
+    LINK — Balance Sheet inventory value (asset-8, 2026-07-15, OWNER REPORT "Inventory values
+    are not showing because inventory aging is not importing from b2b"). Root cause traced
+    end-to-end: the asset module's own /aging (Inventory Aging) report is entirely VIP-ledger
+    sourced (asset_ledger.acquired_date) and was never b2b-dependent — it already works. The real
+    gap is the Balance Sheet inventory line (account/coa.py), which reads
+    commcalc.inventory_value (swept_value/manual_value) with an asset_ledger fallback: a
+    non-Boost tenant (e.g. a Total-only dealer with few/no VIP-financed on-hand devices) has a
+    thin asset_ledger fallback AND an empty inventory_value (the b2bsoft portal-sweep that would
+    populate it — commcalc/b2b_sweep.py, mod-commission-owned — is either not configured or,
+    once wired, parses 0 stores against that tenant's real export shape), so the BS inventory
+    line is genuinely near-empty, not just stale. Fix: when an uploaded row ALSO carries a $
+    value (most b2bsoft/POS "Inventory Aging" exports have a cost/retail column alongside qty),
+    aggregate it per store — canonicalized through store_mapping so it lands under the SAME
+    store key the rest of the app uses, org-scoped — and upsert it into
+    commcalc.inventory_value, the exact same table + shape (org_id, store, swept_value,
+    as_of_date, source) the portal-sweep would have written, and what the Balance Sheet + the
+    Account module's Inventory Values page (/accounts/inventory) already read. This value total
+    is independent of category/qty mapping (a row can be unmappable to one of the 5 recon
+    buckets — e.g. "Accessory" or "SIM Kit" — and still count toward the store's on-hand $
+    value), and independent of whether asset_ledger has any rows for this org at all, so it
+    works uniformly for every tenant, not just Boost/VIP ones. Degrades silently if
+    commcalc.inventory_value doesn't exist yet (pre-migration-026 tenant) — the qty/category
+    recon upload below is unaffected either way."""
     as_of = (body.get("as_of_date") or "").strip()
     if not as_of:
         raise HTTPException(400, "as_of_date required")
     rows = body.get("rows") or []
     if not isinstance(rows, list) or not rows:
         raise HTTPException(400, "rows[] required")
+    client = sb()
+    addr_map = _store_canon_map(client, org_id)
     agg = {}
+    value_by_store = {}
     skipped = []
     for i, r in enumerate(rows):
-        s = (str(r.get("store") or "")).strip()
+        s_raw = (str(r.get("store") or "")).strip()
+        s = _canon_store(s_raw, addr_map)
         bucket = _inv_bucket(r.get("category"))
         try:
             qty = int(float(r.get("qty")))
         except (TypeError, ValueError):
             qty = None
+        val = None
+        if r.get("value") not in (None, ""):
+            try:
+                val = float(str(r.get("value")).replace("$", "").replace(",", "").strip())
+            except (TypeError, ValueError):
+                val = None
+        if s and val is not None:
+            value_by_store[s] = value_by_store.get(s, 0.0) + val
         if not s or not bucket or qty is None:
-            skipped.append({"row": i + 1, "store": s, "category": r.get("category")})
+            skipped.append({"row": i + 1, "store": s_raw, "category": r.get("category")})
             continue
         agg[(s, bucket)] = agg.get((s, bucket), 0) + qty
-    client = sb()
     # Replace this date's snapshot, then insert the aggregated rows.
     client.schema("commcalc").table("b2b_inventory").delete() \
         .eq("org_id", org_id).eq("as_of_date", as_of).execute()
@@ -738,8 +792,30 @@ async def upload_b2b_inventory(body: dict, org_id: str = ORG_ID):
                 "as_of_date": as_of, "source": "upload"} for (s, b), q in agg.items()]
     if payload:
         client.schema("commcalc").table("b2b_inventory").insert(payload).execute()
+
+    # LINK — write the $ value side into commcalc.inventory_value (Balance Sheet). Best-effort:
+    # a tenant that hasn't run migration 026 yet still gets the qty/category recon above.
+    inventory_value_stores = 0
+    inventory_value_total = 0.0
+    if value_by_store:
+        try:
+            for store_key, total in value_by_store.items():
+                rec = {"org_id": org_id, "store": store_key, "swept_value": round(total, 2),
+                       "as_of_date": as_of, "source": "asset_b2b_upload",
+                       "updated_at": datetime.now(timezone.utc).isoformat()}
+                client.schema("commcalc").table("inventory_value") \
+                    .upsert(rec, on_conflict="org_id,store").execute()
+            inventory_value_stores = len(value_by_store)
+            inventory_value_total = round(sum(value_by_store.values()), 2)
+        except Exception as _e:
+            # commcalc.inventory_value may not exist yet (migration 026 not run for this tenant) —
+            # never let that break the qty/category recon upload above, which already succeeded.
+            print(f"[asset b2b-inventory upload] inventory_value write skipped (mig 026 not run?): {_e}")
+
     return {"loaded": len(payload), "skipped": len(skipped), "as_of_date": as_of,
-            "skipped_rows": skipped[:20]}
+            "skipped_rows": skipped[:20],
+            "inventory_value_stores": inventory_value_stores,
+            "inventory_value_total": inventory_value_total}
 
 
 @router.post("/sync-inventory-flags")
