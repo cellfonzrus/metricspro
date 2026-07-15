@@ -4,7 +4,7 @@ Upload the closing sheet (one row per rep per day), DM evening verification (per
 missing-rep check vs the schedule), and reconciliation against B2B actual daily sales. Tables live
 in commcalc.* (migration 029).
 """
-from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks, Header
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks, Header
 from app.core.database import get_supabase
 from app.core.config import settings
 from datetime import datetime, timezone, timedelta
@@ -1403,34 +1403,42 @@ def seed_standard_tenders(org_id: str = ORG_ID):
 
 
 @router.post("/tender-config/detect")
-async def detect_tenders(file: UploadFile = File(None), org_id: str = ORG_ID):
+async def detect_tenders(file: UploadFile = File(None), leg: str = Form("auto"), org_id: str = ORG_ID):
     """Smart mapping helper: gather the distinct raw Tender Type values in the tenant's data and SUGGEST
-    the best tender per value with a confidence. Sources: an uploaded sample (any column containing
-    'tender'), ELSE the already-ingested Sales report (raw_sales) + X-report (pos_tender_summary). The
-    wizard pre-fills each dropdown with the suggestion. On the Total side both reports are b2bsoft."""
+    the best tender per value with a confidence. Sources: an uploaded sample, ELSE the already-ingested
+    Sales report (raw_sales + daily_sales_feed) + X-report (pos_tender_summary). The wizard pre-fills
+    each dropdown with the suggestion. On the Total side both reports are b2bsoft.
+
+    2026-07-15 fix: an uploaded sample used to ALWAYS land in the sales leg — a tenant with no
+    ingested X-report data (e.g. Luxelink) had no way to upload an X-Report sample to map that leg at
+    all. `leg` ('sales'|'x_report'|'auto', default 'auto') lets the Step-2 wizard force a leg via its
+    explicit upload buttons; 'auto' classifies the file by its own column shape (see
+    tender_config.classify_sample_file) and the response's `detected_leg`/`detect_detail` tell the UI
+    which leg it landed in and why. `org_id` stays a query param (never a Form field) per the
+    multi-tenant rule. Backward compatible: an omitted `leg` behaves as 'auto', and a plain
+    tender-column file with no X-report signature still lands in `sales` exactly as before."""
     require_org(org_id)
     client = sb()
-    from .tender_config import load_tender_config, tender_axis, suggest_for_labels
+    from .tender_config import (load_tender_config, tender_axis, suggest_for_labels,
+                                 classify_sample_file, db_sales_tender_labels)
     defs, _maps = load_tender_config(client, org_id)
     keys, labels, _rc, _it = tender_axis(defs, CANON_TENDERS, CANON_TENDER_LABEL)
     sales_labels, x_labels = set(), set()
+    detected_leg, detect_detail = None, None
     if file is not None:
         try:
             content = await file.read()
-            fn = (file.filename or "").lower()
-            df = pd.read_excel(io.BytesIO(content)) if fn.endswith((".xlsx", ".xls")) else pd.read_csv(io.BytesIO(content))
-            tcol = next((c for c in df.columns if "tender" in str(c).strip().lower()), None)
-            if tcol is not None:
-                sales_labels |= {str(v).strip() for v in df[tcol].dropna().unique() if str(v).strip()}
+            detected_leg, found, detect_detail = classify_sample_file(content, file.filename or "", leg)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         except Exception as e:
             raise HTTPException(400, f"could not read sample file: {e}")
+        if detected_leg == "x_report":
+            x_labels |= found
+        else:
+            sales_labels |= found
     else:
-        try:
-            srows = (client.schema("commcalc").table("raw_sales").select("tender_type")
-                     .eq("org_id", org_id).limit(20000).execute().data) or []
-            sales_labels |= {str(r.get("tender_type")).strip() for r in srows if str(r.get("tender_type") or "").strip()}
-        except Exception:
-            pass
+        sales_labels |= db_sales_tender_labels(client, org_id)
         try:
             xrows = (client.schema("commcalc").table("pos_tender_summary").select("tender_type")
                      .eq("org_id", org_id).limit(20000).execute().data) or []
@@ -1439,7 +1447,8 @@ async def detect_tenders(file: UploadFile = File(None), org_id: str = ORG_ID):
             pass
     return {"tenders": [{"key": k, "label": labels.get(k, k)} for k in keys],
             "sales": suggest_for_labels(sorted(sales_labels), keys, labels, _canon_tender),
-            "x_report": suggest_for_labels(sorted(x_labels), keys, labels, _canon_tender)}
+            "x_report": suggest_for_labels(sorted(x_labels), keys, labels, _canon_tender),
+            "detected_leg": detected_leg, "detect_detail": detect_detail}
 
 
 # ── Configurable activation-count fields (mig 501): standard-or-custom count fields on the closing ──

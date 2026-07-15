@@ -108,3 +108,112 @@ STANDARD_DEFS = [
     ("store_acct", "Store Account", "other", True), ("zelle", "Zelle / CashApp", "other", True),
     ("acima", "ACIMA (lease)", "other", True),
 ]
+
+
+# ── Step-2 sample-file leg detection (2026-07-15 fix) ───────────────────────────────────────────
+# BUG: the tender-config wizard's "upload a sample" always dumped every distinct value into the SALES
+# leg — a tenant with no ingested X-report data (e.g. a new/incompletely-onboarded tenant like Luxelink)
+# had NO way to map the x_report leg at all, since x_labels could only ever come from already-ingested
+# commcalc.pos_tender_summary rows. Fixed by making Step 2 leg-aware: classify the uploaded sample by
+# its OWN column shape (reusing the real X-Report importer's signature) instead of assuming 'sales'.
+_SALES_SIG = {"salesperson", "trans id"}          # mirrors commcalc.router.SIGNATURES['sales']
+_XR_STORE_K = {"store", "location", "store_name", "storename", "site", "register"}
+_XR_TENDER_K = {"tender_type", "tender type", "tender", "payment_type", "payment type",
+                "payment", "type", "media"}
+_XR_AMT_K = {"amount", "total", "value", "net", "net amount", "amt"}
+
+
+def classify_sample_file(content: bytes, filename: str, leg: str = "auto"):
+    """Classify an uploaded tender-config sample as the 'sales' leg or the 'x_report' leg and pull the
+    distinct raw tender values out of it, so Step 2's "Upload a sample" can populate EITHER leg — not
+    just sales.
+
+    Detection tiers (checked in order for leg='auto'; an explicit leg skips straight to its own tier
+    but still degrades sanely if the file doesn't actually match):
+      1. The REAL B2B Soft X-Report: a multi-sheet workbook, one sheet per store, each holding a
+         'Tendered Amounts' matrix. Reuses `commcalc.router._parse_xreport` verbatim (lazy import —
+         mirrors the existing commcalc<->closing lazy-import boundary used for `_send_alert` /
+         `classify_contract_type`) so a sample is classified EXACTLY the way the real ingest path
+         (`POST /commcalc/upload/x_report`) would treat it — same filename date-range validation, same
+         'Tender Types'/'Net'/'Refunds|Sub Net' header signature.
+      2. The Sales Transaction Details signature (Salesperson + Trans ID columns — mirrors
+         commcalc.router.SIGNATURES['sales']) -> 'sales'.
+      3. A flat/generic single-sheet X-report export (any POS) — a Tender-ish column PLUS a
+         Store-ish or Amount-ish column, and NOT the sales signature -> 'x_report'. Mirrors the
+         flexible column names the generic (non-B2B-Soft) X-report importer in commcalc.router
+         accepts, kept local here as a detection-only heuristic (not itself an ingest path).
+      4. Anything else with a bare 'tender'-named column -> 'sales' (today's original behaviour,
+         byte-identical for a plain tender-column file with no X-report signature).
+
+    `leg` ('sales'|'x_report'|'auto') lets the caller force a leg (Step 2's explicit upload buttons);
+    an unrecognized value falls back to 'auto'. Returns (detected_leg, {raw_label, ...}, detail_str).
+    Raises ValueError only for a genuinely bad file (unreadable, or an X-Report filename covering more
+    than one day — the same validation the real ingest enforces)."""
+    leg = (leg or "auto").strip().lower()
+    if leg not in ("sales", "x_report"):
+        leg = "auto"
+    fn = filename or ""
+
+    if leg in ("auto", "x_report"):
+        try:
+            from app.modules.commcalc.router import _parse_xreport  # lazy: avoids a commcalc<->closing cycle
+        except Exception:
+            _parse_xreport = None
+        if _parse_xreport is not None:
+            try:
+                xr = _parse_xreport(content, fn, fallback_date=None)
+            except ValueError:
+                raise   # a real X-Report shape with a bad (multi-day) filename range — surface it
+            except Exception:
+                xr = []
+            if xr:
+                store_labels = {str(t).strip() for (_s, _d, t, _a) in xr if str(t).strip()}
+                stores = {s for (s, _d, _t, _a) in xr}
+                return "x_report", store_labels, f"B2B multi-sheet X-Report ({len(stores)} store sheet(s))"
+
+    import pandas as pd
+    import io
+    try:
+        df = (pd.read_excel(io.BytesIO(content)) if fn.lower().endswith((".xlsx", ".xls"))
+              else pd.read_csv(io.BytesIO(content)))
+    except Exception as e:
+        raise ValueError(f"could not read sample file: {e}")
+    cols = [str(c).strip() for c in df.columns]
+    lcols = {c.lower() for c in cols}
+    tcol = next((c for c in cols if "tender" in c.lower()), None)
+
+    is_sales_shape = _SALES_SIG.issubset(lcols)
+    is_flat_xreport_shape = (not is_sales_shape) and bool(_XR_TENDER_K & lcols) and \
+        bool((_XR_STORE_K | _XR_AMT_K) & lcols)
+
+    if leg == "x_report" or (leg == "auto" and is_flat_xreport_shape):
+        if tcol is None:
+            tcol = next((c for c in cols if c.lower() in _XR_TENDER_K), None)
+        labels = ({str(v).strip() for v in df[tcol].dropna().unique() if str(v).strip()}
+                  if tcol is not None else set())
+        detail = ("flat X-report-shaped columns" if is_flat_xreport_shape else
+                   ("no Tender-like column found" if tcol is None else "explicit X-Report leg"))
+        return "x_report", labels, detail
+
+    labels = ({str(v).strip() for v in df[tcol].dropna().unique() if str(v).strip()}
+              if tcol is not None else set())
+    detail = ("Sales Transaction Details columns" if is_sales_shape else
+               ("Tender column (no X-report signature)" if tcol is not None else "no Tender column found"))
+    return "sales", labels, detail
+
+
+def db_sales_tender_labels(client, org_id):
+    """Distinct raw Tender Type values already ingested for the SALES leg, org-scoped. UNIONs
+    commcalc.raw_sales (the monthly authoritative upload) with commcalc.daily_sales_feed (mig 047, the
+    daily B2B email feed a feed-only tenant like Luxelink relies on) — previously read raw_sales ONLY,
+    so a tenant whose sales live solely in the daily feed got an empty sales leg with nothing to map.
+    Each table read is independently guarded so one failing/un-migrated table doesn't blank the other."""
+    labels = set()
+    for table in ("raw_sales", "daily_sales_feed"):
+        try:
+            rows = (client.schema("commcalc").table(table).select("tender_type")
+                    .eq("org_id", org_id).limit(20000).execute().data) or []
+            labels |= {str(r.get("tender_type")).strip() for r in rows if str(r.get("tender_type") or "").strip()}
+        except Exception:
+            pass
+    return labels
