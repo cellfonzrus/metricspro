@@ -66,6 +66,10 @@ export default function EmailImportsPage() {
   const [code, setCode] = useState('')
   const [authBusy, setAuthBusy] = useState('')
   const [shotView, setShotView] = useState<any>(null)   // { label, loading, src, at, note } — last login screenshot
+  const [live, setLive] = useState<any>(null)           // { source } while the 🔴 Live-login modal is open
+  const [liveState, setLiveState] = useState<any>(null) // { phase, message, shot, updated_at } — polled ~1s
+  const [liveCode, setLiveCode] = useState('')
+  const [liveBusy, setLiveBusy] = useState(false)
   const [customTypes, setCustomTypes] = useState<any[]>([])   // self-serve custom sheets (mig 099)
   const [newSheet, setNewSheet] = useState('')
   const [viewer, setViewer] = useState<any>(null)             // { report_key, label } while viewing data
@@ -106,6 +110,19 @@ export default function EmailImportsPage() {
   const knownTypeKeys = new Set([...BUILTIN_TYPES, ...customTypes.map((c: any) => c.report_key)])
 
   const body = () => ({ ...cfg, password: pwd || undefined })
+
+  // Live-login: while the modal is open, poll the session state ~1s and stream the screenshot.
+  useEffect(() => {
+    const id = live?.source?.id
+    if (!id) return
+    let stop = false
+    const tick = async () => {
+      try { const r: any = await api(`/api/v1/commcalc/data-sources/${id}/live-login/state`); if (!stop) setLiveState(r) } catch { /* keep last */ }
+    }
+    tick()
+    const iv = setInterval(tick, 1000)
+    return () => { stop = true; clearInterval(iv) }
+  }, [live?.source?.id])
 
   function pickAccount(acct: string) {
     const a = accounts.find(x => x.account === acct)
@@ -318,6 +335,35 @@ export default function EmailImportsPage() {
       const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/login/screenshot`)
       setShotView({ label, loading: false, src: r?.shot || null, at: r?.at || null, note: r?.note || null, id: s.id })
     } catch (e: any) { setShotView({ label, loading: false, src: null, note: '❌ ' + (e?.message || e), id: s.id }) }
+  }
+  // 🔴 Live login: ONE persistent browser stays open from login through code entry, so the 2FA code is
+  // sent ONCE and the operator's code goes into the SAME live page (fixes the "code sent twice" resend).
+  // The operator watches a live screenshot stream and submits / resends / cancels against that session.
+  async function startLive(s: any) {
+    setLive({ source: s }); setLiveCode(''); setLiveBusy(true)
+    setLiveState({ phase: 'starting', message: 'Starting the live session…', shot: null })
+    try { await api(`/api/v1/commcalc/data-sources/${s.id}/live-login/start`, { method: 'POST', body: '{}' }) }
+    catch (e: any) { setLiveState({ phase: 'error', message: '❌ ' + (e?.message || e), shot: null }) }
+    finally { setLiveBusy(false) }
+  }
+  async function submitLive() {
+    if (!live?.source?.id || !liveCode.trim()) return
+    setLiveBusy(true)
+    try { await api(`/api/v1/commcalc/data-sources/${live.source.id}/live-login/submit`, { method: 'POST', body: JSON.stringify({ code: liveCode.trim() }) }); setLiveCode('') }
+    catch (e: any) { setLiveState((p: any) => ({ ...(p || {}), message: '❌ ' + (e?.message || e) })) }
+    finally { setLiveBusy(false) }
+  }
+  async function resendLive() {
+    if (!live?.source?.id) return
+    try { await api(`/api/v1/commcalc/data-sources/${live.source.id}/live-login/resend`, { method: 'POST', body: '{}' }) } catch { /* the state poll shows the outcome */ }
+  }
+  async function closeLive(cancel = true) {
+    const id = live?.source?.id
+    if (id && cancel && liveState?.phase !== 'authenticated') {
+      try { await api(`/api/v1/commcalc/data-sources/${id}/live-login/cancel`, { method: 'POST', body: '{}' }) } catch { /* best-effort */ }
+    }
+    setLive(null); setLiveState(null); setLiveCode('')
+    try { const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) } catch { /* keep list */ }
   }
   function authBadge(s: any) {
     const st = s.auth_status || 'unconfigured'
@@ -606,6 +652,9 @@ export default function EmailImportsPage() {
                     {s.last_status && <div style={{ color: 'var(--text3)', fontSize: 11, marginTop: 2, maxWidth: 240, whiteSpace: 'normal' }}>{s.last_status}</div>}
                   </td>
                   <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {['vidapay', 'total_access', 'b2bsoft', 'b2b'].includes((s.processor || '').toLowerCase()) && (
+                      <><button className="btn btn-secondary" title="Watchable LIVE login: one browser stays open from login through the 2FA code — the code is sent ONCE (no re-send). Best for VidaPay / Total Access." style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626', fontWeight: 700 }} onClick={() => startLive(s)}>🔴 Live login</button>{' '}</>
+                    )}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} disabled={authBusy === s.id} onClick={() => startLogin(s)}>{authBusy === s.id ? '…' : (s.auth_status === 'authenticated' ? '🔁 Re-auth' : '🔐 Log in')}</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => runSource(s)}>▶ Pull now</button>{' '}
                     <button className="btn btn-secondary" title="See the page the headless login browser last saw (2FA screen / bot-wall / error)" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => openShot(s)}>📷</button>{' '}
@@ -765,6 +814,64 @@ export default function EmailImportsPage() {
           </div>
         </div>
       )}
+
+      {/* ── 🔴 LIVE login: one persistent browser, watched via a streamed screenshot; code sent ONCE ── */}
+      {live && (() => {
+        const ph = liveState?.phase || 'starting'
+        const showCode = ph === 'awaiting_code' || (ph === 'error' && liveState?.shot) || ph === 'verifying'
+        const done = ph === 'authenticated'
+        const badge: Record<string, { t: string; c: string; b: string }> = {
+          starting: { t: '⏳ Starting…', c: '#1e40af', b: '#dbeafe' },
+          login: { t: '⏳ Signing in…', c: '#1e40af', b: '#dbeafe' },
+          awaiting_code: { t: '🔒 Enter the code', c: '#9a3412', b: '#ffedd5' },
+          verifying: { t: '⏳ Verifying…', c: '#1e40af', b: '#dbeafe' },
+          authenticated: { t: '✅ Signed in', c: '#166534', b: '#dcfce7' },
+          error: { t: '⚠️ Error', c: '#991b1b', b: '#fee2e2' },
+          cancelled: { t: '○ Cancelled', c: 'var(--text3)', b: 'var(--surface2)' },
+          idle: { t: '○ Idle', c: 'var(--text3)', b: 'var(--surface2)' },
+        }
+        const bd = badge[ph] || badge.starting
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }} onClick={() => closeLive(true)}>
+            <div className="card" style={{ padding: 18, width: 720, maxWidth: '95vw', maxHeight: '92vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>🔴 Live login — <span style={{ fontWeight: 400 }}>{live.source?.label || live.source?.username || live.source?.processor}</span></div>
+                <span style={{ display: 'inline-block', padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: bd.c, background: bd.b }}>{bd.t}</span>
+                <div style={{ flex: 1 }} />
+                <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => closeLive(true)}>Close</button>
+              </div>
+              <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '0 0 10px' }}>{liveState?.message || 'Starting…'}</p>
+              <div style={{ position: 'relative', minHeight: 220, background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
+                {liveState?.shot
+                  // eslint-disable-next-line @next/next/no-img-element
+                  ? <img src={liveState.shot} alt="Live login screen" style={{ maxWidth: '100%', borderRadius: 8 }} />
+                  : <div style={{ color: 'var(--text3)', fontSize: 13, padding: 30 }}>Opening the portal in a live browser… the screen appears here in a moment.</div>}
+              </div>
+              {done ? (
+                <div style={{ padding: '10px 12px', borderRadius: 8, background: '#dcfce7', color: '#166534', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontWeight: 700 }}>✅ Signed in — the session is saved and reused until it expires.</span>
+                  <div style={{ flex: 1 }} />
+                  <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={() => closeLive(false)}>Done</button>
+                </div>
+              ) : showCode ? (
+                <div>
+                  <input autoFocus inputMode="numeric" value={liveCode} onChange={e => setLiveCode(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') submitLive() }} placeholder="123456"
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 18, letterSpacing: 3, textAlign: 'center', marginBottom: 10 }} />
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={liveBusy} onClick={resendLive}>↻ Resend</button>
+                    <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>The code is sent ONCE to this same live browser — enter the latest code; Resend voids the previous one.</span>
+                    <div style={{ flex: 1 }} />
+                    <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={liveBusy || !liveCode.trim() || ph === 'verifying'} onClick={submitLive}>{ph === 'verifying' ? 'Verifying…' : 'Submit code'}</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>{ph === 'error' || ph === 'cancelled' ? 'Close this and try again, or use 🔐 Log in as a fallback.' : 'Watch the live screen above — the code box appears here once the portal challenges.'}</div>
+              )}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── Login-screenshot viewer: the page the headless Playwright browser last saw for a source ── */}
       {shotView && (

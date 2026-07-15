@@ -10598,6 +10598,110 @@ def data_source_login_screenshot(sid: str, org_id: str = ORG_ID):
     return {"ready": True, "shot": "data:image/jpeg;base64," + r["login_shot"], "at": r.get("login_shot_at")}
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# LIVE PORTAL LOGIN — one persistent browser from login through code entry, so VidaPay/T-CETRA's
+# new-device 2FA code is sent ONCE and the operator's code goes into the SAME live page (no re-navigate,
+# no resend). See commcalc/live_login.py for the worker-thread + command-queue design. The screenshot
+# stream is served by /live-login/state (polled ~1s), NOT by the data-sources list. OPERATOR CAVEAT:
+# the session lives in ONE worker process's memory → the backend must run a SINGLE uvicorn worker
+# (Railway FastAPI default) or start + submit could hit different workers. Fallback is login/start+verify.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _live_persist(client, sid, org_id):
+    """A persist callback the live session calls (from its worker thread) to store the durable session
+    once authenticated. Org-scoped write; best-effort so a DB hiccup can't crash the login thread."""
+    def _p(updates):
+        try:
+            client.schema("commcalc").table("data_source").update(updates)\
+                .eq("id", sid).eq("org_id", org_id).execute()
+        except Exception:
+            pass
+    return _p
+
+
+def _live_source_row(client, sid, org_id):
+    rows = (client.schema("commcalc").table("data_source").select("*")
+            .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "unknown data source")
+    return rows[0]
+
+
+@router.post("/data-sources/{sid}/live-login/start")
+def live_login_start(sid: str, org_id: str = ORG_ID):
+    """Spawn (or replace) the persistent live-login session for this source. Non-blocking — a worker
+    thread drives the login to the 2FA code screen; the UI polls /live-login/state (~1s) to watch it."""
+    require_org(org_id)
+    from app.modules.commcalc import live_login
+    client = sb()
+    s = _live_source_row(client, sid, org_id)
+    if not (s.get("password") and (s.get("username") or s.get("account_id"))):
+        raise HTTPException(400, "Enter the Account ID, User ID and Password on this login first, then start the live login.")
+    now = datetime.now(timezone.utc)
+    try:
+        client.schema("commcalc").table("data_source").update(
+            {"auth_status": "authenticating", "auth_message": "Live login in progress…",
+             "pending_started_at": now.isoformat(), "last_run_at": now.isoformat()})\
+            .eq("id", sid).eq("org_id", org_id).execute()
+    except Exception:
+        pass
+    sess = live_login.start_session(sid, org_id, s, _live_persist(client, sid, org_id))
+    return {"ok": True, "phase": sess.snapshot_phase(),
+            "message": "Live session starting — watch it below. The 2FA code is sent ONCE to this same "
+                       "live browser; enter it here when the code box appears."}
+
+
+@router.get("/data-sources/{sid}/live-login/state")
+def live_login_state(sid: str, org_id: str = ORG_ID):
+    """The live session's phase + human message + the LATEST screenshot (data-uri JPEG). Polled ~1s by
+    the UI. Screenshot is served ONLY here (never in the polled data-sources list)."""
+    require_org(org_id)
+    from app.modules.commcalc import live_login
+    sess = live_login.get_session(sid, org_id)
+    if not sess:
+        return {"phase": "idle", "message": "No live session running — click 🔴 Live login to start one.",
+                "shot": None, "updated_at": None}
+    return sess.state()
+
+
+@router.post("/data-sources/{sid}/live-login/submit")
+def live_login_submit(sid: str, body: dict, org_id: str = ORG_ID):
+    """Enqueue the operator's 2FA code into the LIVE session. The worker thread fills it into the same
+    open page, selects the trust radio and clicks Verify — the UI polls /state for the outcome."""
+    require_org(org_id)
+    from app.modules.commcalc import live_login
+    code = str((body or {}).get("code") or "").strip()
+    if not code:
+        raise HTTPException(400, "Enter the verification code.")
+    sess = live_login.get_session(sid, org_id)
+    if not sess:
+        raise HTTPException(400, "No live session running — click 🔴 Live login to start one.")
+    sess.submit(code)
+    return {"ok": True, "phase": sess.snapshot_phase(), "message": "Submitting the code to the live session…"}
+
+
+@router.post("/data-sources/{sid}/live-login/resend")
+def live_login_resend(sid: str, org_id: str = ORG_ID):
+    """Click the LIVE page's resend / send-code control — no re-login, no re-navigation."""
+    require_org(org_id)
+    from app.modules.commcalc import live_login
+    sess = live_login.get_session(sid, org_id)
+    if not sess:
+        raise HTTPException(400, "No live session running — click 🔴 Live login to start one.")
+    sess.resend()
+    return {"ok": True, "phase": sess.snapshot_phase()}
+
+
+@router.post("/data-sources/{sid}/live-login/cancel")
+def live_login_cancel(sid: str, org_id: str = ORG_ID):
+    """Cancel + close the live session (frees the headless browser)."""
+    require_org(org_id)
+    from app.modules.commcalc import live_login
+    sess = live_login.get_session(sid, org_id)
+    if sess:
+        sess.cancel()
+    return {"ok": True}
+
+
 _MA_COMPONENTS = ["device_margin", "consumer_margin", "consumer_financing", "rebate",
                   "wallet_funding", "fees_margin",
                   "spiff_m1", "spiff_m2", "spiff_m3", "spiff_m4", "spiff_m5", "spiff_m6"]
