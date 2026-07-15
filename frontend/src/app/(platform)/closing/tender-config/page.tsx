@@ -28,6 +28,7 @@ export default function TenderConfigPage() {
   const [assign, setAssign] = useState<Record<string, Record<string, string>>>({ sales: {}, x_report: {} })
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+  const [uploadLeg, setUploadLeg] = useState<'sales' | 'x_report' | 'auto'>('auto')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(() => {
@@ -72,33 +73,42 @@ export default function TenderConfigPage() {
   }
 
   // ── detect (smart map): from an uploaded sample, or from already-ingested data ──
-  async function detect(file?: File) {
+  // `leg` ('sales'|'x_report'|'auto', default 'auto') lets the caller force which leg an uploaded
+  // sample belongs to; the backend auto-detects the file's own shape (real B2B multi-sheet X-Report vs
+  // a Sales Transaction Details export) when left on auto, and reports back which leg it landed the
+  // values in (`detected_leg`/`detect_detail`) so a sample that has no ingested data yet — the case an
+  // upload-only leg needs — still gets mapped.
+  async function detect(file?: File, leg: 'sales' | 'x_report' | 'auto' = 'auto') {
     setBusy(true); setMsg('🔍 Detecting tender types…')
     try {
       const fd = new FormData()
-      if (file) fd.append('file', file)
+      if (file) { fd.append('file', file); fd.append('leg', leg) }
       const d: any = await apiUpload('/api/v1/closing/tender-config/detect', fd)
       setRawLabels(prev => {
         const next = { ...prev }
-        for (const leg of ['sales', 'x_report'] as const) {
-          const found: Sug[] = d?.[leg] || []
-          // a file only carries the sales leg; keep existing labels for the untouched leg
-          if (file && leg === 'x_report' && !found.length) continue
-          const merged = [...next[leg]]
+        for (const l of ['sales', 'x_report'] as const) {
+          const found: Sug[] = d?.[l] || []
+          const merged = [...next[l]]
           for (const s of found) if (!merged.some(x => x.raw_label === s.raw_label)) merged.push(s)
-          next[leg] = merged
+          next[l] = merged
         }
         return next
       })
       // pre-fill assignments from suggestions (don't clobber an existing manual choice)
       setAssign(prev => {
         const next = { sales: { ...prev.sales }, x_report: { ...prev.x_report } }
-        for (const leg of ['sales', 'x_report'] as const) for (const s of (d?.[leg] || []))
-          if (s.suggested_tender && !next[leg][s.raw_label]) next[leg][s.raw_label] = s.suggested_tender
+        for (const l of ['sales', 'x_report'] as const) for (const s of (d?.[l] || []))
+          if (s.suggested_tender && !next[l][s.raw_label]) next[l][s.raw_label] = s.suggested_tender
         return next
       })
       const n = (d?.sales?.length || 0) + (d?.x_report?.length || 0)
-      setMsg(n ? `🔍 Found ${n} tender value(s); pre-filled the best match — review & Save.` : 'No tender values found — upload a sample report, or ingest a day of sales first.')
+      if (file && d?.detected_leg) {
+        const legLabel = d.detected_leg === 'x_report' ? 'X-Report' : 'Sales transactions'
+        const found = (d?.[d.detected_leg]?.length || 0)
+        setMsg(`🔍 Detected: ${legLabel}${d?.detect_detail ? ` (${d.detect_detail})` : ''} — ${found} raw value(s). Pre-filled the best match — review & Save.`)
+      } else {
+        setMsg(n ? `🔍 Found ${n} tender value(s); pre-filled the best match — review & Save.` : 'No tender values found — upload a sample report, or ingest a day of sales first.')
+      }
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     setBusy(false)
   }
@@ -188,9 +198,15 @@ export default function TenderConfigPage() {
       <button className="btn btn-secondary" style={{ fontSize: 13, marginTop: 8 }} onClick={addDef}>＋ Add tender</button>
 
       {/* Step 2 — detect */}
-      <StepHead n={2} title="Find your POS tender values" sub="Upload a sample Sales Transaction report, or pull the distinct Tender Types from data you've already ingested. On the Total side both reports come from b2bsoft." />
+      <StepHead n={2} title="Find your POS tender values" sub="Upload a sample Sales Transaction report or a sample X-Report (auto-detected by shape, or pick which leg it is), or pull the distinct Tender Types from data you've already ingested. On the Total side both reports come from b2bsoft." />
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) detect(f); e.target.value = '' }} />
+        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+          onChange={e => { const f = e.target.files?.[0]; if (f) detect(f, uploadLeg); e.target.value = '' }} />
+        <select style={sel} value={uploadLeg} onChange={e => setUploadLeg(e.target.value as any)} title="Which report the next uploaded sample is">
+          <option value="auto">Auto-detect shape</option>
+          <option value="sales">Sales transactions sample</option>
+          <option value="x_report">X-Report sample</option>
+        </select>
         <button className="btn btn-secondary" disabled={busy} style={{ fontSize: 13 }} onClick={() => fileRef.current?.click()}>📄 Upload a sample report</button>
         <button className="btn btn-secondary" disabled={busy} style={{ fontSize: 13 }} onClick={() => detect()}>⚡ Detect from ingested data</button>
       </div>
