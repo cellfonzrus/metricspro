@@ -8332,6 +8332,213 @@ def exec_overview(period: str, org_id: str = ORG_ID):
             "stores": stores}
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# EXECUTIVE MTD SUMMARY — the b2bsoft "Month To Date Location/Employee Sales Report", replicated from the
+# org-corrected sales source so it works for EVERY tenant (luxelink + house) with NO monthly upload.
+# DISPLAY-ONLY: reads sales, writes nothing, touches no pay path. Metric DEFINITIONS are CONFIG
+# (exec_metric_config, mig 204) — NOT a ninth hard-coded accessory classifier (accessory-divergence note).
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# Defaults DERIVED from the real luxelink Total-Wireless Sales-Transaction-Details export. The ingest
+# stores category = Category-column OR System-Category-column (router.py ~694), so each token list carries
+# BOTH variants (System Category CellPhone/RTR Product/Accessory + Category KittedBranded/HandsetBranded/
+# Other Carr. payments). Tokens are lowercase; the engine lowercases each sale line before matching.
+_EXEC_METRIC_DEFAULTS = {
+    'activation':     {'rules': {'byod': ['byod'], 'upgrade': ['upgrade'], 'port': ['port']}, 'basis': 'count'},
+    'phones':         {'rules': {'category': ['cellphone', 'kittedbranded']}, 'basis': 'count'},
+    'bill_payment':   {'rules': {'department': ['rtr'], 'category': ['rtr product', 'other carr. payments']}, 'basis': 'count'},
+    'accessory':      {'rules': {'category': ['accessory', 'handsetbranded', 'accessories']}, 'basis': 'ext_price'},
+    'activation_fee': {'rules': {'product_desc_contains': ['access charge']}, 'basis': 'ext_price'},
+    'protect':        {'rules': {'product_desc_contains': ['protect'],
+                                 'exclude_product_desc_contains': ['screen protect'],
+                                 'exclude_department': ['rtr'],
+                                 'exclude_category': ['rtr product', 'other carr. payments']}, 'basis': 'count'},
+}
+_EXEC_BUCKETS = tuple(_EXEC_METRIC_DEFAULTS.keys())
+
+
+def _exec_metric_config(client, org_id):
+    """Per-tenant Executive-MTD metric DEFINITIONS (exec_metric_config, mig 204), falling back to the
+    DERIVED code defaults so the report works before the migration runs / for an un-seeded tenant. Returns
+    {bucket: {'rules': {...}, 'basis': 'count'|'ext_price'}}. SAP-configurable: definitions are config, not
+    a hard-coded classifier."""
+    cfg = {k: {'rules': dict(v['rules']), 'basis': v['basis']} for k, v in _EXEC_METRIC_DEFAULTS.items()}
+    try:
+        rows = (client.schema('commcalc').table('exec_metric_config')
+                .select('bucket,rules,basis').eq('org_id', org_id).execute().data) or []
+        for r in rows:
+            b = r.get('bucket')
+            if b in cfg:
+                cfg[b] = {'rules': r.get('rules') or {}, 'basis': r.get('basis') or cfg[b]['basis']}
+    except Exception:
+        pass
+    return cfg
+
+
+def _exec_line_match(rule, dept, cat, pdesc):
+    """True if a sale line matches a bucket rule (all case-insensitive; inputs already lowercased).
+    category/department = exact membership in a token list; product_desc_contains = substring; exclude_*
+    negate first. Match = ANY positive predicate true AND no exclusion true."""
+    if rule.get('exclude_department') and dept in rule['exclude_department']:
+        return False
+    if rule.get('exclude_category') and cat in rule['exclude_category']:
+        return False
+    if rule.get('exclude_product_desc_contains') and any(t in pdesc for t in rule['exclude_product_desc_contains']):
+        return False
+    if rule.get('category') and cat in rule['category']:
+        return True
+    if rule.get('department') and dept in rule['department']:
+        return True
+    if rule.get('product_desc_contains') and any(t in pdesc for t in rule['product_desc_contains']):
+        return True
+    return False
+
+
+def _exec_act_class(ct, rules):
+    """Activation split (b2bsoft Location/Employee report): BYOD/Upgrade/Port by keyword-CONTAINS on the
+    contract_type (config tokens), any OTHER non-blank contract_type = a plain Activation. Priority
+    upgrade > byod > port > activation (so 'BYOD Port' = BYOD, 'Port with IDV' = Port). This is the ONE
+    split the spreadsheet uses; it reuses the same 'non-blank contract_type = an activation' rule as
+    classify_contract_type/_compute_feed_actuals_py but adds the Port refinement. None = not an activation
+    line (blank contract_type — e.g. an accessory/bill-payment line)."""
+    c = (ct or '').strip().lower()
+    if not c:
+        return None
+    if any(t in c for t in (rules.get('upgrade') or [])):
+        return 'upgrade'
+    if any(t in c for t in (rules.get('byod') or [])):
+        return 'byod'
+    if any(t in c for t in (rules.get('port') or [])):
+        return 'port'
+    return 'activation'
+
+
+def _exec_mtd(client, org_id, period):
+    """Executive Month-To-Date summary — the b2bsoft 'Month To Date Location/Employee Sales Report'
+    replicated from the ORG-CORRECTED sales source (_sales_rows_union: the daily feed leads the OPEN month,
+    the authoritative raw_sales a closed one, each filling the other's day-gaps). Works for luxelink AND
+    the house org with NO monthly upload. DISPLAY-ONLY (reads sales, writes nothing). Buckets config-driven.
+
+    Verified formulas (against 'Luxelink MTD 15 July.xlsx'): Total Activation = Activation+Port+BYOD+Upgrade;
+    Trending Box = Total Activation × days_in_month ÷ complete_days_elapsed; Trending Acc. Sales likewise on
+    Acc. Sales; Conv. = Total Activation ÷ Bill Payment Qty; APB = Acc. Sales ÷ Total Activation. For a
+    closed/past month trending = actual (factor 1)."""
+    cfg = _exec_metric_config(client, org_id)
+    act_rules = cfg.get('activation', {}).get('rules', {})
+    rows, meta = _sales_rows_union(client, org_id, period)
+
+    # trending divisor: complete days elapsed (= yesterday's day-of-month) for the OPEN month; the full
+    # month (factor 1) for a closed/past month. days_in_month from the calendar.
+    mo, yr = _month_year(period)
+    dim = _calendar.monthrange(yr, mo)[1] if (1 <= mo <= 12 and yr) else 30
+    elapsed = max(1, _date.today().day - 1) if _is_open_month(period) else dim
+    trend_factor = (dim / elapsed) if elapsed else 1.0
+
+    def _blank():
+        return {'activation': 0, 'port': 0, 'byod': 0, 'upgrade': 0, 'total_phones': 0,
+                'bill_qty': 0, 'bill_amt': 0.0, 'acc_sales': 0.0, 'activation_fee': 0.0, 'protect': 0}
+    by_store, by_emp = {}, {}
+    _VOID = ('yes', 'true', '1', 'y', 't', 'voided')
+    for r in rows:
+        if str(r.get('voided') or '').strip().lower() in _VOID:
+            continue
+        dept = str(r.get('department') or '').strip().lower()
+        cat = str(r.get('category') or '').strip().lower()
+        pdesc = str(r.get('product_desc') or '').strip().lower()
+        ext = safe_float(r.get('ext_price'))
+        store = str(r.get('store') or '').strip() or '—'
+        rep = str(r.get('salesperson') or '').strip() or '—'
+        targets = (by_store.setdefault(store, _blank()), by_emp.setdefault(rep, _blank()))
+        acl = _exec_act_class(r.get('contract_type'), act_rules)
+        for d in targets:
+            if acl:
+                d[acl] += 1
+            if _exec_line_match(cfg['phones']['rules'], dept, cat, pdesc):
+                d['total_phones'] += 1
+            if _exec_line_match(cfg['bill_payment']['rules'], dept, cat, pdesc):
+                d['bill_qty'] += 1
+                d['bill_amt'] += ext
+            if _exec_line_match(cfg['accessory']['rules'], dept, cat, pdesc):
+                d['acc_sales'] += ext
+            if _exec_line_match(cfg['activation_fee']['rules'], dept, cat, pdesc):
+                d['activation_fee'] += ext
+            if _exec_line_match(cfg['protect']['rules'], dept, cat, pdesc):
+                d['protect'] += 1
+
+    def _row(name, label_key, d):
+        ta = d['activation'] + d['port'] + d['byod'] + d['upgrade']
+        return {label_key: name,
+                'total_activation': ta, 'activation': d['activation'], 'port': d['port'],
+                'byod': d['byod'], 'upgrade': d['upgrade'], 'total_phones': d['total_phones'],
+                'trending_box': round(ta * trend_factor),
+                'bill_payment_qty': d['bill_qty'], 'amount': round(d['bill_amt'], 2),
+                'conv': round(ta / d['bill_qty'], 4) if d['bill_qty'] else 0.0,
+                'acc_sales': round(d['acc_sales'], 2),
+                'apb': round(d['acc_sales'] / ta, 2) if ta else 0.0,
+                'trending_acc_sales': round(d['acc_sales'] * trend_factor, 2),
+                'activation_fee': round(d['activation_fee'], 2),
+                'total_protect': d['protect']}
+
+    def _finish(agg, label_key):
+        out = [_row(n, label_key, d) for n, d in agg.items()]
+        out.sort(key=lambda x: -x['total_activation'])
+        return out
+
+    def _totals(rowset, label_key):
+        t = {label_key: 'TOTAL'}
+        for k in ('total_activation', 'activation', 'port', 'byod', 'upgrade', 'total_phones',
+                  'trending_box', 'bill_payment_qty', 'amount', 'acc_sales', 'trending_acc_sales',
+                  'activation_fee', 'total_protect'):
+            t[k] = round(sum(r.get(k, 0) for r in rowset), 2)
+        t['conv'] = round(t['total_activation'] / t['bill_payment_qty'], 4) if t['bill_payment_qty'] else 0.0
+        t['apb'] = round(t['acc_sales'] / t['total_activation'], 2) if t['total_activation'] else 0.0
+        return t
+
+    stores = _finish(by_store, 'store')
+    emps = _finish(by_emp, 'employee')
+    return {'period': period, 'source': meta,
+            'trending': {'elapsed_days': elapsed, 'days_in_month': dim, 'factor': round(trend_factor, 6)},
+            'by_location': {'rows': stores, 'total': _totals(stores, 'store')},
+            'by_employee': {'rows': emps, 'total': _totals(emps, 'employee')}}
+
+
+@router.get("/exec-mtd/{period}")
+def exec_mtd(period: str, org_id: str = ORG_ID):
+    """Executive Month-To-Date summary (b2bsoft Location + Employee MTD sales) — replicated from the
+    org-corrected sales source so it works for every tenant with NO monthly upload. DISPLAY-ONLY,
+    org-scoped, config-driven metric definitions."""
+    require_org(org_id)
+    return _exec_mtd(sb(), org_id, period)
+
+
+@router.get("/exec-metric-config")
+def get_exec_metric_config(org_id: str = ORG_ID):
+    """The tenant's Executive-MTD metric DEFINITIONS (config, falling back to code defaults). Drives the
+    admin-editable 'Metric definitions' panel — SAP-configurable, no hard-coded classifier."""
+    require_org(org_id)
+    cfg = _exec_metric_config(sb(), org_id)
+    return {"buckets": list(_EXEC_BUCKETS), "config": cfg}
+
+
+@router.put("/exec-metric-config")
+def put_exec_metric_config(body: dict, org_id: str = ORG_ID):
+    """Upsert one bucket's metric definition (org-scoped). body = {bucket, rules:{...}, basis}. Only the
+    six known buckets are accepted. Degrades gracefully if mig 204 hasn't run (returns ok=false hint)."""
+    require_org(org_id)
+    bucket = str(body.get('bucket') or '').strip()
+    if bucket not in _EXEC_BUCKETS:
+        raise HTTPException(400, f"unknown bucket (allowed: {', '.join(_EXEC_BUCKETS)})")
+    rules = body.get('rules') if isinstance(body.get('rules'), dict) else {}
+    basis = 'ext_price' if str(body.get('basis') or 'count') == 'ext_price' else 'count'
+    try:
+        sb().schema('commcalc').table('exec_metric_config').upsert(
+            {'org_id': org_id, 'bucket': bucket, 'rules': rules, 'basis': basis,
+             'updated_at': _datetime.now(_timezone.utc).isoformat()},
+            on_conflict='org_id,bucket').execute()
+        return {"ok": True, "bucket": bucket}
+    except Exception as e:
+        return {"ok": False, "hint": "run migration 204 (exec_metric_config)", "error": str(e)[:200]}
+
+
 def _acc_flags_by_rep(client, org_id, period):
     """Lightweight per-rep accessory-flag counts (over/under threshold) for the action plan — ONE read of
     raw_sales via the configurable accessory classifier. NO item_mapping load/write (unlike the full
@@ -9269,6 +9476,73 @@ def promote_feed(period: str, org_id: str = ORG_ID, dry_run: bool = True, force:
     recompute the period. Idempotent + guarded; merges so no transaction is ever dropped."""
     require_org(org_id)
     return _promote_feed_to_raw_sales(sb(), org_id, period, dry_run=dry_run, force=force)
+
+
+def _promote_all_due(client, period=None):
+    """ORG-AGNOSTIC, self-healing feed→raw_sales promotion. For the OPEN month (default) it reconciles
+    EVERY tenant that has daily_sales_feed rows — so a tenant whose email sweep hasn't ingested a NEW
+    attachment recently still gets its raw_sales backfilled from the accumulated feed. This is the
+    org-level fix for "the daily feed is ingesting but the Daily Sales reports show nothing": the promotion
+    was previously invoked ONLY as a side-effect of the email sweep processing a fresh attachment
+    (_run_email_sweep ~line 9126); when no new file arrives, the ~10 raw_sales-only display consumers
+    (gp_report / sales_analyzer / top-sellers / discrepancy phantom / accessory-flags / fraud scan + the
+    finance P&L and retail closing _b2b_day) show empty for a tenant with a healthy feed (luxelink July 2026).
+
+    MONEY-SAFE by construction: promotion MERGES + dedups by trans_id (a trans_id present in BOTH tables is
+    counted ONCE — feed wins, monthly-only kept once) and is guarded by the existing retain guard; it runs
+    on the OPEN month only, which the commission calculator (_fetch_sales_unified) reads from the FEED
+    regardless — so Boost/house pay is byte-identical and no pay is recomputed here (the sweep path + manual
+    /calculate own recompute). Per-org opt-out via report_definitions.auto for report_key='sales' (the same
+    gate the in-sweep promote uses)."""
+    period = period or _ftp_current_period()
+    pv = _pvariants(period)
+    # 1) every tenant with feed rows for this period — fast RPC (mig 204), else a bounded distinct scan so
+    #    the job still self-heals before the migration runs.
+    orgs = []
+    try:
+        rows = client.schema('commcalc').rpc('sales_feed_orgs_for_period', {'p_periods': pv}).execute().data or []
+        orgs = [r['org_id'] for r in rows if r.get('org_id')]
+    except Exception:
+        try:
+            seen, start = set(), 0
+            while True:
+                batch = (client.schema('commcalc').table('daily_sales_feed').select('org_id')
+                         .in_('period', pv).range(start, start + 4999).execute().data) or []
+                for r in batch:
+                    if r.get('org_id'):
+                        seen.add(r['org_id'])
+                if len(batch) < 5000:
+                    break
+                start += 5000
+            orgs = list(seen)
+        except Exception as e:
+            return {"ok": False, "error": f"could not enumerate feed orgs: {e}", "period": period}
+    out = []
+    for oid in orgs:
+        try:
+            if not _registry_auto_map(client, oid).get('sales', True):
+                out.append({"org_id": oid, "skipped": "sales auto=false"})
+                continue
+            pr = _promote_feed_to_raw_sales(client, oid, period)
+            out.append({"org_id": oid, "written": (pr or {}).get('written', 0),
+                        "result_lines": (pr or {}).get('result_lines'),
+                        "skipped": (pr or {}).get('skipped')})
+        except Exception as e:
+            out.append({"org_id": oid, "error": str(e)[:200]})
+    return {"ok": True, "period": period, "orgs": len(orgs),
+            "written_orgs": sum(1 for r in out if r.get('written')), "detail": out}
+
+
+@router.post("/sales/promote-due")
+def sales_promote_due(x_notify_secret: str = Header(default=""), period: str = None):
+    """pg_cron entrypoint — org-agnostic, self-healing feed→raw_sales promotion for the OPEN month across
+    EVERY tenant (see _promote_all_due). Reuses NOTIFY_RUN_SECRET (no new env var). DISPLAY-safe: OPEN
+    month only, promotion dedups by trans_id, no pay recompute — a run can never change Boost numbers or
+    double-count. Schedule hourly (offset from the email-sweep cron) so raw_sales never lags the feed for
+    any tenant."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    return _promote_all_due(sb(), period)
 
 
 def _strip_pw(cfg):
