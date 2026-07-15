@@ -4,9 +4,10 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
-import { ExportButtons, ExportPayload } from '@/lib/export'
-import { SendReportButton } from '@/lib/send-report'
+import ReportExportBar from '@/components/ReportExportBar'
+import type { ExportSheet } from '@/lib/export'
 import { StalenessBanner } from '../_components/StalenessBanner'
+import { statementInfoSheet, statementSubtitle, type StatementMeta } from '../_components/statementExport'
 
 const SEC: Record<string, string> = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity' }
 
@@ -19,11 +20,16 @@ function BSInner() {
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState<Record<string, boolean>>({})
   const [reloadKey, setReloadKey] = useState(0)
+  const [inv, setInv] = useState<any[]>([])   // per-store inventory backing the BS inventory line (for the detail sheet)
 
   useEffect(() => {
     api(`/api/v1/account/overview/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
       .then((o: any) => setScopes(o.scopes || [])).catch(() => setScopes([]))
   }, [period, reloadKey])
+  useEffect(() => {
+    api(`/api/v1/account/inventory-values?org_id=${ORG_ID}`)
+      .then((d: any) => setInv(d.rows || [])).catch(() => setInv([]))
+  }, [reloadKey])
   useEffect(() => {
     setLoading(true)
     api(`/api/v1/account/balance-sheet/${encodeURIComponent(period)}?scope=${encodeURIComponent(scope)}&org_id=${ORG_ID}`)
@@ -33,21 +39,49 @@ function BSInner() {
   const st = data?.statement
   const sec = (t: string) => (st?.sections || []).find((s: any) => s.type === t)
 
-  function buildPayload(): ExportPayload {
+  // RULE FOUR (§3c) export. DISPLAY/EXPORT ONLY — figures come straight from the computed snapshot.
+  function bsMeta(): StatementMeta {
+    return {
+      reportName: 'Balance Sheet', scopeLabel: st?.scope_label || scope, period, basis: 'Point-in-time',
+      computed: !!data?.computed, computedAt: data?.computed_at,
+      newestIngestAt: data?.newest_ingest_at, stale: !!data?.stale,
+      extra: st ? [
+        ['Balanced', st.balanced ? 'Yes' : 'No'],
+        ['Imbalance (Assets − L+E)', fmt(st.imbalance || 0)],
+      ] : undefined,
+    }
+  }
+  function bsSheets(): ExportSheet[] {
     const rows: any[] = []
     ;(st?.sections || []).forEach((s: any) => {
       s.lines.forEach((l: any) => rows.push({ section: SEC[s.type] || s.type, line: l.label, amount: l.amount }))
       rows.push({ section: SEC[s.type] || s.type, line: `  Total ${SEC[s.type] || s.type}`, amount: s.subtotal })
     })
-    return {
-      title: `Balance Sheet — ${st?.scope_label || scope}`, subtitle: `${period} · point-in-time`,
-      filename: `balance-sheet-${scope.replace(/[^a-z0-9]+/gi, '-')}-${period.replace(/\s+/g, '-')}`,
-      sheets: [{ name: 'Balance Sheet', rows, columns: [
+    const sheets: ExportSheet[] = [
+      statementInfoSheet(bsMeta()),                                   // self-describing cover (Excel too)
+      { name: 'Balance Sheet', rows, columns: [
         { header: 'Section', get: (r: any) => r.section },
         { header: 'Line', get: (r: any) => r.line },
         { header: 'Amount', get: (r: any) => r.amount, money: true },
-      ] }],
+      ] },
+    ]
+    // Multi-sheet: the per-store inventory backing the BS inventory line (effective = manual override
+    // if set, else swept b2bsoft value). Filtered to the selected store when a store scope is active,
+    // so the export mirrors the on-screen scope. Values as displayed on the Inventory Values page.
+    const invRows = scope.startsWith('store:')
+      ? inv.filter((r: any) => r.store === scope.slice('store:'.length))
+      : inv
+    if (invRows.length > 0) {
+      sheets.push({ name: 'Inventory detail', rows: invRows, columns: [
+        { header: 'Store', get: (r: any) => r.store },
+        { header: 'Swept (b2bsoft)', get: (r: any) => r.swept_value, money: true },
+        { header: 'Manual override', get: (r: any) => r.manual_value, money: true },
+        { header: 'Effective (on BS)', get: (r: any) => r.effective, money: true },
+        { header: 'Source', get: (r: any) => r.effective_source },
+        { header: 'As of', get: (r: any) => r.as_of_date },
+      ] })
     }
+    return sheets
   }
 
   return (
@@ -63,8 +97,11 @@ function BSInner() {
             {!scopes.find((s: any) => s.scope_key === scope) && <option value={scope}>{scope}</option>}
           </select>
           <Link className="btn" href="/accounts/inventory" style={{ fontSize: 13 }}>📦 Edit inventory</Link>
-          {st && <ExportButtons payload={buildPayload} />}
-          {data?.computed && <SendReportButton reportKey="account_balance_sheet" filters={{ period, scope }} />}
+          {st && <ReportExportBar
+            title={`Balance Sheet — ${st?.scope_label || scope}`}
+            subtitle={statementSubtitle(bsMeta())}
+            filename={`balance-sheet-${scope.replace(/[^a-z0-9]+/gi, '-')}-${period.replace(/\s+/g, '-')}`}
+            sheets={bsSheets()} />}
         </div>
       </div>
 

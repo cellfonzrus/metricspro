@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 export default function AccountsDashboard() {
   const { period } = usePeriod()
@@ -35,6 +36,32 @@ export default function AccountsDashboard() {
   const companyScopes = (data.scopes || []).filter((s: any) => s.scope_key?.startsWith('company:'))
   const storeScopes = (data.scopes || []).filter((s: any) => s.scope_key?.startsWith('store:'))
 
+  // RULE FOUR (§3c) — tiles doctrine: this hub is a dashboard with detail tables (By Company / By
+  // Store), so it exports a {Metric,Value} summary sheet PLUS those tables. DISPLAY/EXPORT ONLY.
+  const scopeCols: ExportColumn[] = [
+    { header: 'Scope', get: (r: any) => r.scope_label || r.scope_key },
+    { header: 'Revenue', get: (r: any) => r.revenue, money: true },
+    { header: 'Gross Profit', get: (r: any) => r.gross_profit, money: true },
+    { header: 'Net Income', get: (r: any) => r.net_income, money: true },
+    { header: 'Assets', get: (r: any) => r.assets, money: true },
+    { header: 'Balanced', get: (r: any) => (r.balanced ? 'Yes' : 'No') },
+  ]
+  function overviewSheets() {
+    const summary = [
+      { k: 'Revenue', v: fmt(consolidated?.revenue || 0) },
+      { k: 'Gross Profit', v: fmt(consolidated?.gross_profit || 0) },
+      { k: 'Net Income', v: fmt(consolidated?.net_income || 0) },
+      { k: 'Total Assets', v: fmt(consolidated?.assets || 0) },
+      { k: 'Balance sheet balances', v: consolidated?.balanced ? 'Yes' : 'No' },
+    ]
+    const sheets: { name: string; columns: ExportColumn[]; rows: any[] }[] = [
+      { name: 'Summary', columns: [{ header: 'Metric', get: (r: any) => r.k }, { header: 'Value', get: (r: any) => r.v }], rows: summary },
+    ]
+    if (companyScopes.length) sheets.push({ name: 'By Company', columns: scopeCols, rows: companyScopes })
+    if (storeScopes.length) sheets.push({ name: 'By Store', columns: scopeCols, rows: storeScopes })
+    return sheets
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
@@ -46,6 +73,9 @@ export default function AccountsDashboard() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--text2)', maxWidth: 380 }}>{msg}</span>}
+          {data.computed && <ReportExportBar title={`Account Overview — ${period}`}
+            subtitle={`${period} · consolidated + per company & store · cash basis`}
+            filename={`account-overview-${String(period).replace(/\s+/g, '-')}`} sheets={overviewSheets()} />}
           <button className="btn btn-primary" onClick={compute} disabled={computing}>
             {computing ? '⏳ Computing…' : '⚙️ Compute statements'}
           </button>
