@@ -1020,6 +1020,15 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
             if _classify(page) == "authenticated":
                 return {"status": "authenticated", "storage_state": ctx.storage_state(),
                         "diag": _snapshot(page), "screenshot_b64": _shot_b64(page)}
+            # NEW-DEVICE FLOW: restoring the pending session re-lands on the "New Sign In → Next"
+            # interstitial (id.vidapaycrm.com/TwoFactor/TwoFactorNewDeviceSignIn — only a Next button,
+            # no code box), so click THROUGH it (Next / method chooser) to reach the code field before
+            # searching. Same stateId → the already-sent code stays valid. (Owner diag 2026-07-15.)
+            if not _code_field(page):
+                try:
+                    _advance_2fa(page)
+                except Exception:
+                    pass
             code_el, code_fr = None, None
             for fr in _frames(page):
                 code_el = _find_input(fr, kinds=("text", "tel", "number", "password"),
@@ -1094,6 +1103,12 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
             if not on_2fa and _classify(page) == "authenticated":
                 return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": _snapshot(page),
                         "screenshot_b64": _shot_b64(page)}
+            # New-device flow can re-land on a "New Sign In → Next" interstitial before the code box.
+            if not (page.query_selector("#TwoFactorCode") or _code_field(page)):
+                try:
+                    _advance_2fa(page)
+                except Exception:
+                    pass
             code_el = page.query_selector("#TwoFactorCode")
             if not code_el:
                 for fr in _frames(page):
