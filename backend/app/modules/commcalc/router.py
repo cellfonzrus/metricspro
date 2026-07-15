@@ -10356,10 +10356,17 @@ async def _vidapay_scraper(org_id, src_row):
     run_data_source turns into an auth_status=needs_2fa prompt rather than a hard error."""
     from app.modules.commcalc import vidapay_sweep as vp
     from fastapi.concurrency import run_in_threadpool
+    # months_back is config-driven per source (notes-free knob on the row); default 2 months so a
+    # manual "Pull now" / scheduled pull stays inside the gateway budget. Operator widens via the row's
+    # months_back column; each report's param_spec.max_months_back still caps it (≤ 1 year hard limit).
+    try:
+        mb = int(src_row.get("months_back") or 2)
+    except Exception:
+        mb = 2
     return await run_in_threadpool(
         vp.run_vidapay_sweep, sb(), org_id, src_row.get("portal_url"),
         src_row.get("session_state"), src_row.get("id"), src_row.get("carrier_id"),
-        src_row.get("proxy_url"))
+        src_row.get("proxy_url"), src_row.get("account_id"), mb, src_row)
 
 
 async def _b2bsoft_scraper(org_id, src_row):
@@ -10557,6 +10564,139 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
         except Exception:
             pass
         raise HTTPException(500, f"pull failed: {e}")
+
+
+# ── REPORT-PULL MAPPING (mig 207) — the config that decides report→table→column (RULE TWO). Visible +
+# editable at /commcalc/report-mappings. An org's row overrides the house/default row; a missing table
+# degrades to report_pull.DEFAULT_REPORT_SPECS so the engine still has sane defaults. ────────────────
+_RPM_FIELDS = ["report_key", "display_name", "target_table", "column_map", "param_spec",
+               "export_pref", "enabled", "sort_order", "processor"]
+
+
+@router.get("/report-pull-map")
+def list_report_pull_map(processor: str = "", org_id: str = ORG_ID):
+    """The effective report-pull specs for this tenant (house defaults + this org's overrides). Each row
+    carries `inherited` (true = showing the house default, editing creates an override) so the admin page
+    shows exactly what will run and lets it be edited. Degrades to the Python defaults pre-migration 207."""
+    require_org(org_id)
+    from app.modules.commcalc import report_pull as rp
+    proc = (processor or None)
+    try:
+        specs = rp.resolve_report_specs(sb(), org_id, processor=proc, only_enabled=False)
+        ready = True
+    except Exception:
+        specs = [{**s, "org_id": org_id} for s in rp.default_specs(proc)]
+        ready = False
+    out = []
+    for s in specs:
+        s = dict(s)
+        s["inherited"] = str(s.get("org_id")) != str(org_id)
+        s.pop("_inherited", None)
+        out.append(s)
+    return {"ready": ready, "reports": out, "house_org": rp.HOUSE_ORG,
+            "targets_note": "raw_ma_marketplace_orders is a view over raw_ma_fulfillment (mod-asset)"}
+
+
+@router.put("/report-pull-map")
+def save_report_pull_map(body: dict, org_id: str = ORG_ID):
+    """Create/update THIS org's override for one report_key (never mutates the house default row — a
+    tenant edit becomes a tenant-scoped override). Upserts on (org_id, report_key)."""
+    require_org(org_id)
+    rk = (body.get("report_key") or "").strip()
+    if not rk:
+        raise HTTPException(400, "report_key is required")
+    row = {k: body[k] for k in _RPM_FIELDS if k in body}
+    row["org_id"] = org_id
+    row["report_key"] = rk
+    row["updated_at"] = datetime.now(timezone.utc).isoformat()
+    client = sb()
+    try:
+        existing = (client.schema("commcalc").table("report_pull_map").select("id")
+                    .eq("org_id", org_id).eq("report_key", rk).limit(1).execute().data) or []
+        if existing:
+            client.schema("commcalc").table("report_pull_map").update(row)\
+                .eq("org_id", org_id).eq("report_key", rk).execute()
+            return {"ok": True, "updated": True}
+        r = client.schema("commcalc").table("report_pull_map").insert(row).execute()
+        return {"ok": True, "id": (r.data or [{}])[0].get("id")}
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — is migration 207 applied? {e}")
+
+
+@router.post("/report-pull-map/{report_key}/reset")
+def reset_report_pull_map(report_key: str, org_id: str = ORG_ID):
+    """Drop THIS org's override for a report_key so it falls back to the house default."""
+    require_org(org_id)
+    if str(org_id) == "00000000-0000-0000-0000-000000000001":
+        raise HTTPException(400, "cannot reset the house default itself")
+    sb().schema("commcalc").table("report_pull_map").delete()\
+        .eq("org_id", org_id).eq("report_key", report_key).execute()
+    return {"ok": True}
+
+
+@router.post("/report-pull-map/reseed")
+def reseed_report_pull_map(org_id: str = ORG_ID):
+    """(Re)seed the house/default rows from report_pull.DEFAULT_REPORT_SPECS — idempotent, only inserts
+    the report_keys that are missing. A convenience mirror of migration 207's seed for the operator."""
+    require_org(org_id)
+    from app.modules.commcalc import report_pull as rp
+    client = sb()
+    inserted = []
+    try:
+        have = {r.get("report_key") for r in ((client.schema("commcalc").table("report_pull_map")
+                .select("report_key").eq("org_id", rp.HOUSE_ORG).execute().data) or [])}
+    except Exception as e:
+        raise HTTPException(400, f"report_pull_map not available — run migration 207 first: {e}")
+    for s in rp.DEFAULT_REPORT_SPECS:
+        if s["report_key"] in have:
+            continue
+        row = {k: s.get(k) for k in _RPM_FIELDS}
+        row["org_id"] = rp.HOUSE_ORG
+        client.schema("commcalc").table("report_pull_map").insert(row).execute()
+        inserted.append(s["report_key"])
+    return {"ok": True, "inserted": inserted, "already_present": sorted(have)}
+
+
+@router.post("/data-sources/sweep/run-due")
+async def data_sources_run_due(org_id: str = ORG_ID):
+    """Scheduled trigger (pg_cron → this endpoint, like the other /run-due sweeps): for every ENABLED
+    data_source whose next_run_at has passed and whose processor has a wired scraper, pull ALL enabled
+    reports (config-driven) and re-schedule next_run_at. The tenant does nothing in the UI. Best-effort
+    per source — one failure never aborts the batch. NOT money-touching: this only INGESTS source data."""
+    require_org(org_id)
+    client = sb()
+    now = datetime.now(timezone.utc)
+    try:
+        rows = (client.schema("commcalc").table("data_source").select("*")
+                .eq("enabled", True)
+                .or_(f"next_run_at.is.null,next_run_at.lte.{now.isoformat()}")
+                .execute().data) or []
+    except Exception as e:
+        return {"ok": False, "error": f"data_source not ready (mig 083/084/207?): {e}", "ran": []}
+    ran = []
+    for s in rows:
+        proc = (s.get("processor") or "").strip().lower()
+        handler = _SOURCE_SCRAPERS.get(proc)
+        oid = s.get("org_id") or org_id
+        nxt = _vip_next_run(s.get("frequency") or "daily", None, None, s.get("hour"), "America/New_York")
+        if not handler:
+            continue
+        try:
+            res = await handler(oid, s)
+            client.schema("commcalc").table("data_source").update(
+                {"last_run_at": now.isoformat(), "last_status": str((res or {}).get("status") or "ok"),
+                 "auth_status": "authenticated", "next_run_at": nxt})\
+                .eq("id", s["id"]).eq("org_id", oid).execute()
+            ran.append({"id": s["id"], "ok": True, "status": (res or {}).get("status")})
+        except Exception as e:
+            try:
+                client.schema("commcalc").table("data_source").update(
+                    {"last_run_at": now.isoformat(), "last_status": f"error: {str(e)[:160]}",
+                     "next_run_at": nxt}).eq("id", s["id"]).eq("org_id", oid).execute()
+            except Exception:
+                pass
+            ran.append({"id": s["id"], "ok": False, "error": str(e)[:200]})
+    return {"ok": True, "ran": ran, "count": len(ran)}
 
 
 def _do_portal_login(sid: str, org_id: str):
