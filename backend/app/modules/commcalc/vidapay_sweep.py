@@ -614,21 +614,37 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
                 raise VidaPayLoginError(
                     "Could not find the password field on the VidaPay login page — the form may render "
                     "differently than expected. Diagnostic: " + str(diag))
-            # Fill whichever of the three fields exist in the login frame.
-            acct_el = _find_input(login_fr, want=("account", "acct", "agent", "dealer", "merchant"),
-                                  avoid=("user", "pass"))
-            user_el = _find_input(login_fr, want=("user", "login", "email", "userid", "username"),
-                                  avoid=("account", "acct"))
-            if acct_el and account_id:
-                acct_el.fill(str(account_id))
-            if user_el and user:
-                user_el.fill(str(user))
-            pw_el.fill(str(pw or ""))
-            if not _click_submit(login_fr, ("log in", "login", "sign in", "signin", "submit", "continue")):
-                try:
+            # VidaPay / T-CETRA SSO (id.vidapaycrm.com "SIGN IN") — PINNED selectors, calibrated
+            # 2026-07-15 against the live DOM: #AccountId (type=number) · #Username · #Password ·
+            # submit button #btnClick. The Sign-In POST is what makes the portal DISPATCH the 2FA
+            # code to the registered phone, so this click must never depend on text heuristics.
+            if login_fr.query_selector("#AccountId") and login_fr.query_selector("#Password"):
+                if account_id:
+                    login_fr.fill("#AccountId", str(account_id))
+                if user and login_fr.query_selector("#Username"):
+                    login_fr.fill("#Username", str(user))
+                login_fr.fill("#Password", str(pw or ""))
+                btn = login_fr.query_selector("#btnClick")
+                if btn:
+                    btn.click()
+                elif not _click_submit(login_fr, ("sign in", "log in", "login", "submit")):
                     pw_el.press("Enter")
-                except Exception:
-                    pass
+            else:
+                # Unknown portal variant — fill whichever of the three fields exist, heuristically.
+                acct_el = _find_input(login_fr, want=("account", "acct", "agent", "dealer", "merchant"),
+                                      avoid=("user", "pass"))
+                user_el = _find_input(login_fr, want=("user", "login", "email", "userid", "username"),
+                                      avoid=("account", "acct"))
+                if acct_el and account_id:
+                    acct_el.fill(str(account_id))
+                if user_el and user:
+                    user_el.fill(str(user))
+                pw_el.fill(str(pw or ""))
+                if not _click_submit(login_fr, ("log in", "login", "sign in", "signin", "submit", "continue")):
+                    try:
+                        pw_el.press("Enter")
+                    except Exception:
+                        pass
             try:
                 page.wait_for_load_state("networkidle", timeout=25000)
             except Exception:
