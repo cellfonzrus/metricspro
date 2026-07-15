@@ -17,6 +17,8 @@ export default function CompaniesPage() {
   const [bulkCo, setBulkCo] = useState('')
   const [coEdit, setCoEdit] = useState<Record<string, { name: string; legal_name: string; ein: string }>>({})
   const [coSaving, setCoSaving] = useState('')
+  const [msStores, setMsStores] = useState<string[]>([])   // multi-select: stores to assign at once
+  const [msCompany, setMsCompany] = useState('')           // multi-select: target company ('' = Default)
 
   function load() {
     setLoading(true)
@@ -68,6 +70,14 @@ export default function CompaniesPage() {
   function bulkApply() {
     if (!bulkCo) return
     setAssign(a => { const n = { ...a }; visible.forEach(s => { n[s.store_address] = bulkCo }); return n })
+  }
+
+  function assignMulti() {
+    if (!msStores.length) return
+    setAssign(a => { const n = { ...a }; msStores.forEach(sa => { n[sa] = msCompany }); return n })
+    const coName = companies.find(c => c.id === msCompany)?.name || 'Default Company'
+    setMsg(`Staged ${msStores.length} store${msStores.length > 1 ? 's' : ''} → ${coName}. Click “Save assignments” to persist.`)
+    setMsStores([])
   }
 
   async function save() {
@@ -130,6 +140,32 @@ export default function CompaniesPage() {
         <button className="btn" onClick={bulkApply}>Apply</button>
       </div>
 
+      {/* Multi-select: pick one/many stores → assign to a company in one shot (RULE THREE: stores are
+          chosen from the existing list — store_mapping ∪ the tenant's sales data — never typed). */}
+      <div className="card" style={{ padding: 12, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Assign multiple stores at once</div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>Pick stores — Ctrl/Cmd-click for several (the market / find-store filter above narrows this list)</div>
+            <select multiple value={msStores} style={{ ...inp, minWidth: 280, height: 170 }}
+              onChange={e => setMsStores(Array.from(e.target.selectedOptions, o => o.value))}>
+              {visible.map(s => <option key={s.store_address} value={s.store_address}>{s.store_address}{s.market ? ` · ${s.market}` : ''}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>{msStores.length} selected · {visible.length} shown</div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 18 }}>
+            <span style={{ fontSize: 11, color: 'var(--text3)' }}>Assign selected to</span>
+            <select style={inp} value={msCompany} onChange={e => setMsCompany(e.target.value)}>
+              <option value="">— Default Company —</option>
+              {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <button className="btn btn-primary" onClick={assignMulti} disabled={!msStores.length}>
+              {msStores.length ? `Assign ${msStores.length} store${msStores.length > 1 ? 's' : ''} →` : 'Assign →'}
+            </button>
+          </div>
+        </div>
+      </div>
+
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (
@@ -155,7 +191,7 @@ export default function CompaniesPage() {
                   </td>
                 </tr>
               ))}
-              {visible.length === 0 && <tr><td colSpan={3} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>No stores match. Stores come from the store mapping registry.</td></tr>}
+              {visible.length === 0 && <tr><td colSpan={3} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>No stores match. Stores come from the store-mapping registry and from your sales data (raw_sales / daily feed).</td></tr>}
             </tbody>
           </table>
         </div>

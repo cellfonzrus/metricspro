@@ -56,7 +56,117 @@ def _latest_period(client, org_id):
     return n.year, n.month
 
 
+# The MA/VidaPay residual components — SAME definitions the shipped /ma-commission/summary uses
+# (mig 083): NEGATIVE on the Commission Details export = paid TO the dealer, so payable is sign-FLIPPED
+# (positive = money the dealer receives). Reused here verbatim so the residual page and the commission
+# roll-up never diverge on what a Total/VidaPay dealer is paid.
+_MA_COMPONENTS = ["device_margin", "consumer_margin", "consumer_financing", "rebate",
+                  "wallet_funding", "fees_margin",
+                  "spiff_m1", "spiff_m2", "spiff_m3", "spiff_m4", "spiff_m5", "spiff_m6"]
+
+
+def _latest_ma_period(client, org_id):
+    """(year, month) of the most recent raw_ma_commission period; today's month if unknown/empty."""
+    try:
+        rows = (client.schema("commcalc").table("raw_ma_commission")
+                .select("period_year,period_month")
+                .eq("org_id", org_id)
+                .order("period_year", desc=True).order("period_month", desc=True)
+                .limit(1).execute().data) or []
+        if rows and rows[0].get("period_year") and rows[0].get("period_month"):
+            return int(rows[0]["period_year"]), int(rows[0]["period_month"])
+    except Exception:
+        pass
+    n = datetime.now(timezone.utc)
+    return n.year, n.month
+
+
+def _aggregate_ma(client, org_id, months):
+    """Carrier-agnostic residual source for MA/VidaPay tenants (Total, luxelink), used when a tenant has
+    NO Boost raw_mi. MI-equivalent = MA Commission Details payable (raw_ma_commission, sign-flipped);
+    ATU-equivalent = airtime margin (raw_ma_daily_tx.merchant_discount) — the SAME two figures the
+    shipped /ma-commission/summary reports (mig 083). Store = the processor merchant/account id (MA rows
+    carry NO salesforce_id), so each row carries an explicit `store_label`. Subscribers = distinct
+    activation lines (each Commission Details row = one activated line); airtime top-ups are recurring
+    margin on existing lines, so they add to residual $ but not to the subscriber count.
+
+    Returns the same per-(period, store) aggregate shape as the Boost path, or [] when the MA tables are
+    empty (a data-gap until the VidaPay report ingest runs — the code path is correct, the data just
+    hasn't landed). NEVER raises."""
+    ly, lm = _latest_ma_period(client, org_id)
+    want = set(_recent_labels(ly, lm, months))
+    agg = {}  # (period, store_label) -> aggregate
+
+    def _bucket(period, store_label, name=None):
+        k = (period, store_label)
+        a = agg.get(k)
+        if a is None:
+            a = agg[k] = {"period": period, "store_label": store_label, "store_name": name,
+                          "salesforce_id": "", "market": "(VidaPay/MA)",
+                          "sum_mi": 0.0, "sum_atu": 0.0, "subs": 0, "lines": 0}
+        elif name and not a.get("store_name"):
+            a["store_name"] = name
+        return a
+
+    # MI-equivalent — per-activation dealer payable, by merchant account (store)
+    try:
+        cols = "period,merchant_account_id," + ",".join(_MA_COMPONENTS)
+        start, page = 0, 1000
+        while True:
+            chunk = (client.schema("commcalc").table("raw_ma_commission").select(cols)
+                     .eq("org_id", org_id).in_("period", list(want))
+                     .range(start, start + page - 1).execute().data) or []
+            for r in chunk:
+                per = (r.get("period") or "").strip()
+                if not per:
+                    continue
+                store = (r.get("merchant_account_id") or "").strip() or "(Unassigned)"
+                pay = -sum(safe_float(r.get(c)) for c in _MA_COMPONENTS)  # flip: positive = dealer receives
+                a = _bucket(per, store)
+                a["sum_mi"] += pay
+                a["lines"] += 1
+                a["subs"] += 1  # one Commission Details row == one activated subscriber line
+            if len(chunk) < page:
+                break
+            start += page
+    except Exception:
+        pass
+
+    # ATU-equivalent — airtime margin, by processor account (store)
+    try:
+        start, page = 0, 1000
+        while True:
+            chunk = (client.schema("commcalc").table("raw_ma_daily_tx")
+                     .select("period,account_id,account_name,merchant_discount")
+                     .eq("org_id", org_id).in_("period", list(want))
+                     .range(start, start + page - 1).execute().data) or []
+            for r in chunk:
+                per = (r.get("period") or "").strip()
+                if not per:
+                    continue
+                store = (r.get("account_id") or "").strip() or "(Unassigned)"
+                a = _bucket(per, store, name=(r.get("account_name") or None))
+                a["sum_atu"] += safe_float(r.get("merchant_discount"))
+            if len(chunk) < page:
+                break
+            start += page
+    except Exception:
+        pass
+
+    return list(agg.values())
+
+
 def _aggregate(client, org_id, months):
+    """Per (period, store): sum_mi, sum_atu, subs, lines — CARRIER-AGNOSTIC (no tenant-name branching).
+    Boost (raw_mi) is the primary source; a tenant with no raw_mi falls through to the MA/VidaPay tables
+    (raw_ma_commission + raw_ma_daily_tx). Source is chosen by which data EXISTS, per org, at runtime."""
+    boost = _aggregate_boost(client, org_id, months)
+    if boost:
+        return boost
+    return _aggregate_ma(client, org_id, months)
+
+
+def _aggregate_boost(client, org_id, months):
     """Per (period, salesforce_id): sum_mi, sum_atu, subs, lines. Postgres RPC, Python fallback."""
     # Fast path: RPC over ALL history (grouped in Postgres), trim to last `months` after.
     try:
@@ -150,11 +260,18 @@ def compute(client, org_id, months=6):
         per = (a.get("period") or "").strip()
         if per not in kept_set:
             continue
-        meta = by_sfid.get((a.get("salesforce_id") or "").strip())
-        if meta and meta["store"]:
-            label, market_v, code, num = meta["store"], meta["market"], meta["store_code"], meta["num"]
+        if a.get("store_label"):
+            # MA/VidaPay row — the store is carried on the row (merchant/account id); no salesforce_id
+            # join exists for MA. Prefer the human account name when the processor supplied one.
+            label = (a.get("store_name") or a["store_label"])
+            market_v = a.get("market") or "(VidaPay/MA)"
+            code, num = "", _street_num(label)
         else:
-            label, market_v, code, num = UNASSIGNED, "(Unassigned)", "", ""
+            meta = by_sfid.get((a.get("salesforce_id") or "").strip())
+            if meta and meta["store"]:
+                label, market_v, code, num = meta["store"], meta["market"], meta["store_code"], meta["num"]
+            else:
+                label, market_v, code, num = UNASSIGNED, "(Unassigned)", "", ""
         d = stores.setdefault(label, {"store": label, "market": market_v,
                                       "store_code": code, "num": num, "per": {}})
         pp = d["per"].setdefault(per, {"mi": 0.0, "atu": 0.0, "subs": 0})
@@ -204,5 +321,6 @@ def compute(client, org_id, months=6):
         "company": company,
         "markets": markets,
         "note": (None if kept else
-                 "No residual (MI/ATU) data yet — upload an MI report or run the ePay sweep first."),
+                 "No residual (MI/ATU) data yet — upload the residual report (Boost: MI/ePay sweep; "
+                 "Total/VidaPay: the MA Commission Details + Daily Tx reports) first."),
     }
