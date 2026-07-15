@@ -37,8 +37,8 @@ from datetime import datetime, timezone, timedelta
 _SESSIONS = {}
 _SESSIONS_LOCK = threading.Lock()
 
-_SHOT_INTERVAL = 1.5          # seconds between idle screenshot captures
-_IDLE_CLOSE_SECONDS = 8 * 60  # auto-close a session left idle this long
+_SHOT_INTERVAL = 1.5           # seconds between idle screenshot captures
+_IDLE_CLOSE_SECONDS = 20 * 60  # auto-close a session left idle this long (long enough to fetch a code)
 _TERMINAL = ("authenticated", "error", "cancelled")
 _TERMINAL_TTL = 15 * 60       # keep a finished session's final state this long, then prune
 
@@ -396,8 +396,9 @@ class LiveLoginSession:
         self._capture(page)
         # Click through the post-code "Trust This Device" page (nickname + Next) — that Next both
         # finalizes the 90-day trust AND is what leads to the dashboard; without it the accepted code
-        # looks rejected. finalize_after_code handles it (and the trust page's misleading Sign-Out header).
-        state = vp.finalize_after_code(page)
+        # looks rejected. on_step keeps the live screenshot refreshing so the viewer doesn't freeze.
+        self._set(phase="verifying", message="Finishing sign-in (trusting this device)…")
+        state = vp.finalize_after_code(page, on_step=lambda: self._capture(page))
         self._capture(page)
         if state == "authenticated":
             self._on_authenticated(page, ctx, vp)

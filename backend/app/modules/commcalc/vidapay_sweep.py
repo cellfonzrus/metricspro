@@ -692,10 +692,17 @@ _TRUST_PAGE_WORDS = ("trust this device", "trust this computer", "remember this 
                      "give this device a nickname", "recognize this device going forward")
 
 
+_TRUST_NEXT_AVOID = ("cancel", "sign out", "logout", "log out", "back", "don't", "do not",
+                     "skip", "not now", "forgot", "assistance")
+_TRUST_NEXT_WANT = ("next", "continue", "confirm", "trust", "save", "finish", "done", "proceed",
+                    "submit", "ok")
+
+
 def _confirm_trust_device(page):
     """If we're on the post-code 'Trust This Device' page (nickname + Next, no code field), give the
     device a nickname when blank and click Next to finalize the trusted session. Returns True if clicked.
-    Never clicks Sign Out / Cancel / a 'Don't trust' control."""
+    Never clicks Sign Out / Cancel / a 'Don't trust' control. Robust to the button being a plain <a>
+    styled as a button, and to a normal .click() being intercepted (falls back to a DOM click)."""
     try:
         if _code_field(page):
             return False
@@ -703,53 +710,82 @@ def _confirm_trust_device(page):
         return False
     if not any(w in _page_text(page) for w in _TRUST_PAGE_WORDS):
         return False
+    # Fill/normalize the nickname field. Use keystrokes (delay) so any input-event validation that
+    # gates the Next button fires — same trait the login button had. If prefilled, nudge it once.
     for fr in _frames(page):
         try:
             el = _find_input(fr, kinds=("text",),
                              want=("nickname", "name", "device", "reference", "label"),
                              avoid=("code", "otp", "user", "pass"))
-            if el and not (el.input_value() or "").strip():
-                el.fill("MetricsPro")
+            if not el:
+                continue
+            cur = (el.input_value() or "").strip()
+            if not cur:
+                el.click(); el.type("MetricsPro", delay=15)
+            else:
+                try:                       # nudge validation without changing the value
+                    el.click(); el.type(" "); el.press("Backspace")
+                except Exception:
+                    pass
         except Exception:
             continue
-    AVOID = ("cancel", "sign out", "logout", "log out", "back", "don't", "do not", "skip", "not now")
+    # Click the affirmative control. Include PLAIN <a> and [onclick] (T-CETRA's Next is an anchor
+    # styled as a button), and fall back to a DOM click if Playwright's actionable click is blocked.
     for fr in _frames(page):
         try:
-            cands = fr.query_selector_all("button, input[type=submit], input[type=button], a[role=button]")
+            cands = fr.query_selector_all(
+                "button, input[type=submit], input[type=button], a, [role=button], [onclick]")
         except Exception:
             continue
         for c in cands:
             try:
                 if not c.is_visible():
                     continue
-                label = (c.get_attribute("value") or c.inner_text() or "").strip().lower()
-                if not label or len(label) > 30 or any(a in label for a in AVOID):
+                label = (c.get_attribute("value") or c.inner_text()
+                         or c.get_attribute("aria-label") or "").strip().lower()
+                if not label or len(label) > 30 or any(a in label for a in _TRUST_NEXT_AVOID):
                     continue
-                if label in ("next", "continue", "confirm", "trust", "save", "finish", "done", "ok") \
-                        or label.startswith("next") or label.startswith("trust"):
-                    c.click()
-                    return True
+                if not any(label == w or label.startswith(w) for w in _TRUST_NEXT_WANT):
+                    continue
+                try:
+                    c.click(timeout=6000)
+                except Exception:
+                    try:
+                        c.evaluate("el => el.click()")   # DOM click — bypasses overlay/actionability
+                    except Exception:
+                        continue
+                return True
             except Exception:
                 continue
     return False
 
 
-def finalize_after_code(page):
+def finalize_after_code(page, on_step=None):
+    return _finalize_after_code_impl(page, on_step)
+
+
+def _finalize_after_code_impl(page, on_step=None):
     """After the code is submitted, click through any post-code 'Trust This Device' page(s) until the
     portal lands on the app. Returns the final _classify state ('authenticated' | 'twofa' | ...). The
     trust page can LOOK authenticated (its header has 'Sign Out'), so it's handled BEFORE concluding
-    auth — otherwise the session saves without the trust actually registering (no 90-day skip)."""
-    for _ in range(3):
+    auth — otherwise the session saves without the trust actually registering (no 90-day skip).
+    `on_step` (optional) is called each pass so a live viewer's screenshot keeps refreshing."""
+    for _ in range(4):
         try:
             _wait_settle(page)
         except Exception:
             pass
-        if _confirm_trust_device(page):
+        if callable(on_step):
             try:
-                page.wait_for_load_state("networkidle", timeout=20000)
+                on_step()
             except Exception:
                 pass
-            page.wait_for_timeout(2500)
+        if _confirm_trust_device(page):
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+            page.wait_for_timeout(2000)
             continue
         state = _classify(page)
         if state in ("authenticated", "twofa"):
