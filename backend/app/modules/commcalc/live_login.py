@@ -143,6 +143,17 @@ class LiveLoginSession:
         self._touch()
         self._cmd_q.put(("RESEND",))
 
+    def click(self, nx, ny):
+        """Forward an operator click at NORMALIZED coords (0..1 of the streamed image) to the live page —
+        this is the 'take control' path so the operator can press a button (e.g. Next) the auto-clicker
+        missed."""
+        self._touch()
+        self._cmd_q.put(("CLICK", float(nx), float(ny)))
+
+    def type_text(self, text):
+        self._touch()
+        self._cmd_q.put(("TYPE", str(text)))
+
     def cancel(self):
         self._touch()
         self._cmd_q.put(("CANCEL",))
@@ -317,10 +328,51 @@ class LiveLoginSession:
                 self._do_resend(page, vp)
                 last_shot = 0.0
                 continue
+            if kind == "CLICK":
+                self._do_click(page, ctx, vp, cmd[1], cmd[2])
+                if self.snapshot_phase() == "authenticated":
+                    return           # the operator's click finished sign-in
+                last_shot = 0.0
+                continue
+            if kind == "TYPE":
+                try:
+                    page.keyboard.type(cmd[1], delay=20)
+                except Exception:
+                    pass
+                self._capture(page)
+                last_shot = 0.0
+                continue
             if kind == "SUBMIT_CODE":
                 if self._do_submit(page, ctx, vp, cmd[1]):
                     return           # authenticated → session done
                 last_shot = 0.0
+
+    def _do_click(self, page, ctx, vp, nx, ny):
+        """'Take control': translate a normalized (0..1) click on the streamed image to a real click on
+        the live page at the matching viewport pixel, then re-check whether we've landed authenticated
+        (so an operator clicking the portal's Next / Trust button completes + saves the session)."""
+        try:
+            vp_size = page.viewport_size or {"width": 1366, "height": 900}
+            x = max(0.0, min(1.0, nx)) * vp_size["width"]
+            y = max(0.0, min(1.0, ny)) * vp_size["height"]
+            page.mouse.click(x, y)
+        except Exception as e:
+            self._set(message="Click didn't register (%s) — try again." % str(e)[:80])
+            self._capture(page)
+            return
+        try:
+            page.wait_for_timeout(1200)
+            vp._wait_settle(page)
+        except Exception:
+            pass
+        self._capture(page)
+        # A click on Next/Trust may finish sign-in — but only conclude auth once the trust page is gone.
+        try:
+            on_trust = any(w in vp._page_text(page) for w in vp._TRUST_PAGE_WORDS)
+            if not on_trust and not vp._code_field(page) and vp._classify(page) == "authenticated":
+                self._on_authenticated(page, ctx, vp)
+        except Exception:
+            pass
 
     def _do_resend(self, page, vp):
         """Click the LIVE page's resend / send-code control — NO re-login, NO re-navigation."""
@@ -403,9 +455,20 @@ class LiveLoginSession:
         if state == "authenticated":
             self._on_authenticated(page, ctx, vp)
             return True
-        # Keep the page OPEN on the verification screen — retryable.
-        self._set(phase="awaiting_code",
-                  message="That code was not accepted (it may have expired). Enter the LATEST code, or ↻ Resend.")
+        # If the auto-clicker couldn't finish the "Trust This Device" page, tell the operator to click
+        # the Next button themselves in the live view (click-forwarding is enabled) — the code WAS
+        # accepted; only the trust step remains. Otherwise it's a genuine code rejection.
+        try:
+            on_trust = any(w in vp._page_text(page) for w in vp._TRUST_PAGE_WORDS)
+        except Exception:
+            on_trust = False
+        if on_trust:
+            self._set(phase="action_needed",
+                      message="Code accepted! One step left — click the blue Next button in the view "
+                              "above to finish trusting this device.")
+        else:
+            self._set(phase="awaiting_code",
+                      message="That code was not accepted (it may have expired). Enter the LATEST code, or ↻ Resend.")
         self._capture(page)
         return False
 

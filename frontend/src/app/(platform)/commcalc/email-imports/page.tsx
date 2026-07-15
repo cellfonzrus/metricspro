@@ -357,6 +357,15 @@ export default function EmailImportsPage() {
     if (!live?.source?.id) return
     try { await api(`/api/v1/commcalc/data-sources/${live.source.id}/live-login/resend`, { method: 'POST', body: '{}' }) } catch { /* the state poll shows the outcome */ }
   }
+  // "Take control": forward a click on the live screenshot to the real browser (normalized 0..1 coords).
+  async function clickLive(e: React.MouseEvent<HTMLImageElement>) {
+    if (!live?.source?.id) return
+    const img = e.currentTarget
+    const r = img.getBoundingClientRect()
+    const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
+    const y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))
+    try { await api(`/api/v1/commcalc/data-sources/${live.source.id}/live-login/click`, { method: 'POST', body: JSON.stringify({ x, y }) }) } catch { /* state poll shows the outcome */ }
+  }
   async function closeLive(cancel = true) {
     const id = live?.source?.id
     if (id && cancel && liveState?.phase !== 'authenticated') {
@@ -825,6 +834,7 @@ export default function EmailImportsPage() {
           login: { t: '⏳ Signing in…', c: '#1e40af', b: '#dbeafe' },
           awaiting_code: { t: '🔒 Enter the code', c: '#9a3412', b: '#ffedd5' },
           verifying: { t: '⏳ Verifying…', c: '#1e40af', b: '#dbeafe' },
+          action_needed: { t: '👆 Click Next in the view', c: '#9a3412', b: '#ffedd5' },
           authenticated: { t: '✅ Signed in', c: '#166534', b: '#dcfce7' },
           error: { t: '⚠️ Error', c: '#991b1b', b: '#fee2e2' },
           cancelled: { t: '○ Cancelled', c: 'var(--text3)', b: 'var(--surface2)' },
@@ -841,10 +851,15 @@ export default function EmailImportsPage() {
                 <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => closeLive(true)}>Close</button>
               </div>
               <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '0 0 10px' }}>{liveState?.message || 'Starting…'}</p>
+              {!done && liveState?.shot && (
+                <div style={{ fontSize: 11.5, color: '#9a3412', margin: '0 0 6px', fontWeight: 600 }}>
+                  👆 You can click directly on the screen below to control the browser (e.g. press the portal’s <b>Next</b> button).
+                </div>
+              )}
               <div style={{ position: 'relative', minHeight: 220, background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
                 {liveState?.shot
                   // eslint-disable-next-line @next/next/no-img-element
-                  ? <img src={liveState.shot} alt="Live login screen" style={{ maxWidth: '100%', borderRadius: 8 }} />
+                  ? <img src={liveState.shot} alt="Live login screen" onClick={done ? undefined : clickLive} style={{ maxWidth: '100%', borderRadius: 8, cursor: done ? 'default' : 'crosshair' }} />
                   : <div style={{ color: 'var(--text3)', fontSize: 13, padding: 30 }}>Opening the portal in a live browser… the screen appears here in a moment.</div>}
               </div>
               {done ? (
@@ -864,6 +879,10 @@ export default function EmailImportsPage() {
                     <div style={{ flex: 1 }} />
                     <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={liveBusy || !liveCode.trim() || ph === 'verifying'} onClick={submitLive}>{ph === 'verifying' ? 'Verifying…' : 'Submit code'}</button>
                   </div>
+                </div>
+              ) : ph === 'action_needed' ? (
+                <div style={{ padding: '10px 12px', borderRadius: 8, background: '#ffedd5', color: '#9a3412', fontSize: 13 }}>
+                  ✅ Your code was accepted — just <b>click the blue Next button</b> on the screen above to finish trusting this device. (The click is sent straight to the live browser.)
                 </div>
               ) : (
                 <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>{ph === 'error' || ph === 'cancelled' ? 'Close this and try again, or use 🔐 Log in as a fallback.' : 'Watch the live screen above — the code box appears here once the portal challenges.'}</div>

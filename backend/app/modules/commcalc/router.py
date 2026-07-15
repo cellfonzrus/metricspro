@@ -10817,6 +10817,23 @@ def live_login_resend(sid: str, org_id: str = ORG_ID):
     return {"ok": True, "phase": sess.snapshot_phase()}
 
 
+@router.post("/data-sources/{sid}/live-login/click")
+def live_login_click(sid: str, body: dict, org_id: str = ORG_ID):
+    """'Take control': forward an operator click (NORMALIZED x/y in 0..1 of the streamed image) to the
+    live page, so they can press a control the auto-clicker missed (e.g. the portal's Next button)."""
+    require_org(org_id)
+    from app.modules.commcalc import live_login
+    sess = live_login.get_session(sid, org_id)
+    if not sess:
+        raise HTTPException(400, "No live session running — click 🔴 Live login to start one.")
+    try:
+        nx = float((body or {}).get("x")); ny = float((body or {}).get("y"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "click needs numeric x,y in 0..1")
+    sess.click(nx, ny)
+    return {"ok": True, "phase": sess.snapshot_phase()}
+
+
 @router.post("/data-sources/{sid}/live-login/cancel")
 def live_login_cancel(sid: str, org_id: str = ORG_ID):
     """Cancel + close the live session (frees the headless browser)."""
