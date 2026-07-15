@@ -704,14 +704,17 @@ def _advance_2fa(page):
     return " → ".join(steps) if steps else None
 
 
-# The POST-code "Trust This Device" page (T-CETRA/VidaPay: nickname field + Next) — clicking Next is
-# what actually establishes the 90-day trusted session, AND it sits between the accepted code and the
-# dashboard, so without it the login stalls and looks like "code not accepted". Note its header carries
-# a "Sign Out" link (looks authenticated) — so it MUST be handled before concluding auth.
+# The POST-code interstitial pages T-CETRA/VidaPay shows AFTER the code is accepted but BEFORE the
+# dashboard: "Trust This Device" (nickname + Next) AND "Ready to Go — you have completed 2-Factor
+# Authentication" (Continue). BOTH carry a "Sign Out" header (so they LOOK authenticated to _classify),
+# so both MUST be clicked THROUGH before concluding auth — else the live session freezes on them and the
+# operator can't proceed. The affirmative button ("Continue" is in _TRUST_NEXT_WANT) is clicked.
 _TRUST_PAGE_WORDS = ("trust this device", "trust this computer", "remember this as a secure device",
                      "secure device", "won't be needed when you sign in",
                      "wont be needed when you sign in", "nickname for reference",
-                     "give this device a nickname", "recognize this device going forward")
+                     "give this device a nickname", "recognize this device going forward",
+                     "ready to go", "you have completed 2-factor", "you have completed 2 factor",
+                     "completed 2-factor authentication", "completed 2 factor authentication")
 
 
 _TRUST_NEXT_AVOID = ("cancel", "sign out", "logout", "log out", "back", "don't", "do not",
