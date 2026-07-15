@@ -432,6 +432,35 @@ def _trigger_2fa_send(page):
     return None
 
 
+def _tick_remember(scope):
+    """Tick a 'Remember this device / browser' checkbox when the 2FA screen offers one, so the portal
+    trusts this headless profile (typically 90 days) and scheduled pulls skip 2FA. Only ticks a box
+    whose name/id/label actually says remember/trust/don't-ask — never an unrelated checkbox."""
+    try:
+        for c in scope.query_selector_all("input[type=checkbox]"):
+            try:
+                if not c.is_visible():
+                    continue
+                hay = " ".join(filter(None, [c.get_attribute("name"), c.get_attribute("id"),
+                                             c.get_attribute("aria-label")])).lower()
+                lbl = ""
+                cid = c.get_attribute("id")
+                if cid:
+                    le = scope.query_selector('label[for="%s"]' % cid)
+                    lbl = (le.inner_text() or "").strip().lower() if le else ""
+                text = hay + " " + lbl
+                if any(k in text for k in ("remember", "trust", "don't ask", "dont ask",
+                                           "90 day", "this device", "this browser")):
+                    if not c.is_checked():
+                        c.check()
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
+
 # Provider keywords for the 2FA METHOD-CHOOSER step, SMS/text first (the channel the operator
 # actually receives). Deliberately excludes "call" (voice) and authenticator options.
 _METHOD_PICKS = ("sms", "text", "phone", "mobile", "cell")
@@ -843,6 +872,7 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
                 raise VidaPayAuthError(
                     "Could not find the 2FA code field to enter the code. Diagnostic: " + str(_snapshot(page)))
             code_el.fill(str(code).strip())
+            _tick_remember(code_fr)   # "Remember this device" → portal trusts this profile (typically 90 days)
             if not _click_submit(code_fr, ("verify", "submit", "continue", "confirm", "log in", "sign in")):
                 try:
                     code_el.press("Enter")
