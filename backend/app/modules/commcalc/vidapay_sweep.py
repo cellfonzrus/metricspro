@@ -45,14 +45,42 @@ PENDING_TTL_MINUTES = 20
 # serves a "Something doesn't look right..." interstitial (no form fields) to flagged browsers, so
 # we present a normal viewport/locale/timezone, send a real Accept-Language header, and mask the
 # automation signals detectors check first.
+# The signals Cloudflare's managed-challenge JS fingerprints FIRST. Kept internally consistent — an
+# inconsistent spoof (e.g. a numeric plugins array, or a WebGL renderer that contradicts the UA) is
+# itself a bot tell — so these mirror a real desktop-Chrome-on-Windows profile matching UA above.
 _STEALTH_JS = (
     "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
-    "window.chrome=window.chrome||{runtime:{}};"
+    "window.chrome=window.chrome||{};window.chrome.runtime=window.chrome.runtime||{};"
     "Object.defineProperty(navigator,'languages',{get:()=>['en-US','en']});"
-    "Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});"
+    "Object.defineProperty(navigator,'hardwareConcurrency',{get:()=>8});"
+    "Object.defineProperty(navigator,'deviceMemory',{get:()=>8});"
+    "Object.defineProperty(navigator,'platform',{get:()=>'Win32'});"
+    # WebGL vendor/renderer → a common Intel desktop GPU (headless reports 'Google SwiftShader', a tell).
+    "try{const gp=WebGLRenderingContext.prototype.getParameter;"
+    "WebGLRenderingContext.prototype.getParameter=function(p){"
+    "if(p===37445)return 'Intel Inc.';if(p===37446)return 'Intel Iris OpenGL Engine';"
+    "return gp.call(this,p);};}catch(e){}"
+    # Notification permission: headless returns 'denied' while Notification.permission='default' — a mismatch bots trip on.
+    "try{const q=navigator.permissions.query.bind(navigator.permissions);"
+    "navigator.permissions.query=(p)=>p&&p.name==='notifications'"
+    "?Promise.resolve({state:Notification.permission}):q(p);}catch(e){}"
 )
 _LAUNCH_ARGS = ["--no-sandbox", "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled"]
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process"]
+
+
+def _launch(p):
+    """Launch the browser for a portal login. Prefers REAL Google Chrome (channel='chrome') — Cloudflare's
+    bot-management passes genuine Chrome far more often than bundled Chromium, whose build fingerprints as
+    automation — and falls back to bundled Chromium when Chrome isn't in the image (so this is zero-regression
+    if `playwright install chrome` hasn't run). Same args either way."""
+    try:
+        return p.chromium.launch(headless=True, channel="chrome", args=_LAUNCH_ARGS)
+    except Exception:
+        return p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+
+
 _BOT_PHRASES = ("something doesn't look right", "doesn't look right", "unusual activity",
                 "verify you are human", "are you a robot", "request unsuccessful",
                 "access to this page has been denied", "attention required")
@@ -254,18 +282,28 @@ def _looks_like_bot_wall(page):
     return any(p in body for p in _BOT_PHRASES)
 
 
-def _wait_settle(page, timeout_s=25):
-    """Give Cloudflare's managed challenge time to clear for a real Chromium. A persistent
-    interstitial means the egress IP is being blocked."""
-    import time
-    waited = 0.0
-    while _looks_like_cloudflare(page) and waited < timeout_s:
-        page.wait_for_timeout(1500)
-        waited += 1.5
+def _wait_settle(page, timeout_s=30):
+    """Give Cloudflare's managed challenge time to clear, then — if it hasn't — RELOAD once and wait
+    again. The JS challenge often solves and sets the cf_clearance cookie without auto-redirecting the
+    headless page; a single reload picks up the clearance and lands on the form. If it STILL hasn't
+    cleared after the reload, the egress IP is genuinely blocked (or the browser fingerprint is flagged)."""
+    def _spin(budget):
+        waited = 0.0
+        while _looks_like_cloudflare(page) and waited < budget:
+            page.wait_for_timeout(1500)
+            waited += 1.5
+    _spin(timeout_s)
+    if _looks_like_cloudflare(page):
+        try:
+            page.reload(timeout=45000, wait_until="domcontentloaded")
+        except Exception:
+            pass
+        _spin(timeout_s)
     if _looks_like_cloudflare(page):
         raise VidaPayLoginError(
-            "The portal's WAF is blocking this egress IP (bot challenge did not clear). It must be "
-            "reached from an allow-listed / residential IP — the same WAF caveat as ePay.")
+            "The portal's WAF is blocking this egress IP (bot challenge did not clear, even after a "
+            "reload). Rotate to a fresh residential IP and retry; if a clean US residential IP is STILL "
+            "challenged, the block is on the headless-browser fingerprint — the same WAF caveat as ePay.")
 
 
 # ── heuristic field finders (frame-aware; credential-free; calibrated on first live login) ─────
@@ -655,7 +693,7 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
     base_url = _norm_url(url, DEFAULT_URL)
     proxy = _proxy_arg(proxy_url)
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+        browser = _launch(p)
         ctx = _new_context(browser, proxy=proxy)
         page = ctx.new_page()
         try:
@@ -800,7 +838,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
         raise VidaPayLoginError("Playwright/Chromium is not available in the backend image.")
     base_url = _norm_url(url, B2BSOFT_URL)
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+        browser = _launch(p)
         ctx = _new_context(browser, proxy=_proxy_arg(proxy_url))
         page = ctx.new_page()
         try:
@@ -972,7 +1010,7 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
         raise VidaPayAuthError("No pending login to verify — start the login again.")
     base_url = _norm_url(url, DEFAULT_URL)
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+        browser = _launch(p)
         ctx = _new_context(browser, storage_state=pending_state, proxy=_proxy_arg(proxy_url))
         page = ctx.new_page()
         try:
@@ -1044,7 +1082,7 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
         raise VidaPayAuthError("No pending login to verify — start the login again.")
     base_url = _norm_url(url, B2BSOFT_URL)
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+        browser = _launch(p)
         ctx = _new_context(browser, storage_state=pending_state, proxy=_proxy_arg(proxy_url))
         page = ctx.new_page()
         try:
@@ -1171,7 +1209,7 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
         raise VidaPayAuthError("Not authenticated yet — click “Log in” and complete 2FA first.")
     base_url = _norm_url(url, DEFAULT_URL)
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+        browser = _launch(p)
         ctx = _new_context(browser, storage_state=session_state, proxy=_proxy_arg(proxy_url))
         page = ctx.new_page()
         try:
@@ -1222,7 +1260,7 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
         raise VidaPayAuthError("Not authenticated yet — click “Log in” and complete 2FA first.")
     base_url = _norm_url(url, B2BSOFT_URL)
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+        browser = _launch(p)
         ctx = _new_context(browser, storage_state=session_state, proxy=_proxy_arg(proxy_url))
         page = ctx.new_page()
         try:
