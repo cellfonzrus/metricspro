@@ -37,7 +37,7 @@ from datetime import datetime, timezone, timedelta
 _SESSIONS = {}
 _SESSIONS_LOCK = threading.Lock()
 
-_SHOT_INTERVAL = 1.5           # seconds between idle screenshot captures
+_SHOT_INTERVAL = 0.7           # seconds between idle screenshot captures (responsive live stream)
 _IDLE_CLOSE_SECONDS = 20 * 60  # auto-close a session left idle this long (long enough to fetch a code)
 _TERMINAL = ("authenticated", "error", "cancelled")
 _TERMINAL_TTL = 15 * 60       # keep a finished session's final state this long, then prune
@@ -317,7 +317,7 @@ class LiveLoginSession:
                 self._set(phase="cancelled", message="Live session closed after inactivity.")
                 return
             try:
-                cmd = self._cmd_q.get(timeout=0.5)
+                cmd = self._cmd_q.get(timeout=0.2)
             except queue.Empty:
                 continue
             kind = cmd[0]
@@ -355,13 +355,22 @@ class LiveLoginSession:
             vp_size = page.viewport_size or {"width": 1366, "height": 900}
             x = max(0.0, min(1.0, nx)) * vp_size["width"]
             y = max(0.0, min(1.0, ny)) * vp_size["height"]
+            page.mouse.move(x, y)      # move first so the very next frame shows the pointer where it'll land
+            self._capture(page)        # instant feedback (cursor moved) — no wait
             page.mouse.click(x, y)
         except Exception as e:
             self._set(message="Click didn't register (%s) — try again." % str(e)[:80])
             self._capture(page)
             return
+        # Rapid burst of captures right after the click so the result appears in <1s, not ~2s.
+        self._capture(page)
+        for _ in range(4):
+            try:
+                page.wait_for_timeout(350)
+            except Exception:
+                break
+            self._capture(page)
         try:
-            page.wait_for_timeout(1200)
             vp._wait_settle(page)
         except Exception:
             pass

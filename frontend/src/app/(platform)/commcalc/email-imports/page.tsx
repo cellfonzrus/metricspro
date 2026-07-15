@@ -120,7 +120,7 @@ export default function EmailImportsPage() {
       try { const r: any = await api(`/api/v1/commcalc/data-sources/${id}/live-login/state`); if (!stop) setLiveState(r) } catch { /* keep last */ }
     }
     tick()
-    const iv = setInterval(tick, 1000)
+    const iv = setInterval(tick, 600)   // responsive live stream (esp. while click-controlling the browser)
     return () => { stop = true; clearInterval(iv) }
   }, [live?.source?.id])
 
@@ -359,12 +359,21 @@ export default function EmailImportsPage() {
   }
   // "Take control": forward a click on the live screenshot to the real browser (normalized 0..1 coords).
   async function clickLive(e: React.MouseEvent<HTMLImageElement>) {
-    if (!live?.source?.id) return
+    const id = live?.source?.id
+    if (!id) return
     const img = e.currentTarget
     const r = img.getBoundingClientRect()
     const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
     const y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))
-    try { await api(`/api/v1/commcalc/data-sources/${live.source.id}/live-login/click`, { method: 'POST', body: JSON.stringify({ x, y }) }) } catch { /* state poll shows the outcome */ }
+    setLiveState((p: any) => ({ ...(p || {}), message: 'Clicking…' }))
+    try {
+      await api(`/api/v1/commcalc/data-sources/${id}/live-login/click`, { method: 'POST', body: JSON.stringify({ x, y }) })
+      // pull a couple of fresh frames right away so the click result shows without waiting for the poll
+      for (const d of [250, 600, 1100]) {
+        await new Promise(res => setTimeout(res, d))
+        try { const s: any = await api(`/api/v1/commcalc/data-sources/${id}/live-login/state`); setLiveState(s) } catch { /* keep */ }
+      }
+    } catch { /* the periodic state poll shows the outcome */ }
   }
   async function closeLive(cancel = true) {
     const id = live?.source?.id
