@@ -2389,3 +2389,138 @@ async def get_asset_ledger(
     q = q.order("date_sold", desc=True).range(offset, offset + limit - 1)
     resp = q.execute()
     return {"rows": resp.data or [], "offset": offset, "limit": limit}
+
+
+# ── Marketplace Purchases (VidaPay "MA - Marketplace Handset Fulfillment Orders") ──────────────
+# OWNER REQUEST 2026-07-15: "similar to the asset landing which shows the purchases" — a purchases/
+# landing-style view over the report mod-commission's report-pull engine now ingests
+# (backend/app/modules/commcalc/report_pull.py) into commcalc.raw_ma_fulfillment (mig 083). This
+# module reads it ONLY via the purpose-named read view commcalc.raw_ma_marketplace_orders
+# (migration 207, mod-commission-owned) — never the raw table directly, so a future column/shape
+# change to raw_ma_fulfillment has one seam to fix. Org-scoped throughout. No migration needed here
+# (band 300-399 untouched) — this is a read-only report over an existing view.
+_MP_VIEW = "raw_ma_marketplace_orders"
+_MP_COLS = ("id,date_ordered,date_filled,date_shipped,order_number,order_status,order_type,"
+            "tspid,business_name,business_address,city,state,zip,product_name,"
+            "number_ordered,price,tracking_number")
+
+
+def _mp_fetch_rows(client, org_id: str, cols: str, date_from: str = "", date_to: str = "",
+                    status: str = "", order_type: str = ""):
+    """Paginated, org-scoped fetch from the marketplace-orders view. SQL-level filters for the
+    real columns (date range on date_ordered, order_status, order_type exact match — all three are
+    picked from values this same view returns via the filter-options endpoint below, so an exact
+    match always hits). `business` is deliberately NOT filtered here — it's resolved through
+    _canon_store/_store_canon_map in Python by the caller, because the raw business_address text
+    can vary in spelling across rows for what is really the same store (same precedent as
+    _backfill_market's own resolution), so filtering by canonical name has to happen after that
+    resolution, not as a raw-text SQL match.
+    Returns None (not []) when the view/table doesn't exist yet (migration 207 not run, or the
+    VidaPay report pull has never populated it for this org) — callers turn that into
+    `available: false` instead of a 500, and the frontend shows a "run the VidaPay pull" note."""
+    rows, page, PAGE = [], 0, 1000
+    while True:
+        start = page * PAGE
+        q = client.schema("commcalc").table(_MP_VIEW).select(cols).eq("org_id", org_id)
+        if date_from:
+            q = q.gte("date_ordered", date_from)
+        if date_to:
+            q = q.lte("date_ordered", date_to)
+        if status:
+            q = q.eq("order_status", status)
+        if order_type:
+            q = q.eq("order_type", order_type)
+        try:
+            chunk = q.range(start, start + PAGE - 1).execute().data or []
+        except Exception as e:
+            if _is_missing_schema_error(e):
+                return None
+            raise
+        rows.extend(chunk)
+        if len(chunk) < PAGE:
+            break
+        page += 1
+        if page > 100:
+            break
+    return rows
+
+
+def _mp_num(v):
+    try:
+        return float(v or 0)
+    except Exception:
+        return 0.0
+
+
+@router.get("/marketplace-purchases")
+async def get_marketplace_purchases(org_id: str = ORG_ID, date_from: str = "", date_to: str = "",
+                                     business: str = "", status: str = "", order_type: str = ""):
+    """Marketplace/handset-fulfillment purchase orders — the VidaPay 'MA - Marketplace Handset
+    Fulfillment Orders' report, pulled by the commission report-pull engine and read here via the
+    org-scoped view commcalc.raw_ma_marketplace_orders (mig 207). Asset-landing-style: per-order
+    rows (date ordered/filled/shipped, order #, status, order type, product, qty, price, tracking
+    #, business/store), filterable by date range / business / status / order type. Degrades to
+    `available: false` (empty rows, no error) if the view isn't there yet — pre-mig-207, or the
+    report pull has never run for this org — instead of a 500, per contract §5 (a missing
+    migration must never break an unrelated page)."""
+    client = sb()
+    raw_rows = _mp_fetch_rows(client, org_id, _MP_COLS, date_from, date_to, status, order_type)
+    if raw_rows is None:
+        return {"available": False, "rows": [], "count": 0,
+                "totals": {"orders": 0, "qty": 0.0, "price": 0.0}, "by_status": {},
+                "note": "No marketplace orders yet — run the VidaPay report pull to populate this view."}
+
+    addr_map = _store_canon_map(client, org_id)
+    rows = []
+    by_status: dict = {}
+    total_qty = 0.0
+    total_price = 0.0
+    for r in raw_rows:
+        biz_addr = r.get("business_address") or ""
+        canon = _canon_store(biz_addr, addr_map) if biz_addr else (r.get("business_name") or "")
+        if business and canon != business:
+            continue
+        qty = _mp_num(r.get("number_ordered"))
+        price = _mp_num(r.get("price"))
+        total_qty += qty
+        total_price += price
+        st = r.get("order_status") or "(unknown)"
+        b = by_status.setdefault(st, {"count": 0, "qty": 0.0, "price": 0.0})
+        b["count"] += 1
+        b["qty"] += qty
+        b["price"] += price
+        rows.append({**r, "store": canon})
+
+    rows.sort(key=lambda x: (x.get("date_ordered") or ""), reverse=True)
+    for _st, b in by_status.items():
+        b["qty"] = round(b["qty"], 2)
+        b["price"] = round(b["price"], 2)
+
+    return {"available": True, "rows": rows, "count": len(rows),
+            "totals": {"orders": len(rows), "qty": round(total_qty, 2), "price": round(total_price, 2)},
+            "by_status": by_status}
+
+
+@router.get("/marketplace-purchases/filter-options")
+async def get_marketplace_purchases_filter_options(org_id: str = ORG_ID):
+    """Distinct businesses (canonicalized through store_mapping)/statuses/order-types for the page's
+    picker filters (RULE THREE — dropdown over existing values, never free text). Degrades to
+    `available: false` (empty lists) if the view doesn't exist yet."""
+    client = sb()
+    raw_rows = _mp_fetch_rows(client, org_id, "business_name,business_address,order_status,order_type")
+    if raw_rows is None:
+        return {"available": False, "businesses": [], "statuses": [], "order_types": []}
+
+    addr_map = _store_canon_map(client, org_id)
+    businesses, statuses, order_types = set(), set(), set()
+    for r in raw_rows:
+        biz_addr = r.get("business_address") or ""
+        canon = _canon_store(biz_addr, addr_map) if biz_addr else (r.get("business_name") or "")
+        if canon:
+            businesses.add(canon)
+        if r.get("order_status"):
+            statuses.add(r["order_status"])
+        if r.get("order_type"):
+            order_types.add(r["order_type"])
+    return {"available": True, "businesses": sorted(businesses),
+            "statuses": sorted(statuses), "order_types": sorted(order_types)}
