@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { api, fmt } from '@/lib/client'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Total Processor (VidaPay / Total Access) commission report — the MA Commission Details + MA Daily
 // Tx roll-up (mig 083). Sign-flipped: positive = money the dealer RECEIVES. Org-scoped: shows the
@@ -30,6 +31,36 @@ export default function MaCommissionPage() {
   }
   useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
+  // RULE FOUR export: tiles summary + the by-store / by-rep / spiff-by-month report tables.
+  const storeCols: ExportColumn[] = [
+    { header: 'Store / account', field: 'store', role: 'store', get: (r: any) => r.name || r.account_id },
+    { header: 'Account', field: 'account_id', get: (r: any) => r.account_id },
+    { header: 'Activations', get: (r: any) => r.activations },
+    { header: 'Rebates', money: true, get: (r: any) => r.rebates },
+    { header: 'Spiffs', money: true, get: (r: any) => r.spiffs },
+    { header: 'Airtime margin', money: true, get: (r: any) => r.airtime_margin },
+    { header: 'Total payable', money: true, get: (r: any) => (r.payable || 0) + (r.airtime_margin || 0) },
+  ]
+  const repCols: ExportColumn[] = [
+    { header: 'Rep (processor login)', field: 'rep', role: 'rep', get: (r: any) => r.rep },
+    { header: 'Activations', get: (r: any) => r.activations },
+    { header: 'Rebates', money: true, get: (r: any) => r.rebates },
+    { header: 'Spiffs', money: true, get: (r: any) => r.spiffs },
+    { header: 'Avg MRC', money: true, get: (r: any) => r.avg_mrc ?? 0 },
+    { header: 'Payable', money: true, get: (r: any) => r.payable },
+  ]
+  const exportSheets = d?.ready ? [
+    { name: 'Summary', columns: [{ header: 'Metric', get: (r: any) => r.k }, { header: 'Value', get: (r: any) => r.v }] as ExportColumn[], rows: [
+      { k: 'Total payable', v: fmt(d.total_payable) }, { k: 'Activations', v: d.activations?.total },
+      { k: 'Rebates', v: fmt(d.components?.rebates) }, { k: 'Spiffs (M1–M6)', v: fmt(d.components?.spiffs_total) },
+      { k: 'Airtime margin', v: fmt(d.airtime?.margin) },
+    ] },
+    { name: 'By store', columns: storeCols, rows: d.by_store || [] },
+    { name: 'By rep', columns: repCols, rows: d.by_rep || [] },
+    { name: 'Spiff by month', columns: [{ header: 'Month', get: (r: any) => r.m }, { header: 'Amount', money: true, get: (r: any) => r.v }] as ExportColumn[],
+      rows: Object.entries(d.spiff_by_month || {}).map(([m, v]) => ({ m: m.toUpperCase(), v })) },
+  ] : []
+
   return (
     <div style={{ maxWidth: 1020 }}>
       <div style={{ marginBottom: 14 }}>
@@ -46,6 +77,8 @@ export default function MaCommissionPage() {
         <input style={{ ...sel, width: 160 }} placeholder="e.g. June 2026 (blank = all)" value={period} onChange={e => setPeriod(e.target.value)} />
         <button className="btn btn-primary" disabled={busy} onClick={() => load()}>{busy ? '…' : 'Load'}</button>
         {d?.date_range && <span style={{ fontSize: 12, color: 'var(--text3)' }}>data {d.date_range[0]} → {d.date_range[1]} · {d.rows} activation rows</span>}
+        <div style={{ flex: 1 }} />
+        {d?.ready && !d.note && <ReportExportBar title={`Total Processor Commissions ${period}`} filename={`total_processor_${period.replace(/\s+/g, '_')}`} sheets={exportSheets} />}
       </div>
       {msg && <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
       {d && d.ready === false && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {d.note}</div>}

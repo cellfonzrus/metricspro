@@ -13,6 +13,8 @@ import { useState } from 'react'
 import { api, fmt } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import { hasDataGrant } from '@/lib/rbac'
+import ReportExportBar from '@/components/ReportExportBar'
+import { buildDeviceHistoryExport } from './deviceHistoryExport'
 
 const cell: React.CSSProperties = { padding: '6px 10px', borderTop: '1px solid var(--border)', fontSize: 13 }
 const cellR: React.CSSProperties = { ...cell, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
@@ -73,8 +75,15 @@ export default function DeviceHistoryLookup() {
 
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-      <div style={{ padding: '11px 16px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 14 }}>
-        🔎 Device History Lookup
+      <div style={{ padding: '11px 16px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span>🔎 Device History Lookup</span>
+        {res?.found && (() => {
+          // What-you-see-is-what-exports: the sheets come from `res` — and the gated COMMISSION/REBATE
+          // sheets are only built when `res.commission_visible && res.money` (backend-gated), so a
+          // caller without the grant exports ONLY the ungated device/tenure sheet (proof: scratchpad).
+          const ex = buildDeviceHistoryExport(res)
+          return <ReportExportBar style={{ marginLeft: 'auto' }} title={ex.title} filename={ex.filename} sheets={ex.sheets} />
+        })()}
       </div>
       <div style={{ padding: 16 }}>
         <div style={{ display: 'flex', gap: 8 }}>
