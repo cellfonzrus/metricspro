@@ -84,6 +84,7 @@ export default function ExecOverviewPage() {
             <div style={{ fontWeight: 700, fontSize: 14 }}>Store leaderboard</div>
             <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
               <ReportExportBar title={`Owner Overview ${period}`} filename={`owner_overview_${String(period).replace(/\s+/g, '_')}`} sheets={exportSheets} />
+              <Link href="/commcalc/exec/mtd" style={{ fontSize: 12 }}>MTD sales summary →</Link>
               <Link href="/commcalc/coaching" style={{ fontSize: 12 }}>Rep coaching →</Link>
             </div>
           </div>
