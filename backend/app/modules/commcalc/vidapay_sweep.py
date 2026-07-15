@@ -246,6 +246,28 @@ def _snapshot(page):
             "controls": [c for c in controls if c.get("vis")][:24] or controls[:24]}
 
 
+def capture_session_state(page, ctx):
+    """The FULL authenticated state to persist/restore = Playwright storage_state (cookies + localStorage)
+    PLUS a sessionStorage stash under st['_sessionStorage']. VidaPay/T-CETRA is an OIDC SPA that keeps its
+    auth token in sessionStorage, which ctx.storage_state() DROPS — so a session saved without this
+    'expires' the instant it's restored in a fresh browser, and the report Pull bounces to the login
+    screen (which then looks like a re-auth / new code). _new_context re-injects '_sessionStorage' on
+    restore. Use this everywhere an authenticated (or pending) session is captured."""
+    try:
+        st = ctx.storage_state()
+    except Exception:
+        return None
+    try:
+        ss = page.evaluate(
+            "() => { const o={}; for (let i=0;i<sessionStorage.length;i++){const k=sessionStorage.key(i);"
+            " o[k]=sessionStorage.getItem(k);} return o; }") or {}
+        if ss:
+            st["_sessionStorage"] = {"origin": (page.url or ""), "items": ss}
+    except Exception:
+        pass
+    return st
+
+
 def _shot_b64(page):
     """Small viewport JPEG of the current page, base64 — persisted on the data_source row so the
     operator can SEE exactly what the headless browser saw (the 2FA challenge, a bot-wall, a portal
@@ -853,7 +875,7 @@ def _twofa_result(page, ctx, extra=None):
     # If we advanced all the way to the CODE-ENTRY page, remember its URL. complete_2fa navigates
     # straight there — avoiding a second "New Sign In → Next" click, which would DISPATCH ANOTHER code
     # and invalidate the one the operator just typed (owner: "it sent another code twice").
-    st = ctx.storage_state()
+    st = capture_session_state(page, ctx)
     try:
         if _code_field(page):
             st["_2fa_url"] = page.url
@@ -1020,7 +1042,7 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             if state == "twofa":
                 return _twofa_result(page, ctx)
             if state == "authenticated":
-                return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": diag,
+                return {"status": "authenticated", "storage_state": capture_session_state(page, ctx), "diag": diag,
                         "screenshot_b64": _shot_b64(page)}
             if state == "botwall":
                 raise VidaPayLoginError(
@@ -1193,7 +1215,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
             if state == "twofa":
                 return _twofa_result(page, ctx, {"filled": _filled, "portal_error": _b2b_error(page)})
             if state == "authenticated":
-                return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": diag,
+                return {"status": "authenticated", "storage_state": capture_session_state(page, ctx), "diag": diag,
                         "screenshot_b64": _shot_b64(page)}
             if state == "botwall":
                 raise VidaPayLoginError(
@@ -1237,7 +1259,7 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
             _wait_settle(page)
             page.wait_for_timeout(2500)
             if _classify(page) == "authenticated":
-                return {"status": "authenticated", "storage_state": ctx.storage_state(),
+                return {"status": "authenticated", "storage_state": capture_session_state(page, ctx),
                         "diag": _snapshot(page), "screenshot_b64": _shot_b64(page)}
             # NEW-DEVICE FLOW: restoring the pending session re-lands on the "New Sign In → Next"
             # interstitial (id.vidapaycrm.com/TwoFactor/TwoFactorNewDeviceSignIn — only a Next button,
@@ -1278,13 +1300,13 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
             # Click through the post-code "Trust This Device" page (nickname + Next) before deciding.
             state = finalize_after_code(page)
             if state == "authenticated":
-                return {"status": "authenticated", "storage_state": ctx.storage_state(),
+                return {"status": "authenticated", "storage_state": capture_session_state(page, ctx),
                         "diag": _snapshot(page), "screenshot_b64": _shot_b64(page)}
             if state == "twofa":
                 raise VidaPayAuthError(
                     "2FA code was not accepted (still on the verification screen) — check the code and "
                     "try again; it may have expired, request a new one.")
-            return {"status": "authenticated", "storage_state": ctx.storage_state(),
+            return {"status": "authenticated", "storage_state": capture_session_state(page, ctx),
                     "diag": {**_snapshot(page), "_note": "post-2FA page not definitively recognized"},
                     "screenshot_b64": _shot_b64(page)}
         except Exception as e:   # attach the evidence to EVERY failure, incl. Playwright timeouts
@@ -1322,7 +1344,7 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
             page.wait_for_timeout(2500)
             on_2fa = bool(page.query_selector("#TwoFactorCode")) or "twofactor" in (page.url or "").lower()
             if not on_2fa and _classify(page) == "authenticated":
-                return {"status": "authenticated", "storage_state": ctx.storage_state(), "diag": _snapshot(page),
+                return {"status": "authenticated", "storage_state": capture_session_state(page, ctx), "diag": _snapshot(page),
                         "screenshot_b64": _shot_b64(page)}
             # New-device flow can re-land on a "New Sign In → Next" interstitial before the code box.
             if not (page.query_selector("#TwoFactorCode") or _code_field(page)):
@@ -1414,7 +1436,7 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
                 ss_dump = page.evaluate("() => { const o={}; for (let i=0;i<sessionStorage.length;i++){const k=sessionStorage.key(i); o[k]=sessionStorage.getItem(k);} return o; }") or {}
             except Exception:
                 pass
-            st = ctx.storage_state()
+            st = capture_session_state(page, ctx)
             if ss_dump:
                 st["_sessionStorage"] = {"origin": sd.get("url") or base_url, "items": ss_dump}
             return {"status": "authenticated", "storage_state": st,

@@ -474,7 +474,9 @@ class LiveLoginSession:
 
     def _on_authenticated(self, page, ctx, vp):
         try:
-            st = ctx.storage_state()
+            # capture_session_state ALSO stashes sessionStorage — VidaPay/T-CETRA keeps its OIDC token
+            # there, and a session saved without it dies the moment the report Pull restores it.
+            st = vp.capture_session_state(page, ctx)
         except Exception:
             st = None
         now = datetime.now(timezone.utc)

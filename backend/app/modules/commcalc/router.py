@@ -10546,11 +10546,14 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
         return {"ok": True, **(res or {})}
     except VidaPayAuthError as e:
         # Session expired / never authenticated — not a hard failure; prompt the operator to log in.
+        # Do NOT null session_state here: a transient nav/validity blip would otherwise DESTROY a good
+        # saved login and force a needless re-login (+ new 2FA code). Leave the stored session in place;
+        # a real re-login overwrites it, and a still-valid session is reused on the next Pull.
         try:
             client.schema("commcalc").table("data_source").update(
                 {"last_run_at": datetime.now(timezone.utc).isoformat(),
                  "last_status": f"needs login: {str(e)[:160]}",
-                 "auth_status": "needs_2fa", "auth_message": str(e)[:300], "session_state": None})\
+                 "auth_status": "needs_2fa", "auth_message": str(e)[:300]})\
                 .eq("id", sid).eq("org_id", org_id).execute()
         except Exception:
             pass
