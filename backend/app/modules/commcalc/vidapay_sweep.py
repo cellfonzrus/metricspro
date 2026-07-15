@@ -757,6 +757,38 @@ def _confirm_trust_device(page):
                 return True
             except Exception:
                 continue
+    # LAST RESORT — find the "Next"/"Trust" control by TEXT across ANY tag (incl. a <div>/<span> styled
+    # as a button whose handler is bound in JS, which the tag-based query above can't see) and DOM-click
+    # the smallest/most-clickable match. Returns True if it clicked something.
+    js = r"""() => {
+        const WANT = ['next','continue','confirm','trust','proceed','submit','done','finish'];
+        const AVOID = ['cancel','sign out','log out','logout','back','assistance','don','skip','not now','forgot'];
+        const els = Array.from(document.querySelectorAll(
+            'button,input[type=submit],input[type=button],a,[role=button],[onclick],div,span'));
+        const cands = [];
+        for (const e of els) {
+            const t = (e.value || e.innerText || e.textContent || '').trim().toLowerCase();
+            if (!t || t.length > 25) continue;
+            if (AVOID.some(a => t.includes(a))) continue;
+            if (!WANT.some(w => t === w || t.startsWith(w))) continue;
+            const r = e.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) continue;
+            const tag = e.tagName.toLowerCase();
+            const clickable = ['button','a','input'].includes(tag) || e.hasAttribute('role') || e.hasAttribute('onclick');
+            cands.push({e, score: (clickable ? 0 : 1000) + e.querySelectorAll('*').length});
+        }
+        if (!cands.length) return null;
+        cands.sort((a, b) => a.score - b.score);
+        cands[0].e.click();
+        return (cands[0].e.value || cands[0].e.innerText || '').trim().slice(0, 30);
+    }"""
+    for fr in _frames(page):
+        try:
+            hit = fr.evaluate(js)
+            if hit:
+                return True
+        except Exception:
+            continue
     return False
 
 
@@ -770,7 +802,7 @@ def _finalize_after_code_impl(page, on_step=None):
     trust page can LOOK authenticated (its header has 'Sign Out'), so it's handled BEFORE concluding
     auth — otherwise the session saves without the trust actually registering (no 90-day skip).
     `on_step` (optional) is called each pass so a live viewer's screenshot keeps refreshing."""
-    for _ in range(4):
+    for _ in range(6):
         try:
             _wait_settle(page)
         except Exception:
@@ -787,10 +819,19 @@ def _finalize_after_code_impl(page, on_step=None):
                 pass
             page.wait_for_timeout(2000)
             continue
+        # While the 'Trust This Device' wording is still on screen, do NOT conclude authenticated — its
+        # header carries a 'Sign Out' link that _classify would misread as logged-in even though the Next
+        # click hasn't landed. Keep looping (retrying the click) until the trust page is actually gone.
+        if any(w in _page_text(page) for w in _TRUST_PAGE_WORDS):
+            page.wait_for_timeout(1500)
+            continue
         state = _classify(page)
         if state in ("authenticated", "twofa"):
             return state
         page.wait_for_timeout(1500)
+    # Fell out of the loop still on the trust page → report a clear, actionable error (not a false auth).
+    if any(w in _page_text(page) for w in _TRUST_PAGE_WORDS):
+        return "twofa"
     return _classify(page)
 
 
