@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import ReportExportBar from '@/components/ReportExportBar'
 
 const inp: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const PL_TYPES = ['revenue', 'cogs', 'opex', 'other']
@@ -59,6 +60,19 @@ export default function JournalPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{msg}</span>}
+          {/* RULE FOUR (§3c): export the manual journal for this period (what you see is what exports). */}
+          {rows.some(r => r.account_line.trim()) && <ReportExportBar
+            title={`Manual Journal Entries — ${period}`} subtitle={`${period} · manual entries`}
+            filename={`journal-${period.replace(/\s+/g, '-')}`}
+            columns={[
+              { header: 'Statement', get: (r: any) => r.statement === 'pl' ? 'P&L' : 'Balance Sheet' },
+              { header: 'Type', get: (r: any) => r.account_type },
+              { header: 'Account line', get: (r: any) => r.account_line },
+              { header: 'Amount', get: (r: any) => r.amount, money: true },
+              { header: 'Store', get: (r: any) => r.store_address || '' },
+              { header: 'Memo', get: (r: any) => r.memo || '' },
+            ]}
+            rows={rows.filter(r => r.account_line.trim())} />}
           <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? '…' : '💾 Save entries'}</button>
         </div>
       </div>

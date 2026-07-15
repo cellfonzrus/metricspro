@@ -4,9 +4,10 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
-import { ExportButtons, ExportPayload } from '@/lib/export'
-import { SendReportButton } from '@/lib/send-report'
+import ReportExportBar from '@/components/ReportExportBar'
+import type { ExportSheet } from '@/lib/export'
 import { StalenessBanner } from '../_components/StalenessBanner'
+import { statementInfoSheet, statementSubtitle, type StatementMeta } from '../_components/statementExport'
 
 const SECTION_TITLE: Record<string, string> = { revenue: 'Revenue', cogs: 'Cost of Goods Sold', opex: 'Operating Expenses', other: 'Other' }
 
@@ -34,7 +35,15 @@ function PLInner() {
   const st = data?.statement
   const sec = (t: string) => (st?.sections || []).find((s: any) => s.type === t)
 
-  function buildPayload(): ExportPayload {
+  // RULE FOUR (§3c) export. DISPLAY/EXPORT ONLY — figures come straight from the computed snapshot.
+  function plMeta(): StatementMeta {
+    return {
+      reportName: 'Profit & Loss', scopeLabel: st?.scope_label || scope, period, basis: 'Cash basis',
+      computed: !!data?.computed, computedAt: data?.computed_at,
+      newestIngestAt: data?.newest_ingest_at, stale: !!data?.stale,
+    }
+  }
+  function plSheets(): ExportSheet[] {
     const rows: any[] = []
     ;(st?.sections || []).forEach((s: any) => {
       s.lines.forEach((l: any) => rows.push({ section: SECTION_TITLE[s.type] || s.type, line: l.label, amount: l.amount }))
@@ -43,15 +52,26 @@ function PLInner() {
     rows.push({ section: 'Totals', line: 'Gross Profit', amount: st?.gross_profit })
     rows.push({ section: 'Totals', line: 'Net Operating Income', amount: st?.net_operating_income })
     rows.push({ section: 'Totals', line: 'Net Income', amount: st?.net_income })
-    return {
-      title: `Profit & Loss — ${st?.scope_label || scope}`, subtitle: `${period} · cash basis`,
-      filename: `pl-${scope.replace(/[^a-z0-9]+/gi, '-')}-${period.replace(/\s+/g, '-')}`,
-      sheets: [{ name: 'P&L', rows, columns: [
+    const sheets: ExportSheet[] = [
+      statementInfoSheet(plMeta()),                                   // self-describing cover (Excel too)
+      { name: 'P&L', rows, columns: [
         { header: 'Section', get: (r: any) => r.section },
         { header: 'Line', get: (r: any) => r.line },
         { header: 'Amount', get: (r: any) => r.amount, money: true },
-      ] }],
+      ] },
+    ]
+    // Multi-sheet: a company-wide company/store breakdown for the SAME period — every computed scope
+    // the dropdown offers — so one export answers "which store drove it". Numbers are the stored
+    // per-scope snapshots (overview), untouched.
+    if (scopes.length > 0) {
+      sheets.push({ name: 'By Scope', rows: scopes, columns: [
+        { header: 'Scope', get: (r: any) => r.scope_label || r.scope_key },
+        { header: 'Revenue', get: (r: any) => r.revenue, money: true },
+        { header: 'Gross Profit', get: (r: any) => r.gross_profit, money: true },
+        { header: 'Net Income', get: (r: any) => r.net_income, money: true },
+      ] })
     }
+    return sheets
   }
 
   return (
@@ -66,8 +86,11 @@ function PLInner() {
             {scopes.map((s: any) => <option key={s.scope_key} value={s.scope_key}>{(s.scope_label || s.scope_key).substring(0, 50)}</option>)}
             {!scopes.find((s: any) => s.scope_key === scope) && <option value={scope}>{scope}</option>}
           </select>
-          {st && <ExportButtons payload={buildPayload} />}
-          {data?.computed && <SendReportButton reportKey="account_pl" filters={{ period, scope }} />}
+          {st && <ReportExportBar
+            title={`Profit & Loss — ${st?.scope_label || scope}`}
+            subtitle={statementSubtitle(plMeta())}
+            filename={`pl-${scope.replace(/[^a-z0-9]+/gi, '-')}-${period.replace(/\s+/g, '-')}`}
+            sheets={plSheets()} />}
         </div>
       </div>
 
