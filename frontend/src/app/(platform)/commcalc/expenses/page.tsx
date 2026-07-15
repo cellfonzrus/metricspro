@@ -51,6 +51,55 @@ const CAT_ALIASES: Record<string, string> = {
 const CAT_SKIP = new Set(['', 'store#', 'store #', 'total', 'sub total', 'subtotal', 'total exp.', 'total exp', 'min.sales target', 'min sales target', 'min. sales target'])
 const canonCat = (raw: string) => { const k = (raw || '').trim().toLowerCase(); return CAT_ALIASES[k] || (raw || '').trim() }
 const typeFor = (name: string) => DEFAULT_CATS.find(c => c.name === name)?.type || 'Fixed'
+const chip: React.CSSProperties = { padding: '3px 8px', fontSize: 11, borderRadius: 999 }
+
+// Multi-store picker (RULE THREE — stores come from the real store list, never free text). A button that
+// opens a checkbox list with type-to-filter, Select-all (respects the filter), Clear, and per-market
+// add-shortcuts when markets are available on the stores. Emits store_code[] (the canonical key).
+type Store = { store_code: string; address?: string; market?: string }
+function StorePicker({ stores, markets, value, onChange, exclude, label }: {
+  stores: Store[]; markets: string[]; value: string[]; onChange: (v: string[]) => void; exclude?: string; label?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const opts = stores.filter(s => s.store_code && s.store_code !== exclude)
+  const filt = opts.filter(s => !q || `${s.store_code} ${s.address || ''} ${s.market || ''}`.toLowerCase().includes(q.toLowerCase()))
+  const sel = new Set(value)
+  const add = (codes: string[]) => onChange(Array.from(new Set([...value, ...codes])))
+  const toggle = (sc: string) => onChange(sel.has(sc) ? value.filter(x => x !== sc) : [...value, sc])
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button className="btn" onClick={() => setOpen(o => !o)}>
+        {label || 'Apply to stores…'}{value.length ? ` (${value.length})` : ''} ▾
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', zIndex: 41, top: '108%', left: 0, width: 300, maxHeight: 360, overflow: 'auto', background: 'white', border: '1px solid var(--border)', borderRadius: 9, boxShadow: '0 8px 28px rgba(0,0,0,.16)', padding: 9 }}>
+            <input autoFocus style={{ ...inp, width: '100%', marginBottom: 7 }} placeholder="Filter stores…" value={q} onChange={e => setQ(e.target.value)} />
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: markets.length ? 5 : 7 }}>
+              <button className="btn" style={chip} onClick={() => add(filt.map(s => s.store_code))}>Select all{q ? ' (filtered)' : ''}</button>
+              <button className="btn" style={chip} onClick={() => onChange([])} disabled={!value.length}>Clear</button>
+            </div>
+            {markets.length > 0 && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 7 }}>
+                {markets.map(m => <button key={m} className="btn" style={chip} title={`Add all ${m} stores`}
+                  onClick={() => add(opts.filter(s => s.market === m).map(s => s.store_code))}>＋ {m}</button>)}
+              </div>
+            )}
+            {filt.map(s => (
+              <label key={s.store_code} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 4px', fontSize: 13, cursor: 'pointer' }}>
+                <input type="checkbox" checked={sel.has(s.store_code)} onChange={() => toggle(s.store_code)} />
+                <span><b>{s.store_code}</b> <span style={{ color: 'var(--text3)' }}>{(s.address || '').slice(0, 26)}</span></span>
+              </label>
+            ))}
+            {filt.length === 0 && <div style={{ padding: 8, color: 'var(--text3)', fontSize: 12 }}>No stores match.</div>}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 export default function ExpensesPage() {
   const { period } = usePeriod()
@@ -72,6 +121,12 @@ export default function ExpensesPage() {
   const [commissionFrom, setCommissionFrom] = useState('')
   const [dirty, setDirty] = useState(0)                // bumps ONLY on real edits → drives auto-save
   const [expTrend, setExpTrend] = useState<any>(null)  // month-over-month total-expenses chart on top
+  const [copySource, setCopySource] = useState('')     // store_code whose column is being copied
+  const [copyTargets, setCopyTargets] = useState<string[]>([])
+  const [commonOpen, setCommonOpen] = useState(false)  // multi-store common-expense panel
+  const [common, setCommon] = useState<{ name: string; type: string; amount: string }>({ name: '', type: 'Fixed', amount: '' })
+  const [commonTargets, setCommonTargets] = useState<string[]>([])
+  const [applyBusy, setApplyBusy] = useState(false)    // batch bulk-apply in flight
   const cw = useColumnResize()                          // auto-fit + user-resizable columns
 
   function load() {
@@ -152,6 +207,79 @@ export default function ExpensesPage() {
     if (!name) return
     if (cats.find(c => c.name.toLowerCase() === name.toLowerCase())) { setMsg('That expense already exists.'); return }
     setCats(c => [...c, { name, type: newCat.type }]); setNewCat({ name: '', type: 'Fixed' })
+  }
+
+  // ONE request → the /bulk-apply batch endpoint (idempotent upsert per (store, expense) cell), NOT N
+  // sequential saves. Only the cells in the payload are touched; everything else in the period is left
+  // exactly as-is. The grid is updated first (optimistic) so it reflects instantly; the write persists it.
+  async function persistCells(cells: any[], okMsg: string) {
+    setApplyBusy(true)
+    try {
+      const r = await api(`/api/v1/commcalc/expenses/${encodeURIComponent(period)}/bulk-apply?org_id=${ORG_ID}`,
+        { method: 'POST', body: JSON.stringify({ cells }) })
+      setMsg(`${okMsg} — saved ${r.saved}${r.cleared ? `, cleared ${r.cleared}` : ''}. Re-run Calculation to include in Gross Profit.`)
+    } catch (e: any) {
+      // The values are already in the grid — a failed batch write degrades to the normal Save All path.
+      setMsg('Bulk apply failed (values are in the grid — hit 💾 Save All): ' + (e?.message || e))
+    }
+    setApplyBusy(false)
+  }
+
+  // COPY ONE COLUMN TO MANY: mirror every category value of the source store's column onto each selected
+  // target store (a 0 in the source CLEARS the target cell). Grid + one batch write.
+  async function applyCopy() {
+    if (!copySource || !copyTargets.length) return
+    const src = amounts[copySource] || {}
+    const map: any = { ...amounts }; const cells: any[] = []
+    copyTargets.forEach(tc => {
+      map[tc] = { ...(map[tc] || {}) }
+      cats.forEach(c => {
+        const v = src[c.name] || 0
+        map[tc][c.name] = v
+        cells.push({ store_code: tc, expense_name: c.name, expense_type: c.type, amount: v })
+      })
+    })
+    setAmounts(map); setDirty(d => d + 1)
+    const src2 = stores.find(s => s.store_code === copySource)
+    await persistCells(cells, `Copied ${src2?.store_code || copySource}'s column to ${copyTargets.length} store(s)`)
+    setCopySource(''); setCopyTargets([])
+  }
+
+  // MULTI-STORE COMMON EXPENSE: write the same expense/amount to every selected store in one submit.
+  async function applyCommon() {
+    const name = common.name.trim()
+    const amt = parseFloat(String(common.amount).replace(/[$,\s]/g, '')) || 0
+    if (!name) { setMsg('Name the common expense first.'); return }
+    if (!commonTargets.length) { setMsg('Pick at least one store to apply it to.'); return }
+    const existing = cats.find(c => c.name.toLowerCase() === name.toLowerCase())
+    const canonName = existing?.name || name
+    const type = existing?.type || common.type
+    if (!existing) setCats(c => [...c, { name: canonName, type }])
+    const map: any = { ...amounts }; const cells: any[] = []
+    commonTargets.forEach(tc => { map[tc] = { ...(map[tc] || {}), [canonName]: amt }; cells.push({ store_code: tc, expense_name: canonName, expense_type: type, amount: amt }) })
+    setAmounts(map); setDirty(d => d + 1)
+    await persistCells(cells, `Applied ${fmt(amt)} ${canonName} to ${commonTargets.length} store(s)`)
+    setCommonOpen(false); setCommon({ name: '', type: 'Fixed', amount: '' }); setCommonTargets([])
+  }
+
+  // Real clipboard paste of a COLUMN of numbers (multi-row copy from Excel) into one store's column,
+  // starting at the pasted cell and filling downward across the category rows. Single-value pastes fall
+  // through to the browser default (normal cell edit).
+  function pasteColumn(e: React.ClipboardEvent, startCi: number, storeCode: string) {
+    const text = e.clipboardData.getData('text')
+    const lines = text.replace(/\r/g, '').split('\n').filter((l, i, a) => !(i === a.length - 1 && l === ''))
+    if (lines.length <= 1) return   // let the browser handle a normal single-cell paste
+    e.preventDefault()
+    const map: any = { ...amounts }; map[storeCode] = { ...(map[storeCode] || {}) }
+    let n = 0
+    lines.forEach((line, k) => {
+      const ci = startCi + k
+      if (ci >= cats.length) return
+      const v = parseFloat(String(line).replace(/[$,\s]/g, '')) || 0
+      map[storeCode][cats[ci].name] = v; n++
+    })
+    setAmounts(map); setDirty(d => d + 1)
+    setMsg(`Pasted ${n} value(s) into ${storeCode}. Review, then 💾 Save All.`)
   }
 
   async function save(silent = false) {
@@ -284,6 +412,9 @@ export default function ExpensesPage() {
         <input style={{ ...inp, width: 150 }} placeholder="New expense name" value={newCat.name} onChange={e => setNewCat({ ...newCat, name: e.target.value })} />
         <select style={inp} value={newCat.type} onChange={e => setNewCat({ ...newCat, type: e.target.value })}><option>Fixed</option><option>Variable</option></select>
         <button className="btn" onClick={addCat}>＋ Add expense</button>
+        <button className="btn" onClick={() => { setCommonOpen(o => !o); setCopySource('') }}
+          title="Write one common expense (same amount) to many stores in a single submit">
+          {commonOpen ? '✕ Close common' : '🏢 Common expense…'}</button>
         <span style={{ width: 1, height: 22, background: 'var(--border)' }} />
         <button className="btn" onClick={downloadTemplate}>⬇️ Template</button>
         <label className="btn" style={{ cursor: upBusy ? 'default' : 'pointer', margin: 0 }}>
@@ -298,6 +429,35 @@ export default function ExpensesPage() {
           </>
         )}
       </div>
+
+      {/* COPY ONE COLUMN → MANY. Opened by the ⧉ button on a store column header. */}
+      {copySource && (
+        <div className="card" style={{ padding: 12, marginBottom: 16, background: '#eff6ff', borderLeft: '4px solid var(--accent)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13 }}>⧉ Copy <b>{copySource}</b>{(() => { const a = stores.find(s => s.store_code === copySource)?.address; return a ? ` (${a.slice(0, 22)})` : '' })()}'s whole column to:</span>
+          <StorePicker stores={stores} markets={markets} value={copyTargets} onChange={setCopyTargets} exclude={copySource} label="Paste to stores…" />
+          <button className="btn btn-primary" onClick={applyCopy} disabled={applyBusy || !copyTargets.length}>
+            {applyBusy ? '…' : `Apply to ${copyTargets.length || 0} store${copyTargets.length === 1 ? '' : 's'}`}</button>
+          <button className="btn" onClick={() => { setCopySource(''); setCopyTargets([]) }}>Cancel</button>
+          <span style={{ fontSize: 11, color: 'var(--text3)' }}>Copies every category value (a blank/0 clears the target cell). Writes in one request.</span>
+        </div>
+      )}
+
+      {/* MULTI-STORE COMMON EXPENSE — same expense + amount to many stores in one submit. */}
+      {commonOpen && (
+        <div className="card" style={{ padding: 12, marginBottom: 16, background: '#f0fdf4', borderLeft: '4px solid #16a34a', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>🏢 Common expense →</span>
+          <input style={{ ...inp, width: 170 }} list="exp-cats" placeholder="Expense (pick or new)" value={common.name}
+            onChange={e => { const nm = e.target.value; const ex = cats.find(c => c.name.toLowerCase() === nm.toLowerCase()); setCommon(v => ({ ...v, name: nm, type: ex?.type || v.type })) }} />
+          <datalist id="exp-cats">{cats.map(c => <option key={c.name} value={c.name} />)}</datalist>
+          <select style={inp} value={common.type} onChange={e => setCommon(v => ({ ...v, type: e.target.value }))}><option>Fixed</option><option>Variable</option></select>
+          <input style={{ ...inp, width: 110, textAlign: 'right' }} type="number" min="0" step="0.01" placeholder="Amount" value={common.amount}
+            onChange={e => setCommon(v => ({ ...v, amount: e.target.value }))} />
+          <StorePicker stores={stores} markets={markets} value={commonTargets} onChange={setCommonTargets} label="Apply to stores…" />
+          <button className="btn btn-primary" onClick={applyCommon} disabled={applyBusy || !commonTargets.length || !common.name.trim()}>
+            {applyBusy ? '…' : `Apply to ${commonTargets.length || 0} store${commonTargets.length === 1 ? '' : 's'}`}</button>
+          <span style={{ fontSize: 11, color: 'var(--text3)' }}>Writes the same amount to every selected store in one request.</span>
+        </div>
+      )}
 
       {expTrendData.length > 1 && !loading && (
         <div className="card" style={{ padding: '12px 12px 6px', marginBottom: 14 }}>
@@ -345,6 +505,9 @@ export default function ExpensesPage() {
                   <th key={s.store_code} style={{ padding: '8px 10px', color: 'white', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative' }}>
                     <div style={{ fontWeight: 700 }}>{s.store_code}</div>
                     <div style={{ fontWeight: 400, opacity: 0.7, fontSize: 10 }}>{(s.address || '').substring(0, 18)}</div>
+                    <button onClick={() => { setCopySource(cur => cur === s.store_code ? '' : s.store_code); setCommonOpen(false); setCopyTargets([]) }}
+                      title={`Copy ${s.store_code}'s whole column onto other stores`}
+                      style={{ marginTop: 3, fontSize: 10, padding: '1px 6px', borderRadius: 5, cursor: 'pointer', border: '1px solid rgba(255,255,255,.5)', background: copySource === s.store_code ? 'white' : 'transparent', color: copySource === s.store_code ? 'var(--accent)' : 'white' }}>⧉ Copy</button>
                     <ResizeHandle onDown={e => cw.start(s.store_code, e)} onReset={() => cw.reset(s.store_code)} />
                   </th>
                 ))}
@@ -364,6 +527,8 @@ export default function ExpensesPage() {
                       <td key={s.store_code} style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>
                         <input type="number" min="0" step="0.01" value={getVal(s.store_code, cat.name) || ''} placeholder="0"
                           onChange={e => setVal(s.store_code, cat.name, parseFloat(e.target.value) || 0)}
+                          onPaste={e => pasteColumn(e, ci, s.store_code)}
+                          title="Paste a column of numbers here (multi-row copy from Excel) to fill this store's column down"
                           style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 6px', fontSize: 13, textAlign: 'right', background: 'var(--surface)' }} />
                       </td>
                     ))}

@@ -8889,6 +8889,64 @@ async def put_expenses(period: str, body: dict, org_id: str = ORG_ID):
     return {"saved": len(ins), "period": period}
 
 
+def _bulk_apply_expand(cells):
+    """Pure payload→rows expansion for the bulk-apply endpoint (kept separate so it's unit-testable
+    without a DB). Groups the requested cells by expense_name; for each expense name it returns the set
+    of affected store_codes (to CLEAR) and the non-zero rows (to INSERT). Last write wins on a repeated
+    (store, expense) pair → the expansion is idempotent. Returns (by_expense, ins, cleared) where
+    by_expense maps expense_name -> {store_code: {'type','amount'}}."""
+    by_expense = {}
+    for c in cells or []:
+        sc = str((c or {}).get('store_code') or '').strip()
+        nm = str((c or {}).get('expense_name') or '').strip()
+        if not sc or not nm:
+            continue
+        try:
+            amt = float(c.get('amount') or 0)
+        except (TypeError, ValueError):
+            amt = 0
+        by_expense.setdefault(nm, {})[sc] = {
+            'type': (c.get('expense_type') or 'Fixed'), 'amount': amt}
+    ins, cleared = [], 0
+    for nm, stores in by_expense.items():
+        for sc, v in stores.items():
+            if v['amount'] == 0:
+                cleared += 1          # amount 0 = clear the cell (delete, no re-insert)
+                continue
+            ins.append({'store_code': sc, 'expense_name': nm,
+                        'expense_type': v['type'], 'amount': v['amount']})
+    return by_expense, ins, cleared
+
+
+@router.post("/expenses/{period}/bulk-apply")
+async def bulk_apply_expenses(period: str, body: dict, org_id: str = ORG_ID):
+    """Idempotent per-CELL upsert of specific (store, expense) cells for a period — powers the
+    'copy one column to many stores' and 'multi-store common expense' bulk actions in ONE request
+    (never N sequential saves). Body: {cells:[{store_code, expense_name, expense_type, amount}]}.
+    Unlike PUT /expenses (which FULL-replaces the whole period), this touches ONLY the
+    (store_code, expense_name) pairs in the payload — every other cell in the period is left as-is.
+    amount 0 CLEARS the cell. Delete-then-insert-nonzero per (expense_name × affected stores) → no
+    unique index required and safe to re-run. org-scoped on every read AND write."""
+    require_org(org_id)
+    by_expense, ins_bare, cleared = _bulk_apply_expand(body.get('cells') or [])
+    client = sb()
+    pv = _pvariants(period)
+    # Clear every affected (period, expense_name, store_code) cell. Compound (store,expense) IN isn't
+    # expressible in one PostgREST filter, so we group by expense_name (one delete per expense name).
+    for nm, stores in by_expense.items():
+        scodes = list(stores.keys())
+        for i in range(0, len(scodes), 200):
+            client.schema('commcalc').table('store_expenses').delete() \
+                .eq('org_id', org_id).in_('period', pv).eq('expense_name', nm) \
+                .in_('store_code', scodes[i:i + 200]).execute()
+    ins = [{'org_id': org_id, 'period': period, **row} for row in ins_bare]
+    for i in range(0, len(ins), 500):
+        client.schema('commcalc').table('store_expenses').insert(ins[i:i + 500]).execute()
+    stores_touched = len({sc for st in by_expense.values() for sc in st})
+    return {"saved": len(ins), "cleared": cleared, "cells": len(ins) + cleared,
+            "stores": stores_touched, "expenses": len(by_expense), "period": period}
+
+
 @router.get("/commission-by-store/{period}")
 async def commission_by_store(period: str, org_id: str = ORG_ID):
     """Σ rep_commissions.total_payout per STORE CODE for the period — feeds the Store Expenses
