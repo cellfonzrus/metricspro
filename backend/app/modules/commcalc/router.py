@@ -8863,14 +8863,87 @@ async def get_expenses(period: str, org_id: str = ORG_ID):
     return {"period": period, "expenses": rows, "carried_from": carried_from}
 
 
+# ── SYSTEM (auto-computed) expense lines ─────────────────────────────────────────────────────────
+# A "system line" is a store-expense row written by an automated producer (e.g. mod-people's payroll run
+# inserting the per-store 'Paid Leave Accumulated' PTO accrual) rather than typed by a human. It is tagged
+# with a non-null `source_key` (mig 206) so the UI can render it read-only and the MANUAL expense paths
+# (put_expenses / bulk-apply / apply-to-months) never overwrite or copy it. NULL source_key == manual.
+# Everything degrades gracefully before mig 206: the column is absent → no system rows can exist → every
+# guard falls back to the pre-existing behavior (there is nothing to protect yet).
+
+def _is_missing_col_err(e, col='source_key'):
+    """True ONLY when a PostgREST error is 'column <col> does not exist' / schema-cache miss (pre-migration),
+    never a transient/network error — so a guarded query degrades to the unguarded path only when the column
+    genuinely isn't there yet. Both the PG (42703) and PostgREST schema-cache messages name the column."""
+    s = str(e).lower()
+    return (col in s) or ('42703' in s)
+
+
+def _system_line_expand(org_id, period, source_key, label, cells, expense_type='Fixed'):
+    """PURE (no DB, unit-testable): expand a system-line payload into store_expenses INSERT rows tagged with
+    `source_key` (marks the row AUTO). Accepts `store` or `store_code` per cell; last-write-wins per store;
+    drops blank stores and zero/blank amounts. org_id/period are baked in here — the caller stamps nothing."""
+    etype = str(expense_type or 'Fixed').strip() or 'Fixed'
+    by_store = {}
+    for c in cells or []:
+        sc = str((c or {}).get('store') or (c or {}).get('store_code') or '').strip()
+        if not sc:
+            continue
+        try:
+            amt = float((c or {}).get('amount') or 0)
+        except (TypeError, ValueError):
+            amt = 0
+        by_store[sc] = amt          # last write wins per store
+    return [{'org_id': org_id, 'period': period, 'store_code': sc, 'expense_name': label,
+             'expense_type': etype, 'amount': amt, 'source_key': source_key}
+            for sc, amt in by_store.items() if amt != 0]
+
+
+def _delete_manual_expenses(client, org_id, pv, extra=None):
+    """Delete MANUAL (source_key IS NULL) store_expense rows for (org, period∈pv) — NEVER an auto system
+    line. `extra` = optional {column: value|list} additional filters (e.g. expense_name / store_code list).
+    Degrades to the pre-mig-206 unguarded delete when store_expenses.source_key is absent (no system rows
+    exist yet, so the fallback is safe)."""
+    def _base():
+        q = client.schema('commcalc').table('store_expenses').delete().eq('org_id', org_id).in_('period', pv)
+        for k, v in (extra or {}).items():
+            q = q.in_(k, v) if isinstance(v, list) else q.eq(k, v)
+        return q
+    try:
+        _base().is_('source_key', 'null').execute()
+    except Exception as e:
+        if _is_missing_col_err(e):
+            _base().execute()
+        else:
+            raise
+
+
+def _system_line_keys(client, org_id, pv):
+    """The set of (store_code, expense_name) that are AUTO system lines for (org, period∈pv) — used to stop a
+    manual save from shadowing a system line with a duplicate manual row (which would double-count in GP).
+    Empty pre-mig-206 (column absent → select raises → caught)."""
+    try:
+        rows = (client.schema('commcalc').table('store_expenses')
+                .select('store_code,expense_name,source_key')
+                .eq('org_id', org_id).in_('period', pv).execute().data) or []
+        return {(str(r.get('store_code') or ''), str(r.get('expense_name') or ''))
+                for r in rows if r.get('source_key')}
+    except Exception:
+        return set()
+
+
 @router.put("/expenses/{period}")
 async def put_expenses(period: str, body: dict, org_id: str = ORG_ID):
-    """Replace all expenses for the period (matrix save + bulk upload). Body:
-    {rows:[{store_code, expense_name, expense_type, amount}]}. Zero/blank rows are dropped."""
+    """Replace all MANUAL expenses for the period (matrix save + bulk upload). Body:
+    {rows:[{store_code, expense_name, expense_type, amount}]}. Zero/blank rows are dropped.
+    AUTO 'system' lines (source_key not null — e.g. the payroll-computed Paid Leave Accumulated) are
+    NEVER deleted or shadowed here: the delete is manual-only, and an incoming row that collides with a
+    system (store, expense) is dropped (the system line owns that cell), so GP never double-counts."""
     rows = body.get('rows') or []
     client = sb()
-    client.schema('commcalc').table('store_expenses').delete() \
-        .eq('org_id', org_id).in_('period', _pvariants(period)).execute()
+    pv = _pvariants(period)
+    sys_keys = _system_line_keys(client, org_id, pv)
+    _delete_manual_expenses(client, org_id, pv)          # deletes MANUAL rows only — protects system lines
     ins = []
     for r in rows:
         try:
@@ -8879,11 +8952,11 @@ async def put_expenses(period: str, body: dict, org_id: str = ORG_ID):
             amt = 0
         if amt == 0 or not (r.get('store_code') and r.get('expense_name')):
             continue
-        ins.append({'org_id': org_id, 'period': period,
-                    'store_code': str(r['store_code']).strip(),
-                    'expense_name': str(r['expense_name']).strip(),
-                    'expense_type': (r.get('expense_type') or 'Fixed'),
-                    'amount': amt})
+        sc, nm = str(r['store_code']).strip(), str(r['expense_name']).strip()
+        if (sc, nm) in sys_keys:                          # never shadow an auto system line with a manual dup
+            continue
+        ins.append({'org_id': org_id, 'period': period, 'store_code': sc, 'expense_name': nm,
+                    'expense_type': (r.get('expense_type') or 'Fixed'), 'amount': amt})
     for i in range(0, len(ins), 500):
         client.schema('commcalc').table('store_expenses').insert(ins[i:i + 500]).execute()
     return {"saved": len(ins), "period": period}
@@ -8936,15 +9009,60 @@ async def bulk_apply_expenses(period: str, body: dict, org_id: str = ORG_ID):
     for nm, stores in by_expense.items():
         scodes = list(stores.keys())
         for i in range(0, len(scodes), 200):
-            client.schema('commcalc').table('store_expenses').delete() \
-                .eq('org_id', org_id).in_('period', pv).eq('expense_name', nm) \
-                .in_('store_code', scodes[i:i + 200]).execute()
+            # manual-only delete → a bulk apply can never clobber an auto system line, even on a name collision
+            _delete_manual_expenses(client, org_id, pv,
+                                    {'expense_name': nm, 'store_code': scodes[i:i + 200]})
     ins = [{'org_id': org_id, 'period': period, **row} for row in ins_bare]
     for i in range(0, len(ins), 500):
         client.schema('commcalc').table('store_expenses').insert(ins[i:i + 500]).execute()
     stores_touched = len({sc for st in by_expense.values() for sc in st})
     return {"saved": len(ins), "cleared": cleared, "cells": len(ins) + cleared,
             "stores": stores_touched, "expenses": len(by_expense), "period": period}
+
+
+@router.post("/expenses/{period}/system-line")
+async def upsert_expense_system_line(period: str, body: dict, org_id: str = ORG_ID):
+    """RECEIVER for an AUTO-COMPUTED ('system') store-expense line. mod-people's payroll run is the CALLER:
+    it computes the per-store cost (e.g. 'Paid Leave Accumulated' / PTO accrual) and POSTs it here to be
+    inserted into the Store Expenses matrix. The line coexists with manual expenses and rolls into the SAME
+    GP/P&L totals (store_expenses is summed by amount, agnostic of source_key) so the PTO cost hits the books.
+    Body: { source_key:'pto_accrual', label:'Paid Leave Accumulated',
+            expense_type:'Fixed'(optional), cells:[{store:'<store_code>', amount:<number>}, ...] }
+    IDEMPOTENT: each call REPLACES the prior values for this (org, period, source_key) — delete-by-
+    (org,period,source_key) then insert the non-zero cells — so a re-run of payroll never double-writes.
+    Rows are tagged with source_key (marks them AUTO) so the UI renders them read-only and the MANUAL paths
+    (put_expenses / bulk-apply / apply-to-months) never overwrite or copy them. org-scoped (org_id query
+    param + require_org); stamps org_id on writes; _pvariants for period-spelling.
+    MONEY: NON-money on the PAY path — it only INSERTS a cost line (feeds GP/P&L); no commission payout,
+    rate, tier, or plan changes, and it does NOT recompute anything. Returns {ok, period, source_key, label,
+    stores_written, total}."""
+    require_org(org_id)
+    source_key = str(body.get('source_key') or '').strip()
+    label = str(body.get('label') or '').strip()
+    if not source_key:
+        return {"ok": False, "error": "source_key required"}
+    if not label:
+        return {"ok": False, "error": "label required"}
+    ins = _system_line_expand(org_id, period, source_key, label,
+                              body.get('cells') or [], body.get('expense_type') or 'Fixed')
+    client = sb()
+    pv = _pvariants(period)
+    # Replace the prior values for THIS (source_key, period): delete-by-source_key then insert the non-zero
+    # cells. Never touches manual rows or another producer's source_key → idempotent, no double-write.
+    try:
+        client.schema('commcalc').table('store_expenses').delete() \
+            .eq('org_id', org_id).in_('period', pv).eq('source_key', source_key).execute()
+    except Exception as e:
+        if _is_missing_col_err(e):
+            return {"ok": False, "error": "store_expenses.source_key column missing",
+                    "hint": "run migration 206_commission_expense_system_line.sql (band 200-299)",
+                    "period": period, "source_key": source_key}
+        raise
+    for i in range(0, len(ins), 500):
+        client.schema('commcalc').table('store_expenses').insert(ins[i:i + 500]).execute()
+    total = round(sum(float(r['amount']) for r in ins), 2)
+    return {"ok": True, "period": period, "source_key": source_key, "label": label,
+            "stores_written": len(ins), "total": total}
 
 
 # ── EXPENSES: apply a source month across many months (except commission/salary) ─────────────────
@@ -9099,9 +9217,17 @@ async def apply_expenses_to_months(body: dict, org_id: str = ORG_ID):
     if isinstance(src_override, list) and src_override:
         src_rows = src_override                     # LIVE grid passed by the page (WYSIWYG for the open month)
     else:
-        src_rows = (client.schema('commcalc').table('store_expenses')
-                    .select('store_code,expense_name,expense_type,amount')
-                    .eq('org_id', org_id).in_('period', _pvariants(source_period)).execute().data) or []
+        _spv = _pvariants(source_period)
+        try:   # read MANUAL source rows only — an auto system line (e.g. PTO accrual) is never copied forward
+            src_rows = (client.schema('commcalc').table('store_expenses')
+                        .select('store_code,expense_name,expense_type,amount')
+                        .eq('org_id', org_id).in_('period', _spv).is_('source_key', 'null').execute().data) or []
+        except Exception as e:
+            if not _is_missing_col_err(e):
+                raise
+            src_rows = (client.schema('commcalc').table('store_expenses')
+                        .select('store_code,expense_name,expense_type,amount')
+                        .eq('org_id', org_id).in_('period', _spv).execute().data) or []
     excluded_tokens = _expense_apply_tokens(client, org_id)
     selection = body.get('expense_names')
     sel = selection if (isinstance(selection, list) and selection) else None
@@ -9112,9 +9238,9 @@ async def apply_expenses_to_months(body: dict, org_id: str = ORG_ID):
         pv = _pvariants(p)
         for nm, scodes in by_expense.items():
             for i in range(0, len(scodes), 200):
-                client.schema('commcalc').table('store_expenses').delete() \
-                    .eq('org_id', org_id).in_('period', pv).eq('expense_name', nm) \
-                    .in_('store_code', scodes[i:i + 200]).execute()
+                # manual-only delete → a cross-month apply can never clobber a target month's system line
+                _delete_manual_expenses(client, org_id, pv,
+                                        {'expense_name': nm, 'store_code': scodes[i:i + 200]})
     ins = [{'org_id': org_id, **row} for row in rows]
     for i in range(0, len(ins), 500):
         client.schema('commcalc').table('store_expenses').insert(ins[i:i + 500]).execute()
