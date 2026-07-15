@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 type Row = {
   bucket: string; trans_id: string; store: string; salesperson: string; trans_date: string
@@ -97,6 +98,24 @@ export default function SalesReconPage() {
       return true
     })
   }, [data, tab, storeFilter, search, dayFrom, dayTo])
+
+  // Export the CURRENTLY-VISIBLE bucket rows (respects the active tab + all filters), plus a by-store sheet.
+  const reconCols: ExportColumn[] = [
+    { header: 'Trans ID', field: 'trans_id', get: (r: Row) => r.trans_id },
+    { header: 'Store', field: 'store', role: 'store', get: (r: Row) => r.store },
+    { header: 'Rep', field: 'salesperson', role: 'rep', get: (r: Row) => r.salesperson },
+    { header: 'Date', field: 'trans_date', type: 'date', get: (r: Row) => r.trans_date },
+    { header: 'Monthly', field: 'monthly_total', money: true, get: (r: Row) => r.monthly_total ?? 0 },
+    { header: 'Daily', field: 'daily_total', money: true, get: (r: Row) => r.daily_total ?? 0 },
+    { header: 'Delta', field: 'delta', money: true, get: (r: Row) => r.delta },
+  ]
+  const byStoreCols: ExportColumn[] = [
+    { header: 'Store', field: 'store', role: 'store', get: (r: StoreSummary) => r.store },
+    { header: 'Missing in Monthly', get: (r: StoreSummary) => r.missing_in_monthly },
+    { header: 'Mismatch', get: (r: StoreSummary) => r.amount_mismatch },
+    { header: 'Missing in Daily', get: (r: StoreSummary) => r.missing_in_daily },
+    { header: 'Net Delta', money: true, get: (r: StoreSummary) => r.delta_total },
+  ]
 
   const s = data?.summary
   const tabMeta = TABS.find(t => t.key === tab)!
@@ -206,6 +225,13 @@ export default function SalesReconPage() {
         {(storeFilter || search || dayFrom || dayTo) && (
           <button onClick={() => { setStoreFilter(''); setSearch(''); setDayFrom(''); setDayTo('') }}
             style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', fontSize: 14 }}>Clear</button>
+        )}
+        <div style={{ flex: 1 }} />
+        {rows.length > 0 && (
+          <ReportExportBar title={`Sales Recon — ${tabMeta.label} — ${period}`}
+            filename={`sales_recon_${tab}_${String(period).replace(/\s+/g, '_')}`}
+            sheets={[{ name: tabMeta.label.slice(0, 28), columns: reconCols, rows },
+                     ...(data?.by_store?.length ? [{ name: 'By store', columns: byStoreCols, rows: data.by_store }] : [])]} />
         )}
       </div>
 

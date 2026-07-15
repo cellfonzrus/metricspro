@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api, fmt } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Owner / exec single-pane — headline business health + store leaderboard for the period.
 const th: React.CSSProperties = { textAlign: 'right', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }
@@ -24,6 +25,33 @@ export default function ExecOverviewPage() {
 
   const t = data?.tiles || {}
   const stores: any[] = data?.stores || []
+
+  // Store-leaderboard export columns (money flagged so Excel/PDF/subtotals format correctly).
+  const storeCols: ExportColumn[] = [
+    { header: 'Store', field: 'store', role: 'store', get: (r: any) => r.store },
+    { header: 'Market', field: 'market', get: (r: any) => r.market || '' },
+    { header: 'Reps', field: 'reps', get: (r: any) => r.reps },
+    { header: 'Paid', field: 'paid', money: true, get: (r: any) => r.paid },
+    { header: 'At risk', field: 'at_risk', money: true, get: (r: any) => r.at_risk },
+    { header: 'Chargebacks', field: 'chargebacks', money: true, get: (r: any) => r.chargebacks },
+    { header: 'Flags', field: 'flags', get: (r: any) => r.flags || 0 },
+    { header: 'On table', field: 'on_table', money: true, get: (r: any) => r.on_table },
+  ]
+  // Tiles doctrine: a dashboard with a detail table exports the table PLUS a one-page {Metric,Value} summary.
+  const summaryRows = [
+    ...(data?.pl ? [{ k: 'Revenue', v: fmt(data.pl.revenue) }, { k: 'Gross profit', v: fmt(data.pl.gross_profit) }, { k: 'Net income', v: fmt(data.pl.net_income) }] : []),
+    { k: 'Commissions paid', v: fmt(t.commissions_paid) },
+    { k: 'Commission at risk', v: fmt(t.commission_at_risk) },
+    { k: 'Chargebacks deducted', v: fmt(t.chargebacks_deducted) },
+    { k: 'Total left on table', v: fmt(t.money_on_table) },
+    { k: 'Reps', v: String(t.reps || 0) },
+    { k: 'Open chargebacks', v: String(t.open_chargebacks || 0) },
+  ]
+  const summaryCols: ExportColumn[] = [{ header: 'Metric', get: (r: any) => r.k }, { header: 'Value', get: (r: any) => r.v }]
+  const exportSheets = [
+    { name: 'Summary', columns: summaryCols, rows: summaryRows },
+    { name: 'Store leaderboard', columns: storeCols, rows: stores },
+  ]
 
   return (
     <div>
@@ -52,9 +80,12 @@ export default function ExecOverviewPage() {
             <Tile label="Open chargebacks" value={`${t.open_chargebacks || 0}`} tone="#b42318" sub="in the bucket" />
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 10, flexWrap: 'wrap' }}>
             <div style={{ fontWeight: 700, fontSize: 14 }}>Store leaderboard</div>
-            <Link href="/commcalc/coaching" style={{ fontSize: 12 }}>Rep coaching →</Link>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              <ReportExportBar title={`Owner Overview ${period}`} filename={`owner_overview_${String(period).replace(/\s+/g, '_')}`} sheets={exportSheets} />
+              <Link href="/commcalc/coaching" style={{ fontSize: 12 }}>Rep coaching →</Link>
+            </div>
           </div>
           {stores.length === 0 ? (
             <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No commission data for {period}. (Run the commission calc.)</div>

@@ -4,6 +4,7 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { TrendChart } from '@/components/TrendChart'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 const r2 = (n: number) => Math.round((n || 0) * 100) / 100
 const shortPeriod = (p: string) => {
@@ -136,6 +137,15 @@ export default function ExpensesPage() {
     else (expTrend?.stores || []).filter((s: any) => s.market === market).forEach((s: any) => { const pt = s.series.find((x: any) => x.period === p); v += pt?.total || 0 })
     return { name: shortPeriod(p), total: r2(v) }
   }), [expTrend, market])
+
+  // RULE FOUR export — the same expense × store matrix on screen (respects the market/search filters via
+  // visStores), one column per visible store + a Total column, one row per expense category.
+  const expenseCols: ExportColumn[] = [
+    { header: 'Expense', get: (r: any) => r.name },
+    { header: 'Type', get: (r: any) => r.type },
+    ...visStores.map(s => ({ header: s.store_code, money: true, get: (r: any) => getVal(s.store_code, r.name) })),
+    { header: 'Total', money: true, get: (r: any) => visStores.reduce((sum, s) => sum + getVal(s.store_code, r.name), 0) },
+  ]
 
   function addCat() {
     const name = newCat.name.trim()
@@ -281,6 +291,12 @@ export default function ExpensesPage() {
           <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={upBusy}
             onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.currentTarget.value = '' }} />
         </label>
+        {!loading && visStores.length > 0 && (
+          <>
+            <span style={{ flex: 1 }} />
+            <ReportExportBar title={`Store Expenses ${period}`} filename={`store_expenses_${period.replace(/\s+/g, '_')}`} columns={expenseCols} rows={cats} />
+          </>
+        )}
       </div>
 
       {expTrendData.length > 1 && !loading && (

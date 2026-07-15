@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, Fragment } from 'react'
 import { api } from '@/lib/client'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Denied-Appeal Commission Recovery. A denied appeal is RECOVERABLE when the line paid/activated after
 // the denial → claim the commission back from the carrier (within the claw-back window). Rebuild the
@@ -62,6 +63,17 @@ export default function RecoveryPage() {
     try { const r = await api('/api/v1/recovery/config', { method: 'PUT', body: JSON.stringify({ ...cfg, recipients }) }); setCfg(r.config); setMsg('Settings saved.') }
     catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) } finally { setBusy('') }
   }
+
+  const recoveryRows: any[] = data?.rows || []
+  const recoveryCols: ExportColumn[] = [
+    { header: 'Store', field: 'store', role: 'store', get: (r: any) => r.store },
+    { header: 'Device', field: 'device_model', get: (r: any) => r.device_model },
+    { header: 'IMEI', field: 'imei', get: (r: any) => r.imei },
+    { header: 'MDN', field: 'mdn', get: (r: any) => r.mdn },
+    { header: 'Denied', field: 'denied_date', get: (r: any) => r.denied_date },
+    { header: 'Owed', field: 'owed_amount', money: true, get: (r: any) => r.owed_amount || 0 },
+    { header: 'Evidence', field: 'evidence', get: (r: any) => r.evidence ? `${r.evidence.type} ${r.evidence.date || ''}`.trim() : '' },
+  ]
 
   const b = data?.buckets || {}
   const tiles = [
@@ -145,8 +157,11 @@ export default function RecoveryPage() {
 
       <div style={card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <div style={{ fontWeight: 700 }}>Devices — <span style={{ textTransform: 'capitalize' }}>{status.replace('_', ' ')}</span> ({data?.rows?.length || 0})</div>
-          {status === 'recoverable' && <button className="btn btn-primary" disabled={!!busy || !(data?.rows?.length)} onClick={() => run('claim')}>{busy === 'claim' ? '…' : '📄 Generate claim'}</button>}
+          <div style={{ fontWeight: 700 }}>Devices — <span style={{ textTransform: 'capitalize' }}>{status.replace('_', ' ')}</span> ({recoveryRows.length})</div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {recoveryRows.length > 0 && <ReportExportBar title={`Appeal Recovery — ${status.replace('_', ' ')}`} filename={`appeal_recovery_${status}`} columns={recoveryCols} rows={recoveryRows} />}
+            {status === 'recoverable' && <button className="btn btn-primary" disabled={!!busy || !recoveryRows.length} onClick={() => run('claim')}>{busy === 'claim' ? '…' : '📄 Generate claim'}</button>}
+          </div>
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, fmt } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Rep coaching — which KPIs each rep met vs missed + WHY they're losing money (commission at risk
 // below tier + chargebacks) + flags. Sorted by money left on the table. Admin/DM (market-scoped).
@@ -47,6 +48,18 @@ export default function RepCoachingPage() {
 
   const toggleMarket = (m: string) => setMarkets(ms => ms.includes(m) ? ms.filter(x => x !== m) : [...ms, m])
 
+  // Export columns — the same money/KPI fields the coaching table shows (what-you-see-is-what-exports).
+  const cols: ExportColumn[] = [
+    { header: 'Rep', field: 'rep', role: 'rep', get: (r: any) => r.rep },
+    { header: 'Store', field: 'store', role: 'store', get: (r: any) => r.store || '' },
+    { header: 'Tier %', field: 'tier', get: (r: any) => Math.round((r.tier ?? 0) * 100) },
+    { header: 'KPIs met', field: 'kpis', get: (r: any) => `${r.kpis_met}/${r.total_kpis}` },
+    { header: 'At risk', field: 'at_risk', money: true, get: (r: any) => r.at_risk || 0 },
+    { header: 'Chargebacks', field: 'chargeback_deducted', money: true, get: (r: any) => r.chargeback_deducted || 0 },
+    { header: 'Flags', field: 'flag_count', get: (r: any) => r.flag_count || 0 },
+    { header: 'On the table', field: 'money_on_table', money: true, get: (r: any) => r.money_on_table || 0 },
+  ]
+
   const reps: any[] = marketReps.filter(r =>
     (!storeF || r.store === storeF) &&
     (!repF || r.rep === repF) &&
@@ -89,6 +102,8 @@ export default function RepCoachingPage() {
         <input style={{ ...sel, width: 180 }} placeholder="Search…" value={q} onChange={e => setQ(e.target.value)} />
         {(markets.length > 0 || storeF || repF || q) &&
           <button className="btn btn-sm" onClick={() => { setMarkets([]); setStoreF(''); setRepF(''); setQ('') }}>Clear</button>}
+        <div style={{ flex: 1 }} />
+        {reps.length > 0 && <ReportExportBar title={`Rep Coaching ${period}`} filename={`rep_coaching_${String(period).replace(/\s+/g, '_')}`} columns={cols} rows={reps} />}
       </div>
 
       {loading ? (

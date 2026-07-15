@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Device Forecasting & Vendor Payables (module 095). Reads the config-driven ledger built by
 // POST /api/v1/payables/rebuild. Forecasting is phones-only; payables + due are per-IMEI.
@@ -143,6 +144,47 @@ export default function PayablesPage() {
   const th = { textAlign: 'left' as const, padding: '8px 10px', borderBottom: '2px solid var(--border)', fontSize: 12, color: 'var(--muted)' }
   const td = { padding: '7px 10px', borderBottom: '1px solid var(--border)', fontSize: 13 }
 
+  // RULE FOUR export — reflects the ACTIVE tab (what-you-see-is-what-exports). The Phone-Mapping tab is a
+  // config surface (mapping input), so it is exempt (no export bar there).
+  const exportSpec = (): { title: string; filename: string; columns: ExportColumn[]; rows: any[] } | null => {
+    if (tab === 'forecast') return {
+      title: 'Device Forecast', filename: 'device_forecast', rows: fRows,
+      columns: [
+        { header: 'Carrier', field: 'carrier', get: (r: any) => r.carrier },
+        { header: 'Store', field: 'store', role: 'store', get: (r: any) => r.store || '' },
+        { header: 'Model', field: 'device_model', get: (r: any) => r.device_model },
+        { header: 'Sold', get: (r: any) => r.units },
+        { header: 'Velocity/day', get: (r: any) => r.avg_daily_velocity },
+        { header: 'Projected', get: (r: any) => r.projected_demand },
+        { header: 'On hand', get: (r: any) => r.on_hand },
+        { header: 'Order', get: (r: any) => r.recommend_order },
+      ],
+    }
+    if (tab === 'payables') return {
+      title: 'Vendor Payables (per IMEI)', filename: 'vendor_payables', rows: pRows,
+      columns: [
+        { header: 'IMEI', field: 'imei', get: (r: any) => r.imei },
+        { header: 'Store', field: 'store', role: 'store', get: (r: any) => r.store },
+        { header: 'Model', field: 'device_model', get: (r: any) => r.device_model },
+        { header: 'Owed', money: true, get: (r: any) => r.owed ?? 0 },
+        { header: 'Rebate', money: true, get: (r: any) => r.rebate_amount ?? 0 },
+        { header: 'Net owed', money: true, get: (r: any) => r.net_owed ?? 0 },
+        { header: 'Due', field: 'due_date', type: 'date', get: (r: any) => r.due_date || '' },
+        { header: 'Status', field: 'status', get: (r: any) => r.status },
+      ],
+    }
+    if (tab === 'owed') return {
+      title: 'Daily Owed', filename: 'daily_owed', rows: oRows,
+      columns: [
+        { header: 'Due date', field: 'due_date', type: 'date', get: (r: any) => r.due_date },
+        { header: 'Devices', get: (r: any) => r.count },
+        { header: 'Owed', money: true, get: (r: any) => r.owed },
+      ],
+    }
+    return null
+  }
+  const exp = exportSpec()
+
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
@@ -205,6 +247,12 @@ export default function PayablesPage() {
             <option value="offset">Offset (rebate received)</option>
             <option value="open">Open</option>
           </select>
+        )}
+        {exp && exp.rows.length > 0 && (
+          <>
+            <div style={{ flex: 1 }} />
+            <ReportExportBar title={exp.title} filename={exp.filename} columns={exp.columns} rows={exp.rows} />
+          </>
         )}
       </div>
 

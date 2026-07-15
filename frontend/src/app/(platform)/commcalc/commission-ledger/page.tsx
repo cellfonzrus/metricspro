@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { api, apiUpload } from '@/lib/client'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Canonical Commission Ledger (SAP-style) — normalise ANY carrier's commission/tx file into FIVE canonical
 // buckets: Commission / Spiff / Equipment rebate / Residual-monthly / Auto Pay residual. A payout paid over
@@ -87,6 +88,27 @@ export default function CommissionLedgerPage() {
   const months = Array.from(new Set(Object.keys(summ?.by_month || {}).map(k => Number(k.split('|')[1])).filter(m => m > 0))).sort((a, b) => a - b)
   const cell = (cat: string, m: number) => summ?.by_month?.[`${cat}|${m}`] || 0
 
+  // RULE FOUR export — reflects the ACTIVE view (By category month-matrix vs By rep). Money-flagged.
+  const catExportCols: ExportColumn[] = [
+    { header: 'Category', get: (r: any) => r.cat },
+    ...months.map(m => ({ header: `M${m}`, money: true, get: (r: any) => r.months[m] || 0 })),
+    { header: 'Total', money: true, get: (r: any) => r.total },
+  ]
+  const catExportRows = CATS.map(c => ({
+    cat: labels[c] || c, total: summ?.categories[c]?.total || 0,
+    months: Object.fromEntries(months.map(m => [m, cell(c, m)])),
+  }))
+  const repExportCols: ExportColumn[] = [
+    { header: 'Rep', role: 'rep', get: (r: any) => r.rep },
+    ...CATS.map(c => ({ header: (byRep?.category_labels?.[c] || c).split(' / ')[0], money: true, get: (r: any) => r[c] || 0 })),
+    { header: 'Ledger payout', money: true, get: (r: any) => r.ledger_payout || 0 },
+    { header: 'Live payout', money: true, get: (r: any) => r.live_payout ?? 0 },
+  ]
+  const canExport = summ && summ.line_count > 0
+  const exportProps = view === 'cat'
+    ? { title: `Commission Ledger — ${src}${period ? ' — ' + period : ''}`, filename: `commission_ledger_${src}`, columns: catExportCols, rows: catExportRows }
+    : { title: `Commission Ledger by rep — ${src}${period ? ' — ' + period : ''}`, filename: `commission_ledger_by_rep_${src}`, columns: repExportCols, rows: byRep?.reps || [] }
+
   return (
     <div style={{ padding: 24, maxWidth: 1100 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🧾 Commission Ledger</h1>
@@ -129,13 +151,15 @@ export default function CommissionLedgerPage() {
               ⚠️ {summ.other_count} payout line(s) totaling {money(summ.other_total)} are <b>unmapped</b> — add a rule on the Category Map so they land in a bucket.
             </div>
           )}
-          <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 14, alignItems: 'center' }}>
             {(['cat', 'rep'] as const).map(v => (
               <button key={v} onClick={() => setView(v)} style={{ ...inp, cursor: 'pointer', fontWeight: view === v ? 700 : 400,
                 background: view === v ? 'var(--accent,#2563eb)' : 'var(--surface)', color: view === v ? '#fff' : 'inherit' }}>
                 {v === 'cat' ? 'By category' : 'By rep'}
               </button>
             ))}
+            <div style={{ flex: 1 }} />
+            {canExport && (view === 'cat' ? catExportRows.length > 0 : (byRep?.reps?.length || 0) > 0) && <ReportExportBar {...exportProps} />}
           </div>
 
           {view === 'cat' && (<>
