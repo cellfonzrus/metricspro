@@ -531,28 +531,85 @@ def _choose_2fa_method(page):
     return None
 
 
-def _twofa_result(page, ctx, extra=None):
-    """Build a needs_2fa result, first CLICKING a send-code control if the portal requires one (else no
-    code is dispatched). Captures sent_via + the page's clickable buttons (in diag) for calibration."""
-    sent = None
-    try:
-        sent = _trigger_2fa_send(page)
-    except Exception:
-        sent = None
-    if not sent:
+# Wording of the post-login "confirm this computer" interstitial (T-CETRA/VidaPay: "New Sign In —
+# We don't recognize this device… Cancel | Next"). Keywords deliberately start AFTER the word
+# "don't", so the don't / don’t / do not variants all hit "recognize this device".
+_INTERSTITIAL_WORDS = ("recognize this device", "recognize this computer", "new sign in",
+                      "unrecognized device", "confirm this device", "confirm this computer",
+                      "verify your identity")
+
+
+def _click_2fa_interstitial(page):
+    """The post-login device-confirmation interstitial: no code field, no chooser — just Cancel + Next,
+    and clicking NEXT is what advances to the 2FA code dispatch (owner screenshot 2026-07-15). Safe
+    ONLY because there is no code input to empty-submit; never clicks Cancel/Sign-Out, and only fires
+    when the page actually carries the interstitial wording."""
+    if _code_field(page):
+        return None
+    body = _page_text(page)
+    if not any(w in body for w in _INTERSTITIAL_WORDS):
+        return None
+    AVOID = ("cancel", "sign out", "logout", "log out", "back", "forgot")
+    for fr in _frames(page):
         try:
-            if not _code_field(page):
-                # No explicit send-code control and no code input either → this is very likely the
-                # METHOD-CHOOSER step (pick SMS/Email, then a plain Submit dispatches the code).
-                sent = _choose_2fa_method(page)
+            cands = fr.query_selector_all("button, input[type=submit], input[type=button], a[role=button], a")
         except Exception:
-            pass
-    if sent:
+            continue
+        for c in cands:
+            try:
+                if not c.is_visible():
+                    continue
+                label = (c.get_attribute("value") or c.inner_text() or "").strip().lower()
+                if not label or len(label) > 30 or any(a in label for a in AVOID):
+                    continue
+                if label in ("next", "continue", "verify", "proceed", "confirm", "ok") or label.startswith("next"):
+                    c.click()
+                    return label[:40]
+            except Exception:
+                continue
+    return None
+
+
+def _advance_2fa(page):
+    """Drive the pre-code 2FA steps a human clicks through — an explicit send-code button, the
+    'we don't recognize this device → Next' interstitial, or the SMS/email method chooser — LOOPING
+    (max 3 transitions, e.g. interstitial → chooser → code screen) until a code input appears or
+    nothing more can be safely clicked. Returns the ' → '-joined labels clicked, or None."""
+    steps = []
+    for _ in range(3):
+        try:
+            if _code_field(page):
+                break
+        except Exception:
+            break
+        sent = None
+        for attempt in (_trigger_2fa_send, _choose_2fa_method, _click_2fa_interstitial):
+            try:
+                sent = attempt(page)
+            except Exception:
+                sent = None
+            if sent:
+                break
+        if not sent:
+            break
+        steps.append(sent)
         try:
             page.wait_for_timeout(3000)
             _wait_settle(page)
         except Exception:
             pass
+    return " → ".join(steps) if steps else None
+
+
+def _twofa_result(page, ctx, extra=None):
+    """Build a needs_2fa result, first CLICKING THROUGH whatever pre-code steps the portal requires
+    (send-code button / device interstitial / method chooser — else no code is ever dispatched).
+    Captures sent_via + the page's clickable buttons (in diag) for calibration."""
+    sent = None
+    try:
+        sent = _advance_2fa(page)
+    except Exception:
+        sent = None
     diag = _snapshot(page)
     if extra:
         try:
