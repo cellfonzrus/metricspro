@@ -1,9 +1,21 @@
 """StoreOps API Router — /api/v1/storeops/*"""
 import base64
+import os
+import requests
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Header
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.modules.storeops.pto_accrual import (
+    DEFAULT_CONFIG as PTO_DEFAULT_CONFIG,
+    resolve_effective_config as pto_resolve_effective_config,
+    month_bounds as pto_month_bounds,
+    hours_worked_from_shifts as pto_hours_worked_from_shifts,
+    taken_hours_from_time_off as pto_taken_hours_from_time_off,
+    compute_pto,
+    ledger_rows as pto_ledger_rows,
+    expense_cells_from_stores as pto_expense_cells_from_stores,
+)
 
 try:
     from zoneinfo import ZoneInfo
@@ -2302,3 +2314,238 @@ def scope_emp_ids(authorization: str, org_id: str = ORG_ID):
     emps = sb().table("employees").select("employee_id,home_store").eq("org_id", org_id).execute().data or []
     return {str(e.get("employee_id")) for e in emps
             if e.get("employee_id") and in_keyset(ks, e.get("home_store"))}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# PTO ACCRUAL ("Paid Leave Accumulated") — migration 403, band 400-499. RULE TWO: rate/mode/cap/basis
+# are CONFIG (storeops.pto_accrual_config, layered org -> role -> employee override), never hard-coded.
+# The pure math lives in pto_accrual.py (unit-tested in harness_pto_accrual.py) — everything here is
+# I/O: fetch rows, resolve effective config per employee, call the engine, persist a ledger, and push
+# the per-store cost to mod-commission's Store Expenses via the shared "system-line" contract.
+#
+# MONEY-ADJACENT: this produces a NEW, ADDITIVE expense line. It never touches an existing payroll
+# payout number (shifts/pay_rate/timelog are only READ here, never written).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+# The commcalc "system-line" receiver is a SEPARATE mod-commission package (not built as of this
+# writing — see docs/handoffs/people.md). Calls degrade gracefully: a 404 just means "not deployed
+# yet", logged and swallowed — the ledger is still persisted so the numbers can be pulled later via
+# GET /pto-accrual/{period} instead of push. INTERNAL_API_BASE_URL lets an operator point this at a
+# non-default loopback if the backend's own bind address ever changes; the Railway container binds
+# 0.0.0.0:8000 (Dockerfile), so 127.0.0.1:8000 is the correct same-process default.
+PTO_INTERNAL_API_BASE = os.environ.get("INTERNAL_API_BASE_URL") or "http://127.0.0.1:8000"
+
+
+def _pto_config_rows(org_id: str) -> dict:
+    """Fetch every pto_accrual_config row for the org, split by scope. Degrades gracefully (empty
+    dict/None) if migration 403 hasn't run yet — a missing table must never break payroll or the
+    Store Expenses fill, per contract §5."""
+    try:
+        rows = sb().table("pto_accrual_config").select("*").eq("org_id", org_id).execute().data or []
+    except Exception:
+        rows = []
+    org_row = next((r for r in rows if r.get("scope") == "org"), None)
+    role_rows = {r.get("role"): r for r in rows if r.get("scope") == "role" and r.get("role")}
+    emp_rows = {r.get("employee_id"): r for r in rows if r.get("scope") == "employee" and r.get("employee_id")}
+    return {"org": org_row, "roles": role_rows, "employees": emp_rows}
+
+
+def _pto_cfg_for(cfg_rows: dict, employee_id: str, role: str) -> dict:
+    return pto_resolve_effective_config(cfg_rows.get("org"), cfg_rows.get("roles", {}).get(role),
+                                         cfg_rows.get("employees", {}).get(employee_id))
+
+
+@router.get("/pto-accrual-config")
+def get_pto_accrual_config(org_id: str = ORG_ID):
+    """Admin view of the layered PTO accrual config: the org default (falls back to the code default
+    if migration 403 hasn't run / no row saved yet), plus every role- and employee-level override row,
+    for the admin UI to render and edit."""
+    rows_raw = []
+    try:
+        rows_raw = sb().table("pto_accrual_config").select("*").eq("org_id", org_id).execute().data or []
+    except Exception:
+        pass
+    org_row = next((r for r in rows_raw if r.get("scope") == "org"), None)
+    role_rows = [r for r in rows_raw if r.get("scope") == "role"]
+    emp_rows = [r for r in rows_raw if r.get("scope") == "employee"]
+    effective_org = pto_resolve_effective_config(org_row, None, None)
+    return {"org_row": org_row, "effective_org_defaults": effective_org,
+            "role_overrides": role_rows, "employee_overrides": emp_rows,
+            "code_defaults": PTO_DEFAULT_CONFIG}
+
+
+_PTO_CFG_FIELDS = ("enabled", "accrual_rate", "mode", "cost_basis", "max_accrual_hours",
+                    "hours_per_pto_day", "counts_as_pto_types")
+
+
+@router.put("/pto-accrual-config")
+def put_pto_accrual_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Upsert one config row: {scope:'org'|'role'|'employee', role?, employee_id?, ...fields}. Only
+    fields present in the body are written — omitted fields on a role/employee override row mean
+    "inherit" (see pto_accrual.resolve_effective_config). Manager-gated (this changes a cost the
+    business books every payroll run)."""
+    _require_manager(authorization, org_id)
+    scope = (body.get("scope") or "org").strip().lower()
+    if scope not in ("org", "role", "employee"):
+        raise HTTPException(400, "scope must be 'org', 'role', or 'employee'")
+    role = (body.get("role") or "").strip() if scope == "role" else None
+    employee_id = (body.get("employee_id") or "").strip() if scope == "employee" else None
+    if scope == "role" and not role:
+        raise HTTPException(400, "role is required when scope='role'")
+    if scope == "employee" and not employee_id:
+        raise HTTPException(400, "employee_id is required when scope='employee'")
+
+    fields = {k: body[k] for k in _PTO_CFG_FIELDS if k in body}
+    if "mode" in fields and fields["mode"] not in ("accrue", "on_use"):
+        raise HTTPException(400, "mode must be 'accrue' or 'on_use'")
+
+    q = sb().table("pto_accrual_config").select("id").eq("org_id", org_id).eq("scope", scope)
+    q = q.eq("role", role) if scope == "role" else q
+    q = q.eq("employee_id", employee_id) if scope == "employee" else q
+    existing = (q.execute().data or [])
+
+    row = {**fields, "updated_at": datetime.now(timezone.utc).isoformat(),
+           "updated_by": body.get("updated_by") or "admin"}
+    if existing:
+        sb().table("pto_accrual_config").update(row).eq("id", existing[0]["id"]).eq("org_id", org_id).execute()
+        return {"ok": True, "id": existing[0]["id"], "scope": scope}
+    row.update({"org_id": org_id, "scope": scope, "role": role, "employee_id": employee_id})
+    if scope == "org":
+        # The org row is the base every other layer inherits from — always fully populated so a
+        # partial PUT (e.g. just {"accrual_rate": 0.04}) never leaves an unset field ambiguous.
+        row = {**PTO_DEFAULT_CONFIG, **row}
+    r = sb().table("pto_accrual_config").insert(row).execute()
+    return {"ok": True, "id": (r.data or [{}])[0].get("id"), "scope": scope}
+
+
+@router.delete("/pto-accrual-config/{config_id}")
+def delete_pto_accrual_config(config_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Remove one override row (org-scoped so a foreign id is a no-op). Deleting an override just
+    means that role/employee falls back to the next layer down — never destructive to any computed
+    ledger data already persisted."""
+    _require_manager(authorization, org_id)
+    sb().table("pto_accrual_config").delete().eq("id", config_id).eq("org_id", org_id).execute()
+    return {"ok": True}
+
+
+def _pto_gather(org_id: str, period: str):
+    """Shared fetch+compute for both the read-only GET and the persisting POST /run. Returns
+    (result, meta) where result is compute_pto's {"employees","stores"} and meta carries the
+    effective org config + period bounds for the caller to use."""
+    period_start, period_end = pto_month_bounds(period)
+    ps, pe = period_start.isoformat(), period_end.isoformat()
+
+    employees = (sb().table("employees").select("employee_id,name,home_store,pay_rate,role,is_active")
+                 .eq("org_id", org_id).execute().data) or []
+    emp_by_id = {e["employee_id"]: e for e in employees if e.get("employee_id")}
+
+    shifts = (sb().table("shifts").select("employee_id,store_code,scheduled_hours,actual_hours,shift_date")
+              .eq("org_id", org_id).eq("is_deleted", False)
+              .gte("shift_date", ps).lte("shift_date", pe).execute().data) or []
+    hours_by_emp_store = pto_hours_worked_from_shifts(shifts)
+
+    time_off_raw = (sb().table("time_off_requests").select("employee_id,start_date,end_date,type,status")
+                     .eq("org_id", org_id).eq("status", "approved")
+                     .lte("start_date", pe).gte("end_date", ps).execute().data) or []
+    time_off_by_emp = {}
+    for r in time_off_raw:
+        time_off_by_emp.setdefault(r.get("employee_id"), []).append(r)
+
+    cfg_rows = _pto_config_rows(org_id)
+    active_eids = set(hours_by_emp_store) | set(time_off_by_emp)
+    cfg_by_emp, rates, home_store, names, taken_by_emp = {}, {}, {}, {}, {}
+    for eid in active_eids:
+        emp = emp_by_id.get(eid, {})
+        cfg = _pto_cfg_for(cfg_rows, eid, (emp.get("role") or ""))
+        cfg_by_emp[eid] = cfg
+        rates[eid] = float(emp.get("pay_rate") or 0)
+        home_store[eid] = emp.get("home_store") or ""
+        names[eid] = emp.get("name") or ""
+        taken_map = pto_taken_hours_from_time_off(time_off_by_emp.get(eid, []), period_start, period_end,
+                                                    cfg["counts_as_pto_types"], cfg["hours_per_pto_day"])
+        taken_by_emp[eid] = taken_map.get(eid, 0.0)
+
+    prior_balance = {}
+    if active_eids:
+        try:
+            hist = (sb().table("pto_accrual_ledger").select("employee_id,accrued_hours,taken_hours")
+                    .eq("org_id", org_id).lt("period", period).execute().data) or []
+            for h in hist:
+                eid = h.get("employee_id")
+                if eid in active_eids:
+                    prior_balance[eid] = prior_balance.get(eid, 0.0) + float(h.get("accrued_hours") or 0) - float(h.get("taken_hours") or 0)
+        except Exception:
+            prior_balance = {}
+
+    result = compute_pto(hours_by_emp_store, taken_by_emp, rates, cfg_by_emp,
+                          home_store_by_employee=home_store, prior_balance_by_employee=prior_balance,
+                          employee_names=names)
+    org_effective = pto_resolve_effective_config(cfg_rows.get("org"), None, None)
+    return result, {"period_start": ps, "period_end": pe, "org_effective": org_effective}
+
+
+@router.get("/pto-accrual/{period}")
+def get_pto_accrual(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Read-only PTO accrual view for a period (YYYY-MM) — for display/debug and so the expense side
+    (mod-commission) can re-pull the numbers directly if the push-on-run didn't land. Always computed
+    LIVE from current shifts/time-off/config (never reads the ledger for the numbers themselves — the
+    ledger is only consulted for `last_run_at` and for each employee's PRIOR-period running balance)."""
+    result, meta = _pto_gather(org_id, period)
+    last_run_at = None
+    try:
+        rows = (sb().table("pto_accrual_ledger").select("run_at").eq("org_id", org_id).eq("period", period)
+                .order("run_at", desc=True).limit(1).execute().data) or []
+        last_run_at = rows[0]["run_at"] if rows else None
+    except Exception:
+        pass
+    ks = scope_keyset(authorization, org_id)
+    stores = [d for s, d in sorted(result["stores"].items()) if in_keyset(ks, s)]
+    employees = [e for e in result["employees"].values() if in_keyset(ks, e.get("store"))]
+    return {"period": period, "mode": meta["org_effective"]["mode"], "rate": meta["org_effective"]["accrual_rate"],
+            "stores": stores, "employees": sorted(employees, key=lambda r: r.get("name") or ""),
+            "last_run_at": last_run_at}
+
+
+def _pto_push_expense_line(org_id: str, period: str, cells: list) -> dict:
+    """POST the per-store cost to mod-commission's Store Expenses system-line endpoint (shared
+    contract — see docs/handoffs/people.md). Best-effort: any failure (404 = package not deployed
+    yet, timeout, connection error) is caught and reported, NEVER raised — the ledger is already
+    persisted by the time this runs, so the numbers aren't lost; they can be pulled later via
+    GET /pto-accrual/{period}."""
+    url = f"{PTO_INTERNAL_API_BASE}/api/v1/commcalc/expenses/{period}/system-line"
+    body = {"source_key": "pto_accrual", "label": "Paid Leave Accumulated", "cells": cells}
+    try:
+        resp = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        if resp.status_code == 404:
+            return {"pushed": False, "status": 404, "note": "system-line endpoint not deployed yet (mod-commission package pending) — ledger persisted, pull via GET /pto-accrual/{period} instead"}
+        resp.raise_for_status()
+        return {"pushed": True, "status": resp.status_code}
+    except Exception as e:
+        return {"pushed": False, "status": None, "note": f"push failed ({type(e).__name__}: {e}) — ledger persisted, pull via GET /pto-accrual/{{period}} instead"}
+
+
+@router.post("/pto-accrual/run/{period}")
+def run_pto_accrual(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The payroll-run hook: compute this period's PTO accrual, persist an idempotent ledger
+    (delete-by-(org,period) then insert — safe to re-run e.g. after a shift correction), and push the
+    per-store cost to Store Expenses as an ADDITIVE system line. Manager-gated (this is what finalizes
+    a cost the business books). NEVER writes to shifts/timelog/employees — read-only against payroll
+    inputs, so it cannot change what anyone is paid."""
+    u = _require_manager(authorization, org_id)
+    result, meta = _pto_gather(org_id, period)
+    run_by = u.get("email") or u.get("employee_id") or "manager"
+
+    rows = pto_ledger_rows(org_id, period, result, run_by=run_by)
+    sb().table("pto_accrual_ledger").delete().eq("org_id", org_id).eq("period", period).execute()
+    if rows:
+        for i in range(0, len(rows), 500):
+            sb().table("pto_accrual_ledger").insert(rows[i:i + 500]).execute()
+
+    cells = pto_expense_cells_from_stores(result["stores"])
+    push = _pto_push_expense_line(org_id, period, cells) if cells else {"pushed": False, "status": None, "note": "no store activity this period — nothing to push"}
+
+    return {"period": period, "mode": meta["org_effective"]["mode"], "rate": meta["org_effective"]["accrual_rate"],
+            "employees": sorted(result["employees"].values(), key=lambda r: r.get("name") or ""),
+            "stores": [d for _, d in sorted(result["stores"].items())],
+            "ledger_rows_written": len(rows), "push": push}
+

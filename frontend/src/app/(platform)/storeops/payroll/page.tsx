@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, fmt, parseLocalDate } from '@/lib/client'
 import ReportShell from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
+import PtoAccrualPanel from './PtoAccrualPanel'
 
 interface PayrollRow {
   employee_id: string; name: string; store: string; pay_rate: number
@@ -73,6 +74,8 @@ export default function PayrollPage() {
           </div>
         ))}
       </div>
+
+      <PtoAccrualPanel month={month} />
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
