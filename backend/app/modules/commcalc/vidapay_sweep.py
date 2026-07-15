@@ -182,9 +182,12 @@ def _new_context(browser, storage_state=None, proxy=None):
     storage_state doesn't persist sessionStorage — many OIDC SPAs keep their token there, so without
     this the session 'expires' the moment it's restored in a fresh context)."""
     ss_stash = None
-    if isinstance(storage_state, dict) and "_sessionStorage" in storage_state:
+    if isinstance(storage_state, dict):
         ss_stash = storage_state.get("_sessionStorage")
-        storage_state = {k: v for k, v in storage_state.items() if k != "_sessionStorage"}
+        # Strip our private keys — Playwright's storage_state parser only knows cookies/origins, and
+        # `_2fa_url` (the captured code-entry page, see complete_2fa) is navigation state, not browser state.
+        storage_state = {k: v for k, v in storage_state.items()
+                         if k not in ("_sessionStorage", "_2fa_url")}
     kw = dict(user_agent=UA, accept_downloads=True, locale="en-US",
               timezone_id="America/New_York", viewport={"width": 1366, "height": 900},
               extra_http_headers={"Accept-Language": "en-US,en;q=0.9"})
@@ -470,32 +473,54 @@ def _trigger_2fa_send(page):
     return None
 
 
-def _tick_remember(scope):
-    """Tick a 'Remember this device / browser' checkbox when the 2FA screen offers one, so the portal
-    trusts this headless profile (typically 90 days) and scheduled pulls skip 2FA. Only ticks a box
-    whose name/id/label actually says remember/trust/don't-ask — never an unrelated checkbox."""
+# The AFFIRMATIVE "trust/remember this device" wording, and the NEGATIVE option to avoid — VidaPay's
+# new-device screen offers a REQUIRED radio pair ("Trust this device" vs "Don't trust / public
+# computer"), and picking the wrong one (or none) blocks the code submit.
+_REMEMBER_POS = ("remember", "trust", "recognize this", "this device", "this browser",
+                 "this computer", "90 day", "save this device", "don't ask", "dont ask")
+_REMEMBER_NEG = ("don't trust", "do not trust", "dont trust", "not now", "public",
+                 "no,", "don't remember", "do not remember", "someone else", "shared")
+
+
+def _remember_text(el, scope):
+    hay = " ".join(filter(None, [el.get_attribute("name"), el.get_attribute("id"),
+                                 el.get_attribute("value"), el.get_attribute("aria-label")])).lower()
+    lbl = ""
     try:
-        for c in scope.query_selector_all("input[type=checkbox]"):
-            try:
-                if not c.is_visible():
-                    continue
-                hay = " ".join(filter(None, [c.get_attribute("name"), c.get_attribute("id"),
-                                             c.get_attribute("aria-label")])).lower()
-                lbl = ""
-                cid = c.get_attribute("id")
-                if cid:
-                    le = scope.query_selector('label[for="%s"]' % cid)
-                    lbl = (le.inner_text() or "").strip().lower() if le else ""
-                text = hay + " " + lbl
-                if any(k in text for k in ("remember", "trust", "don't ask", "dont ask",
-                                           "90 day", "this device", "this browser")):
-                    if not c.is_checked():
-                        c.check()
-                    return True
-            except Exception:
-                continue
+        cid = el.get_attribute("id")
+        if cid:
+            le = scope.query_selector('label[for="%s"]' % cid)
+            if le:
+                lbl = (le.inner_text() or "").strip().lower()
     except Exception:
         pass
+    return hay + " " + lbl
+
+
+def _tick_remember(scope):
+    """Select the 'trust / remember this device' control (CHECKBOX **or RADIO**) on the 2FA screen so
+    the portal trusts this profile (~90 days) AND — on portals like VidaPay that REQUIRE the choice —
+    the code submit is unblocked. Picks the AFFIRMATIVE option, never a 'don't trust / public computer'
+    one, and never an unrelated control. Returns True if it selected something."""
+    if scope is None:
+        return False
+    try:
+        controls = scope.query_selector_all("input[type=checkbox], input[type=radio]")
+    except Exception:
+        return False
+    for c in controls:
+        try:
+            if not c.is_visible():
+                continue
+            text = _remember_text(c, scope)
+            if any(n in text for n in _REMEMBER_NEG):
+                continue
+            if any(pkw in text for pkw in _REMEMBER_POS):
+                if not c.is_checked():
+                    c.check()
+                return True
+        except Exception:
+            continue
     return False
 
 
@@ -654,7 +679,16 @@ def _twofa_result(page, ctx, extra=None):
             diag = {**diag, **extra}
         except Exception:
             pass
-    return {"status": "needs_2fa", "storage_state": ctx.storage_state(),
+    # If we advanced all the way to the CODE-ENTRY page, remember its URL. complete_2fa navigates
+    # straight there — avoiding a second "New Sign In → Next" click, which would DISPATCH ANOTHER code
+    # and invalidate the one the operator just typed (owner: "it sent another code twice").
+    st = ctx.storage_state()
+    try:
+        if _code_field(page):
+            st["_2fa_url"] = page.url
+    except Exception:
+        pass
+    return {"status": "needs_2fa", "storage_state": st,
             "two_fa_hint": _twofa_hint(page), "sent_via": sent, "diag": diag,
             "screenshot_b64": _shot_b64(page)}
 
@@ -1009,12 +1043,15 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
     if not pending_state:
         raise VidaPayAuthError("No pending login to verify — start the login again.")
     base_url = _norm_url(url, DEFAULT_URL)
+    # Prefer the CODE-ENTRY url captured at begin_login (_twofa_result) — going straight there skips
+    # the "New Sign In → Next" resend. Fall back to base_url if it wasn't captured.
+    nav_url = pending_state.get("_2fa_url") if isinstance(pending_state, dict) else None
     with sync_playwright() as p:
         browser = _launch(p)
         ctx = _new_context(browser, storage_state=pending_state, proxy=_proxy_arg(proxy_url))
         page = ctx.new_page()
         try:
-            page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+            page.goto(nav_url or base_url, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
             page.wait_for_timeout(2500)
             if _classify(page) == "authenticated":
@@ -1090,13 +1127,15 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
     if not pending_state:
         raise VidaPayAuthError("No pending login to verify — start the login again.")
     base_url = _norm_url(url, B2BSOFT_URL)
+    nav_url = pending_state.get("_2fa_url") if isinstance(pending_state, dict) else None
     with sync_playwright() as p:
         browser = _launch(p)
         ctx = _new_context(browser, storage_state=pending_state, proxy=_proxy_arg(proxy_url))
         page = ctx.new_page()
         try:
             # Restoring the mid-2FA session + hitting the portal resumes the pending 2FA challenge.
-            page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+            # Prefer the captured code-entry url (no resend); else the portal home.
+            page.goto(nav_url or base_url, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
             page.wait_for_timeout(2500)
             on_2fa = bool(page.query_selector("#TwoFactorCode")) or "twofactor" in (page.url or "").lower()
