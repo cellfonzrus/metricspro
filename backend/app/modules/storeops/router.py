@@ -16,6 +16,19 @@ from app.modules.storeops.pto_accrual import (
     ledger_rows as pto_ledger_rows,
     expense_cells_from_stores as pto_expense_cells_from_stores,
 )
+from app.modules.storeops.payroll_expenses import (
+    DEFAULT_TAX_CONFIG as PAYEX_DEFAULT_TAX_CONFIG,
+    CALC_METHODS as PAYEX_CALC_METHODS,
+    ITEM_SCOPES as PAYEX_ITEM_SCOPES,
+    resolve_tax_config as payex_resolve_tax_config,
+    wages_by_store_from_hours as payex_wages_by_store,
+    headcount_by_store_from_hours as payex_headcount_by_store,
+    compute_payroll_tax,
+    compute_expense_items,
+    rollup_cells as payex_rollup_cells,
+    tax_ledger_rows as payex_tax_ledger_rows,
+    expense_ledger_rows as payex_expense_ledger_rows,
+)
 
 try:
     from zoneinfo import ZoneInfo
@@ -2549,3 +2562,259 @@ def run_pto_accrual(period: str, authorization: str = Header(default=""), org_id
             "stores": [d for _, d in sorted(result["stores"].items())],
             "ledger_rows_written": len(rows), "push": push}
 
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# PAYROLL EXPENSES (payroll tax + operator-customizable employer-burden items) — migration 404, band
+# 400-499. RULE TWO: tax rates/wage-bases and every item's calc_method/rate/scope are CONFIG
+# (storeops.payroll_tax_config + storeops.payroll_expense_item), never hard-coded. The pure math lives
+# in payroll_expenses.py (unit-tested in harness_payroll_expenses.py) — everything here is I/O: fetch
+# rows, resolve config, call the engine, persist 2 ledgers, and push ONE rolled-up "Payroll Expenses"
+# line to mod-commission's Store Expenses via the same "system-line" contract the PTO package uses.
+#
+# MONEY-ADJACENT: this produces a NEW, ADDITIVE expense line. It never touches an existing payroll
+# payout number (shifts/pay_rate/timelog are only READ here, never written).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+@router.get("/payroll-tax-config")
+def get_payroll_tax_config(org_id: str = ORG_ID):
+    """Admin view of the org's payroll tax config (falls back to code defaults if migration 404 hasn't
+    run / no row saved yet)."""
+    org_row = None
+    try:
+        rows = sb().table("payroll_tax_config").select("*").eq("org_id", org_id).limit(1).execute().data or []
+        org_row = rows[0] if rows else None
+    except Exception:
+        pass
+    return {"row": org_row, "effective": payex_resolve_tax_config(org_row), "code_defaults": PAYEX_DEFAULT_TAX_CONFIG}
+
+
+_PAYEX_TAX_FIELDS = ("enabled", "fica_ss_rate", "fica_ss_wage_base", "medicare_rate",
+                      "futa_rate", "futa_wage_base", "suta_rate", "suta_wage_base")
+
+
+@router.put("/payroll-tax-config")
+def put_payroll_tax_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Upsert the org's ONE payroll tax config row. Manager-gated (changes a cost the business books
+    every payroll run)."""
+    _require_manager(authorization, org_id)
+    fields = {k: body[k] for k in _PAYEX_TAX_FIELDS if k in body}
+    row = {**fields, "updated_at": datetime.now(timezone.utc).isoformat(),
+           "updated_by": body.get("updated_by") or "admin"}
+    existing = (sb().table("payroll_tax_config").select("id").eq("org_id", org_id).limit(1).execute().data or [])
+    if existing:
+        sb().table("payroll_tax_config").update(row).eq("id", existing[0]["id"]).eq("org_id", org_id).execute()
+        return {"ok": True, "id": existing[0]["id"]}
+    row.update({"org_id": org_id, **{k: v for k, v in PAYEX_DEFAULT_TAX_CONFIG.items() if k not in row}})
+    r = sb().table("payroll_tax_config").insert(row).execute()
+    return {"ok": True, "id": (r.data or [{}])[0].get("id")}
+
+
+@router.get("/payroll-expense-items")
+def get_payroll_expense_items(org_id: str = ORG_ID):
+    """List every payroll expense item (Unemployment Insurance / Workers Comp / custom) for the org,
+    in the operator's chosen sort_order."""
+    try:
+        rows = sb().table("payroll_expense_item").select("*").eq("org_id", org_id).order("sort_order").execute().data or []
+    except Exception:
+        rows = []
+    return {"items": rows, "calc_methods": list(PAYEX_CALC_METHODS), "scopes": list(PAYEX_ITEM_SCOPES)}
+
+
+_PAYEX_ITEM_FIELDS = ("key", "name", "calc_method", "rate_or_amount", "wage_cap", "scope", "enabled", "sort_order")
+
+
+@router.post("/payroll-expense-items")
+def create_payroll_expense_item(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Add a custom payroll expense item (Unemployment Insurance / Workers Comp are seeded by
+    migration 404; this is for any ADDITIONAL operator-defined item). Manager-gated."""
+    _require_manager(authorization, org_id)
+    key = (body.get("key") or "").strip().lower().replace(" ", "_")
+    name = (body.get("name") or "").strip()
+    if not key or not name:
+        raise HTTPException(400, "key and name are required")
+    calc_method = body.get("calc_method") or "pct_wages"
+    if calc_method not in PAYEX_CALC_METHODS:
+        raise HTTPException(400, f"calc_method must be one of {PAYEX_CALC_METHODS}")
+    scope = body.get("scope") or "store"
+    if scope not in PAYEX_ITEM_SCOPES:
+        raise HTTPException(400, f"scope must be one of {PAYEX_ITEM_SCOPES}")
+    row = {"org_id": org_id, "key": key, "name": name, "calc_method": calc_method,
+           "rate_or_amount": float(body.get("rate_or_amount") or 0),
+           "wage_cap": (None if body.get("wage_cap") in (None, "") else float(body.get("wage_cap"))),
+           "scope": scope, "enabled": bool(body.get("enabled", True)),
+           "sort_order": int(body.get("sort_order") or 0), "updated_by": body.get("updated_by") or "admin"}
+    try:
+        r = sb().table("payroll_expense_item").insert(row).execute()
+    except Exception as e:
+        if "duplicate" in str(e).lower() or "unique" in str(e).lower():
+            raise HTTPException(400, f"an item with key '{key}' already exists")
+        raise
+    return {"ok": True, "id": (r.data or [{}])[0].get("id")}
+
+
+@router.patch("/payroll-expense-items/{item_id}")
+def update_payroll_expense_item(item_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Edit an existing item (rate, calc_method, scope, enabled, …). Org-scoped so a foreign id is a
+    no-op. Manager-gated."""
+    _require_manager(authorization, org_id)
+    fields = {k: body[k] for k in _PAYEX_ITEM_FIELDS if k in body}
+    if "calc_method" in fields and fields["calc_method"] not in PAYEX_CALC_METHODS:
+        raise HTTPException(400, f"calc_method must be one of {PAYEX_CALC_METHODS}")
+    if "scope" in fields and fields["scope"] not in PAYEX_ITEM_SCOPES:
+        raise HTTPException(400, f"scope must be one of {PAYEX_ITEM_SCOPES}")
+    if "wage_cap" in fields and fields["wage_cap"] in ("", None):
+        fields["wage_cap"] = None
+    fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+    fields["updated_by"] = body.get("updated_by") or "admin"
+    sb().table("payroll_expense_item").update(fields).eq("id", item_id).eq("org_id", org_id).execute()
+    return {"ok": True}
+
+
+@router.delete("/payroll-expense-items/{item_id}")
+def delete_payroll_expense_item(item_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Remove a custom item (org-scoped). Manager-gated. Deleting an item stops it from contributing to
+    FUTURE runs; past ledger rows already persisted are untouched (historical audit trail)."""
+    _require_manager(authorization, org_id)
+    sb().table("payroll_expense_item").delete().eq("id", item_id).eq("org_id", org_id).execute()
+    return {"ok": True}
+
+
+def _payex_gather(org_id: str, period: str):
+    """Shared fetch+compute for both the read-only GET and the persisting POST /run. Reuses the SAME
+    shifts/rate basis pto_accrual.py + /payroll-by-store use (hours = actual if clocked else
+    scheduled, wages = hours * pay_rate, attributed to the shift's own store_code)."""
+    employees = (sb().table("employees").select("employee_id,name,home_store,pay_rate")
+                 .eq("org_id", org_id).execute().data) or []
+    rates = {e["employee_id"]: float(e.get("pay_rate") or 0) for e in employees if e.get("employee_id")}
+    names = {e["employee_id"]: e.get("name") or "" for e in employees if e.get("employee_id")}
+
+    period_start, period_end = pto_month_bounds(period)      # reuse the same 'YYYY-MM' bounds helper
+    ps, pe = period_start.isoformat(), period_end.isoformat()
+    shifts = (sb().table("shifts").select("employee_id,store_code,scheduled_hours,actual_hours,shift_date")
+              .eq("org_id", org_id).eq("is_deleted", False)
+              .gte("shift_date", ps).lte("shift_date", pe).execute().data) or []
+    hours_by_emp_store = pto_hours_worked_from_shifts(shifts)     # reuse the PTO engine's shift reader
+
+    tax_org_row = None
+    try:
+        rows = sb().table("payroll_tax_config").select("*").eq("org_id", org_id).limit(1).execute().data or []
+        tax_org_row = rows[0] if rows else None
+    except Exception:
+        pass
+    tax_cfg = payex_resolve_tax_config(tax_org_row)
+
+    year = str(period).split("-")[0]
+    ytd_taxable_before: dict = {}
+    try:
+        hist = (sb().table("payroll_tax_ledger")
+                .select("employee_id,ss_taxable_wages,futa_taxable_wages,suta_taxable_wages")
+                .eq("org_id", org_id).gte("period", f"{year}-01").lt("period", period).execute().data) or []
+        for h in hist:
+            eid = h.get("employee_id")
+            if not eid:
+                continue
+            d = ytd_taxable_before.setdefault(eid, {"ss": 0.0, "futa": 0.0, "suta": 0.0})
+            d["ss"] += float(h.get("ss_taxable_wages") or 0)
+            d["futa"] += float(h.get("futa_taxable_wages") or 0)
+            d["suta"] += float(h.get("suta_taxable_wages") or 0)
+    except Exception:
+        ytd_taxable_before = {}
+
+    tax_result = compute_payroll_tax(hours_by_emp_store, rates, tax_cfg, ytd_taxable_before)
+
+    items = []
+    try:
+        items = sb().table("payroll_expense_item").select("*").eq("org_id", org_id).order("sort_order").execute().data or []
+    except Exception:
+        items = []
+    wages_by_store = payex_wages_by_store(hours_by_emp_store, rates)
+    headcount_by_store = payex_headcount_by_store(hours_by_emp_store)
+    company_headcount = len({eid for eid, by_store in hours_by_emp_store.items()
+                              if any(float(h or 0) > 0 for h in by_store.values())})
+    item_result = compute_expense_items(wages_by_store, headcount_by_store, company_headcount, items)
+
+    cells = payex_rollup_cells(tax_result["stores"], item_result["stores"])
+    return {"tax": tax_result, "items": item_result, "cells": cells, "tax_cfg": tax_cfg,
+            "wages_by_store": wages_by_store, "employee_names": names}
+
+
+@router.get("/payroll-expenses/{period}")
+def get_payroll_expenses(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Read-only Payroll Expenses view for a period (YYYY-MM): the itemized tax + item breakdown per
+    store, and the single rolled-up total that would be pushed to Store Expenses. Always computed
+    LIVE (never reads the ledger for the numbers — only for `last_run_at`)."""
+    g = _payex_gather(org_id, period)
+    last_run_at = None
+    try:
+        rows = (sb().table("payroll_expense_ledger").select("run_at").eq("org_id", org_id).eq("period", period)
+                .order("run_at", desc=True).limit(1).execute().data) or []
+        last_run_at = rows[0]["run_at"] if rows else None
+    except Exception:
+        pass
+    ks = scope_keyset(authorization, org_id)
+    stores = sorted(set(g["tax"]["stores"]) | set(g["items"]["stores"]))
+    if ks is not None:
+        stores = [s for s in stores if in_keyset(ks, s)]
+    stores_out = []
+    for s in stores:
+        tax_d = g["tax"]["stores"].get(s, {})
+        item_d = g["items"]["stores"].get(s, {})
+        stores_out.append({
+            "store": s, "wages": tax_d.get("wages", 0.0),
+            "fica_ss": tax_d.get("fica_ss", 0.0), "medicare": tax_d.get("medicare", 0.0),
+            "futa": tax_d.get("futa", 0.0), "suta": tax_d.get("suta", 0.0),
+            "tax_total": tax_d.get("total", 0.0),
+            "items": item_d, "items_total": round(sum(item_d.values()), 2),
+            "total": round(tax_d.get("total", 0.0) + sum(item_d.values()), 2),
+        })
+    cells = [c for c in g["cells"] if ks is None or in_keyset(ks, c["store"])]
+    return {"period": period, "tax_cfg": g["tax_cfg"], "items": g["items"]["items"],
+            "stores": stores_out, "cells": cells, "last_run_at": last_run_at}
+
+
+def _payex_push_expense_line(org_id: str, period: str, cells: list) -> dict:
+    """POST the single rolled-up per-store cost to mod-commission's Store Expenses system-line
+    endpoint (source_key='payroll_expenses', label='Payroll Expenses' — the SAME shared contract the
+    PTO package pushes 'pto_accrual' through, a DIFFERENT source_key so the two coexist as separate
+    lines). Same best-effort contract as PTO's push: any failure is caught and reported, NEVER raised
+    — both ledgers are already persisted by the time this runs."""
+    url = f"{PTO_INTERNAL_API_BASE}/api/v1/commcalc/expenses/{period}/system-line"
+    body = {"source_key": "payroll_expenses", "label": "Payroll Expenses", "cells": cells}
+    try:
+        resp = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        if resp.status_code == 404:
+            return {"pushed": False, "status": 404, "note": "system-line endpoint not deployed yet — ledger persisted, pull via GET /payroll-expenses/{period} instead"}
+        resp.raise_for_status()
+        return {"pushed": True, "status": resp.status_code}
+    except Exception as e:
+        return {"pushed": False, "status": None, "note": f"push failed ({type(e).__name__}: {e}) — ledger persisted, pull via GET /payroll-expenses/{{period}} instead"}
+
+
+@router.post("/payroll-expenses/run/{period}")
+def run_payroll_expenses(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The payroll-run hook: compute this period's payroll tax + expense items, persist BOTH ledgers
+    idempotently (delete-by-(org,period) then insert — safe to re-run e.g. after a shift correction),
+    and push ONE rolled-up 'Payroll Expenses' line to Store Expenses. Manager-gated. NEVER writes to
+    shifts/timelog/employees — read-only against payroll inputs, so it cannot change what anyone is
+    paid."""
+    u = _require_manager(authorization, org_id)
+    run_by = u.get("email") or u.get("employee_id") or "manager"
+    g = _payex_gather(org_id, period)
+
+    tax_rows = payex_tax_ledger_rows(org_id, period, g["tax"], run_by=run_by)
+    sb().table("payroll_tax_ledger").delete().eq("org_id", org_id).eq("period", period).execute()
+    if tax_rows:
+        for i in range(0, len(tax_rows), 500):
+            sb().table("payroll_tax_ledger").insert(tax_rows[i:i + 500]).execute()
+
+    exp_rows = payex_expense_ledger_rows(org_id, period, g["tax"], g["items"], run_by=run_by)
+    sb().table("payroll_expense_ledger").delete().eq("org_id", org_id).eq("period", period).execute()
+    if exp_rows:
+        for i in range(0, len(exp_rows), 500):
+            sb().table("payroll_expense_ledger").insert(exp_rows[i:i + 500]).execute()
+
+    push = _payex_push_expense_line(org_id, period, g["cells"]) if g["cells"] else {"pushed": False, "status": None, "note": "no store activity this period — nothing to push"}
+
+    return {"period": period, "tax_cfg": g["tax_cfg"], "items": g["items"]["items"],
+            "cells": g["cells"], "tax_ledger_rows_written": len(tax_rows),
+            "expense_ledger_rows_written": len(exp_rows), "push": push}
