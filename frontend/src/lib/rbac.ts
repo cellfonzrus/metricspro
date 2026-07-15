@@ -307,6 +307,28 @@ export function moduleForPath(path: string): string {
   return 'commissions'
 }
 
+// The module that GOVERNS a path = the nav item whose href is the longest boundary-matched prefix
+// (exact wins). This is the SAME source the sidebar gates on (canSeeItem keys off item.module), so the
+// guard (canAccessPath) and the sidebar can never disagree about which module a page belongs to.
+// Some items are placed in an information-architecture group whose URL prefix implies a DIFFERENT
+// module than the item's real one (e.g. `/commcalc/payables` is an Asset feature, `/commcalc/distributors`
+// a Distributor/vip feature, `/commcalc/asset/hotsheet-recon` a Commissions pricing page). Path-prefix
+// derivation (moduleForPath) got those wrong, so a tab the sidebar SHOWED under module X was gated by
+// the guard under module Y → clicking it failed canAccessPath and bounced to the dashboard. Returns null
+// for paths no nav item governs (deep sub-pages of a module whose root isn't itself a nav href) → the
+// caller falls back to moduleForPath.
+export function navModuleForPath(path: string): string | null {
+  let best: string | null = null, bestLen = -1
+  for (const g of NAV) {
+    for (const it of g.items) {
+      if ((path === it.href || path.startsWith(it.href + '/')) && it.href.length > bestLen) {
+        best = it.module; bestLen = it.href.length
+      }
+    }
+  }
+  return best
+}
+
 // A super-admin (role-management rights) implicitly has EVERY module. This keeps newly
 // added modules (e.g. Accounts, added after the roles were seeded) visible to admins
 // without re-seeding each role's permissions JSONB. Non-admin roles still need the flag.
@@ -409,6 +431,10 @@ const SELF_ALLOWED = ['/commcalc/targets/my', '/account/password', '/reports', '
 
 export function canAccessPath(perms: Permissions, path: string): boolean {
   if (path === '/' || path.startsWith('/account/password')) return true
+  // Super-admin bypass FIRST — mirrors canSeeItem's own precedence (isSuperAdmin checked before scope).
+  // Keeping it ahead of the per-item scope loop guarantees the operator/super-admin (who sees every tab)
+  // can never be bounced by a scope-restricted nav item → the sidebar and the guard stay consistent.
+  if (isSuperAdmin(perms)) return true
   const scope = perms.scope || 'all'
   if (scope === 'self') {
     const home = perms.home || '/commcalc/targets/my'
@@ -420,13 +446,14 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
       if (path === it.href && it.scopes && !it.scopes.includes(scope)) return false
     }
   }
-  if (isSuperAdmin(perms)) return true
   if (MGMT_ONLY.has(path)) return canManage(perms, path)   // management-only pages, DMs excluded
   const ov = pageOverrideForPath(perms, path)   // per-function override wins
   if (typeof ov === 'boolean') return ov
   const area = reportAreaForPath(path)   // report pages need the separate report permission
   if (area && !hasReport(perms, area)) return false
-  return moduleGranted(perms.modules, moduleForPath(path))
+  // Gate on the GOVERNING nav item's module (same source the sidebar uses), not the path-prefix guess —
+  // so any tab the sidebar shows is guaranteed reachable. Fall back to moduleForPath for un-navved paths.
+  return moduleGranted(perms.modules, navModuleForPath(path) ?? moduleForPath(path))
 }
 
 export function homeFor(perms: Permissions): string {
