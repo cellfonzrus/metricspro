@@ -78,6 +78,35 @@ function resolveRow(row) {
   if (row.kind === 'option' || row.kind === 'suggest') return { create: false, id: row.id, option: row.option }
   return null
 }
+// ── multi-select helpers (verbatim from entity-picker-core.ts) ───────────────────────────────────────
+function excludeSelected(options, selectedIds) {
+  const chosen = new Set(selectedIds)
+  return options.filter(o => !chosen.has(o.id))
+}
+function buildMenuMulti(options, query, allowCreate, selectedIds) {
+  const remaining = excludeSelected(options, selectedIds)
+  const displays = computeDisplays(options)
+  const filtered = remaining.filter(o => matchesQuery(o.label, query) || (o.sublabel ? matchesQuery(o.sublabel, query) : false))
+  const rows = []
+  for (const o of filtered) rows.push({ kind: 'option', id: o.id, display: displays[o.id], option: o })
+  const showCreate = shouldShowCreate(options, query, allowCreate)
+  if (filtered.length === 0 && !showCreate) {
+    rows.push({ kind: 'empty', message: normalizeText(query) ? 'No match' : 'No options' })
+    for (const o of closest(remaining, query)) rows.push({ kind: 'suggest', id: o.id, display: displays[o.id], option: o })
+  }
+  if (showCreate) rows.push({ kind: 'create', value: query.trim() })
+  return rows
+}
+function addSelection(selectedIds, id) {
+  return selectedIds.includes(id) ? selectedIds : [...selectedIds, id]
+}
+function removeSelection(selectedIds, id) {
+  return selectedIds.filter(x => x !== id)
+}
+function selectedChips(options, selectedIds) {
+  const displays = computeDisplays(options)
+  return selectedIds.map(id => ({ id, display: displays[id] ?? id }))
+}
 
 // ── harness ─────────────────────────────────────────────────────────────────────────────────────────
 let pass = 0, fail = 0
@@ -175,6 +204,47 @@ console.log('\n── E. emit contract: resolveRow returns ID for a pick, {creat
 }
 ok('empty header row is NOT selectable (resolveRow → null)', resolveRow({ kind: 'empty', message: 'No match' }) === null)
 
+console.log('\n── G. MULTI-select: exclude chosen · emit string[] · chips · create guard ──')
+{
+  // dropdown EXCLUDES already-selected options
+  const rows = buildMenuMulti(STATES, '', false, ['IL', 'CA'])
+  check('menu excludes the already-selected ids', ids(rows), ['IN', 'NY'])
+}
+check('filtering still works within the remaining options', ids(buildMenuMulti(STATES, 'in', false, ['IL'])), ['IN'])
+{
+  // add is idempotent + order-preserving; remove is order-preserving
+  check('addSelection appends a new id', addSelection(['IL'], 'CA'), ['IL', 'CA'])
+  check('addSelection is idempotent (no dup)', addSelection(['IL', 'CA'], 'IL'), ['IL', 'CA'])
+  check('removeSelection drops the id, keeps order', removeSelection(['IL', 'CA', 'NY'], 'CA'), ['IL', 'NY'])
+}
+{
+  // chips: disambiguated display, selection order; an off-roster id survives as the raw id
+  const chips = selectedChips(PEOPLE, ['e2', 'e3'])
+  check('chips carry the disambiguated display in selection order', chips, [
+    { id: 'e2', display: 'John Smith — jsmith@shop.com' }, { id: 'e3', display: 'Maria Cruz' },
+  ])
+  check('an off-roster selected id is kept as the raw id (never vanishes)', selectedChips(STORES, ['s1', 'ghost']), [
+    { id: 's1', display: 'Aurora Main' }, { id: 'ghost', display: 'ghost' },
+  ])
+}
+{
+  // create-affordance guard uses the FULL set: an exact match of an ALREADY-selected value never re-offers create
+  ok('multi + allowCreate + exact match of a SELECTED value → NO create row (no dup)',
+    !buildMenuMulti(STORES, 'Aurora Main', true, ['s1']).some(r => r.kind === 'create'))
+  ok('multi + allowCreate + genuinely new value → create row present',
+    buildMenuMulti(STORES, 'Elgin', true, ['s1']).some(r => r.kind === 'create'))
+  ok('multi + allowCreate=false + no match → no create, closest suggestion instead',
+    (() => { const r = buildMenuMulti(STORES, 'Aroira', false, ['s3']); return !r.some(x => x.kind === 'create') && r.some(x => x.kind === 'suggest' && x.id === 's1') })())
+}
+{
+  // emitting: commit maps a picked option-row id into the array via addSelection (emit is string[])
+  const row = buildMenuMulti(STATES, 'new york', false, ['IL']).find(r => r.kind === 'option')
+  const emitted = addSelection(['IL'], resolveRow(row).id)
+  check('picking an option in multi emits the id APPENDED to the array', emitted, ['IL', 'NY'])
+}
+ok('all-selected → menu is just the empty header (nothing left to pick)',
+  kinds(buildMenuMulti(STORES, '', false, ['s1', 's2', 's3'])).join() === 'empty')
+
 // ── source-parity guard: the bodies above must exist verbatim in entity-picker-core.ts ──────────────
 console.log('\n── F. source-parity: entity-picker-core.ts matches this harness ──')
 const src = readFileSync(new URL('../src/lib/entity-picker-core.ts', import.meta.url), 'utf8')
@@ -187,6 +257,12 @@ const need = [
   'const filtered = options.filter(o => matchesQuery(o.label, query) || (o.sublabel ? matchesQuery(o.sublabel, query) : false))',
   'if (showCreate) rows.push({ kind: \'create\', value: query.trim() })',
   'if (row.kind === \'create\') return { create: true, value: row.value }',
+  // multi-select parity
+  'const chosen = new Set(selectedIds)',
+  'const remaining = excludeSelected(options, selectedIds)',
+  'return selectedIds.includes(id) ? selectedIds : [...selectedIds, id]',
+  'return selectedIds.filter(x => x !== id)',
+  'return selectedIds.map(id => ({ id, display: displays[id] ?? id }))',
 ]
 for (const s of need) {
   const found = src.includes(s)

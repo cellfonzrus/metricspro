@@ -2,12 +2,13 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { api } from '@/lib/client'
 import {
-  EntityOption, MenuRow, buildMenu, computeDisplays, selectableRows, resolveRow,
+  EntityOption, MenuRow, buildMenu, buildMenuMulti, computeDisplays, selectableRows, resolveRow,
+  addSelection, removeSelection, selectedChips,
 } from '@/lib/entity-picker-core'
 
 // Re-export the primitives so a page needs a single import:  import EntityPicker, { US_STATES } from '@/components/EntityPicker'
 export type { EntityOption } from '@/lib/entity-picker-core'
-export { US_STATES, normalizeText, buildMenu } from '@/lib/entity-picker-core'
+export { US_STATES, normalizeText, buildMenu, buildMenuMulti } from '@/lib/entity-picker-core'
 
 /**
  * EntityPicker — the shared "pick, don't type" primitive (AGENT_CONTRACT §3b / RULE THREE).
@@ -26,25 +27,25 @@ export { US_STATES, normalizeText, buildMenu } from '@/lib/entity-picker-core'
  *   // convenience fetch (GET -> [{id,label,sublabel}]):
  *   <EntityPicker fetchUrl="/api/v1/commcalc/reps" value={repId} onChange={setRepId} />
  *
- * The pure logic (filter / disambiguation / create-affordance / emit) lives in
+ *   // MULTI-select — selected values render as removable chips, dropdown excludes the chosen,
+ *   // emits string[] (same id/label/sublabel + allowCreate contract):
+ *   <EntityPicker multi options={reps} value={repIds} onChange={setRepIds} placeholder="Reps…" />
+ *
+ * The pure logic (filter / disambiguation / create-affordance / emit / multi) lives in
  * `@/lib/entity-picker-core` and is unit-proven by `scratchpad/prove_entity_picker.mjs`.
  */
-export interface EntityPickerProps {
+interface EntityPickerBaseProps {
   /** Existing values. Each page fetches its own list — no new backend needed. */
   options?: EntityOption[]
   /** Optional convenience: GET this URL for `[{id,label,sublabel}]` (uses lib/client `api`). */
   fetchUrl?: string
-  /** Controlled selected ID (or null when nothing is chosen). */
-  value?: string | null
-  /** Emits the selected entity's ID (canonical key) — or null when cleared. NEVER the label. */
-  onChange: (id: string | null) => void
   /** Called when the "➕ Create new" affordance is chosen (only reachable when `allowCreate`). */
   onCreate?: (value: string) => void
   /** Show the "➕ Create new: '<value>'" affordance for an unmatched value. Default false. */
   allowCreate?: boolean
   placeholder?: string
   disabled?: boolean
-  /** Allow clearing back to nothing (shows an ✕). Default true. */
+  /** Allow clearing back to nothing (shows an ✕ / "clear all" in multi). Default true. */
   clearable?: boolean
   /** Customize the create-row text. Default: `Create new: "<value>"`. */
   createLabel?: (value: string) => string
@@ -55,12 +56,38 @@ export interface EntityPickerProps {
   /** Optional id for the underlying input (label association). */
   id?: string
 }
+/** Single-select (default). Emits the selected entity's ID (canonical key) — or null when cleared. */
+export interface EntityPickerSingleProps extends EntityPickerBaseProps {
+  multi?: false
+  /** Controlled selected ID (or null when nothing is chosen). */
+  value?: string | null
+  /** Emits the selected entity's ID (canonical key) — or null when cleared. NEVER the label. */
+  onChange: (id: string | null) => void
+}
+/** Multi-select. Chips for each selection; the dropdown excludes already-chosen; emits string[]. */
+export interface EntityPickerMultiProps extends EntityPickerBaseProps {
+  multi: true
+  /** Controlled selected IDs (canonical keys). */
+  value?: string[] | null
+  /** Emits the full selected-ID array (canonical keys). NEVER the labels. */
+  onChange: (ids: string[]) => void
+}
+export type EntityPickerProps = EntityPickerSingleProps | EntityPickerMultiProps
 
-export default function EntityPicker({
-  options: optionsProp, fetchUrl, value = null, onChange, onCreate, allowCreate = false,
-  placeholder = 'Select…', disabled = false, clearable = true, createLabel,
-  width = 240, ariaLabel, autoFocus = false, id,
-}: EntityPickerProps) {
+export default function EntityPicker(props: EntityPickerProps) {
+  const {
+    options: optionsProp, fetchUrl, onCreate, allowCreate = false,
+    placeholder = 'Select…', disabled = false, clearable = true, createLabel,
+    width = 240, ariaLabel, autoFocus = false, id,
+  } = props
+  const multi = props.multi === true
+  // Normalized controlled state — the union's value/onChange are narrowed by `multi` and cast at the
+  // (guarded) call sites so single-select stays byte-identical while multi gets the array contract.
+  const selectedIds: string[] = multi && Array.isArray(props.value) ? props.value : []
+  const value: string | null = !multi ? ((props.value as string | null | undefined) ?? null) : null
+  const emitSingle = (v: string | null) => { (props.onChange as (id: string | null) => void)(v) }
+  const emitMulti = (ids: string[]) => { (props.onChange as (ids: string[]) => void)(ids) }
+
   const [fetched, setFetched] = useState<EntityOption[] | null>(null)
   const options = optionsProp ?? fetched ?? []
 
@@ -84,10 +111,12 @@ export default function EntityPicker({
   const displays = useMemo(() => computeDisplays(options), [options])
   const selected = useMemo(() => options.find(o => o.id === value) || null, [options, value])
   const selectedDisplay = selected ? displays[selected.id] : ''
+  // multi: the removable chips (disambiguated display; off-roster ids kept as raw ids so they stay visible)
+  const chips = useMemo(() => (multi ? selectedChips(options, selectedIds) : []), [multi, options, selectedIds])
 
   const rows: MenuRow[] = useMemo(
-    () => buildMenu(options, query, allowCreate),
-    [options, query, allowCreate],
+    () => (multi ? buildMenuMulti(options, query, allowCreate, selectedIds) : buildMenu(options, query, allowCreate)),
+    [options, query, allowCreate, multi, selectedIds],
   )
   const picks = useMemo(() => selectableRows(rows), [rows])
 
@@ -111,13 +140,23 @@ export default function EntityPicker({
     if (!row) return
     const r = resolveRow(row)
     if (!r) return
-    if (r.create) { onCreate?.(r.value) } else { onChange(r.id) }
-    close()
-    inputRef.current?.blur()
+    if (r.create) { onCreate?.(r.value) }
+    else if (multi) { emitMulti(addSelection(selectedIds, r.id)) }
+    else { emitSingle(r.id) }
+    if (multi) {
+      // stay open so several can be added in a row; reset the filter + keep focus
+      setQuery(''); setHi(0); inputRef.current?.focus()
+    } else {
+      close(); inputRef.current?.blur()
+    }
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
     if (disabled) return
+    // multi: Backspace on an empty box removes the last chip (standard tag-input affordance)
+    if (multi && e.key === 'Backspace' && query === '' && selectedIds.length) {
+      e.preventDefault(); emitMulti(selectedIds.slice(0, -1)); return
+    }
     if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) { openMenu(); return }
     if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(h + 1, picks.length - 1)); return }
     if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(h - 1, 0)); return }
@@ -125,7 +164,7 @@ export default function EntityPicker({
     if (e.key === 'Escape') { e.preventDefault(); close(); inputRef.current?.blur(); return }
   }
 
-  const inputValue = open ? query : selectedDisplay
+  const inputValue = open ? query : (multi ? '' : selectedDisplay)
 
   const box: React.CSSProperties = {
     padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13,
@@ -133,36 +172,60 @@ export default function EntityPicker({
     width: '100%', outline: 'none',
   }
 
+  // shared input props (identical role/keyboard/aria in both modes)
+  const inputCommon = {
+    id, ref: inputRef, role: 'combobox' as const, 'aria-expanded': open, 'aria-controls': listId,
+    'aria-autocomplete': 'list' as const, 'aria-label': ariaLabel || placeholder, autoComplete: 'off',
+    disabled, value: inputValue,
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setQuery(e.target.value); setHi(0); if (!open) setOpen(true) },
+    onFocus: openMenu, onKeyDown,
+  }
+
   return (
     <div ref={rootRef} style={{ position: 'relative', display: 'inline-block', width }}>
-      <div style={{ position: 'relative' }}>
-        <input
-          id={id}
-          ref={inputRef}
-          role="combobox"
-          aria-expanded={open}
-          aria-controls={listId}
-          aria-autocomplete="list"
-          aria-label={ariaLabel || placeholder}
-          autoComplete="off"
-          disabled={disabled}
-          placeholder={selected && !open ? selectedDisplay : placeholder}
-          value={inputValue}
-          onChange={e => { setQuery(e.target.value); setHi(0); if (!open) setOpen(true) }}
-          onFocus={openMenu}
-          onKeyDown={onKeyDown}
-          style={{ ...box, paddingRight: 46 }}
-        />
-        {clearable && selected && !disabled && (
-          <button type="button" aria-label="Clear" tabIndex={-1}
-            onMouseDown={e => { e.preventDefault(); onChange(null); close() }}
-            style={clearBtn}>✕</button>
-        )}
-        <span aria-hidden style={caret}>▾</span>
-      </div>
+      {!multi ? (
+        <div style={{ position: 'relative' }}>
+          <input {...inputCommon}
+            placeholder={selected && !open ? selectedDisplay : placeholder}
+            style={{ ...box, paddingRight: 46 }}
+          />
+          {clearable && selected && !disabled && (
+            <button type="button" aria-label="Clear" tabIndex={-1}
+              onMouseDown={e => { e.preventDefault(); emitSingle(null); close() }}
+              style={clearBtn}>✕</button>
+          )}
+          <span aria-hidden style={caret}>▾</span>
+        </div>
+      ) : (
+        <div style={{ position: 'relative' }}>
+          <div style={{ ...box, paddingRight: 46, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', minHeight: 38, cursor: disabled ? 'default' : 'text' }}
+            onMouseDown={e => { if (e.target === e.currentTarget && !disabled) inputRef.current?.focus() }}>
+            {chips.map(c => (
+              <span key={c.id} style={chip}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>{c.display}</span>
+                {!disabled && (
+                  <button type="button" aria-label={`Remove ${c.display}`} tabIndex={-1}
+                    onMouseDown={e => { e.preventDefault(); emitMulti(removeSelection(selectedIds, c.id)) }}
+                    style={chipX}>✕</button>
+                )}
+              </span>
+            ))}
+            <input {...inputCommon}
+              placeholder={chips.length === 0 ? placeholder : ''}
+              style={{ border: 'none', outline: 'none', background: 'transparent', color: 'var(--text1)', fontSize: 13, flex: 1, minWidth: 80, padding: '2px 0' }}
+            />
+          </div>
+          {clearable && chips.length > 0 && !disabled && (
+            <button type="button" aria-label="Clear all" tabIndex={-1}
+              onMouseDown={e => { e.preventDefault(); emitMulti([]); close() }}
+              style={clearBtn}>✕</button>
+          )}
+          <span aria-hidden style={caret}>▾</span>
+        </div>
+      )}
 
       {open && (
-        <ul id={listId} role="listbox" style={menu}>
+        <ul id={listId} role="listbox" aria-multiselectable={multi || undefined} style={menu}>
           {rows.length === 0 && (
             <li role="presentation" style={emptyRow}>No options</li>
           )}
@@ -222,4 +285,13 @@ const caret: React.CSSProperties = { position: 'absolute', right: 10, top: '50%'
 const clearBtn: React.CSSProperties = {
   position: 'absolute', right: 26, top: '50%', transform: 'translateY(-50%)', border: 'none',
   background: 'transparent', color: 'var(--text3)', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1,
+}
+// multi-select chips
+const chip: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 4px 2px 8px', borderRadius: 6,
+  background: 'var(--surface2)', border: '1px solid var(--border)', fontSize: 12, maxWidth: '100%',
+}
+const chipX: React.CSSProperties = {
+  border: 'none', background: 'transparent', color: 'var(--text3)', cursor: 'pointer', fontSize: 11,
+  padding: '0 2px', lineHeight: 1,
 }

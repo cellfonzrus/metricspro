@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { api, ORG_ID } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import AiAssistant from '@/components/AiAssistant'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 const enc = encodeURIComponent
 type Ticket = {
@@ -53,6 +54,19 @@ export default function HelpdeskInbox() {
   }, [isAgent, requester, view, statusKey, priorityKey, q])
   useEffect(() => { load() }, [load])
 
+  // RULE FOUR (§3c) exports — the loaded `tickets` already reflect the view/status/priority/search filters
+  // (applied server-side + already scoped to what the caller may see), so what's listed is what exports.
+  const exportCols: ExportColumn[] = [
+    { header: 'Number', field: 'display_number', get: t => t.display_number },
+    { header: 'Subject', field: 'subject', get: t => t.subject },
+    { header: 'Category', field: 'category', get: t => t.category?.name || '' },
+    { header: 'Priority', field: 'priority', get: t => t.priority?.label || '' },
+    { header: 'Status', field: 'status', get: t => t.status?.label || '' },
+    { header: 'Requester', field: 'requester', role: 'rep', get: t => t.requester_name || t.requester_email || '' },
+    { header: 'Assignee', field: 'assignee', get: t => t.assignee || '' },
+    { header: 'Created', field: 'created_at', type: 'date', get: t => String(t.created_at).slice(0, 10) },
+  ]
+
   return (
     <div style={{ padding: 24, maxWidth: 1100 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
@@ -82,6 +96,8 @@ export default function HelpdeskInbox() {
           {priorities.map(p => <option key={p.id} value={p.key}>{p.label}</option>)}
         </select>
         <input className="input" placeholder="Search subject…" value={q} onChange={e => setQ(e.target.value)} style={{ width: 200 }} />
+        <span style={{ flex: 1 }} />
+        <ReportExportBar title="Helpdesk tickets" filename="helpdesk_tickets" columns={exportCols} rows={tickets} />
       </div>
 
       {err && <div className="card" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 12, marginBottom: 12 }}>{err}</div>}

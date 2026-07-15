@@ -128,6 +128,57 @@ export function selectableRows(rows: MenuRow[]): MenuRow[] {
   return rows.filter(r => r.kind !== 'empty')
 }
 
+// ── MULTI-select helpers (the `multi` prop) ──────────────────────────────────────────────────────────
+// Same id/label/sublabel + allowCreate contract as single-select; the picker emits string[] instead of a
+// single id. These stay pure/framework-free so the proof harness can drive them without a DOM.
+
+// Options the menu may still offer = all options MINUS the ones already chosen (no dup-picks).
+export function excludeSelected(options: EntityOption[], selectedIds: string[]): EntityOption[] {
+  const chosen = new Set(selectedIds)
+  return options.filter(o => !chosen.has(o.id))
+}
+
+// Multi-select menu model. Identical shape to buildMenu, but (a) the dropdown EXCLUDES already-selected
+// options, (b) disambiguation displays are computed over the FULL option set (so chips + menu agree and a
+// name stays disambiguated even after its twin is picked), and (c) the create-affordance guard checks the
+// FULL set — so an exact match of an ALREADY-selected value never re-offers "create" (no accidental dup).
+export function buildMenuMulti(
+  options: EntityOption[], query: string, allowCreate: boolean, selectedIds: string[],
+): MenuRow[] {
+  const remaining = excludeSelected(options, selectedIds)
+  const displays = computeDisplays(options)
+  const filtered = remaining.filter(o => matchesQuery(o.label, query) || (o.sublabel ? matchesQuery(o.sublabel, query) : false))
+  const rows: MenuRow[] = []
+  for (const o of filtered) rows.push({ kind: 'option', id: o.id, display: displays[o.id], option: o })
+  const showCreate = shouldShowCreate(options, query, allowCreate)
+  if (filtered.length === 0 && !showCreate) {
+    rows.push({ kind: 'empty', message: normalizeText(query) ? 'No match' : 'No options' })
+    for (const o of closest(remaining, query)) rows.push({ kind: 'suggest', id: o.id, display: displays[o.id], option: o })
+  }
+  if (showCreate) rows.push({ kind: 'create', value: query.trim() })
+  return rows
+}
+
+// Add an id to the selection (idempotent — never a duplicate, preserves order).
+export function addSelection(selectedIds: string[], id: string): string[] {
+  return selectedIds.includes(id) ? selectedIds : [...selectedIds, id]
+}
+
+// Remove an id from the selection (order-preserving).
+export function removeSelection(selectedIds: string[], id: string): string[] {
+  return selectedIds.filter(x => x !== id)
+}
+
+// The removable chips: one per selected id, in selection order, with the disambiguated display. An id
+// that is NOT in the current option set (a preserved off-roster value) keeps the raw id as its display so
+// it stays visible/removable rather than silently vanishing — the multi-select twin of single-select's
+// "inject the current value as a synthetic option."
+export type Chip = { id: string; display: string }
+export function selectedChips(options: EntityOption[], selectedIds: string[]): Chip[] {
+  const displays = computeDisplays(options)
+  return selectedIds.map(id => ({ id, display: displays[id] ?? id }))
+}
+
 // ── US states — the canonical first adopter of RULE THREE (state fields). ────────────────────────────
 // {id: <USPS code>, label: "<Name> (<code>)"} so filtering matches on BOTH the name AND the code:
 // typing "illinois", "IL", or "il" all land on Illinois; the stored/emitted value is always "IL".

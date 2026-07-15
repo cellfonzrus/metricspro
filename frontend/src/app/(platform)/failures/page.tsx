@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback, Fragment } from 'react'
 import { api } from '@/lib/client'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Failure Logs — a system log of failures the app hits (e.g. a valid rep rejected by kiosk face-match),
 // each WITH a how-to-fix note, so admins can diagnose recurring issues. Admin-only by default (RBAC —
@@ -68,6 +69,20 @@ export default function FailureLogsPage() {
   const when = (iso: string) => { try { return new Date(iso).toLocaleString() } catch { return iso } }
   const cell: React.CSSProperties = { padding: '8px 10px', fontSize: 13, borderTop: '1px solid var(--border)', verticalAlign: 'top' }
 
+  // RULE FOUR (§3c) exports — the currently-loaded rows already reflect the status/type filters (applied
+  // server-side), so `rows` IS the visible view. Interactive table below is kept; this only adds exports.
+  const exportCols: ExportColumn[] = [
+    { header: 'When', field: 'created_at', type: 'date', get: r => when(r.created_at) },
+    { header: 'Type', field: 'category', get: r => labelOf(r.category) },
+    { header: 'Severity', field: 'severity', get: r => r.severity },
+    { header: 'Employee', field: 'employee_name', role: 'rep', get: r => r.employee_name || '' },
+    { header: 'Store', field: 'store_code', role: 'store', get: r => r.store_code || '' },
+    { header: 'Source', field: 'source', get: r => r.source || '' },
+    { header: 'What happened', field: 'message', get: r => r.message },
+    { header: 'Status', field: 'status', get: r => r.status },
+    { header: 'How to fix', field: 'remediation', get: r => r.remediation || '' },
+  ]
+
   return (
     <div>
       <div style={{ marginBottom: 14 }}>
@@ -121,6 +136,8 @@ export default function FailureLogsPage() {
           {types.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
         </select>
         <button className="btn btn-sm" onClick={load}>Refresh</button>
+        <span style={{ flex: 1 }} />
+        <ReportExportBar title="Failure Logs" filename="failure_logs" columns={exportCols} rows={rows} />
       </div>
 
       {err && <div className="card" style={{ padding: 14, color: '#dc2626' }}>{err}{err.includes('112') && ' — run migration 112_failure_log.sql in Supabase.'}</div>}
