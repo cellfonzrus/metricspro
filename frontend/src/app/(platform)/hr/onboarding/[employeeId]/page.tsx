@@ -448,7 +448,16 @@ export default function EmployeeOnboardingPage() {
                     {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ ...btn, color: 'var(--accent,#2563eb)', textDecoration: 'none' }}>🔗 {t.doc_label || 'Open form'}</a>}
                     {t.sample_url && <a href={t.sample_url} target="_blank" rel="noreferrer" style={{ ...btn, color: 'var(--accent,#2563eb)', textDecoration: 'none' }} title="Compare this submission against a correctly completed example">👁 Completed sample</a>}
                     {/* migration 402: a pre-402 row (or one that's never had documents[] populated) falls
-                        back to the old single-file view button — never a regression for untouched data */}
+                        back to the old single-file view button — never a regression for untouched data.
+                        BUG FIX 2026-07-15 (owner report, luxelink): this used to gate the fallback button
+                        on documents.length===0 while the per-file list below only rendered for
+                        documents.length>1 — a task with EXACTLY ONE file (the ordinary case for every
+                        normal single-photo upload post-402) matched neither branch and rendered nothing,
+                        i.e. the "Completed" board's Review-packet page showed an empty document section
+                        for a record /hr/compliance (which reads has_document directly, unconditioned on
+                        documents.length) rendered correctly. Fixed by keeping this button ONLY for the
+                        true legacy case (documents[] genuinely empty/absent) and handing every non-empty
+                        documents[] — 1 file or many — to the list below (now `length > 0`, was `length > 1`). */}
                     {t.has_document && (!t.documents || t.documents.length === 0)
                       ? <button style={btn} onClick={() => viewDoc(t)}>📄 View {t.document_name ? `(${t.document_name})` : 'upload'}</button>
                       : (!t.has_document && <span style={{ fontSize: 12, color: 'var(--text3)' }}>{t.requires_upload ? 'no document yet' : ''}</span>)}
@@ -462,8 +471,10 @@ export default function EmployeeOnboardingPage() {
                   </div>
                   {/* migration 402: every file on this document, each independently viewable — HR/admin
                       may delete any of them, at any time (unlike the employee's own portal, which is
-                      gated to only-while-pending, self-uploaded files). */}
-                  {(t.documents || []).length > 1 && (
+                      gated to only-while-pending, self-uploaded files). `> 0` (not `> 1`, see the bug-fix
+                      note above) — a single-file task is the common case and must render here too, since
+                      the button above deliberately no longer covers it. */}
+                  {(t.documents || []).length > 0 && (
                     <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
                       {(t.documents || []).map(f => (
                         <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
