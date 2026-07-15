@@ -41,6 +41,14 @@ Expenses line ("Payroll Expenses", source_key='payroll_expenses'):
 This module NEVER changes a wage/payout number — every input here (hours, pay_rate, headcount) is
 READ-ONLY. It only produces new, additive cost figures. The router (router.py) does all I/O; this file
 is pure so it's unit-testable without a database (see harness_payroll_expenses.py).
+
+  3. GROSS PAYROLL (OWNER DECISION 2026-07-15, migration 405) — the SAME `wages_by_store` figure the
+     two buckets above use as their wage base (hours x employees.pay_rate, attributed to the shift's
+     own store_code — the identical basis `/payroll-by-store` uses), surfaced as its OWN additive P&L
+     line: source_key='payroll_gross', label='Gross Payroll'. This is NOT a third cost bucket — it is
+     the exact gross $ already paid to employees, pushed alongside (never merged into) the burden
+     total so the P&L can show Gross Payroll and Payroll Expenses as two distinct, non-double-counting
+     lines. See gross_payroll_cells / gross_payroll_ledger_rows below.
 """
 from typing import Dict, List, Optional
 
@@ -309,6 +317,39 @@ def tax_ledger_rows(org_id: str, period: str, tax_result: dict, run_by: Optional
             "futa_taxable_wages": e["futa_taxable_wages"], "futa_tax": e["futa_tax"],
             "suta_taxable_wages": e["suta_taxable_wages"], "suta_tax": e["suta_tax"],
             "total_tax": e["total_tax"], "run_by": run_by,
+        })
+    return rows
+
+
+def gross_payroll_cells(wages_by_store: Dict[str, float]) -> List[dict]:
+    """OWNER DECISION 2026-07-15: the P&L must show TWO separate payroll lines — 'Gross Payroll'
+    (the exact $ paid to employees) and 'Payroll Expenses' (the employer burden computed above).
+    This shapes `wages_by_store` — the SAME wages basis `compute_payroll_tax`/`compute_expense_items`
+    already use as their wage base, so the two lines are always internally consistent — into the
+    `cells` payload for POST .../expenses/{period}/system-line (source_key='payroll_gross',
+    label='Gross Payroll'). A DIFFERENT source_key than 'payroll_expenses' so the two coexist as
+    distinct, non-double-counting P&L lines (gross wages vs. burden are different costs). Includes
+    every store touched this period even at $0 (clears a stale prior value on the receiver's
+    idempotent delete-by-source_key, same convention as rollup_cells / expense_cells_from_stores).
+    Read-only over its input — computes nothing new about pay, only re-shapes an already-computed
+    figure into a P&L cell."""
+    return [{"store": s, "amount": round(float(w), 2)} for s, w in sorted((wages_by_store or {}).items())]
+
+
+def gross_payroll_ledger_rows(org_id: str, period: str, wages_by_store: Dict[str, float],
+                               headcount_by_store: Optional[Dict[str, int]] = None,
+                               run_by: Optional[str] = None) -> List[dict]:
+    """One row per (org, period, store) — the audit trail for the 'payroll_gross' system line
+    (storeops.payroll_gross_ledger, migration 405), mirroring payroll_expense_ledger's shape. A
+    store with $0 gross wages this period still gets a row (mirrors gross_payroll_cells' 'include
+    every touched store' convention) so the ledger and the pushed cells always agree exactly."""
+    headcount_by_store = headcount_by_store or {}
+    rows = []
+    for store, w in sorted((wages_by_store or {}).items()):
+        rows.append({
+            "org_id": org_id, "period": period, "store": store,
+            "wages": round(float(w), 2), "headcount": int(headcount_by_store.get(store, 0)),
+            "run_by": run_by,
         })
     return rows
 

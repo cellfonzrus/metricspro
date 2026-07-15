@@ -29,6 +29,12 @@ Proves:
   16. End-to-end YTD accumulation across 3 consecutive periods for one employee proves the CORRECT
       cumulative-cap behavior a naive per-period cap check would get wrong (the FUTA cap should bind
       partway through, not reset every month).
+  17. GROSS PAYROLL (migration 405, OWNER DECISION 2026-07-15) — gross_payroll_cells /
+      gross_payroll_ledger_rows: per-store gross computed correctly from synthetic hours * rate,
+      matches wages_by_store_from_hours exactly, is DISTINCT from (not equal to, not derived from)
+      the burden/tax total for the same data, an idempotent re-run (simulated delete-by-(org,period)
+      -then-insert) never duplicates and correctly drops a store whose activity goes to zero, and two
+      different orgs' ledger rows never collide/leak into each other (org-scoped).
 """
 import sys
 
@@ -39,6 +45,7 @@ from app.modules.storeops.payroll_expenses import (   # noqa: E402
     DEFAULT_TAX_CONFIG, resolve_tax_config, compute_payroll_tax,
     wages_by_store_from_hours, headcount_by_store_from_hours,
     compute_expense_items, rollup_cells, tax_ledger_rows, expense_ledger_rows,
+    gross_payroll_cells, gross_payroll_ledger_rows,
 )
 
 PASS, FAIL = [], []
@@ -321,6 +328,100 @@ check("t16d: month 4 fully capped — YTD already >= 7000 -> FUTA = 0 for the re
 check("t16e: a naive per-period-only cap check would have taxed FUTA all 4 months ($18 x 4 = $72) — "
       "the YTD design saved $72 - 42 = $30 of overstated liability",
       sum(futa_by_month.values()) == 18.0 + 18.0 + 6.0 + 0.0)
+
+
+# ── 17. GROSS PAYROLL (migration 405, OWNER DECISION 2026-07-15) ───────────────────────────────
+# Synthetic 2-store, 2-employee period — a floater (E9) splits hours across Store1/Store2, E10 works
+# only Store1. Uses the SAME shifts fixture as check 15 so wages_by_store is known-correct.
+gross_shifts = [
+    {"employee_id": "E9", "store_code": "Store1", "scheduled_hours": 8, "actual_hours": 0},
+    {"employee_id": "E9", "store_code": "Store1", "scheduled_hours": 8, "actual_hours": 7.5},
+    {"employee_id": "E9", "store_code": "Store2", "scheduled_hours": 4, "actual_hours": 0},
+    {"employee_id": "E10", "store_code": "Store1", "scheduled_hours": 10, "actual_hours": 10},
+]
+gross_rates = {"E9": 20.0, "E10": 10.0}
+gross_hbs = hours_worked_from_shifts(gross_shifts)
+gross_wbs = wages_by_store_from_hours(gross_hbs, gross_rates)   # {"Store1": 410.0, "Store2": 80.0} (see check 15)
+gross_hcs = headcount_by_store_from_hours(gross_hbs)
+
+# t17a-b: per-store GROSS matches hours*rate exactly (same basis as wages_by_store_from_hours) —
+# Store1 = (15.5hrs * $20 for E9) + (10hrs * $10 for E10) = 310 + 100 = 410; Store2 = 4hrs * $20 = 80.
+g_cells = gross_payroll_cells(gross_wbs)
+g_by_store = {c["store"]: c["amount"] for c in g_cells}
+check("t17a: Store1 gross payroll = hours*rate summed across both employees = $410",
+      abs(g_by_store["Store1"] - 410.0) < 1e-6, g_by_store)
+check("t17b: Store2 gross payroll = 4hrs * $20 = $80", abs(g_by_store["Store2"] - 80.0) < 1e-6, g_by_store)
+check("t17c: gross_payroll_cells reproduces wages_by_store_from_hours exactly, store-for-store",
+      g_by_store == {s: round(w, 2) for s, w in gross_wbs.items()}, (g_by_store, gross_wbs))
+
+# t17d: DISTINCT from the burden/tax total for the SAME underlying data — gross wages != employer tax.
+tax_same_data = compute_payroll_tax(gross_hbs, gross_rates, dict(DEFAULT_TAX_CONFIG), ytd_taxable_before={})
+tax_total_store1 = tax_same_data["stores"]["Store1"]["total"]
+check("t17d: Store1's gross payroll ($410) is NOT equal to Store1's employer tax burden on the same "
+      "wages (proves the two lines are genuinely distinct figures, not aliases of each other)",
+      abs(g_by_store["Store1"] - tax_total_store1) > 1.0, (g_by_store["Store1"], tax_total_store1))
+check("t17e: gross payroll ($410) is strictly LARGER than the tax burden on it (burden is a fraction "
+      "of wages under any realistic rate set) — sanity check the two aren't swapped",
+      g_by_store["Store1"] > tax_total_store1 > 0, (g_by_store["Store1"], tax_total_store1))
+
+# t17f: ledger row shaping carries wages + headcount per store, sorted, one row per touched store.
+g_rows = gross_payroll_ledger_rows("ORG1", "2026-07", gross_wbs, gross_hcs, run_by="tester")
+check("t17f: one gross ledger row per store touched", len(g_rows) == 2, g_rows)
+check("t17g: Store1 ledger row carries wages=410 and headcount=2 (E9+E10)",
+      any(r["store"] == "Store1" and abs(r["wages"] - 410.0) < 1e-6 and r["headcount"] == 2 for r in g_rows), g_rows)
+check("t17h: Store2 ledger row carries wages=80 and headcount=1 (only E9)",
+      any(r["store"] == "Store2" and abs(r["wages"] - 80.0) < 1e-6 and r["headcount"] == 1 for r in g_rows), g_rows)
+
+
+# ── idempotent re-run + org-scoping (simulated delete-by-(org,period)-then-insert, same harness
+# convention as check 14) ───────────────────────────────────────────────────────────────────────
+class FakeGrossLedger:
+    def __init__(self):
+        self.rows = []
+
+    def run(self, org_id, period, rows):
+        self.rows = [r for r in self.rows
+                     if not (r["org_id"] == org_id and r["period"] == period)]
+        self.rows.extend(rows)
+
+
+gross_ledger_db = FakeGrossLedger()
+gross_ledger_db.run("ORG1", "2026-07", g_rows)
+check("t17i: first run persists 2 rows (Store1, Store2)", len(gross_ledger_db.rows) == 2, gross_ledger_db.rows)
+
+gross_ledger_db.run("ORG1", "2026-07", g_rows)   # re-run SAME (org, period), same data
+check("t17j: re-running the SAME (org, period) does not duplicate", len(gross_ledger_db.rows) == 2, gross_ledger_db.rows)
+
+# a different ORG, same period, must coexist without colliding (org-scoped)
+gross_ledger_db.run("ORG2", "2026-07", gross_payroll_ledger_rows("ORG2", "2026-07", {"Store9": 999.0}, {"Store9": 1}, run_by="tester"))
+check("t17k: a DIFFERENT org's rows for the SAME period coexist (org-scoped, no cross-org overwrite)",
+      len(gross_ledger_db.rows) == 3, gross_ledger_db.rows)
+check("t17l: ORG1's rows are untouched by ORG2's write", sum(1 for r in gross_ledger_db.rows if r["org_id"] == "ORG1") == 2,
+      gross_ledger_db.rows)
+check("t17m: ORG2's row is scoped to ORG2 only (never visible under ORG1)",
+      all(r["org_id"] == "ORG2" for r in gross_ledger_db.rows if r["store"] == "Store9"), gross_ledger_db.rows)
+
+# activity drops to zero at Store2 next run (E9's Store2 shift removed) -> Store2 disappears from the
+# re-run's rows entirely (gross_payroll_ledger_rows only emits rows for stores present in wages_by_store)
+wbs_store2_gone = {"Store1": gross_wbs["Store1"]}
+rows_after_drop = gross_payroll_ledger_rows("ORG1", "2026-07", wbs_store2_gone, {"Store1": 2}, run_by="tester2")
+gross_ledger_db.run("ORG1", "2026-07", rows_after_drop)
+check("t17n: a store whose gross payroll drops to zero/absent leaves NO stale ledger row after a re-run",
+      not any(r["org_id"] == "ORG1" and r["store"] == "Store2" for r in gross_ledger_db.rows), gross_ledger_db.rows)
+check("t17o: Store1's row (still active) and ORG2's row are both untouched by the ORG1 re-run",
+      any(r["org_id"] == "ORG1" and r["store"] == "Store1" for r in gross_ledger_db.rows)
+      and any(r["org_id"] == "ORG2" for r in gross_ledger_db.rows), gross_ledger_db.rows)
+
+# t17p: gross_payroll_cells includes every store even at $0 (matches rollup_cells/expense_cells_from_stores
+# convention — clears a stale prior value on the receiver's idempotent delete-by-source_key).
+check("t17p: a $0-wage store still gets an explicit cell (not silently dropped)",
+      {"store": "StoreZero", "amount": 0.0} in gross_payroll_cells({"StoreZero": 0.0}))
+
+# t17q: this module NEVER writes hours/pay_rate/shifts — gross_payroll_cells/gross_payroll_ledger_rows
+# are pure functions of their inputs; calling them twice with the same input is byte-identical (no
+# hidden mutable state, no side effect on a payout number).
+check("t17q: pure + side-effect-free — same input twice produces byte-identical output",
+      gross_payroll_cells(gross_wbs) == gross_payroll_cells(gross_wbs), None)
 
 
 # ── Report ─────────────────────────────────────────────────────────────────────────────────────

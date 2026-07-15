@@ -28,6 +28,8 @@ from app.modules.storeops.payroll_expenses import (
     rollup_cells as payex_rollup_cells,
     tax_ledger_rows as payex_tax_ledger_rows,
     expense_ledger_rows as payex_expense_ledger_rows,
+    gross_payroll_cells as payex_gross_payroll_cells,
+    gross_payroll_ledger_rows as payex_gross_payroll_ledger_rows,
 )
 
 try:
@@ -2735,20 +2737,30 @@ def _payex_gather(org_id: str, period: str):
 
     cells = payex_rollup_cells(tax_result["stores"], item_result["stores"])
     return {"tax": tax_result, "items": item_result, "cells": cells, "tax_cfg": tax_cfg,
-            "wages_by_store": wages_by_store, "employee_names": names}
+            "wages_by_store": wages_by_store, "headcount_by_store": headcount_by_store,
+            "employee_names": names}
 
 
 @router.get("/payroll-expenses/{period}")
 def get_payroll_expenses(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Read-only Payroll Expenses view for a period (YYYY-MM): the itemized tax + item breakdown per
     store, and the single rolled-up total that would be pushed to Store Expenses. Always computed
-    LIVE (never reads the ledger for the numbers — only for `last_run_at`)."""
+    LIVE (never reads the ledger for the numbers — only for `last_run_at`). Also surfaces the
+    separate GROSS PAYROLL cells (source_key='payroll_gross') that /run pushes as its own P&L line —
+    see gross_cells / gross_last_run_at (migration 405; degrades to [] / None until it's applied)."""
     g = _payex_gather(org_id, period)
     last_run_at = None
     try:
         rows = (sb().table("payroll_expense_ledger").select("run_at").eq("org_id", org_id).eq("period", period)
                 .order("run_at", desc=True).limit(1).execute().data) or []
         last_run_at = rows[0]["run_at"] if rows else None
+    except Exception:
+        pass
+    gross_last_run_at = None
+    try:
+        rows = (sb().table("payroll_gross_ledger").select("run_at").eq("org_id", org_id).eq("period", period)
+                .order("run_at", desc=True).limit(1).execute().data) or []
+        gross_last_run_at = rows[0]["run_at"] if rows else None
     except Exception:
         pass
     ks = scope_keyset(authorization, org_id)
@@ -2768,8 +2780,11 @@ def get_payroll_expenses(period: str, authorization: str = Header(default=""), o
             "total": round(tax_d.get("total", 0.0) + sum(item_d.values()), 2),
         })
     cells = [c for c in g["cells"] if ks is None or in_keyset(ks, c["store"])]
+    gross_cells_all = payex_gross_payroll_cells(g["wages_by_store"])
+    gross_cells = [c for c in gross_cells_all if ks is None or in_keyset(ks, c["store"])]
     return {"period": period, "tax_cfg": g["tax_cfg"], "items": g["items"]["items"],
-            "stores": stores_out, "cells": cells, "last_run_at": last_run_at}
+            "stores": stores_out, "cells": cells, "last_run_at": last_run_at,
+            "gross_cells": gross_cells, "gross_last_run_at": gross_last_run_at}
 
 
 def _payex_push_expense_line(org_id: str, period: str, cells: list) -> dict:
@@ -2790,13 +2805,42 @@ def _payex_push_expense_line(org_id: str, period: str, cells: list) -> dict:
         return {"pushed": False, "status": None, "note": f"push failed ({type(e).__name__}: {e}) — ledger persisted, pull via GET /payroll-expenses/{{period}} instead"}
 
 
+def _payex_push_gross_line(org_id: str, period: str, cells: list) -> dict:
+    """POST the per-store GROSS PAYROLL — the exact wages basis the burden calc above uses — to
+    mod-commission's Store Expenses system-line endpoint as its OWN line: source_key='payroll_gross',
+    label='Gross Payroll'. OWNER DECISION 2026-07-15: this is a DIFFERENT source_key than
+    'payroll_expenses' (and than PTO's 'pto_accrual') so all three coexist as separate, non-
+    double-counting P&L lines — gross wages vs. employer burden vs. accrued PTO are distinct costs.
+    Same best-effort contract as the other pushes here: any failure is caught and reported, NEVER
+    raised — the gross ledger is already persisted (when migration 405 has run) by the time this
+    executes."""
+    url = f"{PTO_INTERNAL_API_BASE}/api/v1/commcalc/expenses/{period}/system-line"
+    body = {"source_key": "payroll_gross", "label": "Gross Payroll", "cells": cells}
+    try:
+        resp = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        if resp.status_code == 404:
+            return {"pushed": False, "status": 404, "note": "system-line endpoint not deployed yet — ledger persisted, pull via GET /payroll-expenses/{period} instead"}
+        resp.raise_for_status()
+        return {"pushed": True, "status": resp.status_code}
+    except Exception as e:
+        return {"pushed": False, "status": None, "note": f"push failed ({type(e).__name__}: {e}) — ledger persisted, pull via GET /payroll-expenses/{{period}} instead"}
+
+
 @router.post("/payroll-expenses/run/{period}")
 def run_payroll_expenses(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The payroll-run hook: compute this period's payroll tax + expense items, persist BOTH ledgers
     idempotently (delete-by-(org,period) then insert — safe to re-run e.g. after a shift correction),
     and push ONE rolled-up 'Payroll Expenses' line to Store Expenses. Manager-gated. NEVER writes to
     shifts/timelog/employees — read-only against payroll inputs, so it cannot change what anyone is
-    paid."""
+    paid.
+
+    Also computes + pushes the SEPARATE 'Gross Payroll' line (source_key='payroll_gross') on the SAME
+    run — OWNER DECISION 2026-07-15: the exact $ paid to employees (g['wages_by_store'], the identical
+    wage base the tax bucket above already uses), persisted to storeops.payroll_gross_ledger
+    (migration 405) and pushed via the identical system-line contract, so the P&L can show Gross
+    Payroll and Payroll Expenses as two distinct, non-double-counting lines. Purely ADDITIVE: never
+    modifies payroll_tax_ledger / payroll_expense_ledger / the 'payroll_expenses' push above, and
+    degrades gracefully (push still attempted, run still succeeds) if migration 405 hasn't run yet."""
     u = _require_manager(authorization, org_id)
     run_by = u.get("email") or u.get("employee_id") or "manager"
     g = _payex_gather(org_id, period)
@@ -2815,6 +2859,28 @@ def run_payroll_expenses(period: str, authorization: str = Header(default=""), o
 
     push = _payex_push_expense_line(org_id, period, g["cells"]) if g["cells"] else {"pushed": False, "status": None, "note": "no store activity this period — nothing to push"}
 
+    # ── Gross Payroll (additive, migration 405) — org-scoped write, wrapped so a not-yet-applied
+    # migration degrades gracefully (the push still fires; only the audit-ledger persist is skipped).
+    gross_cells = payex_gross_payroll_cells(g["wages_by_store"])
+    gross_rows = payex_gross_payroll_ledger_rows(org_id, period, g["wages_by_store"],
+                                                  g.get("headcount_by_store"), run_by=run_by)
+    gross_ledger_rows_written = 0
+    try:
+        sb().table("payroll_gross_ledger").delete().eq("org_id", org_id).eq("period", period).execute()
+        if gross_rows:
+            for i in range(0, len(gross_rows), 500):
+                sb().table("payroll_gross_ledger").insert(gross_rows[i:i + 500]).execute()
+        gross_ledger_rows_written = len(gross_rows)
+    except Exception as e:
+        gross_ledger_rows_written = None  # migration 405 likely not applied yet — ledger skipped, push still attempted below
+        _gross_ledger_error = f"{type(e).__name__}: {e}"
+    else:
+        _gross_ledger_error = None
+
+    gross_push = _payex_push_gross_line(org_id, period, gross_cells) if gross_cells else {"pushed": False, "status": None, "note": "no store activity this period — nothing to push"}
+
     return {"period": period, "tax_cfg": g["tax_cfg"], "items": g["items"]["items"],
             "cells": g["cells"], "tax_ledger_rows_written": len(tax_rows),
-            "expense_ledger_rows_written": len(exp_rows), "push": push}
+            "expense_ledger_rows_written": len(exp_rows), "push": push,
+            "gross_cells": gross_cells, "gross_ledger_rows_written": gross_ledger_rows_written,
+            "gross_ledger_error": _gross_ledger_error, "gross_push": gross_push}
