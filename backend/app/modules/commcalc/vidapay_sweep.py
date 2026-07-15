@@ -619,16 +619,69 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             # submit button #btnClick. The Sign-In POST is what makes the portal DISPATCH the 2FA
             # code to the registered phone, so this click must never depend on text heuristics.
             if login_fr.query_selector("#AccountId") and login_fr.query_selector("#Password"):
-                if account_id:
-                    login_fr.fill("#AccountId", str(account_id))
-                if user and login_fr.query_selector("#Username"):
-                    login_fr.fill("#Username", str(user))
-                login_fr.fill("#Password", str(pw or ""))
+                # TYPE (real keystrokes), don't fill: #btnClick is DISABLED until the form's JS
+                # validation sees key events — fill() skips them, so the click timed out on
+                # "element is not enabled" (same trait as b2bsoft's progressive form).
+                def _type_id(sel, val):
+                    if val in (None, ""):
+                        return
+                    el = login_fr.query_selector(sel)
+                    if not el:
+                        return
+                    try:
+                        el.click()
+                        el.fill("")
+                        el.type(str(val), delay=25)
+                    except Exception:
+                        try:
+                            el.fill(str(val))
+                        except Exception:
+                            pass
+                _type_id("#AccountId", account_id)
+                _type_id("#Username", user)
+                _type_id("#Password", pw or "")
+                _ENABLED = "() => { const b = document.getElementById('btnClick'); return !!b && !b.disabled; }"
+                try:
+                    login_fr.wait_for_function(_ENABLED, timeout=8000)
+                except Exception:
+                    # Nudge the validation listeners, then wait once more.
+                    try:
+                        login_fr.evaluate(
+                            """() => ['AccountId','Username','Password'].forEach(id => {
+                                   const el = document.getElementById(id); if (!el) return;
+                                   ['input','change','keyup','blur'].forEach(t =>
+                                       el.dispatchEvent(new Event(t, {bubbles: true})));
+                               })""")
+                        login_fr.wait_for_function(_ENABLED, timeout=5000)
+                    except Exception:
+                        pass
+                clicked = False
                 btn = login_fr.query_selector("#btnClick")
                 if btn:
-                    btn.click()
-                elif not _click_submit(login_fr, ("sign in", "log in", "login", "submit")):
-                    pw_el.press("Enter")
+                    try:
+                        btn.click(timeout=8000)
+                        clicked = True
+                    except Exception:
+                        pass
+                if not clicked:
+                    # Native form-submit fallback — but Enter "succeeds" as an API call even when it
+                    # submits nothing, so only count it if the login form actually went away.
+                    try:
+                        pw_el.press("Enter")
+                        page.wait_for_timeout(1200)
+                        try:
+                            clicked = not login_fr.query_selector("#Password")
+                        except Exception:
+                            clicked = True   # frame detached = navigation happened = submitted
+                    except Exception:
+                        pass
+                if not clicked and btn:
+                    try:
+                        # Last resort: the fields ARE filled; the disable is stale UI state.
+                        login_fr.evaluate(
+                            "() => { const b = document.getElementById('btnClick'); if (b) { b.disabled = false; b.click(); } }")
+                    except Exception:
+                        pass
             else:
                 # Unknown portal variant — fill whichever of the three fields exist, heuristically.
                 acct_el = _find_input(login_fr, want=("account", "acct", "agent", "dealer", "merchant"),
@@ -667,7 +720,7 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
                     "Login was rejected — Account ID / User ID / Password not accepted (still on the "
                     "login form). Double-check the three credentials. Diagnostic: " + str(diag))
             return _twofa_result(page, ctx, {"_note": "post-login page not recognized as 2FA or app; if no code field appears, send this diagnostic for calibration"})
-        except (VidaPayLoginError, VidaPayAuthError) as e:
+        except Exception as e:   # attach the evidence to EVERY failure, incl. Playwright timeouts
             if getattr(e, "screenshot_b64", None) is None:
                 try:
                     e.screenshot_b64 = _shot_b64(page)
@@ -840,7 +893,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                     "diagnostic (filled / portal_error) — if 'filled' shows your values, the creds/Access-Code are "
                     "being refused; if empty, the form didn't accept the fill. Diagnostic: " + str(diag))
             return _twofa_result(page, ctx, {"_note": "post-login page not recognized as 2FA/app; send this diagnostic"})
-        except (VidaPayLoginError, VidaPayAuthError) as e:
+        except Exception as e:   # attach the evidence to EVERY failure, incl. Playwright timeouts
             if getattr(e, "screenshot_b64", None) is None:
                 try:
                     e.screenshot_b64 = _shot_b64(page)
@@ -911,7 +964,7 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
             return {"status": "authenticated", "storage_state": ctx.storage_state(),
                     "diag": {**_snapshot(page), "_note": "post-2FA page not definitively recognized"},
                     "screenshot_b64": _shot_b64(page)}
-        except (VidaPayLoginError, VidaPayAuthError) as e:
+        except Exception as e:   # attach the evidence to EVERY failure, incl. Playwright timeouts
             if getattr(e, "screenshot_b64", None) is None:
                 try:
                     e.screenshot_b64 = _shot_b64(page)
@@ -1037,7 +1090,7 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
                     "diag": {**_snapshot(page), "final_url": page.url, "storage": sd,
                              "cookie_hosts": cookie_hosts, "_note": "post-2FA landed on portal (b2bsoft)"},
                     "screenshot_b64": _shot_b64(page)}
-        except (VidaPayLoginError, VidaPayAuthError) as e:
+        except Exception as e:   # attach the evidence to EVERY failure, incl. Playwright timeouts
             if getattr(e, "screenshot_b64", None) is None:
                 try:
                     e.screenshot_b64 = _shot_b64(page)
