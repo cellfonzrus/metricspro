@@ -57,6 +57,7 @@ PL_SPEC = [
     ("vip_fees",      "Distributor fees paid (shipping / SIM kit / processing)", "cogs", "auto", "store"),
     ("rep_comm",      "Rep commissions paid",                        "opex",    "auto",  "store"),
     ("wages",         "Wages / hourly payroll",                      "opex",    "auto",  "store"),
+    ("payroll_expenses", "Payroll Expenses",                         "opex",    "auto_opt", "store"),
     ("chargebacks",   "Chargebacks / clawbacks",                     "opex",    "auto",  "store"),
     ("store_opex",    "Store operating expenses (rent / utilities / supplies)", "opex", "auto", "store"),
 ]
@@ -437,22 +438,51 @@ def build_inputs(client, org_id, period):
     except Exception:
         pass
 
-    # store_expenses — operating expenses (opex), drill by expense_name; key by store_code→address
+    # store_expenses — operating expenses (opex), drill by expense_name; key by store_code→address.
+    # source_key (mig 206) SPLITS the payroll system lines OUT of generic opex so each is booked in its
+    # OWN P&L line exactly once (no double-count):
+    #   'payroll_gross'    → the Gross Payroll line (reuses `wages`; SUPPRESSES the StoreOps estimate below)
+    #   'payroll_expenses' → its OWN "Payroll Expenses" line (employer burden: tax / unemployment / WC)
+    #   NULL (manual) / 'pto_accrual' / any other token → generic store_opex, unchanged (pto_accrual keeps
+    #   its own "Paid Leave Accumulated" drill-down under store_opex — it is NOT folded into payroll).
+    # Degrades to pre-mig-206 behaviour (every row → store_opex, byte-identical) if source_key is absent.
+    has_payroll_gross = False
     try:
-        for r in _fetch_all(client, "store_expenses", "store_code,expense_name,expense_type,amount,period",
-                            {"org_id": org_id, "period": period_keys}):
+        try:
+            exp_rows = _fetch_all(client, "store_expenses",
+                                  "store_code,expense_name,expense_type,amount,period,source_key",
+                                  {"org_id": org_id, "period": period_keys})
+        except Exception:
+            exp_rows = _fetch_all(client, "store_expenses",
+                                  "store_code,expense_name,expense_type,amount,period",
+                                  {"org_id": org_id, "period": period_keys})
+        for r in exp_rows:
             sa = code2addr.get(_norm_store(r.get("store_code")), _norm_store(r.get("store_code")))
-            label = (r.get("expense_name") or "Expense").strip()
-            add("store_opex", sa, r.get("amount"), detail_label=label)
+            sk = (r.get("source_key") or "").strip()
+            if sk == "payroll_gross":
+                add("wages", sa, r.get("amount"))            # exact Gross Payroll — relabelled below
+                has_payroll_gross = True
+            elif sk == "payroll_expenses":
+                add("payroll_expenses", sa, r.get("amount"))
+            else:
+                label = (r.get("expense_name") or "Expense").strip()
+                add("store_opex", sa, r.get("amount"), detail_label=label)
     except Exception:
         pass
 
-    # StoreOps payroll — wages (opex). Degrades to 0 (→ manual journal) if no shifts.
-    try:
-        for st, amt in wages_by_store(client, org_id, period).items():
-            add("wages", st, amt)
-    except Exception:
-        pass
+    # Gross Payroll — reuses the `wages` line. AUTHORITATIVE source = the payroll_gross system line
+    # (the EXACT gross paid to employees, pushed by mod-people) booked just above. Only FALL BACK to the
+    # StoreOps shifts×rate ESTIMATE when NO payroll_gross line exists — booking BOTH double-counts the
+    # gross. Relabel to "Gross Payroll" when the exact figure is present; keep "Wages / hourly payroll"
+    # (byte-identical) for the estimate so a tenant without the payroll job is unchanged from today.
+    if has_payroll_gross:
+        L["wages"]["label"] = "Gross Payroll"
+    else:
+        try:
+            for st, amt in wages_by_store(client, org_id, period).items():
+                add("wages", st, amt)
+        except Exception:
+            pass
 
     # #6 inter-store borrowings (auto*, migration 018) — receivable/payable. Degrade to 0 if absent.
     try:

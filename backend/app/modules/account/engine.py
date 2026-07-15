@@ -50,8 +50,16 @@ def _assemble(inputs, journal_rows, spec, label_map, sections_def, scope, stores
             amt, detail = 0.0, {}
         else:
             amt, detail = _scoped(inputs[key], stores_in_scope, include_company_wide)
+        # per-line display-label override: coa may rename a line from data (e.g. the payroll line
+        # becomes "Gross Payroll" once the exact-gross system line is present). Absent → spec label,
+        # so a tenant without the override is byte-identical.
+        disp = (inputs.get(key) or {}).get("label") or label
+        # "auto_opt" lines (e.g. Payroll Expenses) materialize ONLY when they carry a value, so a
+        # tenant that never pushes them shows no empty line — byte-identical to before the line existed.
+        if kind == "auto_opt" and not amt and not detail:
+            continue
         lines_by_section[section].append(
-            {"key": key, "label": label, "amount": amt, "kind": kind, "detail": detail})
+            {"key": key, "label": disp, "amount": amt, "kind": kind, "detail": detail})
 
     # fold in manual journal entries (match by label to a spec line, else append)
     for je in journal_rows:
