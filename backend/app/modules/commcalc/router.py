@@ -1129,20 +1129,25 @@ async def _upload_file_impl(
 
 
 @router.get("/whatif/activation-baseline")
-def whatif_activation_baseline(period: str, org_id: str = ORG_ID):
-    """What-If tool #1 — live commission rates (payout_config) + baseline actuals (rep_commissions)
-    for a period. The projector recomputes Sum(count x rate) x tier client-side, matching calculator.py."""
+def whatif_activation_baseline(period: str, carrier_id: str = "", org_id: str = ORG_ID):
+    """What-If tool #1 — CARRIER-AGNOSTIC employee-payout template. Boost carriers keep the legacy 8
+    components (byte-identical); non-Boost carriers' components auto-populate from their configured
+    Commission Plans / rules / tiers + payout_schedule installments; a carrier with no pay source gets an
+    explicit empty state pointing at /commcalc/commission-plans. Employee-payout perspective (no residual
+    money) → not gated behind the carrier-residual grant."""
     require_org(org_id)
-    return whatif.activation_baseline(sb(), org_id, period)
+    return whatif.activation_baseline(sb(), org_id, period, carrier_id=(carrier_id or None))
 
 
 @router.get("/whatif/byod-residual")
-def whatif_byod_residual(months: int = 6, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """What-If tool #2 — residual (MI+ATU) trend + avg residual/sub + BYOD activation counts per period,
-    to model BYOD's contribution to recurring residual."""
+def whatif_byod_residual(months: int = 6, carrier_id: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """What-If tool #2 — BYOD → recurring-residual analysis. Residual source resolved per carrier
+    (whatif_source_config, mig 209): Boost → raw_mi MI+ATU (unchanged); MA-fed → raw_ma_daily_tx residual
+    rows (sign-normalized) joined with raw_ma_commission M1-M6 + rebate. Residual = carrier-income money →
+    gated behind the carrier-residual visibility grant."""
     require_org(org_id)
     _require_carrier_residual(authorization, org_id)   # carrier-residual visibility gate (mig 201)
-    return whatif.byod_residual(sb(), org_id, max(1, min(months, 24)))
+    return whatif.byod_residual(sb(), org_id, max(1, min(months, 24)), carrier_id=(carrier_id or None))
 
 
 @router.get("/whatif/accessory-byod")
@@ -1151,6 +1156,76 @@ def whatif_accessory_byod(months: int = 4, org_id: str = ORG_ID):
     with Pearson correlations."""
     require_org(org_id)
     return whatif.accessory_byod_correlation(sb(), org_id, months)
+
+
+@router.get("/whatif/carrier-income")
+def whatif_carrier_income(months: int = 6, carrier_id: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """What-If tool #4 — the COMPANY perspective: what the carrier / master-agent pays the company, by
+    heading, month over month. Boost → Comprehensive Comp + MI+ATU (unchanged shape); MA-fed →
+    raw_ma_commission (M1-M6 spiffs + rebate) + raw_ma_daily_tx (residual + airtime margin). Company
+    payout / carrier income = residual-class money → gated behind the carrier-residual visibility grant."""
+    require_org(org_id)
+    _require_carrier_residual(authorization, org_id)
+    return whatif.carrier_income(sb(), org_id, max(1, min(months, 24)), carrier_id=(carrier_id or None))
+
+
+@router.get("/whatif/source-config")
+def whatif_get_source_config(carrier_id: str = "", org_id: str = ORG_ID):
+    """The RESOLVED What-If source config (whatif_source_config, mig 209) for the selected carrier, plus
+    the org's raw override rows. Drives the ⚙️ Sources admin panel. Read-only, degrades to code defaults
+    when mig 209 is absent."""
+    require_org(org_id)
+    client = sb()
+    carriers, picked, mode = whatif._carrier_ctx(client, org_id, (carrier_id or None))
+    resolved = whatif._whatif_source_config(client, org_id, (picked or {}).get("id"), mode)
+    try:
+        rows = (client.schema("commcalc").table("whatif_source_config").select("*")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows = []
+    return {
+        "carrier": ({"id": picked.get("id"), "name": picked.get("name"), "code": picked.get("code")} if picked else None),
+        "carrier_mode": mode,
+        "carriers": [{"id": c.get("id"), "name": c.get("name"), "code": c.get("code"),
+                      "is_default": bool(c.get("is_default"))} for c in carriers],
+        "resolved": resolved,
+        "rows": rows,
+        "options": {
+            "residual_source": ["boost_mi_atu", "ma_daily_tx", "none"],
+            "residual_sign": ["as_is", "negate", "abs"],
+            "income_source": ["boost_comp_mi_atu", "ma"],
+            "retail_cost_source": ["none", "ma_pr_activation"],
+            "residual_amount_field": ["merchant_invoice", "merchant_discount", "retail_cost"],
+        },
+    }
+
+
+@router.put("/whatif/source-config")
+def whatif_put_source_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Admin-only. Upsert a PER-CARRIER What-If source override (or the org's mode-default row when
+    carrier_id is the nil UUID). Config, not code (RULE TWO). Degrades with an ok=false hint before mig
+    209 runs."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    carrier_id = (body.get("carrier_id") or "").strip() or "00000000-0000-0000-0000-000000000000"
+    carrier_mode = (body.get("carrier_mode") or "boost").strip().lower()
+    if carrier_mode not in ("boost", "plan"):
+        carrier_mode = "boost"
+    row = {"org_id": org_id, "carrier_id": carrier_id, "carrier_mode": carrier_mode,
+           "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    for k in ("residual_source", "residual_order_type", "residual_amount_field", "residual_sign",
+              "income_source", "retail_cost_source", "notes"):
+        if k in body:
+            row[k] = body.get(k)
+    if "is_active" in body:
+        row["is_active"] = bool(body.get("is_active"))
+    try:
+        client = sb()
+        client.schema("commcalc").table("whatif_source_config").upsert(
+            row, on_conflict="org_id,carrier_id,carrier_mode").execute()
+    except Exception as e:
+        return {"ok": False, "hint": "run migration 209 (commcalc.whatif_source_config)", "error": str(e)}
+    return {"ok": True, "saved": row}
 
 
 def _store_market_resolver(client, org_id):
