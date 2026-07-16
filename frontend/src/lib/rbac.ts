@@ -100,6 +100,7 @@ export const NAV: NavGroup[] = [
   { group: 'Commissions', module: 'commissions', items: [
     { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions' },
     { href: '/commcalc/sales-report', label: 'Sales Report', icon: '🧾', module: 'commissions' },
+    { href: '/commcalc/custom-report', label: 'Custom Report', icon: '🧩', module: 'commissions' },
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/exec/mtd', label: 'Executive MTD', icon: '📅', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/reports', label: 'Rep Commission Report', icon: '📋', module: 'commissions' },
