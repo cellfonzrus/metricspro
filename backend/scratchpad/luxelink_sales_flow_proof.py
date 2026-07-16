@@ -105,22 +105,45 @@ def build_feed(cat_source):
     return out
 
 def reference(feed):
-    """Independent re-implementation of the bucket counts (excludes voided) — cross-checks the engine
-    rather than trusting hardcoded numbers. The 330-row sample has 14 voided rows (3 with a contract type:
-    1 Activation + 2 BYOD), which the exec report correctly EXCLUDES → 72 activations, not the raw 75."""
-    e = {'total_activation': 0, 'activation': 0, 'port': 0, 'byod': 0, 'upgrade': 0,
-         'total_phones': 0, 'bill_payment_qty': 0}
+    """Independent re-implementation of the bucket counts — cross-checks the engine rather than trusting
+    hardcoded numbers. UPDATED 2026-07-16 (exec-targets-one-source): Exec MTD now DERIVES its cumulative
+    numbers from the SAME aggregation the Sales Report uses — so activations/byod/upgrades are counted by
+    DISTINCT trans_id (a multi-line AAL transaction = 1, not N lines), voided / Return / blank-or-'admin'
+    rep rows are excluded, and the base activation classes come from the SHARED classify_contract_type
+    (not the old per-line 'any non-blank contract_type = an activation' loop). This is exactly the fix for
+    "Exec MTD keeps taking data from somewhere": the sample's 72 contract-type LINES collapse to 21 distinct
+    activation transactions (14 premium [1 of them a Port] + 6 BYOD + 1 upgrade). Port is a SUB-split of
+    premium. total_phones / bill_payment_qty stay PER-LINE (b2bsoft columns the Sales Report doesn't carry)."""
+    prem, port, byod, upg = set(), set(), set(), set()
+    e = {'total_phones': 0, 'bill_payment_qty': 0}
     for r in feed:
-        if str(r['voided']).strip().lower() in ('yes', 'true', '1', 'y', 't', 'voided'):
+        if str(r['voided']).strip().lower() in ('true', 'yes', '1', 'voided', 'void'):
             continue
-        ct = r['contract_type'].lower(); cat = r['category'].lower(); dept = r['department'].lower()
-        if ct:
-            e['total_activation'] += 1
-            e['upgrade' if 'upgrade' in ct else 'byod' if 'byod' in ct else 'port' if 'port' in ct else 'activation'] += 1
+        if str(r.get('trans_type') or '').strip() == 'Return':
+            continue
+        rep = str(r.get('salesperson') or '').strip()
+        if not rep or rep.lower() == 'admin':
+            continue
+        ct = r['contract_type']; cl = ct.lower(); cat = r['category'].lower(); dept = r['department'].lower()
+        tid = r.get('trans_id')
+        cls = R.classify_contract_type(ct)          # the ONE shared classifier (source of truth)
+        if tid and cls == 'byod':
+            byod.add(tid)
+        elif tid and cls == 'upgrade':
+            upg.add(tid)
+        elif tid and cls == 'premium':
+            prem.add(tid)
+            if 'port' in cl:
+                port.add(tid)
         if cat in ('cellphone', 'kittedbranded'):
             e['total_phones'] += 1
         if dept == 'rtr' or cat in ('rtr product', 'other carr. payments'):
             e['bill_payment_qty'] += 1
+    e['total_activation'] = len(prem) + len(byod) + len(upg)
+    e['activation'] = len(prem) - len(port)
+    e['port'] = len(port)
+    e['byod'] = len(byod)
+    e['upgrade'] = len(upg)
     return e
 
 for cat_source in ('Category', 'System Category'):
@@ -134,8 +157,11 @@ for cat_source in ('Category', 'System Category'):
     check(f"[{cat_source}] Total Activation == parts",
           tot['total_activation'] == tot['activation'] + tot['port'] + tot['byod'] + tot['upgrade'])
     # both export variants (Category vs System Category) must give IDENTICAL bucket counts
-    check(f"[{cat_source}] total_activation == 72 (14 voided rows, 3 with CT, correctly excluded)",
-          tot['total_activation'] == 72, f"got {tot['total_activation']}")
+    # DISTINCT-trans_id (Sales-Report-shared) semantics: the sample's 72 contract-type LINES = 21 distinct
+    # activation transactions (14 premium incl. 1 Port + 6 BYOD + 1 upgrade). Was 72 under the old per-line
+    # exec loop — the divergence the owner called "taking data from somewhere" (2026-07-16).
+    check(f"[{cat_source}] total_activation == 21 (distinct-txn; 72 CT lines collapse; voided/Return excluded)",
+          tot['total_activation'] == 21, f"got {tot['total_activation']}")
     # location vs employee totals reconcile (same lines, different grouping)
     et = res['by_employee']['total']
     for k in ('total_activation', 'total_phones', 'bill_payment_qty', 'acc_sales', 'activation_fee', 'total_protect'):

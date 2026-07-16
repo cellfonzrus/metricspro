@@ -7111,58 +7111,13 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
         except Exception:
             pass
 
-    # SAME classification the Action Plan uses (_compute_feed_actuals_py) so the two reports AGREE:
-    # skip voided / Returns / the 'admin' pseudo-rep; count DISTINCT trans_id per category, splitting
-    # BYOD out; any other non-empty Contract Type = an activation (tolerant of label drift).
-    agg = {}
-    for r in rows:
-        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
-            continue
-        if str(r.get("trans_type") or "").strip() == "Return":
-            continue
-        rep = (r.get("salesperson") or "").strip()
-        if not rep or rep.lower() == "admin":
-            continue
-        store = (r.get("store") or "—").strip() or "—"
-        date = str(r.get("trans_date") or "")[:10]
-        dept = (r.get("department") or "").strip()
-        tid = str(r.get("trans_id") or "").strip()
-        try:
-            ext = float(r.get("ext_price") or 0)
-        except (TypeError, ValueError):
-            ext = 0.0
-        try:
-            gp = float(r.get("gp") or 0)
-        except (TypeError, ValueError):
-            gp = 0.0
-        k = (store, rep, date)
-        a = agg.get(k)
-        if not a:
-            a = agg[k] = {"store": store, "salesperson": rep, "trans_date": date, "_txn": set(),
-                          "_act": set(), "_byod": set(), "_upg": set(), "_swap": set(), "lines": 0,
-                          "accessory_rev": 0.0, "revenue": 0.0, "gp": 0.0}
-        if tid:
-            a["_txn"].add(tid)
-        a["lines"] += 1
-        a["revenue"] += ext
-        a["gp"] += gp
-        if _is_accessory(dept, r.get("category"), r.get("product_desc"), acfg):
-            a["accessory_rev"] += ext
-        _cls = classify_contract_type(r.get("contract_type"))   # shared classifier (matches commissions)
-        if tid and _cls == "byod":
-            a["_byod"].add(tid)
-        elif tid and _cls == "upgrade":
-            a["_upg"].add(tid)
-        elif tid and _cls == "premium":
-            a["_act"].add(tid)
-        # Swaps — a SALES-REPORT-LOCAL, DISPLAY-ONLY count of distinct transactions whose Contract Type
-        # names a swap (contains 'swap', case-insensitive: SIM / device / warranty / BYOD swaps).
-        # DELIBERATELY NOT folded into the shared classify_contract_type: that classifier feeds
-        # commissions AND targets (money-adjacent) and already maps 'BYOD Swap' -> byod, so adding a
-        # swap class there would silently reclassify BYOD. This is an INDEPENDENT tally alongside
-        # activations/byod/upgrades and changes none of them.
-        if tid and "swap" in str(r.get("contract_type") or "").lower():
-            a["_swap"].add(tid)
+    # THE shared per-(store, rep, day) pass — the ONE aggregation the Sales Report, Executive MTD and Daily
+    # Targets all consume (see _sales_cell_agg), so they can never disagree: canonical skip rules (voided /
+    # Returns / the blank-or-'admin' rep), the shared classify_contract_type + _is_accessory, DISTINCT
+    # trans_id per bucket (a multi-line AAL transaction = 1, not N), and the swaps tally. This IS the
+    # aggregation the owner calls correct — Exec MTD now derives its cumulative numbers from the very same
+    # cells (rolled up by store/employee with an MTD date-cut) instead of its old per-line/config loop.
+    agg = _sales_cell_agg(rows, acfg)
 
     # Resolve each store to its market (store_mapping) so the report can filter by market —
     # keyed by address, store_code, or leading store-number, matching commission-trend's resolver.
@@ -7196,15 +7151,14 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
 
     out = []
     for a in agg.values():
-        a["txns"] = len(a.pop("_txn"))
-        a["activations"] = len(a.pop("_act"))
-        a["byod"] = len(a.pop("_byod"))
-        a["upgrades"] = len(a.pop("_upg"))
-        a["swaps"] = len(a.pop("_swap"))
-        for key in ("accessory_rev", "revenue", "gp"):
-            a[key] = round(a[key], 2)
-        a["market"] = _market_for(a["store"])
-        out.append(a)
+        st = a["store"] or "—"
+        out.append({
+            "store": st, "salesperson": a["salesperson"], "trans_date": a["trans_date"],
+            "txns": len(a["_txn"]), "activations": len(a["_prem"]), "byod": len(a["_byod"]),
+            "upgrades": len(a["_upg"]), "swaps": len(a["_swap"]), "lines": a["lines"],
+            "accessory_rev": round(a["accessory_rev"], 2), "revenue": round(a["revenue"], 2),
+            "gp": round(a["gp"], 2), "market": _market_for(st),
+        })
     out.sort(key=lambda r: (r["store"], r["trans_date"], r["salesperson"]))
     try:
         from app.modules.storeops.router import scope_keyset, in_keyset
@@ -8365,6 +8319,111 @@ _ACTUALS_COLS = ("trans_id,trans_date,store,salesperson,user_login,contract_type
                  "product_desc,gp,ext_price,voided,trans_type")
 
 
+# ── THE ONE shared per-(store, rep, day) sales aggregation ─────────────────────────────────────────
+# The Sales Report, Executive MTD and Daily Targets ALL consume this single row-level pass so they can
+# never disagree again (owner directive 2026-07-16: "the Sales Report is CORRECT — Exec MTD should take
+# its cumulative numbers from there, and Daily Targets should flow from the Sales Report too"). Before
+# this, each of the three had its OWN loop with slightly different rules — which is exactly how Exec MTD
+# "kept taking data from somewhere" the Sales Report dropped (see the divergence table in the handoff):
+#   • Exec counted activations PER LINE; the Sales Report counts DISTINCT trans_id (a 4-device AAL under
+#     one trans_id was 4 in Exec, 1 in the Sales Report — the dominant inflation).
+#   • Exec did NOT skip Return rows or the blank/'admin' rep; the Sales Report + Targets do.
+#   • Exec classified activations from exec_metric_config tokens ("any non-blank contract_type = an
+#     activation"); the Sales Report uses the shared classify_contract_type (recognized labels only).
+#   • Exec measured accessory$ from its OWN exec_metric_config['accessory'] token match; the Sales
+#     Report + Targets use the shared _is_accessory (the Classification-settings config).
+# This function applies ONE canonical skip set + ONE classification (the shared classify_contract_type +
+# _is_accessory, DISTINCT-trans_id counting) and returns per-cell bucket SETS + sums. Consumers roll it up
+# their own way (Sales Report → the cell rows as-is; Exec MTD → by store / employee + an MTD date-cut +
+# trending; Targets → by canonical store_code). Extension-only line metrics a single consumer needs (Exec
+# phones / bill-payment / activation-fee / protect — b2bsoft per-line columns the Sales Report doesn't
+# show; Targets box / bill-payment) are computed in the SAME pass so there is never a divergent second
+# scan. Pure — no I/O, never raises. DISPLAY ONLY: the commission CALC path is deliberately NOT wired here.
+_VOID_TOKENS = ('true', 'yes', '1', 'voided', 'void')   # the Sales Report's set = the source of truth
+
+
+def _sales_cell_agg(rows, acfg, exec_cfg=None):
+    """Aggregate raw sales lines → {(store, rep, day): cell}. `acfg` = _accessory_config(...) (the ONE
+    accessory classifier). `exec_cfg` (optional _exec_metric_config result) turns ON the Executive-MTD
+    extension line-metrics + the configurable Port sub-split; when None those are skipped (Sales Report /
+    Targets). See the block comment above."""
+    act_rules = (exec_cfg.get('activation', {}) or {}).get('rules', {}) if exec_cfg else {}
+    agg = {}
+    for r in rows:
+        # ── THE canonical skip rules — shared by all three (was three slightly different predicates).
+        if str(r.get('voided') or '').strip().lower() in _VOID_TOKENS:
+            continue
+        if str(r.get('trans_type') or '').strip() == 'Return':
+            continue
+        rep = str(r.get('salesperson') or '').strip()
+        if not rep or rep.lower() == 'admin':
+            continue
+        store = str(r.get('store') or '').strip()
+        date = str(r.get('trans_date') or '')[:10]
+        tid = str(r.get('trans_id') or '').strip()
+        ct = str(r.get('contract_type') or '')
+        ctl = ct.lower()
+        dept = str(r.get('department') or '').strip()
+        ext = safe_float(r.get('ext_price'))
+        gp = safe_float(r.get('gp'))
+        k = (store, rep, date)
+        a = agg.get(k)
+        if not a:
+            a = agg[k] = {'store': store, 'salesperson': rep, 'trans_date': date, 'login': None,
+                          '_txn': set(), '_prem': set(), '_byod': set(), '_upg': set(),
+                          '_port': set(), '_swap': set(), '_billpay': set(),
+                          'lines': 0, 'revenue': 0.0, 'gp': 0.0, 'accessory_rev': 0.0, 'box_count': 0,
+                          'total_phones': 0, 'bill_qty': 0, 'bill_amt': 0.0, 'activation_fee': 0.0,
+                          'protect': 0}
+        if a['login'] is None and r.get('user_login'):
+            a['login'] = r.get('user_login')
+        if tid:
+            a['_txn'].add(tid)
+        a['lines'] += 1
+        a['revenue'] += ext
+        a['gp'] += gp
+        # SHARED activation classifier (money-adjacent; identical to commissions + targets), DISTINCT-txn.
+        _cls = classify_contract_type(ct)
+        if tid and _cls == 'byod':
+            a['_byod'].add(tid)
+        elif tid and _cls == 'upgrade':
+            a['_upg'].add(tid)
+        elif tid and _cls == 'premium':
+            a['_prem'].add(tid)
+            # Port is a SUB-split of premium/activation (never a redefinition of it) — the token stays
+            # exec_metric_config-configurable; only needed when exec_cfg is present (Exec MTD).
+            if exec_cfg and _exec_act_class(ct, act_rules) == 'port':
+                a['_port'].add(tid)
+        # Swaps — distinct-txn, contract_type contains 'swap' (independent tally; changes none of the above).
+        if tid and 'swap' in ctl:
+            a['_swap'].add(tid)
+        # Accessory$ — the ONE shared _is_accessory classifier (all three agree; Exec MTD no longer uses
+        # its own exec_metric_config['accessory'] token match for the number — see the handoff note).
+        if _is_accessory(dept, r.get('category'), r.get('product_desc'), acfg):
+            a['accessory_rev'] += ext
+        # Targets extension metrics (cheap, config-free).
+        if dept in _BOX_DEPTS:
+            a['box_count'] += 1
+        _pl = str(r.get('product_desc') or '').lower()
+        if tid and ('boost rtr' in _pl or 'xfinity prepaid refill' in _pl):
+            a['_billpay'].add(tid)
+        # Executive-MTD extension LINE metrics — b2bsoft per-line columns (phones / bill payment /
+        # activation fee / protect) the Sales Report doesn't carry, so they have NO equality requirement;
+        # computed only when exec_cfg is supplied (config-driven, SAP-configurable, unchanged semantics).
+        if exec_cfg:
+            _d, _c = dept.lower(), str(r.get('category') or '').strip().lower()
+            if _exec_line_match(exec_cfg['phones']['rules'], _d, _c, _pl):
+                a['total_phones'] += 1
+            if _exec_line_match(exec_cfg['bill_payment']['rules'], _d, _c, _pl):
+                a['bill_qty'] += 1
+                a['bill_amt'] += ext
+            if _exec_line_match(exec_cfg['activation_fee']['rules'], _d, _c, _pl):
+                a['activation_fee'] += ext
+            if _exec_line_match(exec_cfg['protect']['rules'], _d, _c, _pl):
+                a['protect'] += 1
+    return agg
+
+
 def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed', rows=None):
     """The ONE processed sales source, computed in Python so the whole targets/recon system agrees.
 
@@ -8409,65 +8468,54 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed', 
         c = (m.get('store_code') or '').strip()
         if a and c:
             addr_to_code[a] = c
+    # THE shared per-(store, rep, day) pass — identical skip rules + classification + distinct-txn counting
+    # as the Sales Report + Executive MTD (see _sales_cell_agg). Targets then re-keys each cell to the
+    # canonical store_code (so scope_achieved_mtd matches the Daily Target's store_code) and rep.upper(),
+    # merging any raw-store spellings that resolve to the same code by UNIONing the distinct-txn sets.
+    cells = _sales_cell_agg(rows, acfg)
     agg = {}
-    for r in rows:
-        if str(r.get('voided') or '').strip().upper() == 'YES':
-            continue
-        if str(r.get('trans_type') or '').strip() == 'Return':
-            continue
-        rep = (r.get('salesperson') or '').strip()
-        if not rep or rep.lower() == 'admin':
-            continue
-        date = str(r.get('trans_date') or '')[:10]
+    for (store, rep, date), a in cells.items():
         if not date:
             continue
-        store = (r.get('store') or '').strip()
         canon = (_resolve_store(store) if (_resolve_store and store) else None) or store
-        code = addr_to_code.get(canon.strip().lower(), canon)
-        tid = str(r.get('trans_id') or '').strip()
-        dept = (r.get('department') or '').strip()
-        pdesc = (r.get('product_desc') or '').lower()
+        code = addr_to_code.get(str(canon).strip().lower(), canon)
         k = (code, rep.upper(), date)
-        a = agg.get(k)
-        if not a:
-            a = agg[k] = {'store_code': code, 'store': store, 'rep_name': rep, 'login': r.get('user_login'),
+        o = agg.get(k)
+        if not o:
+            o = agg[k] = {'store_code': code, 'store': store, 'rep_name': rep, 'login': a.get('login'),
                           'trans_date': date, '_prem': set(), '_byod': set(), '_upg': set(),
                           'acc_gp': 0.0, 'box_count': 0, '_billpay': set()}
-        _cls = classify_contract_type(r.get('contract_type'))
-        if tid and _cls == 'byod':
-            a['_byod'].add(tid)
-        elif tid and _cls == 'upgrade':
-            a['_upg'].add(tid)
-        elif tid and _cls == 'premium':
-            a['_prem'].add(tid)
-        if _is_accessory(dept, r.get('category'), r.get('product_desc'), acfg):
-            # Accessory "achieved" = accessory SALES revenue (ext_price) — matches rep_commissions'
-            # accessory basis and the July feed (which carries ext_price but $0 gp on accessory lines).
-            a['acc_gp'] += safe_float(r.get('ext_price'))
-        if dept in _BOX_DEPTS:
-            a['box_count'] += 1
-        if tid and ('boost rtr' in pdesc or 'xfinity prepaid refill' in pdesc):
-            a['_billpay'].add(tid)
+        o['_prem'] |= a['_prem']
+        o['_byod'] |= a['_byod']
+        o['_upg'] |= a['_upg']
+        o['_billpay'] |= a['_billpay']
+        o['acc_gp'] += a['accessory_rev']   # accessory "achieved" = accessory SALES revenue (ext_price)
+        o['box_count'] += a['box_count']
     out = []
-    for a in agg.values():
-        out.append({'store_code': a['store_code'], 'store': a['store'], 'rep_name': a['rep_name'],
-                    'login': a['login'], 'trans_date': a['trans_date'],
-                    'prem_count': len(a['_prem']), 'byod_count': len(a['_byod']),
-                    'upg_count': len(a['_upg']), 'acc_gp': round(a['acc_gp'], 2),
-                    'box_count': a['box_count'], 'billpay_count': len(a['_billpay'])})
+    for o in agg.values():
+        out.append({'store_code': o['store_code'], 'store': o['store'], 'rep_name': o['rep_name'],
+                    'login': o['login'], 'trans_date': o['trans_date'],
+                    'prem_count': len(o['_prem']), 'byod_count': len(o['_byod']),
+                    'upg_count': len(o['_upg']), 'acc_gp': round(o['acc_gp'], 2),
+                    'box_count': o['box_count'], 'billpay_count': len(o['_billpay'])})
     return out
 
 
 def _fetch_actuals(client, org_id, period):
-    """MTD 'achieved' actuals for Daily Targets — from the UNIFIED sales set (raw_sales ∪ daily_sales_feed,
-    deduped by trans_id via `_sales_rows_union_txn`) with ONE tolerant classification
-    (_compute_feed_actuals_py), no rigid SQL label lists. Previously this read ONLY the open-month primary
-    (the feed), falling back to the other source only when the primary was entirely empty — so a tenant
-    whose raw_sales carried transactions the partial feed lacked (luxelink July 2026: ~1,939 raw_sales
-    July trans) saw those sales missing from its targets. The union now includes them, feed-wins on the
-    overlap (no double count). Display-only (targets), never commission payout, so making it MORE accurate
-    is safe; in the healthy feed-only state the union is the feed verbatim → Boost unchanged."""
-    rows, _umeta = _sales_rows_union_txn(client, org_id, period, cols=_ACTUALS_COLS)
+    """MTD 'achieved' actuals for Daily Targets — flowing from the EXACT SAME sales aggregation the Sales
+    Report + Executive MTD use (owner directive 2026-07-16: "the Sales Report should flow into the Daily
+    Targets"). Reads the SAME union (`_sales_rows_union`, the (day × store) cell-grain feed∪raw_sales the
+    Sales Report reads) and the SAME row-level pass (`_compute_feed_actuals_py` → `_sales_cell_agg`), so
+    the three surfaces can never disagree.
+
+    Previously this used the TRANSACTION-grain union (`_sales_rows_union_txn`) — which could keep a raw_sales
+    transaction the feed lacked even on a store-day the feed also sold, i.e. count sales the Sales Report's
+    cell-grain view does NOT show. Repointing to the cell-grain union trades that narrow completeness edge
+    for guaranteed consistency with the Sales Report (the owner's "never disagree again"): the feed still
+    wins each store-day cell it holds, every other store fills from raw_sales (so luxelink's re-uploaded
+    stores are still present), and in the healthy feed-only state the union is the feed verbatim → Boost
+    unchanged. Display-only (targets), never commission payout."""
+    rows, _umeta = _sales_rows_union(client, org_id, period, cols=_ACTUALS_COLS)
     rows = _compute_feed_actuals_py(client, org_id, period, rows=rows)
     cmap = _rep_canon_map(client, org_id)
     for r in rows:
@@ -9192,25 +9240,32 @@ def _exec_act_class(ct, rules):
     return 'activation'
 
 
-def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None):
-    """Executive Month-To-Date summary — the b2bsoft 'Month To Date Location/Employee Sales Report'
-    replicated from the ORG-CORRECTED sales source (_sales_rows_union: the daily feed leads the OPEN month,
-    the authoritative raw_sales a closed one, each filling the other's (day × store) gaps). Works for
-    luxelink AND the house org with NO monthly upload. DISPLAY-ONLY (reads sales, writes nothing).
-    Buckets config-driven.
+def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, today=None):
+    """Executive Month-To-Date summary — the b2bsoft 'Month To Date Location/Employee Sales Report',
+    now DERIVED FROM the EXACT SAME aggregation the Sales Report uses (owner directive 2026-07-16: "the
+    Sales Report is correct — Exec MTD should take its cumulative numbers from there"). Reads the SAME
+    `_sales_rows_union` (feed leads the OPEN month, raw_sales a closed one, filling the other's (day × store)
+    gaps) and the SAME `_sales_cell_agg` row-level pass — canonical skip rules (voided / Returns / the
+    blank-or-'admin' rep), the shared classify_contract_type + _is_accessory, DISTINCT trans_id per bucket —
+    then rolls the cells up by store / employee, applies the MTD date-cut, and trends. Works for luxelink AND
+    the house org with NO monthly upload. DISPLAY-ONLY (reads sales, writes nothing).
 
-    RULE FIVE standardized filters (2026-07-16): optional `stores` / `markets` / `reps` multi-selects
-    filter the UNION rows SERVER-SIDE (before bucketing) so the by-location table, the by-employee table,
-    the trending math AND the exports all reflect the same filtered set. Filter OPTIONS are returned in
-    `filters` (pick-don't-type over the org's real data: the union's own store/rep strings + store_mapping
-    markets + storeops stores) computed from the UNFILTERED union so a selection can always be changed.
+    The base activation buckets (Activation / Port / BYOD / Upgrade) + Accessory$ come from the shared
+    classifier so they EQUAL the Sales Report's; exec_metric_config now only EXTENDS — the configurable Port
+    sub-split + the b2bsoft per-line columns the Sales Report doesn't carry (Total Phones / Bill Payment /
+    Activation Fee / Total Protect). `today` is injectable (defaults to the server date) so the MTD date-cut
+    + trending are unit-testable.
 
-    Verified formulas (against 'Luxelink MTD 15 July.xlsx'): Total Activation = Activation+Port+BYOD+Upgrade;
-    Trending Box = Total Activation × days_in_month ÷ complete_days_elapsed; Trending Acc. Sales likewise on
-    Acc. Sales; Conv. = Total Activation ÷ Bill Payment Qty; APB = Acc. Sales ÷ Total Activation. For a
-    closed/past month trending = actual (factor 1)."""
+    RULE FIVE standardized filters (2026-07-16): optional `stores` / `markets` / `reps` multi-selects filter
+    the UNION rows SERVER-SIDE (before bucketing) so the by-location table, the by-employee table, the
+    trending math AND the exports all reflect the same filtered set. Filter OPTIONS are returned in `filters`
+    (pick-don't-type over the org's real data) computed from the UNFILTERED union.
+
+    Verified formulas: Total Activation = Activation+Port+BYOD+Upgrade; Trending Box = Total Activation ×
+    days_in_month ÷ complete_days_elapsed; Trending Acc. Sales likewise on Acc. Sales; Conv. = Total
+    Activation ÷ Bill Payment Qty; APB = Acc. Sales ÷ Total Activation. Closed/past month trending = actual."""
     cfg = _exec_metric_config(client, org_id)
-    act_rules = cfg.get('activation', {}).get('rules', {})
+    acfg = _accessory_config(client, org_id)
     rows, meta = _sales_rows_union(client, org_id, period)
 
     # ── Market resolver (store_mapping; keyed by address / code / leading store-number) — inline + optional
@@ -9289,42 +9344,46 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None):
         rows = [r for r in rows if _keep(r)]
 
     # trending divisor: complete days elapsed (= yesterday's day-of-month) for the OPEN month; the full
-    # month (factor 1) for a closed/past month. days_in_month from the calendar.
+    # month (factor 1) for a closed/past month. days_in_month from the calendar. `today` injectable.
+    _today = today or _date.today()
     mo, yr = _month_year(period)
     dim = _calendar.monthrange(yr, mo)[1] if (1 <= mo <= 12 and yr) else 30
-    elapsed = max(1, _date.today().day - 1) if _is_open_month(period) else dim
+    open_m = _is_open_month(period)
+    elapsed = max(1, _today.day - 1) if open_m else dim
     trend_factor = (dim / elapsed) if elapsed else 1.0
+    # MTD DATE-CUT — an OPEN month is cumulative THROUGH TODAY (a line dated after today is excluded, so the
+    # cumulative is a true month-to-date). Real sales are never future-dated, so this is a no-op on live
+    # data; it is the ONE intentional difference from the Sales Report's whole-month total (proof case b).
+    # A closed/past month has no cut (the whole month).
+    cut = _today.isoformat() if open_m else None
+
+    # THE shared per-(store, rep, day) pass — identical skip rules + classification + distinct-txn counting
+    # as the Sales Report + Daily Targets (see _sales_cell_agg). Exec MTD consumes the SAME cells, applies
+    # the MTD date-cut, then rolls up by store / employee. A trans_id lives in exactly one (store,rep,day)
+    # cell, so SUMMING the per-cell distinct-txn counts across a store's cells == that store's distinct-txn
+    # total. Activation = premium−port (Port is a sub-split of premium); Total Activation = prem+byod+upg,
+    # which EQUALS the Sales Report's (activations+byod+upgrades) over the same rows.
+    cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg)
 
     def _blank():
         return {'activation': 0, 'port': 0, 'byod': 0, 'upgrade': 0, 'total_phones': 0,
                 'bill_qty': 0, 'bill_amt': 0.0, 'acc_sales': 0.0, 'activation_fee': 0.0, 'protect': 0}
     by_store, by_emp = {}, {}
-    _VOID = ('yes', 'true', '1', 'y', 't', 'voided')
-    for r in rows:
-        if str(r.get('voided') or '').strip().lower() in _VOID:
+    for (st, rep, date), a in cells.items():
+        if cut and date and date > cut:
             continue
-        dept = str(r.get('department') or '').strip().lower()
-        cat = str(r.get('category') or '').strip().lower()
-        pdesc = str(r.get('product_desc') or '').strip().lower()
-        ext = safe_float(r.get('ext_price'))
-        store = str(r.get('store') or '').strip() or '—'
-        rep = str(r.get('salesperson') or '').strip() or '—'
-        targets = (by_store.setdefault(store, _blank()), by_emp.setdefault(rep, _blank()))
-        acl = _exec_act_class(r.get('contract_type'), act_rules)
-        for d in targets:
-            if acl:
-                d[acl] += 1
-            if _exec_line_match(cfg['phones']['rules'], dept, cat, pdesc):
-                d['total_phones'] += 1
-            if _exec_line_match(cfg['bill_payment']['rules'], dept, cat, pdesc):
-                d['bill_qty'] += 1
-                d['bill_amt'] += ext
-            if _exec_line_match(cfg['accessory']['rules'], dept, cat, pdesc):
-                d['acc_sales'] += ext
-            if _exec_line_match(cfg['activation_fee']['rules'], dept, cat, pdesc):
-                d['activation_fee'] += ext
-            if _exec_line_match(cfg['protect']['rules'], dept, cat, pdesc):
-                d['protect'] += 1
+        prem, port = len(a['_prem']), len(a['_port'])
+        for d in (by_store.setdefault(st or '—', _blank()), by_emp.setdefault(rep or '—', _blank())):
+            d['activation'] += prem - port
+            d['port'] += port
+            d['byod'] += len(a['_byod'])
+            d['upgrade'] += len(a['_upg'])
+            d['total_phones'] += a['total_phones']
+            d['bill_qty'] += a['bill_qty']
+            d['bill_amt'] += a['bill_amt']
+            d['acc_sales'] += a['accessory_rev']
+            d['activation_fee'] += a['activation_fee']
+            d['protect'] += a['protect']
 
     def _row(name, label_key, d):
         ta = d['activation'] + d['port'] + d['byod'] + d['upgrade']

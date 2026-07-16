@@ -201,6 +201,10 @@ export default function SalesReportPage() {
           rows={fRows}
           totals
           stickyHeader
+          defaultGroupBy="Store"
+          collapsibleGroups
+          defaultCollapsed
+          groupPersistKey="sales-report:groupBy"
           onRowClick={openDrill}
         />
       )}
