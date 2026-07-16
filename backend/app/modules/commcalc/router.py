@@ -10821,6 +10821,31 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
             pass
         return {"ok": False, "error": status}
     from app.modules.commcalc.vidapay_sweep import VidaPayAuthError
+    # PREFER THE LIVE AUTHENTICATED BROWSER. T-CETRA/VidaPay re-challenges the cold storage_state restore
+    # (a fresh browser + a new egress IP + a new server session is not the trusted device → it lands on
+    # the 2FA screen and the cold path raises "session expired"; owner repro 2026-07-16). If a 🔴 Live
+    # login session for this source is still alive in THIS worker's memory, run the pull on the SAME page
+    # that just passed 2FA. Falls back to the cold restore for scheduled pulls / other workers.
+    if proc in ("vidapay", "total_access"):
+        try:
+            from app.modules.commcalc import live_login as _ll
+            from fastapi.concurrency import run_in_threadpool
+            sess = _ll.get_session(sid, org_id)
+        except Exception:
+            sess = None
+        if sess is not None and sess.can_pull():
+            res = await run_in_threadpool(sess.run_pull_blocking, 900)
+            if res is not None:
+                try:
+                    client.schema("commcalc").table("data_source").update(
+                        {"last_run_at": datetime.now(timezone.utc).isoformat(),
+                         "last_status": str((res or {}).get("status") or "ok"),
+                         "auth_status": "authenticated"})\
+                        .eq("id", sid).eq("org_id", org_id).execute()
+                except Exception:
+                    pass
+                return {"ok": True, "via": "live-session", **(res or {})}
+            # res is None → the live session couldn't pull (timed out / just closed) → fall through.
     try:
         res = await handler(org_id, src_row)
         client.schema("commcalc").table("data_source").update(
@@ -11183,6 +11208,23 @@ def _live_persist_shot(client, sid, org_id):
     return _p
 
 
+def _live_pull(client, org_id, src_row):
+    """Build the pull_fn the live session runs on its OWN authenticated page (reused, NOT a cold
+    storage_state restore — T-CETRA re-challenges a fresh browser/egress/server session). Closes over
+    the supabase client + org + this source row (id / carrier_id / months_back)."""
+    from app.modules.commcalc import vidapay_sweep as vp
+    sid = src_row.get("id")
+    carrier_id = src_row.get("carrier_id")
+    try:
+        mb = int(src_row.get("months_back") or 2)
+    except Exception:
+        mb = 2
+
+    def _p(page):
+        return vp._pull_all_reports_on_page(page, client, org_id, sid, carrier_id, mb, dict(src_row or {}))
+    return _p
+
+
 def _live_source_row(client, sid, org_id):
     rows = (client.schema("commcalc").table("data_source").select("*")
             .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
@@ -11210,7 +11252,8 @@ def live_login_start(sid: str, org_id: str = ORG_ID):
     except Exception:
         pass
     sess = live_login.start_session(sid, org_id, s, _live_persist(client, sid, org_id),
-                                    _live_persist_shot(client, sid, org_id))
+                                    _live_persist_shot(client, sid, org_id),
+                                    _live_pull(client, org_id, s))
     return {"ok": True, "phase": sess.snapshot_phase(),
             "message": "Live session starting — watch it below. The 2FA code is sent ONCE to this same "
                        "live browser; enter it here when the code box appears."}

@@ -364,8 +364,8 @@ check("_store_login_shot writes login_shot + login_shot_at (no new column invent
 check("live_login_start passes _live_persist_shot into start_session",
       "_live_persist_shot(client, sid, org_id)" in RT and "live_login.start_session(" in RT)
 check("live_login.start_session + __init__ accept persist_shot",
-      "def start_session(sid, org_id, row, persist=None, persist_shot=None)" in LL
-      and "def __init__(self, sid, org_id, row, persist=None, persist_shot=None)" in LL)
+      "def start_session(sid, org_id, row, persist=None, persist_shot=None" in LL
+      and "def __init__(self, sid, org_id, row, persist=None, persist_shot=None" in LL)
 check("_run persists in a finally (every stop path)",
       "finally:" in LL and "self._persist_diag()" in LL)
 

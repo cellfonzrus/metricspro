@@ -1774,13 +1774,49 @@ def _pull_one_report(page, client, org_id, source_id, carrier_id, source_row, sp
     return out
 
 
+def _pull_all_reports_on_page(page, client, org_id, source_id=None, carrier_id=None,
+                              months_back=2, source_row=None):
+    """Pull EVERY enabled report (config-driven report_pull_map, degrading to DEFAULT_REPORT_SPECS) on
+    an ALREADY-AUTHENTICATED `page`, month-by-month across the last `months_back` months (each report's
+    ≤1-month window + ≤1-year-back caps still apply), mapping + ingesting each export idempotently.
+    Shared by run_vidapay_sweep (cold storage_state restore) AND the live-login session, which calls
+    this on the SAME trusted browser that just passed 2FA — the cold restore is re-challenged by
+    T-CETRA (a fresh browser / egress IP / server session isn't the trusted device), so reusing the
+    live page is what makes '▶ Pull now' work right after a live login. This NEVER builds a context or
+    navigates to the login URL; the caller has already placed `page` on an authenticated portal page.
+    Returns a per-report summary dict."""
+    from app.modules.commcalc import report_pull as rp
+    from datetime import datetime as _dt, timedelta as _td
+    specs = rp.resolve_report_specs(client, org_id, processor="vidapay", only_enabled=True)
+    end_dt = _dt.now()
+    start_dt = end_dt - _td(days=31 * max(1, int(months_back or 1)))
+    src = dict(source_row or {})
+    reports = []
+    for spec in specs:
+        reports.append(_pull_one_report(page, client, org_id, source_id, carrier_id,
+                                        src, spec, start_dt, end_dt))
+    ok_rows = sum(r.get("rows_ingested", 0) for r in reports)
+    ok_reports = [r["report_key"] for r in reports if r.get("ok") and r.get("rows_ingested")]
+    calib = [r["report_key"] for r in reports if not r.get("ok") or r.get("calibration")]
+    status = (f"pulled {ok_rows} rows across {len(ok_reports)} report(s): "
+              f"{', '.join(ok_reports) or '—'}"
+              + (f"; calibration/diagnostic needed: {', '.join(calib)}" if calib else ""))
+    return {"status": status, "authenticated": True, "reports": reports,
+            "rows_ingested": ok_rows, "months_back": months_back}
+
+
 def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrier_id=None,
                       proxy_url=None, account_id=None, months_back=2, source_row=None):
     """Restore the authenticated session and pull EVERY enabled report in report_pull_map for this org
     (config-driven), month-by-month across the last `months_back` months (respecting each report's
     ≤1-month window + ≤1-year-back caps), mapping + ingesting each export idempotently into its target
-    table. Returns a per-report summary; raises VidaPayAuthError if the session is missing/expired."""
-    from app.modules.commcalc import report_pull as rp
+    table. Returns a per-report summary; raises VidaPayAuthError if the session is missing/expired.
+
+    NOTE: this is the COLD-RESTORE path (fresh browser + persisted storage_state), used for scheduled
+    pulls and when no live session is available. T-CETRA does not always trust a cold restore (new
+    browser/egress/server session → it re-challenges 2FA and this raises VidaPayAuthError); an operator
+    '▶ Pull now' right after a 🔴 Live login is routed to the live browser instead (router.run_data_source
+    → LiveLoginSession.run_pull_blocking → _pull_all_reports_on_page on the SAME trusted page)."""
     try:
         from playwright.sync_api import sync_playwright
     except Exception:
@@ -1791,10 +1827,6 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
     src = dict(source_row or {})
     if account_id and not src.get("account_id"):
         src["account_id"] = account_id
-    specs = rp.resolve_report_specs(client, org_id, processor="vidapay", only_enabled=True)
-    from datetime import datetime as _dt, timedelta as _td
-    end_dt = _dt.now()
-    start_dt = end_dt - _td(days=31 * max(1, int(months_back or 1)))
     with sync_playwright() as p:
         browser = _launch(p)
         ctx = _new_context(browser, storage_state=session_state, proxy=_proxy_arg(proxy_url))
@@ -1809,18 +1841,8 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
             if state in ("login", "twofa", "botwall"):
                 raise VidaPayAuthError(
                     "The VidaPay session has expired — please re-authenticate (Log in + 2FA).")
-            reports = []
-            for spec in specs:
-                reports.append(_pull_one_report(page, client, org_id, source_id, carrier_id,
-                                                src, spec, start_dt, end_dt))
-            ok_rows = sum(r.get("rows_ingested", 0) for r in reports)
-            ok_reports = [r["report_key"] for r in reports if r.get("ok") and r.get("rows_ingested")]
-            calib = [r["report_key"] for r in reports if not r.get("ok") or r.get("calibration")]
-            status = (f"pulled {ok_rows} rows across {len(ok_reports)} report(s): "
-                      f"{', '.join(ok_reports) or '—'}"
-                      + (f"; calibration/diagnostic needed: {', '.join(calib)}" if calib else ""))
-            return {"status": status, "authenticated": True, "reports": reports,
-                    "rows_ingested": ok_rows, "months_back": months_back}
+            return _pull_all_reports_on_page(page, client, org_id, source_id, carrier_id,
+                                             months_back, src)
         finally:
             browser.close()
 
