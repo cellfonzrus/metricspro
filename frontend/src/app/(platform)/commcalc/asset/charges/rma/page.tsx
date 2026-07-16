@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { NoLedgerData } from '../../_shared/NoLedgerData'
 
 type Row = { id:number; store:string; market:string; esn_imei:string|null; phone_number:string|null
   device_model:string|null; status:string|null; date_sold:string|null; owed_to_vip:number|null
@@ -62,10 +63,15 @@ export default function RmaPage() {
   const [loading, setLoading] = useState(true)
   const [month, setMonth] = useState(0)  // 0 = all time
   const [year, setYear] = useState(new Date().getFullYear())
+  // Has GET /asset/filter-options resolved yet? Gates the "no ledger data" empty state so it can't
+  // flash for a tenant that DOES have data (see NoLedgerData.tsx header comment — luxelink-parity).
+  const [filterOptionsLoaded, setFilterOptionsLoaded] = useState(false)
 
   useEffect(() => {
     api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
-      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) }).catch(console.error)
+      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) })
+      .catch(console.error)
+      .finally(() => setFilterOptionsLoaded(true))
   }, [])
   useEffect(() => { load() }, [market, store, month, year])
 
@@ -146,6 +152,8 @@ export default function RmaPage() {
 
       {loading ? (
         <div style={{ textAlign:'center', padding:60, color:'var(--text3)' }}>Loading…</div>
+      ) : filterOptionsLoaded && stores.length === 0 ? (
+        <NoLedgerData title="RMA Reconciliation" />
       ) : !data ? (
         <div style={{ textAlign:'center', padding:60, color:'var(--text3)' }}>No data.</div>
       ) : (

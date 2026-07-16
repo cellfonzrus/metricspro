@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { NoLedgerData } from '../../_shared/NoLedgerData'
 
 // cfg.key (backend group) -> notify report key
 const SEND_KEY: Record<string, string> = {
@@ -60,10 +61,15 @@ export default function ChargeGroupPage() {
   const [month, setMonth] = useState(new Date().getMonth()+1)
   const [year, setYear] = useState(new Date().getFullYear())
   const [weekFriday, setWeekFriday] = useState(ymd(upcomingFriday()))
+  // Has GET /asset/filter-options resolved yet? Gates the "no ledger data" empty state so it can't
+  // flash for a tenant that DOES have data (see NoLedgerData.tsx header comment — luxelink-parity).
+  const [filterOptionsLoaded, setFilterOptionsLoaded] = useState(false)
 
   useEffect(() => {
     api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
-      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) }).catch(console.error)
+      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) })
+      .catch(console.error)
+      .finally(() => setFilterOptionsLoaded(true))
   }, [])
   useEffect(() => { if (cfg) load() }, [market, store, slug, mode, month, year, weekFriday])
 
@@ -98,6 +104,9 @@ export default function ChargeGroupPage() {
   const tabBtn = (active:boolean) => ({ padding:'6px 14px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, cursor:'pointer', fontWeight:600,
     background: active ? 'var(--accent)' : 'var(--surface)', color: active ? '#fff' : 'var(--text2)' })
   const periodLabel = mode==='all' ? 'All time' : mode==='month' ? `${MONTHS[month-1]} ${year}` : `Week of ${weekFriday}`
+  // No asset_ledger rows for this org at all (see NoLedgerData.tsx — luxelink-parity, 2026-07-16):
+  // don't show the unconditional "Critical — money at stake" banner when there is nothing to review.
+  const ledgerEmpty = filterOptionsLoaded && stores.length === 0
   const filterLabel = [periodLabel, market||null, store||null, catFilter||null].filter(Boolean).join(' · ')
   const isAppeals = cfg.key === 'appeals'
   const shownRows = (lineItems?.rows || []).filter(r => !catFilter || r.category === catFilter)
@@ -152,7 +161,7 @@ export default function ChargeGroupPage() {
         </div>
       </div>
 
-      {cfg.critical && (
+      {cfg.critical && !ledgerEmpty && (
         <div style={{ background:'#fef2f2', border:'2px solid #dc2626', borderRadius:10, padding:'14px 18px', marginBottom:20, color:'#991b1b' }}>
           <strong>🚨 Critical — money at stake.</strong> These are denied/withheld carrier payments. Use “Push Appeals to Flags” on the dashboard to track them on the Flags page.
         </div>
@@ -190,6 +199,8 @@ export default function ChargeGroupPage() {
 
       {loading ? (
         <div style={{ textAlign:'center', padding:60, color:'var(--text3)' }}>Loading…</div>
+      ) : ledgerEmpty ? (
+        <NoLedgerData title={cfg.title} />
       ) : !group ? (
         <div style={{ textAlign:'center', padding:60, color:'var(--text3)' }}>No data.</div>
       ) : (
