@@ -395,6 +395,52 @@ def _proxy_error_message(failing_url, proxy_url):
             % (via, (failing_url or "?")[:200]))
 
 
+# A visible "I'm not a robot" human-check widget on the login/2FA form. We must NOT auto-submit past one
+# (that trips the portal into rejecting the login as if the creds were bad — the owner's 2026-07-16 repro),
+# so the live session detects it BEFORE clicking Sign in / Verify and hands control to the human. Detects
+# Google reCAPTCHA v2, hCaptcha, and Cloudflare Turnstile by their rendered widget (element) AND by the
+# human-facing text. We deliberately key off the VISIBLE checkbox widget / human phrasing — NOT a bare
+# "recaptcha" string in a <script> include (which is present on reCAPTCHA v3 pages that need no human
+# interaction and would false-positive).
+_CAPTCHA_SELECTORS = ("iframe[src*='recaptcha']", "iframe[title*='recaptcha']",
+                      "iframe[src*='hcaptcha']", "iframe[title*='hcaptcha']",
+                      "iframe[src*='turnstile']", ".g-recaptcha", "#g-recaptcha",
+                      ".h-captcha", ".cf-turnstile", "#cf-turnstile")
+_CAPTCHA_TEXT = ("i'm not a robot", "i am not a robot", "i`m not a robot",
+                 "verify you are human", "verify you're human", "confirm you are human",
+                 "please complete the captcha", "complete the security check",
+                 "complete the captcha to continue")
+
+
+def _looks_like_captcha(page):
+    """True if a captcha / 'I'm not a robot' human-check widget is present on the current page (across
+    frames) — by rendered element (visible where determinable) OR by human-facing text. Best-effort;
+    never raises. Used by the live session to enter human_action instead of auto-submitting past a check."""
+    try:
+        frames = _frames(page)
+    except Exception:
+        frames = [page]
+    for fr in frames:
+        for sel in _CAPTCHA_SELECTORS:
+            try:
+                el = fr.query_selector(sel)
+            except Exception:
+                el = None
+            if not el:
+                continue
+            try:
+                if el.is_visible():
+                    return True
+            except Exception:
+                return True   # present but visibility can't be resolved → treat as present
+    try:
+        if any(t in _page_text(page) for t in _CAPTCHA_TEXT):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _wait_settle(page, timeout_s=30):
     """Give Cloudflare's managed challenge time to clear, then — if it hasn't — RELOAD once and wait
     again. The JS challenge often solves and sets the cf_clearance cookie without auto-redirecting the
@@ -1091,6 +1137,56 @@ def drive_typed_login(page, login_fr, pw_el, account_id, user, pw):
                 pw_el.press("Enter")
             except Exception:
                 pass
+
+
+def prefill_login(page, login_fr, pw_el, account_id, user, pw):
+    """Fill the login fields WITHOUT submitting. A convenience for the human-driven path: when a captcha /
+    challenge is present, the live session pre-fills the credentials (so the operator only has to solve the
+    'I'm not a robot' box and click Sign in), but MUST NOT auto-submit past the check. Mirrors
+    drive_typed_login's field logic (pinned #AccountId/#Username/#Password with real keystrokes so the
+    form's enable-validation fires, else heuristic finders) but stops before the submit click.
+    Best-effort; never raises."""
+    try:
+        if login_fr.query_selector("#AccountId") and login_fr.query_selector("#Password"):
+            def _type_id(sel, val):
+                if val in (None, ""):
+                    return
+                el = login_fr.query_selector(sel)
+                if not el:
+                    return
+                try:
+                    el.click()
+                    el.fill("")
+                    el.type(str(val), delay=25)
+                except Exception:
+                    try:
+                        el.fill(str(val))
+                    except Exception:
+                        pass
+            _type_id("#AccountId", account_id)
+            _type_id("#Username", user)
+            _type_id("#Password", pw or "")
+        else:
+            acct_el = _find_input(login_fr, want=("account", "acct", "agent", "dealer", "merchant"),
+                                  avoid=("user", "pass"))
+            user_el = _find_input(login_fr, want=("user", "login", "email", "userid", "username"),
+                                  avoid=("account", "acct"))
+            if acct_el and account_id:
+                try:
+                    acct_el.fill(str(account_id))
+                except Exception:
+                    pass
+            if user_el and user:
+                try:
+                    user_el.fill(str(user))
+                except Exception:
+                    pass
+            try:
+                pw_el.fill(str(pw or ""))
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 # ── phase 1: start login ───────────────────────────────────────────────────────────────────────

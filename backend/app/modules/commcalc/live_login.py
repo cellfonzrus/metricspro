@@ -1,4 +1,4 @@
-"""Persistent LIVE portal-login session manager (VidaPay / T-CETRA new-device 2FA).
+"""Persistent LIVE portal-login session manager (VidaPay / T-CETRA new-device 2FA + reCAPTCHA).
 
 THE PROBLEM this fixes. The two-call state machine in vidapay_sweep.py (begin_login → complete_2fa)
 opens a FRESH browser for each call. On VidaPay/T-CETRA's NEW-DEVICE 2FA, begin_login logs in and
@@ -8,20 +8,44 @@ code the operator just typed ("it sent another code twice"). The challenge is st
 it by replaying storage_state.
 
 THE FIX (this module). ONE browser stays ALIVE from login through code entry. A dedicated worker THREAD
-runs a single `sync_playwright()` for the session's whole life (NOT the per-call `with` that closes it),
-drives the login to the code-entry screen — clicking "New Sign In → Next" EXACTLY ONCE so the code is
-sent ONCE — then idles, capturing a screenshot every ~1.5s into a shared buffer. The operator watches
-that live screenshot stream and submits the code / resends / cancels against the SAME live page: no
-re-navigation, no resend, so the code the operator types goes into the very page that requested it.
+runs a single `sync_playwright()` for the session's whole life (NOT the per-call `with` that closes it).
+The operator watches a LOW-LATENCY live stream of that browser and clicks / types / submits against the
+SAME live page: no re-navigation, no resend, so the code the operator types goes into the very page that
+requested it.
+
+HUMAN-DRIVEN UNTIL AUTHENTICATED (owner directive 2026-07-16 — "let it be alive human interaction till
+the login happens"). From session start until authentication succeeds the live view is a continuously
+interactive human session. The machine's job pre-auth is to (1) render frames FAST, (2) forward the
+human's clicks/typing INSTANTLY, and (3) DETECT state (captcha present, 2FA screen, authenticated, proxy
+error) for the status line — but NOT to race the human or classify a human-paced login as a
+failure/rejection. The existing auto-drive (fill + submit + advance the 2FA once) remains as a FAST-PATH
+when NO captcha is detected and the human hasn't touched anything; the FIRST human input pauses
+auto-driving for the rest of the pre-auth phase, and a captcha ("I'm not a robot") is never auto-submitted
+past — it flips to a `human_action` phase and waits for the human. Once `_classify` sees authenticated,
+behaviour is exactly as before: persist the durable session and enter the post-auth reuse-the-session
+PULL loop.
+
+LOW-LATENCY FRAMES. Instead of a ~1.5s `page.screenshot()` poll, the worker starts a CDP screencast
+(`page.context.new_cdp_session(page)` → `Page.startScreencast`, JPEG frames pushed at the browser's paint
+cadence and acked on the worker thread) and streams them into the session's shot buffer, bumping a
+monotonic `_seq`. If the CDP session can't start it falls back to a tightened ~300ms screenshot loop. The
+UI polls a lightweight `GET /live-login/frame?since=<seq>` (~300ms) that returns a new JPEG only when the
+seq advanced (else a tiny unchanged payload). Explicit screenshots at every phase transition + a ≤1.5s
+liveness guarantee mean the view never freezes even if the screencast stalls.
+
+IMMEDIATE INPUT. `POST /live-login/{sid}/input` {type: click|dblclick|type|key|scroll, x, y, text, key,
+deltaY} is enqueued on a HIGH-priority queue (drained before SUBMIT_CODE/RESEND/PULL) and executed on the
+live page. Click coords are NORMALIZED (0..1 of the streamed image) and multiplied by the live viewport
+size server-side (DPR-proof — the img is rendered smaller than the real viewport).
 
 DESIGN.
   - `_SESSIONS[sid] -> LiveLoginSession`, keyed by data_source id. Org-scoped: a session is bound to
     its source's org_id and `get_session(sid, org_id)` refuses a mismatched tenant.
-  - The worker thread consumes a command queue: (implicit START) → SUBMIT_CODE(code) → RESEND → CANCEL.
+  - Two queues: `_hi_q` (human input — high priority) and `_cmd_q` (SUBMIT_CODE / RESEND / CANCEL / PULL).
   - All Playwright calls happen ON the worker thread only. The request thread just enqueues commands and
-    reads shared state (phase / message / latest screenshot) under a lock.
-  - Phases surfaced to the UI: starting | login | awaiting_code | verifying | authenticated | error |
-    cancelled — each with a human message + the latest JPEG.
+    reads shared state (phase / message / latest frame / seq) under a lock.
+  - Phases surfaced to the UI: starting | login | human_action | awaiting_code | verifying |
+    action_needed | authenticated | pulling | error | cancelled.
 
 OPERATOR CAVEAT (documented in the handoff): the live session lives in ONE worker PROCESS's memory, so
 the backend must run a SINGLE uvicorn worker (Railway's FastAPI default is 1) or start + submit could hit
@@ -37,14 +61,24 @@ from datetime import datetime, timezone, timedelta
 _SESSIONS = {}
 _SESSIONS_LOCK = threading.Lock()
 
-_SHOT_INTERVAL = 0.7           # seconds between idle screenshot captures (responsive live stream)
+_SHOT_INTERVAL = 0.7           # legacy idle capture cadence (kept for the post-auth slow path)
 _IDLE_CLOSE_SECONDS = 20 * 60  # auto-close a session left idle this long (long enough to fetch a code)
+_HUMAN_ACTION_IDLE_SECONDS = 8 * 60  # a human_action (captcha) phase left untouched this long closes cleanly
 # 'authenticated' is deliberately NOT terminal: after sign-in the browser stays OPEN (see _post_auth_loop)
 # so a '▶ Pull now' can run on the SAME trusted page. The session becomes terminal only on error/cancel
 # (incl. the post-auth idle timeout, which flips it to 'cancelled').
 _TERMINAL = ("error", "cancelled")
 _TERMINAL_TTL = 15 * 60       # keep a finished session's final state this long, then prune
 _POST_AUTH_IDLE_SECONDS = 15 * 60  # keep the authenticated browser open this long for a reuse-the-session pull
+
+# Low-latency frame streaming.
+_SCREENCAST_QUALITY = 55       # JPEG quality for the CDP screencast (viewport-sized)
+_SCREENCAST_MAX_W = 1366
+_SCREENCAST_MAX_H = 900
+_FRAME_PUMP_MS = 80            # CDP mode: pump the event loop this often so screencast frames dispatch (~12/s)
+_FALLBACK_PUMP_MS = 300        # no-CDP mode: tightened screenshot loop (~3.3/s vs the old ~0.67/s)
+_FRAME_GUARANTEE_S = 1.5       # even in CDP mode, force a screenshot if no frame advanced this long (never freeze)
+_CLASSIFY_POLL_S = 1.2         # pre-auth: how often to re-DETECT state (captcha / auth / proxy) for the status
 
 _B2B_PROCESSORS = ("b2bsoft", "b2b")
 
@@ -62,6 +96,14 @@ def _wall_note(vp, page):
     except Exception:
         pass
     return "The login form may render differently than expected — check the screenshot."
+
+
+def _captcha_present(vp, page):
+    """Best-effort captcha detection that never raises (the driver may lack the helper in a fake)."""
+    try:
+        return bool(vp._looks_like_captcha(page))
+    except Exception:
+        return False
 
 
 class LiveLoginSession:
@@ -83,11 +125,18 @@ class LiveLoginSession:
         self.pull_result = None                    # last '▶ Pull now' result (reuse-the-session pull)
         self.session_state = None                 # durable storage_state once authenticated
 
-        self._cmd_q = queue.Queue()
+        self._cmd_q = queue.Queue()               # SUBMIT_CODE / RESEND / CANCEL / PULL
+        self._hi_q = queue.Queue()                # HIGH-priority human input (click / type / key / scroll)
         self._lock = threading.Lock()
         self.phase = "starting"
         self.message = "Starting the live login session…"
         self._shot = None                         # latest base64 JPEG (no data-uri prefix)
+        self._seq = 0                             # monotonic frame sequence — bumped on every new frame
+        self._last_frame_at = 0.0                 # wall time of the last frame stored (liveness guarantee)
+        self._human_driving = False               # True once the human sends ANY input → pauses auto-drive
+        self._cdp = None                          # the CDP screencast session (None if unavailable)
+        self._screencast_on = False
+        self._pending_ack = None                  # sessionId of the newest screencast frame awaiting ack
         self._updated_at = datetime.now(timezone.utc).isoformat()
         self._last_activity = time.time()
         self._finished_at = None
@@ -110,15 +159,24 @@ class LiveLoginSession:
         with self._lock:
             self._last_activity = time.time()
 
+    def _store_frame(self, shot):
+        """Record a new frame (from the CDP screencast OR an explicit screenshot) + bump the sequence."""
+        if not shot:
+            return
+        with self._lock:
+            self._shot = shot
+            self._seq += 1
+            self._last_frame_at = time.time()
+            self._updated_at = datetime.now(timezone.utc).isoformat()
+
     def _capture(self, page):
+        """Take a real screenshot NOW (used at phase transitions + as the fallback / liveness guarantee)."""
         try:
             shot = _vp()._shot_b64(page)
         except Exception:
             shot = None
         if shot:
-            with self._lock:
-                self._shot = shot
-                self._updated_at = datetime.now(timezone.utc).isoformat()
+            self._store_frame(shot)
 
     def _persist_diag(self):
         """Persist the LAST live frame + a status line to the SAME data_source diag store the two-call
@@ -153,14 +211,34 @@ class LiveLoginSession:
         with self._lock:
             return self.phase
 
+    def snapshot_seq(self):
+        with self._lock:
+            return self._seq
+
     def state(self):
         with self._lock:
             return {
                 "phase": self.phase,
                 "message": self.message,
                 "shot": ("data:image/jpeg;base64," + self._shot) if self._shot else None,
+                "seq": self._seq,
+                "human": self._human_driving,
                 "updated_at": self._updated_at,
             }
+
+    def frame_since(self, since):
+        """Lightweight frame poll: return the newest frame ONLY if `_seq` advanced past `since`, else a tiny
+        unchanged payload (phase/message always included so the panel stays fresh without shipping a JPEG)."""
+        try:
+            since = int(since)
+        except Exception:
+            since = 0
+        with self._lock:
+            seq, phase, message, shot = self._seq, self.phase, self.message, self._shot
+        if shot and seq > since:
+            return {"seq": seq, "phase": phase, "message": message, "changed": True,
+                    "shot": "data:image/jpeg;base64," + shot}
+        return {"seq": seq, "phase": phase, "message": message, "changed": False, "shot": None}
 
     def is_terminal(self):
         with self._lock:
@@ -179,16 +257,20 @@ class LiveLoginSession:
         self._touch()
         self._cmd_q.put(("RESEND",))
 
+    def input_event(self, ev):
+        """Forward a raw human input event (click / dblclick / type / key / scroll) to the live page with
+        HIGH priority. The FIRST input pauses auto-driving for the rest of the pre-auth phase (human wins)."""
+        with self._lock:
+            self._human_driving = True
+            self._last_activity = time.time()
+        self._hi_q.put(("INPUT", dict(ev or {})))
+
     def click(self, nx, ny):
-        """Forward an operator click at NORMALIZED coords (0..1 of the streamed image) to the live page —
-        this is the 'take control' path so the operator can press a button (e.g. Next) the auto-clicker
-        missed."""
-        self._touch()
-        self._cmd_q.put(("CLICK", float(nx), float(ny)))
+        """Back-compat single-click affordance (the legacy /live-login/click endpoint)."""
+        self.input_event({"type": "click", "x": nx, "y": ny})
 
     def type_text(self, text):
-        self._touch()
-        self._cmd_q.put(("TYPE", str(text)))
+        self.input_event({"type": "type", "text": str(text)})
 
     def cancel(self):
         self._touch()
@@ -220,6 +302,103 @@ class LiveLoginSession:
             return rq.get(timeout=timeout)
         except queue.Empty:
             return None
+
+    def _next_cmd(self):
+        """Pop the next command, HIGH-priority input first (so a click never waits behind a SUBMIT_CODE)."""
+        try:
+            return self._hi_q.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            return self._cmd_q.get_nowait()
+        except queue.Empty:
+            return None
+
+    # ── low-latency frame plumbing ────────────────────────────────────────────────────────────────
+    def _start_screencast(self, page):
+        """Start a CDP screencast on the live page (Chromium only, which _launch guarantees). Frames stream
+        into `_shot` via the on-frame handler; the ack is deferred to the worker thread (`_flush_ack`) so we
+        never call a Playwright method from inside an event callback. Silently no-ops if CDP is unavailable —
+        the worker then falls back to a tightened screenshot loop."""
+        try:
+            cdp = page.context.new_cdp_session(page)
+        except Exception:
+            self._cdp = None
+            self._screencast_on = False
+            return
+
+        def _on_frame(params):
+            try:
+                data = params.get("data") if isinstance(params, dict) else None
+                fsid = params.get("sessionId") if isinstance(params, dict) else None
+            except Exception:
+                data, fsid = None, None
+            if data:
+                self._store_frame(data)
+            if fsid is not None:
+                with self._lock:
+                    self._pending_ack = fsid
+
+        try:
+            cdp.on("Page.screencastFrame", _on_frame)
+            cdp.send("Page.startScreencast", {
+                "format": "jpeg", "quality": _SCREENCAST_QUALITY,
+                "maxWidth": _SCREENCAST_MAX_W, "maxHeight": _SCREENCAST_MAX_H, "everyNthFrame": 1})
+            self._cdp = cdp
+            self._screencast_on = True
+        except Exception:
+            self._cdp = None
+            self._screencast_on = False
+
+    def _flush_ack(self):
+        """Ack the newest screencast frame (on the worker thread) so Chrome keeps sending frames."""
+        cdp = self._cdp
+        if cdp is None:
+            return
+        with self._lock:
+            fsid = self._pending_ack
+            self._pending_ack = None
+        if fsid is None:
+            return
+        try:
+            cdp.send("Page.screencastFrameAck", {"sessionId": fsid})
+        except Exception:
+            pass
+
+    def _stop_screencast(self):
+        cdp = self._cdp
+        self._cdp = None
+        self._screencast_on = False
+        if cdp is None:
+            return
+        try:
+            cdp.send("Page.stopScreencast")
+        except Exception:
+            pass
+        try:
+            cdp.detach()
+        except Exception:
+            pass
+
+    def _pump(self, page):
+        """Drive the live frame stream for one tick. In CDP mode this pumps the event loop (~80ms) so
+        screencast frames dispatch, flushes the ack, and takes a guarantee screenshot only if the stream
+        stalled. Without CDP it takes a screenshot every ~300ms (tightened fallback). A tiny sleep floor
+        keeps a no-op `wait_for_timeout` (e.g. a test fake) from hot-looping."""
+        pm = _FRAME_PUMP_MS if self._screencast_on else _FALLBACK_PUMP_MS
+        t0 = time.time()
+        try:
+            page.wait_for_timeout(pm)
+        except Exception:
+            pass
+        if self._screencast_on:
+            self._flush_ack()
+            if time.time() - self._last_frame_at > _FRAME_GUARANTEE_S:
+                self._capture(page)
+        else:
+            self._capture(page)
+        if time.time() - t0 < 0.02:      # wait_for_timeout was a no-op → throttle so we don't spin
+            time.sleep(0.03)
 
     # ── worker thread ────────────────────────────────────────────────────────────────────────────
     def start(self):
@@ -254,6 +433,7 @@ class LiveLoginSession:
             browser = vp._launch(p)
             ctx = vp._new_context(browser, proxy=vp._proxy_arg(self.proxy_url))
             page = ctx.new_page()
+            self._start_screencast(page)             # low-latency frames from the very first paint
             self._set(phase="login", message="Opening the portal…")
             self._capture(page)
             base = vp._norm_url(self.url, vp.B2BSOFT_URL if self._is_b2b else vp.DEFAULT_URL)
@@ -280,9 +460,31 @@ class LiveLoginSession:
                 self._capture(page)
                 return
 
+            # HUMAN-DRIVEN-UNTIL-AUTH decision. If a captcha ('I'm not a robot') is present, or the human
+            # has already taken control, do NOT auto-submit — hand the login to the human on the live page.
+            captcha = _captcha_present(vp, page)
+            with self._lock:
+                human = self._human_driving
+            if captcha or human:
+                if captcha:
+                    try:
+                        vp.prefill_login(page, login_fr, pw_el, self.account_id, self.user, self.pw)
+                    except Exception:
+                        pass
+                    self._set(phase="human_action",
+                              message="Human check detected. Complete the 'I'm not a robot' box on the "
+                                      "screen, then click Sign in — you're driving this login directly.")
+                else:
+                    self._set(phase="login",
+                              message="You're driving this login — click and type directly on the screen.")
+                self._capture(page)
+                self._preauth_loop(page, ctx, vp)
+                return
+
             self._set(phase="login", message="Signing in…")
             self._capture(page)
-            # Fill + submit using the SHARED pinned/heuristic driver (identical to begin_login).
+            # FAST PATH (no captcha, human hasn't interacted): fill + submit using the SHARED pinned/heuristic
+            # driver (identical to begin_login). The human can still take over at any moment.
             vp.drive_typed_login(page, login_fr, pw_el, self.account_id, self.user, self.pw)
             try:
                 page.wait_for_load_state("networkidle", timeout=25000)
@@ -304,11 +506,35 @@ class LiveLoginSession:
                 self._post_auth_loop(page, ctx, vp)     # keep the trusted browser open for a reuse pull
                 return
             if state == "botwall":
+                if _captcha_present(vp, page):
+                    self._set(phase="human_action",
+                              message="The portal's human check must be completed — solve the 'I'm not a "
+                                      "robot' box on the screen, then Sign in.")
+                    self._capture(page)
+                    self._preauth_loop(page, ctx, vp)
+                    return
                 self._set(phase="error",
                           message="The portal served an anti-automation page after login — route through a residential proxy.")
                 self._capture(page)
                 return
             if state == "login":
+                # A login rejection with an UNSOLVED captcha present is the human check, NOT bad creds.
+                if _captcha_present(vp, page):
+                    self._set(phase="human_action",
+                              message="The portal's human check must be completed — solve the 'I'm not a "
+                                      "robot' box on the screen, then click Sign in. (This is NOT a "
+                                      "credentials problem.)")
+                    self._capture(page)
+                    self._preauth_loop(page, ctx, vp)
+                    return
+                with self._lock:
+                    human = self._human_driving
+                if human:
+                    self._set(phase="login",
+                              message="You're driving this login — complete it on the screen above.")
+                    self._capture(page)
+                    self._preauth_loop(page, ctx, vp)
+                    return
                 self._set(phase="error",
                           message="Login was rejected — Account ID / User ID / Password not accepted.")
                 self._capture(page)
@@ -326,14 +552,24 @@ class LiveLoginSession:
                 self._capture(page)
                 return
 
-            # 2FA: click THROUGH the pre-code steps (device interstitial → method chooser) EXACTLY ONCE,
-            # dispatching the code a SINGLE time. The page then stays OPEN on the code screen; the code
-            # the operator types goes into THIS page (no second dispatch → no "code sent twice").
+            # 2FA: unless a captcha blocks it or the human has taken over, click THROUGH the pre-code steps
+            # (device interstitial → method chooser) EXACTLY ONCE, dispatching the code a SINGLE time. The
+            # page then stays OPEN on the code screen; the code the operator types goes into THIS page.
             if not vp._code_field(page):
-                try:
-                    vp._advance_2fa(page)
-                except Exception:
-                    pass
+                if _captcha_present(vp, page):
+                    self._set(phase="human_action",
+                              message="A human check appeared before the code — complete the 'I'm not a "
+                                      "robot' box on the screen, then continue.")
+                    self._capture(page)
+                    self._preauth_loop(page, ctx, vp)
+                    return
+                with self._lock:
+                    human = self._human_driving
+                if not human:
+                    try:
+                        vp._advance_2fa(page)
+                    except Exception:
+                        pass
             self._capture(page)
             if vp._code_field(page):
                 self._set(phase="awaiting_code",
@@ -343,8 +579,9 @@ class LiveLoginSession:
                           message="Reached the verification step — if no code box appears, use the screenshot "
                                   "to see what the portal is waiting on, then Resend or Cancel.")
             self._capture(page)
-            self._command_loop(page, ctx, vp)
+            self._preauth_loop(page, ctx, vp)
         finally:
+            self._stop_screencast()
             try:
                 if browser:
                     browser.close()
@@ -384,75 +621,118 @@ class LiveLoginSession:
         except Exception:
             pass
 
-    def _command_loop(self, page, ctx, vp):
-        """Idle on the code screen: refresh the screenshot every ~1.5s and service operator commands.
-        Auto-close after ~8 min idle. All Playwright work stays on this (the worker) thread."""
-        last_shot = 0.0
+    def _preauth_loop(self, page, ctx, vp):
+        """The HUMAN-DRIVEN pre-auth loop: stream frames fast, forward the operator's input immediately,
+        and periodically DETECT state (authenticated / proxy_error / captcha) for the status line — without
+        auto-submitting or racing the human. Services the convenience code box (SUBMIT_CODE / RESEND) too.
+        Returns into _post_auth_loop the moment the login reaches 'authenticated'. Auto-closes after idle.
+        All Playwright work stays on this (the worker) thread."""
+        last_poll = 0.0
         while True:
+            self._pump(page)
             now = time.time()
-            if now - last_shot >= _SHOT_INTERVAL:
-                self._capture(page)
-                last_shot = now
+            if now - last_poll >= _CLASSIFY_POLL_S:
+                last_poll = now
+                self._preauth_detect(page, ctx, vp)
+                ph = self.snapshot_phase()
+                if ph == "authenticated":
+                    return self._post_auth_loop(page, ctx, vp)
+                if ph in _TERMINAL:
+                    return
             with self._lock:
                 idle = time.time() - self._last_activity
-            if idle > _IDLE_CLOSE_SECONDS:
+                ph = self.phase
+            limit = _HUMAN_ACTION_IDLE_SECONDS if ph == "human_action" else _IDLE_CLOSE_SECONDS
+            if idle > limit:
                 self._set(phase="cancelled", message="Live session closed after inactivity.")
                 return
-            try:
-                cmd = self._cmd_q.get(timeout=0.2)
-            except queue.Empty:
+            cmd = self._next_cmd()
+            if cmd is None:
                 continue
             kind = cmd[0]
             if kind == "CANCEL":
                 self._set(phase="cancelled", message="Cancelled by the operator.")
                 return
+            if kind == "INPUT":
+                self._do_input(page, ctx, vp, cmd[1])
+                if self.snapshot_phase() == "authenticated":
+                    return self._post_auth_loop(page, ctx, vp)   # a human click finished sign-in → keep open
+                continue
             if kind == "RESEND":
                 self._do_resend(page, vp)
-                last_shot = 0.0
-                continue
-            if kind == "CLICK":
-                self._do_click(page, ctx, vp, cmd[1], cmd[2])
-                if self.snapshot_phase() == "authenticated":
-                    return self._post_auth_loop(page, ctx, vp)   # click finished sign-in → keep it open
-                last_shot = 0.0
-                continue
-            if kind == "TYPE":
-                try:
-                    page.keyboard.type(cmd[1], delay=20)
-                except Exception:
-                    pass
-                self._capture(page)
-                last_shot = 0.0
                 continue
             if kind == "SUBMIT_CODE":
                 if self._do_submit(page, ctx, vp, cmd[1]):
                     if self.snapshot_phase() == "authenticated":
                         return self._post_auth_loop(page, ctx, vp)   # authenticated → keep browser open
                     return           # error/proxy_error → terminate (browser closes in _drive finally)
-                last_shot = 0.0
+                continue
+            # PULL is meaningless pre-auth — ignore.
+
+    def _preauth_detect(self, page, ctx, vp):
+        """Pre-auth state DETECTION (never drives): conclude auth when the human finishes, stop on a proxy
+        error, and keep the human_action ↔ awaiting/login status line in sync as a captcha appears/clears."""
+        try:
+            state = vp._classify(page)
+        except Exception:
+            state = "unknown"
+        if state == "proxy_error":
+            try:
+                pmsg = vp._proxy_error_message(page.url, self.proxy_url)
+            except Exception:
+                pmsg = "The request died at the egress proxy — check the proxy route, then retry."
+            self._set(phase="error", message=pmsg[:400])
+            self._capture(page)
+            return
+        if state == "authenticated":
+            try:
+                on_trust = any(w in vp._page_text(page) for w in vp._TRUST_PAGE_WORDS)
+            except Exception:
+                on_trust = False
+            code = None
+            try:
+                code = vp._code_field(page)
+            except Exception:
+                code = None
+            if not on_trust and not code:
+                self._on_authenticated(page, ctx, vp)
+                return
+        # Captcha status upkeep — flip TO human_action when a challenge appears, and back when it clears.
+        cap = _captcha_present(vp, page)
+        ph = self.snapshot_phase()
+        if cap and ph in ("login", "awaiting_code", "verifying", "action_needed"):
+            self._set(phase="human_action",
+                      message="A human check appeared — complete the 'I'm not a robot' box on the screen, "
+                              "then continue.")
+        elif not cap and ph == "human_action":
+            try:
+                has_code = bool(vp._code_field(page))
+            except Exception:
+                has_code = False
+            if has_code:
+                self._set(phase="awaiting_code",
+                          message="Human check cleared — enter the verification code the portal sent.")
+            else:
+                self._set(phase="login",
+                          message="Human check cleared — complete the login on the screen (click Sign in).")
 
     def _post_auth_loop(self, page, ctx, vp):
         """After authentication, keep the SAME trusted browser OPEN and idle so a '▶ Pull now' runs on
         the very session that just passed 2FA. The cold storage_state restore is re-challenged by
         T-CETRA (a fresh browser / egress IP / server session isn't the trusted device — this is the
         'Pull asks for another code / session expired' the operator hit), so reusing this page is the
-        fix. Services PULL + CANCEL (+ CLICK/TYPE 'take control'); auto-closes after an idle window.
+        fix. Services PULL + CANCEL (+ input 'take control'); auto-closes after an idle window.
         All Playwright work stays on this (the worker) thread; SUBMIT_CODE/RESEND are ignored post-auth."""
         self._touch()
-        last_shot = 0.0
         while True:
-            now = time.time()
-            if now - last_shot >= _SHOT_INTERVAL * 3:        # slower cadence on the idle dashboard
-                self._capture(page)
-                last_shot = now
+            self._pump(page)
             with self._lock:
                 idle = time.time() - self._last_activity
             if idle > _POST_AUTH_IDLE_SECONDS:
                 self._set(phase="cancelled", message="Live session closed after inactivity (post-login).")
                 return
-            try:
-                cmd = self._cmd_q.get(timeout=0.25)
-            except queue.Empty:
+            cmd = self._next_cmd()
+            if cmd is None:
                 continue
             kind = cmd[0]
             if kind == "CANCEL":
@@ -460,19 +740,9 @@ class LiveLoginSession:
                 return
             if kind == "PULL":
                 self._handle_pull(page, vp, cmd[1] if len(cmd) > 1 else None)
-                last_shot = 0.0
                 continue
-            if kind == "CLICK":
-                self._do_click(page, ctx, vp, cmd[1], cmd[2])
-                last_shot = 0.0
-                continue
-            if kind == "TYPE":
-                try:
-                    page.keyboard.type(cmd[1], delay=20)
-                except Exception:
-                    pass
-                self._capture(page)
-                last_shot = 0.0
+            if kind == "INPUT":
+                self._do_input(page, ctx, vp, cmd[1])
                 continue
             # SUBMIT_CODE / RESEND are meaningless once authenticated — ignore.
 
@@ -501,26 +771,57 @@ class LiveLoginSession:
         self._set(phase="authenticated", message=("Pulled: " + str(msg))[:300])
         self._capture(page)
 
-    def _do_click(self, page, ctx, vp, nx, ny):
-        """'Take control': translate a normalized (0..1) click on the streamed image to a real click on
-        the live page at the matching viewport pixel, then re-check whether we've landed authenticated
-        (so an operator clicking the portal's Next / Trust button completes + saves the session)."""
+    def _do_input(self, page, ctx, vp, ev):
+        """Execute a forwarded human input on the live page. Click coords are NORMALIZED (0..1 of the
+        streamed image) → multiplied by the live viewport size (DPR-proof). type/key dispatch real key
+        events (so form-validation listeners fire); scroll uses the wheel."""
+        et = (ev or {}).get("type")
+        if et in ("click", "dblclick"):
+            self._do_click(page, ctx, vp, ev.get("x"), ev.get("y"), double=(et == "dblclick"))
+            return
+        try:
+            if et == "type":
+                txt = str(ev.get("text") or "")
+                if txt:
+                    page.keyboard.type(txt, delay=8)
+            elif et == "key":
+                k = str(ev.get("key") or "")
+                if k:
+                    page.keyboard.press(k)
+            elif et == "scroll":
+                try:
+                    dy = float(ev.get("deltaY") or 0)
+                except (TypeError, ValueError):
+                    dy = 0.0
+                page.mouse.wheel(0, dy)
+        except Exception as e:
+            self._set(message="Input didn't register (%s)." % str(e)[:80])
+        self._capture(page)
+
+    def _do_click(self, page, ctx, vp, nx, ny, double=False):
+        """Translate a normalized (0..1) click on the streamed image to a real click on the live page at
+        the matching viewport pixel, then re-check whether we've landed authenticated (so an operator
+        clicking the portal's Sign in / Next / Trust button completes + saves the session)."""
         try:
             vp_size = page.viewport_size or {"width": 1366, "height": 900}
-            x = max(0.0, min(1.0, nx)) * vp_size["width"]
-            y = max(0.0, min(1.0, ny)) * vp_size["height"]
+            x = max(0.0, min(1.0, float(nx))) * vp_size["width"]
+            y = max(0.0, min(1.0, float(ny))) * vp_size["height"]
             page.mouse.move(x, y)      # move first so the very next frame shows the pointer where it'll land
             self._capture(page)        # instant feedback (cursor moved) — no wait
-            page.mouse.click(x, y)
+            if double:
+                page.mouse.dblclick(x, y)
+            else:
+                page.mouse.click(x, y)
         except Exception as e:
             self._set(message="Click didn't register (%s) — try again." % str(e)[:80])
             self._capture(page)
             return
-        # Rapid burst of captures right after the click so the result appears in <1s, not ~2s.
+        # Rapid burst of captures right after the click so the result appears fast (screencast covers the
+        # gaps too, but these guarantee movement even if the stream is idle).
         self._capture(page)
-        for _ in range(4):
+        for _ in range(3):
             try:
-                page.wait_for_timeout(350)
+                page.wait_for_timeout(250)
             except Exception:
                 break
             self._capture(page)
@@ -529,7 +830,8 @@ class LiveLoginSession:
         except Exception:
             pass
         self._capture(page)
-        # A click on Next/Trust may finish sign-in — but only conclude auth once the trust page is gone.
+        # A click on Sign in / Next / Trust may finish sign-in — but only conclude auth once the trust page
+        # is gone (its header carries a 'Sign Out' link that _classify would misread as logged-in).
         try:
             on_trust = any(w in vp._page_text(page) for w in vp._TRUST_PAGE_WORDS)
             if not on_trust and not vp._code_field(page) and vp._classify(page) == "authenticated":
@@ -629,8 +931,15 @@ class LiveLoginSession:
             self._set(phase="error", message=pmsg[:400])
             self._capture(page)
             return True
+        # A human check that appears at/after the code step is NOT a code rejection — flip to human_action.
+        if _captcha_present(vp, page):
+            self._set(phase="human_action",
+                      message="A human check appeared — complete the 'I'm not a robot' box on the screen, "
+                              "then Submit the code again.")
+            self._capture(page)
+            return False
         # If the auto-clicker couldn't finish the "Trust This Device" page, tell the operator to click
-        # the Next button themselves in the live view (click-forwarding is enabled) — the code WAS
+        # the Next button themselves in the live view (input-forwarding is enabled) — the code WAS
         # accepted; only the trust step remains. Otherwise it's a genuine code rejection.
         try:
             on_trust = any(w in vp._page_text(page) for w in vp._TRUST_PAGE_WORDS)
