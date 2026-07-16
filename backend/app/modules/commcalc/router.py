@@ -30,6 +30,7 @@ from app.modules.commcalc import commission_catalog
 from app.modules.commcalc import target_registry
 from app.modules.commcalc import commission_ledger
 from app.modules.commcalc import device_history
+from app.modules.commcalc import custom_report
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 # Plain names too: 45+ call sites across this router use bare datetime/timezone/timedelta (all the
@@ -12071,3 +12072,400 @@ def ma_commission_summary(period: str = "", org_id: str = ORG_ID):
             "note": None if comm or tx else
             "No MA rows for this period yet — upload the MA reports on Data Imports (no period needed) "
             "or add mailbox rules (*Commission*Details* → MA Commission Details)."}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# CUSTOM REPORT BUILDER (mig 211) — the config-driven, universal report over EVERY commcalc dataset.
+# The dataset REGISTRY + all aggregation math live in commcalc.custom_report (pure, unit-tested). Here we
+# bind each dataset key to a RESOLVER that REUSES the module's existing read functions (never duplicating
+# query logic) and returns NORMALIZED rows: dicts keyed by the dataset's column-catalog fields PLUS the
+# field_map dims (store/rep/market/day) so the RULE FIVE filter + group-by can operate universally.
+# Everything degrades gracefully: mig 211 absent → code-default registry; a backing table absent →
+# "dataset unavailable" (never a 500); mig-210 category columns absent → hidden.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+def _cr_market_resolver(client, org_id):
+    """A `(_market_for, all_markets)` pair over store_mapping — the SAME address / store_code /
+    leading-number resolution the Sales Report uses — so any dataset with a store string can carry a
+    `market` for RULE FIVE market filtering + group-by. Never raises (a store_mapping read error → every
+    market blank)."""
+    import re as _re_cr
+    try:
+        sm = (client.schema("commcalc").table("store_mapping")
+              .select("store_code,store_address,market").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        sm = []
+    by_code, by_addr, by_num, markets = {}, {}, {}, set()
+
+    def _lead(s):
+        m = _re_cr.match(r"\s*(\d+)", str(s or "")); return m.group(1) if m else ""
+
+    for s in sm:
+        mk = (s.get("market") or "").strip()
+        if not mk:
+            continue
+        markets.add(mk)
+        code = str(s.get("store_code") or "").strip()
+        addr = str(s.get("store_address") or "").strip()
+        if code:
+            by_code[code] = mk
+        if addr:
+            by_addr[addr.lower()] = mk
+        n = _lead(addr)
+        if n:
+            by_num.setdefault(n, mk)
+
+    def _market_for(store):
+        st = str(store or "").strip()
+        return by_addr.get(st.lower()) or by_code.get(st) or by_num.get(_lead(st)) or ""
+
+    return _market_for, sorted(markets)
+
+
+def _cr_guarded(fn):
+    """Run a resolver read; return (rows, True) on success or ([], False) when the backing table is absent
+    / the read errors — so a section degrades to 'dataset unavailable' instead of 500ing the whole report."""
+    try:
+        return fn() or [], True
+    except Exception as e:
+        print(f"WARN custom_report resolver failed: {e}")
+        return [], False
+
+
+def _cr_resolve_sales_line(client, org_id, period, ctx):
+    """Sales LINE grain — REUSES `_sales_rows_union` (the canonical feed∪raw_sales display source). Voided
+    / Return lines are dropped so money totals match the Sales Report. Market is attached for RULE FIVE.
+    mig-210 categories interface (loose coupling): if the underlying rows ever carry master_category /
+    kpi_category columns they flow through untouched; absent (today) → simply not present, hidden silently."""
+    market_for = ctx["market_for"]
+    rows, _meta = _sales_rows_union(client, org_id, period)
+    out = []
+    for r in rows:
+        if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+            continue
+        if str(r.get("trans_type") or "").strip() == "Return":
+            continue
+        store = (r.get("store") or "").strip()
+        row = {
+            "store": store, "market": market_for(store),
+            "salesperson": (r.get("salesperson") or "").strip(),
+            "trans_date": str(r.get("trans_date") or "")[:10],
+            "trans_id": r.get("trans_id"), "department": r.get("department"),
+            "category": r.get("category"), "contract_type": r.get("contract_type"),
+            "product_desc": r.get("product_desc"),
+            "ext_price": safe_float(r.get("ext_price")), "gp": safe_float(r.get("gp")),
+        }
+        # mig-210 dual-category mapping (commcalc.item_mapping.sales_category / kpi_category, joined by
+        # item_key). Degrades silently when absent; surfaces automatically once the join is wired.
+        for extra in ("sales_category", "kpi_category"):
+            if r.get(extra) not in (None, ""):
+                row[extra] = r.get(extra)
+        out.append(row)
+    return out
+
+
+def _cr_resolve_rep_commissions(client, org_id, period, ctx):
+    """rep_commissions snapshot + chargeback deductions — the SAME read `get_commissions` serves (final
+    payout = total_payout − deducted chargebacks). Market attached from the rep's store."""
+    market_for = ctx["market_for"]
+    rows = (client.schema("commcalc").table("rep_commissions").select("*")
+            .eq("org_id", org_id).in_("period", _pvariants(period)).order("total_payout", desc=True)
+            .execute().data) or []
+    cb = (client.schema("commcalc").table("chargeback_items").select("epay_salesperson,amount,deduct")
+          .eq("org_id", org_id).in_("period", _pvariants(period)).execute().data) or []
+    ded = {}
+    for it in cb:
+        if it.get("deduct"):
+            rep = it.get("epay_salesperson") or ""
+            ded[rep] = ded.get(rep, 0) + safe_float(it.get("amount"))
+    out = []
+    for cr in rows:
+        row = dict(cr)
+        row["market"] = market_for(cr.get("store"))
+        d = ded.get(cr.get("epay_salesperson") or "", 0)
+        row["chargeback_deduction"] = d
+        row["final_payout"] = safe_float(cr.get("total_payout")) - safe_float(d)
+        out.append(row)
+    return out
+
+
+def _cr_resolve_targets_actuals(client, org_id, period, ctx):
+    """Targets ACHIEVED actuals — REUSES `_compute_feed_actuals_py` (per store×rep×day, from the unified
+    sales set). Market attached."""
+    market_for = ctx["market_for"]
+    rows = _compute_feed_actuals_py(client, org_id, period)
+    for r in rows:
+        r["market"] = market_for(r.get("store") or r.get("store_code"))
+    return rows
+
+
+def _cr_resolve_kpi_metrics(client, org_id, period, ctx):
+    """Store KPI metrics — the SAME raw_dlar_store read `get_dlar_store_kpis` serves."""
+    market_for = ctx["market_for"]
+    mo, yr = _month_year(period)
+    q = (client.schema("commcalc").table("raw_dlar_store")
+         .select("location,address,store_code,atu,protect_pct,byod_pct,family_plan_pct,tmr3,"
+                 "aal_conversion,conversion_rate,total_acts,gross_adds,total_upgrades")
+         .eq("org_id", org_id))
+    q = q.eq("period_month", mo).eq("period_year", yr) if mo and yr else q.in_("period", _pvariants(period))
+    rows = q.order("location").execute().data or []
+    for r in rows:
+        r["market"] = market_for(r.get("location") or r.get("address") or r.get("store_code"))
+    return rows
+
+
+def _cr_resolve_store_expenses(client, org_id, period, ctx):
+    """Store expenses — the SAME store_expenses read `get_expenses` serves (period-scoped)."""
+    market_for = ctx["market_for"]
+    rows = (client.schema("commcalc").table("store_expenses").select("*")
+            .eq("org_id", org_id).in_("period", _pvariants(period)).order("store_code").execute().data) or []
+    for r in rows:
+        r["market"] = market_for(r.get("store_code"))
+    return rows
+
+
+def _cr_resolve_chargebacks(client, org_id, period, ctx):
+    """Employee chargeback_items — the assigned chargebacks that deduct from rep pay."""
+    market_for = ctx["market_for"]
+    rows = (client.schema("commcalc").table("chargeback_items").select("*")
+            .eq("org_id", org_id).in_("period", _pvariants(period)).order("epay_salesperson").execute().data) or []
+    for r in rows:
+        r["market"] = market_for(r.get("store"))
+        r["deduct"] = "Yes" if r.get("deduct") else "No"
+    return rows
+
+
+def _cr_resolve_flags(client, org_id, period, ctx):
+    """commcalc.flags — the SAME read `get_flags` serves."""
+    market_for = ctx["market_for"]
+    rows = (client.schema("commcalc").table("flags").select("*")
+            .eq("org_id", org_id).in_("period", _pvariants(period)).order("severity").execute().data) or []
+    for r in rows:
+        r["market"] = market_for(r.get("store_address"))
+    return rows
+
+
+def _cr_resolve_ma_commission(client, org_id, period, ctx):
+    """raw_ma_commission (M1-M6 spiffs + rebate per activated phone) — the same table the What-If
+    carrier-income / BYOD-residual views read. The money columns are carrier-income → gated downstream."""
+    q = (client.schema("commcalc").table("raw_ma_commission")
+         .select("period,activation_type2,imei,ban,spiff_m1,spiff_m2,spiff_m3,spiff_m4,spiff_m5,spiff_m6,rebate")
+         .eq("org_id", org_id))
+    if period:
+        q = q.in_("period", _pvariants(period))
+    return q.limit(100000).execute().data or []
+
+
+def _cr_resolve_ma_daily_tx(client, org_id, period, ctx):
+    """raw_ma_daily_tx (incl. the Postpaid Residual Order rows) — the same table the What-If reads. Money
+    columns are carrier-income → gated downstream."""
+    q = (client.schema("commcalc").table("raw_ma_daily_tx")
+         .select("period,order_type,account_id,order_number,merchant_invoice,merchant_discount,retail_cost")
+         .eq("org_id", org_id))
+    if period:
+        q = q.in_("period", _pvariants(period))
+    return q.limit(100000).execute().data or []
+
+
+_CUSTOM_REPORT_RESOLVERS = {
+    "sales_line": _cr_resolve_sales_line,
+    "rep_commissions": _cr_resolve_rep_commissions,
+    "targets_actuals": _cr_resolve_targets_actuals,
+    "kpi_metrics": _cr_resolve_kpi_metrics,
+    "store_expenses": _cr_resolve_store_expenses,
+    "chargebacks": _cr_resolve_chargebacks,
+    "flags": _cr_resolve_flags,
+    "ma_commission": _cr_resolve_ma_commission,
+    "ma_daily_tx": _cr_resolve_ma_daily_tx,
+}
+
+
+def _cr_registry(client, org_id):
+    """(resolved_registry, config_present). Merges the code-default DATASETS with the mig-211 registry rows
+    (HOUSE ∪ this org). Degrades to code defaults when the table is absent (config_present=False)."""
+    try:
+        rows = (client.schema("commcalc").table("custom_report_dataset").select("*")
+                .in_("org_id", [custom_report.HOUSE_ORG, org_id]).execute().data) or []
+        present = len(rows) > 0
+    except Exception:
+        rows, present = [], False
+    return custom_report.resolve_registry(rows), present
+
+
+def _cr_grants(authorization, org_id):
+    """The permission-gate keys the caller holds, for per-column gating. Today: 'carrier_residual' when
+    `_can_view_carrier_residual` passes (MA carrier-income money). A gate the caller lacks → that column is
+    dropped from the metadata AND the rows (RULE FOUR: never leaks through an export)."""
+    g = set()
+    try:
+        if _can_view_carrier_residual(authorization, org_id):
+            g.add("carrier_residual")
+    except Exception:
+        pass
+    return g
+
+
+@router.get("/custom-report/datasets")
+def custom_report_datasets(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The resolved dataset registry for this org — drives the Custom Report's dataset multi-select +
+    column picker + group-by picker. Columns the caller may not see (gated) are already omitted."""
+    require_org(org_id)
+    client = sb()
+    grants = _cr_grants(authorization, org_id)
+    reg, present = _cr_registry(client, org_id)
+    out = []
+    for d in reg:
+        cols = custom_report.visible_columns(d, grants)
+        fm_vals = set(v for v in d["field_map"].values() if v)
+        universal = [dim for dim in ("store", "rep", "market", "day") if d["field_map"].get(dim)]
+        group_extra = [c["field"] for c in cols if c.get("group") and c["field"] not in fm_vals]
+        out.append({
+            "key": d["key"], "name": d["name"], "sort_order": d.get("sort_order"),
+            "backing_tables": d.get("backing_tables"),
+            "columns": [{"field": c["field"], "label": c["label"], "type": c["type"],
+                         "numeric": custom_report.is_numeric(c), "money": c["type"] == "money",
+                         "group": bool(c.get("group"))} for c in cols],
+            "group_dims": universal + group_extra,
+            "has_gated_hidden": any(c.get("gate") and c["gate"] not in grants for c in d["columns"]),
+        })
+    return {"datasets": out, "org_id": org_id, "grants": sorted(grants),
+            "registry_source": "config" if present else "code-default"}
+
+
+@router.get("/custom-report")
+async def custom_report_run(datasets: str = "", period: str = "", date_from: str = "", date_to: str = "",
+                            stores: str = "", markets: str = "", reps: str = "",
+                            group_by: str = "", columns: str = "",
+                            authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """THE universal Custom Report. Params: `datasets` (comma-sep registry keys), `period` (or
+    `date_from`/`date_to`), the RULE FIVE core filters `stores`/`markets`/`reps` (comma-sep selected
+    values, applied SERVER-SIDE before aggregation), optional `group_by` (a universal dim store/rep/market/
+    day OR a groupable column field), optional `columns` (comma-sep field names to keep). Returns one
+    SECTION per dataset (honest side-by-side; NO cross-dataset joins in v1) with rows + column metadata +
+    totals + availability, plus the pick-don't-type filter options unioned across datasets. Multi-tenant:
+    org-scoped reads, span-scope honored, gated columns dropped for a caller without the grant."""
+    require_org(org_id)
+    client = sb()
+    if not period and not (date_from or date_to):
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+    reg, reg_present = _cr_registry(client, org_id)
+    reg_by_key = {d["key"]: d for d in reg}
+    grants = _cr_grants(authorization, org_id)
+    market_for, sm_markets = _cr_market_resolver(client, org_id)
+    ctx = {"market_for": market_for}
+
+    want_keys = [k.strip() for k in (datasets or "").split(",") if k.strip()] or ([reg[0]["key"]] if reg else [])
+    sel_stores = [s for s in (stores or "").split(",") if s.strip()]
+    sel_markets = [s for s in (markets or "").split(",") if s.strip()]
+    sel_reps = [s for s in (reps or "").split(",") if s.strip()]
+    want_cols = [c.strip() for c in (columns or "").split(",") if c.strip()]
+
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)   # None = unrestricted
+    except Exception:
+        ks, in_keyset = None, None
+
+    sections, opt_src = [], []
+    for key in want_keys:
+        d = reg_by_key.get(key)
+        if not d:
+            sections.append({"key": key, "name": key, "available": False,
+                             "reason": "unknown or disabled dataset", "columns": [], "rows": [], "totals": {}})
+            continue
+        resolver = _CUSTOM_REPORT_RESOLVERS.get(d["resolver"])
+        if not resolver:
+            sections.append({"key": key, "name": d["name"], "available": False,
+                             "reason": "no resolver bound", "columns": [], "rows": [], "totals": {}})
+            continue
+        raw, available = _cr_guarded(lambda r=resolver: r(client, org_id, period, ctx))
+        if not available:
+            tbls = ", ".join(d.get("backing_tables") or [])
+            sections.append({"key": key, "name": d["name"], "available": False,
+                             "reason": f"dataset unavailable — backing table(s) {tbls} not present for this tenant",
+                             "columns": [], "rows": [], "totals": {}})
+            continue
+        # Span-scope filter on the dataset's store field (when it has one) — a store-scoped user never sees
+        # out-of-scope rows, matching every other report.
+        f_store = d["field_map"].get("store")
+        if ks is not None and f_store and in_keyset:
+            raw = [r for r in raw if in_keyset(ks, r.get(f_store))]
+        opt_src.append((d, raw))   # pick-don't-type options come from PRE-RULE-FIVE (post-scope) rows
+        # mig-210 categories interface: expose master/kpi category columns WHEN the rows carry them
+        # (loose coupling — hidden silently until mig 210 populates them).
+        d = custom_report.augment_columns(d, raw)
+        # RULE FIVE server-side filter BEFORE aggregation.
+        filt = custom_report.filter_rows(raw, d["field_map"], sel_stores, sel_markets, sel_reps,
+                                          day_from=(date_from or None), day_to=(date_to or None))
+        allvis = custom_report.visible_columns(d, grants)
+        vis = custom_report.select_columns(allvis, want_cols)
+        grp_field = custom_report.resolve_group_field(d, group_by)
+        if grp_field and not any(c["field"] == grp_field for c in vis):
+            # keep the group column present so its value labels the grouped rows
+            gc = next((c for c in allvis if c["field"] == grp_field), None)
+            if gc:
+                vis = [gc] + vis
+        rows_out, cols_out = custom_report.group_and_aggregate(filt, vis, grp_field)
+        proj = custom_report.project_rows(rows_out, cols_out)   # drop any non-visible field before it ships
+        totals = custom_report.compute_totals(proj, cols_out)
+        sections.append({
+            "key": key, "name": d["name"], "available": True, "grouped_by": grp_field or None,
+            "columns": [{"field": c["field"], "label": c["label"], "type": c["type"],
+                         "numeric": custom_report.is_numeric(c), "money": c["type"] == "money",
+                         "agg": custom_report.col_agg(c)} for c in cols_out],
+            "rows": proj, "totals": totals, "row_count": len(proj),
+            "gated_columns_hidden": [c["label"] for c in d["columns"] if c.get("gate") and c["gate"] not in grants],
+        })
+
+    opts = custom_report.option_values(opt_src)
+    opts["markets"] = sorted(set(opts["markets"]) | set(sm_markets))   # a market with no rows is still a valid pick
+    return {"org_id": org_id, "period": period, "date_from": date_from or None, "date_to": date_to or None,
+            "datasets": want_keys, "sections": sections, "filter_options": opts,
+            "applied_filters": {"stores": sel_stores, "markets": sel_markets, "reps": sel_reps,
+                                "group_by": group_by or None},
+            "registry_source": "config" if reg_present else "code-default"}
+
+
+@router.get("/custom-report/definitions")
+def custom_report_defs_list(org_id: str = ORG_ID):
+    """Saved Custom Report definitions for this org (the RULE THREE load-a-saved-report picker)."""
+    require_org(org_id)
+    try:
+        rows = (sb().schema("commcalc").table("custom_report_def").select("*")
+                .eq("org_id", org_id).order("name").execute().data) or []
+    except Exception:
+        rows = []   # mig 211 not run → no saved reports yet (page still works)
+    return {"definitions": rows, "org_id": org_id}
+
+
+@router.post("/custom-report/definitions")
+def custom_report_defs_save(body: dict, org_id: str = ORG_ID):
+    """Save (upsert on org_id+name) a named report configuration — that's what makes it a recallable
+    'primary report'. org_id is STAMPED on the row (RULE ONE)."""
+    require_org(org_id)
+    client = sb()
+    reg, _present = _cr_registry(client, org_id)
+    known = {d["key"] for d in reg}
+    ok, res = custom_report.validate_definition(body, known)
+    if not ok:
+        raise HTTPException(400, res)
+    row = {"org_id": org_id, "name": res["name"], "config": res["config"],
+           "created_by": (body.get("created_by") or None),
+           "updated_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        client.schema("commcalc").table("custom_report_def").upsert(row, on_conflict="org_id,name").execute()
+    except Exception as e:
+        raise HTTPException(400, f"could not save (run migration 211?): {e}")
+    return {"ok": True, "name": res["name"]}
+
+
+@router.delete("/custom-report/definitions/{def_id}")
+def custom_report_defs_delete(def_id: str, org_id: str = ORG_ID):
+    """Delete a saved definition (org-scoped)."""
+    require_org(org_id)
+    try:
+        sb().schema("commcalc").table("custom_report_def").delete().eq("org_id", org_id).eq("id", def_id).execute()
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
