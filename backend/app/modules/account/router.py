@@ -248,6 +248,45 @@ async def put_inventory_values(body: dict, org_id: str = ORG_ID):
     return {"saved": saved}
 
 
+# ── per-org accounting config (booking rates — mig 611) ────────────────────────────────────────
+@router.get("/config")
+async def get_config(org_id: str = ORG_ID):
+    """This tenant's finance/accounting config (currently the accessory COGS %). Returns the resolved
+    values with the historical Boost defaults filled in, so a tenant with no saved row reads the same
+    0.20 the code used to hard-code. `is_default` tells the UI whether a row has been explicitly saved."""
+    require_org(org_id)
+    cfg = coa._account_config(sb(), org_id)
+    saved = False
+    try:
+        saved = bool((sb().schema("commcalc").table("account_config").select("org_id")
+                      .eq("org_id", org_id).limit(1).execute().data))
+    except Exception:
+        saved = False
+    return {"org_id": org_id, "config": cfg, "is_default": not saved,
+            "defaults": {"accessory_cogs_pct": coa.ACCESSORY_COGS_PCT}}
+
+
+@router.put("/config")
+async def put_config(body: dict, org_id: str = ORG_ID):
+    """Set this tenant's finance/accounting config. Body: {accessory_cogs_pct} (0..1). MONEY-TOUCHING —
+    changing the accessory COGS % moves this tenant's Accessory cost / Gross Profit; RECOMPUTE the
+    period statements afterward for it to take effect on the stored P&L."""
+    require_org(org_id)
+    try:
+        pct = float(body.get("accessory_cogs_pct"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "accessory_cogs_pct must be a number between 0 and 1")
+    if not (0 <= pct <= 1):
+        raise HTTPException(400, "accessory_cogs_pct must be between 0 and 1 (e.g. 0.20 = 20%)")
+    row = {"org_id": org_id, "accessory_cogs_pct": round(pct, 6),
+           "updated_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        sb().schema("commcalc").table("account_config").upsert(row, on_conflict="org_id").execute()
+    except Exception as e:
+        raise HTTPException(500, f"save failed — run migration 611 first: {e}")
+    return {"ok": True, "org_id": org_id, "config": coa._account_config(sb(), org_id)}
+
+
 # ── compute (build + persist all snapshots) ───────────────────────────────────────────────────
 @router.post("/compute/{period}")
 async def compute(period: str, org_id: str = ORG_ID):

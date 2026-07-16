@@ -44,6 +44,9 @@ VIP_FEE_CATS = {"PROCESSING FEE", "SHIPPING", "SIM KIT"}
 # Accounting rule (user-set 2026-06-20): accessory COGS is a flat 20% of gross accessory
 # sales, NOT the per-line recorded cost (B2B accessory lines often carry no cost → GP looked
 # inflated). Commission payout still treats accessories as 100% of gross sales separately.
+# NOTE: 0.20 is now only the DEFAULT / fallback — the live rate is resolved PER-ORG from
+# commcalc.account_config (mig 611) via `_account_config`, so a tenant can carry its own accessory
+# margin. An empty/absent config yields 0.20 for every org ⇒ Boost byte-identical. See build_inputs.
 ACCESSORY_COGS_PCT = 0.20
 
 # ── chart-of-accounts line specs ───────────────────────────────────────────────────────────
@@ -218,6 +221,24 @@ def store_code_to_address(client, org_id):
     return out
 
 
+def _account_config(client, org_id):
+    """Per-org finance/accounting config (commcalc.account_config, mig 611). Currently one knob:
+    accessory_cogs_pct. Returns a dict of resolved values with the historical code defaults filled
+    in, so a tenant with NO config row (and any tenant before mig 611 runs) is byte-identical to the
+    old hard-coded behaviour. NEVER raises — a missing table/row degrades to the defaults."""
+    cfg = {"accessory_cogs_pct": ACCESSORY_COGS_PCT}
+    try:
+        rows = (client.schema("commcalc").table("account_config")
+                .select("accessory_cogs_pct").eq("org_id", org_id).limit(1).execute().data) or []
+        if rows and rows[0].get("accessory_cogs_pct") is not None:
+            pct = safe_float(rows[0]["accessory_cogs_pct"])
+            if 0 <= pct <= 1:
+                cfg["accessory_cogs_pct"] = pct
+    except Exception:
+        pass
+    return cfg
+
+
 def store_resolver(client, org_id):
     """Return resolve(raw) -> canonical store_address, mirroring the app's existing store
     canonicalization so one physical store never appears under two spellings.
@@ -333,6 +354,8 @@ def build_inputs(client, org_id, period):
     period_keys = _period.period_keys(period)
     code2addr = store_code_to_address(client, org_id)
     resolve_store = store_resolver(client, org_id)
+    acct_cfg = _account_config(client, org_id)           # per-org finance knobs (mig 611); default = Boost
+    accessory_cogs_pct = acct_cfg["accessory_cogs_pct"]  # 0.20 default ⇒ Boost byte-identical
 
     L = {k: {"by_store": {}, "company_wide": 0.0, "detail": {}} for k, *_ in PL_SPEC + BS_SPEC}
 
@@ -349,14 +372,43 @@ def build_inputs(client, org_id, period):
         if detail_label:
             L[key]["detail"][detail_label] = round(L[key]["detail"].get(detail_label, 0.0) + amt, 2)
 
-    # raw_mi — MI + ATU residual (company-wide)
+    # raw_mi — MI + ATU residual income (company-wide). CARRIER-AGNOSTIC, mirroring the shipped
+    # residual-per-sub report (residual_subs._aggregate, dcb0807): Boost is the primary source
+    # (raw_mi); a tenant with NO raw_mi for the period falls through to the VidaPay/MA tables so its
+    # residual income is not silently $0 on the books. Source chosen by which data EXISTS per org —
+    # never by tenant name. BOOST BYTE-IDENTICAL: a Boost org always has raw_mi for the period, so the
+    # MA fallback never fires (and MA tables are empty for a Boost org regardless). Each MA source is
+    # read exactly once → no double-count. See the MONEY-TOUCHING note in the finance handoff.
+    had_raw_mi = False
     try:
         for r in _fetch_all(client, "raw_mi", "actual_mi_payout,actual_atu_payout",
                             {"org_id": org_id, "period": period_keys}):
+            had_raw_mi = True
             add("mi_income", None, r.get("actual_mi_payout"))
             add("atu_income", None, r.get("actual_atu_payout"))
     except Exception:
-        pass
+        had_raw_mi = False
+    if not had_raw_mi:
+        # VidaPay/MA residual (Total, luxelink). SAME two figures the shipped /ma-commission/summary +
+        # residual-per-sub report use (mig 083): MI-equivalent = MA Commission Details payable
+        # (raw_ma_commission, sign-flipped Σ components — positive = money the dealer receives);
+        # ATU-equivalent = airtime margin (raw_ma_daily_tx.merchant_discount). MA rows carry no
+        # store_address (only a processor merchant/account id), so — like PayGo — this is booked
+        # COMPANY-WIDE (store=None) rather than inventing a phantom per-store bucket keyed by an
+        # account id. Empty MA tables (data not yet ingested) → $0, correct. NEVER raises.
+        try:
+            from app.modules.account.residual_subs import _MA_COMPONENTS
+            for r in _fetch_all(client, "raw_ma_commission", ",".join(_MA_COMPONENTS),
+                                {"org_id": org_id, "period": period_keys}):
+                add("mi_income", None, -sum(safe_float(r.get(c)) for c in _MA_COMPONENTS))
+        except Exception:
+            pass
+        try:
+            for r in _fetch_all(client, "raw_ma_daily_tx", "merchant_discount",
+                                {"org_id": org_id, "period": period_keys}):
+                add("atu_income", None, r.get("merchant_discount"))
+        except Exception:
+            pass
 
     # raw_comp_report — carrier commissions/incentives. Broken into canonical components via
     # carrier_category_map (framework): same carrier_comm total, with a Commission/SPIFF/Reimbursement
@@ -397,7 +449,7 @@ def build_inputs(client, org_id, period):
             # department (luxelink). Empty config ⇒ Boost byte-identical (Ondigo→accessory, *-XP→device).
             if is_accessory(dept, cat, prod):
                 add("accessory_rev", st, ext)
-                add("accessory_cost", st, ext * ACCESSORY_COGS_PCT)
+                add("accessory_cost", st, ext * accessory_cogs_pct)
             elif is_device(dept):
                 add("device_rev", st, ext)
                 add("device_cost", st, ext - gp)

@@ -88,6 +88,8 @@ export default function AccountsDashboard() {
         </div>
       )}
 
+      <AccountConfigCard />
+
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : !data.computed ? (
@@ -124,6 +126,63 @@ export default function AccountsDashboard() {
           {companyScopes.length > 0 && <ScopeTable title="By Company" rows={companyScopes} />}
           {storeScopes.length > 0 && <ScopeTable title="By Store" rows={storeScopes} />}
         </>
+      )}
+    </div>
+  )
+}
+
+// Per-org accounting config (mig 611). MONEY-TOUCHING: the accessory COGS % moves Accessory cost /
+// Gross Profit, so saving prompts a recompute. Empty/default = 0.20 for every tenant (Boost byte-identical).
+function AccountConfigCard() {
+  const [cfg, setCfg] = useState<any>(null)
+  const [pct, setPct] = useState('')
+  const [msg, setMsg] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [open, setOpen] = useState(false)
+
+  function load() {
+    api(`/api/v1/account/config?org_id=${ORG_ID}`).then((r: any) => {
+      setCfg(r)
+      setPct(String(Math.round((r?.config?.accessory_cogs_pct ?? 0.2) * 10000) / 100))
+    }).catch(() => {})
+  }
+  useEffect(() => { load() }, [])
+
+  async function save() {
+    const v = parseFloat(pct)
+    if (isNaN(v) || v < 0 || v > 100) { setMsg('Enter a percent between 0 and 100.'); return }
+    setSaving(true); setMsg('')
+    try {
+      await api(`/api/v1/account/config?org_id=${ORG_ID}`, { method: 'PUT', body: JSON.stringify({ accessory_cogs_pct: v / 100 }) })
+      setMsg('Saved. Recompute this period’s statements for it to take effect.'); load()
+    } catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) }
+    setSaving(false)
+  }
+
+  if (!cfg) return null
+  return (
+    <div className="card" style={{ padding: 12, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <button onClick={() => setOpen(o => !o)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 700, padding: 0, color: 'var(--text)' }}>
+          {open ? '▾' : '▸'} ⚙️ Accounting settings
+        </button>
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+          Accessory COGS: <strong>{Math.round((cfg.config?.accessory_cogs_pct ?? 0.2) * 10000) / 100}%</strong>
+          {cfg.is_default && <span style={{ marginLeft: 6, color: 'var(--text3)' }}>(default)</span>}
+        </span>
+      </div>
+      {open && (
+        <div style={{ marginTop: 10, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ fontSize: 13 }}>Accessory COGS %
+            <input type="number" step="0.01" min={0} max={100} value={pct} onChange={e => setPct(e.target.value)}
+              style={{ marginLeft: 8, width: 90, padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }} />
+          </label>
+          <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? '⏳…' : 'Save'}</button>
+          {msg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{msg}</span>}
+          <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+            Accessory cost is booked as this fraction of gross accessory sales (money-touching — recompute after saving).
+          </span>
+        </div>
       )}
     </div>
   )
