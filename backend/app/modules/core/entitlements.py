@@ -27,7 +27,10 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"   # house org (middleware rewrit
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
 # folded the configurable HR intake-capture form into seed_tenant_defaults(); 3 = mig 079 expanded
 # seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
-SEED_VERSION = 4   # bumped: added "ai_assistant" capability (auto-provisions to every tenant on next login)
+SEED_VERSION = 5   # bumped: 5 = mig 708 folded the carrier-neutral remediation playbook catalog into
+                   #             seed_tenant_defaults(), so every tenant (not just the house org) gets the
+                   #             Auto-Remediation starter catalog on its next login.
+                   #         4 = added "ai_assistant" capability (auto-provisions to every tenant on next login)
 
 # ── ONE canonical module registry (platform-core-3) ────────────────────────────────────────────
 # The DB table core.module_catalog (migration 700) is the SINGLE SOURCE OF TRUTH. This in-code dict

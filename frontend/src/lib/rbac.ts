@@ -157,6 +157,10 @@ export const NAV: NavGroup[] = [
   ]},
   { group: 'Assets', module: 'asset', items: [
     { href: '/commcalc/asset', label: 'Asset Ledger', icon: '📦', module: 'asset' },
+    // MA / VidaPay marketplace-purchase orders (mig 207). First-class nav entry per mod-asset NEEDS CORE
+    // [asset-10] — was reachable only via a button on the VIP-styled landing. carrier-gated to Total in
+    // NAV_CARRIERS (the one asset page that applies to luxelink/Total, and only to them).
+    { href: '/commcalc/asset/marketplace-purchases', label: 'Marketplace Purchases', icon: '🛒', module: 'asset', scopes: ['all', 'market'] },
     { href: '/commcalc/asset/dashboard', label: 'Charges Dashboard', icon: '📊', module: 'asset', scopes: ['all', 'market'] },
     { href: '/commcalc/asset/owed-weekly', label: 'Weekly Owed-to-Distributor', icon: '📅', module: 'asset', scopes: ['all', 'market'] },
     { href: '/commcalc/asset/aging', label: 'Inventory Aging', icon: '⏳', module: 'asset', scopes: ['all', 'market'] },
@@ -359,8 +363,22 @@ export const NAV_CARRIERS: Record<string, string[]> = {
   '/commcalc/vip': ['boost'], '/commcalc/vip/paygo': ['boost'], '/commcalc/vip/sweep': ['boost'],
   '/commcalc/distributors': ['boost'], '/commcalc/asset/lending': ['boost'],
   '/commcalc/asset/owed-weekly': ['boost'], '/commcalc/asset/hotsheet-recon': ['boost'],
+  // The rest of the VIP(Boost)-financing asset reports (they read the VIP asset_ledger / ePay appeals
+  // and are empty for a non-Boost tenant). Added per mod-asset NEEDS CORE [asset-10]. Boost-byte-identical:
+  // a Boost tenant HAS the boost carrier → carrierOK stays true → these still show; only a Total-only
+  // tenant (luxelink) loses them. Admin can override per item at /admin/labels (caps['carrier:<href>']).
+  '/commcalc/asset/dashboard': ['boost'], '/commcalc/asset/aging': ['boost'],
+  '/commcalc/asset/missing-phones': ['boost'], '/commcalc/asset/aging-rebate': ['boost'],
+  '/commcalc/asset/on-inventory': ['boost'], '/commcalc/asset/charges/rma': ['boost'],
   '/commcalc/kpi': ['boost'], '/commcalc/coaching': ['boost'],
+  // MA / VidaPay (T-CETRA) pages — the mirror gate of Boost's ePay pages. Total-processor only.
+  // Marketplace Purchases reads commcalc.raw_ma_marketplace_orders (VidaPay MA orders), so it is
+  // processor-specific just like ma-commission → gated to Total, NOT ungated. STEWARD JUDGMENT (differs
+  // from mod-asset's "leave ungated" note): an ungated item would add a permanently-empty tab to the
+  // Boost sidebar, violating "Boost byte-identical"; ['total'] shows it for luxelink/Total (the actual
+  // goal) and any admin can widen it per tenant at /admin/labels if a non-Total tenant ever needs it.
   '/commcalc/ma-commission': ['total'],
+  '/commcalc/asset/marketplace-purchases': ['total'],
   // Boost Rates page = the hardcoded Boost KPI-tier config; only meaningful for Boost tenants. A
   // Total-only tenant (e.g. luxelink) never sees it — they configure pay via Commission Plans instead.
   '/commcalc/settings': ['boost'],
