@@ -13,12 +13,56 @@ router = APIRouter(prefix="/storevisit", tags=["Store Visits"])
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 BUCKET = "store-visits"
+# Default accessory-reorder link (mig 503, 2026-07-16 luxelink-parity audit): this was a bare constant
+# used for EVERY tenant, including non-Boost carriers that have no relationship with vAccessorize — a
+# hard-coded-vendor violation. Kept as the DEFAULT (so an un-configured tenant, i.e. the house org today,
+# is byte-for-byte unchanged); a tenant overrides it via GET/PUT /storevisit/config ->
+# storeops.store_visit_config (accessory_order_url/accessory_order_label).
 VACCESSORIZE_URL = "https://www.vaccessorize.com"
+_DEFAULT_ACCESSORY_ORDER_LABEL = "Order on vAccessorize.com"
 
 
 def sb():
     # store-visit + checklist tables live in the storeops.* schema (migration 027)
     return get_supabase().schema("storeops")
+
+
+def _accessory_order_config(client, org_id: str) -> dict:
+    """{url, label} for the store-visit 'order accessories' link — per-tenant override (mig 503) with
+    the historical vAccessorize default so an un-configured tenant (the house org today) is unchanged.
+    Missing table (migration not run) degrades to the same default, never a 500."""
+    url, label = VACCESSORIZE_URL, _DEFAULT_ACCESSORY_ORDER_LABEL
+    try:
+        rows = (client.table("store_visit_config").select("*")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        if rows:
+            url = (rows[0].get("accessory_order_url") or "").strip() or url
+            label = (rows[0].get("accessory_order_label") or "").strip() or label
+    except Exception:
+        pass
+    return {"url": url, "label": label}
+
+
+@router.get("/config")
+def get_storevisit_config(org_id: str = ORG_ID):
+    """Tenant-editable store-visit settings — currently just the accessory-reorder link (mig 503)."""
+    cfg = _accessory_order_config(sb(), org_id)
+    return {"accessory_order_url": cfg["url"], "accessory_order_label": cfg["label"],
+            "is_default": cfg["url"] == VACCESSORIZE_URL and cfg["label"] == _DEFAULT_ACCESSORY_ORDER_LABEL}
+
+
+@router.put("/config")
+def put_storevisit_config(body: dict, org_id: str = ORG_ID):
+    """Set (or clear, via blank strings -> back to the default) the tenant's accessory-reorder link."""
+    url = (body.get("accessory_order_url") or "").strip()
+    label = (body.get("accessory_order_label") or "").strip()
+    row = {"org_id": org_id, "accessory_order_url": url or None, "accessory_order_label": label or None,
+           "updated_at": _now()}
+    try:
+        sb().table("store_visit_config").upsert(row, on_conflict="org_id").execute()
+    except Exception:
+        raise HTTPException(400, "run migration 503 first (storeops.store_visit_config)")
+    return get_storevisit_config(org_id)
 
 
 def _now() -> str:
@@ -162,8 +206,10 @@ def get_visit(visit_id: str, org_id: str = ORG_ID):
         resp["photo_url"] = _signed_url(resp.get("photo_path"))
     visit["clean_store_photo_url"] = _signed_url(visit.get("clean_store_photo_path"))
     visit["signed_checklist_url"] = _signed_url(visit.get("signed_checklist_path"))
+    acc_cfg = _accessory_order_config(sb(), org_id)
     return {"visit": visit, "responses": responses, "accessories": accessories,
-            "vaccessorize_url": VACCESSORIZE_URL}
+            "vaccessorize_url": acc_cfg["url"], "accessory_order_url": acc_cfg["url"],
+            "accessory_order_label": acc_cfg["label"]}
 
 
 @router.patch("/visits/{visit_id}")
@@ -326,5 +372,5 @@ def signoff(visit_id: str, payload: dict, org_id: str = ORG_ID):
 
 
 @router.get("/health")
-def health():
-    return {"status": "ok", "module": "storevisit", "vaccessorize_url": VACCESSORIZE_URL}
+def health(org_id: str = ORG_ID):
+    return {"status": "ok", "module": "storevisit", "vaccessorize_url": _accessory_order_config(sb(), org_id)["url"]}

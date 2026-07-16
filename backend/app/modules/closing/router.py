@@ -2807,6 +2807,107 @@ def closing_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: st
     return {"triggered": len(due)}
 
 
+# ── Closing readiness (self-diagnostic — 2026-07-16 luxelink audit) ───────────────────────
+def _rc_count(client, schema, table, org_id):
+    """Row count for (schema.table, org_id). None = table/migration unreachable (unknown, NOT zero —
+    a readiness check must never cry wolf over an unrun migration in some environment)."""
+    try:
+        r = (client.schema(schema).table(table).select("org_id", count="exact")
+             .eq("org_id", org_id).limit(1).execute())
+        return r.count or 0
+    except Exception:
+        return None
+
+
+@router.get("/readiness")
+def closing_readiness(org_id: str = ORG_ID):
+    """Self-diagnostic: 'is Daily Closing actually wired for this tenant', surfaced explicitly instead
+    of the module quietly degrading to empty/pending everywhere (the pattern behind the 2026-07-16
+    "not wired properly on the luxelink side" report — every one of those gaps was a real config/data
+    hole this module already degrades around SAFELY, but silently). Universal: the exact same checks run
+    for every tenant, house included — Boost simply passes all of them today, so this endpoint changes
+    NOTHING about how closing/recon behave, it only makes the existing degrade states visible. Read-only,
+    no gate/money-math touched."""
+    require_org(org_id)
+    client = sb()
+    issues = []
+
+    module_on = True
+    try:
+        from app.modules.core.entitlements import module_enabled
+        module_on = module_enabled(org_id, "closing", client)
+    except Exception:
+        pass
+    if not module_on:
+        issues.append({"code": "module_disabled", "severity": "critical",
+                       "message": "Daily Closing is not enabled for this tenant's billing plan — enable "
+                                  "it under Admin \u2192 Billing / Modules."})
+
+    # NOTE: every "is this a real gap" check below fires ONLY on a CONFIRMED count of 0 (never on
+    # None = the table/migration was unreachable) \u2014 an unrun migration in some environment must
+    # never be misreported as "no stores" / "no sales" for a tenant that's actually fine.
+    sm_n = _rc_count(client, "commcalc", "store_mapping", org_id)
+    so_n = _rc_count(client, "storeops", "stores", org_id)
+    if sm_n == 0 and so_n == 0:
+        issues.append({"code": "no_stores", "severity": "critical",
+                       "message": "No stores found in StoreOps or commcalc.store_mapping \u2014 create "
+                                  "stores under StoreOps \u2192 Admin \u2192 Stores first; nothing else "
+                                  "in Daily Closing can resolve a store until this exists."})
+    elif sm_n == 0 and (so_n or 0) > 0:
+        issues.append({"code": "no_store_mapping", "severity": "warning",
+                       "message": f"{so_n} store(s) in StoreOps but none yet mirrored into "
+                                  "commcalc.store_mapping (the table B2B/X-report recon resolves stores "
+                                  "against) \u2014 this self-heals the next time each store is saved in "
+                                  "StoreOps Admin; re-save a store if this persists."})
+
+    raw_n = _rc_count(client, "commcalc", "raw_sales", org_id)
+    feed_n = _rc_count(client, "commcalc", "daily_sales_feed", org_id)
+    if raw_n == 0 and feed_n == 0:
+        issues.append({"code": "no_sales_source", "severity": "critical",
+                       "message": "No B2B sales data has ever landed in raw_sales or daily_sales_feed \u2014 "
+                                  "money/count recon and the \u2018who worked\u2019 check will stay "
+                                  "recon-pending for every day. Check the daily email-import mapping (a "
+                                  "*Sales* \u2192 sales rule on this tenant's mailbox under Email Imports) "
+                                  "or upload a Sales Transaction Details file."})
+
+    xr_n = _rc_count(client, "commcalc", "pos_tender_summary", org_id)
+    if xr_n == 0:
+        issues.append({"code": "no_xreport_ever", "severity": "warning",
+                       "message": "No POS X-report has ever been imported \u2014 cash & credit recon will "
+                                  "stay \u2018pending\u2019 (never falsely flagged/blocked, but never "
+                                  "verified either). Check (1) the mailbox has an *X*Report* \u2192 "
+                                  "x_report rule under Email Imports and (2) b2bsoft is actually scheduled "
+                                  "to email an X-Report for this tenant (a separate subscription from the "
+                                  "mailbox rule)."})
+
+    dc_n = _rc_count(client, "commcalc", "daily_closing", org_id)
+    if dc_n == 0:
+        issues.append({"code": "no_closings_yet", "severity": "info",
+                       "message": "No daily_closing rows yet \u2014 reps haven't submitted via "
+                                  "/closing/submit, and/or the Google-sheet auto-import (Closing \u2192 "
+                                  "Auto-Import) isn't configured for this tenant yet."})
+
+    from . import tender_config, count_config
+    try:
+        _tdefs, _tmaps = tender_config.load_tender_config(client, org_id)
+    except Exception:
+        _tdefs = []
+    try:
+        _cdefs = count_config.load_count_config(client, org_id)
+    except Exception:
+        _cdefs = []
+
+    return {
+        "org_id": org_id, "module_enabled": module_on,
+        "counts": {"store_mapping": sm_n, "storeops_stores": so_n, "raw_sales": raw_n,
+                  "daily_sales_feed": feed_n, "pos_tender_summary": xr_n, "daily_closing": dc_n},
+        "tender_config": "custom" if _tdefs else "standard (built-in 7 tenders)",
+        "count_config": "custom" if _cdefs else "standard (built-in 3 fields)",
+        "issues": issues,
+        "ok": not any(i["severity"] == "critical" for i in issues),
+    }
+
+
 @router.get("/health")
 def health():
     return {"status": "ok", "module": "closing"}
