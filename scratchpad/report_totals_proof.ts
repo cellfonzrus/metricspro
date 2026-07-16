@@ -12,7 +12,8 @@ const eq = (name: string, got: any, want: any) => {
 }
 const ok = (name: string, cond: boolean) => { if (cond) { pass++; console.log(`  ok  ${name}`) } else { fail++; console.log(`FAIL  ${name}`) } }
 
-// ---- The EXACT sales-report column set ----
+// ---- The EXACT sales-report column set (v2: Swaps added between Upgrades and Accessory $) ----
+// idx: 0 Store 1 Market 2 Rep 3 Date 4 Txns 5 Activations 6 BYOD 7 Upgrades 8 Swaps 9 Acc$ 10 Rev$ 11 GP$
 const salesCols: TotalsCol[] = [
   { header: 'Store', get: r => r.store },
   { header: 'Market', get: r => r.market || '—' },
@@ -22,14 +23,15 @@ const salesCols: TotalsCol[] = [
   { header: 'Activations', get: r => r.activations, align: 'right' },
   { header: 'BYOD', get: r => r.byod, align: 'right' },
   { header: 'Upgrades', get: r => r.upgrades, align: 'right' },
+  { header: 'Swaps', get: r => r.swaps, align: 'right' },
   { header: 'Accessory $', get: r => r.accessory_rev, money: true },
   { header: 'Revenue $', get: r => r.revenue, money: true },
   { header: 'GP $', get: r => r.gp, money: true },
 ]
 const salesRows = [
-  { store: 'Store A', market: 'North', salesperson: 'Jane', trans_date: '2026-07-01', txns: 3, activations: 2, byod: 1, upgrades: 0, accessory_rev: 40.5, revenue: 500, gp: 120 },
-  { store: 'Store A', market: 'North', salesperson: 'Bob', trans_date: '2026-07-02', txns: 2, activations: 1, byod: 0, upgrades: 1, accessory_rev: 10, revenue: 300.25, gp: 80 },
-  { store: 'Store B', market: 'South', salesperson: 'Amy', trans_date: '2026-07-01', txns: 5, activations: 4, byod: 2, upgrades: 1, accessory_rev: 305.64, revenue: 999.75, gp: 250.5 },
+  { store: 'Store A', market: 'North', salesperson: 'Jane', trans_date: '2026-07-01', txns: 3, activations: 2, byod: 1, upgrades: 0, swaps: 1, accessory_rev: 40.5, revenue: 500, gp: 120 },
+  { store: 'Store A', market: 'North', salesperson: 'Bob', trans_date: '2026-07-02', txns: 2, activations: 1, byod: 0, upgrades: 1, swaps: 0, accessory_rev: 10, revenue: 300.25, gp: 80 },
+  { store: 'Store B', market: 'South', salesperson: 'Amy', trans_date: '2026-07-01', txns: 5, activations: 4, byod: 2, upgrades: 1, swaps: 2, accessory_rev: 305.64, revenue: 999.75, gp: 250.5 },
 ]
 
 console.log('\n== A. Sales-report grand total (all rows) ==')
@@ -43,18 +45,20 @@ eq('Txns text formatted', A[4].text, '10')
 eq('Activations summed (2+1+4=7)', A[5].raw, 7)
 eq('BYOD summed (1+0+2=3)', A[6].raw, 3)
 eq('Upgrades summed (0+1+1=2)', A[7].raw, 2)
-eq('Accessory$ summed raw', Math.round(A[8].raw as number * 100) / 100, 356.14)
-eq('Accessory$ money text', A[8].text, '$356.14')
-eq('Revenue$ summed raw', Math.round(A[9].raw as number * 100) / 100, 1800)
-eq('Revenue$ money text', A[9].text, '$1,800.00')
-eq('GP$ summed raw (120+80+250.5)', A[10].raw, 450.5)
-eq('GP$ money text', A[10].text, '$450.50')
-ok('count cols are agg=sum', A[4].agg === 'sum' && A[7].agg === 'sum')
-ok('money cols are agg=sum', A[8].agg === 'sum' && A[10].agg === 'sum')
+eq('Swaps summed (1+0+2=3)', A[8].raw, 3)
+eq('Swaps text formatted', A[8].text, '3')
+eq('Accessory$ summed raw', Math.round(A[9].raw as number * 100) / 100, 356.14)
+eq('Accessory$ money text', A[9].text, '$356.14')
+eq('Revenue$ summed raw', Math.round(A[10].raw as number * 100) / 100, 1800)
+eq('Revenue$ money text', A[10].text, '$1,800.00')
+eq('GP$ summed raw (120+80+250.5)', A[11].raw, 450.5)
+eq('GP$ money text', A[11].text, '$450.50')
+ok('count cols are agg=sum (incl. Swaps)', A[4].agg === 'sum' && A[7].agg === 'sum' && A[8].agg === 'sum')
+ok('money cols are agg=sum', A[9].agg === 'sum' && A[11].agg === 'sum')
 ok('text/date cols are agg=none', A[1].agg === 'none' && A[3].agg === 'none')
 
 console.log('\n== B. Money raw stays numeric (Excel), text is formatted (screen/PDF) ==')
-ok('money raw is a number type', typeof A[9].raw === 'number')
+ok('money raw is a number type', typeof A[10].raw === 'number')
 ok('label raw is the string', A[0].raw === 'TOTAL')
 ok('blank raw is empty string', A[1].raw === '')
 
@@ -108,7 +112,7 @@ eq('all-summable-first → label in first text col', [f1[0].text, f1[1].text], [
 console.log('\n== G. Empty / degenerate inputs never throw ==')
 // Over zero rows a count column can't be confirmed numeric → blank; money still sums to $0.00;
 // the label still lands. (ReportShell separately skips the export total row when there are 0 rows.)
-ok('empty rows → label + $0.00 money + blank counts', (() => { const g = computeTotalRow(salesCols, []); return g[0].raw === 'TOTAL' && g[4].text === '' && g[8].text === '$0.00' })())
+ok('empty rows → label + $0.00 money + blank counts (incl. Swaps)', (() => { const g = computeTotalRow(salesCols, []); return g[0].raw === 'TOTAL' && g[4].text === '' && g[8].text === '' && g[9].text === '$0.00' })())
 eq('toNumber strips currency', toNumber('$1,234.50'), 1234.5)
 eq('toNumber blank → null', toNumber(''), null)
 eq('toNumber non-numeric → null', toNumber('abc'), null)
@@ -132,15 +136,17 @@ const lastRow = sheet.rows[sheet.rows.length - 1]
 ok('export sheet has exactly rows+1', sheet.rows.length === salesRows.length + 1)
 eq('export TOTAL Store cell', rawCell(sheet.columns[0], lastRow), 'TOTAL')
 eq('export TOTAL Txns cell = 10 (real number)', rawCell(sheet.columns[4], lastRow), 10)
-eq('export TOTAL Revenue$ cell = 1800 (real number)', rawCell(sheet.columns[9], lastRow), 1800)
+eq('export TOTAL Swaps cell = 3 (real number)', rawCell(sheet.columns[8], lastRow), 3)
+eq('export TOTAL Revenue$ cell = 1800 (real number)', rawCell(sheet.columns[10], lastRow), 1800)
 eq('export normal row still reads through', rawCell(sheet.columns[0], salesRows[0]), 'Store A')
-ok('export money total number matches on-screen raw', rawCell(sheet.columns[10], lastRow) === A[10].raw)
+ok('export money total number matches on-screen raw', rawCell(sheet.columns[11], lastRow) === A[11].raw)
 
 console.log('\n== I. Grouped export → per-sheet subtotal == what that group shows ==')
 const north = salesRows.filter(r => r.market === 'North')
 const gTot = computeTotalRow(salesCols, north)
 eq('group North Txns subtotal (3+2)', gTot[4].raw, 5)
-eq('group North Revenue$ subtotal (500+300.25)', Math.round(gTot[9].raw as number * 100) / 100, 800.25)
+eq('group North Swaps subtotal (1+0)', gTot[8].raw, 1)
+eq('group North Revenue$ subtotal (500+300.25)', Math.round(gTot[10].raw as number * 100) / 100, 800.25)
 
 console.log(`\n==== ${pass} passed, ${fail} failed ====`)
 if (fail) process.exit(1)

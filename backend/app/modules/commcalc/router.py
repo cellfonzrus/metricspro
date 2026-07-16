@@ -6704,7 +6704,7 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
         a = agg.get(k)
         if not a:
             a = agg[k] = {"store": store, "salesperson": rep, "trans_date": date, "_txn": set(),
-                          "_act": set(), "_byod": set(), "_upg": set(), "lines": 0,
+                          "_act": set(), "_byod": set(), "_upg": set(), "_swap": set(), "lines": 0,
                           "accessory_rev": 0.0, "revenue": 0.0, "gp": 0.0}
         if tid:
             a["_txn"].add(tid)
@@ -6720,6 +6720,14 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
             a["_upg"].add(tid)
         elif tid and _cls == "premium":
             a["_act"].add(tid)
+        # Swaps — a SALES-REPORT-LOCAL, DISPLAY-ONLY count of distinct transactions whose Contract Type
+        # names a swap (contains 'swap', case-insensitive: SIM / device / warranty / BYOD swaps).
+        # DELIBERATELY NOT folded into the shared classify_contract_type: that classifier feeds
+        # commissions AND targets (money-adjacent) and already maps 'BYOD Swap' -> byod, so adding a
+        # swap class there would silently reclassify BYOD. This is an INDEPENDENT tally alongside
+        # activations/byod/upgrades and changes none of them.
+        if tid and "swap" in str(r.get("contract_type") or "").lower():
+            a["_swap"].add(tid)
 
     # Resolve each store to its market (store_mapping) so the report can filter by market —
     # keyed by address, store_code, or leading store-number, matching commission-trend's resolver.
@@ -6731,11 +6739,12 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
         sm_rows = []   # market resolution is optional — never 500 the report over a store_mapping read
     def _lead_sr(s):
         m = _re_sr.match(r"\s*(\d+)", str(s or "")); return m.group(1) if m else ""
-    mkt_by_code, mkt_by_addr, mkt_by_num = {}, {}, {}
+    mkt_by_code, mkt_by_addr, mkt_by_num, all_markets = {}, {}, {}, set()
     for s in sm_rows:
         mk = (s.get("market") or "").strip()
         if not mk:
             continue
+        all_markets.add(mk)
         code = str(s.get("store_code") or "").strip()
         addr = str(s.get("store_address") or "").strip()
         if code:
@@ -6756,6 +6765,7 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
         a["activations"] = len(a.pop("_act"))
         a["byod"] = len(a.pop("_byod"))
         a["upgrades"] = len(a.pop("_upg"))
+        a["swaps"] = len(a.pop("_swap"))
         for key in ("accessory_rev", "revenue", "gp"):
             a[key] = round(a[key], 2)
         a["market"] = _market_for(a["store"])
@@ -6771,12 +6781,19 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
     totals = {
         "txns": sum(r["txns"] for r in out), "lines": sum(r["lines"] for r in out),
         "activations": sum(r["activations"] for r in out), "byod": sum(r["byod"] for r in out),
-        "upgrades": sum(r["upgrades"] for r in out),
+        "upgrades": sum(r["upgrades"] for r in out), "swaps": sum(r["swaps"] for r in out),
         "accessory_rev": round(sum(r["accessory_rev"] for r in out), 2),
         "revenue": round(sum(r["revenue"] for r in out), 2), "gp": round(sum(r["gp"] for r in out), 2),
     }
+    # RULE FIVE §3d pick-don't-type filter options — built from the org's REAL data (never a hard-coded
+    # or house-only list): distinct stores from the union rows actually shown, and markets from those
+    # rows' resolved market UNION every store_mapping market (so a market with no sales this month is
+    # still a valid pick). The page's market/store MultiSelects render EMPTY without these keys.
+    filter_stores = sorted({r["store"] for r in out if r.get("store")})
+    filter_markets = sorted({m for m in ([r.get("market") for r in out] + list(all_markets)) if m})
     return {"period": period, "source": source, "org_id": org_id, "rows": out, "totals": totals,
             "periods": sorted(periods, reverse=True),
+            "stores": filter_stores, "markets": filter_markets,
             # Transparency (owner's debug-first mandate): exactly what this read used, so a truncated or
             # wrong-tenant view is self-evident. `org_id` above surfaces the super-admin org-resolution
             # default (a no-org_id request reads the HOUSE org). `source_meta` explains the union.

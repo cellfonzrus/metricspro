@@ -52,7 +52,7 @@ function ymd(v: any): string {
   return s
 }
 
-export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick, totals }: {
+export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick, totals, stickyHeader }: {
   title: string
   subtitle?: string
   filename?: string
@@ -65,6 +65,11 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   totals?: boolean                          // opt-in: a pinned TOTAL row (sum of money+numeric cols over
                                             // ALL filtered rows) — shown on screen AND in every export.
                                             // Off by default so other reports are unchanged.
+  stickyHeader?: boolean                    // opt-in: pin the column-header ribbon at the top while the
+                                            // body scrolls. Off by default → other consumers unchanged.
+                                            // z-index 3 keeps it above the scrolling body AND above the
+                                            // sticky totals footer (z-index 2); both use --surface2 so
+                                            // they stay opaque in light & dark.
 }) {
   const cols = useMemo(() => columns.filter(Boolean), [columns])
   const byKey = useMemo(() => Object.fromEntries(cols.map(c => [key(c), c])), [cols])
@@ -159,6 +164,14 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }
   const cell: React.CSSProperties = { padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 13 }
   const th: React.CSSProperties = { textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', position: 'sticky', top: 0, background: 'var(--surface2)' }
+  // Header-cell positioning. Default (OFF) = position:relative EXACTLY as before, so the ResizeHandle
+  // anchors to it and every non-opting consumer is byte-identical. When stickyHeader is ON the cell is
+  // sticky+z3 (sticky is still a positioned containing block, so the absolute ResizeHandle keeps
+  // anchoring), with a box-shadow bottom rule because border-collapse borders scroll away from a
+  // sticky cell. --surface2 stays opaque so scrolling rows never bleed through.
+  const thPos: React.CSSProperties = stickyHeader
+    ? { position: 'sticky', top: 0, zIndex: 3, boxShadow: 'inset 0 -1px 0 var(--border)' }
+    : { position: 'relative' }
 
   return (
     <div>
@@ -240,7 +253,7 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
       <div className="table-wrapper" style={{ maxHeight: '70vh', overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
           <colgroup>{cols.map(c => <col key={key(c)} style={{ width: cw.width(key(c)) }} />)}</colgroup>
-          <thead><tr>{cols.map(c => <th key={key(c)} style={{ ...th, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', whiteSpace: 'nowrap', position: 'relative' }}>{c.header}<ResizeHandle onDown={e => cw.start(key(c), e)} onReset={() => cw.reset(key(c))} /></th>)}</tr></thead>
+          <thead><tr>{cols.map(c => <th key={key(c)} style={{ ...th, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', whiteSpace: 'nowrap', ...thPos }}>{c.header}<ResizeHandle onDown={e => cw.start(key(c), e)} onReset={() => cw.reset(key(c))} /></th>)}</tr></thead>
           <tbody>
             {!groups && filtered.map((r, i) => (
               <tr key={i} onClick={onRowClick ? () => onRowClick(r) : undefined} style={onRowClick ? { cursor: 'pointer' } : undefined}
@@ -264,7 +277,7 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
           </tbody>
           {totalCells && (
             <tfoot><tr>
-              {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: (isMoney(c) || c.align === 'right') ? 'right' : 'left', borderTop: '2px solid var(--text3)', position: 'sticky', bottom: 0, background: 'var(--surface2)' }}>{totalCells[i].text}</td>)}
+              {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: (isMoney(c) || c.align === 'right') ? 'right' : 'left', borderTop: '2px solid var(--text3)', position: 'sticky', bottom: 0, zIndex: 2, background: 'var(--surface2)' }}>{totalCells[i].text}</td>)}
             </tr></tfoot>
           )}
           {!totals && moneyCols.length > 0 && filtered.length > 0 && (
