@@ -196,6 +196,7 @@ export default function SalesReportPage() {
           filename={`sales-report-${period.replace(/\s+/g, '-')}`}
           columns={cols}
           rows={fRows}
+          totals
           onRowClick={openDrill}
         />
       )}

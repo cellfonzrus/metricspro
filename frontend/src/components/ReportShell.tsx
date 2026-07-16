@@ -11,6 +11,7 @@ import { Fragment, useMemo, useState } from 'react'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
+import { computeTotalRow } from '@/lib/report-totals'
 
 type Col = ExportColumn
 type Filter = { field: string; op: string; value: string }
@@ -51,7 +52,7 @@ function ymd(v: any): string {
   return s
 }
 
-export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick }: {
+export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick, totals }: {
   title: string
   subtitle?: string
   filename?: string
@@ -61,6 +62,9 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   right?: React.ReactNode                   // extra toolbar content (page-specific controls)
   children?: React.ReactNode                // optional custom body ABOVE the table (charts, tiles…)
   onRowClick?: (row: any) => void           // makes each data row clickable (e.g. drill into a transaction)
+  totals?: boolean                          // opt-in: a pinned TOTAL row (sum of money+numeric cols over
+                                            // ALL filtered rows) — shown on screen AND in every export.
+                                            // Off by default so other reports are unchanged.
 }) {
   const cols = useMemo(() => columns.filter(Boolean), [columns])
   const byKey = useMemo(() => Object.fromEntries(cols.map(c => [key(c), c])), [cols])
@@ -124,12 +128,33 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   const moneyCols = cols.filter(isMoney)
   const subtotal = (rs: any[], c: Col) => rs.reduce((s, r) => s + (Number(String(c.get(r)).replace(/[^0-9.-]/g, '')) || 0), 0)
 
-  const buildPayload = (): ExportPayload => ({
-    title, subtitle, filename: filename || title.replace(/[^\w]+/g, '_').toLowerCase(),
-    sheets: groups
-      ? groups.map(([g, rs]) => ({ name: g.slice(0, 28), columns: cols, rows: rs }))
-      : [{ name: 'Report', columns: cols, rows: filtered }],
-  })
+  // Opt-in pinned TOTAL row. On-screen shows the GRAND total over every filtered row (across all
+  // groups); each EXPORT sheet ends with a TOTAL row summing that sheet (= the same grand total when
+  // ungrouped, = each group's subtotal per sheet when grouped) so what you see is what you export.
+  const totalCells = useMemo(
+    () => (totals && filtered.length ? computeTotalRow(cols, filtered) : null),
+    [totals, cols, filtered],
+  )
+  // Append a synthetic TOTAL row to one export sheet. A sentinel row carries the precomputed cells;
+  // each column's getter is wrapped to read them for that row and delegate to the original otherwise —
+  // so export.tsx formats/serializes the total exactly like any other cell (no change to export.tsx).
+  const TOTAL_ROW = '__rsTotal'
+  const sheetWithTotal = (rs: any[]): { columns: Col[]; rows: any[] } => {
+    if (!rs.length) return { columns: cols, rows: rs }   // never export a lone total-of-nothing row
+    const cells = computeTotalRow(cols, rs)
+    const wrapped = cols.map((c, i) => ({ ...c, get: (row: any) => (row && row[TOTAL_ROW]) ? row[TOTAL_ROW][i].raw : c.get(row) }))
+    return { columns: wrapped, rows: [...rs, { [TOTAL_ROW]: cells }] }
+  }
+
+  const buildPayload = (): ExportPayload => {
+    const mkSheet = (rs: any[]) => totals ? sheetWithTotal(rs) : { columns: cols, rows: rs }
+    return {
+      title, subtitle, filename: filename || title.replace(/[^\w]+/g, '_').toLowerCase(),
+      sheets: groups
+        ? groups.map(([g, rs]) => ({ name: g.slice(0, 28), ...mkSheet(rs) }))
+        : [{ name: 'Report', ...mkSheet(filtered) }],
+    }
+  }
 
   const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }
   const cell: React.CSSProperties = { padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 13 }
@@ -237,7 +262,12 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
             ))}
             {filtered.length === 0 && <tr><td style={{ ...cell, textAlign: 'center', color: 'var(--text3)', padding: 24 }} colSpan={cols.length}>No rows match the filters.</td></tr>}
           </tbody>
-          {moneyCols.length > 0 && filtered.length > 0 && (
+          {totalCells && (
+            <tfoot><tr>
+              {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: (isMoney(c) || c.align === 'right') ? 'right' : 'left', borderTop: '2px solid var(--text3)', position: 'sticky', bottom: 0, background: 'var(--surface2)' }}>{totalCells[i].text}</td>)}
+            </tr></tfoot>
+          )}
+          {!totals && moneyCols.length > 0 && filtered.length > 0 && (
             <tfoot><tr style={{ borderTop: '2px solid var(--border)' }}>
               {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: isMoney(c) ? 'right' : 'left' }}>{isMoney(c) ? money(subtotal(filtered, c)) : (i === 0 ? 'Total' : '')}</td>)}
             </tr></tfoot>
