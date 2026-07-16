@@ -1,3 +1,6 @@
+# SNAPSHOT: verbatim copy of sale_installment_engine.py at HEAD (pre-mig-210, base origin/main 144a076→f2a792e)
+# BEFORE the installment-edit-m1gate changes. Used ONLY by installment_edit_m1gate_proof.py to prove the
+# new engine is byte-identical for schedules that do NOT opt into m1_gate=activation_payment. Do not edit.
 """Sale-triggered multi-month rep-pay engine — Commission-Plan payout type (migration 201).
 
 DOCTRINE (owner, 2026-07-14; commission-0 §7b): rep multi-month commission is a COMMISSION-PLAN payout
@@ -9,13 +12,6 @@ PAID GATE (owner rev-B correction, §7b decision 2): months 1..N pay ONLY when, 
 line is ACTIVE and the dealer is receiving residual on that line — proven by raw_mi presence for that
 line/period. "We pay as we get paid." A sold-but-unpaid line is WITHHELD ($0) and surfaced as TWO flags
 (sources 'commission_rebate_tracking' + 'employee_miss'). Clawback is optional/off (schedule config).
-
-MONTH-1 "PAID AT ACTIVATION" (owner directive 2026-07-16, mig 210): a schedule may set m1_gate=
-'activation_payment' so month_index 1 qualifies when the ACTIVATION TRANSACTION ITSELF shows a first-month
-payment collected at the register (configurable matcher — see DEFAULT_ACTIVATION_PAYMENT_MATCHER), INSTEAD
-OF the raw_mi residual gate. Months 2..N keep the schedule's per-month gate. This is DISTINCT from
-gate_from_month=2 ("month 1 always pays, ungated"): here month 1 IS gated, on the sale's own payment.
-m1_gate='inherit' (default) is byte-identical to pre-mig-210.
 
 MRC (§7b decision 1): pct_mrc lines resolve MRC from the product_mrc CATALOG (mig 074), auto-prefilled by
 extracting the $ from the product-description text, user-confirmed. NEVER from the carrier statement.
@@ -48,145 +44,6 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"
 # The line classifications the user chooses from (§7b decision 1). Carrier-agnostic; reuse the existing
 # classifier CONFIG to auto-suggest — never a new sixth classifier.
 CLASSIFICATIONS = ("accessory", "activation", "upgrade", "swap", "bill_payment", "rebate", "misc_other")
-
-# ── MONTH-1 "PAID AT ACTIVATION" GATE (mig 210) ─────────────────────────────────────────────────────
-# Owner directive 2026-07-16: month_index 1 may qualify when the ACTIVATION TRANSACTION ITSELF shows a
-# first-month payment collected at the register — INSTEAD OF the raw_mi carrier-residual gate. Months
-# 2..N keep the schedule's existing per-month gate. This is DISTINCT from gate_from_month=2 ("month 1
-# always pays, ungated") — here month 1 IS gated, on the sale's own payment.
-#
-# WHAT COUNTS is CONFIGURABLE per org (RULE TWO — no hard-coded product/category/carrier). Default
-# studied against the luxelink B2BSoft "Sales Transaction Details" sample: the customer's first-month
-# payment surfaces as System "Access Charge"/"Wallet Funding" lines and Rtr "Other Carr. payments"
-# plan/airtime lines, each carrying a NONZERO Ext Price (= the amount actually rung). The device line
-# (BrandedHandset) and the bookkeeping "Activation payment" line (Ext Price ALWAYS 0; negative GP = the
-# DEALER's activation cost, not customer money) are deliberately NOT the signal. Ext Price is the default
-# value field because it is the amount charged to the customer; GP is dealer profit and Unit Price is a
-# list price present even when nothing was rung.
-DEFAULT_ACTIVATION_PAYMENT_MATCHER = {
-    "departments": ["system", "rtr"],
-    "categories": ["system", "other carr. payments"],
-    "product_keywords": ["access charge", "wallet funding", "airtime", "recharge", "refill",
-                         "rtr", "plan", "first month", "monthly"],
-    "value_field": "ext_price",   # the numeric column that proves money was collected
-    "min_amount": 0.01,           # the line must charge at least this (excludes the $0 bookkeeping line)
-}
-
-# The DUAL-CATEGORY item_mapping (mig 210) is the AUTHORITATIVE matcher when configured: an item mapped
-# (in commcalc.item_mapping) to sales_category OR kpi_category == 'activation_payment', with money
-# collected, IS a first-month payment. The heuristic matcher above is the seeded FALLBACK used until the
-# org maps items to that category. "The mapping is the matcher, with a seeded default." (owner 2026-07-16)
-ACTIVATION_PAYMENT_CATEGORY = "activation_payment"
-
-
-def _norm_matcher(m):
-    """Normalize a stored/default matcher into lowercased sets + a value field + a min amount. PURE."""
-    m = m or {}
-    return {
-        "departments": {str(x).strip().lower() for x in (m.get("departments") or []) if str(x).strip()},
-        "categories": {str(x).strip().lower() for x in (m.get("categories") or []) if str(x).strip()},
-        "product_keywords": {str(x).strip().lower() for x in (m.get("product_keywords") or []) if str(x).strip()},
-        "value_field": (str(m.get("value_field") or "ext_price").strip().lower() or "ext_price"),
-        "min_amount": safe_float(m.get("min_amount")) if m.get("min_amount") is not None else 0.01,
-    }
-
-
-def _load_activation_matcher(client, org_id):
-    """The org's activation-payment matcher (commission_org_config.activation_payment_matcher), falling
-    back to DEFAULT_ACTIVATION_PAYMENT_MATCHER when unset or when mig 210 isn't applied. Returns a
-    NORMALIZED matcher (sets). Degrades to the default on any error — never raises."""
-    stored = None
-    try:
-        rows = (client.schema("commcalc").table("commission_org_config")
-                .select("activation_payment_matcher").eq("org_id", org_id).limit(1).execute().data) or []
-        if rows:
-            stored = rows[0].get("activation_payment_matcher")
-    except Exception:
-        stored = None
-    return _norm_matcher(stored or DEFAULT_ACTIVATION_PAYMENT_MATCHER)
-
-
-def _item_key(sku, desc):
-    """Mirror of router._item_key: SKU if present, else upper(trim(desc)). The item_mapping join key."""
-    s = str(sku or "").strip()
-    if s and s.lower() not in ("nan", "none", "0", "0.0"):
-        return s.upper()[:200]
-    return str(desc or "").strip().upper()[:200]
-
-
-def _load_item_map(client, org_id):
-    """{item_key -> row} of the org's item_mapping (with the mig-210 sales_category/kpi_category). Empty
-    dict if migration 041/210 isn't applied. Self-contained (no router import)."""
-    try:
-        rows = (client.schema("commcalc").table("item_mapping").select("*")
-                .eq("org_id", org_id).limit(100000).execute().data) or []
-        return {r["item_key"]: r for r in rows if r.get("item_key")}
-    except Exception:
-        return {}
-
-
-def _line_value_ok(row, matcher):
-    """The 'money collected' gate: the line's value_field is at least min_amount. PURE."""
-    return safe_float(row.get(matcher.get("value_field") or "ext_price")) >= safe_float(matcher.get("min_amount"))
-
-
-def _line_class_matches(row, matcher):
-    """HEURISTIC classification only (department OR category OR product-desc keyword) — the seeded fallback
-    'is this a payment/plan/airtime line'. Value gate applied separately. PURE (matcher = normalized sets)."""
-    dept = str(row.get("department", "") or "").strip().lower()
-    cat = str(row.get("category", "") or "").strip().lower()
-    prod = str(row.get("product_desc", "") or "").strip().lower()
-    kws = matcher.get("product_keywords") or set()
-    return ((dept and dept in (matcher.get("departments") or set()))
-            or (cat and cat in (matcher.get("categories") or set()))
-            or (bool(kws) and prod and any(k in prod for k in kws)))
-
-
-def _line_mapped_ap(row, item_map, ap_key):
-    """True if the line's item is mapped (item_mapping) to the activation-payment category in EITHER
-    dimension (sales_category or kpi_category). PURE — item_map prebuilt {item_key -> row}."""
-    m = item_map.get(_item_key(row.get("sku"), row.get("product_desc") or row.get("item_desc")))
-    if not m:
-        return False
-    return (str(m.get("sales_category") or "").strip().lower() == ap_key
-            or str(m.get("kpi_category") or "").strip().lower() == ap_key)
-
-
-def _line_is_activation_payment(row, matcher):
-    """True if ONE sale line is a first-month PAYMENT line via the HEURISTIC matcher (class + value). Kept
-    for the seeded-default path + unit tests. PURE."""
-    return _line_class_matches(row, matcher) and _line_value_ok(row, matcher)
-
-
-def _build_trans_index(sales):
-    """{trans_id -> [all sale lines on that transaction]} so the activation-payment gate can inspect the
-    WHOLE transaction (the payment/System lines, not just the triggering line). PURE."""
-    idx = {}
-    for r in sales:
-        tid = str(r.get("trans_id") or "").strip()
-        if tid:
-            idx.setdefault(tid, []).append(r)
-    return idx
-
-
-def _activation_payment_met(trans_id, trans_index, matcher, item_map=None, ap_key=None, has_ap_mappings=False):
-    """True if the activation transaction shows any qualifying first-month payment line.
-    AUTHORITATIVE when the org has mapped items to the activation-payment category (has_ap_mappings): a
-    line qualifies iff its item is mapped to `ap_key` (either dimension) AND money was collected.
-    Otherwise falls back to the seeded HEURISTIC matcher (class + value). PURE."""
-    if not trans_id:
-        return False
-    for r in (trans_index.get(trans_id) or []):
-        if not _line_value_ok(r, matcher):
-            continue
-        if has_ap_mappings:
-            if _line_mapped_ap(r, item_map or {}, ap_key or ACTIVATION_PAYMENT_CATEGORY):
-                return True
-        else:
-            if _line_class_matches(r, matcher):
-                return True
-    return False
-
 
 # ── MRC PREFILL: extract the $ monthly charge from a product-description text (PURE) ────────────────
 _MONEY = r"\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)"
@@ -463,19 +320,6 @@ def compute_sale_installments(client, org_id, pay_period, persist=False):
     # paid gate reads raw_mi for the PAY period only (is the line active/paying NOW).
     mi_index = _mi_index(_read_mi(client, org_id, pay_period))
 
-    # MONTH-1 "paid at activation" gate (mig 210): only prep the matcher when at least one schedule opts
-    # in — so a schedule that doesn't opt in is byte-identical to pre-mig-210 (no extra reads, no new
-    # ledger fields). act_matcher is normalized (sets); trans_index is built per sale_period on demand.
-    any_activation = any((str(s.get("m1_gate") or "inherit").strip().lower()) == "activation_payment" for s in scheds)
-    act_matcher = _load_activation_matcher(client, org_id) if any_activation else None
-    # DUAL-CATEGORY item mapping (mig 210): when the org has mapped any item to the activation-payment
-    # category, the mapping is AUTHORITATIVE; else the seeded heuristic matcher is the fallback.
-    ap_item_map = _load_item_map(client, org_id) if any_activation else {}
-    has_ap_mappings = any(
-        (str(v.get("sales_category") or "").strip().lower() == ACTIVATION_PAYMENT_CATEGORY
-         or str(v.get("kpi_category") or "").strip().lower() == ACTIVATION_PAYMENT_CATEGORY)
-        for v in ap_item_map.values()) if any_activation else False
-
     pm = parse_period(pay_period)
     by_rep, ledger, flags = {}, [], []
     n_paid = n_withheld = 0
@@ -489,9 +333,6 @@ def compute_sale_installments(client, org_id, pay_period, persist=False):
         if month_index < 1:
             continue
         sales = _read_sales(client, org_id, sale_period)
-        # month_index 1 <=> sale_period == pay_period (k=0), so the activation-payment gate only ever
-        # needs the trans index for that period. Built from the FULL read (payment/System lines included).
-        trans_index = _build_trans_index(sales) if (any_activation and sale_period == pay_period) else None
         valid = [r for r in sales
                  if str(r.get("voided", "") or "").upper().strip() != "YES"
                  and str(r.get("trans_type", "") or "").strip() != "Return"]
@@ -525,22 +366,8 @@ def compute_sale_installments(client, org_id, pay_period, persist=False):
 
                 gate_mode = (sched.get("gate_mode") or "paid_residual").strip().lower()
                 gate_from = int(sched.get("gate_from_month") or 1)
-                m1_gate = (str(sched.get("m1_gate") or "inherit").strip().lower())
-                # MONTH-1 "paid at activation" (mig 210): month 1 qualifies when the ACTIVATION TRANSACTION
-                # shows a first-month payment (configurable matcher), NOT via raw_mi residual. Months 2..N
-                # keep the schedule's existing gate. Only opted-in rows carry the extra ledger fields, so an
-                # 'inherit' schedule is byte-identical to pre-mig-210. m1_gate wins over gate_from_month for
-                # month 1 (the owner wants month 1 GATED on the sale's own payment, not ungated).
-                if month_index == 1 and m1_gate == "activation_payment":
-                    gate_met = _activation_payment_met(str(line.get("trans_id") or "").strip(),
-                                                       trans_index or {}, act_matcher or {},
-                                                       ap_item_map, ACTIVATION_PAYMENT_CATEGORY, has_ap_mappings)
-                    mi_row = None
-                    gate_kind = "activation_payment"
-                else:
-                    gated = month_index >= gate_from and gate_mode != "none"
-                    gate_met, mi_row = _gate_met(line, mi_index, gate_mode) if gated else (True, None)
-                    gate_kind = None
+                gated = month_index >= gate_from and gate_mode != "none"
+                gate_met, mi_row = _gate_met(line, mi_index, gate_mode) if gated else (True, None)
 
                 repU = rep.upper()
                 mdn = _norm_mdn(line.get("mdn"))
@@ -554,38 +381,24 @@ def compute_sale_installments(client, org_id, pay_period, persist=False):
                 else:
                     n_withheld += 1
                     status = "withheld_unpaid"
-                    # TWO flags for a sold-but-unpaid line (existing flags machinery; delete-first by source).
-                    # Under the month-1 activation-payment gate the miss reason is "no first-month payment
-                    # collected at activation" rather than "not receiving residual" — same two flag sources.
+                    # TWO flags for a sold-but-unpaid line (existing flags machinery; delete-first by source)
                     base = {"period": pay_period, "period_month": pm.get("month"),
                             "period_year": pm.get("year"), "epay_salesperson": rep,
                             "store_address": store, "mdn": mdn, "imei": serial,
                             "amount": round(safe_float(amount), 2)}
-                    if gate_kind == "activation_payment":
-                        desc1 = (f"Month {month_index} installment ${safe_float(amount):,.2f} WITHHELD — no "
-                                 f"qualifying first-month payment collected at activation for trans "
-                                 f"{str(line.get('trans_id') or '').strip() or (mdn or serial)}.")
-                        coach1 = ("Month 1 pays only when payment is received at activation — verify the "
-                                  "first-month / plan / access-charge payment was rung on this sale.")
-                        desc2 = (f"{rep} sold {mdn or serial} but no activation payment was collected — "
-                                 f"month {month_index} commission gated.")
-                        coach2 = "Confirm the customer paid their first month at the point of sale."
-                    else:
-                        desc1 = (f"Month {month_index} installment ${safe_float(amount):,.2f} WITHHELD — line "
-                                 f"{mdn or serial} not active/receiving residual (dealer unpaid). Tracked; "
-                                 f"pays when residual resumes.")
-                        coach1 = "We pay as we get paid — recheck when the carrier residual posts."
-                        desc2 = (f"{rep} sold {mdn or serial} but the line is not active/paying residual — "
-                                 f"month {month_index} commission gated.")
-                        coach2 = "Review activation quality / early deactivation for this line."
                     flags.append({**base, "flag_type": "INSTALLMENT_WITHHELD_UNPAID",
                                   "source": "commission_rebate_tracking", "severity": "MEDIUM",
-                                  "description": desc1, "coaching_note": coach1})
+                                  "description": (f"Month {month_index} installment ${safe_float(amount):,.2f} "
+                                                  f"WITHHELD — line {mdn or serial} not active/receiving residual "
+                                                  f"(dealer unpaid). Tracked; pays when residual resumes."),
+                                  "coaching_note": "We pay as we get paid — recheck when the carrier residual posts."})
                     flags.append({**base, "flag_type": "SOLD_LINE_NOT_PAYING",
                                   "source": "employee_miss", "severity": "MEDIUM",
-                                  "description": desc2, "coaching_note": coach2})
+                                  "description": (f"{rep} sold {mdn or serial} but the line is not active/paying "
+                                                  f"residual — month {month_index} commission gated."),
+                                  "coaching_note": "Review activation quality / early deactivation for this line."})
 
-                ledger_row = {
+                ledger.append({
                     "org_id": org_id, "trans_id": str(line.get("trans_id") or "").strip(),
                     "mdn": mdn, "serial_1": serial, "plan_id": plan.get("id"),
                     "schedule_id": sched.get("id"), "store": store, "epay_salesperson": rep,
@@ -594,14 +407,7 @@ def compute_sale_installments(client, org_id, pay_period, persist=False):
                     "amount": round(safe_float(amount) if gate_met else 0.0, 2),
                     "paid_gate_met": gate_met, "gate_mode": gate_mode, "status": status,
                     "matched_mi_period": pay_period if mi_row is not None else None,
-                }
-                # OPT-IN ONLY: the month-1 activation-payment rows carry the extra provenance fields so the
-                # preview can show WHY month 1 qualified. Rows on schedules that don't opt in stay byte-
-                # identical to pre-mig-210 (no new keys → no persistence/shape drift).
-                if gate_kind == "activation_payment":
-                    ledger_row["gate_kind"] = "activation_payment"
-                    ledger_row["activation_payment_matched"] = gate_met
-                ledger.append(ledger_row)
+                })
 
     if persist:
         _persist(client, org_id, pay_period, ledger)

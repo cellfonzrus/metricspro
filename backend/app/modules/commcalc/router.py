@@ -3890,9 +3890,123 @@ def put_flag_rules(body: dict, org_id: str = ORG_ID):
     return _flag_rules(sb(), org_id)
 
 
+# ── DUAL-CATEGORY item mapping (mig 210): per-org EDITABLE category value lists (RULE TWO) ───────────
+# Each item_mapping row now also carries sales_category (master/sales dimension) + kpi_category (KPI
+# dimension). The allowed VALUES per dimension are per-org configurable (commcalc.item_category_config),
+# seeded with sensible defaults. The M1 activation-payment gate reads sales_category|kpi_category ==
+# 'activation_payment'. STABLE INTERFACE for the parallel custom-report package — see the inbox note.
+DEFAULT_SALES_CATEGORIES = [
+    {"value": "activation", "label": "Activation", "sort_order": 10},
+    {"value": "upgrade", "label": "Upgrade", "sort_order": 20},
+    {"value": "accessory", "label": "Accessory", "sort_order": 30},
+    {"value": "swap", "label": "Swap", "sort_order": 40},
+    {"value": "bill_payment", "label": "Bill payment", "sort_order": 50},
+    {"value": "rebate", "label": "Rebate", "sort_order": 60},
+    {"value": "activation_payment", "label": "Activation payment", "sort_order": 70},
+    {"value": "misc_other", "label": "Other", "sort_order": 80},
+]
+DEFAULT_KPI_CATEGORIES = [
+    {"value": "protection", "label": "Protection", "sort_order": 10},
+    {"value": "wireless_home_internet", "label": "Wireless home internet", "sort_order": 20},
+    {"value": "activation_payment", "label": "Activation payment", "sort_order": 30},
+    {"value": "accessory", "label": "Accessory", "sort_order": 40},
+    {"value": "plan", "label": "Plan", "sort_order": 50},
+    {"value": "other", "label": "Other", "sort_order": 60},
+]
+_DEFAULT_CATS = {"sales": DEFAULT_SALES_CATEGORIES, "kpi": DEFAULT_KPI_CATEGORIES}
+
+
+def _item_category_values(client, org_id, dimension, seed_if_empty=True):
+    """The org's category value list for a dimension ('sales'|'kpi'), sorted. Falls back to the seeded
+    defaults when the table is empty for this org (best-effort seeding it so it becomes editable) or when
+    mig 210 isn't applied. Degrades to the code defaults — never raises."""
+    dim = dimension if dimension in _DEFAULT_CATS else "sales"
+    try:
+        rows = (client.schema("commcalc").table("item_category_config").select("*")
+                .eq("org_id", org_id).eq("dimension", dim).eq("is_active", True).execute().data) or []
+    except Exception:
+        return [{**d, "source": "default"} for d in _DEFAULT_CATS[dim]]
+    if not rows:
+        if seed_if_empty:
+            try:
+                seed = [{"org_id": org_id, "dimension": dim, "value": d["value"], "label": d["label"],
+                         "sort_order": d["sort_order"], "is_active": True, "source": "seed"} for d in _DEFAULT_CATS[dim]]
+                client.schema("commcalc").table("item_category_config").upsert(
+                    seed, on_conflict="org_id,dimension,value").execute()
+            except Exception:
+                pass
+        return [{**d, "source": "seed"} for d in _DEFAULT_CATS[dim]]
+    rows.sort(key=lambda r: (r.get("sort_order") or 100, r.get("label") or r.get("value") or ""))
+    return rows
+
+
+@router.get("/item-categories")
+def get_item_categories(org_id: str = ORG_ID):
+    """The per-org editable category value lists for BOTH dimensions (sales + kpi). Seeded defaults are
+    returned (and best-effort persisted) when unset. Drives the dual-category pickers."""
+    require_org(org_id)
+    client = sb()
+    return {"sales": _item_category_values(client, org_id, "sales"),
+            "kpi": _item_category_values(client, org_id, "kpi"), "ready": True}
+
+
+@router.put("/item-categories")
+def put_item_category(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Admin-only. Add/rename/deactivate ONE category value. body: {dimension('sales'|'kpi'), value,
+    label?, is_active?, sort_order?}. value is the canonical key stored on item_mapping.*_category."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    dim = (body.get("dimension") or "").strip().lower()
+    val = (body.get("value") or "").strip().lower().replace(" ", "_")
+    if dim not in ("sales", "kpi") or not val:
+        raise HTTPException(400, "dimension ('sales'|'kpi') and value are required.")
+    row = {"org_id": org_id, "dimension": dim, "value": val,
+           "label": (body.get("label") or val.replace("_", " ").title()),
+           "is_active": bool(body.get("is_active")) if body.get("is_active") is not None else True,
+           "source": "manual", "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    if body.get("sort_order") is not None:
+        row["sort_order"] = int(body.get("sort_order") or 100)
+    try:
+        sb().schema("commcalc").table("item_category_config").upsert(row, on_conflict="org_id,dimension,value").execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not save category (is migration 210 applied?): {e}")
+    return {"ok": True, "dimension": dim, "value": val}
+
+
+@router.get("/item-mapping/facets")
+def item_mapping_facets(period: str = "", org_id: str = ORG_ID):
+    """Distinct STORES / departments / categories present in the org's raw_sales (optionally one period),
+    for the item-mapping filter dropdowns (pick-don't-type). Read-only; degrades to empty lists."""
+    require_org(org_id)
+    from collections import Counter
+    stores, depts, cats = Counter(), Counter(), Counter()
+    try:
+        q = sb().schema("commcalc").table("raw_sales").select("store,department,category").eq("org_id", org_id)
+        if period:
+            q = q.in_("period", _pvariants(period))
+        for r in (q.limit(100000).execute().data or []):
+            s = str(r.get("store") or "").strip()
+            if s:
+                stores[s] += 1
+            d = str(r.get("department") or "").strip()
+            if d:
+                depts[d] += 1
+            c = str(r.get("category") or "").strip()
+            if c:
+                cats[c] += 1
+    except Exception:
+        pass
+    return {"stores": [s for s, _ in stores.most_common()],
+            "departments": [d for d, _ in depts.most_common()],
+            "categories": [c for c, _ in cats.most_common()]}
+
+
 @router.get("/item-mapping")
-def get_item_mapping(search: str = None, item_type: str = None, org_id: str = ORG_ID):
-    """The item → type + phone-model mapping (search by sku/desc/model; filter by type)."""
+def get_item_mapping(search: str = None, item_type: str = None, store: str = None,
+                     department: str = None, category: str = None, org_id: str = ORG_ID):
+    """The item → type/model + DUAL-category (sales_category, kpi_category, mig 210) mapping. Filters:
+    search (sku/desc/model text), item_type, department, category, and store (restricts to item_keys sold
+    in that store, computed from raw_sales). Pick-don't-type options come from GET /item-mapping/facets."""
     require_org(org_id)
     try:
         q = sb().schema("commcalc").table("item_mapping").select("*").eq("org_id", org_id)
@@ -3901,6 +4015,22 @@ def get_item_mapping(search: str = None, item_type: str = None, org_id: str = OR
         rows = q.limit(100000).execute().data or []
     except Exception as e:
         return {"items": [], "ready": False, "detail": str(e)[:200], "counts": {}, "total": 0}
+    if department:
+        rows = [r for r in rows if (r.get("department") or "") == department]
+    if category:
+        rows = [r for r in rows if (r.get("category") or "") == category]
+    if store:
+        # which item_keys were sold in this store (org-scoped raw_sales scan)
+        keyset = set()
+        try:
+            srows = (sb().schema("commcalc").table("raw_sales").select("sku,product_desc")
+                     .eq("org_id", org_id).eq("store", store).limit(100000).execute().data) or []
+            for sr in srows:
+                keyset.add(_item_key(sr.get("sku"), sr.get("product_desc")))
+        except Exception:
+            keyset = None
+        if keyset is not None:
+            rows = [r for r in rows if (r.get("item_key") or "") in keyset]
     if search:
         s = search.lower()
         rows = [r for r in rows if s in (r.get("item_desc") or "").lower()
@@ -3930,6 +4060,11 @@ def upsert_item_mapping(body: dict, org_id: str = ORG_ID):
            "item_type": item_type, "device_model": device_model,
            "department": body.get("department"), "category": body.get("category"),
            "source": "manual", "updated_at": _cb_now()}
+    # DUAL-category (mig 210): only stamp when present so a type-only save never nulls a category.
+    if "sales_category" in body:
+        row["sales_category"] = (str(body.get("sales_category") or "").strip() or None)
+    if "kpi_category" in body:
+        row["kpi_category"] = (str(body.get("kpi_category") or "").strip() or None)
     try:
         sb().schema("commcalc").table("item_mapping").upsert(row, on_conflict="org_id,item_key").execute()
         if device_model:
@@ -3951,13 +4086,20 @@ def bulk_item_mapping(body: dict, org_id: str = ORG_ID):
     device_model = (body.get("device_model") or "").strip() or None
     if item_type == "phone" and not device_model:
         raise HTTPException(400, "Phone model is required when setting type to 'phone'. Pick a model to apply to the selected items.")
-    if not item_type and not device_model:
-        raise HTTPException(400, "Provide item_type and/or device_model to apply.")
+    sales_category = (body.get("sales_category") or "").strip() if "sales_category" in body else None
+    kpi_category = (body.get("kpi_category") or "").strip() if "kpi_category" in body else None
+    if not item_type and not device_model and sales_category is None and kpi_category is None:
+        raise HTTPException(400, "Provide item_type, device_model, sales_category and/or kpi_category to apply.")
     patch = {"source": "manual", "updated_at": _cb_now()}
     if item_type:
         patch["item_type"] = item_type
     if device_model:
         patch["device_model"] = device_model
+    # DUAL-category bulk assign (mig 210): '' clears the category, a value sets it, absent leaves it alone.
+    if sales_category is not None:
+        patch["sales_category"] = sales_category or None
+    if kpi_category is not None:
+        patch["kpi_category"] = kpi_category or None
     client = sb()
     updated = 0
     for i in range(0, len(keys), 200):
@@ -5509,6 +5651,119 @@ async def put_commission_settings(body: dict, authorization: str = Header(defaul
     return _commission_org_config(sb(), org_id)
 
 
+# ── installment-schedule EDIT helpers (mig 210): shared create/update writer + audit trail ──────────
+def _caller_uid(authorization):
+    """The signed-in auth uid (for updated_by / audit changed_by), or 'web' when unresolved. Never raises."""
+    try:
+        from app.modules.core.router import _uid_from_token
+        return _uid_from_token(authorization) or 'web'
+    except Exception:
+        return 'web'
+
+
+def _installment_snapshot(client, org_id, sid):
+    """Schedule header + its month lines as a plain dict — the audit before/after payload. Best-effort:
+    returns None if the schedule is gone or the tables are absent (pre-mig-201)."""
+    if not sid:
+        return None
+    try:
+        sc = (client.schema('commcalc').table('plan_installment_schedule').select('*')
+              .eq('org_id', org_id).eq('id', sid).limit(1).execute().data) or []
+        if not sc:
+            return None
+        ln = (client.schema('commcalc').table('plan_installment_line').select('*')
+              .eq('org_id', org_id).eq('schedule_id', sid).execute().data) or []
+        head = dict(sc[0]); head['lines'] = sorted(ln, key=lambda x: x.get('month_index') or 0)
+        return head
+    except Exception:
+        return None
+
+
+def _installment_audit(client, org_id, sid, action, before, after, changed_by):
+    """Write ONE edit-trail row (mig 210 commcalc.plan_installment_schedule_audit). Best-effort — a
+    missing audit table must NEVER block the money-config save (degrades to a no-op pre-mig-210)."""
+    try:
+        client.schema('commcalc').table('plan_installment_schedule_audit').insert({
+            'org_id': org_id, 'schedule_id': sid, 'action': action,
+            'changed_by': changed_by or 'web', 'before_json': before, 'after_json': after,
+        }).execute()
+    except Exception:
+        pass
+
+
+def _installment_head(body, org_id):
+    """The plan_installment_schedule header dict from a request body (create OR update). m1_gate (mig 210)
+    composes with gate_mode/gate_from_month: 'inherit' = today's behaviour; 'activation_payment' gates
+    MONTH 1 on the sale's own activation payment (months 2..N keep gate_mode)."""
+    m1g = (str(body.get("m1_gate") or "inherit").strip().lower())
+    return {
+        "org_id": org_id, "plan_id": body["plan_id"],
+        "name": (body.get("name") or None),
+        "num_months": max(1, min(12, int(body.get("num_months") or 1))),
+        "trigger_match_field": (body.get("trigger_match_field") or "any").strip() or "any",
+        "trigger_match_op": (body.get("trigger_match_op") or "equals").strip() or "equals",
+        "trigger_match_value": body.get("trigger_match_value"),
+        "gate_mode": (body.get("gate_mode") or "paid_residual").strip() or "paid_residual",
+        "gate_from_month": max(1, int(body.get("gate_from_month") or 1)),
+        "m1_gate": m1g if m1g in ("inherit", "activation_payment") else "inherit",
+        "clawback_enabled": bool(body.get("clawback_enabled", False)),
+        "effective_from": (body.get("effective_from") or None),
+        "effective_to": (body.get("effective_to") or None),
+        "eligible_sale_periods": [str(pp).strip() for pp in (body.get("eligible_sale_periods") or []) if str(pp).strip()],
+        "is_active": bool(body.get("is_active", True)),
+        "notes": body.get("notes"),
+    }
+
+
+def _installment_lines(body, sid, org_id):
+    return [{
+        "org_id": org_id, "schedule_id": sid,
+        "month_index": max(1, int(ln.get("month_index") or 1)),
+        "payout_kind": (ln.get("payout_kind") or "flat").strip() or "flat",
+        "flat_amount": safe_float(ln.get("flat_amount")),
+        "mrc_pct": safe_float(ln.get("mrc_pct")),
+        "mrc_source": (ln.get("mrc_source") or "product_catalog").strip() or "product_catalog",
+    } for ln in (body.get("lines") or [])]
+
+
+def _write_installment_schedule(client, org_id, body, sid, changed_by):
+    """Shared create/update writer (mig 201 + mig 210). sid None → INSERT; else UPDATE that id. Replaces
+    the month lines (delete-then-insert). Stamps updated_by/updated_at (mig 210) and records a before/after
+    audit row. m1_gate/updated_by degrade if mig 210 isn't applied — retried without them so a save on a
+    mig-201-only DB still works. Does NOT recompute pay (that waits for POST /calculate)."""
+    action = "update" if sid else "create"
+    before = _installment_snapshot(client, org_id, sid) if sid else None
+    head = _installment_head(body, org_id)
+    head["updated_at"] = _datetime.now(_timezone.utc).isoformat()
+    head["updated_by"] = changed_by
+    tbl = client.schema('commcalc').table('plan_installment_schedule')
+
+    def _do(head_dict):
+        if sid:
+            tbl.update(head_dict).eq('id', sid).eq('org_id', org_id).execute()
+            return sid
+        r = tbl.insert(head_dict).execute()
+        return (r.data or [{}])[0].get('id')
+
+    try:
+        new_sid = _do(head)
+    except Exception:
+        # mig 210 not applied → m1_gate / updated_by columns absent. Retry mig-201-compatible.
+        h2 = {k: v for k, v in head.items() if k not in ("m1_gate", "updated_by")}
+        new_sid = _do(h2)
+    if not new_sid:
+        raise HTTPException(500, "could not save installment schedule header")
+
+    client.schema('commcalc').table('plan_installment_line').delete().eq('org_id', org_id).eq('schedule_id', new_sid).execute()
+    lines = _installment_lines(body, new_sid, org_id)
+    if lines:
+        client.schema('commcalc').table('plan_installment_line').insert(lines).execute()
+
+    after = _installment_snapshot(client, org_id, new_sid)
+    _installment_audit(client, org_id, new_sid, action, before, after, changed_by)
+    return new_sid
+
+
 # ── SALE-TRIGGERED installment SCHEDULES (mig 201) — attach to a Commission Plan, triggered by the sale line
 @router.get("/plan-installments")
 async def list_plan_installments(org_id: str = ORG_ID):
@@ -5533,54 +5788,19 @@ async def list_plan_installments(org_id: str = ORG_ID):
 
 @router.post("/plan-installments")
 async def save_plan_installment(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Create/replace a sale-triggered schedule + its month lines (money config → admin-only). Body:
+    """CREATE a sale-triggered schedule + its month lines (money config → admin-only). Body:
     {id?, plan_id (required), name?, num_months, trigger_match_field?, trigger_match_op?, trigger_match_value?,
-     gate_mode?, gate_from_month?, clawback_enabled?, effective_from?, effective_to?, eligible_sale_periods?[],
-     is_active?, lines:[{month_index, payout_kind, flat_amount?, mrc_pct?, mrc_source?}]}. Replaces the lines
-    (delete-then-insert). Does NOT recompute pay (that waits for POST /calculate)."""
+     gate_mode?, gate_from_month?, m1_gate?('inherit'|'activation_payment'), clawback_enabled?, effective_from?,
+     effective_to?, eligible_sale_periods?[], is_active?, lines:[{month_index, payout_kind, flat_amount?,
+     mrc_pct?, mrc_source?}]}. Replaces the lines (delete-then-insert). If `id` is present this UPDATES that
+     schedule (same path as PUT) for backward compatibility. Does NOT recompute pay (waits for POST /calculate)."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     if not body.get("plan_id"):
         raise HTTPException(400, "plan_id is required (a sale-triggered schedule attaches to a Commission Plan).")
     client = sb()
-    head = {
-        "org_id": org_id, "plan_id": body["plan_id"],
-        "name": (body.get("name") or None),
-        "num_months": max(1, min(12, int(body.get("num_months") or 1))),
-        "trigger_match_field": (body.get("trigger_match_field") or "any").strip() or "any",
-        "trigger_match_op": (body.get("trigger_match_op") or "equals").strip() or "equals",
-        "trigger_match_value": body.get("trigger_match_value"),
-        "gate_mode": (body.get("gate_mode") or "paid_residual").strip() or "paid_residual",
-        "gate_from_month": max(1, int(body.get("gate_from_month") or 1)),
-        "clawback_enabled": bool(body.get("clawback_enabled", False)),
-        "effective_from": (body.get("effective_from") or None),
-        "effective_to": (body.get("effective_to") or None),
-        "eligible_sale_periods": [str(p).strip() for p in (body.get("eligible_sale_periods") or []) if str(p).strip()],
-        "is_active": bool(body.get("is_active", True)),
-        "notes": body.get("notes"),
-    }
     try:
-        if body.get("id"):
-            client.schema('commcalc').table('plan_installment_schedule').update(head).eq('id', body['id']).eq('org_id', org_id).execute()
-            sid = body['id']
-        else:
-            r = client.schema('commcalc').table('plan_installment_schedule').insert(head).execute()
-            sid = (r.data or [{}])[0].get('id')
-        if not sid:
-            raise HTTPException(500, "could not save installment schedule header")
-        client.schema('commcalc').table('plan_installment_line').delete().eq('org_id', org_id).eq('schedule_id', sid).execute()
-        lines = []
-        for ln in (body.get("lines") or []):
-            lines.append({
-                "org_id": org_id, "schedule_id": sid,
-                "month_index": max(1, int(ln.get("month_index") or 1)),
-                "payout_kind": (ln.get("payout_kind") or "flat").strip() or "flat",
-                "flat_amount": safe_float(ln.get("flat_amount")),
-                "mrc_pct": safe_float(ln.get("mrc_pct")),
-                "mrc_source": (ln.get("mrc_source") or "product_catalog").strip() or "product_catalog",
-            })
-        if lines:
-            client.schema('commcalc').table('plan_installment_line').insert(lines).execute()
+        sid = _write_installment_schedule(client, org_id, body, body.get("id") or None, _caller_uid(authorization))
     except HTTPException:
         raise
     except Exception as e:
@@ -5588,16 +5808,55 @@ async def save_plan_installment(body: dict, authorization: str = Header(default=
     return {"id": sid, "saved": True}
 
 
+@router.put("/plan-installments/{sid}")
+async def update_plan_installment(sid: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """EDIT an existing sale-triggered schedule + its month lines (money config → admin-only). Same body
+    shape as POST (minus id). RECOMPUTE SEMANTICS: the edit takes effect from the NEXT POST /calculate
+    onward — it does NOT retroactively rewrite pay. sale_installment_ledger rows already written for PAST
+    pay periods are IMMUTABLE unless the operator explicitly re-runs POST /calculate for that period (and
+    even then, a paid month only re-derives from the edited schedule if that period is recomputed). Every
+    edit is captured in commcalc.plan_installment_schedule_audit (before/after + who/when)."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    if not body.get("plan_id"):
+        raise HTTPException(400, "plan_id is required.")
+    client = sb()
+    exists = _installment_snapshot(client, org_id, sid)
+    if exists is None:
+        raise HTTPException(404, "installment schedule not found for this tenant (or migration 201 not applied).")
+    try:
+        _write_installment_schedule(client, org_id, body, sid, _caller_uid(authorization))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"could not update installment schedule: {e}")
+    return {"id": sid, "saved": True, "updated": True}
+
+
 @router.delete("/plan-installments/{sid}")
 async def delete_plan_installment(sid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     client = sb()
+    before = _installment_snapshot(client, org_id, sid)
     try:
         client.schema('commcalc').table('plan_installment_schedule').delete().eq('id', sid).eq('org_id', org_id).execute()
     except Exception as e:
         raise HTTPException(500, f"delete failed: {e}")
+    _installment_audit(client, org_id, sid, "delete", before, None, _caller_uid(authorization))
     return {"deleted": True}
+
+
+@router.get("/plan-installments/{sid}/audit")
+async def plan_installment_audit(sid: str, org_id: str = ORG_ID):
+    """Edit trail for one schedule (mig 210). [] if the audit table isn't applied yet."""
+    require_org(org_id)
+    try:
+        rows = (sb().schema('commcalc').table('plan_installment_schedule_audit').select('*')
+                .eq('org_id', org_id).eq('schedule_id', sid).order('changed_at', desc=True).limit(200).execute().data) or []
+    except Exception:
+        return {"audit": [], "ready": False}
+    return {"audit": rows, "ready": True}
 
 
 @router.get("/plan-installments/preview/{period}")
@@ -5609,6 +5868,74 @@ async def preview_plan_installments(period: str, org_id: str = ORG_ID):
         return sale_installment_engine.compute_sale_installments(sb(), org_id, period, persist=False)
     except Exception as e:
         raise HTTPException(500, f"installment preview failed: {type(e).__name__}: {e}")
+
+
+# ── ACTIVATION-PAYMENT MATCHER (mig 210): what counts as "payment received at activation" (per-tenant) ─
+@router.get("/plan-installments/activation-matcher")
+async def get_activation_matcher(period: str = "", org_id: str = ORG_ID):
+    """The tenant's 'payment received at activation' matcher used by the month-1 'activation_payment' gate,
+    PLUS the distinct raw_sales departments/categories present (pick-don't-type editor). Falls back to the
+    engine's seeded default when unset (is_default=true). Read-only."""
+    require_org(org_id)
+    from app.modules.commcalc.sale_installment_engine import DEFAULT_ACTIVATION_PAYMENT_MATCHER
+    from collections import Counter
+    client = sb()
+    stored, ready = None, True
+    try:
+        rows = (client.schema('commcalc').table('commission_org_config')
+                .select('activation_payment_matcher').eq('org_id', org_id).limit(1).execute().data) or []
+        if rows:
+            stored = rows[0].get('activation_payment_matcher')
+    except Exception:
+        ready = False
+    eff = stored or DEFAULT_ACTIVATION_PAYMENT_MATCHER
+    matcher = {
+        "departments": [str(x) for x in (eff.get("departments") or [])],
+        "categories": [str(x) for x in (eff.get("categories") or [])],
+        "product_keywords": [str(x) for x in (eff.get("product_keywords") or [])],
+        "value_field": (eff.get("value_field") or "ext_price"),
+        "min_amount": safe_float(eff.get("min_amount")) if eff.get("min_amount") is not None else 0.01,
+    }
+    depts, cats = [], []
+    try:
+        q = client.schema('commcalc').table('raw_sales').select('department,category').eq('org_id', org_id)
+        if period:
+            q = q.in_('period', _pvariants(period))
+        rs = q.limit(50000).execute().data or []
+        depts = [d for d, _ in Counter(str(r.get('department') or '').strip() for r in rs if str(r.get('department') or '').strip()).most_common()]
+        cats = [c for c, _ in Counter(str(r.get('category') or '').strip() for r in rs if str(r.get('category') or '').strip()).most_common()]
+    except Exception:
+        pass
+    return {"matcher": matcher, "is_default": stored is None, "ready": ready,
+            "value_fields": ["ext_price", "gp"], "departments": depts, "categories": cats}
+
+
+@router.put("/plan-installments/activation-matcher")
+async def put_activation_matcher(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Admin-only. Save the tenant's activation-payment matcher (mig 210). body: {departments[], categories[],
+    product_keywords[], value_field('ext_price'|'gp'), min_amount} — OR {reset:true} to revert to the engine
+    default (stored NULL). 500 with a 'run migration 210' hint if the column is absent."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    client = sb()
+    if body.get("reset"):
+        matcher = None
+    else:
+        vf = str(body.get("value_field") or "ext_price").strip().lower()
+        matcher = {
+            "departments": [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()],
+            "categories": [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()],
+            "product_keywords": [str(x).strip() for x in (body.get("product_keywords") or []) if str(x).strip()],
+            "value_field": vf if vf in ("ext_price", "gp") else "ext_price",
+            "min_amount": safe_float(body.get("min_amount")) if body.get("min_amount") is not None else 0.01,
+        }
+    row = {"org_id": org_id, "activation_payment_matcher": matcher,
+           "updated_by": _caller_uid(authorization), "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    try:
+        client.schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not save activation-payment matcher (is migration 210 applied?): {e}")
+    return {"saved": True, "is_default": matcher is None}
 
 
 # ── Classification-first MRC MAPPING (§7b decision 1): classify imported plan lines + prefill $ MRC ──
