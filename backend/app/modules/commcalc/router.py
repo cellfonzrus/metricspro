@@ -1,6 +1,7 @@
 """CommCalc API Router — all /api/v1/commcalc/* endpoints"""
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks, Header
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks, Header, Query
 from fastapi.responses import JSONResponse
+from typing import List, Optional
 import pandas as pd
 import io
 import re
@@ -7678,6 +7679,61 @@ def _merge_days_richer(prows, orows, day_fn, min_rows=_RICHER_DAY_MIN_ROWS, rati
     return kept_primary + add_from_other, swapped, filled
 
 
+# Cell-grain (day × store) "richer source wins" thresholds — the store-aware successor to the day-grain
+# rule above. The day-grain merge masked EVERY store on a day the primary led: the luxelink July 2026
+# incident — the daily b2bsoft feed carries only ~6 NY stores, so on a feed-led day the freshly
+# re-uploaded raw_sales rows for the other ~13 stores (Chicago / NJ) were hidden, and only the feed-less
+# days showed all stores. Merging at (day × store) grain lets the primary win only the CELLS it actually
+# holds; every other store's cell fills from the other source. The row FLOOR is scaled DOWN from the
+# day-level 50 to 10 (a single store-day is far fewer rows than a whole day); the 50% ratio is unchanged.
+_RICHER_CELL_MIN_ROWS = 10
+_RICHER_CELL_RATIO = 0.5
+
+
+def _cell_store_key(store):
+    """Cheap canonicalization for the store half of a (day, store) cell key: strip, collapse internal
+    whitespace, casefold. NO store_mapping / resolver lookup (deliberately out of scope) — just enough
+    that a feed copy and a raw_sales copy of the SAME store don't split into two cells over case /
+    whitespace drift (which would double-count that store-day). The row's ORIGINAL store string is
+    preserved in the merged output; this key only decides which source wins a cell."""
+    return ' '.join(str(store or '').split()).casefold()
+
+
+def _merge_cells_richer(prows, orows, cell_fn, min_rows=_RICHER_CELL_MIN_ROWS, ratio=_RICHER_CELL_RATIO):
+    """Per-(day × store)-CELL merge of a PRIMARY and OTHER row set — the store-aware successor to
+    `_merge_days_richer`. The primary keeps every cell it has EXCEPT a cell whose primary copy is
+    DEGRADED versus the other's — the other holds >= `min_rows` rows for that cell AND the primary holds
+    < `ratio` x the other's count (the ingest price-guard rule, scaled to store-day cells). On such a
+    cell the other's richer copy is used and the cell is reported as RICHER (swapped). Cells the primary
+    lacks entirely are FILLED from the other. Rows whose `cell_fn` is falsy (blank day) on the primary
+    are always kept; such rows on the other are dropped (can't be cell-compared). Primary order preserved
+    for kept rows; other-source rows appended.
+
+    Returns (merged_rows, richer_cells_sorted, filled_cells_sorted), each cell a (day, store_key) tuple.
+    Pure — no I/O, never raises."""
+    if not prows:
+        ocells = sorted({c for c in (cell_fn(r) for r in orows) if c})
+        return list(orows), [], ocells
+    p_cnt, o_cnt = {}, {}
+    for r in prows:
+        c = cell_fn(r)
+        if c:
+            p_cnt[c] = p_cnt.get(c, 0) + 1
+    for r in orows:
+        c = cell_fn(r)
+        if c:
+            o_cnt[c] = o_cnt.get(c, 0) + 1
+    pcells = set(p_cnt)
+    richer = sorted(c for c, oc in o_cnt.items()
+                    if oc >= min_rows and p_cnt.get(c, 0) > 0 and p_cnt.get(c, 0) < ratio * oc)
+    richer_set = set(richer)
+    filled = sorted(c for c in o_cnt if c not in pcells)
+    kept_primary = [r for r in prows if cell_fn(r) not in richer_set]
+    add_from_other = [r for r in orows
+                      if cell_fn(r) and (cell_fn(r) in richer_set or cell_fn(r) not in pcells)]
+    return kept_primary + add_from_other, richer, filled
+
+
 def _row_content_sig(row, drop_keys=('id', 'created_at')):
     """A stable, order-independent full-content signature of a row: every column except `drop_keys`,
     values normalized to str (None → '') so ('5' vs 5) and (None vs '') can't split a true duplicate.
@@ -7734,12 +7790,17 @@ def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
     hand-uploaded raw_sales 1-13 → the union shows 1-13, not a truncated 1-8), and a promoted raw_sales
     month is never masked by a stale feed. Closed month → raw_sales leads, feed fills gaps.
 
-    Per-DAY pick WITH a degradation guard (2026-07-16): the primary leads each day it has UNLESS its copy
-    of that day is degraded versus the other source's — the other holds >= 50 rows for the day AND the
-    primary holds < 50% of that (a MIRROR of the ingest price-guard) — in which case the other's richer
-    copy of that day is shown and the day is reported in meta['richer_days']. Days the primary lacks are
-    filled from the other as before. (Live case: open month July 2026 — the feed's July 8 held 162 rows
-    while raw_sales held 341; the old primary-wins-wholesale rule showed the degraded 162.)
+    Per-(day × store)-CELL pick WITH a degradation guard (2026-07-16): the primary leads each store-day
+    CELL it has UNLESS its copy of that cell is degraded versus the other source's — the other holds
+    >= 10 rows for the cell AND the primary holds < 50% of that (a MIRROR of the ingest price-guard,
+    scaled to store-day grain) — in which case the other's richer copy of that cell is shown and it is
+    counted in meta['richer_cells']. Cells the primary lacks are filled from the other. STORE-grain (not
+    the old day-grain) is what stops a partial feed from MASKING other stores: the luxelink July 2026
+    incident — the daily feed carries only ~6 NY stores, so on a feed-led day the re-uploaded raw_sales
+    rows for the other ~13 stores (Chicago / NJ) were dropped; now only the feed's own store cells win
+    and every other store fills from raw_sales, so all stores show on every day. meta reports store
+    coverage (`stores_shown` / `primary_stores` / `stores_from_other`) so the page can show which source
+    covered what.
 
     NEVER raises: a failed read on either table degrades to whatever the other returned (so a column
     drift on one side can't 500 the page). Returns `(rows, meta)`; `meta` carries the per-source counts,
@@ -7766,22 +7827,43 @@ def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
     def _day(r):
         return str(r.get('trans_date') or '')[:10]
 
-    # Primary leads each day it has; a day where the other source is materially richer (>=50 rows and the
-    # primary < 50% of it) is SWAPPED to the other; days the primary lacks are FILLED from the other.
-    merged, richer_days, filled_days = _merge_days_richer(prows, orows, _day)
+    def _cell(r):
+        d = _day(r)
+        return (d, _cell_store_key(r.get('store'))) if d else None
+
+    # Primary leads each (day × store) CELL it has; a cell where the other source is materially richer
+    # (>= 10 rows AND the primary < 50% of it) is SWAPPED to the other; cells the primary lacks are
+    # FILLED from the other. Store-grain (not day-grain) so a feed carrying only some stores can no longer
+    # mask the other stores' rows on a day it leads (the luxelink July 2026 incident).
+    merged, richer_cells, filled_cells = _merge_cells_richer(prows, orows, _cell)
 
     feed_rows = len(prows) if primary == 'daily_sales_feed' else len(orows)
     raw_rows = len(prows) if primary == 'raw_sales' else len(orows)
-    filled_set, richer_set = set(filled_days), set(richer_days)
-    fill_rows = sum(1 for r in orows if _day(r) in filled_set)
-    richer_rows = sum(1 for r in orows if _day(r) in richer_set)
+    filled_set, richer_set = set(filled_cells), set(richer_cells)
+    fill_rows = sum(1 for r in orows if _cell(r) in filled_set)
+    richer_rows = sum(1 for r in orows if _cell(r) in richer_set)
+    # Day-level rollups of the cell picks — kept so the existing sales-report transparency line
+    # (`filled_days` / `richer_days`) still reads; now "days on which >= 1 store cell was filled / swapped".
+    filled_days = sorted({c[0] for c in filled_cells})
+    richer_days = sorted({c[0] for c in richer_cells})
+
+    # Store coverage — the transparency the page needs to SEE that all stores are present (not just the
+    # feed's ~6): how many distinct stores each side holds, how many the merged view shows, and how many
+    # only appear because of the other source.
+    def _stores_of(rs):
+        return {_cell_store_key(r.get('store')) for r in rs if str(r.get('store') or '').strip()}
+    p_stores, o_stores, shown_stores = _stores_of(prows), _stores_of(orows), _stores_of(merged)
+    stores_from_other = sorted(s for s in shown_stores if s and s not in p_stores)
+
     meta = {
         'primary': primary, 'other': other,
         'primary_rows': len(prows), 'other_rows': len(orows),
         'feed_rows': feed_rows, 'raw_rows': raw_rows,
-        'filled_rows': fill_rows, 'filled_days': filled_days,
-        'richer_rows': richer_rows, 'richer_days': richer_days,
+        'filled_rows': fill_rows, 'filled_days': filled_days, 'filled_cells': len(filled_cells),
+        'richer_rows': richer_rows, 'richer_days': richer_days, 'richer_cells': len(richer_cells),
         'shown_rows': len(merged),
+        'stores_shown': len(shown_stores), 'primary_stores': len(p_stores),
+        'other_stores': len(o_stores), 'stores_from_other': len(stores_from_other),
     }
     return merged, meta
 
@@ -8659,11 +8741,18 @@ def _exec_act_class(ct, rules):
     return 'activation'
 
 
-def _exec_mtd(client, org_id, period):
+def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None):
     """Executive Month-To-Date summary — the b2bsoft 'Month To Date Location/Employee Sales Report'
     replicated from the ORG-CORRECTED sales source (_sales_rows_union: the daily feed leads the OPEN month,
-    the authoritative raw_sales a closed one, each filling the other's day-gaps). Works for luxelink AND
-    the house org with NO monthly upload. DISPLAY-ONLY (reads sales, writes nothing). Buckets config-driven.
+    the authoritative raw_sales a closed one, each filling the other's (day × store) gaps). Works for
+    luxelink AND the house org with NO monthly upload. DISPLAY-ONLY (reads sales, writes nothing).
+    Buckets config-driven.
+
+    RULE FIVE standardized filters (2026-07-16): optional `stores` / `markets` / `reps` multi-selects
+    filter the UNION rows SERVER-SIDE (before bucketing) so the by-location table, the by-employee table,
+    the trending math AND the exports all reflect the same filtered set. Filter OPTIONS are returned in
+    `filters` (pick-don't-type over the org's real data: the union's own store/rep strings + store_mapping
+    markets + storeops stores) computed from the UNFILTERED union so a selection can always be changed.
 
     Verified formulas (against 'Luxelink MTD 15 July.xlsx'): Total Activation = Activation+Port+BYOD+Upgrade;
     Trending Box = Total Activation × days_in_month ÷ complete_days_elapsed; Trending Acc. Sales likewise on
@@ -8672,6 +8761,81 @@ def _exec_mtd(client, org_id, period):
     cfg = _exec_metric_config(client, org_id)
     act_rules = cfg.get('activation', {}).get('rules', {})
     rows, meta = _sales_rows_union(client, org_id, period)
+
+    # ── Market resolver (store_mapping; keyed by address / code / leading store-number) — inline + optional
+    #    (never 500 the summary over a store_mapping read). Mirrors the sales-report resolver so the two
+    #    pages agree on which market a store belongs to.
+    import re as _re_em
+    try:
+        _sm_rows = (client.schema('commcalc').table('store_mapping')
+                    .select('store_code,store_address,market').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        _sm_rows = []
+
+    def _lead_em(s):
+        m = _re_em.match(r'\s*(\d+)', str(s or ''))
+        return m.group(1) if m else ''
+    _mkt_code, _mkt_addr, _mkt_num, _all_markets = {}, {}, {}, set()
+    for s in _sm_rows:
+        mk = (s.get('market') or '').strip()
+        if not mk:
+            continue
+        _all_markets.add(mk)
+        code = str(s.get('store_code') or '').strip()
+        addr = str(s.get('store_address') or '').strip()
+        if code:
+            _mkt_code[code] = mk
+        if addr:
+            _mkt_addr[addr.lower()] = mk
+        n = _lead_em(addr)
+        if n:
+            _mkt_num.setdefault(n, mk)
+
+    def _market_for(store):
+        st = str(store or '').strip()
+        return (_mkt_addr.get(st.lower()) or _mkt_code.get(st) or _mkt_num.get(_lead_em(st)) or '')
+
+    # ── Filter OPTIONS from the UNFILTERED union (+ storeops roster + store_mapping markets), so the
+    #    pickers list every real store/market/rep present, not just what survived the current selection.
+    opt_stores, opt_reps = set(), set()
+    for r in rows:
+        st = str(r.get('store') or '').strip()
+        if st:
+            opt_stores.add(st)
+            mk = _market_for(st)
+            if mk:
+                _all_markets.add(mk)
+        rp = str(r.get('salesperson') or '').strip()
+        if rp and rp.lower() != 'admin':
+            opt_reps.add(rp)
+    try:
+        for s in (client.schema('storeops').table('stores')
+                  .select('address').eq('org_id', org_id).execute().data) or []:
+            a = str(s.get('address') or '').strip()
+            if a:
+                opt_stores.add(a)
+    except Exception:
+        pass
+    filters = {'stores': sorted(opt_stores), 'markets': sorted(_all_markets), 'reps': sorted(opt_reps)}
+
+    # ── Apply the selected filters to the UNION rows SERVER-SIDE (before bucketing) — case-insensitive
+    #    membership; a market filter resolves each row's store to its market. Empty selection = no filter.
+    store_sel = {str(s).strip().lower() for s in (stores or []) if str(s).strip()}
+    rep_sel = {str(s).strip().lower() for s in (reps or []) if str(s).strip()}
+    market_sel = {str(s).strip().lower() for s in (markets or []) if str(s).strip()}
+    applied = {'stores': sorted(store_sel), 'markets': sorted(market_sel), 'reps': sorted(rep_sel)}
+
+    def _keep(r):
+        st = str(r.get('store') or '').strip()
+        if store_sel and st.lower() not in store_sel:
+            return False
+        if rep_sel and str(r.get('salesperson') or '').strip().lower() not in rep_sel:
+            return False
+        if market_sel and _market_for(st).strip().lower() not in market_sel:
+            return False
+        return True
+    if store_sel or rep_sel or market_sel:
+        rows = [r for r in rows if _keep(r)]
 
     # trending divisor: complete days elapsed (= yesterday's day-of-month) for the OPEN month; the full
     # month (factor 1) for a closed/past month. days_in_month from the calendar.
@@ -8740,21 +8904,29 @@ def _exec_mtd(client, org_id, period):
         t['apb'] = round(t['acc_sales'] / t['total_activation'], 2) if t['total_activation'] else 0.0
         return t
 
-    stores = _finish(by_store, 'store')
+    store_rows = _finish(by_store, 'store')
     emps = _finish(by_emp, 'employee')
     return {'period': period, 'source': meta,
+            'filters': filters, 'applied': applied,
             'trending': {'elapsed_days': elapsed, 'days_in_month': dim, 'factor': round(trend_factor, 6)},
-            'by_location': {'rows': stores, 'total': _totals(stores, 'store')},
+            'by_location': {'rows': store_rows, 'total': _totals(store_rows, 'store')},
             'by_employee': {'rows': emps, 'total': _totals(emps, 'employee')}}
 
 
 @router.get("/exec-mtd/{period}")
-def exec_mtd(period: str, org_id: str = ORG_ID):
+def exec_mtd(period: str, org_id: str = ORG_ID,
+             stores: Optional[List[str]] = Query(default=None),
+             markets: Optional[List[str]] = Query(default=None),
+             reps: Optional[List[str]] = Query(default=None)):
     """Executive Month-To-Date summary (b2bsoft Location + Employee MTD sales) — replicated from the
     org-corrected sales source so it works for every tenant with NO monthly upload. DISPLAY-ONLY,
-    org-scoped, config-driven metric definitions."""
+    org-scoped, config-driven metric definitions.
+
+    RULE FIVE standardized filters: optional repeated `stores` / `markets` / `reps` query params filter
+    the union rows SERVER-SIDE (before bucketing) so the tables, trending AND exports stay consistent.
+    The response's `filters` object lists the pick-don't-type options over the org's real data."""
     require_org(org_id)
-    return _exec_mtd(sb(), org_id, period)
+    return _exec_mtd(sb(), org_id, period, stores=stores, markets=markets, reps=reps)
 
 
 @router.get("/exec-metric-config")
