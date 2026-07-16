@@ -7,7 +7,7 @@
 //   • Export to Excel / PDF / Print (lib/export) and 📤 Send to a rep via email / WhatsApp (lib/send-report),
 //     both operating on the CURRENTLY FILTERED rows.
 // Filtering/grouping is client-side over the rows the page already loaded — no backend change to adopt.
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useMemo, useState, useEffect } from 'react'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
@@ -52,7 +52,7 @@ function ymd(v: any): string {
   return s
 }
 
-export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick, totals, stickyHeader }: {
+export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick, totals, stickyHeader, defaultGroupBy, collapsibleGroups, defaultCollapsed, groupPersistKey }: {
   title: string
   subtitle?: string
   filename?: string
@@ -70,6 +70,13 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
                                             // z-index 3 keeps it above the scrolling body AND above the
                                             // sticky totals footer (z-index 2); both use --surface2 so
                                             // they stay opaque in light & dark.
+  defaultGroupBy?: string                   // opt-in: initial Group-by column (its key/header). The user
+                                            // can still change it. Off by default → other consumers ungrouped.
+  collapsibleGroups?: boolean               // opt-in: each group header becomes a ▸/▾ toggle; a collapsed
+                                            // group hides its data rows but keeps a subtotal row for EVERY
+                                            // numeric/money column. Off by default → group rendering unchanged.
+  defaultCollapsed?: boolean                // opt-in (with collapsibleGroups): start every group COLLAPSED.
+  groupPersistKey?: string                  // opt-in: persist the user's Group-by choice to localStorage.
 }) {
   const cols = useMemo(() => columns.filter(Boolean), [columns])
   const byKey = useMemo(() => Object.fromEntries(cols.map(c => [key(c), c])), [cols])
@@ -89,7 +96,24 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   const [dTo, setDTo] = useState('')
   const [month, setMonth] = useState('')            // YYYY-MM
   const [custom, setCustom] = useState<Filter[]>([])
-  const [groupBy, setGroupBy] = useState('')
+  // Group-by: seeded from defaultGroupBy (opt-in), optionally restored from / persisted to localStorage.
+  // ReportShell only renders once the page has data (client-side), so the lazy localStorage read is safe.
+  const [groupBy, setGroupBy] = useState<string>(() => {
+    if (groupPersistKey && typeof window !== 'undefined') {
+      const v = window.localStorage.getItem(groupPersistKey)
+      if (v !== null) return v
+    }
+    return defaultGroupBy || ''
+  })
+  useEffect(() => {
+    if (groupPersistKey && typeof window !== 'undefined') window.localStorage.setItem(groupPersistKey, groupBy)
+  }, [groupBy, groupPersistKey])
+  // Collapsible groups (opt-in). A group's collapsed state = defaultCollapsed XOR "user toggled it", so
+  // groups start collapsed (defaultCollapsed) yet each is independently expandable; new groups from a
+  // filter change inherit the default. Never collapses when collapsibleGroups is off (byte-identical).
+  const [toggledGroups, setToggledGroups] = useState<Set<string>>(() => new Set())
+  const isCollapsed = (g: string) => (collapsibleGroups ? (!!defaultCollapsed !== toggledGroups.has(g)) : false)
+  const toggleGroup = (g: string) => setToggledGroups(s => { const n = new Set(s); n.has(g) ? n.delete(g) : n.add(g); return n })
 
   const monthsAvail = useMemo(() => dateCol
     ? Array.from(new Set(rows.map(r => ymd(dateCol.get(r)).slice(0, 7)).filter(s => /^\d{4}-\d{2}$/.test(s)))).sort()
@@ -260,19 +284,37 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
                 className={onRowClick ? 'rs-clickable' : undefined}>
                 {cols.map(c => <td key={key(c)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left' }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
             ))}
-            {groups && groups.map(([g, rs]) => (
+            {groups && groups.map(([g, rs]) => {
+              const collapsed = isCollapsed(g)
+              return (
               <Fragment key={g}>
-                <tr style={{ background: 'var(--surface2)' }}>
-                  <td style={{ ...cell, fontWeight: 700 }} colSpan={cols.length - moneyCols.length || 1}>{g} · {rs.length}</td>
-                  {cols.filter(isMoney).map(c => <td key={'gs' + key(c)} style={{ ...cell, textAlign: 'right', fontWeight: 700 }}>{money(subtotal(rs, c))}</td>)}
-                </tr>
-                {rs.map((r, i) => (
+                {collapsibleGroups ? (
+                  // Collapsible group header — a ▸/▾ toggle in the first column, plus a subtotal for EVERY
+                  // numeric/money column so a collapsed group still shows its totals (owner: grouped +
+                  // collapsed default for the Sales Report). Clicking the header row expands/collapses it.
+                  <tr onClick={() => toggleGroup(g)} style={{ background: 'var(--surface2)', cursor: 'pointer' }}>
+                    {cols.map((c, i) => {
+                      const numeric = isMoney(c) || c.align === 'right'
+                      return (
+                        <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: numeric ? 'right' : 'left', whiteSpace: 'nowrap' }}>
+                          {i === 0 ? `${collapsed ? '▸' : '▾'} ${g} · ${rs.length}` : (numeric ? (isMoney(c) ? money(subtotal(rs, c)) : String(subtotal(rs, c))) : '')}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ) : (
+                  <tr style={{ background: 'var(--surface2)' }}>
+                    <td style={{ ...cell, fontWeight: 700 }} colSpan={cols.length - moneyCols.length || 1}>{g} · {rs.length}</td>
+                    {cols.filter(isMoney).map(c => <td key={'gs' + key(c)} style={{ ...cell, textAlign: 'right', fontWeight: 700 }}>{money(subtotal(rs, c))}</td>)}
+                  </tr>
+                )}
+                {(!collapsibleGroups || !collapsed) && rs.map((r, i) => (
                   <tr key={g + i} onClick={onRowClick ? () => onRowClick(r) : undefined} style={onRowClick ? { cursor: 'pointer' } : undefined}
                     className={onRowClick ? 'rs-clickable' : undefined}>
                     {cols.map(c => <td key={key(c)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left' }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
                 ))}
               </Fragment>
-            ))}
+            )})}
             {filtered.length === 0 && <tr><td style={{ ...cell, textAlign: 'center', color: 'var(--text3)', padding: 24 }} colSpan={cols.length}>No rows match the filters.</td></tr>}
           </tbody>
           {totalCells && (

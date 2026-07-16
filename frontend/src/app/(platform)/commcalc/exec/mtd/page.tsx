@@ -231,6 +231,14 @@ function MetricConfigPanel({ onClose, onSaved }: { onClose: () => void; onSaved:
         <code>category</code> (a b2bsoft export stores either the Category or the System Category column) or
         a substring of <code>product_desc</code>. Editing here does NOT touch commission pay.
       </p>
+      <p style={{ fontSize: 12, color: 'var(--text2)', margin: '0 0 10px', padding: '7px 9px', background: 'var(--surface2)', borderRadius: 6 }}>
+        ℹ️ <b>Activation type</b> (Activation/BYOD/Upgrade counts) and <b>Accessory $</b> now flow from the
+        shared Sales Report classifier + the Sales Report’s <b>Classification settings</b> — counted by
+        <b> distinct transaction</b> — so Executive MTD, the Sales Report and Daily Targets always agree.
+        The tokens below still drive the <b>Port</b> split and the per-line columns
+        (<b>Total Phones / Bill Payment / Activation Fee / Total Protect</b>); the <code>activation</code>
+        byod/upgrade and <code>accessory</code> tokens no longer change the headline counts.
+      </p>
       {(cfg.buckets as string[]).map((b) => (
         <div key={b} style={{ borderTop: '1px solid var(--border)', padding: '8px 0' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
