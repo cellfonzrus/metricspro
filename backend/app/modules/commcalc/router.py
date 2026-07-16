@@ -36,6 +36,7 @@ from datetime import date as _date, timedelta as _timedelta, datetime as _dateti
 # when their branch executes (most sat in swallowed try/except, so it went unnoticed).
 from datetime import datetime, timezone, timedelta
 import calendar as _calendar
+import threading
 
 
 router = APIRouter(prefix="/commcalc", tags=["CommCalc"])
@@ -7631,6 +7632,98 @@ _SALES_DISPLAY_COLS = ("trans_id,trans_date,store,salesperson,department,categor
                        "contract_type,ext_price,gp,voided,trans_type")
 
 
+# ── Feed↔raw_sales merge / dedupe / promotion-mutex primitives (all pure + unit-testable) ──────────
+# Extracted so the promotion-dedup + display day-pick logic can be tested without a live DB
+# (backend/scratchpad/promotion_dedup_proof.py). Introduced 2026-07-16 for the luxelink July 2026
+# feed-less-day compounding-duplication incident.
+
+# Day-grain "richer source wins" thresholds — a deliberate MIRROR of the ingest price-guard
+# (_SHRINK_* / router.py upload_file: protect a day at existing >= 50 priced rows, refuse it at
+# incoming < 0.5 x existing). Same 50-row floor + 50% ratio, applied to READS so the display never
+# shows a degraded copy of a day when the other table holds a materially fuller copy of that same day.
+_RICHER_DAY_MIN_ROWS = 50
+_RICHER_DAY_RATIO = 0.5
+
+
+def _merge_days_richer(prows, orows, day_fn, min_rows=_RICHER_DAY_MIN_ROWS, ratio=_RICHER_DAY_RATIO):
+    """Per-DAY merge of a PRIMARY and OTHER row set. The primary keeps every day it has EXCEPT a day
+    whose primary copy is DEGRADED versus the other's — i.e. the other holds >= `min_rows` rows for that
+    day AND the primary holds < `ratio` x the other's count for it (the price-guard 50%/50-row rule). On
+    such a day the other's richer copy is used and the day is reported as SWAPPED. Days the primary lacks
+    entirely are FILLED from the other (the prior behaviour). Blank-day rows (day_fn falsy) on the primary
+    are always kept; blank-day rows on the other are dropped (can't be day-compared). Primary order is
+    preserved for kept rows; other-source rows are appended.
+
+    Returns (merged_rows, swapped_days_sorted, filled_days_sorted). Pure — no I/O, never raises."""
+    if not prows:
+        odays = sorted({day_fn(r) for r in orows if day_fn(r)})
+        return list(orows), [], odays
+    p_cnt, o_cnt = {}, {}
+    for r in prows:
+        d = day_fn(r)
+        if d:
+            p_cnt[d] = p_cnt.get(d, 0) + 1
+    for r in orows:
+        d = day_fn(r)
+        if d:
+            o_cnt[d] = o_cnt.get(d, 0) + 1
+    pdays = set(p_cnt)
+    swapped = sorted(d for d, oc in o_cnt.items()
+                     if oc >= min_rows and p_cnt.get(d, 0) > 0 and p_cnt.get(d, 0) < ratio * oc)
+    swap_set = set(swapped)
+    filled = sorted(d for d in o_cnt if d not in pdays)
+    kept_primary = [r for r in prows if day_fn(r) not in swap_set]
+    add_from_other = [r for r in orows
+                      if day_fn(r) and (day_fn(r) in swap_set or day_fn(r) not in pdays)]
+    return kept_primary + add_from_other, swapped, filled
+
+
+def _row_content_sig(row, drop_keys=('id', 'created_at')):
+    """A stable, order-independent full-content signature of a row: every column except `drop_keys`,
+    values normalized to str (None → '') so ('5' vs 5) and (None vs '') can't split a true duplicate.
+    Used to collapse read-skew / compounded duplicate rows. NOTE: two genuinely-identical line items on
+    one real ticket produce the same signature and WILL collapse to one — accepted, because the
+    authoritative monthly re-upload restores exact per-line truth; the feed merge is a self-heal, not the
+    system of record."""
+    drop = set(drop_keys)
+    return tuple(sorted((k, '' if v is None else str(v)) for k, v in row.items() if k not in drop))
+
+
+def _dedupe_rows(rows, drop_keys=('id', 'created_at')):
+    """Dedupe rows on their full-content signature (`_row_content_sig`), keeping the FIRST occurrence of
+    each signature. Returns (deduped_rows, dropped_count). Pure — no I/O."""
+    seen, out, dropped = set(), [], 0
+    for r in rows:
+        sig = _row_content_sig(r, drop_keys)
+        if sig in seen:
+            dropped += 1
+            continue
+        seen.add(sig)
+        out.append(r)
+    return out, dropped
+
+
+# In-process, per-(org_id, period) promotion mutex. Railway runs a SINGLE process, so a module-level
+# lock table is sufficient to serialize the hourly email-sweep promotion side-effect against the
+# scheduled _promote_all_due (and any manual promote-feed): two overlapping delete-then-insert cycles
+# for the same org+period would otherwise interleave into a double-count. Non-blocking by design — a
+# second concurrent caller SKIPS rather than queueing.
+_PROMO_LOCKS = {}
+_PROMO_LOCKS_GUARD = threading.Lock()
+
+
+def _promo_lock_for(org_id, period_key):
+    """Return the shared threading.Lock for one (org_id, period_key), creating it under the guard lock
+    on first use (so two threads racing to create it get the SAME lock object)."""
+    key = (org_id, period_key)
+    with _PROMO_LOCKS_GUARD:
+        lk = _PROMO_LOCKS.get(key)
+        if lk is None:
+            lk = threading.Lock()
+            _PROMO_LOCKS[key] = lk
+        return lk
+
+
 def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
     """THE canonical DISPLAY sales source: a per-DAY UNION of daily_sales_feed and raw_sales.
 
@@ -7641,9 +7734,17 @@ def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
     hand-uploaded raw_sales 1-13 → the union shows 1-13, not a truncated 1-8), and a promoted raw_sales
     month is never masked by a stale feed. Closed month → raw_sales leads, feed fills gaps.
 
+    Per-DAY pick WITH a degradation guard (2026-07-16): the primary leads each day it has UNLESS its copy
+    of that day is degraded versus the other source's — the other holds >= 50 rows for the day AND the
+    primary holds < 50% of that (a MIRROR of the ingest price-guard) — in which case the other's richer
+    copy of that day is shown and the day is reported in meta['richer_days']. Days the primary lacks are
+    filled from the other as before. (Live case: open month July 2026 — the feed's July 8 held 162 rows
+    while raw_sales held 341; the old primary-wins-wholesale rule showed the degraded 162.)
+
     NEVER raises: a failed read on either table degrades to whatever the other returned (so a column
     drift on one side can't 500 the page). Returns `(rows, meta)`; `meta` carries the per-source counts,
-    which source led, and which days were filled from the other — for the report's transparency line.
+    which source led, which days were filled from the other, and which days were swapped to the richer
+    source (`richer_days`) — for the report's transparency line.
 
     DISPLAY ONLY. The commission CALC path (`_run_calculation`/`_fetch_sales_unified`,
     `commission_engine._read_sales`) is deliberately NOT wired to this — that is money and gets its own
@@ -7665,21 +7766,21 @@ def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
     def _day(r):
         return str(r.get('trans_date') or '')[:10]
 
-    if not prows:
-        # Primary empty → the entire other source shows (no masking, nothing to merge against).
-        merged, fill = list(orows), list(orows)
-    else:
-        pdays = {_day(r) for r in prows if _day(r)}
-        fill = [r for r in orows if _day(r) and _day(r) not in pdays]
-        merged = list(prows) + fill
+    # Primary leads each day it has; a day where the other source is materially richer (>=50 rows and the
+    # primary < 50% of it) is SWAPPED to the other; days the primary lacks are FILLED from the other.
+    merged, richer_days, filled_days = _merge_days_richer(prows, orows, _day)
 
     feed_rows = len(prows) if primary == 'daily_sales_feed' else len(orows)
     raw_rows = len(prows) if primary == 'raw_sales' else len(orows)
+    filled_set, richer_set = set(filled_days), set(richer_days)
+    fill_rows = sum(1 for r in orows if _day(r) in filled_set)
+    richer_rows = sum(1 for r in orows if _day(r) in richer_set)
     meta = {
         'primary': primary, 'other': other,
         'primary_rows': len(prows), 'other_rows': len(orows),
         'feed_rows': feed_rows, 'raw_rows': raw_rows,
-        'filled_rows': len(fill), 'filled_days': sorted({_day(r) for r in fill if _day(r)}),
+        'filled_rows': fill_rows, 'filled_days': filled_days,
+        'richer_rows': richer_rows, 'richer_days': richer_days,
         'shown_rows': len(merged),
     }
     return merged, meta
@@ -9883,15 +9984,44 @@ def _promote_feed_to_raw_sales(client, org_id, period, dry_run=False, force=Fals
 
     Guarded: if the merged result would shrink the existing raw_sales line count below `retain` of its
     current size, the write is SKIPPED (a half-delivered feed can't wipe a good month) unless force.
-    dry_run returns the would-be delta WITHOUT writing — the safe way to validate before committing."""
+    dry_run returns the would-be delta WITHOUT writing — the safe way to validate before committing.
+
+    ANTI-DUPLICATION (2026-07-16, luxelink July 2026 incident — feed-less days compounding ~2x→16x per
+    run): (1) the paginated `_all()` read now `.order('id')` so unordered OFFSET pages can't re-read rows;
+    (2) the carried-over `monthly_only` rows (existing raw_sales rows the feed lacks — the feed-less days)
+    are content-deduped before persisting (`summary['dupes_dropped']`), which also SELF-HEALS pre-existing
+    bloat on the next run — NOTE this collapses two genuinely-identical line items on one real ticket to
+    one (accepted; the authoritative monthly re-upload restores exact per-line truth); (3) an in-process
+    per-(org_id, period) mutex serializes the hourly email-sweep promotion against the scheduled
+    _promote_all_due — a second concurrent run for the same org+period SKIPS ('promotion already running')
+    rather than interleaving a delete/insert into a double-count. dry_run is read-only → not mutex-gated."""
     pv = _pvariants(period)
     canon = next((v for v in pv if v[:1].isalpha()), period)  # 'June 2026' form for raw_sales
+    # DEFECT 3 mutex — real (writing) runs only; dry_run is read-only so it must never block/skip a real
+    # run. Non-blocking acquire: a concurrent real run for the same org+period skips with a trace note.
+    _lock = None if dry_run else _promo_lock_for(org_id, canon)
+    if _lock is not None and not _lock.acquire(blocking=False):
+        note = "promotion already running for this org+period — skipped (concurrent run)"
+        _write_upload_trace(org_id, source="promotion", filename=None, upload_type="sales",
+                            period=canon, result={"saved": 0, "skipped": note, "note": note})
+        return {"period": canon, "dry_run": dry_run, "skipped": note}
+    try:
+        return _promote_feed_impl(client, org_id, pv, canon, dry_run, force, retain)
+    finally:
+        if _lock is not None:
+            _lock.release()
+
+
+def _promote_feed_impl(client, org_id, pv, canon, dry_run, force, retain):
+    """Core feed→raw_sales merge, mutex-guarded by `_promote_feed_to_raw_sales` (which precomputes
+    pv/canon). See that wrapper's docstring for the full contract."""
 
     def _all(table):
         out, start = [], 0
         while True:
             rows = (client.schema('commcalc').table(table).select('*')
-                    .eq('org_id', org_id).in_('period', pv).range(start, start + 999).execute().data) or []
+                    .eq('org_id', org_id).in_('period', pv)
+                    .order('id').range(start, start + 999).execute().data) or []
             out.extend(rows)
             if len(rows) < 1000:
                 return out
@@ -9924,7 +10054,12 @@ def _promote_feed_to_raw_sales(client, org_id, period, dry_run=False, force=Fals
         row['org_id'] = org_id
         row['period'] = canon
         new_rows.append(row)
+    # DEFECT 2 — the feed-less-day rows (in raw_sales but NOT the feed) are carried over VERBATIM, so any
+    # read-skew / previously-persisted duplicate compounds run-over-run (the feed-covered days don't,
+    # because they're rebuilt from the feed each run). Content-dedupe them (signature drops id + created_at)
+    # keeping the FIRST occurrence — this also self-heals existing bloat on the next run.
     monthly_only = [r for r in existing if r.get('trans_id') not in feed_trans]
+    monthly_only, dupes_dropped = _dedupe_rows(monthly_only, drop_keys=('id', 'created_at'))
     for r in monthly_only:
         new_rows.append({k: v for k, v in r.items() if k != 'id'})
 
@@ -9935,17 +10070,19 @@ def _promote_feed_to_raw_sales(client, org_id, period, dry_run=False, force=Fals
         "feed_lines": len(feed), "feed_trans": len(feed_trans),
         "existing_lines": len(existing), "existing_trans": len({r.get('trans_id') for r in existing}),
         "monthly_only_trans": len({r.get('trans_id') for r in monthly_only}),
+        "dupes_dropped": dupes_dropped,
         "result_lines": len(new_rows), "result_trans": len({r.get('trans_id') for r in new_rows}),
         "existing_amount": _amt(existing), "result_amount": _amt(new_rows),
     }
-    def _trace_promo(saved, skipped=None, error=None):
+    def _trace_promo(saved, skipped=None, error=None, note=None):
         # mig 202: trace the promotion (feed→raw_sales) like any other ingest. dry_run previews aren't
-        # traced (no write). Best-effort — never affects the promotion.
+        # traced (no write). Best-effort — never affects the promotion. `note` surfaces the dedupe heal
+        # (dupes_dropped) so the self-healing is observable in the trace even on a clean success.
         if dry_run:
             return
         _write_upload_trace(org_id, source="promotion", filename=None, upload_type="sales",
                             period=canon,
-                            result={"saved": saved, "skipped": skipped, "note": skipped,
+                            result={"saved": saved, "skipped": skipped, "note": note or skipped,
                                     "_trace": {"rows_in": summary.get("feed_lines"),
                                                "target_table": "raw_sales",
                                                "periods": {canon: summary.get("result_lines", 0)},
@@ -9972,7 +10109,9 @@ def _promote_feed_to_raw_sales(client, org_id, period, dry_run=False, force=Fals
         _trace_promo(0, error=str(e))
         raise
     summary["written"] = len(new_rows)
-    _trace_promo(len(new_rows))
+    _heal_note = (f"healed {dupes_dropped} duplicate monthly-only line(s) via content-dedupe"
+                  if dupes_dropped else None)
+    _trace_promo(len(new_rows), note=_heal_note)
     return summary
 
 
