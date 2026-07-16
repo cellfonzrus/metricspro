@@ -2896,6 +2896,25 @@ def closing_readiness(org_id: str = ORG_ID):
         _cdefs = count_config.load_count_config(client, org_id)
     except Exception:
         _cdefs = []
+    # INFO only (2026-07-16 platform-core cross-module sweep flagged mig 089/111 as "house-org-only
+    # seeded" -> re-verified: BOTH are pure additive DDL with NO seed rows, house or otherwise; the
+    # documented doctrine is an empty config falls back to the hardcoded standard set BYTE-IDENTICAL
+    # (proven, retail-ops-8's 13/13 harness) and /closing/tender-config + /closing/count-config already
+    # render that standard set as the pre-filled editable starting point even with zero DB rows -> not
+    # a functional gap. Still surfaced here (info, not critical) purely for DISCOVERABILITY, since a
+    # tenant that never visits either wizard is silently on the generic keyword-matching fallback,
+    # which may not fit every POS vendor's raw labels as well as an explicit mapping would.
+    if not _tdefs:
+        issues.append({"code": "tender_config_default", "severity": "info",
+                       "message": "Using the built-in 7 tenders + generic keyword matching (no tenant-"
+                                  "specific tender mapping saved yet) — fine to leave as-is, or "
+                                  "visit Closing → Tender Setup to map this tenant's own POS "
+                                  "labels for a tighter match."})
+    if not _cdefs:
+        issues.append({"code": "count_config_default", "severity": "info",
+                       "message": "Using the built-in 3 activation-count fields (Upgrades/New Lines/"
+                                  "Postpaid) — fine to leave as-is, or visit Closing → Count "
+                                  "Fields to define this tenant's own activation taxonomy."})
 
     return {
         "org_id": org_id, "module_enabled": module_on,
