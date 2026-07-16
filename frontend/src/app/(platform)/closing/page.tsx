@@ -19,6 +19,7 @@ export default function ClosingDashboard() {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'store' | 'rep'>('store')
+  const [readiness, setReadiness] = useState<any>(null)   // self-diagnostic (2026-07-16), best-effort
 
   useEffect(() => { if (user?.market && permissions?.scope === 'market') setMarket(user.market) }, [user, permissions])
 
@@ -29,6 +30,9 @@ export default function ClosingDashboard() {
       .then(setData).catch(console.error).finally(() => setLoading(false))
   }, [period, market])
   useEffect(() => { load() }, [load])
+  // Surface config/data gaps (no stores mapped, no B2B sales source, no X-report ever, module not
+  // entitled) right on the dashboard instead of letting empty tiles/recon speak for themselves.
+  useEffect(() => { api('/api/v1/closing/readiness').then(setReadiness).catch(() => {}) }, [])
 
   const t = data?.totals || {}
   const byStore: any[] = data?.by_store || []
@@ -53,8 +57,15 @@ export default function ClosingDashboard() {
           <Link href="/closing/cash-position" className="btn btn-secondary" style={{ fontSize: 13 }}>💰 Cash Position</Link>
           <Link href="/closing/duplicates" className="btn btn-secondary" style={{ fontSize: 13 }}>🧾 Duplicates</Link>
           <Link href="/closing/count-config" className="btn btn-secondary" style={{ fontSize: 13 }}>🔢 Count fields</Link>
+          <Link href="/closing/readiness" className="btn btn-secondary" style={{ fontSize: 13 }}>🩺 Readiness</Link>
         </div>
       </div>
+
+      {readiness && !readiness.ok && (
+        <Link href="/closing/readiness" className="card" style={{ display: 'block', padding: 12, marginBottom: 14, background: '#fdeaea', border: '1px solid #f3b4b4', textDecoration: 'none', color: 'inherit' }}>
+          🔴 <b>{readiness.issues.filter((i: any) => i.severity === 'critical').length} critical wiring gap(s)</b> found for this tenant — {readiness.issues.find((i: any) => i.severity === 'critical')?.message} <span style={{ textDecoration: 'underline' }}>See all →</span>
+        </Link>
+      )}
 
       {/* Filters */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
