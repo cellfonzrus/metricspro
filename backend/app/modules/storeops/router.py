@@ -46,6 +46,26 @@ def sb():
     return get_supabase().schema("storeops")
 
 
+def _biz_tz_for(org_id: str):
+    """The tenant's OWN business timezone when set (storeops.tenants.timezone, mig 085 — added for
+    Luxelink's pay-period setup but never wired to the clock until now), else the house-wide
+    settings.BUSINESS_TZ default. Every 'business-local work date' (clock-in/out bucketing, the
+    closing-gate's 'today', the force-clockout sweep) should use THIS, not the bare global _BIZ_TZ,
+    so a tenant outside America/New_York doesn't get punches bucketed onto the wrong calendar day.
+    Safe/additive: no tenant has this column set yet (it's not exposed in any settings UI), so this
+    is a no-op today and Boost's behavior is unchanged — it only takes effect once a value is set.
+    Any lookup/parse failure falls back to the global default (never breaks the clock over a
+    config/migration gap)."""
+    try:
+        t = (sb().table("tenants").select("timezone").eq("org_id", org_id).limit(1).execute().data) or []
+        tz = ((t[0].get("timezone") if t else "") or "").strip()
+        if tz:
+            return ZoneInfo(tz)
+    except Exception:
+        pass
+    return _BIZ_TZ
+
+
 @router.get("/stores")
 def get_stores(authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
     r = sb().table("stores").select("*").eq("org_id", org_id).order("address").execute()
@@ -419,8 +439,13 @@ def delete_employee(emp_id: str, org_id: str = ORG_ID):
         raise HTTPException(409, f"cannot delete (linked records exist — try deactivating): {ex}")
     login = {}
     try:
-        from app.modules.core.router import purge_app_user, ORG_ID
-        login = purge_app_user(ORG_ID, email=e.get("email"), employee_id=e.get("employee_id"), hard=True)
+        # BUG FIX (luxelink-parity audit 2026-07-16): this used to purge under the imported HOUSE
+        # `ORG_ID` constant instead of the caller's own `org_id` — so deleting a non-house-tenant
+        # employee (e.g. luxelink) purged nothing (found:0, login left dangling as a ghost user)
+        # and, worse, scoped the lookup to the WRONG tenant. Use the local org_id (the tenant this
+        # employee actually belongs to) — purge_app_user is already org_id-scoped internally.
+        from app.modules.core.router import purge_app_user
+        login = purge_app_user(org_id, email=e.get("email"), employee_id=e.get("employee_id"), hard=True)
     except Exception:
         pass
     return {"ok": True, "deleted": emp_id, "name": e.get("name"), "login": login}
@@ -467,8 +492,9 @@ def merge_employees(body: dict, org_id: str = ORG_ID):
     # merged-away person doesn't linger in Roles & Access.
     login = {}
     try:
-        from app.modules.core.router import purge_app_user, ORG_ID
-        login = purge_app_user(ORG_ID, email=dup.get("email"), employee_id=dup.get("employee_id"), hard=deleted)
+        # Same fix as delete_employee: use the caller's own org_id, not the house ORG_ID constant.
+        from app.modules.core.router import purge_app_user
+        login = purge_app_user(org_id, email=dup.get("email"), employee_id=dup.get("employee_id"), hard=deleted)
     except Exception:
         pass
     return {"ok": True, "merged_into": tgt.get("name"), "moved": moved, "deleted_duplicate": deleted, "login": login}
@@ -791,11 +817,13 @@ def _emp_name(org_id, employee_id):
     return (r[0].get("name") if r else None), (r[0].get("home_store") if r else None)
 
 
-def _fmt_time(iso):
+def _fmt_time(iso, org_id=None):
     # Display in the BUSINESS timezone (not the server's) so the kiosk time matches the reports and
-    # doesn't drift with wherever Railway happens to run.
+    # doesn't drift with wherever Railway happens to run. org_id (optional) resolves the TENANT's
+    # own timezone if one is set (mig 085); omitted callers keep the house-wide default.
     try:
-        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(_BIZ_TZ).strftime("%I:%M %p").lstrip("0")
+        tz = _biz_tz_for(org_id) if org_id else _BIZ_TZ
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(tz).strftime("%I:%M %p").lstrip("0")
     except Exception:
         return iso
 
@@ -960,7 +988,7 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
         raise HTTPException(409, "Already clocked in — clock out first.")
     name, home_store = _emp_name(org_id, employee_id)
     now = datetime.now(timezone.utc)
-    work_date = now.astimezone(_BIZ_TZ).date().isoformat()   # business-local date (not UTC)
+    work_date = now.astimezone(_biz_tz_for(org_id)).date().isoformat()   # business-local date (not UTC)
     # Which store is this punch for? The kiosk sends the selected store; fall back to home store.
     req_store = (body.get("store_code") or "").strip() or home_store
     # Gate: home OR scheduled-today OR floater store. Anything else needs a manager override.
@@ -1001,7 +1029,7 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
                 "ack_date": work_date, "imei_count": int(body.get("priority_ack_count") or 0)}).execute()
         except Exception:
             pass
-    return {"success": True, "data": {"time": _fmt_time(saved.get("clock_in")), "entry_id": saved.get("id"),
+    return {"success": True, "data": {"time": _fmt_time(saved.get("clock_in"), org_id), "entry_id": saved.get("id"),
                                       "store_code": req_store}}
 
 
@@ -1011,7 +1039,7 @@ def timeclock_allowed_stores(authorization: str = Header(default=""), org_id: st
     kiosk can show a picker instead of forcing the home store."""
     org_id, employee_id = _caller_identity(authorization)
     name, home_store = _emp_name(org_id, employee_id)
-    work_date = datetime.now(timezone.utc).astimezone(_BIZ_TZ).date().isoformat()
+    work_date = datetime.now(timezone.utc).astimezone(_biz_tz_for(org_id)).date().isoformat()
     allowed = sorted(_allowed_clock_stores(org_id, employee_id, home_store, work_date))
     return {"home_store": home_store, "work_date": work_date,
             "stores": allowed or ([_norm_store(home_store)] if home_store else [])}
@@ -1035,7 +1063,7 @@ def clock_in_override(body: dict, authorization: str = Header(default=""), org_i
         raise HTTPException(409, "That employee is already clocked in — clock out first.")
     name, _home = _emp_name(org_id, employee_id)
     now = datetime.now(timezone.utc)
-    work_date = now.astimezone(_BIZ_TZ).date().isoformat()
+    work_date = now.astimezone(_biz_tz_for(org_id)).date().isoformat()
     # update the schedule so the store is on record for today (idempotent-ish: skip if already there)
     try:
         exists = (sb().table("shifts").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
@@ -1056,7 +1084,7 @@ def clock_in_override(body: dict, authorization: str = Header(default=""), org_i
     r = sb().table("timelog").insert(row).execute()
     saved = r.data[0] if r.data else row
     return {"success": True, "override_by": mgr.get("email"),
-            "data": {"time": _fmt_time(saved.get("clock_in")), "entry_id": saved.get("id"), "store_code": store_code}}
+            "data": {"time": _fmt_time(saved.get("clock_in"), org_id), "entry_id": saved.get("id"), "store_code": store_code}}
 
 
 def _closing_gate_block(org_id, employee_id, store_code):
@@ -1078,7 +1106,7 @@ def _closing_gate_block(org_id, employee_id, store_code):
         ids, _ = _emp_id_variants(org_id, employee_id)
         if str(closer[0].get("employee_id") or "") not in ids:
             return None  # not the assigned closer → not gated
-        today = datetime.now(timezone.utc).astimezone(_BIZ_TZ).date().isoformat()
+        today = datetime.now(timezone.utc).astimezone(_biz_tz_for(org_id)).date().isoformat()
         done = (get_supabase().schema("commcalc").table("daily_closing").select("id")
                 .eq("org_id", org_id).eq("store_code", store).eq("close_date", today).limit(1).execute().data) or []
         if done:
@@ -1116,8 +1144,8 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
     except Exception:
         hours = None
     sb().table("timelog").update({"clock_out": now.isoformat(), "hours": hours}).eq("id", entry["id"]).execute()
-    return {"success": True, "data": {"time": _fmt_time(now.isoformat()), "hours": hours,
-                                      "clock_in": _fmt_time(entry.get("clock_in"))}}
+    return {"success": True, "data": {"time": _fmt_time(now.isoformat(), org_id), "hours": hours,
+                                      "clock_in": _fmt_time(entry.get("clock_in"), org_id)}}
 
 
 @router.get("/timeclock/list")
@@ -1224,13 +1252,14 @@ def _emp_id_variants(org_id, employee_id):
     return ids, name
 
 
-def _biz_dt_utc(date_str, hhmm):
+def _biz_dt_utc(date_str, hhmm, org_id=None):
     """Combine a 'YYYY-MM-DD' + 'HH:MM' (business-local) into an aware UTC datetime, or None."""
     try:
         parts = str(hhmm).strip().split(":")
         h, m = int(parts[0]), int(parts[1])
         naive = datetime.fromisoformat(str(date_str)[:10] + f"T{h:02d}:{m:02d}:00")
-        return naive.replace(tzinfo=_BIZ_TZ).astimezone(timezone.utc)
+        tz = _biz_tz_for(org_id) if org_id else _BIZ_TZ
+        return naive.replace(tzinfo=tz).astimezone(timezone.utc)
     except Exception:
         return None
 
@@ -1269,7 +1298,7 @@ def _scheduled_end_for_punch(org_id, punch):
     end_hhmm = _approved_extension_end(org_id, ids, wdate) or s.get("end_time")
     if not end_hhmm:
         return None
-    return _biz_dt_utc(wdate, end_hhmm)
+    return _biz_dt_utc(wdate, end_hhmm, org_id)
 
 
 def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN):
@@ -1565,7 +1594,7 @@ def list_hours_budgets(week: str = "", authorization: str = Header(default=""), 
         org_id, _ = _caller_identity(authorization)
     except Exception:
         pass
-    ref = (week or datetime.now(timezone.utc).astimezone(_BIZ_TZ).date().isoformat())
+    ref = (week or datetime.now(timezone.utc).astimezone(_biz_tz_for(org_id)).date().isoformat())
     ws, we = _work_week_bounds(org_id, ref)
     budgets = {b["store_code"]: float(b.get("weekly_hours") or 0)
                for b in (sb().table("hours_budget").select("store_code,weekly_hours").eq("org_id", org_id).execute().data or [])}

@@ -53,8 +53,15 @@ const td: React.CSSProperties = { padding: '7px 10px', fontSize: 12.5, borderTop
 
 const blankNewItem = { key: '', name: '', calc_method: 'pct_wages' as Item['calc_method'], rate_or_amount: '', wage_cap: '', scope: 'store' as Item['scope'] }
 
+// Current month 'YYYY-MM', local-safe (was a hardcoded '2026-07' that would silently go stale
+// every month for every tenant, Boost included).
+function currentMonth() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
 export default function PayrollExpensesPage() {
-  const [month, setMonth] = useState('2026-07')
+  const [month, setMonth] = useState(() => currentMonth())
   const [taxCfg, setTaxCfg] = useState<TaxConfig | null>(null)
   const [taxSaving, setTaxSaving] = useState(false)
   const [taxMsg, setTaxMsg] = useState('')
