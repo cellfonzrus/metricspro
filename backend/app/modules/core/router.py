@@ -283,10 +283,15 @@ def _mods(**on):
 
 # the role set seeded into every new tenant (mirror of migration 015 + helpdesk); the tenant admin
 # edits them afterward on their own Roles & Access.
+# `closing` (Daily Closing) is a store-operations feature: every tier that already gets `storeops`
+# (admin / market / store manager) also gets `closing` so a NEW tenant's managers can run closings out
+# of the box — the seed list stays in lockstep with MODULE_CATALOG. FORWARD-ONLY: this seeds roles at
+# tenant CREATION; it never rewrites an existing tenant's role rows, so the house/Boost org is untouched
+# (byte-identical). An existing tenant grants/revokes any module per role on /admin/roles.
 _BASE_ROLES = [
-    ("admin", "Admin", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True, helpdesk=True, hr=True, ai_assistant=True, admin=True), "scope": "all", "home": "/commcalc"}),
-    ("market_manager", "Market Manager", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, notify=True, helpdesk=True, hr=True, ai_assistant=True), "scope": "market", "home": "/commcalc/targets"}),
-    ("store_manager", "Store Manager", {"modules": _mods(commissions=True, targets=True, asset=True, storeops=True, helpdesk=True, ai_assistant=True), "scope": "store", "home": "/commcalc/targets"}),
+    ("admin", "Admin", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, closing=True, notify=True, helpdesk=True, hr=True, ai_assistant=True, admin=True), "scope": "all", "home": "/commcalc"}),
+    ("market_manager", "Market Manager", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, closing=True, notify=True, helpdesk=True, hr=True, ai_assistant=True), "scope": "market", "home": "/commcalc/targets"}),
+    ("store_manager", "Store Manager", {"modules": _mods(commissions=True, targets=True, asset=True, storeops=True, closing=True, helpdesk=True, ai_assistant=True), "scope": "store", "home": "/commcalc/targets"}),
     ("sales_rep", "Sales Rep", {"modules": _mods(targets=True, helpdesk=True), "scope": "self", "home": "/commcalc/targets/my"}),
 ]
 
@@ -898,14 +903,16 @@ def _level_role_perms(rank: int) -> dict:
         return base
     def R(on):  # per-area REPORT access (separate from the operational module)
         return {k: on for k in ("commissions", "asset", "vip", "accounts", "storeops", "closing")}
+    # `closing` (Daily Closing) rides with `storeops` for every store-operations tier — same rationale as
+    # _BASE_ROLES. FORWARD-ONLY (INSERT of a level-derived role); never rewrites an existing role row.
     if rank <= 1:    # Executive / Director — company-wide leadership: full reports + HR
-        return {"modules": M(commissions=True, targets=True, asset=True, vip=True, storeops=True, hr=True, notify=True),
+        return {"modules": M(commissions=True, targets=True, asset=True, vip=True, storeops=True, closing=True, hr=True, notify=True),
                 "reports": R(True), "scope": "all", "home": "/commcalc"}
     if rank <= 3:    # Regional / District manager — market scope: operational only, NO reports by default
-        return {"modules": M(commissions=True, targets=True, asset=True, storeops=True, notify=True),
+        return {"modules": M(commissions=True, targets=True, asset=True, storeops=True, closing=True, notify=True),
                 "reports": R(False), "scope": "market", "home": "/commcalc/targets"}
     if rank == 4:    # Store manager — store scope: NO reports by default
-        return {"modules": M(commissions=True, targets=True, asset=True, storeops=True),
+        return {"modules": M(commissions=True, targets=True, asset=True, storeops=True, closing=True),
                 "reports": R(False), "scope": "store", "home": "/commcalc/targets"}
     return {"modules": M(targets=True), "reports": R(False), "scope": "self", "home": "/commcalc/targets/my"}  # rep
 
