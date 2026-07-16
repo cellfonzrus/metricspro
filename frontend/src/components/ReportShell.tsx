@@ -11,6 +11,7 @@ import { Fragment, useMemo, useState } from 'react'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
+import { computeTotalRow } from '@/lib/report-totals'
 
 type Col = ExportColumn
 type Filter = { field: string; op: string; value: string }
@@ -51,7 +52,7 @@ function ymd(v: any): string {
   return s
 }
 
-export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick }: {
+export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick, totals, stickyHeader }: {
   title: string
   subtitle?: string
   filename?: string
@@ -61,6 +62,14 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   right?: React.ReactNode                   // extra toolbar content (page-specific controls)
   children?: React.ReactNode                // optional custom body ABOVE the table (charts, tiles…)
   onRowClick?: (row: any) => void           // makes each data row clickable (e.g. drill into a transaction)
+  totals?: boolean                          // opt-in: a pinned TOTAL row (sum of money+numeric cols over
+                                            // ALL filtered rows) — shown on screen AND in every export.
+                                            // Off by default so other reports are unchanged.
+  stickyHeader?: boolean                    // opt-in: pin the column-header ribbon at the top while the
+                                            // body scrolls. Off by default → other consumers unchanged.
+                                            // z-index 3 keeps it above the scrolling body AND above the
+                                            // sticky totals footer (z-index 2); both use --surface2 so
+                                            // they stay opaque in light & dark.
 }) {
   const cols = useMemo(() => columns.filter(Boolean), [columns])
   const byKey = useMemo(() => Object.fromEntries(cols.map(c => [key(c), c])), [cols])
@@ -124,16 +133,45 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   const moneyCols = cols.filter(isMoney)
   const subtotal = (rs: any[], c: Col) => rs.reduce((s, r) => s + (Number(String(c.get(r)).replace(/[^0-9.-]/g, '')) || 0), 0)
 
-  const buildPayload = (): ExportPayload => ({
-    title, subtitle, filename: filename || title.replace(/[^\w]+/g, '_').toLowerCase(),
-    sheets: groups
-      ? groups.map(([g, rs]) => ({ name: g.slice(0, 28), columns: cols, rows: rs }))
-      : [{ name: 'Report', columns: cols, rows: filtered }],
-  })
+  // Opt-in pinned TOTAL row. On-screen shows the GRAND total over every filtered row (across all
+  // groups); each EXPORT sheet ends with a TOTAL row summing that sheet (= the same grand total when
+  // ungrouped, = each group's subtotal per sheet when grouped) so what you see is what you export.
+  const totalCells = useMemo(
+    () => (totals && filtered.length ? computeTotalRow(cols, filtered) : null),
+    [totals, cols, filtered],
+  )
+  // Append a synthetic TOTAL row to one export sheet. A sentinel row carries the precomputed cells;
+  // each column's getter is wrapped to read them for that row and delegate to the original otherwise —
+  // so export.tsx formats/serializes the total exactly like any other cell (no change to export.tsx).
+  const TOTAL_ROW = '__rsTotal'
+  const sheetWithTotal = (rs: any[]): { columns: Col[]; rows: any[] } => {
+    if (!rs.length) return { columns: cols, rows: rs }   // never export a lone total-of-nothing row
+    const cells = computeTotalRow(cols, rs)
+    const wrapped = cols.map((c, i) => ({ ...c, get: (row: any) => (row && row[TOTAL_ROW]) ? row[TOTAL_ROW][i].raw : c.get(row) }))
+    return { columns: wrapped, rows: [...rs, { [TOTAL_ROW]: cells }] }
+  }
+
+  const buildPayload = (): ExportPayload => {
+    const mkSheet = (rs: any[]) => totals ? sheetWithTotal(rs) : { columns: cols, rows: rs }
+    return {
+      title, subtitle, filename: filename || title.replace(/[^\w]+/g, '_').toLowerCase(),
+      sheets: groups
+        ? groups.map(([g, rs]) => ({ name: g.slice(0, 28), ...mkSheet(rs) }))
+        : [{ name: 'Report', ...mkSheet(filtered) }],
+    }
+  }
 
   const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }
   const cell: React.CSSProperties = { padding: '6px 9px', borderTop: '1px solid var(--border)', fontSize: 13 }
   const th: React.CSSProperties = { textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', position: 'sticky', top: 0, background: 'var(--surface2)' }
+  // Header-cell positioning. Default (OFF) = position:relative EXACTLY as before, so the ResizeHandle
+  // anchors to it and every non-opting consumer is byte-identical. When stickyHeader is ON the cell is
+  // sticky+z3 (sticky is still a positioned containing block, so the absolute ResizeHandle keeps
+  // anchoring), with a box-shadow bottom rule because border-collapse borders scroll away from a
+  // sticky cell. --surface2 stays opaque so scrolling rows never bleed through.
+  const thPos: React.CSSProperties = stickyHeader
+    ? { position: 'sticky', top: 0, zIndex: 3, boxShadow: 'inset 0 -1px 0 var(--border)' }
+    : { position: 'relative' }
 
   return (
     <div>
@@ -215,7 +253,7 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
       <div className="table-wrapper" style={{ maxHeight: '70vh', overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
           <colgroup>{cols.map(c => <col key={key(c)} style={{ width: cw.width(key(c)) }} />)}</colgroup>
-          <thead><tr>{cols.map(c => <th key={key(c)} style={{ ...th, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', whiteSpace: 'nowrap', position: 'relative' }}>{c.header}<ResizeHandle onDown={e => cw.start(key(c), e)} onReset={() => cw.reset(key(c))} /></th>)}</tr></thead>
+          <thead><tr>{cols.map(c => <th key={key(c)} style={{ ...th, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', whiteSpace: 'nowrap', ...thPos }}>{c.header}<ResizeHandle onDown={e => cw.start(key(c), e)} onReset={() => cw.reset(key(c))} /></th>)}</tr></thead>
           <tbody>
             {!groups && filtered.map((r, i) => (
               <tr key={i} onClick={onRowClick ? () => onRowClick(r) : undefined} style={onRowClick ? { cursor: 'pointer' } : undefined}
@@ -237,7 +275,12 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
             ))}
             {filtered.length === 0 && <tr><td style={{ ...cell, textAlign: 'center', color: 'var(--text3)', padding: 24 }} colSpan={cols.length}>No rows match the filters.</td></tr>}
           </tbody>
-          {moneyCols.length > 0 && filtered.length > 0 && (
+          {totalCells && (
+            <tfoot><tr>
+              {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: (isMoney(c) || c.align === 'right') ? 'right' : 'left', borderTop: '2px solid var(--text3)', position: 'sticky', bottom: 0, zIndex: 2, background: 'var(--surface2)' }}>{totalCells[i].text}</td>)}
+            </tr></tfoot>
+          )}
+          {!totals && moneyCols.length > 0 && filtered.length > 0 && (
             <tfoot><tr style={{ borderTop: '2px solid var(--border)' }}>
               {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: isMoney(c) ? 'right' : 'left' }}>{isMoney(c) ? money(subtotal(filtered, c)) : (i === 0 ? 'Total' : '')}</td>)}
             </tr></tfoot>

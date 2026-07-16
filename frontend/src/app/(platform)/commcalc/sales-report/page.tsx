@@ -91,7 +91,8 @@ export default function SalesReportPage() {
   const sum = (k: string) => fRows.reduce((s, r) => s + (Number(r[k]) || 0), 0)
   const t = filtered
     ? { revenue: sum('revenue'), gp: sum('gp'), accessory_rev: sum('accessory_rev'),
-        txns: sum('txns'), activations: sum('activations'), byod: sum('byod'), upgrades: sum('upgrades') }
+        txns: sum('txns'), activations: sum('activations'), byod: sum('byod'), upgrades: sum('upgrades'),
+        swaps: sum('swaps') }
     : (data?.totals || {})
   // Distinct months available across both sales tables (for the picker).
   const months = Array.from(new Set((data?.periods || []).map((p: string) => {
@@ -109,6 +110,7 @@ export default function SalesReportPage() {
     { header: 'Activations', get: r => r.activations, align: 'right' },
     { header: 'BYOD', get: r => r.byod, align: 'right' },
     { header: 'Upgrades', get: r => r.upgrades, align: 'right' },
+    { header: 'Swaps', get: r => r.swaps, align: 'right' },
     { header: 'Accessory $', get: r => r.accessory_rev, money: true },
     { header: 'Revenue $', get: r => r.revenue, money: true },
     { header: 'GP $', get: r => r.gp, money: true },
@@ -179,6 +181,7 @@ export default function SalesReportPage() {
         <Tile label="Activations" value={String(t.activations || 0)} />
         <Tile label="BYOD" value={String(t.byod || 0)} />
         <Tile label="Upgrades" value={String(t.upgrades || 0)} />
+        <Tile label="Swaps" value={String(t.swaps || 0)} />
       </div>
 
       {loading ? (
@@ -196,6 +199,8 @@ export default function SalesReportPage() {
           filename={`sales-report-${period.replace(/\s+/g, '-')}`}
           columns={cols}
           rows={fRows}
+          totals
+          stickyHeader
           onRowClick={openDrill}
         />
       )}
