@@ -175,6 +175,34 @@ def _proxy_arg(proxy_url):
         return None
 
 
+def _https_upgrade_url(url):
+    """Return the https:// form of a plain-http URL, or None when it must NOT be upgraded (already
+    https / a non-http scheme, or a localhost/loopback host — local test servers and Playwright's own
+    internals must stay on http). Only the SCHEME is swapped: the host, port, userinfo, path, query
+    string and every percent-encoded character are preserved byte-for-byte (the VidaPay bounce URL
+    carries a percent-encoded ?returnto=http%3a%2f%2f… that must survive intact). Backs the
+    https-upgrade route in _new_context — see the squid/Decodo plain-http failure documented there."""
+    u = url or ""
+    if not u.lower().startswith("http://"):
+        return None
+    rest = u[len("http://"):]                    # everything after the scheme, kept verbatim
+    authority = rest
+    for sep in ("/", "?", "#"):
+        i = authority.find(sep)
+        if i != -1:
+            authority = authority[:i]
+    hostport = authority.split("@")[-1]          # strip any user:pass@ before reading the host
+    if hostport.startswith("["):                 # IPv6 literal, e.g. [::1]:8080
+        host = hostport[1:hostport.find("]")] if "]" in hostport else hostport[1:]
+    else:
+        host = hostport.split(":")[0]
+    host = host.lower()
+    if (host in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+            or host.startswith("127.") or host.endswith(".localhost")):
+        return None
+    return "https://" + rest
+
+
 def _new_context(browser, storage_state=None, proxy=None):
     """A desktop-Chrome context with the anti-automation shims applied before any page script runs.
     `proxy` is a Playwright proxy dict (see _proxy_arg) routing the session through a given egress.
@@ -209,6 +237,36 @@ def _new_context(browser, storage_state=None, proxy=None):
                 "; for (const k in it) sessionStorage.setItem(k, it[k]); } catch(e){} })();")
         except Exception:
             pass
+    # HTTPS-UPGRADE ROUTE — applies to EVERY flow that builds a context (begin_login, complete_2fa,
+    # the live session, run_vidapay_sweep, b2bsoft). VidaPay/T-CETRA is a legacy ASP.NET app behind
+    # Cloudflare that believes its own scheme is plain http, so after login it bounces the browser to
+    # http:// absolute URLs (e.g. /Default.aspx?returnto=http%3a%2f%2fwww.vidapaycrm.com%2fMain+Panel.aspx).
+    # When the session egresses through the Decodo residential proxy (an HTTPS CONNECT tunnel), a
+    # plain-http absolute-form request is parsed by Decodo's squid and REJECTED — the browser renders
+    # squid's own "Invalid URL … (squid)" error page and every http hop dies AT THE PROXY. The portal
+    # serves everything over https, so we transparently rewrite any http:// request to https:// with a
+    # 307 (preserves method + body → ASP.NET postbacks survive) and let the browser re-issue it over the
+    # CONNECT tunnel the proxy handles. Unconditional (not proxy-only): these portals are https-only and
+    # it also hardens the no-proxy path. Loopback is excluded (local test servers must stay on http).
+    try:
+        def _https_upgrade_route(route):
+            try:
+                https = _https_upgrade_url(route.request.url)
+            except Exception:
+                https = None
+            try:
+                if https:
+                    route.fulfill(status=307, headers={"Location": https})
+                else:
+                    route.continue_()
+            except Exception:
+                try:
+                    route.continue_()
+                except Exception:
+                    pass
+        ctx.route(lambda u: bool(u) and u.lower().startswith("http://"), _https_upgrade_route)
+    except Exception:
+        pass
     return ctx
 
 
@@ -305,6 +363,36 @@ def _looks_like_cloudflare(page):
 def _looks_like_bot_wall(page):
     body = _page_text(page)
     return any(p in body for p in _BOT_PHRASES)
+
+
+# The egress PROXY's OWN rejection page. When a plain-http absolute-form request reaches the Decodo
+# residential proxy (an HTTPS CONNECT tunnel), its squid refuses to tunnel it and serves its own page —
+# "ERROR: The requested URL could not be retrieved … Your cache administrator is … Generated … by
+# localhost (squid)". The https-upgrade route in _new_context stops VidaPay's http-redirect from
+# producing this, but if a proxy still mangles a request we must NAME the proxy as the failure point —
+# NOT misread it as an expired session and blunder into report pulls with confusing calibration errors.
+_PROXY_ERR_PHRASES = ("requested url could not be retrieved", "your cache administrator", "(squid)")
+
+
+def _looks_like_proxy_error(page):
+    body = _page_text(page)
+    return any(pph in body for pph in _PROXY_ERR_PHRASES)
+
+
+def _proxy_error_message(failing_url, proxy_url):
+    """A clear, actionable error for the egress-proxy's own rejection page — names the failing URL and
+    states the request died AT THE EGRESS PROXY (NOT an expired session, NOT the portal). Mirrors the
+    per-egress WAF error style (egress_hint / commit f60f1e1)."""
+    arg = _proxy_arg(proxy_url)
+    server = arg.get("server") if arg else None
+    via = (" (%s)" % server) if server else ""
+    return ("The request died AT THE EGRESS PROXY%s, which returned its OWN error page (squid: \"the "
+            "requested URL could not be retrieved\") for %s. This is NOT a session/2FA problem and the "
+            "portal is fine — the proxy rejected the request (typically a plain-http absolute-form URL "
+            "its squid won't tunnel). The portal's http→https redirects are now auto-upgraded, so if you "
+            "still see this, verify the egress proxy is a working HTTPS CONNECT proxy (Decodo ISP wants "
+            "http://USER:PASS@isp.decodo.com:10001), click Test proxy (expect routed + US), then retry."
+            % (via, (failing_url or "?")[:200]))
 
 
 def _wait_settle(page, timeout_s=30):
@@ -438,7 +526,11 @@ def _code_field(page):
 
 
 def _classify(page):
-    """Where did we land: 'twofa' | 'authenticated' | 'login' | 'botwall' | 'unknown'."""
+    """Where did we land: 'proxy_error' | 'twofa' | 'authenticated' | 'login' | 'botwall' | 'unknown'."""
+    # The egress proxy's own rejection page is checked FIRST — it superficially resembles a generic
+    # error/login page, and misreading it as 'unknown'/expired would blunder the sweep into report pulls.
+    if _looks_like_proxy_error(page):
+        return "proxy_error"
     if _looks_like_bot_wall(page) and not _password_frame(page)[1]:
         return "botwall"
     body = _page_text(page)
@@ -1023,6 +1115,8 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             login_fr, pw_el = _password_frame(page)
             if not pw_el:
                 diag = _snapshot(page)
+                if _looks_like_proxy_error(page):
+                    raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(diag))
                 if _looks_like_bot_wall(page):
                     raise VidaPayLoginError(
                         "VidaPay served an anti-automation page (\"Something doesn't look right\") instead "
@@ -1042,6 +1136,8 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             _wait_settle(page)
             state = _classify(page)
             diag = _snapshot(page)
+            if state == "proxy_error":
+                raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(diag))
             if state == "twofa":
                 return _twofa_result(page, ctx)
             if state == "authenticated":
@@ -1147,6 +1243,8 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                 login_fr, pw_el = _password_frame(page)
                 if not pw_el:
                     diag = _snapshot(page)
+                    if _looks_like_proxy_error(page):
+                        raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(diag))
                     if _looks_like_bot_wall(page):
                         raise VidaPayLoginError(
                             "b2bsoft served an anti-automation page instead of the password form — reach it from a "
@@ -1209,6 +1307,8 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                 except Exception:
                     pass
                 return _twofa_result(page, ctx, {"filled": _filled})
+            if _looks_like_proxy_error(page):
+                raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(_snapshot(page)))
             state = _classify(page)
             diag = _snapshot(page)
             try:
@@ -1261,6 +1361,8 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
             page.goto(nav_url or base_url, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
             page.wait_for_timeout(2500)
+            if _looks_like_proxy_error(page):
+                raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(_snapshot(page)))
             if _classify(page) == "authenticated":
                 return {"status": "authenticated", "storage_state": capture_session_state(page, ctx),
                         "diag": _snapshot(page), "screenshot_b64": _shot_b64(page)}
@@ -1345,6 +1447,8 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
             page.goto(nav_url or base_url, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
             page.wait_for_timeout(2500)
+            if _looks_like_proxy_error(page):
+                raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(_snapshot(page)))
             on_2fa = bool(page.query_selector("#TwoFactorCode")) or "twofactor" in (page.url or "").lower()
             if not on_2fa and _classify(page) == "authenticated":
                 return {"status": "authenticated", "storage_state": capture_session_state(page, ctx), "diag": _snapshot(page),
@@ -1700,6 +1804,8 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
             _wait_settle(page)
             page.wait_for_timeout(2500)
             state = _classify(page)
+            if state == "proxy_error":
+                raise VidaPayPortalError(_proxy_error_message(page.url, proxy_url))
             if state in ("login", "twofa", "botwall"):
                 raise VidaPayAuthError(
                     "The VidaPay session has expired — please re-authenticate (Log in + 2FA).")
@@ -1746,6 +1852,8 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
             page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
             page.wait_for_timeout(2500)
+            if _looks_like_proxy_error(page):
+                raise VidaPayPortalError(_proxy_error_message(page.url, proxy_url))
             # b2bsoft-specific validity check (the generic _classify can misread the wsreports app as a
             # login page): the session is invalid ONLY if we're on the SSO login (#companyId) or 2FA screen.
             u = (page.url or "").lower()
