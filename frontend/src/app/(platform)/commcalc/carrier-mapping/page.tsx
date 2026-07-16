@@ -2,6 +2,17 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, fmt } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
+
+// Build the pick-don't-type option list (RULE THREE): the org's REAL distinct values plus the row's
+// CURRENT value (so an existing pattern/subtype that isn't in the fresh list still shows + stays
+// selected). id === label === the stored string (the classifier matches on the raw string).
+function toOptions(values: string[], current?: string): EntityOption[] {
+  const out: EntityOption[] = values.map(v => ({ id: v, label: v }))
+  const cur = (current || '').trim()
+  if (cur && !values.includes(cur)) out.unshift({ id: cur, label: cur })
+  return out
+}
 
 // Carrier category map (SaaS framework Phase 1): map each carrier's raw compensation category to a
 // canonical component (RESIDUAL/COMMISSION/SPIFF/REIMBURSEMENT) — config-driven, no code. Unmapped
@@ -23,6 +34,18 @@ export default function CarrierMappingPage() {
   const [add, setAdd] = useState({ raw_category: '', match_type: 'contains', component: 'COMMISSION', subtype: '', priority: '100' })
   const [cAdd, setCAdd] = useState({ name: '', code: '', is_default: false })
   const [msg, setMsg] = useState('')
+  // pick-don't-type option lists (org-scoped, from the org's REAL comp data + existing rules)
+  const [catOpts, setCatOpts] = useState<string[]>([])
+  const [subOpts, setSubOpts] = useState<string[]>([])
+
+  const loadOptions = useCallback(() => {
+    // all-period distinct categories: a mapping rule applies to every period, so offer the full set
+    api('/api/v1/commcalc/carrier-category-options').then((d: any) => {
+      setCatOpts(Array.isArray(d?.categories) ? d.categories : [])
+      setSubOpts(Array.isArray(d?.subtypes) ? d.subtypes : [])
+    }).catch(() => {})
+  }, [])
+  useEffect(() => { loadOptions() }, [loadOptions])
 
   const loadCarriers = useCallback((selectId?: string) => {
     api('/api/v1/commcalc/carriers').then((c: any) => {
@@ -62,7 +85,7 @@ export default function CarrierMappingPage() {
   useEffect(() => { loadRules(); loadComp() }, [loadRules, loadComp])
 
   async function saveRule(r: any) {
-    try { await api('/api/v1/commcalc/carrier-category-map', { method: 'POST', body: JSON.stringify({ ...r, carrier_id: cid }) }); setMsg('✅ Saved.'); loadRules(); loadComp() }
+    try { await api('/api/v1/commcalc/carrier-category-map', { method: 'POST', body: JSON.stringify({ ...r, carrier_id: cid }) }); setMsg('✅ Saved.'); loadRules(); loadComp(); loadOptions() }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
   async function delRule(id: string) {
@@ -101,8 +124,9 @@ export default function CarrierMappingPage() {
           <li>Look at <b style={{ color: '#b42318' }}>⚠️ categories that need mapping</b> — these are the REAL category
             labels found in that carrier's comp data for {period}. For each, choose a component and click <b>Map</b>.
             (Fastest way — you only map what actually appears.)</li>
-          <li>Or add a rule by hand in the <b>rules table</b>: type a <b>pattern</b>, choose how it should <b>match</b>,
-            and the <b>component</b> it belongs to. Click <b>+ Add</b>.</li>
+          <li>Or add a rule by hand in the <b>rules table</b>: <b>pick a category</b> from the dropdown (it lists the
+            real labels in your comp data — or type to filter, and choose <i>“Use as new pattern”</i> for a
+            partial/regex match), choose how it should <b>match</b>, and the <b>component</b> it belongs to. Click <b>+ Add</b>.</li>
           <li>The <b>component totals</b> at the top update as you map. Anything left in <b>UNMAPPED</b> isn't counted —
             keep mapping until UNMAPPED is $0.</li>
         </ol>
@@ -213,10 +237,23 @@ export default function CarrierMappingPage() {
           <tbody>
             {rules.map((r, i) => (
               <tr key={r.id}>
-                <td style={cell}><input style={{ ...sel, width: '100%' }} value={r.raw_category || ''} onChange={e => setRule(i, { raw_category: e.target.value })} /></td>
+                <td style={cell}>
+                  <EntityPicker width="100%" options={toOptions(catOpts, r.raw_category)}
+                    value={r.raw_category || null}
+                    onChange={v => setRule(i, { raw_category: v || '' })}
+                    allowCreate onCreate={v => setRule(i, { raw_category: v })}
+                    createLabel={v => `Use as new pattern: “${v}”`}
+                    placeholder="Pick or type a category…" />
+                </td>
                 <td style={cell}><select style={sel} value={r.match_type || 'exact'} onChange={e => setRule(i, { match_type: e.target.value })}>{MATCH.map(m => <option key={m} value={m}>{m}</option>)}</select></td>
                 <td style={cell}><select style={{ ...sel, color: COMP_COLOR[r.component] }} value={r.component} onChange={e => setRule(i, { component: e.target.value })}>{COMPONENTS.map(c => <option key={c} value={c}>{c}</option>)}</select></td>
-                <td style={cell}><input style={{ ...sel, width: 90 }} value={r.subtype || ''} onChange={e => setRule(i, { subtype: e.target.value })} /></td>
+                <td style={cell}>
+                  <EntityPicker width={110} options={toOptions(subOpts, r.subtype)}
+                    value={r.subtype || null}
+                    onChange={v => setRule(i, { subtype: v || '' })}
+                    allowCreate onCreate={v => setRule(i, { subtype: v })}
+                    placeholder="subtype…" />
+                </td>
                 <td style={cell}><input style={{ ...sel, width: 60 }} value={r.priority ?? 100} onChange={e => setRule(i, { priority: Number(e.target.value) || 0 })} /></td>
                 <td style={cell}><input type="checkbox" checked={r.is_active !== false} onChange={e => setRule(i, { is_active: e.target.checked })} /></td>
                 <td style={cell}>
@@ -227,10 +264,23 @@ export default function CarrierMappingPage() {
             ))}
             {/* add row */}
             <tr style={{ background: 'var(--surface2)' }}>
-              <td style={cell}><input style={{ ...sel, width: '100%' }} placeholder="e.g. Promo" value={add.raw_category} onChange={e => setAdd({ ...add, raw_category: e.target.value })} /></td>
+              <td style={cell}>
+                <EntityPicker width="100%" options={toOptions(catOpts, add.raw_category)}
+                  value={add.raw_category || null}
+                  onChange={v => setAdd({ ...add, raw_category: v || '' })}
+                  allowCreate onCreate={v => setAdd({ ...add, raw_category: v })}
+                  createLabel={v => `Use as new pattern: “${v}”`}
+                  placeholder="Pick or type a category…" />
+              </td>
               <td style={cell}><select style={sel} value={add.match_type} onChange={e => setAdd({ ...add, match_type: e.target.value })}>{MATCH.map(m => <option key={m} value={m}>{m}</option>)}</select></td>
               <td style={cell}><select style={sel} value={add.component} onChange={e => setAdd({ ...add, component: e.target.value })}>{COMPONENTS.map(c => <option key={c} value={c}>{c}</option>)}</select></td>
-              <td style={cell}><input style={{ ...sel, width: 90 }} placeholder="subtype" value={add.subtype} onChange={e => setAdd({ ...add, subtype: e.target.value })} /></td>
+              <td style={cell}>
+                <EntityPicker width={110} options={toOptions(subOpts, add.subtype)}
+                  value={add.subtype || null}
+                  onChange={v => setAdd({ ...add, subtype: v || '' })}
+                  allowCreate onCreate={v => setAdd({ ...add, subtype: v })}
+                  placeholder="subtype…" />
+              </td>
               <td style={cell}><input style={{ ...sel, width: 60 }} value={add.priority} onChange={e => setAdd({ ...add, priority: e.target.value })} /></td>
               <td style={cell}></td>
               <td style={cell}><button className="btn btn-primary" style={{ fontSize: 12 }} onClick={addRule}>+ Add</button></td>

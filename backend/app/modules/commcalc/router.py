@@ -3064,6 +3064,37 @@ def comp_by_component(period: str = "", carrier_id: str = "", org_id: str = ORG_
     return {"period": period, "components": comps}
 
 
+@router.get("/carrier-category-options")
+def carrier_category_options(period: str = "", org_id: str = ORG_ID):
+    """Pick-don't-type option lists for the Carrier Mapping page (AGENT_CONTRACT RULE THREE).
+
+    Returns the distinct RAW comp categories actually present in THIS org's comp data
+    (raw_comp_report.compensation_type) — the only strings the classifier ever matches against
+    (see comp_by_component / unmapped_categories) — plus the distinct subtypes already used in this
+    org's mapping rules. Org-scoped. `period` is optional: omit it to get all-period categories,
+    since a mapping rule applies to every period (the caller does exactly that so the full set is
+    pickable); pass it to narrow the list to one month's real labels.
+    """
+    require_org(org_id)
+    client = sb()
+    q = (client.schema("commcalc").table("raw_comp_report")
+         .select("compensation_type").eq("org_id", org_id))
+    if period:
+        q = q.in_("period", _period_variants(period))
+    rows = q.limit(200000).execute().data or []
+    cats = sorted(
+        {(r.get("compensation_type") or "").strip() for r in rows
+         if (r.get("compensation_type") or "").strip()},
+        key=lambda s: s.lower())
+    srows = (client.schema("commcalc").table("carrier_category_map")
+             .select("subtype").eq("org_id", org_id).execute().data) or []
+    subs = sorted(
+        {(r.get("subtype") or "").strip() for r in srows
+         if (r.get("subtype") or "").strip()},
+        key=lambda s: s.lower())
+    return {"categories": cats, "subtypes": subs}
+
+
 # ── Unified connector model (SaaS framework Phase 2: registry + live status + run-now dispatch) ──
 def _connector_status(client, org_id, cfg_table):
     """Live status (last run / next run / enabled / schedule) from the connector's *_sweep_config.
