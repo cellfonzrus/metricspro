@@ -31,8 +31,25 @@ function hoursBetween(start: string, end: string) {
   return Math.max(0, ((eh * 60 + em) - (sh * 60 + sm)) / 60)
 }
 
+// Tenant-aware work-week start (storeops.tenants.work_week_start_dow, mig 085 — 0=Mon..6=Sun;
+// e.g. Luxelink=3/Thursday). `mondayOf()` in lib/client.ts is always Monday, so the schedule grid
+// defaulted to Mon-Sun for EVERY tenant regardless of their actual configured work week — for a
+// tenant on a different cycle the grid didn't line up with their real pay period ("not wired
+// properly"). This generalizes it locally (client.ts is shared/core, not ours to edit) without
+// touching mondayOf() itself, so a tenant with dow=0 (the default — Boost included) is
+// byte-identical to the old mondayOf() behavior.
+function workWeekStartOf(dow: number, iso?: string) {
+  const d = iso ? parseLocalDate(iso) : new Date()
+  const cur = d.getDay() === 0 ? 6 : d.getDay() - 1   // 0=Mon..6=Sun
+  const delta = (cur - (dow || 0) + 7) % 7
+  d.setDate(d.getDate() - delta)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 export default function SchedulePage() {
   const [weekStart, setWeekStart] = useState(() => mondayOf())
+  const [wwDow, setWwDow] = useState(0)   // tenant's work-week-start dow (0=Mon default; Boost stays 0)
   const [shifts, setShifts] = useState<Shift[]>([])
   const [employees, setEmployees] = useState<Employee[]>([])   // span-scoped — drives the grid
   const [allEmps, setAllEmps] = useState<Employee[]>([])       // whole-company roster — for the picker
@@ -52,6 +69,20 @@ export default function SchedulePage() {
 
   const weekEnd = addDays(weekStart, 6)
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart])
+
+  // Snap the default view to the tenant's OWN work-week start once we know it (no-op for the
+  // default Monday tenants — e.g. Boost — since dow===0 leaves weekStart unchanged).
+  useEffect(() => {
+    let cancelled = false
+    api('/api/v1/core/tenant-settings').then((r: any) => {
+      const dow = r?.settings?.work_week_start_dow
+      if (!cancelled && typeof dow === 'number' && dow !== 0) {
+        setWwDow(dow)
+        setWeekStart(workWeekStartOf(dow))
+      }
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     setLoading(true)
@@ -366,7 +397,7 @@ export default function SchedulePage() {
             {stores.filter(s => s.store_code && (selMkt.size === 0 || selMkt.has(s.market))).map(s => <option key={s.store_code} value={s.store_code}>{s.store_code} — {s.address?.substring(0, 26)}</option>)}
           </select>
           <button className="btn btn-secondary" onClick={prevWeek}>← Prev</button>
-          <button className="btn btn-secondary" onClick={() => setWeekStart(mondayOf())}>Today</button>
+          <button className="btn btn-secondary" onClick={() => setWeekStart(workWeekStartOf(wwDow))}>Today</button>
           <button className="btn btn-secondary" onClick={nextWeek}>Next →</button>
           <button className="btn btn-secondary" disabled={busy} onClick={copyFromLastWeek} title="Pull last week's shifts into this week">⬅️ Copy last week</button>
           <button className="btn btn-primary" disabled={busy} onClick={copyWeeks} title="Duplicate this week's shifts into one or more following weeks">📋 Copy weeks</button>

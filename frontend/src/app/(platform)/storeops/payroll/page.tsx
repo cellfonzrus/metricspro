@@ -11,8 +11,15 @@ interface PayrollRow {
   scheduled_pay: number; actual_pay: number
 }
 
+// Current month 'YYYY-MM', local-safe (not a stale hardcoded month — this used to default to
+// '2026-04' regardless of today, silently landing every tenant, Boost included, on the wrong month).
+function currentMonth() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
 export default function PayrollPage() {
-  const [month, setMonth] = useState('2026-04')
+  const [month, setMonth] = useState(() => currentMonth())
   const [rows, setRows] = useState<PayrollRow[]>([])
   const [loading, setLoading] = useState(true)
 
