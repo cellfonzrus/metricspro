@@ -1,9 +1,16 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { api, fmt } from '@/lib/client'
+import { api, fmt, getActiveOrg } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { MultiSelect } from '@/lib/multiselect'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+
+// Super-admin org-resolution mitigation (same as the Sales Report page): reads carry the active tenant
+// so a super-admin (whom the tenant middleware does NOT rewrite) reads the selected tenant, not the house
+// org. No-op for normal users (the middleware overrides org_id to their membership) and when no tenant is
+// selected. RULE FIVE: this page's filter bar mirrors the Sales Report's — same MultiSelect UX.
+const orgParam = () => { const o = getActiveOrg(); return o ? `&org_id=${encodeURIComponent(o)}` : '' }
 
 // Executive MTD summary — replicates b2bsoft's "Month To Date Location / Employee Sales Report".
 // Reads the org-corrected sales source (feed for the open month, raw_sales for a closed one) so it works
@@ -25,14 +32,32 @@ export default function ExecMtdPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [showCfg, setShowCfg] = useState(false)
+  // RULE FIVE standardized filters — store(s) / market(s) / rep(s) multi-select, applied SERVER-SIDE.
+  const [selStores, setSelStores] = useState<string[]>([])
+  const [selMarkets, setSelMarkets] = useState<string[]>([])
+  const [selReps, setSelReps] = useState<string[]>([])
 
   const load = useCallback(() => {
     if (!period) return
     setLoading(true); setErr(null)
-    api(`/api/v1/commcalc/exec-mtd/${encodeURIComponent(period)}`)
+    const qs = new URLSearchParams()
+    selStores.forEach((s) => qs.append('stores', s))
+    selMarkets.forEach((s) => qs.append('markets', s))
+    selReps.forEach((s) => qs.append('reps', s))
+    const q = qs.toString()
+    api(`/api/v1/commcalc/exec-mtd/${encodeURIComponent(period)}?${q}${orgParam()}`)
       .then(setData).catch((e) => setErr(String(e?.message || e))).finally(() => setLoading(false))
-  }, [period])
+  }, [period, selStores, selMarkets, selReps])
   useEffect(() => { load() }, [load])
+
+  // Options are computed by the backend from the UNFILTERED union (pick-don't-type over real data).
+  const opt = data?.filters || {}
+  const storeOpts: string[] = opt.stores || []
+  const marketOpts: string[] = opt.markets || []
+  const repOpts: string[] = opt.reps || []
+  const hasFilter = selStores.length > 0 || selMarkets.length > 0 || selReps.length > 0
+  const clearFilters = () => { setSelStores([]); setSelMarkets([]); setSelReps([]) }
+  const src = data?.source || {}
 
   const active = tab === 'location' ? data?.by_location : data?.by_employee
   const labelKey = tab === 'location' ? 'store' : 'employee'
@@ -90,6 +115,29 @@ export default function ExecMtdPage() {
         </p>
       </div>
 
+      {/* RULE FIVE standardized filter bar — store(s) / market(s) / rep(s), pick-don't-type over the org's
+          real data, applied server-side so tables, trending AND exports all reflect the same selection. */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+        {storeOpts.length > 0 && <MultiSelect allLabel="All stores" width={150} value={selStores} options={storeOpts} onChange={setSelStores} searchable />}
+        {marketOpts.length > 0 && <MultiSelect allLabel="All markets" width={140} value={selMarkets} options={marketOpts} onChange={setSelMarkets} />}
+        {repOpts.length > 0 && <MultiSelect allLabel="All employees" width={150} value={selReps} options={repOpts} onChange={setSelReps} searchable />}
+        {hasFilter && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={clearFilters}>Clear filters</button>}
+      </div>
+
+      {/* Source-coverage transparency (owner's debug-first mandate): which source led the union and how
+          many stores it surfaced — so a partial-feed month that hid stores is self-evident here. */}
+      {(src.stores_shown != null) && (
+        <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10 }}>
+          <span style={{ background: 'var(--surface2)', borderRadius: 8, padding: '4px 10px' }}>
+            Reading <b>{src.primary === 'daily_sales_feed' ? 'daily email feed' : 'monthly raw_sales'}</b>
+            {' '}· <b>{src.stores_shown}</b> store{src.stores_shown === 1 ? '' : 's'} shown
+            {' '}(feed {src.feed_rows ?? 0} · raw_sales {src.raw_rows ?? 0} rows)
+            {src.stores_from_other > 0 && <> · <b>{src.stores_from_other}</b> store{src.stores_from_other === 1 ? '' : 's'} pulled from {src.other === 'raw_sales' ? 'raw_sales' : 'the feed'} that the primary didn’t carry</>}
+            {src.filled_cells > 0 && <> · {src.filled_cells} filled + {src.richer_cells || 0} richer store-day cell(s)</>}
+          </span>
+        </div>
+      )}
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
         <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
           {(['location', 'employee'] as const).map((tb) => (
@@ -116,8 +164,10 @@ export default function ExecMtdPage() {
         <div className="card" style={{ padding: 16, borderLeft: '3px solid #b42318', color: '#b42318', fontSize: 13 }}>Could not load MTD summary: {err}</div>
       ) : rows.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>
-          No sales for {period}. (If the daily feed is ingesting but this is empty, run the sales promotion —
-          POST /commcalc/sales/promote-due — or check the tenant&apos;s sales mailbox.)
+          {hasFilter
+            ? <>No sales match the selected filter for {period}. <span style={{ color: 'var(--accent)', cursor: 'pointer' }} onClick={clearFilters}>Clear filters</span>.</>
+            : <>No sales for {period}. (If the daily feed is ingesting but this is empty, run the sales promotion —
+              POST /commcalc/sales/promote-due — or check the tenant&apos;s sales mailbox.)</>}
         </div>
       ) : (
         <div className="card table-wrapper" style={{ padding: 0 }}>
