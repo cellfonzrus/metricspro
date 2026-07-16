@@ -39,8 +39,12 @@ _SESSIONS_LOCK = threading.Lock()
 
 _SHOT_INTERVAL = 0.7           # seconds between idle screenshot captures (responsive live stream)
 _IDLE_CLOSE_SECONDS = 20 * 60  # auto-close a session left idle this long (long enough to fetch a code)
-_TERMINAL = ("authenticated", "error", "cancelled")
+# 'authenticated' is deliberately NOT terminal: after sign-in the browser stays OPEN (see _post_auth_loop)
+# so a '▶ Pull now' can run on the SAME trusted page. The session becomes terminal only on error/cancel
+# (incl. the post-auth idle timeout, which flips it to 'cancelled').
+_TERMINAL = ("error", "cancelled")
 _TERMINAL_TTL = 15 * 60       # keep a finished session's final state this long, then prune
+_POST_AUTH_IDLE_SECONDS = 15 * 60  # keep the authenticated browser open this long for a reuse-the-session pull
 
 _B2B_PROCESSORS = ("b2bsoft", "b2b")
 
@@ -63,7 +67,7 @@ def _wall_note(vp, page):
 class LiveLoginSession:
     """One persistent browser-backed login session. Owns a single worker thread for its whole life."""
 
-    def __init__(self, sid, org_id, row, persist=None, persist_shot=None):
+    def __init__(self, sid, org_id, row, persist=None, persist_shot=None, pull_fn=None):
         self.sid = sid
         self.org_id = org_id
         self.url = row.get("portal_url")
@@ -75,6 +79,8 @@ class LiveLoginSession:
         self._is_b2b = self.processor in _B2B_PROCESSORS
         self.persist = persist                    # callable(updates: dict) -> persists to data_source
         self.persist_shot = persist_shot          # callable(shot_b64) -> writes login_shot/login_shot_at
+        self.pull_fn = pull_fn                     # callable(page) -> pull result; runs on THIS live page
+        self.pull_result = None                    # last '▶ Pull now' result (reuse-the-session pull)
         self.session_state = None                 # durable storage_state once authenticated
 
         self._cmd_q = queue.Queue()
@@ -188,6 +194,33 @@ class LiveLoginSession:
         self._touch()
         self._cmd_q.put(("CANCEL",))
 
+    def pull(self, result_q=None):
+        """Enqueue a report pull to run on THIS live authenticated browser (not a cold restore)."""
+        self._touch()
+        self._cmd_q.put(("PULL", result_q))
+
+    def can_pull(self):
+        """True only when the worker is alive AND we're post-authentication (browser still open) AND a
+        pull_fn is configured — so the router can decide to reuse the live session instead of a cold
+        storage_state restore. A dead/aged-out session returns False → the router falls back cleanly."""
+        with self._lock:
+            ok_phase = self.phase in ("authenticated", "pulling")
+        alive = bool(self._thread and self._thread.is_alive())
+        return ok_phase and alive and self.pull_fn is not None
+
+    def run_pull_blocking(self, timeout=900):
+        """Called from the request thread: enqueue a pull on the live session and block for its result.
+        Returns the pull result dict, or None if the session can't pull / times out (caller then falls
+        back to the cold-restore path). All Playwright work still happens on the worker thread."""
+        if not self.can_pull():
+            return None
+        rq = queue.Queue(maxsize=1)
+        self.pull(rq)
+        try:
+            return rq.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
     # ── worker thread ────────────────────────────────────────────────────────────────────────────
     def start(self):
         self._thread = threading.Thread(target=self._run, name="live-login-%s" % self.sid, daemon=True)
@@ -268,6 +301,7 @@ class LiveLoginSession:
             state = vp._classify(page)
             if state == "authenticated":
                 self._on_authenticated(page, ctx, vp)
+                self._post_auth_loop(page, ctx, vp)     # keep the trusted browser open for a reuse pull
                 return
             if state == "botwall":
                 self._set(phase="error",
@@ -379,7 +413,7 @@ class LiveLoginSession:
             if kind == "CLICK":
                 self._do_click(page, ctx, vp, cmd[1], cmd[2])
                 if self.snapshot_phase() == "authenticated":
-                    return           # the operator's click finished sign-in
+                    return self._post_auth_loop(page, ctx, vp)   # click finished sign-in → keep it open
                 last_shot = 0.0
                 continue
             if kind == "TYPE":
@@ -392,8 +426,80 @@ class LiveLoginSession:
                 continue
             if kind == "SUBMIT_CODE":
                 if self._do_submit(page, ctx, vp, cmd[1]):
-                    return           # authenticated → session done
+                    if self.snapshot_phase() == "authenticated":
+                        return self._post_auth_loop(page, ctx, vp)   # authenticated → keep browser open
+                    return           # error/proxy_error → terminate (browser closes in _drive finally)
                 last_shot = 0.0
+
+    def _post_auth_loop(self, page, ctx, vp):
+        """After authentication, keep the SAME trusted browser OPEN and idle so a '▶ Pull now' runs on
+        the very session that just passed 2FA. The cold storage_state restore is re-challenged by
+        T-CETRA (a fresh browser / egress IP / server session isn't the trusted device — this is the
+        'Pull asks for another code / session expired' the operator hit), so reusing this page is the
+        fix. Services PULL + CANCEL (+ CLICK/TYPE 'take control'); auto-closes after an idle window.
+        All Playwright work stays on this (the worker) thread; SUBMIT_CODE/RESEND are ignored post-auth."""
+        self._touch()
+        last_shot = 0.0
+        while True:
+            now = time.time()
+            if now - last_shot >= _SHOT_INTERVAL * 3:        # slower cadence on the idle dashboard
+                self._capture(page)
+                last_shot = now
+            with self._lock:
+                idle = time.time() - self._last_activity
+            if idle > _POST_AUTH_IDLE_SECONDS:
+                self._set(phase="cancelled", message="Live session closed after inactivity (post-login).")
+                return
+            try:
+                cmd = self._cmd_q.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            kind = cmd[0]
+            if kind == "CANCEL":
+                self._set(phase="cancelled", message="Cancelled by the operator.")
+                return
+            if kind == "PULL":
+                self._handle_pull(page, vp, cmd[1] if len(cmd) > 1 else None)
+                last_shot = 0.0
+                continue
+            if kind == "CLICK":
+                self._do_click(page, ctx, vp, cmd[1], cmd[2])
+                last_shot = 0.0
+                continue
+            if kind == "TYPE":
+                try:
+                    page.keyboard.type(cmd[1], delay=20)
+                except Exception:
+                    pass
+                self._capture(page)
+                last_shot = 0.0
+                continue
+            # SUBMIT_CODE / RESEND are meaningless once authenticated — ignore.
+
+    def _handle_pull(self, page, vp, result_q):
+        """Run the report pull on THIS live authenticated browser (never a cold restore) and hand the
+        result back to the waiting request thread via `result_q`. Keeps the page open afterwards so the
+        operator can pull again. Best-effort — a pull failure is reported, never crashes the session."""
+        self._set(phase="pulling", message="Pulling reports on the live session…")
+        self._capture(page)
+        res = None
+        try:
+            if self.pull_fn is not None:
+                res = self.pull_fn(page)
+            else:
+                res = {"ok": False, "error": "No pull is configured for this live session."}
+        except Exception as e:
+            res = {"ok": False, "error": ("Pull failed on the live session: " + str(e))[:300]}
+        with self._lock:
+            self.pull_result = res
+        if result_q is not None:
+            try:
+                result_q.put(res)
+            except Exception:
+                pass
+        msg = (res.get("status") if isinstance(res, dict) and res.get("status") else "Pull finished.")
+        self._set(phase="authenticated", message=("Pulled: " + str(msg))[:300])
+        self._capture(page)
 
     def _do_click(self, page, ctx, vp, nx, ny):
         """'Take control': translate a normalized (0..1) click on the streamed image to a real click on
@@ -574,8 +680,9 @@ def _prune_locked():
         _SESSIONS.pop(k, None)
 
 
-def start_session(sid, org_id, row, persist=None, persist_shot=None):
-    """Spawn (or REPLACE) the live session for `sid`. Non-blocking — the worker thread drives it."""
+def start_session(sid, org_id, row, persist=None, persist_shot=None, pull_fn=None):
+    """Spawn (or REPLACE) the live session for `sid`. Non-blocking — the worker thread drives it.
+    `pull_fn` (callable(page) -> pull result) lets a later '▶ Pull now' run on THIS live browser."""
     with _SESSIONS_LOCK:
         _prune_locked()
         old = _SESSIONS.get(sid)
@@ -584,7 +691,7 @@ def start_session(sid, org_id, row, persist=None, persist_shot=None):
                 old.cancel()
             except Exception:
                 pass
-        sess = LiveLoginSession(sid, org_id, row, persist, persist_shot)
+        sess = LiveLoginSession(sid, org_id, row, persist, persist_shot, pull_fn)
         _SESSIONS[sid] = sess
     sess.start()
     return sess
