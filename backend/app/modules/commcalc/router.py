@@ -11172,6 +11172,17 @@ def _live_persist(client, sid, org_id):
     return _p
 
 
+def _live_persist_shot(client, sid, org_id):
+    """A shot-persist callback the live session calls (from its worker thread) at EVERY stop to write its
+    LAST live frame into the SAME data_source.login_shot store the begin_login/complete_2fa failures use,
+    so '📷 What the browser saw' shows THIS live session's final screen (proxy_error / auth failure /
+    idle timeout / operator Close) instead of a stale earlier attempt's frame. Best-effort — reuses the
+    exact _store_login_shot path/shape (login_shot + login_shot_at); a missing column can't break login."""
+    def _p(shot):
+        _store_login_shot(client, sid, org_id, shot)
+    return _p
+
+
 def _live_source_row(client, sid, org_id):
     rows = (client.schema("commcalc").table("data_source").select("*")
             .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
@@ -11198,7 +11209,8 @@ def live_login_start(sid: str, org_id: str = ORG_ID):
             .eq("id", sid).eq("org_id", org_id).execute()
     except Exception:
         pass
-    sess = live_login.start_session(sid, org_id, s, _live_persist(client, sid, org_id))
+    sess = live_login.start_session(sid, org_id, s, _live_persist(client, sid, org_id),
+                                    _live_persist_shot(client, sid, org_id))
     return {"ok": True, "phase": sess.snapshot_phase(),
             "message": "Live session starting — watch it below. The 2FA code is sent ONCE to this same "
                        "live browser; enter it here when the code box appears."}

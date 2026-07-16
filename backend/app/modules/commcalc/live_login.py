@@ -63,7 +63,7 @@ def _wall_note(vp, page):
 class LiveLoginSession:
     """One persistent browser-backed login session. Owns a single worker thread for its whole life."""
 
-    def __init__(self, sid, org_id, row, persist=None):
+    def __init__(self, sid, org_id, row, persist=None, persist_shot=None):
         self.sid = sid
         self.org_id = org_id
         self.url = row.get("portal_url")
@@ -74,6 +74,7 @@ class LiveLoginSession:
         self.processor = (row.get("processor") or "").strip().lower()
         self._is_b2b = self.processor in _B2B_PROCESSORS
         self.persist = persist                    # callable(updates: dict) -> persists to data_source
+        self.persist_shot = persist_shot          # callable(shot_b64) -> writes login_shot/login_shot_at
         self.session_state = None                 # durable storage_state once authenticated
 
         self._cmd_q = queue.Queue()
@@ -112,6 +113,35 @@ class LiveLoginSession:
             with self._lock:
                 self._shot = shot
                 self._updated_at = datetime.now(timezone.utc).isoformat()
+
+    def _persist_diag(self):
+        """Persist the LAST live frame + a status line to the SAME data_source diag store the two-call
+        begin_login/complete_2fa failures write — the frame via persist_shot (→ login_shot/login_shot_at,
+        the store '📷 What the browser saw' reads) and the status line via persist (auth_message, plus
+        auth_status='error' on a hard stop, mirroring _do_portal_login's failure shape). This runs at
+        EVERY stop of the session — proxy_error, auth failure, idle timeout, operator Close, or a crash —
+        so the panel reflects THIS live session's final screen instead of a stale earlier attempt's frame.
+        Best-effort / never raises, like _store_login_shot and the other diag writes. 'authenticated' owns
+        its own status via _on_authenticated, so only the frame is refreshed there (not the status line)."""
+        try:
+            with self._lock:
+                phase, message, shot = self.phase, self.message, self._shot
+            if self.persist and phase in ("error", "cancelled"):
+                upd = {"auth_message": (message or "")[:400],
+                       "last_run_at": datetime.now(timezone.utc).isoformat()}
+                if phase == "error":
+                    upd["auth_status"] = "error"
+                try:
+                    self.persist(upd)
+                except Exception:
+                    pass
+            if shot and self.persist_shot:
+                try:
+                    self.persist_shot(shot)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def snapshot_phase(self):
         with self._lock:
@@ -165,18 +195,24 @@ class LiveLoginSession:
 
     def _run(self):
         try:
-            from playwright.sync_api import sync_playwright
-        except Exception as e:
-            self._set(phase="error",
-                      message="Playwright/Chromium is not available in the backend image: " + str(e)[:200])
-            return
-        try:
-            # ONE sync_playwright for the whole session life — the browser/context/page stay OPEN across
-            # the command loop (do NOT use a per-call `with` that closes it between calls).
-            with sync_playwright() as p:
-                self._drive(p)
-        except Exception as e:
-            self._set(phase="error", message="Live login crashed: " + str(e)[:300])
+            try:
+                from playwright.sync_api import sync_playwright
+            except Exception as e:
+                self._set(phase="error",
+                          message="Playwright/Chromium is not available in the backend image: " + str(e)[:200])
+                return
+            try:
+                # ONE sync_playwright for the whole session life — the browser/context/page stay OPEN across
+                # the command loop (do NOT use a per-call `with` that closes it between calls).
+                with sync_playwright() as p:
+                    self._drive(p)
+            except Exception as e:
+                self._set(phase="error", message="Live login crashed: " + str(e)[:300])
+        finally:
+            # Every stop (proxy_error / auth failure / idle timeout / operator Close / crash / import
+            # failure) persists the last live frame + status line to the diag store that
+            # '📷 What the browser saw' reads — so it is never stale on a live-session failure.
+            self._persist_diag()
 
     def _drive(self, p):
         vp = _vp()
@@ -241,6 +277,18 @@ class LiveLoginSession:
             if state == "login":
                 self._set(phase="error",
                           message="Login was rejected — Account ID / User ID / Password not accepted.")
+                self._capture(page)
+                return
+            if state == "proxy_error":
+                # The egress proxy served its OWN squid rejection page (NOT the portal, NOT a 2FA screen).
+                # Stop here with an actionable message — lingering on the code screen showing the squid page
+                # would be misleading. _persist_diag then writes THIS squid frame to '📷 What the browser saw'.
+                try:
+                    pmsg = vp._proxy_error_message(page.url, self.proxy_url)
+                except Exception:
+                    pmsg = ("The login request died at the egress proxy — check the proxy route "
+                            "(use Test proxy), then retry.")
+                self._set(phase="error", message=pmsg[:400])
                 self._capture(page)
                 return
 
@@ -464,6 +512,17 @@ class LiveLoginSession:
         if state == "authenticated":
             self._on_authenticated(page, ctx, vp)
             return True
+        if state == "proxy_error":
+            # Code accepted, but the post-code navigation died at the egress proxy — retrying the code
+            # can't help. Stop with a clear proxy message; _persist_diag writes the squid frame + status.
+            try:
+                pmsg = vp._proxy_error_message(page.url, self.proxy_url)
+            except Exception:
+                pmsg = ("The request died at the egress proxy after the code — check the proxy route "
+                        "(use Test proxy), then retry.")
+            self._set(phase="error", message=pmsg[:400])
+            self._capture(page)
+            return True
         # If the auto-clicker couldn't finish the "Trust This Device" page, tell the operator to click
         # the Next button themselves in the live view (click-forwarding is enabled) — the code WAS
         # accepted; only the trust step remains. Otherwise it's a genuine code rejection.
@@ -515,7 +574,7 @@ def _prune_locked():
         _SESSIONS.pop(k, None)
 
 
-def start_session(sid, org_id, row, persist=None):
+def start_session(sid, org_id, row, persist=None, persist_shot=None):
     """Spawn (or REPLACE) the live session for `sid`. Non-blocking — the worker thread drives it."""
     with _SESSIONS_LOCK:
         _prune_locked()
@@ -525,7 +584,7 @@ def start_session(sid, org_id, row, persist=None):
                 old.cancel()
             except Exception:
                 pass
-        sess = LiveLoginSession(sid, org_id, row, persist)
+        sess = LiveLoginSession(sid, org_id, row, persist, persist_shot)
         _SESSIONS[sid] = sess
     sess.start()
     return sess
