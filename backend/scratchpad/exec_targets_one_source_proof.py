@@ -355,7 +355,10 @@ check("luxelink: Targets byod_count == Sales Report byod", sum(a['byod_count'] f
 check("luxelink: Targets upg_count == Sales Report upgrades", sum(a['upg_count'] for a in fa_d) == srd['upgrades'])
 check("luxelink: Targets acc_gp == Sales Report accessory_rev",
       round(sum(a['acc_gp'] for a in fa_d), 2) == srd['accessory_rev'])
-check("luxelink: Sales Report activations == 14 distinct-txn (was 72 per-line in old Exec)", srd['activations'] == 14, f"got {srd['activations']}")
+# port-idv (owner ruling 2026-07-16): 'Port with IDV' now classifies 'premium' -> +5 distinct-txn
+# activations over this sample (14 -> 19). The Targets/Exec/Sales-Report EQUALITY checks above still
+# hold (all three consume the shared classify_contract_type); only this hardcoded literal moves.
+check("luxelink: Sales Report activations == 19 distinct-txn (14 + 5 Port-with-IDV; owner 2026-07-16)", srd['activations'] == 19, f"got {srd['activations']}")
 
 print(f"\n=================  {PASS} passed, {FAIL} failed  =================")
 sys.exit(1 if FAIL else 0)

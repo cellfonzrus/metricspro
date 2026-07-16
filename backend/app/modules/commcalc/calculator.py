@@ -23,14 +23,21 @@ PREMIUM_ACT = {
 # Activation", "Standard Activation", "Eligible Port In Activation") so drifted B2B Contract Type
 # labels still pay/count instead of being silently dropped. Kept activation-specific (NOT "any
 # non-empty type") so a stray non-activation label can't accidentally earn an activation bounty.
-_PREMIUM_KEYS = ('activation', 'port-in', 'port in', 'add a line', 'add-a-line', 'new line', ' aal', 'aal ')
+# 'idv' = an IDV (identity-verification) port activation, e.g. "Port with IDV" / "Port w/ IDV" /
+# "Activation With IDV". OWNER RULING 2026-07-16: "Port with IDV" IS an activation. A bare CONTAINS
+# on 'idv' catches the slash/casing drift too; it can't over-reach a BYOD/Upgrade label because the
+# 'byod' and 'upgrade' checks in classify_contract_type return FIRST (so "BYOD Port with IDV" stays
+# byod, "Upgrade with IDV" stays upgrade). 'port with idv' is kept explicit for intent/legibility.
+_PREMIUM_KEYS = ('activation', 'port-in', 'port in', 'add a line', 'add-a-line', 'new line', ' aal', 'aal ',
+                 'idv', 'port with idv')
 
 
 def classify_contract_type(ct: str):
     """The ONE contract-type classifier shared by commissions, targets, and the sales report.
     Returns 'byod' | 'upgrade' | 'premium' | None. Tolerant of label drift: BYOD/Upgrade by CONTAINS,
-    premium by the known set OR an activation keyword. None = not a phone-activation line (e.g. an
-    accessory line, which carries a blank Contract Type)."""
+    premium by the known set OR an activation keyword (incl. 'idv' — an IDV/identity-verification port
+    activation such as "Port with IDV"; owner ruling 2026-07-16). None = not a phone-activation line
+    (e.g. an accessory line, which carries a blank Contract Type)."""
     c = (ct or '').strip()
     if not c:
         return None

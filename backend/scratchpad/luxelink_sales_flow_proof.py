@@ -157,11 +157,12 @@ for cat_source in ('Category', 'System Category'):
     check(f"[{cat_source}] Total Activation == parts",
           tot['total_activation'] == tot['activation'] + tot['port'] + tot['byod'] + tot['upgrade'])
     # both export variants (Category vs System Category) must give IDENTICAL bucket counts
-    # DISTINCT-trans_id (Sales-Report-shared) semantics: the sample's 72 contract-type LINES = 21 distinct
-    # activation transactions (14 premium incl. 1 Port + 6 BYOD + 1 upgrade). Was 72 under the old per-line
-    # exec loop — the divergence the owner called "taking data from somewhere" (2026-07-16).
-    check(f"[{cat_source}] total_activation == 21 (distinct-txn; 72 CT lines collapse; voided/Return excluded)",
-          tot['total_activation'] == 21, f"got {tot['total_activation']}")
+    # DISTINCT-trans_id (Sales-Report-shared) semantics: the sample's contract-type LINES collapse to 26
+    # distinct activation transactions (19 premium incl. 7 Ports + 6 BYOD + 1 upgrade). port-idv
+    # (owner ruling 2026-07-16): 'Port with IDV' now classifies 'premium' -> +5 brand-new Port-with-IDV-only
+    # transactions (was 21 = 14 premium incl. 1 Port before this classifier change).
+    check(f"[{cat_source}] total_activation == 26 (distinct-txn; +5 Port-with-IDV; owner 2026-07-16)",
+          tot['total_activation'] == 26, f"got {tot['total_activation']}")
     # location vs employee totals reconcile (same lines, different grouping)
     et = res['by_employee']['total']
     for k in ('total_activation', 'total_phones', 'bill_payment_qty', 'acc_sales', 'activation_fee', 'total_protect'):
