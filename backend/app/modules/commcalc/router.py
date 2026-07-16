@@ -11940,6 +11940,54 @@ def live_login_click(sid: str, body: dict, org_id: str = ORG_ID):
     return {"ok": True, "phase": sess.snapshot_phase()}
 
 
+@router.post("/data-sources/{sid}/live-login/input")
+def live_login_input(sid: str, body: dict, org_id: str = ORG_ID):
+    """Forward a raw human input event to the LIVE page with HIGH priority (drained before SUBMIT_CODE /
+    RESEND / PULL). type ∈ click|dblclick|type|key|scroll. Click coords are NORMALIZED (0..1 of the
+    streamed image) and multiplied by the live viewport size server-side (DPR-proof — the img is rendered
+    smaller than the real viewport). The first human input pauses auto-driving for the rest of pre-auth."""
+    require_org(org_id)
+    from app.modules.commcalc import live_login
+    sess = live_login.get_session(sid, org_id)
+    if not sess:
+        raise HTTPException(400, "No live session running — click 🔴 Live login to start one.")
+    ev = body or {}
+    et = str(ev.get("type") or "").strip().lower()
+    if et not in ("click", "dblclick", "type", "key", "scroll"):
+        raise HTTPException(400, "input type must be one of click|dblclick|type|key|scroll")
+    norm = {"type": et}
+    if et in ("click", "dblclick"):
+        try:
+            norm["x"] = float(ev.get("x")); norm["y"] = float(ev.get("y"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "click needs numeric x,y in 0..1")
+    elif et == "type":
+        norm["text"] = str(ev.get("text") or "")
+    elif et == "key":
+        norm["key"] = str(ev.get("key") or "")
+    elif et == "scroll":
+        try:
+            norm["deltaY"] = float(ev.get("deltaY") or 0)
+        except (TypeError, ValueError):
+            norm["deltaY"] = 0.0
+    sess.input_event(norm)
+    return {"ok": True, "phase": sess.snapshot_phase()}
+
+
+@router.get("/data-sources/{sid}/live-login/frame")
+def live_login_frame(sid: str, since: int = 0, org_id: str = ORG_ID):
+    """Lightweight frame poll for the low-latency live view. Returns the newest JPEG (as a data-uri) ONLY
+    when `_seq` advanced past `since`, else a tiny unchanged payload — so the panel can poll this ~250-400ms
+    while the modal is open without shipping a frame every time. phase + message are always included so the
+    status line stays fresh. No live session → an idle payload (the panel stops polling)."""
+    require_org(org_id)
+    from app.modules.commcalc import live_login
+    sess = live_login.get_session(sid, org_id)
+    if not sess:
+        return {"seq": 0, "phase": "idle", "message": None, "changed": False, "shot": None}
+    return sess.frame_since(since)
+
+
 @router.post("/data-sources/{sid}/live-login/cancel")
 def live_login_cancel(sid: str, org_id: str = ORG_ID):
     """Cancel + close the live session (frees the headless browser)."""

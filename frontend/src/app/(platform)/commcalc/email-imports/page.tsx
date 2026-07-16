@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '@/lib/client'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import EntityPicker from '@/components/EntityPicker'
@@ -67,9 +67,13 @@ export default function EmailImportsPage() {
   const [authBusy, setAuthBusy] = useState('')
   const [shotView, setShotView] = useState<any>(null)   // { label, loading, src, at, note } — last login screenshot
   const [live, setLive] = useState<any>(null)           // { source } while the 🔴 Live-login modal is open
-  const [liveState, setLiveState] = useState<any>(null) // { phase, message, shot, updated_at } — polled ~1s
+  const [liveState, setLiveState] = useState<any>(null) // { phase, message, shot, seq } — driven by the ~300ms frame poll
   const [liveCode, setLiveCode] = useState('')
   const [liveBusy, setLiveBusy] = useState(false)
+  const [liveFocused, setLiveFocused] = useState(false) // true while the live view has keyboard focus (drives the focus ring)
+  const liveSeqRef = useRef(0)                           // last frame seq we've shown — sent as ?since= so we only fetch a NEW JPEG
+  const liveViewRef = useRef<HTMLDivElement | null>(null) // the focusable live-view container (keyboard + wheel target)
+  const wheelTsRef = useRef(0)                           // throttle stamp so a scroll gesture doesn't flood the input queue
   const [customTypes, setCustomTypes] = useState<any[]>([])   // self-serve custom sheets (mig 099)
   const [newSheet, setNewSheet] = useState('')
   const [viewer, setViewer] = useState<any>(null)             // { report_key, label } while viewing data
@@ -111,18 +115,34 @@ export default function EmailImportsPage() {
 
   const body = () => ({ ...cfg, password: pwd || undefined })
 
-  // Live-login: while the modal is open, poll the session state ~1s and stream the screenshot.
+  // Live-login low-latency frame poll: hit /live-login/frame?since=<seq> (~300ms). The backend returns a
+  // NEW JPEG only when its frame seq advanced past `since` (else a tiny unchanged payload) — so we swap the
+  // <img> only on a real frame change while phase/message stay fresh every tick. Coalesces the CDP screencast
+  // (or the ~300ms screenshot fallback) the worker pumps into one cheap poll.
+  const refreshFrame = useCallback(async () => {
+    const id = live?.source?.id
+    if (!id) return
+    try {
+      const r: any = await api(`/api/v1/commcalc/data-sources/${id}/live-login/frame?since=${liveSeqRef.current}`)
+      if (!r) return
+      if (r.phase === 'idle' && !r.shot) return   // session not up yet — keep the local 'starting' state, don't flash idle
+      liveSeqRef.current = r.seq ?? liveSeqRef.current
+      setLiveState((p: any) => {
+        const next: any = { ...(p || {}), phase: r.phase, message: r.message, seq: r.seq }
+        if (r.changed && r.shot) next.shot = r.shot   // only replace the frame when a newer one actually arrived
+        return next
+      })
+    } catch { /* keep the last frame on a transient poll error */ }
+  }, [live?.source?.id])
+
   useEffect(() => {
     const id = live?.source?.id
     if (!id) return
-    let stop = false
-    const tick = async () => {
-      try { const r: any = await api(`/api/v1/commcalc/data-sources/${id}/live-login/state`); if (!stop) setLiveState(r) } catch { /* keep last */ }
-    }
-    tick()
-    const iv = setInterval(tick, 600)   // responsive live stream (esp. while click-controlling the browser)
-    return () => { stop = true; clearInterval(iv) }
-  }, [live?.source?.id])
+    liveSeqRef.current = 0
+    refreshFrame()
+    const iv = setInterval(refreshFrame, 300)   // ~3.3 polls/s — matches the worker's frame pump cadence
+    return () => clearInterval(iv)
+  }, [live?.source?.id, refreshFrame])
 
   function pickAccount(acct: string) {
     const a = accounts.find(x => x.account === acct)
@@ -340,8 +360,9 @@ export default function EmailImportsPage() {
   // sent ONCE and the operator's code goes into the SAME live page (fixes the "code sent twice" resend).
   // The operator watches a live screenshot stream and submits / resends / cancels against that session.
   async function startLive(s: any) {
+    liveSeqRef.current = 0
     setLive({ source: s }); setLiveCode(''); setLiveBusy(true)
-    setLiveState({ phase: 'starting', message: 'Starting the live session…', shot: null })
+    setLiveState({ phase: 'starting', message: 'Starting the live session…', shot: null, seq: 0 })
     try { await api(`/api/v1/commcalc/data-sources/${s.id}/live-login/start`, { method: 'POST', body: '{}' }) }
     catch (e: any) { setLiveState({ phase: 'error', message: '❌ ' + (e?.message || e), shot: null }) }
     finally { setLiveBusy(false) }
@@ -357,23 +378,61 @@ export default function EmailImportsPage() {
     if (!live?.source?.id) return
     try { await api(`/api/v1/commcalc/data-sources/${live.source.id}/live-login/resend`, { method: 'POST', body: '{}' }) } catch { /* the state poll shows the outcome */ }
   }
-  // "Take control": forward a click on the live screenshot to the real browser (normalized 0..1 coords).
-  async function clickLive(e: React.MouseEvent<HTMLImageElement>) {
+  // ── Human-driven live view: forward raw input to the SAME live page (high-priority /input queue). ──
+  // The first input pauses the backend's auto-drive for the rest of pre-auth (the human wins). All coords
+  // are NORMALIZED (0..1 of the streamed image) — the backend multiplies by the live viewport (DPR-proof).
+  async function sendInput(ev: any) {
     const id = live?.source?.id
     if (!id) return
-    const img = e.currentTarget
-    const r = img.getBoundingClientRect()
-    const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
-    const y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))
-    setLiveState((p: any) => ({ ...(p || {}), message: 'Clicking…' }))
-    try {
-      await api(`/api/v1/commcalc/data-sources/${id}/live-login/click`, { method: 'POST', body: JSON.stringify({ x, y }) })
-      // pull a couple of fresh frames right away so the click result shows without waiting for the poll
-      for (const d of [250, 600, 1100]) {
-        await new Promise(res => setTimeout(res, d))
-        try { const s: any = await api(`/api/v1/commcalc/data-sources/${id}/live-login/state`); setLiveState(s) } catch { /* keep */ }
-      }
-    } catch { /* the periodic state poll shows the outcome */ }
+    try { await api(`/api/v1/commcalc/data-sources/${id}/live-login/input`, { method: 'POST', body: JSON.stringify(ev) }) }
+    catch { /* the frame poll shows the outcome */ }
+  }
+  // Right after an input, pull a few quick frames so the result appears without waiting for the next tick.
+  function nudgeFrames(delays = [140, 380, 800]) {
+    for (const d of delays) setTimeout(() => { refreshFrame() }, d)
+  }
+  function normXY(e: React.MouseEvent<HTMLImageElement>) {
+    const r = e.currentTarget.getBoundingClientRect()
+    return {
+      x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+      y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
+    }
+  }
+  async function clickLive(e: React.MouseEvent<HTMLImageElement>) {
+    if (!live?.source?.id) return
+    liveViewRef.current?.focus()          // so subsequent typing/scroll lands in the live view
+    const { x, y } = normXY(e)
+    await sendInput({ type: 'click', x, y }); nudgeFrames()
+  }
+  async function dblClickLive(e: React.MouseEvent<HTMLImageElement>) {
+    if (!live?.source?.id) return
+    liveViewRef.current?.focus()
+    const { x, y } = normXY(e)
+    await sendInput({ type: 'dblclick', x, y }); nudgeFrames()
+  }
+  // Keyboard: while the live view is focused, printable chars → type; named/combo keys → key press
+  // (Enter/Backspace/Tab/Arrow*/Escape/Delete etc. map 1:1 to Playwright key names; modifiers form a combo).
+  async function keyLive(e: React.KeyboardEvent) {
+    if (!live?.source?.id) return
+    const k = e.key
+    if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Dead', 'Process', 'Unidentified'].includes(k)) return
+    e.preventDefault()
+    if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      await sendInput({ type: 'type', text: k })
+    } else {
+      const mods = [e.ctrlKey && 'Control', e.altKey && 'Alt', e.metaKey && 'Meta'].filter(Boolean) as string[]
+      const key = k.length === 1 ? k.toUpperCase() : k
+      await sendInput({ type: 'key', key: mods.length ? [...mods, key].join('+') : key })
+    }
+    nudgeFrames([120, 340])
+  }
+  // Scroll: forward the wheel delta (throttled) so the human can reach off-screen portal controls.
+  function wheelLive(e: React.WheelEvent) {
+    if (!live?.source?.id) return
+    const now = Date.now()
+    if (now - wheelTsRef.current < 110) return
+    wheelTsRef.current = now
+    sendInput({ type: 'scroll', deltaY: e.deltaY }); nudgeFrames([160, 420])
   }
   async function closeLive(cancel = true) {
     const id = live?.source?.id
@@ -842,10 +901,12 @@ export default function EmailImportsPage() {
         const badge: Record<string, { t: string; c: string; b: string }> = {
           starting: { t: '⏳ Starting…', c: '#1e40af', b: '#dbeafe' },
           login: { t: '⏳ Signing in…', c: '#1e40af', b: '#dbeafe' },
+          human_action: { t: '🧑 Your turn — solve the check', c: '#9a3412', b: '#ffedd5' },
           awaiting_code: { t: '🔒 Enter the code', c: '#9a3412', b: '#ffedd5' },
           verifying: { t: '⏳ Verifying…', c: '#1e40af', b: '#dbeafe' },
           action_needed: { t: '👆 Click Next in the view', c: '#9a3412', b: '#ffedd5' },
           authenticated: { t: '✅ Signed in', c: '#166534', b: '#dcfce7' },
+          pulling: { t: '⏳ Pulling reports…', c: '#1e40af', b: '#dbeafe' },
           error: { t: '⚠️ Error', c: '#991b1b', b: '#fee2e2' },
           cancelled: { t: '○ Cancelled', c: 'var(--text3)', b: 'var(--surface2)' },
           idle: { t: '○ Idle', c: 'var(--text3)', b: 'var(--surface2)' },
@@ -861,16 +922,31 @@ export default function EmailImportsPage() {
                 <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => closeLive(true)}>Close</button>
               </div>
               <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '0 0 10px' }}>{liveState?.message || 'Starting…'}</p>
-              {!done && liveState?.shot && (
+              {ph === 'human_action' ? (
+                <div style={{ fontSize: 12.5, color: '#9a3412', margin: '0 0 6px', fontWeight: 700, padding: '8px 10px', borderRadius: 8, background: '#fff7ed', border: '1px solid #fdba74' }}>
+                  🧑 Human check detected. <b>Solve the “I’m not a robot” box directly in the live view below</b>, then click the portal’s <b>Sign in</b> button. You’re driving this login now — clicks, typing and scrolling all go straight to the live browser.
+                </div>
+              ) : !done && liveState?.shot && (
                 <div style={{ fontSize: 11.5, color: '#9a3412', margin: '0 0 6px', fontWeight: 600 }}>
-                  👆 You can click directly on the screen below to control the browser (e.g. press the portal’s <b>Next</b> button).
+                  👆 Click, type and scroll directly on the screen below to drive the live browser (click once to focus it, then type — e.g. press the portal’s <b>Next</b>/<b>Sign in</b> button).
                 </div>
               )}
-              <div style={{ position: 'relative', minHeight: 220, background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
+              <div
+                ref={liveViewRef}
+                tabIndex={done ? -1 : 0}
+                onKeyDown={done ? undefined : keyLive}
+                onWheel={done ? undefined : wheelLive}
+                onFocus={() => setLiveFocused(true)}
+                onBlur={() => setLiveFocused(false)}
+                style={{ position: 'relative', minHeight: 220, background: 'var(--surface2)', borderRadius: 8, border: `2px solid ${(!done && liveFocused) ? '#f97316' : 'var(--border)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12, outline: 'none' }}>
                 {liveState?.shot
                   // eslint-disable-next-line @next/next/no-img-element
-                  ? <img src={liveState.shot} alt="Live login screen" onClick={done ? undefined : clickLive} style={{ maxWidth: '100%', borderRadius: 8, cursor: done ? 'default' : 'crosshair' }} />
+                  ? <img src={liveState.shot} alt="Live login screen" draggable={false} onClick={done ? undefined : clickLive} onDoubleClick={done ? undefined : dblClickLive} style={{ maxWidth: '100%', borderRadius: 6, cursor: done ? 'default' : 'crosshair', userSelect: 'none' }} />
                   : <div style={{ color: 'var(--text3)', fontSize: 13, padding: 30 }}>Opening the portal in a live browser… the screen appears here in a moment.</div>}
+                {!done && liveState?.shot && (
+                  <div style={{ position: 'absolute', top: 6, right: 8, fontSize: 10.5, fontWeight: 600, padding: '1px 7px', borderRadius: 999, color: liveFocused ? '#9a3412' : 'var(--text3)', background: liveFocused ? '#ffedd5' : 'var(--surface)', border: '1px solid var(--border)' }}>
+                    {liveFocused ? '⌨ typing here' : 'click to type here'}
+                  </div>)}
               </div>
               {done ? (
                 <div style={{ padding: '10px 12px', borderRadius: 8, background: '#dcfce7', color: '#166534', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -893,6 +969,10 @@ export default function EmailImportsPage() {
               ) : ph === 'action_needed' ? (
                 <div style={{ padding: '10px 12px', borderRadius: 8, background: '#ffedd5', color: '#9a3412', fontSize: 13 }}>
                   ✅ Your code was accepted — just <b>click the blue Next button</b> on the screen above to finish trusting this device. (The click is sent straight to the live browser.)
+                </div>
+              ) : ph === 'human_action' ? (
+                <div style={{ padding: '10px 12px', borderRadius: 8, background: '#ffedd5', color: '#9a3412', fontSize: 13 }}>
+                  🧑 <b>Solve the “I’m not a robot” check in the live view above</b>, then click the portal’s <b>Sign in</b> button. Everything you click, type or scroll goes straight to the live browser — take your time, nothing is auto-submitted past the check.
                 </div>
               ) : (
                 <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>{ph === 'error' || ph === 'cancelled' ? 'Close this and try again, or use 🔐 Log in as a fallback.' : 'Watch the live screen above — the code box appears here once the portal challenges.'}</div>
