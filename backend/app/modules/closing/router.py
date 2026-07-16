@@ -2295,8 +2295,11 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     q = client.schema("commcalc").table("daily_closing").select("*").eq("org_id", org_id)
     q = q.eq("close_date", date) if date else q.gte("close_date", start).lte("close_date", end)
     rows = q.execute().data or []
-    stores = (client.schema("storeops").table("stores").select("store_code,address,market,is_active").eq("org_id", org_id).execute().data) or []
-    smeta = {s.get("store_code"): s for s in stores if s.get("store_code")}
+    # NOTE: local named store_rows (NOT `stores`) — `stores` is the multi-select query param below;
+    # this endpoint's 500 (2026-07-16 hotfix) was exactly this roster fetch shadowing that param, so
+    # `stores.split(",")` a few lines down blew up with AttributeError on every call. Keep them distinct.
+    store_rows = (client.schema("storeops").table("stores").select("store_code,address,market,is_active").eq("org_id", org_id).execute().data) or []
+    smeta = {s.get("store_code"): s for s in store_rows if s.get("store_code")}
     # storeops.stores.market is only partly populated; fall back to commcalc.store_mapping.market (much
     # fuller) so a market-scoped DM still sees every store in their market (was: stores with a blank
     # storeops market silently dropped out of the DM's market filter).
@@ -2368,7 +2371,7 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     not_closed = []
     if date:
         closed = {(r.get("store_code") or "") for r in rows if r.get("store_code")}
-        for s in stores:
+        for s in store_rows:
             code = s.get("store_code") or ""
             if not code or code in closed or s.get("is_active") is False:
                 continue
