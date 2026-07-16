@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { NoLedgerData } from '../_shared/NoLedgerData'
 
 type Bucket = 'matched' | 'underpaid' | 'overpaid' | 'no_expected' | 'no_hotsheet' | 'unmapped_type'
 type Item = {
@@ -44,11 +45,15 @@ export default function HotsheetReconPage() {
   const [loading, setLoading] = useState(true)
   const [syncMsg, setSyncMsg] = useState('')
   const [syncing, setSyncing] = useState(false)
+  // Has GET /asset/filter-options resolved yet? Gates the "no ledger data" empty state so it can't
+  // flash for a tenant that DOES have data (see NoLedgerData.tsx header comment — luxelink-parity).
+  const [filterOptionsLoaded, setFilterOptionsLoaded] = useState(false)
 
   useEffect(() => {
     api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
       .then((d: any) => { setMarkets(d.markets || []); setStores(d.stores || []) })
       .catch(console.error)
+      .finally(() => setFilterOptionsLoaded(true))
   }, [])
   useEffect(() => { load() }, [market, store, month, year, tolerance])
 
@@ -102,6 +107,11 @@ export default function HotsheetReconPage() {
     }
   }
 
+  // No asset_ledger rows for this org at all (see NoLedgerData.tsx — luxelink-parity, 2026-07-16):
+  // suppress the "no hotsheet loaded" banner too, so an empty-ledger tenant gets ONE clear message
+  // instead of two (neither of which is the real reason: there's no financing ledger to reconcile).
+  const ledgerEmpty = filterOptionsLoaded && stores.length === 0
+
   const card = (label: string, val: string, sub: string, color: string) => (
     <div key={label} className="card" style={{ padding: '16px 20px', borderTop: `3px solid ${color}` }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
@@ -134,7 +144,7 @@ export default function HotsheetReconPage() {
 
       {syncMsg && <div style={{ marginBottom: 14, fontSize: 13, color: syncMsg.startsWith('✓') ? '#059669' : '#dc2626' }}>{syncMsg}</div>}
 
-      {data && !data.hotsheet_loaded && (
+      {data && !data.hotsheet_loaded && !ledgerEmpty && (
         <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: '#92400e' }}>
           ⚠️ <strong>No hotsheet loaded.</strong> Upload a pricing hotsheet on the Commissions page first — every device will read “Not on hotsheet” until then.
         </div>
@@ -169,6 +179,8 @@ export default function HotsheetReconPage() {
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>Loading…</div>
+      ) : ledgerEmpty ? (
+        <NoLedgerData title="Hotsheet Recon" />
       ) : !data ? (
         <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>No data.</div>
       ) : (

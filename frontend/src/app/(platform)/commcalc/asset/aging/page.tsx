@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { NoLedgerData } from '../_shared/NoLedgerData'
 
 type Row = {
   id: number; store: string; market: string; esn_imei: string|null; phone_number: string|null
@@ -94,11 +95,15 @@ export default function AgingPage() {
   const [showZero, setShowZero] = useState(false)
   const [month, setMonth] = useState(0)  // 0 = all time
   const [year, setYear] = useState(new Date().getFullYear())
+  // Has GET /asset/filter-options resolved yet? Gates the "no ledger data" empty state so it can't
+  // flash for a tenant that DOES have data (see NoLedgerData.tsx header comment — luxelink-parity).
+  const [filterOptionsLoaded, setFilterOptionsLoaded] = useState(false)
 
   useEffect(() => {
     api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
       .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) })
       .catch(console.error)
+      .finally(() => setFilterOptionsLoaded(true))
   }, [])
   useEffect(() => { load() }, [market, store, month, year])
 
@@ -192,6 +197,8 @@ export default function AgingPage() {
 
       {loading ? (
         <div style={{ textAlign:'center', padding:60, color:'var(--text3)' }}>Loading…</div>
+      ) : filterOptionsLoaded && stores.length === 0 ? (
+        <NoLedgerData title="Inventory Aging" />
       ) : !data ? (
         <div style={{ textAlign:'center', padding:60, color:'var(--text3)' }}>No data.</div>
       ) : (

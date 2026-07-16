@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { NoLedgerData } from '../_shared/NoLedgerData'
 
 type Group = { key: string; label: string; count: number; owed: number }
 type Summary = { groups: Record<string, Group>; total_loss: { total: number; appeals: number; rma: number } }
@@ -41,10 +42,15 @@ export default function AssetDashboard() {
   const [store, setStore] = useState('')
   const [markets, setMarkets] = useState<string[]>([])
   const [stores, setStores] = useState<{store:string;market:string}[]>([])
+  // Has GET /asset/filter-options resolved yet? Gates the "no ledger data" empty state so it can't
+  // flash for a tenant that DOES have data (see NoLedgerData.tsx header comment — luxelink-parity).
+  const [filterOptionsLoaded, setFilterOptionsLoaded] = useState(false)
 
   useEffect(() => {
     api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
-      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) }).catch(console.error)
+      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) })
+      .catch(console.error)
+      .finally(() => setFilterOptionsLoaded(true))
   }, [])
   useEffect(() => { load() }, [mode, month, year, weekFriday, market, store])
 
@@ -167,6 +173,8 @@ export default function AssetDashboard() {
 
       {loading ? (
         <div style={{ textAlign:'center', padding:60, color:'var(--text3)' }}>Loading…</div>
+      ) : filterOptionsLoaded && stores.length === 0 ? (
+        <NoLedgerData title="The Asset Charges Dashboard" />
       ) : !data ? (
         <div style={{ textAlign:'center', padding:60, color:'var(--text3)' }}>No data.</div>
       ) : (
