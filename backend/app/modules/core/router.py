@@ -244,7 +244,8 @@ async def whoami(authorization: str = Header(default=""), x_active_org: str = He
              "mode": tw_policy["mode"], "user_channels": u.get("twofa_channels") or ["email"]}
     return {"provisioned": True, "user": u, "permissions": perms,
             "active": bool(u.get("is_active", True)), "tenant": tenant, "carriers": carriers,
-            "password_policy": pw_policy, "twofa": twofa}
+            "password_policy": pw_policy, "twofa": twofa,
+            "default_cc": tw_policy.get("default_cc", _sec.DEFAULT_COUNTRY_CODE)}
 
 
 @router.post("/me/password-changed")
@@ -1887,7 +1888,11 @@ async def password_policy_public():
 
 
 def _normalize_twofa_policy(raw):
-    p = {"mode": "off", "channels": ["email"], "required_roles": []}
+    # `default_cc` (OWNER 2026-07-17) is an ADDITIVE key on the existing twofa_policy JSONB (no migration):
+    # the tenant's default phone country code, applied to bare 10-digit phone entries. '+1' when
+    # absent/invalid. It rides in this dict purely because twofa_policy already exists per-tenant.
+    p = {"mode": "off", "channels": ["email"], "required_roles": [],
+         "default_cc": _sec.DEFAULT_COUNTRY_CODE}
     if isinstance(raw, dict):
         m = str(raw.get("mode") or "off").lower()
         p["mode"] = m if m in ("off", "optional", "required") else "off"
@@ -1897,6 +1902,8 @@ def _normalize_twofa_policy(raw):
         rr = raw.get("required_roles")
         if isinstance(rr, list):
             p["required_roles"] = [str(r) for r in rr if str(r).strip()]
+        if "default_cc" in raw:
+            p["default_cc"] = _sec.normalize_cc(raw.get("default_cc"))
     return p
 
 
@@ -1906,6 +1913,15 @@ def _load_twofa_policy(client, org_id):
         return _normalize_twofa_policy(t.get("twofa_policy"))
     except Exception:
         return _normalize_twofa_policy(None)
+
+
+def _load_default_cc(client, org_id):
+    """The tenant's default phone country code ('+1' fallback). Reads twofa_policy.default_cc (additive
+    JSON key). Best-effort — un-run/absent config degrades to '+1'. Never raises."""
+    try:
+        return _sec.normalize_cc(_load_twofa_policy(client, org_id).get("default_cc"))
+    except Exception:
+        return _sec.DEFAULT_COUNTRY_CODE
 
 
 def _twofa_required_for(policy, role, user_opted_in):
@@ -2417,9 +2433,11 @@ async def set_phone(body: dict, request: Request, authorization: str = Header(de
     org_id = u.get("org_id") or ORG_ID
     _enforce_self_2fa(client, org_id, uid, u.get("role"), u.get("twofa_enabled"), x_2fa_token)
     email = (u.get("email") or _email_for_uid(client, uid) or "").strip().lower()
-    phone = "".join(c for c in (body.get("phone") or "") if c.isdigit() or c == "+")
-    if len(phone) < 8:
-        raise HTTPException(400, "Enter a valid phone number (with country code).")
+    # Auto-correct the country code: a bare 10-digit → tenant default_cc (+1) + digits; an already-CC'd
+    # or international number is kept verbatim. Un-normalizable → clear 400 (never silently mangled).
+    phone, perr = _sec.normalize_phone(body.get("phone") or "", _load_default_cc(client, org_id))
+    if perr or not phone:
+        raise HTTPException(400, perr or "Enter a valid phone number (with country code).")
     try:
         client.schema("storeops").table("app_users").update(
             {"phone": phone, "phone_verified": False}).eq("id", u["id"]).execute()

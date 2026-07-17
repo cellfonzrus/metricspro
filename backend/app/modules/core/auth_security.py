@@ -17,6 +17,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import string
 import time
@@ -99,6 +100,85 @@ def gen_temp_password(policy=None) -> str:
         chars.append(secrets.choice(alphabet))
     secrets.SystemRandom().shuffle(chars)
     return "".join(chars)
+
+
+# ── Phone number normalization (country-code auto-correct) ──────────────────────────────────────────
+# OWNER DIRECTIVE 2026-07-17: reps enter 10-digit numbers; auto-prepend the tenant's default country
+# code (default '+1', tenant-configurable) so a bare 10-digit is stored/sent as a full E.164 number.
+# NEVER silently mangle a number that already carries its own country code (leading '+' or '00', or a
+# plausible 11-15 digit string) — those are kept verbatim (digits only) rather than re-guessed.
+DEFAULT_COUNTRY_CODE = "+1"
+_CC_RE = re.compile(r"^\+\d{1,3}$")   # a country code is '+' then 1-3 digits
+_E164_MIN = 7                          # shortest plausible full number (CC + national significant number)
+_E164_MAX = 15                         # ITU E.164 hard maximum total digits
+
+
+def normalize_cc(raw, fallback: str = DEFAULT_COUNTRY_CODE) -> str:
+    """Validate/normalize a (possibly hostile/absent) tenant default country code to '+<1-3 digits>'.
+    Falls back to `fallback` ('+1') on anything invalid/absent. Pure; never raises.
+    Accepts '+1', '1', ' +44 ', '+001'→'+1'? (strips non-digits after '+'); rejects '+' / '+1234' / ''."""
+    s = str(raw or "").strip()
+    digits = "".join(c for c in s if c.isdigit())
+    if not digits:
+        return fallback
+    cand = "+" + digits
+    return cand if _CC_RE.match(cand) else fallback
+
+
+def normalize_phone(raw, default_cc: str = DEFAULT_COUNTRY_CODE):
+    """Normalize a raw phone entry to canonical E.164 '+<cc><national>' form.
+
+    Returns (phone: str|None, error: str|None). On success `error` is None; on failure `phone` is None
+    and `error` is a human-readable reason so the caller can 400. PURE — no DB, no network, never raises.
+
+    Rules (with default_cc '+1' → cc digits '1'):
+      • strip all formatting (spaces / dashes / parens / dots / etc.) down to a leading '+'? + digits.
+      • already starts with '+'  → international; keep the digits verbatim as '+'+digits (never re-guess).
+      • '00' international-access prefix → treated as '+' + the remainder.
+      • exactly 10 digits           → default_cc + digits (the common "reps stored as 10 digits" case).
+      • (len(cc)+10) digits leading with the cc digits (e.g. 1XXXXXXXXXX for +1) → '+'+digits.
+      • 11-15 digits                → '+'+digits (plausibly already carries a country code).
+      • empty / <10 (not the cc+10 case) / >15 → (None, reason).
+    """
+    cc = normalize_cc(default_cc)
+    cc_digits = cc[1:]
+    s = str(raw or "").strip()
+    if not s:
+        return (None, "Enter a phone number.")
+    has_plus = s.startswith("+")
+    digits = "".join(c for c in s if c.isdigit())
+    if not digits:
+        return (None, "Enter a valid phone number.")
+    # 1) Explicit international: the caller typed a '+' — honor it, only strip formatting.
+    if has_plus:
+        if _E164_MIN <= len(digits) <= _E164_MAX:
+            return ("+" + digits, None)
+        return (None, "That international number doesn't look valid (needs 7-15 digits after the +).")
+    # 2) '00' international access prefix → '+'.
+    if digits.startswith("00") and len(digits) >= _E164_MIN + 2:
+        d = digits[2:]
+        if _E164_MIN <= len(d) <= _E164_MAX:
+            return ("+" + d, None)
+        return (None, "That international number doesn't look valid.")
+    n = len(digits)
+    # 3) Bare 10-digit national number → prepend the (tenant) default country code.
+    if n == 10:
+        return (cc + digits, None)
+    # 4) Full national number with the default CC already on it (e.g. 1+10 = 11 for +1).
+    if n == len(cc_digits) + 10 and digits.startswith(cc_digits):
+        return ("+" + digits, None)
+    # 5) Anything 11-15 digits plausibly carries its own country code → keep it, add '+'.
+    if 11 <= n <= _E164_MAX:
+        return ("+" + digits, None)
+    # 6) Too short (and not the cc+10 case) or absurdly long → reject rather than mangle.
+    return (None, "Enter a 10-digit number, or a full international number with its country code.")
+
+
+def phone_to_e164_digits(raw, default_cc: str = DEFAULT_COUNTRY_CODE) -> str:
+    """Convenience for the WhatsApp/Meta transport layer: the normalized number as DIGITS ONLY (no '+',
+    Meta strips it anyway). Returns '' when `raw` can't be normalized. Never raises."""
+    phone, err = normalize_phone(raw, default_cc)
+    return "" if err or not phone else phone.lstrip("+")
 
 
 # ── OTP (one-time codes for password reset · 2FA · phone verification) ──────────────────────────────

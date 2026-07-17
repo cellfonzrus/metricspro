@@ -30,6 +30,19 @@ def is_configured() -> bool:
     )
 
 
+def _to_number(raw) -> str:
+    """The Meta Cloud API `to` must be digits-only with a country code. Strip +/spaces/dashes/parens;
+    prepend the US country code '1' to a bare 10-digit number (how reps are commonly stored). This is
+    the transport-layer defense-in-depth: callers should already pass a normalized '+<cc>...' number
+    (core.auth_security.normalize_phone), and stripping the '+' here is BYTE-COMPATIBLE with that (and
+    with the pre-existing notify send format). Without this an unprefixed 5162330422 hits Meta #131030
+    'not in allowed list'."""
+    digits = "".join(c for c in str(raw or "") if c.isdigit())
+    if len(digits) == 10:
+        digits = "1" + digits
+    return digits
+
+
 def _base() -> str:
     ver = settings.WHATSAPP_GRAPH_VERSION or "v21.0"
     return f"https://graph.facebook.com/{ver}/{settings.WHATSAPP_PHONE_NUMBER_ID}"
@@ -49,6 +62,7 @@ async def upload_media(cx: httpx.AsyncClient, data: bytes, mime: str, filename: 
 
 
 def _template_msg(to: str, filename: str, media_id: str, body_text: str, with_doc_header: bool) -> dict:
+    to = _to_number(to)
     components = []
     if with_doc_header and media_id:
         components.append({"type": "header", "parameters": [
@@ -89,6 +103,7 @@ async def send_approval(to: str, req_id: str, token: str, issue: str, fix: str, 
     the message id. Requires the 'remediation_approval' template to be APPROVED in WhatsApp Manager."""
     if not approval_configured():
         raise RuntimeError("WhatsApp approval not configured (WHATSAPP_APPROVAL_TEMPLATE + base creds)")
+    to = _to_number(to)
     msg = {
         "messaging_product": "whatsapp", "to": to, "type": "template",
         "template": {
@@ -121,7 +136,7 @@ async def send_text(to: str, body: str) -> str:
     the recipient messaged/tapped us) — used to confirm a decision back in-thread. Best-effort."""
     if not is_configured():
         return ""
-    payload = {"messaging_product": "whatsapp", "to": to, "type": "text",
+    payload = {"messaging_product": "whatsapp", "to": _to_number(to), "type": "text",
                "text": {"body": (body or "")[:1000]}}
     async with httpx.AsyncClient(timeout=30) as cx:
         r = await cx.post(f"{_base()}/messages", headers=_headers(), json=payload)
@@ -146,6 +161,7 @@ async def send_otp(to: str, code: str, purpose: str = "verification") -> str:
     UNCONFIRMED in the handoff. Returns the message id; raises RuntimeError on a hard send failure."""
     if not is_configured():
         raise RuntimeError("WhatsApp not configured (set WHATSAPP_ACCESS_TOKEN / PHONE_NUMBER_ID / TEMPLATE_NAME)")
+    to = _to_number(to)
     if settings.WHATSAPP_OTP_TEMPLATE:
         msg = {
             "messaging_product": "whatsapp", "to": to, "type": "template",

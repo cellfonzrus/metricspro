@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Header
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.modules.core.run_for_tenant import run_for_tenant_async, TenantNotRunnable
+from app.modules.core import auth_security as _sec
 from . import report_registry, render
 from .channels import email_resend, whatsapp_meta
 
@@ -22,6 +23,18 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"
 def sb():
     # notify.* tables live in the notify schema (migration 010).
     return get_supabase().schema("notify")
+
+
+def _tenant_default_cc(org_id) -> str:
+    """The tenant's default phone country code (twofa_policy.default_cc, additive JSON key; '+1'
+    fallback). Best-effort — un-run/absent config degrades to '+1'. Never raises."""
+    try:
+        rows = (get_supabase().schema("storeops").table("tenants").select("twofa_policy")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        raw = (rows[0].get("twofa_policy") or {}).get("default_cc") if rows else None
+        return _sec.normalize_cc(raw)
+    except Exception:
+        return _sec.DEFAULT_COUNTRY_CODE
 
 
 # ── recipients ────────────────────────────────────────────────────────────────
@@ -36,10 +49,21 @@ async def list_recipients(org_id: str = ORG_ID):
     return {"saved": saved, "employees": employees}
 
 
+def _norm_save_phone(org_id, raw):
+    """Normalize a phone for STORAGE (canonical '+<cc>...'). Empty → None (email-only recipient is fine).
+    Un-normalizable → raise 400 with a clear reason (never silently store garbage)."""
+    if not (raw or "").strip():
+        return None
+    v, err = _sec.normalize_phone(raw, _tenant_default_cc(org_id))
+    if err or not v:
+        raise HTTPException(400, err or "Enter a valid phone number.")
+    return v
+
+
 @router.post("/recipients")
 async def create_recipient(body: dict, org_id: str = ORG_ID):
     row = {"org_id": org_id, "name": body.get("name"), "email": body.get("email"),
-           "phone": body.get("phone"), "employee_id": body.get("employee_id")}
+           "phone": _norm_save_phone(org_id, body.get("phone")), "employee_id": body.get("employee_id")}
     r = sb().table("recipients").insert(row).execute()
     return r.data[0] if r.data else row
 
@@ -47,6 +71,8 @@ async def create_recipient(body: dict, org_id: str = ORG_ID):
 @router.put("/recipients/{rid}")
 async def update_recipient(rid: str, body: dict, org_id: str = ORG_ID):
     allowed = {k: v for k, v in body.items() if k in ("name", "email", "phone", "employee_id")}
+    if "phone" in allowed:
+        allowed["phone"] = _norm_save_phone(org_id, allowed.get("phone"))
     r = sb().table("recipients").update(allowed).eq("org_id", org_id).eq("id", rid).execute()
     return r.data[0] if r.data else {}
 
@@ -101,10 +127,17 @@ async def put_report_config(report_key: str, body: dict, org_id: str = ORG_ID):
     """Set the designated recipients + channels for one report."""
     if report_key not in report_registry.REPORTS:
         raise HTTPException(400, f"unknown report_key '{report_key}'")
+    # Country-code-normalize ad-hoc phones on save (canonical '+<cc>...'); keep an un-normalizable
+    # entry verbatim so nothing is silently lost (the send-time normalize gives it a second pass).
+    _cc = _tenant_default_cc(org_id)
+    _phones = []
+    for p in (body.get("ad_hoc_phones") or []):
+        v, _e = _sec.normalize_phone(p, _cc)
+        _phones.append(v or p)
     row = {"org_id": org_id, "report_key": report_key,
            "recipient_ids": body.get("recipient_ids") or [],
            "ad_hoc_emails": body.get("ad_hoc_emails") or [],
-           "ad_hoc_phones": body.get("ad_hoc_phones") or [],
+           "ad_hoc_phones": _phones,
            "channels": body.get("channels") or ["email"],
            "formats": body.get("formats") or ["xlsx", "pdf"],
            "is_active": body.get("is_active", True),
@@ -146,19 +179,15 @@ async def send_to_designated(body: dict, org_id: str = ORG_ID):
 
 
 # ── dispatch core (shared by on-demand send + scheduled run-due) ──────────────
-def _normalize_phone(raw) -> str:
-    """WhatsApp Cloud API needs digits-only with a country code. Strip +/space/
-    dashes/parens; prepend US country code 1 to bare 10-digit numbers (the common
-    way reps are stored). Already-prefixed or international numbers pass through.
-    Without this, an unprefixed 5162330422 hits (#131030) 'not in allowed list'."""
-    digits = "".join(ch for ch in str(raw or "") if ch.isdigit())
-    if len(digits) == 10:
-        digits = "1" + digits
-    return digits
-
-
 def _resolve_targets(client_notify, org_id, body) -> tuple[list, list]:
-    """Return (emails, phones) from explicit lists + saved recipient_ids."""
+    """Return (emails, phones) from explicit lists + saved recipient_ids.
+
+    Phones are country-code-normalized to canonical E.164 '+<cc>...' using the tenant's default_cc.
+    This is also the SEND-TIME rescue for pre-existing bare-10-digit stored rows (e.g. '5162330422'):
+    they normalize to '+15162330422' here even without a data backfill. The WhatsApp transport layer
+    (whatsapp_meta._to_number) strips the '+' to digits for Meta — byte-compatible with the prior send
+    format — so this changes storage/dedup canonicalization, not what Meta receives for existing rows."""
+    cc = _tenant_default_cc(org_id)
     emails = list(body.get("emails") or [])
     phones = list(body.get("phones") or [])
     rids = body.get("recipient_ids") or []
@@ -170,9 +199,14 @@ def _resolve_targets(client_notify, org_id, body) -> tuple[list, list]:
                 emails.append(r["email"])
             if r.get("phone"):
                 phones.append(r["phone"])
-    # normalize phones (country code) then dedup, preserve order
-    phones = [_normalize_phone(p) for p in phones]
-    return list(dict.fromkeys([e for e in emails if e])), list(dict.fromkeys([p for p in phones if p]))
+    # normalize phones (country code) then dedup, preserve order; drop un-normalizable entries.
+    norm_phones = []
+    for p in phones:
+        v, _err = _sec.normalize_phone(p, cc)
+        if v:
+            norm_phones.append(v)
+    return (list(dict.fromkeys([e for e in emails if e])),
+            list(dict.fromkeys(norm_phones)))
 
 
 def _email_html(payload, link, message) -> str:

@@ -179,5 +179,72 @@ ck("off mode + no marker → allowed (unaffected)", _self2fa_raises({"mode": "of
 ck("required(admin only) + sales_rep + no marker → allowed (not in scope)", _self2fa_raises({"mode": "required", "required_roles": ["admin"]}, "sales_rep", False, "") is None)
 ck("required(admin only) + admin + no marker → 401", _self2fa_raises({"mode": "required", "required_roles": ["admin"]}, "admin", False, "") is not None)
 
+print("I. phone country-code normalization (OWNER 2026-07-17)")
+# normalize_cc
+ck("cc '+1' → '+1'", S.normalize_cc("+1") == "+1")
+ck("cc '1' → '+1'", S.normalize_cc("1") == "+1")
+ck("cc ' +44 ' → '+44'", S.normalize_cc(" +44 ") == "+44")
+ck("cc '52' → '+52'", S.normalize_cc("52") == "+52")
+ck("cc '' → '+1' (fallback)", S.normalize_cc("") == "+1")
+ck("cc None → '+1' (fallback)", S.normalize_cc(None) == "+1")
+ck("cc '+' → '+1' (invalid → fallback)", S.normalize_cc("+") == "+1")
+ck("cc '+1234' → '+1' (>3 digits → fallback)", S.normalize_cc("+1234") == "+1")
+ck("cc 'abc' → '+1' (no digits → fallback)", S.normalize_cc("abc") == "+1")
+
+def ph(raw, cc="+1"):
+    return S.normalize_phone(raw, cc)
+
+# The owner's headline example
+ck("10-digit '5162330422' → +15162330422", ph("5162330422") == ("+15162330422", None))
+# Formatted 10-digit (spaces/dashes/parens/dots)
+ck("formatted '(516) 233-0422' → +15162330422", ph("(516) 233-0422") == ("+15162330422", None))
+ck("dashed '516-233-0422' → +15162330422", ph("516-233-0422") == ("+15162330422", None))
+ck("dotted '516.233.0422' → +15162330422", ph("516.233.0422") == ("+15162330422", None))
+ck("spaced ' 516 233 0422 ' → +15162330422", ph(" 516 233 0422 ") == ("+15162330422", None))
+# 11-digit leading-1 (default CC already present, no '+')
+ck("11-digit '15162330422' → +15162330422", ph("15162330422") == ("+15162330422", None))
+ck("formatted 11-digit '1 (516) 233-0422' → +15162330422", ph("1 (516) 233-0422") == ("+15162330422", None))
+# already '+' — kept verbatim (never re-guessed)
+ck("already '+15162330422' kept", ph("+15162330422") == ("+15162330422", None))
+ck("'+1 (516) 233-0422' → +15162330422", ph("+1 (516) 233-0422") == ("+15162330422", None))
+# international (never mangled)
+ck("intl '+44 20 7946 0958' → +442079460958", ph("+44 20 7946 0958") == ("+442079460958", None))
+ck("intl '+52 55 1234 5678' kept", ph("+52 55 1234 5678") == ("+525512345678", None))
+ck("'00' access prefix '0044 20 7946 0958' → +442079460958", ph("0044 20 7946 0958") == ("+442079460958", None))
+# 11-15 digit no '+' plausibly carries a CC
+ck("12-digit '442079460958' → +442079460958", ph("442079460958") == ("+442079460958", None))
+# garbage / too-short / empty → error, phone None
+ck("empty '' → error", ph("")[0] is None and ph("")[1])
+ck("None → error", ph(None)[0] is None and ph(None)[1])
+ck("whitespace '   ' → error", ph("   ")[0] is None and ph("   ")[1])
+ck("letters 'not-a-phone' → error", ph("not-a-phone")[0] is None and ph("not-a-phone")[1])
+ck("7-digit '2330422' → error (ambiguous, not mangled)", ph("2330422")[0] is None)
+ck("9-digit '162330422' → error", ph("162330422")[0] is None)
+ck("16-digit (too long) → error", ph("1234567890123456")[0] is None)
+# per-tenant default_cc override
+ck("cc='+44' 10-digit '2079460958' → +442079460958", ph("2079460958", "+44") == ("+442079460958", None))
+ck("cc='+52' 10-digit '5512345678' → +525512345678", ph("5512345678", "+52") == ("+525512345678", None))
+ck("cc='+91' 10-digit → +91..........", ph("9876543210", "+91") == ("+919876543210", None))
+ck("invalid cc falls back to +1 for 10-digit", ph("5162330422", "garbage") == ("+15162330422", None))
+# phone_to_e164_digits convenience
+ck("phone_to_e164_digits('5162330422') → '15162330422'", S.phone_to_e164_digits("5162330422") == "15162330422")
+ck("phone_to_e164_digits garbage → ''", S.phone_to_e164_digits("nope") == "")
+
+print("J. Meta send formatting is BYTE-COMPATIBLE for an already-normalized number")
+from app.modules.notify.channels import whatsapp_meta as WA
+# The OLD notify _normalize_phone (reference) that the send path used before this change.
+def old_notify_normalize(raw):
+    d = "".join(ch for ch in str(raw or "") if ch.isdigit())
+    return ("1" + d) if len(d) == 10 else d
+for raw in ["5162330422", "+15162330422", "15162330422", "(516) 233-0422",
+            "+442079460958", "442079460958"]:
+    canon, _ = S.normalize_phone(raw)                      # what we now STORE / pass to the send path
+    meta_new = WA._to_number(canon if canon else raw)     # what Meta receives now (transport strips '+')
+    meta_old = old_notify_normalize(raw)                  # what Meta received before
+    ck(f"Meta byte-compat: {raw!r} → {meta_new!r} == old {meta_old!r}", meta_new == meta_old)
+# And an already-'+1'-normalized number reaches Meta as pure digits (no '+'), byte-identical.
+ck("'+15162330422' → Meta '15162330422'", WA._to_number("+15162330422") == "15162330422")
+ck("Meta _to_number is idempotent on '15162330422'", WA._to_number("15162330422") == "15162330422")
+
 print(f"\n{'PASS' if F == 0 else 'FAIL'}: {P} passed, {F} failed")
 sys.exit(1 if F else 0)

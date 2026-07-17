@@ -62,6 +62,7 @@ type AuthState = {
   twofa: TwoFactorState                                         // required/verified for the active tenant
   needs2fa: boolean                                            // required && !verified ⇒ OTP screen
   passwordPolicy: PasswordPolicy | null                        // active tenant policy (client-side hints)
+  defaultCc: string                                            // tenant default phone country code ('+1')
   startTwoFactor: (channel?: string) => Promise<any>           // request an OTP over a channel
   verifyTwoFactor: (code: string, remember?: boolean) => Promise<void> // verify + store the marker
   signOut: () => Promise<void>
@@ -73,7 +74,7 @@ const Ctx = createContext<AuthState>({
   active: false, tenant: null, token: null, tenants: [], activeOrg: null, needsTenantChoice: false,
   switchTenant: async () => {}, pendingConnections: [], connectTenant: async () => {},
   disableAndSwitch: async () => ({}), dismissPending: () => {},
-  twofa: { required: false, verified: true }, needs2fa: false, passwordPolicy: null,
+  twofa: { required: false, verified: true }, needs2fa: false, passwordPolicy: null, defaultCc: '+1',
   startTwoFactor: async () => ({}), verifyTwoFactor: async () => {},
   signOut: async () => {}, refresh: async () => {},
 })
@@ -96,11 +97,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [dismissed, setDismissed] = useState<string[]>([])
   const [twofa, setTwofa] = useState<TwoFactorState>({ required: false, verified: true })
   const [passwordPolicy, setPasswordPolicy] = useState<PasswordPolicy | null>(null)
+  const [defaultCc, setDefaultCc] = useState('+1')
 
   const resetProfile = useCallback(() => {
     setUser(null); setPermissions({}); setProvisioned(false); setActive(false)
     setTenant(null); setCarriers([]); setSessionOrgId(null)
-    setTwofa({ required: false, verified: true }); setPasswordPolicy(null)
+    setTwofa({ required: false, verified: true }); setPasswordPolicy(null); setDefaultCc('+1')
   }, [])
 
   // Fetch /core/me for the given active tenant and populate the profile state.
@@ -120,6 +122,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setCarriers(d.carriers || [])
       setTwofa(d.twofa || { required: false, verified: true })
       setPasswordPolicy(d.password_policy || null)
+      setDefaultCc(d.default_cc || '+1')
     } catch {
       resetProfile()
     }
@@ -272,7 +275,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       loading, session, user, permissions, carriers, provisioned, active, tenant,
       token: session?.access_token || null, tenants, activeOrg, needsTenantChoice,
       switchTenant, pendingConnections: visiblePending, connectTenant, disableAndSwitch,
-      dismissPending, twofa, needs2fa, passwordPolicy, startTwoFactor, verifyTwoFactor,
+      dismissPending, twofa, needs2fa, passwordPolicy, defaultCc, startTwoFactor, verifyTwoFactor,
       signOut, refresh,
     }}>
       {children}
