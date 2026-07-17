@@ -28,7 +28,9 @@ export default function MyTargetsPage() {
 
   // Load store list once per period (reused from the summary endpoint).
   useEffect(() => {
-    api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/summary?org_id=${ORG_ID}`)
+    // include_untargeted=1 so a rep's OWN store shows even before a monthly target is set; the endpoint
+    // now substitutes a self-scoped rep's own store(s) for the empty manager keyset (My Targets visibility).
+    api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/summary?org_id=${ORG_ID}&include_untargeted=1`)
       .then(d => {
         setStores(d.stores || [])
         if (d.stores?.length && !storeCode) setStoreCode(d.stores[0].store_code)

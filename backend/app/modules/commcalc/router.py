@@ -4016,11 +4016,26 @@ def _accessory_config(client, org_id):
         pass
     if not depts and not cats and not kws:
         depts = ["Ondigo"]
-    # ── Device SET-UP FEE keywords (mig 217; per-org, admin-editable). Fetched in its OWN defensive query
-    #    so a missing column (pre-217) can NEVER disturb the accessory resolution above — it just falls back
-    #    to the code default ['Device Setup Charge'] (the canonical b2bsoft token used by calculator.py /
-    #    gp_report.py). Product-desc CONTAINS match (case-insensitive). Reported SEPARATELY; never blended
-    #    into the accessory$ number.
+    # BOX departments (mig 218; per-org, admin-editable) — which POS Departments count as a "box" (device
+    # unit) for the Sales-Report box count, Daily-Targets conversion, and Productivity/Stack-Ranking/Review
+    # boxes. Fetched in its OWN defensive query so a missing column (pre-218) can NEVER disturb the accessory
+    # resolution above — it falls back to the code default _BOX_DEPTS (the Boost XP labels), keeping the
+    # house/Boost box numbers BYTE-IDENTICAL. Matched EXACTLY against the raw dept string (same as the
+    # original constant), so config-driven for a tenant without changing case semantics.
+    box_depts = []
+    try:
+        brows = (client.schema("commcalc").table("accessory_config")
+                 .select("box_departments").eq("org_id", org_id).limit(1).execute().data) or []
+        if brows:
+            box_depts = [b for b in (brows[0].get("box_departments") or []) if b]
+    except Exception:
+        box_depts = []
+    if not box_depts:
+        box_depts = list(_BOX_DEPTS)
+    # Device SET-UP FEE keywords (mig 217 — Package A field, surfaced here so the shared Classification-
+    # settings UI can edit it; CONSUMPTION of it — _is_setup_fee / accessory-target folding — lives in
+    # Package A). Fetched in its OWN defensive query; missing column/empty → the code default
+    # ['Device Setup Charge']. CROSS-PACKAGE OVERLAP: pkg A also resolves this identically (clean merge).
     setup_kws = []
     try:
         srows = (client.schema("commcalc").table("accessory_config")
@@ -4036,6 +4051,8 @@ def _accessory_config(client, org_id):
             "products": {k.strip().lower() for k in kws},
             "departments_list": depts, "categories_list": cats, "products_list": kws,
             "acima_tenders_list": acima,
+            "box_departments": {b.strip() for b in box_depts},
+            "box_departments_list": box_depts,
             "setup_fee_products": {k.strip().lower() for k in setup_kws},
             "setup_fee_keywords_list": setup_kws}
 
@@ -4430,7 +4447,7 @@ def seed_item_mapping_from_catalog(org_id: str = ORG_ID):
 @router.get("/accessory-flags")
 def accessory_flags(start: str = None, end: str = None, store: str = None, rep: str = None,
                     period: str = None, threshold: float = None, min_threshold: float = None,
-                    org_id: str = ORG_ID):
+                    authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Accessory sales priced ABOVE the threshold, over a date range / store / rep.
     The threshold defaults to the saved flag_rules value but can be OVERRIDDEN per request via the
     `threshold` query param (the page applies a user-defined value on Load without persisting it; the
@@ -4458,6 +4475,14 @@ def accessory_flags(start: str = None, end: str = None, store: str = None, rep: 
     if rep:
         q = q.eq("salesperson", rep)
     sales = q.limit(200000).execute().data or []
+
+    # SCOPE (B6): a manager with a span sees only their own stores' flagged sales — this is a
+    # chargeback/pricing tool, so it must not leak other markets. None = admin/unrestricted; an empty set
+    # (a self rep) is not narrowed here (they don't reach this page — nav is ['all','market']).
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    _ks = scope_keyset(authorization, org_id)
+    if _ks:
+        sales = [r for r in sales if in_keyset(_ks, r.get("store"))]
 
     imap = _load_item_map(client, org_id)
     # Auto-add unseen items so the mapping self-maintains (guess type from dept/category/desc).
@@ -4572,9 +4597,39 @@ def accessory_flags(start: str = None, end: str = None, store: str = None, rep: 
         "over": sum(1 for x in out if x.get("flag_reason") != "under"),
         "under": sum(1 for x in out if x.get("flag_reason") == "under"),
     }
+    # RULE FIVE / RULE THREE filter OPTIONS (B6): universal, ORG-SCOPED store + market lists (from
+    # commcalc.store_mapping — the same universal source the rest of the module uses) so a DM/market user
+    # always has pick-don't-type options. Previously the page sourced markets/stores from the ASSET module's
+    # /asset/filter-options, which a non-asset user can't read → the market & store filters were empty.
+    # Options are narrowed to the caller's span (in_keyset) so a DM only picks from their own stores.
+    filt_markets, filt_stores, _seen = set(), [], set()
+    try:
+        sm = (client.schema("commcalc").table("store_mapping")
+              .select("store_code,store_address,market").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        sm = []
+    for m in sm:
+        addr = str(m.get("store_address") or "").strip()
+        code = str(m.get("store_code") or "").strip()
+        mk = str(m.get("market") or "").strip()
+        if _ks and not in_keyset(_ks, addr, code):
+            continue
+        if mk:
+            filt_markets.add(mk)
+        if addr and addr.lower() not in _seen:
+            _seen.add(addr.lower())
+            filt_stores.append({"value": addr, "market": mk})
+    # include any store string actually present in the flagged sales but not in store_mapping (unmapped),
+    # so it can still be filtered — keyset already applied to `sales` above.
+    for x in out:
+        st = str(x.get("store") or "").strip()
+        if st and st.lower() not in _seen:
+            _seen.add(st.lower())
+            filt_stores.append({"value": st, "market": ""})
+    filters = {"stores": sorted(filt_stores, key=lambda s: s["value"]), "markets": sorted(filt_markets)}
     return {"rows": out, "threshold": threshold, "min_threshold": min_t, "default_chargeback": default_cb,
             "total": len(out), "flagged_qty": sum(1 for x in out if x["already_flagged"]),
-            "summary": summary,
+            "summary": summary, "filters": filters,
             "by_rep": _rollup(out, lambda x: x.get("rep") or "—"),
             "by_store": _rollup(out, lambda x: x.get("store") or "—"),
             "by_store_rep": _rollup(out, lambda x: ((x.get("store") or "—"), (x.get("rep") or "—")),
@@ -5739,6 +5794,59 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
 
 
 # ── Report endpoints ──────────────────────────────────────────
+def _caller_rep_keys(authorization: str, org_id: str):
+    """For a SELF-scoped (rep) caller, the UPPER name keys identifying THEIR OWN rep rows in rep_commissions
+    — the caller's storeops employee name (app_user.employee_id → employees.name) PLUS any epay/alias that
+    canonicalizes to it (name_map / rep_aliases). Returns:
+      • None       — not self-scoped (admin / unrestricted / a real manager span → scope_keyset governs).
+      • {keys}     — a self rep → keep ONLY the rows matching these keys.
+      • set()       — a self rep we could NOT map to a rep → the caller sees NOTHING (never another rep's
+                      row; the KPI page shows an empty state + hint, not other people's pay).
+    Same identity path My Targets uses (app_user → employee → rep name). Reads app_users/employees
+    (public schema) READ-ONLY, org-scoped. Never raises."""
+    try:
+        from app.modules.storeops.router import _rbac_enabled, _role_scope
+        from app.modules.core.router import _uid_from_token
+    except Exception:
+        return None
+    try:
+        if not _rbac_enabled(org_id):
+            return None
+        uid = _uid_from_token(authorization)
+        if not uid:
+            return None
+        urows = (sb().table("app_users").select("role,employee_id")
+                 .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
+        if not urows:
+            return None
+        u = urows[0]
+        if _role_scope(org_id, (u.get("role") or "").strip()) != "self":
+            return None
+        name = ""
+        eid = (u.get("employee_id") or "").strip()
+        if eid:
+            try:
+                emp = (sb().table("employees").select("name")
+                       .eq("org_id", org_id).eq("employee_id", eid).limit(1).execute().data) or []
+                if emp:
+                    name = str(emp[0].get("name") or "").strip()
+            except Exception:
+                name = ""
+        keys = set()
+        if name:
+            keys.add(name.upper())
+            try:
+                cmap = _rep_canon_map(sb(), org_id)
+                for alias, canon in cmap.items():
+                    if str(canon).strip().upper() == name.upper():
+                        keys.add(str(alias).strip().upper())
+            except Exception:
+                pass
+        return keys   # empty set = self rep with no resolvable rep → sees nothing
+    except Exception:
+        return None
+
+
 @router.get("/commissions/{period}")
 async def get_commissions(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
@@ -5759,6 +5867,21 @@ async def get_commissions(period: str, authorization: str = Header(default=""), 
         cr['chargeback_deduction'] = d
         cr['final_payout'] = safe_float(cr.get('total_payout')) - safe_float(d)
     from app.modules.storeops.router import scope_keyset, in_keyset
+    # SELF scope (B2): an employee sees ONLY their OWN rep row(s) — their own KPIs/commission, never a
+    # coworker's pay. scope_keyset returns an empty set for a self rep (would hide everything); instead we
+    # match the caller's own rep identity by name (canon-aware). A self rep we can't map sees nothing.
+    rep_keys = _caller_rep_keys(authorization, org_id)
+    if rep_keys is not None:
+        cmap = _rep_canon_map(client, org_id)
+        def _mine(c):
+            cand = set()
+            for f in ('storeops_name', 'epay_salesperson', 'salesperson'):
+                v = str(c.get(f) or '').strip()
+                if v:
+                    cand.add(v.upper())
+                    cand.add(str(_canon(v, cmap)).strip().upper())
+            return bool(cand & rep_keys)
+        return [c for c in comms if _mine(c)]
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
     return [c for c in comms if in_keyset(ks, c.get('store'), c.get('store_code'))]
 
@@ -7604,11 +7727,11 @@ def upload_trace(period: str = "", upload_type: str = "", source: str = "",
 @router.get("/accessory-config")
 def get_accessory_config(org_id: str = ORG_ID):
     """The configured accessory dept/category/product-keyword lists + the ACIMA-lease tender(s) + the
-    device SET-UP-FEE keyword(s) (mig 217; product-desc substrings counted toward the accessory TARGET and
-    reported separately)."""
+    BOX departments (mig 218; which POS Departments count as a device 'box')."""
     c = _accessory_config(sb(), org_id)
     return {"departments": c["departments_list"], "categories": c["categories_list"],
             "product_keywords": c["products_list"], "acima_tenders": c["acima_tenders_list"],
+            "box_departments": c["box_departments_list"],
             "setup_fee_keywords": c["setup_fee_keywords_list"]}
 
 
@@ -7634,19 +7757,27 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID):
         row["product_keywords"] = [str(x).strip() for x in (body.get("product_keywords") or []) if str(x).strip()]
     if "acima_tenders" in body:
         row["acima_tenders"] = [str(x).strip() for x in (body.get("acima_tenders") or []) if str(x).strip()]
-    # Device SET-UP-FEE keywords (mig 217). Included in the upsert defensively: pre-217 the column doesn't
-    # exist, so a save carrying it 500s — we retry WITHOUT it so editing the accessory lists never breaks
-    # before 217 is applied (the set-up fee then falls back to the code default ['Device Setup Charge']).
+    # BOX departments (mig 218). Included defensively: pre-218 the column doesn't exist, so a save carrying
+    # it 500s — we retry WITHOUT it so editing the accessory lists never breaks before 218 is applied (box
+    # counting then falls back to the code default _BOX_DEPTS).
+    row["box_departments"] = ([str(x).strip() for x in (body.get("box_departments") or []) if str(x).strip()]
+                              if "box_departments" in body else cur["box_departments_list"])
+    # Device SET-UP FEE keywords (mig 217, pkg A field — editable from the shared Classification-settings UI).
     row["setup_fee_keywords"] = ([str(x).strip() for x in (body.get("setup_fee_keywords") or []) if str(x).strip()]
                                  if "setup_fee_keywords" in body else cur["setup_fee_keywords_list"])
-    try:
-        client.schema("commcalc").table("accessory_config").upsert(row, on_conflict="org_id").execute()
-    except Exception as e:
-        row.pop("setup_fee_keywords", None)
+    # Persist defensively: pre-mig-217/218 those columns don't exist, so a save carrying them 500s — retry
+    # progressively dropping the newest columns so editing the accessory lists never breaks before the
+    # migrations run (box → _BOX_DEPTS default, set-up fee → 'Device Setup Charge' default).
+    for _drop in ([], ["setup_fee_keywords"], ["setup_fee_keywords", "box_departments"]):
+        attempt = dict(row)
+        for k in _drop:
+            attempt.pop(k, None)
         try:
-            client.schema("commcalc").table("accessory_config").upsert(row, on_conflict="org_id").execute()
+            client.schema("commcalc").table("accessory_config").upsert(attempt, on_conflict="org_id").execute()
+            break
         except Exception as e2:
-            raise HTTPException(500, f"save failed — run migration 208_commission_accessory_config.sql first: {e2}")
+            if _drop == ["setup_fee_keywords", "box_departments"]:
+                raise HTTPException(500, f"save failed — run migration 208_commission_accessory_config.sql first: {e2}")
     return get_accessory_config(org_id)
 
 
@@ -7693,7 +7824,10 @@ def sales_fields(period: str = "", org_id: str = ORG_ID):
     return {"departments": sorted(depts), "categories": sorted(cats), "products": top_products,
             "tenders": sorted(tenders), "contract_types": sorted(ctypes), "trans_types": sorted(ttypes),
             "accessory_departments": cur["departments_list"], "accessory_categories": cur["categories_list"],
-            "accessory_product_keywords": cur["products_list"], "acima_tenders": cur["acima_tenders_list"]}
+            "accessory_product_keywords": cur["products_list"], "acima_tenders": cur["acima_tenders_list"],
+            # Box (device-unit) departments + device set-up-fee keywords for the Classification-settings UI —
+            # options are the DISTINCT `departments`/`products` above (pick-don't-type, RULE THREE).
+            "box_departments": cur["box_departments_list"], "setup_fee_keywords": cur["setup_fee_keywords_list"]}
 
 
 @router.get("/commission-drill")
@@ -8764,8 +8898,10 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None):
             a['setup_fee_rev'] += ext
         elif _is_accessory(dept, r.get('category'), r.get('product_desc'), acfg):
             a['accessory_rev'] += ext
-        # Targets extension metrics (cheap, config-free).
-        if dept in _BOX_DEPTS:
+        # Targets extension metrics. BOX departments are now CONFIG-DRIVEN (mig 218; acfg['box_departments'],
+        # default = _BOX_DEPTS → house byte-identical) so boxes count correctly for non-Boost tenants across
+        # every surface that shares this aggregation (Sales Report / conversion / Productivity / Review).
+        if dept in (acfg.get('box_departments') or _BOX_DEPTS):
             a['box_count'] += 1
         _pl = str(r.get('product_desc') or '').lower()
         if tid and ('boost rtr' in _pl or 'xfinity prepaid refill' in _pl):
@@ -9204,6 +9340,62 @@ async def get_target_calendar(
     return result
 
 
+def _caller_self_keyset(authorization: str, org_id: str):
+    """For a SELF-scoped (rep) caller, the UPPER store keyset (store_code(s) + their addresses) of the
+    rep's OWN store(s). Returns (is_self, keyset|None):
+      • (False, None)  — not self-scoped (admin / unrestricted / a real manager span). Caller keeps
+                         scope_keyset's own result.
+      • (True, {keys}) — a self rep with a pinned store → restrict to THEIR store(s).
+      • (True, None)   — a self rep with NO pinned store → fall back to UNRESTRICTED so they are never
+                         locked out of picking their store (the pre-login "pick your store" behaviour).
+    WHY: scope_keyset returns an EMPTY SET for a self rep (reps get no manager span), and callers that
+    filter with `if ks is not None` then drop EVERY row → the rep's own targets/store never show (the
+    'My Targets not showing for employees' bug). This substitutes the rep's own store so they see their
+    own data. Reads app_users (public schema) READ-ONLY, org-scoped. Never raises."""
+    try:
+        from app.modules.storeops.router import _rbac_enabled, _role_scope
+        from app.modules.core.router import _uid_from_token
+    except Exception:
+        return (False, None)
+    try:
+        if not _rbac_enabled(org_id):
+            return (False, None)
+        uid = _uid_from_token(authorization)
+        if not uid:
+            return (False, None)
+        rows = (sb().table("app_users")
+                .select("role,store_code,store_codes")
+                .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
+        if not rows:
+            return (False, None)
+        u = rows[0]
+        if _role_scope(org_id, (u.get("role") or "").strip()) != "self":
+            return (False, None)
+        codes = set()
+        if u.get("store_code"):
+            codes.add(str(u.get("store_code")).strip().upper())
+        for c in (u.get("store_codes") or []):
+            if str(c).strip():
+                codes.add(str(c).strip().upper())
+        codes.discard("")
+        if not codes:
+            return (True, None)   # self rep, no pinned store → don't lock them out
+        keys = set(codes)
+        try:
+            meta = (sb().table("stores").select("store_code,address")
+                    .eq("org_id", org_id).execute().data) or []
+            for s in meta:
+                if str(s.get("store_code") or "").strip().upper() in codes:
+                    ad = str(s.get("address") or "").strip().upper()
+                    if ad:
+                        keys.add(ad)
+        except Exception:
+            pass
+        return (True, keys)
+    except Exception:
+        return (False, None)
+
+
 @router.get("/targets/{period}/summary")
 async def get_targets_summary(period: str, today: str = "", include_untargeted: bool = False,
                               stores: Optional[List[str]] = Query(default=None),
@@ -9310,6 +9502,12 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)
+    # A self-scoped rep gets an EMPTY keyset from scope_keyset (no manager span) → `is not None` would drop
+    # every store and the rep's own targets would never show (My Targets empty). Substitute the rep's OWN
+    # store(s) so they see their own data; a rep with no pinned store falls back to unrestricted (pick).
+    is_self, self_ks = _caller_self_keyset(authorization, org_id)
+    if is_self:
+        ks = self_ks
     if ks is not None:
         out = [s for s in out if in_keyset(ks, s.get('store_code'), s.get('address'))]
     return {'period': period, 'today': today.isoformat(), 'stores': out,
@@ -10331,12 +10529,34 @@ def get_productivity_config(org_id: str = ORG_ID):
             "value_types": ["number", "dollar", "percent", "score"]}
 
 
+def _require_perf_review_edit(authorization, org_id):
+    """Gate performance-review / productivity CONFIG writes on their OWN permission (owner directive
+    2026-07-17: "config in performance review should have a separate permission"). Uses core's
+    _can_edit_setting with the 'performance_review' settings area (the per-setting pattern —
+    roles.permissions.settings['performance_review']). Until that area is registered in core.SETTING_AREAS +
+    the Roles UI (NEEDS CORE), _can_edit_setting DEGRADES to admin-only (scope='all' / role='admin') — a
+    SAFE default that never opens config to a non-admin. RBAC off / unidentifiable caller → no active block
+    (config stays require_org-gated, unchanged behaviour)."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller, _can_edit_setting
+    except Exception:
+        return
+    try:
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid, org_id) if uid else None
+    except Exception:
+        caller = None
+    if caller is not None and not _can_edit_setting(caller, 'performance_review'):
+        raise HTTPException(403, "You don't have permission to edit performance-review configuration.")
+
+
 @router.put("/productivity/config")
-def put_productivity_config(body: dict, org_id: str = ORG_ID):
+def put_productivity_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Upsert ONE registry item (add a custom item or edit/enable/disable a default). item_key required;
     source_key must be in the SOURCE CATALOG (pick-don't-type — no free-form formula). Degrades with a hint
-    if mig 215 isn't applied."""
+    if mig 215 isn't applied. GATED on the 'performance_review' settings permission (B5)."""
     require_org(org_id)
+    _require_perf_review_edit(authorization, org_id)
     item_key = str(body.get('item_key') or '').strip()
     if not item_key:
         raise HTTPException(400, "item_key required")
@@ -10366,10 +10586,11 @@ def put_productivity_config(body: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/productivity/config/{item_key}")
-def delete_productivity_config(item_key: str, org_id: str = ORG_ID):
+def delete_productivity_config(item_key: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Delete an item. A CUSTOM item is hard-deleted; a seed DEFAULT can't be removed from code, so it's
-    persisted as a hidden override (restored by 'reset to defaults')."""
+    persisted as a hidden override (restored by 'reset to defaults'). GATED on 'performance_review' (B5)."""
     require_org(org_id)
+    _require_perf_review_edit(authorization, org_id)
     ik = str(item_key or '').strip()
     is_default = ik in {d['item_key'] for d in _prod.DEFAULT_ITEMS}
     try:
@@ -10385,9 +10606,10 @@ def delete_productivity_config(item_key: str, org_id: str = ORG_ID):
 
 
 @router.post("/productivity/config/reset")
-def reset_productivity_config(org_id: str = ORG_ID):
-    """Reset the registry to the code defaults (delete all org overrides)."""
+def reset_productivity_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Reset the registry to the code defaults (delete all org overrides). GATED on 'performance_review' (B5)."""
     require_org(org_id)
+    _require_perf_review_edit(authorization, org_id)
     try:
         sb().schema('commcalc').table('productivity_item').delete().eq('org_id', org_id).execute()
         return {"ok": True}
@@ -10404,10 +10626,17 @@ def get_productivity(period: str, org_id: str = ORG_ID, today: str = "",
     by store with rep rows. Hours = StoreOps time-clock closed punches. Zero-hours reps are surfaced (never
     divide by zero). RULE FIVE filters + RULE FOUR exports. DISPLAY-ONLY (no calc, no recompute)."""
     require_org(org_id)
-    g = _prod_gather(sb(), org_id, period, stores=stores, markets=markets, reps=reps, today=today)
-    res = _prod.compute_productivity(g['store_reps'], g['hours_by_key'])
-    return {"period": period, "org_id": org_id, **res,
-            "filters": g['filters'], "applied": g['applied'], "source_meta": g['source_meta']}
+    try:
+        g = _prod_gather(sb(), org_id, period, stores=stores, markets=markets, reps=reps, today=today)
+        res = _prod.compute_productivity(g['store_reps'], g['hours_by_key'])
+        return {"period": period, "org_id": org_id, **res,
+                "filters": g['filters'], "applied": g['applied'], "source_meta": g['source_meta']}
+    except Exception as e:
+        # A report must DEGRADE, not 500. Any unexpected cross-module condition → an empty, well-formed
+        # payload the page renders as "no data" (never a crash / white screen).
+        print(f"WARN productivity/{period} failed: {e}")
+        return {"period": period, "org_id": org_id, "stores": [], "totals": {},
+                "filters": {"stores": [], "markets": [], "reps": []}, "applied": {}, "error": str(e)[:200]}
 
 
 @router.get("/productivity/rankings/{period}")
@@ -10418,12 +10647,17 @@ def get_productivity_rankings(period: str, org_id: str = ORG_ID, today: str = ""
     """FEATURE 2 — weighted stack ranking over the registry's count_in_stack_ranker items. Per-metric
     attainment is returned so a rep can see WHY their rank is what it is. RULE FIVE + RULE FOUR. NON-money."""
     require_org(org_id)
-    client = sb()
-    g = _prod_gather(client, org_id, period, stores=stores, markets=markets, reps=reps, today=today)
-    reg = _prod_registry(client, org_id)
-    res = _prod.compute_rankings(reg, g['per_rep_values'])
-    return {"period": period, "org_id": org_id, **res,
-            "filters": g['filters'], "applied": g['applied']}
+    try:
+        client = sb()
+        g = _prod_gather(client, org_id, period, stores=stores, markets=markets, reps=reps, today=today)
+        reg = _prod_registry(client, org_id)
+        res = _prod.compute_rankings(reg, g['per_rep_values'])
+        return {"period": period, "org_id": org_id, **res,
+                "filters": g['filters'], "applied": g['applied']}
+    except Exception as e:
+        print(f"WARN productivity/rankings/{period} failed: {e}")
+        return {"period": period, "org_id": org_id, "items": [], "rows": [],
+                "filters": {"stores": [], "markets": [], "reps": []}, "applied": {}, "error": str(e)[:200]}
 
 
 @router.get("/productivity/review/{period}")
@@ -10435,12 +10669,18 @@ def get_productivity_review(period: str, org_id: str = ORG_ID, today: str = "",
     each measured against its definable standard (attainment %, weight, weighted score, total). A
     missing-source item shows n/a and is excluded from the total. RULE FIVE + RULE FOUR. NON-money."""
     require_org(org_id)
-    client = sb()
-    g = _prod_gather(client, org_id, period, stores=stores, markets=markets, reps=reps, today=today)
-    reg = _prod_registry(client, org_id)
-    res = _prod.compute_review(reg, g['per_rep_values'])
-    return {"period": period, "org_id": org_id, **res,
-            "filters": g['filters'], "applied": g['applied']}
+    try:
+        client = sb()
+        g = _prod_gather(client, org_id, period, stores=stores, markets=markets, reps=reps, today=today)
+        reg = _prod_registry(client, org_id)
+        res = _prod.compute_review(reg, g['per_rep_values'])
+        return {"period": period, "org_id": org_id, **res,
+                "filters": g['filters'], "applied": g['applied']}
+    except Exception as e:
+        # The Performance Review page must never "error out" — degrade to an empty scorecard set.
+        print(f"WARN productivity/review/{period} failed: {e}")
+        return {"period": period, "org_id": org_id, "items": [], "rows": [],
+                "filters": {"stores": [], "markets": [], "reps": []}, "applied": {}, "error": str(e)[:200]}
 
 
 @router.get("/productivity/kpi-values/{period}")

@@ -32,9 +32,12 @@ export default function SalesReportPage() {
   const [diagBusy, setDiagBusy] = useState(false)
   const [accOpen, setAccOpen] = useState(false)          // accessory-settings modal
   const [accFields, setAccFields] = useState<any>(null)  // distinct departments/categories + current config
-  const [accSel, setAccSel] = useState<{ d: string[]; c: string[]; p: string[]; a: string[] }>({ d: [], c: [], p: [], a: [] })
+  // d=accessory depts · c=accessory categories · p=accessory product-keywords · a=ACIMA tenders ·
+  // box=device-unit "box" departments (mig 218) · setup=device set-up-fee keywords (mig 217).
+  const [accSel, setAccSel] = useState<{ d: string[]; c: string[]; p: string[]; a: string[]; box: string[]; setup: string[] }>({ d: [], c: [], p: [], a: [], box: [], setup: [] })
   const [accMsg, setAccMsg] = useState('')
   const [kwInput, setKwInput] = useState('')
+  const [setupInput, setSetupInput] = useState('')
   const [selMarkets, setSelMarkets] = useState<string[]>([])   // multi-select market filter
   const [selStores, setSelStores] = useState<string[]>([])     // multi-select store filter
 
@@ -45,19 +48,24 @@ export default function SalesReportPage() {
       .finally(() => setDiagBusy(false))
   }
   function openAccCfg() {
-    setAccOpen(true); setAccFields(null); setAccMsg(''); setKwInput('')
+    setAccOpen(true); setAccFields(null); setAccMsg(''); setKwInput(''); setSetupInput('')
     api(`/api/v1/commcalc/sales-fields?period=${encodeURIComponent(period)}${orgParam()}`).then((f: any) => {
       setAccFields(f)
-      setAccSel({ d: f.accessory_departments || [], c: f.accessory_categories || [], p: f.accessory_product_keywords || [], a: f.acima_tenders || [] })
+      setAccSel({ d: f.accessory_departments || [], c: f.accessory_categories || [], p: f.accessory_product_keywords || [],
+        a: f.acima_tenders || [], box: f.box_departments || [], setup: f.setup_fee_keywords || [] })
     }).catch(e => setAccMsg('❌ ' + (e?.message || e)))
   }
   async function saveAccCfg() {
     setAccMsg('Saving…')
-    // fold any half-typed keyword in the box into the list before saving
+    // fold any half-typed keyword in either box into its list before saving
     const extra = kwInput.split(',').map(s => s.trim()).filter(Boolean)
     const kws = Array.from(new Set([...accSel.p, ...extra]))
+    const setupExtra = setupInput.split(',').map(s => s.trim()).filter(Boolean)
+    const setupKws = Array.from(new Set([...accSel.setup, ...setupExtra]))
     try {
-      await api('/api/v1/commcalc/accessory-config', { method: 'PUT', body: JSON.stringify({ departments: accSel.d, categories: accSel.c, product_keywords: kws, acima_tenders: accSel.a }) })
+      await api('/api/v1/commcalc/accessory-config', { method: 'PUT', body: JSON.stringify({
+        departments: accSel.d, categories: accSel.c, product_keywords: kws, acima_tenders: accSel.a,
+        box_departments: accSel.box, setup_fee_keywords: setupKws }) })
       setAccMsg('✅ Saved.'); setAccOpen(false); load()
     } catch (e: any) { setAccMsg('❌ ' + (e?.message || e)) }
   }
@@ -399,10 +407,53 @@ export default function SalesReportPage() {
                     ))}
                   </div>
                 </div>
+                {/* BOX (device-unit) departments — drives the box count on Productivity/Ranking/Review,
+                    Daily-Targets conversion, and the Sales-Report box count. Tick the POS Departments that
+                    are a device "box". Multi-carrier orgs (e.g. Total Wireless IN the house org) must tick
+                    the NON-Boost device departments too, or those device sales don't count as boxes. */}
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Box (device-unit) departments <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(which Department values count as a device &ldquo;box&rdquo; — for productivity boxes/hr, stack ranking, review &amp; conversion. Default = the Boost XP departments; a multi-carrier org must ALSO tick its Total/other device departments.)</span></div>
+                  <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
+                    {(accFields.departments || []).length === 0 ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>no departments in this period</div> : (accFields.departments || []).map((v: string) => (
+                      <label key={v} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, padding: '2px 0' }}>
+                        <input type="checkbox" checked={accSel.box.includes(v)}
+                          onChange={() => setAccSel(s => ({ ...s, box: toggle(s.box, v) }))} />
+                        {v}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                {/* Device SET-UP FEE keywords — product-desc substrings counted toward the accessory TARGET
+                    (reported separately). Default 'Device Setup Charge'. */}
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Device set-up fee — product name contains… <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(these lines count toward the accessory TARGET and are reported separately; default <code>Device Setup Charge</code>)</span></div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+                    {accSel.setup.map(k => (
+                      <span key={k} style={{ display: 'inline-flex', gap: 4, alignItems: 'center', background: 'var(--surface2)', borderRadius: 12, padding: '2px 8px', fontSize: 12 }}>
+                        {k}<span style={{ cursor: 'pointer', color: '#dc2626', fontWeight: 700 }} onClick={() => setAccSel(s => ({ ...s, setup: s.setup.filter(x => x !== k) }))}>✕</span>
+                      </span>
+                    ))}
+                    {accSel.setup.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>none</span>}
+                  </div>
+                  <input style={{ ...sel, width: '100%' }} placeholder="e.g. Device Setup Charge, Set Up Fee (comma-separated) — Enter to add"
+                    value={setupInput} onChange={e => setSetupInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { const xs = setupInput.split(',').map(s => s.trim()).filter(Boolean); setAccSel(s => ({ ...s, setup: Array.from(new Set([...s.setup, ...xs])) })); setSetupInput('') } }} />
+                  {(accFields.products || []).length > 0 && (
+                    <div style={{ marginTop: 6 }}>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>Products seen on non-phone lines (click to add):</div>
+                      <div style={{ maxHeight: 90, overflowY: 'auto', display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                        {(accFields.products || []).slice(0, 40).map((p: string) => (
+                          <span key={p} style={{ cursor: 'pointer', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '2px 7px', fontSize: 11 }}
+                            onClick={() => setAccSel(s => ({ ...s, setup: s.setup.includes(p) ? s.setup : [...s.setup, p] }))}>{p}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, gap: 8 }}>
                   <span style={{ fontSize: 12, color: accMsg.startsWith('❌') ? '#dc2626' : 'var(--text3)' }}>{accMsg}</span>
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => { setAccSel({ d: [], c: [], p: [], a: [] }); setKwInput('') }}>Clear all</button>
+                    <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => { setAccSel({ d: [], c: [], p: [], a: [], box: [], setup: [] }); setKwInput(''); setSetupInput('') }}>Clear all</button>
                     <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={saveAccCfg}>Save</button>
                   </div>
                 </div>

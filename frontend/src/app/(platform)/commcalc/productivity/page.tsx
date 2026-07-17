@@ -180,7 +180,7 @@ function RankingView({ data, period }: any) {
   if (rows.length === 0) return <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No ranked employees for {period}. Enable ranking metrics under ⚙️ Config.</div>
   const flat = rows.map((r) => {
     const o: any = { rank: r.rank, rep: r.rep, score: r.score }
-    for (const b of r.breakdown) o[b.item_key] = b.attainment
+    for (const b of (r.breakdown || [])) o[b.item_key] = b.attainment
     return o
   })
   const cols: ExportColumn[] = [
@@ -208,7 +208,7 @@ function RankingView({ data, period }: any) {
                 <td style={{ ...tdL, fontWeight: 600 }}>{r.rep}{r.market && <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 11 }}> · {r.market}</span>}</td>
                 <td style={{ ...td, fontWeight: 700 }}>{r.score == null ? '—' : r.score.toFixed(1)}</td>
                 {items.map((it) => {
-                  const b = r.breakdown.find((x: any) => x.item_key === it.item_key)
+                  const b = (r.breakdown || []).find((x: any) => x.item_key === it.item_key)
                   return <td key={it.item_key} style={{ ...td, color: b?.na ? 'var(--text3)' : b?.met === false ? 'var(--red)' : 'var(--text)' }}
                     title={b ? `value ${b.value ?? '—'} / std ${b.standard ?? 'relative'}` : ''}>{b ? pct(b.attainment) : '—'}</td>
                 })}
@@ -241,7 +241,7 @@ function ReviewView({ data, period }: any) {
   ]
   const sheets = [
     { name: 'Summary', columns: summaryCols, rows },
-    ...rows.map((r) => ({ name: (r.rep || 'rep').slice(0, 26), columns: itemCols, rows: r.items })),
+    ...rows.map((r) => ({ name: (r.rep || 'rep').slice(0, 26), columns: itemCols, rows: r.items || [] })),
   ]
   return (
     <>
@@ -259,7 +259,7 @@ function ReviewView({ data, period }: any) {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr><th style={thL}>Item</th><th style={th}>Value</th><th style={th}>Std</th><th style={th}>Attain</th><th style={th}>Wt</th></tr></thead>
               <tbody>
-                {r.items.map((b: any, j: number) => (
+                {(r.items || []).map((b: any, j: number) => (
                   <tr key={j}>
                     <td style={tdL}>{b.label}</td>
                     <td style={{ ...td, color: b.na ? 'var(--text3)' : 'var(--text)' }}>{b.na ? 'n/a' : n2(b.value)}</td>
