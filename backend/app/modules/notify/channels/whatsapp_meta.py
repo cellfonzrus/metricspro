@@ -1,21 +1,29 @@
 """WhatsApp delivery via the Meta Cloud API (Graph) — plain HTTPS, no SDK.
 
-Business-initiated messages must use an APPROVED template. Two delivery shapes:
-  • If the approved template has a DOCUMENT header (WHATSAPP_TEMPLATE_DOC_HEADER=true)
-    we upload the file for a media id and reference it in the header component, so the
-    recipient gets the actual file. A BODY text variable still carries the live link.
-  • Otherwise (the current metricspro_report template) we send a body-only template —
-    the BODY text variable carries the live report link, which the recipient taps to
-    view/download. Attaching a file is impossible business-initiated without a doc header
-    (Meta returns #132018 "Template does not contain title component, no parameters allowed").
+`send_document` delivers the ACTUAL report file wherever Meta permits, falling back to a link ONLY when
+it can't. OWNER DIRECTIVE 2026-07-17: "the PDF should be sent as is without logging in" — so the fallback
+link is a no-login DIRECT-DOWNLOAD url (built by the router), never a login page. Selection ladder
+(pure `plan_delivery` / `classify_send_result` decide the order + how each result is read):
 
-For safety we ALSO self-heal: if a header-equipped send is rejected with that header
-error, we retry once body-only so the link still goes out.
+  1. If a doc-header template is configured (WHATSAPP_TEMPLATE_DOC_HEADER=true) → send the approved
+     template WITH a `document` header component (attaches the real file; deliverable OUTSIDE the 24h
+     customer-service window — the only way to attach a file business-initiated). On the "no title
+     component" header error (#132018) the template lacks a real header → fall through.
+  2. Free-form `type:"document"` message (NO template) → attaches the real file, but Meta delivers it
+     only INSIDE the 24h window (recipient messaged us in the last 24h). Outside → a re-engagement/window
+     error (#131047 etc.) → fall through.
+  3. Body-only approved template whose BODY text variable carries the caller-supplied link (now the
+     no-login download url). Always deliverable business-initiated → the guaranteed fallback.
+
+Meta 24h-window rule (why the ladder exists): business-initiated messages OUTSIDE the 24h window must be
+an APPROVED template; free-form text/document is rejected there. So a template is ALWAYS in the ladder,
+and the file only attaches via (1) a doc-header template or (2) an in-window free-form document.
 
 Needs env (see app/core/config.py):
   WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_TEMPLATE_NAME,
   WHATSAPP_TEMPLATE_LANG (default en), WHATSAPP_GRAPH_VERSION (default v21.0),
-  WHATSAPP_TEMPLATE_DOC_HEADER (default false).
+  WHATSAPP_TEMPLATE_DOC_HEADER (default false — set true only when the approved template has a real
+  document header; see the owner setup steps in docs/handoffs/platform-core.md).
 """
 import httpx
 
@@ -84,6 +92,60 @@ def _template_msg(to: str, filename: str, media_id: str, body_text: str, with_do
 def _is_header_error(text: str) -> bool:
     t = (text or "").lower()
     return "132018" in t or "title component" in t or "does not contain" in t
+
+
+def _is_window_error(text: str) -> bool:
+    """A free-form (non-template) message was rejected because we're OUTSIDE the 24h customer-service
+    window. Meta phrasings/codes: #131047 're-engagement message', legacy #470 '24 hours have passed',
+    #131026/#131051 undeliverable. Detected loosely — a false positive only makes us fall back to the
+    (always-deliverable) link template, which is safe."""
+    t = (text or "").lower()
+    return any(k in t for k in (
+        "131047", "131026", "131051", "re-engagement", "reengagement",
+        "24 hours", "24-hour", "customer service window", "outside the allowed", "(#470)", "470"))
+
+
+def plan_delivery(doc_header_configured: bool, media_ok: bool) -> list:
+    """PURE. The ordered list of send attempts for one file. Attaching the real file needs an uploaded
+    media id; without one we can only send the link template. With media: the doc-header template first
+    (outside-window capable) when configured, then a free-form document (inside-window), then the link
+    template as the guaranteed business-initiated fallback."""
+    if not media_ok:
+        return ["template_link"]
+    steps = []
+    if doc_header_configured:
+        steps.append("template_doc")
+    steps.append("freeform_doc")
+    steps.append("template_link")
+    return steps
+
+
+def classify_send_result(status_code: int, text: str) -> str:
+    """PURE. Read one Meta send response: 'ok' (2xx) | 'header_error' (template has no doc header,
+    #132018 — abandon the doc-header attempt) | 'window_error' (free-form blocked outside the 24h
+    window) | 'error' (any other failure). On anything but 'ok' the ladder advances to the next step."""
+    if 200 <= int(status_code) < 300:
+        return "ok"
+    if _is_header_error(text):
+        return "header_error"
+    if _is_window_error(text):
+        return "window_error"
+    return "error"
+
+
+def _msg_id(r) -> str:
+    try:
+        return (r.json().get("messages") or [{}])[0].get("id", "")
+    except Exception:
+        return ""
+
+
+async def _send_freeform_document(cx, to: str, media_id: str, filename: str, caption: str):
+    """Free-form `type:document` message (no template). Deliverable only inside the 24h window; Meta
+    returns a re-engagement/window error otherwise. Returns the raw httpx.Response (caller classifies)."""
+    msg = {"messaging_product": "whatsapp", "to": _to_number(to), "type": "document",
+           "document": {"id": media_id, "filename": filename, "caption": (caption or "")[:1024]}}
+    return await cx.post(f"{_base()}/messages", headers=_headers(), json=msg)
 
 
 def approval_configured() -> bool:
@@ -194,24 +256,44 @@ async def send_otp(to: str, code: str, purpose: str = "verification") -> str:
 
 
 async def send_document(to: str, data: bytes, mime: str, filename: str, body_text: str) -> str:
-    """Send the approved template to `to`. Attaches the file as a document header when the
-    template supports one (WHATSAPP_TEMPLATE_DOC_HEADER), else sends body-only with the link.
-    Self-heals to body-only if Meta rejects the header component. Returns the message id."""
+    """Deliver the ACTUAL report file on WhatsApp wherever Meta permits, else the caller-supplied link.
+
+    Walks the `plan_delivery` ladder (doc-header template → in-window free-form document → link template),
+    reading each Meta response with `classify_send_result` and advancing on anything but 'ok'. `body_text`
+    is the template/caption text and, for the link fallback, MUST already contain the no-login download
+    url (the router builds it). Returns the provider message id; raises only if EVERY planned attempt
+    failed. See the module docstring for the Meta 24h-window rationale."""
     if not is_configured():
         raise RuntimeError("WhatsApp not configured (set WHATSAPP_ACCESS_TOKEN / PHONE_NUMBER_ID / TEMPLATE_NAME)")
 
-    use_doc_header = bool(settings.WHATSAPP_TEMPLATE_DOC_HEADER)
     async with httpx.AsyncClient(timeout=120) as cx:
-        media_id = await upload_media(cx, data, mime, filename) if use_doc_header else ""
-        r = await cx.post(f"{_base()}/messages", headers=_headers(),
-                          json=_template_msg(to, filename, media_id, body_text, use_doc_header))
-        # The approved template may not actually have a document header → retry body-only.
-        if r.status_code >= 300 and use_doc_header and _is_header_error(r.text):
-            r = await cx.post(f"{_base()}/messages", headers=_headers(),
-                              json=_template_msg(to, filename, "", body_text, False))
-    if r.status_code >= 300:
-        raise RuntimeError(f"WhatsApp send {r.status_code}: {r.text[:300]}")
-    try:
-        return (r.json().get("messages") or [{}])[0].get("id", "")
-    except Exception:
-        return ""
+        # One media id serves both attach paths (doc-header template + free-form document); upload once.
+        # Empty bytes = a text-only notification (some callers pass b"" just to fire a templated alert),
+        # so skip the upload → link template only. A failed upload likewise drops the attach paths → the
+        # link template still goes out.
+        media_id = ""
+        if data:
+            try:
+                media_id = await upload_media(cx, data, mime, filename)
+            except Exception:
+                media_id = ""
+
+        last = None
+        for step in plan_delivery(bool(settings.WHATSAPP_TEMPLATE_DOC_HEADER), bool(media_id)):
+            if step == "template_doc":
+                r = await cx.post(f"{_base()}/messages", headers=_headers(),
+                                  json=_template_msg(to, filename, media_id, body_text, True))
+            elif step == "freeform_doc":
+                r = await _send_freeform_document(cx, to, media_id, filename, body_text)
+            else:  # template_link — body-only approved template carrying the download link
+                r = await cx.post(f"{_base()}/messages", headers=_headers(),
+                                  json=_template_msg(to, filename, "", body_text, False))
+            last = r
+            if classify_send_result(r.status_code, r.text) == "ok":
+                return _msg_id(r)
+            # else: advance to the next planned attempt (header/window/other error)
+
+    if last is not None and 200 <= last.status_code < 300:
+        return _msg_id(last)
+    raise RuntimeError(f"WhatsApp send {last.status_code if last is not None else '??'}: "
+                       f"{last.text[:300] if last is not None else 'no send attempted'}")

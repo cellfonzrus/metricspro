@@ -19,9 +19,10 @@ Supabase token is REJECTED (401 `{"detail":"authentication required"}`) instead 
   • Only genuinely-anonymous / self-authenticating routes are allowlisted (see `_is_public`):
     health + docs; the pre-login core auth endpoints; token-verified /core/me; the self-serve
     signup pair; the dual-auth /core/tenants/sync; the Meta WhatsApp webhook; the HR onboarding
-    public token endpoints; and every `*/run-due` sweep (each verifies its own x-notify-secret and
-    is called by pg_cron with no JWT). Each of these authenticates by another mechanism (its own
-    token/secret/handshake), so bypassing the JWT check for them is safe.
+    public token endpoints; the notify no-login report download (/api/v1/notify/dl/{token} — the HMAC
+    token IS the capability, scoped to one file); and every `*/run-due` sweep (each verifies its own
+    x-notify-secret and is called by pg_cron with no JWT). Each of these authenticates by another
+    mechanism (its own token/secret/handshake), so bypassing the JWT check for them is safe.
   • KILL SWITCH: env REQUIRE_AUTH (default ON when unset). Set REQUIRE_AUTH=0 to revert to the old
     pass-through (client org_id honored on tokenless requests) via a single Railway env change — no
     code rollback. The authenticated rewrite still runs regardless.
@@ -64,6 +65,8 @@ _PUBLIC_PREFIXES = (
     "/api/v1/core/me",                    # token-verified whoami + /me/password-changed (self-gate on token)
     "/api/v1/remediation/whatsapp-webhook",  # Meta webhook: GET verify handshake + POST receive (self-gates)
     "/api/v1/hr/public/onboarding",       # HR onboarding public token endpoints (the link token IS the auth)
+    "/api/v1/notify/dl",                   # no-login report download: the HMAC token IS the auth; reaches
+                                           # ONLY the one artifact it signs (uniform 404 on any bad token)
 )
 
 # Self-authenticating background sweeps: EVERY route ending in "/run-due" is invoked by pg_cron with

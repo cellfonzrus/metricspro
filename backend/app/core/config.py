@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     # ── Notify / subscribe (report delivery) ──────────────────────────────────
     # Public base URL of the frontend, used to build "view live report" links.
     APP_PUBLIC_URL: str = "https://metricspro-five.vercel.app"
+    # Public base URL of the BACKEND itself (Railway) — used to build no-login signed download links
+    # (GET /api/v1/notify/dl/{token}) that stream a sent report file directly (owner directive: "send the
+    # PDF as is without logging in"). Override via env if the backend host changes.
+    API_PUBLIC_URL: str = "https://metricspro-production.up.railway.app"
     # Shared secret guarding POST /notify/run-due (pg_cron sends it as x-notify-secret).
     NOTIFY_RUN_SECRET: str = ""
     # Resend email — sending domain is metricspro.tech (verify it in Resend; override via env).
@@ -57,6 +61,10 @@ class Settings(BaseSettings):
     # SUPABASE_SERVICE_KEY when unset. Rotating it invalidates every outstanding 2FA marker (users
     # re-verify on their next request) — safe, never a lockout (they just re-run the OTP step).
     AUTH_2FA_SECRET: str = ""
+    # HMAC secret signing no-login report-download tokens (notify.download_token). Falls back to
+    # AUTH_2FA_SECRET → SUPABASE_SERVICE_KEY when unset (never a trivial constant in prod). Rotating it
+    # invalidates outstanding download links (they 404) — safe, they are short-lived (default 7-day expiry).
+    NOTIFY_DOWNLOAD_SECRET: str = ""
 
     # ── Account Module — Claude-powered accounting engine (#8/#9/#10) ─────────────
     # Drives statement assembly + narrative + the #10 missed-days recon. The engine

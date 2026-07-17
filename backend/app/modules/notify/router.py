@@ -5,15 +5,16 @@ Sends any registered report (and the flags list) by email (Resend) and WhatsApp
 server-side (report_registry + render) so on-demand and scheduled output match the
 browser export. Scheduling is driven by Supabase pg_cron hitting POST /notify/run-due.
 """
+import base64
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Response
 
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.modules.core.run_for_tenant import run_for_tenant_async, TenantNotRunnable
 from app.modules.core import auth_security as _sec
-from . import report_registry, render
+from . import report_registry, render, download_token
 from .channels import email_resend, whatsapp_meta
 
 router = APIRouter(prefix="/notify", tags=["Notify"])
@@ -35,6 +36,43 @@ def _tenant_default_cc(org_id) -> str:
         return _sec.normalize_cc(raw)
     except Exception:
         return _sec.DEFAULT_COUNTRY_CODE
+
+
+# ── no-login download artifacts (owner directive: "send the PDF as is without logging in") ───────────
+def _download_expiry_days(org_id) -> int:
+    """Tenant-configurable expiry (days) for no-login download links —
+    storeops.tenants.notify_policy.download_link_expiry_days. Default 7, clamped 1..90. Best-effort
+    (un-run mig 713 / absent column → 7). Never raises."""
+    try:
+        rows = (get_supabase().schema("storeops").table("tenants").select("notify_policy")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        raw = (rows[0].get("notify_policy") or {}).get("download_link_expiry_days") if rows else None
+        return max(1, min(int(raw), 90))
+    except Exception:
+        return 7
+
+
+def _store_artifact(org_id, filename, mime, data: bytes, report_key=None, created_by=None):
+    """Persist a sent file as a notify.send_artifact and return its no-login signed DOWNLOAD URL (an
+    absolute backend url the recipient taps → the file streams with NO login). Returns None if storage
+    is unavailable (un-run mig 713 → the caller falls back to the live-report link; never crashes a send).
+    Single-file scope: the token references ONLY this row — no other org data is reachable from it."""
+    try:
+        if not data:
+            return None
+        days = _download_expiry_days(org_id)
+        expires = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+        row = {"org_id": org_id, "filename": filename or "report",
+               "mime": mime or "application/octet-stream",
+               "content_b64": base64.b64encode(data).decode(), "size_bytes": len(data),
+               "report_key": report_key, "created_by": created_by, "expires_at": expires}
+        res = sb().table("send_artifact").insert(row).execute()
+        aid = (res.data or [{}])[0].get("id")
+        if not aid:
+            return None
+        return settings.API_PUBLIC_URL.rstrip("/") + "/api/v1/notify/dl/" + download_token.sign(aid)
+    except Exception:
+        return None
 
 
 # ── recipients ────────────────────────────────────────────────────────────────
@@ -264,9 +302,13 @@ async def _dispatch(org_id, report_key, filters, channels, formats, emails, phon
                 _log("email", addr, "failed", err=str(e))
 
     if "whatsapp" in channels:
-        body_text = f"{title} — {link}"
+        # Persist each file once as a no-login downloadable artifact; its signed direct-download url rides
+        # in the WhatsApp body and IS the deliverable when Meta only permits a link (business-initiated,
+        # outside the 24h window, no doc-header template). Best-effort — no artifact → the live-report link.
+        dls = [_store_artifact(org_id, fn, mime, data, report_key) for (data, fn, mime) in files]
         for ph in phones:
-            for (data, fn, mime) in files:
+            for (data, fn, mime), dl in zip(files, dls):
+                body_text = f"{title} — {dl or link}"
                 try:
                     mid = await whatsapp_meta.send_document(ph, data, mime, fn, body_text)
                     _log("whatsapp", ph, "sent", mid=mid)
@@ -334,10 +376,12 @@ async def send_file(body: dict, org_id: str = ORG_ID):
             except Exception as e:
                 _log("email", addr, "failed", err=str(e))
     if "whatsapp" in channels and phones:
+        # Same no-login artifact path as _dispatch: the tapped link downloads the exact file, no login.
+        dls = [_store_artifact(org_id, fn, mime, data, "(client-export)") for (data, fn, mime) in files]
         for ph in phones:
-            for (data, fn, mime) in files:
+            for (data, fn, mime), dl in zip(files, dls):
                 try:
-                    mid = await whatsapp_meta.send_document(ph, data, mime, fn, f"{title} — {link}")
+                    mid = await whatsapp_meta.send_document(ph, data, mime, fn, f"{title} — {dl or link}")
                     _log("whatsapp", ph, "sent", mid=mid)
                 except Exception as e:
                     _log("whatsapp", ph, "failed", err=str(e))
@@ -347,6 +391,82 @@ async def send_file(body: dict, org_id: str = ORG_ID):
         except Exception:
             pass
     return {"sent": sent, "failed": failed, "targets": {"emails": emails, "phones": phones}, "channels": channels}
+
+
+# ── PUBLIC no-login download (owner directive: "the PDF should be sent as is without logging in") ─────
+# This route is on the tenant-middleware PUBLIC allowlist (core/tenant_middleware.py `/api/v1/notify/dl`,
+# segment-boundary). The TOKEN is the only auth: an HMAC capability over exactly ONE artifact id. Any
+# failure (bad/forged token, unknown id, expired, empty) returns an IDENTICAL 404 with no detail, so a
+# probe learns nothing (anti-enumeration). No org_id is taken from the request; nothing but the one file
+# is reachable from the token.
+@router.get("/dl/{token}")
+async def download_artifact(token: str):
+    aid = download_token.verify(token)
+    if not aid:
+        raise HTTPException(404, "Not found")
+    try:
+        rows = (get_supabase().schema("notify").table("send_artifact").select("*")
+                .eq("id", aid).limit(1).execute().data) or []
+    except Exception:
+        raise HTTPException(404, "Not found")   # un-run mig 713 / query error → uniform 404
+    if not rows:
+        raise HTTPException(404, "Not found")
+    art = rows[0]
+    # Expiry — uniform 404, never distinguished from a missing/forged token.
+    try:
+        expired = _sec.otp_is_expired(_sec.now_ts(), art.get("expires_at"))
+    except Exception:
+        expired = True
+    if expired:
+        raise HTTPException(404, "Not found")
+    try:
+        data = base64.b64decode(art.get("content_b64") or "")
+    except Exception:
+        data = b""
+    if not data:
+        raise HTTPException(404, "Not found")
+    # Best-effort download audit (never blocks the download).
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        get_supabase().schema("notify").table("send_artifact").update(
+            {"download_count": int(art.get("download_count") or 0) + 1,
+             "last_downloaded_at": now_iso}).eq("id", aid).execute()
+    except Exception:
+        pass
+    try:
+        sb().table("send_log").insert({
+            "org_id": art.get("org_id"), "report_key": art.get("report_key") or "(download)",
+            "channel": "download", "target": (art.get("filename") or aid)[:120],
+            "status": "sent", "triggered_by": "download"}).execute()
+    except Exception:
+        pass
+    fn = (art.get("filename") or "report").replace('"', "")
+    return Response(content=data, media_type=(art.get("mime") or "application/octet-stream"),
+                    headers={"Content-Disposition": f'attachment; filename="{fn}"',
+                             "Cache-Control": "no-store"})
+
+
+# ── tenant notify settings (RULE TWO — download-link expiry, default 7 days) ──────────────────────────
+@router.get("/settings")
+async def get_settings(org_id: str = ORG_ID):
+    return {"download_link_expiry_days": _download_expiry_days(org_id)}
+
+
+@router.put("/settings")
+async def put_settings(body: dict, org_id: str = ORG_ID):
+    try:
+        days = max(1, min(int(body.get("download_link_expiry_days")), 90))
+    except Exception:
+        raise HTTPException(400, "download_link_expiry_days must be a number between 1 and 90")
+    try:
+        st = get_supabase().schema("storeops").table("tenants")
+        rows = st.select("notify_policy").eq("org_id", org_id).limit(1).execute().data or []
+        pol = dict(rows[0].get("notify_policy") or {}) if rows else {}
+        pol["download_link_expiry_days"] = days
+        st.update({"notify_policy": pol}).eq("org_id", org_id).execute()
+    except Exception as e:
+        raise HTTPException(500, f"save failed — run migration 713 first: {e}")
+    return {"ok": True, "download_link_expiry_days": days}
 
 
 @router.post("/send")
