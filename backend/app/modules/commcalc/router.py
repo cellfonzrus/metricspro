@@ -7569,17 +7569,23 @@ async def sales_report_detail(period: str = "", store: str = "", salesperson: st
     if not period:
         n = datetime.now(timezone.utc)
         period = f"{n.year}-{n.month:02d}"
-    # NOTE: no 'sku' — daily_sales_feed has no sku column, and selecting it throws (was swallowed to []
-    # → the "drill-down shows 0 transactions" bug). Only columns present in BOTH tables.
-    cols = ("trans_id,trans_date,store,salesperson,customer,department,category,contract_type,"
-            "product_desc,ext_price,gp,mdn,serial_1,voided")
+    # Columns present in BOTH sales tables. `sku` is a DEVICE/product identifier the owner wants alongside
+    # the model, but it is added PER TABLE only where it actually exists (raw_sales carries it; the
+    # daily_sales_feed does NOT — and selecting a missing column throws, which was swallowed to [] = the
+    # historic "drill-down shows 0 transactions" bug). `_known_columns` is a cached probe, so this costs at
+    # most one extra round-trip per table per process, and daily-feed months simply show no SKU (safe).
+    _base_cols = ["trans_id", "trans_date", "store", "salesperson", "customer", "department", "category",
+                  "contract_type", "product_desc", "ext_price", "gp", "mdn", "serial_1", "voided"]
 
     def _q(table):
+        cols = list(_base_cols)
+        if "sku" in _known_columns(client, table, ["sku"]):
+            cols.append("sku")
         # Bound to the day in the query (trans_date may be a DATE or 'YYYY-MM-DD HH:MM' text — a
         # lexicographic gte/lt range works for both). We DON'T .eq() store/salesperson here: the report
         # STRIPPED those, so an exact match on the raw DB value (trailing spaces / case) returns nothing —
         # that was the "drill-down shows no transactions" bug. We match them normalized in Python below.
-        q = (client.schema("commcalc").table(table).select(cols)
+        q = (client.schema("commcalc").table(table).select(",".join(cols))
              .eq("org_id", org_id).in_("period", _pvariants(period)).limit(50000))
         if date:
             try:
@@ -7605,6 +7611,15 @@ async def sales_report_detail(period: str = "", store: str = "", salesperson: st
             and (not store or _n(r.get("store")) == ns)
             and (not salesperson or _n(r.get("salesperson")) == nr)]
 
+    # Which POS Departments count as a device "box" — CONFIG-DRIVEN (mig 218, the SAME list the box count
+    # on the Sales Report / Productivity uses), default = the Boost XP labels. Used ONLY to LABEL which line
+    # carries the phone that was sold so the drill-down can show "which phone" at a glance — never to change
+    # a count, a classification, or a payout. Degrades to the code default pre-migration.
+    try:
+        _box_depts = _accessory_config(client, org_id).get("box_departments") or set(_BOX_DEPTS)
+    except Exception:
+        _box_depts = set(_BOX_DEPTS)
+
     txns = {}
     for r in rows:
         if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
@@ -7614,7 +7629,7 @@ async def sales_report_detail(period: str = "", store: str = "", salesperson: st
         if not t:
             t = txns[tid] = {"trans_id": tid, "trans_date": str(r.get("trans_date") or "")[:10],
                              "customer": (r.get("customer") or "").strip(), "lines": [],
-                             "total": 0.0, "gp": 0.0}
+                             "total": 0.0, "gp": 0.0, "_devices": []}
         try:
             ext = float(r.get("ext_price") or 0)
         except (TypeError, ValueError):
@@ -7623,10 +7638,19 @@ async def sales_report_detail(period: str = "", store: str = "", salesperson: st
             gp = float(r.get("gp") or 0)
         except (TypeError, ValueError):
             gp = 0.0
+        pdesc = (r.get("product_desc") or "").strip()
+        serial = (r.get("serial_1") or "").strip()
+        dept = str(r.get("department") or "").strip()
+        # A device (box) line = its Department is a configured box department OR it carries a device
+        # serial/IMEI (a universal fallback so the phone still surfaces for a tenant whose box config isn't
+        # set yet). Accessory / feature / setup-fee lines have neither. DISPLAY-only tag.
+        is_device = bool(pdesc) and (dept in _box_depts or bool(serial))
         t["lines"].append({"department": r.get("department"), "category": r.get("category"),
                            "contract_type": r.get("contract_type"), "product": r.get("product_desc"),
                            "sku": r.get("sku"), "mdn": r.get("mdn"), "serial": r.get("serial_1"),
-                           "ext_price": round(ext, 2), "gp": round(gp, 2)})
+                           "ext_price": round(ext, 2), "gp": round(gp, 2), "is_device": is_device})
+        if is_device and pdesc not in t["_devices"]:
+            t["_devices"].append(pdesc)
         t["total"] += ext
         t["gp"] += gp
         if not t["customer"] and (r.get("customer") or "").strip():
@@ -7636,6 +7660,10 @@ async def sales_report_detail(period: str = "", store: str = "", salesperson: st
         t["total"] = round(t["total"], 2)
         t["gp"] = round(t["gp"], 2)
         t["line_count"] = len(t["lines"])
+        # The phone(s) sold on this transaction — the box/device line product description(s), joined for a
+        # one-glance header ("which phone was sold"). None for an accessory-only / no-device transaction.
+        devs = t.pop("_devices", [])
+        t["device"] = " · ".join(devs) if devs else None
     return {"store": store, "salesperson": salesperson, "date": date, "period": period,
             "transactions": out, "txn_count": len(out)}
 
