@@ -1287,6 +1287,75 @@ async def list_employees(org_id: str = ORG_ID):
     return {"employees": out, "with_email": sum(1 for e in emps if (e.get("email") or "").strip())}
 
 
+@router.get("/filter-options")
+async def filter_options(org_id: str = ORG_ID):
+    """Org-scoped option source for the shared StandardFilterBar (RULE FIVE §3d): the tenant's stores
+    (+their markets), distinct markets, and the rep/employee roster (union of the storeops roster and any
+    app_users). PICK-DON'T-TYPE source — every value is a real org row, so a filter can never reference
+    data outside the tenant. Each source is best-effort (a missing table/migration → that list is just
+    empty; the endpoint never 500s). NOT heavy: stores/employees/store_mapping are small config tables.
+    Reps are 'First Last' with an email sublabel for same-name disambiguation (§3b)."""
+    client = sb()
+    stores: dict[str, str | None] = {}   # store display key → market
+    markets: set[str] = set()
+
+    def _add_store(key, market):
+        key = (key or "").strip()
+        if not key:
+            return
+        market = (market or "").strip() or None
+        if market:
+            markets.add(market)
+        # keep the first non-null market seen for a store
+        if key not in stores or (stores[key] is None and market):
+            stores[key] = market
+
+    # 1) storeops.stores — the canonical tenant store list (address is the report store key; carries market)
+    try:
+        for r in (client.schema("storeops").table("stores")
+                  .select("store_code,address,market").eq("org_id", org_id)
+                  .limit(5000).execute().data or []):
+            _add_store(r.get("address") or r.get("store_code"), r.get("market"))
+    except Exception:
+        pass
+    # 2) commcalc.store_mapping — market map / any stores not in storeops.stores (best-effort)
+    try:
+        for r in (client.schema("commcalc").table("store_mapping")
+                  .select("store_address,market").eq("org_id", org_id)
+                  .limit(5000).execute().data or []):
+            _add_store(r.get("store_address"), r.get("market"))
+    except Exception:
+        pass
+
+    # 3) reps/employees — the org roster (storeops.employees) ∪ app_users; 'First Last' + email sublabel.
+    reps: dict[str, str] = {}   # name → email (first non-empty wins)
+    try:
+        for e in (client.schema("storeops").table("employees")
+                  .select("name,email,is_active").eq("org_id", org_id)
+                  .limit(10000).execute().data or []):
+            nm = (e.get("name") or "").strip()
+            if nm and nm not in reps:
+                reps[nm] = (e.get("email") or "").strip()
+    except Exception:
+        pass
+    try:
+        for u in (client.schema("storeops").table("app_users")
+                  .select("full_name,email").eq("org_id", org_id)
+                  .limit(10000).execute().data or []):
+            nm = (u.get("full_name") or "").strip()
+            if nm and nm not in reps:
+                reps[nm] = (u.get("email") or "").strip()
+    except Exception:
+        pass
+
+    store_list = sorted(({"store": k, "market": v} for k, v in stores.items()), key=lambda x: x["store"])
+    rep_list = [
+        ({"id": nm, "label": nm, "sublabel": em} if em else {"id": nm, "label": nm})
+        for nm, em in sorted(reps.items(), key=lambda kv: kv[0].lower())
+    ]
+    return {"stores": store_list, "markets": sorted(markets), "reps": rep_list}
+
+
 @router.post("/users/assign")
 async def assign_role(body: dict, org_id: str = ORG_ID):
     """Upsert a core.users row (assign role + scope). Keyed on (org_id, email). Does NOT create

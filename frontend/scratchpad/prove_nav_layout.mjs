@@ -6,21 +6,32 @@ let pass = 0, fail = 0
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 function ok(name, cond) { if (cond) { pass++; } else { fail++; console.log('  FAIL:', name) } }
 
-// ── verbatim re-impl of applyNavLayout (frontend/src/lib/rbac.ts) ──────────────────────────────────
-function applyNavLayout(groups, layout) {
+// ── verbatim re-impl of the NEW applyNavLayout (frontend/src/lib/rbac.ts) ───────────────────────────
+// This suite isolates the MOVE/DUPLICATE/HIDE override mechanics, so it forces the built-in Reports
+// directory OFF via the wrapper below (the directory itself is proven in prove_reports_directory.mjs).
+// With the directory off, the new function must behave BYTE-IDENTICALLY to the pre-directory one =
+// the backward-compat guarantee.
+const REPORT_DIRECTORY = [], REPORT_CATEGORY_LABEL = {}   // directory forced off here
+function applyNavLayoutFull(groups, layout) {
   const ov = layout?.items
-  if (!ov || !Object.keys(ov).length) return groups
   const moduleByGroup = {}, defaultOrder = []
   groups.forEach(g => { if (!(g.group in moduleByGroup)) { moduleByGroup[g.group] = g.module; defaultOrder.push(g.group) } })
   const targets = []
+  const placedGH = new Set()
+  const push = (group, it) => { const k = group + '|' + it.href; if (placedGH.has(k)) return; placedGH.add(k); targets.push({ group, it }) }
+  const surviving = new Map()
   for (const g of groups) for (const it of g.items) {
-    const o = ov[it.href]
+    const o = ov?.[it.href]
     if (o?.hidden) continue
+    surviving.set(it.href, it)
     const primary = (o?.group && o.group.trim()) || g.group
-    targets.push({ group: primary, it })
-    if (o?.also && o.also.length) {
-      const placed = new Set([primary])
-      for (const a of o.also) { const ag = (a || '').trim(); if (ag && !placed.has(ag)) { placed.add(ag); targets.push({ group: ag, it }) } }
+    push(primary, it)
+    if (o?.also && o.also.length) { for (const a of o.also) { const ag = (a || '').trim(); if (ag) push(ag, it) } }
+  }
+  if (!layout?.hideReportsDirectory) {
+    for (const [href, catKey] of REPORT_DIRECTORY) {
+      const it = surviving.get(href); const cat = REPORT_CATEGORY_LABEL[catKey]
+      if (it && cat) { moduleByGroup[cat] = moduleByGroup[cat] || it.module; push(cat, it) }
     }
   }
   const seen = new Set(), order = []
@@ -32,6 +43,8 @@ function applyNavLayout(groups, layout) {
     items: targets.filter(t => t.group === group).map(t => t.it),
   })).filter(g => g.items.length > 0)
 }
+// Force the directory off so these tests target ONLY the override mechanics (backward-compat).
+const applyNavLayout = (groups, layout) => applyNavLayoutFull(groups, { ...(layout || {}), hideReportsDirectory: true })
 
 // sample already-RBAC-filtered sidebar (applyNavLayout runs AFTER canSeeItem/carrierOK/capOK)
 const DASH = { href: '/commcalc', label: 'Dashboard', icon: 'D', module: 'commissions' }

@@ -274,10 +274,82 @@ export const NAV: NavGroup[] = [
 // removes it everywhere. `groups` = admin-created group names that may have no items yet (kept so the
 // designer can show an empty group); the sidebar ignores empty groups. BACKWARD-COMPATIBLE: a legacy
 // layout carrying only `{group?, hidden?}` behaves exactly as before (`also`/`groups` absent → no-op).
+// `hideReportsDirectory` (optional, per-tenant) suppresses the built-in Reports directory (below) for a
+// tenant that doesn't want the duplicate categorized copies. Default OFF (every tenant gets the directory).
+// It flows through the existing nav-layout JSON; wiring a designer toggle for it is an optional follow-up.
 export type NavLayout = {
   items?: Record<string, { group?: string; hidden?: boolean; also?: string[] }>
   groups?: string[]
+  hideReportsDirectory?: boolean
 }
+
+// ── Reports directory (OWNER DIRECTIVE 2026-07-17) ────────────────────────────────────────────────
+// Every report/list/dashboard surface ALSO appears — as a DUPLICATE entry — under a categorized
+// "Reports · <Category>" area, WITHOUT leaving its own module group. This is a CODE-LEVEL DEFAULT
+// (no per-tenant rows, no migration): applyNavLayout injects each surviving report item into its
+// category, reusing the SAME NavItem object AFTER access filtering, so every copy is byte-identically
+// RBAC/carrier/entitlement-gated (never a second permission surface). A tenant whose role lacks module X
+// therefore sees NO X entry in Reports either; a tenant admin can still hide/move any item on /admin/menu
+// (a hide removes it from Reports too), or suppress the whole area via `hideReportsDirectory`.
+// ONLY analytical reports + operational lists/dashboards are listed here — pure config/mapping/import/
+// settings/entry pages are intentionally EXCLUDED (they are inputs, not reports; same exemption as
+// RULES FOUR/FIVE). Category ORDER below is the sidebar order (categories render after the module groups).
+export const REPORT_CATEGORIES: { key: string; label: string }[] = [
+  { key: 'sales',    label: 'Reports · Sales' },
+  { key: 'comm',     label: 'Reports · Commissions & Pay' },
+  { key: 'targets',  label: 'Reports · Targets & Coaching' },
+  { key: 'assets',   label: 'Reports · Assets & Inventory' },
+  { key: 'finance',  label: 'Reports · Finance & Accounting' },
+  { key: 'payroll',  label: 'Reports · Payroll & HR' },
+  { key: 'ops',      label: 'Reports · Store Operations' },
+  { key: 'admin',    label: 'Reports · Admin & System' },
+]
+// href → category KEY. Ordered by category (drives intra-area order). A duplicate is only rendered when
+// the SAME href survives access filtering in a module group, so this map never widens visibility.
+export const REPORT_DIRECTORY: [string, string][] = [
+  // Sales
+  ['/commcalc/sales-report', 'sales'], ['/commcalc/custom-report', 'sales'],
+  ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
+  // Commissions & Pay
+  ['/commcalc', 'comm'], ['/commcalc/exec', 'comm'], ['/commcalc/exec/mtd', 'comm'],
+  ['/commcalc/reports', 'comm'], ['/commcalc/comp-trend', 'comm'], ['/commcalc/commission-ledger', 'comm'],
+  ['/commcalc/ma-commission', 'comm'], ['/commcalc/device-history', 'comm'], ['/commcalc/whatif', 'comm'],
+  ['/commcalc/discrepancy', 'comm'], ['/commcalc/recovery', 'comm'], ['/commcalc/flags', 'comm'],
+  ['/commcalc/chargebacks', 'comm'], ['/commcalc/accessory-flags', 'comm'],
+  // Targets & Coaching
+  ['/commcalc/targets', 'targets'], ['/commcalc/targets/action-plan', 'targets'],
+  ['/commcalc/targets/accessories', 'targets'], ['/commcalc/targets/my', 'targets'],
+  ['/commcalc/kpi', 'targets'], ['/commcalc/productivity', 'targets'], ['/commcalc/coaching', 'targets'],
+  // Assets & Inventory (incl. Distributors/VIP consignment)
+  ['/commcalc/asset', 'assets'], ['/commcalc/asset/dashboard', 'assets'], ['/commcalc/asset/owed-weekly', 'assets'],
+  ['/commcalc/asset/aging', 'assets'], ['/commcalc/asset/missing-phones', 'assets'],
+  ['/commcalc/asset/aging-rebate', 'assets'], ['/commcalc/asset/on-inventory', 'assets'],
+  ['/commcalc/asset/borrowed', 'assets'], ['/commcalc/asset/lending', 'assets'],
+  ['/commcalc/asset/charges/rma', 'assets'], ['/commcalc/asset/inventory-recon', 'assets'],
+  ['/commcalc/asset/hotsheet-recon', 'assets'], ['/commcalc/asset/marketplace-purchases', 'assets'],
+  ['/commcalc/payables', 'assets'],
+  ['/commcalc/distributors', 'assets'], ['/commcalc/vip', 'assets'], ['/commcalc/vip/paygo', 'assets'],
+  // Finance & Accounting
+  ['/accounts', 'finance'], ['/accounts/trends', 'finance'], ['/accounts/pl', 'finance'],
+  ['/accounts/balance-sheet', 'finance'], ['/accounts/inventory', 'finance'], ['/accounts/recon', 'finance'],
+  ['/accounts/residual-per-sub', 'finance'], ['/accounts/journal', 'finance'],
+  ['/commcalc/gp', 'finance'], ['/commcalc/expenses', 'finance'], ['/commcalc/tax-collected', 'finance'],
+  // Payroll & HR
+  ['/hr', 'payroll'], ['/hr/people', 'payroll'], ['/hr/onboarding', 'payroll'], ['/hr/compliance', 'payroll'],
+  ['/hr/payroll-expenses', 'payroll'], ['/storeops/payroll', 'payroll'], ['/storeops/payroll-tax', 'payroll'],
+  ['/admin/org-chart', 'payroll'],
+  // Store Operations (workforce + daily closing)
+  ['/storeops', 'ops'], ['/storeops/schedule', 'ops'], ['/storeops/timeoff', 'ops'], ['/storeops/swaps', 'ops'],
+  ['/storeops/shift-extensions', 'ops'], ['/storeops/hours-budget', 'ops'], ['/storeops/timeclock', 'ops'],
+  ['/storeops/employees', 'ops'], ['/storeops/team', 'ops'], ['/storeops/visits', 'ops'], ['/storeops/reports', 'ops'],
+  ['/closing', 'ops'], ['/closing/verify', 'ops'], ['/closing/management', 'ops'], ['/closing/recon', 'ops'],
+  ['/closing/tender-recon', 'ops'], ['/closing/tender-recon-3way', 'ops'], ['/closing/accessory-recon', 'ops'],
+  ['/closing/pickup', 'ops'], ['/closing/epay-recon', 'ops'],
+  // Admin & System
+  ['/failures', 'admin'], ['/helpdesk', 'admin'], ['/helpdesk/dashboard', 'admin'], ['/remediation', 'admin'],
+  ['/admin/tenants', 'admin'],
+]
+const REPORT_CATEGORY_LABEL: Record<string, string> = Object.fromEntries(REPORT_CATEGORIES.map(c => [c.key, c.label]))
 
 // Apply a per-org sidebar layout (admin config) ON TOP of the already-filtered groups: move an item to
 // a different group, DUPLICATE it into additional groups (`also`), or hide it. Items with no override
@@ -288,24 +360,39 @@ export type NavLayout = {
 // sidebar; `layout.groups` is intentionally ignored here (it exists only for the designer's persistence).
 export function applyNavLayout(groups: NavGroup[], layout?: NavLayout): NavGroup[] {
   const ov = layout?.items
-  if (!ov || !Object.keys(ov).length) return groups
   const moduleByGroup: Record<string, string> = {}
   const defaultOrder: string[] = []
   groups.forEach(g => { if (!(g.group in moduleByGroup)) { moduleByGroup[g.group] = g.module; defaultOrder.push(g.group) } })
   const targets: { group: string; it: NavItem }[] = []
+  // Global (group|href) dedup so no href renders twice in one group — protects the built-in Reports
+  // directory from ever double-placing an item a tenant already duplicated there via `also`.
+  const placedGH = new Set<string>()
+  const push = (group: string, it: NavItem) => {
+    const k = group + '|' + it.href
+    if (placedGH.has(k)) return
+    placedGH.add(k); targets.push({ group, it })
+  }
+  const surviving = new Map<string, NavItem>()   // href → item that passed access filtering (for the directory)
   for (const g of groups) for (const it of g.items) {
-    const o = ov[it.href]
+    const o = ov?.[it.href]
     if (o?.hidden) continue
+    surviving.set(it.href, it)
     const primary = (o?.group && o.group.trim()) || g.group
-    targets.push({ group: primary, it })
+    push(primary, it)
     // Additional placements (duplicates). Dedup within one item so the same href never renders twice in
     // one group (React-key + visual dup), and never re-adds its own primary group.
     if (o?.also && o.also.length) {
-      const placed = new Set<string>([primary])
-      for (const a of o.also) {
-        const ag = (a || '').trim()
-        if (ag && !placed.has(ag)) { placed.add(ag); targets.push({ group: ag, it }) }
-      }
+      for (const a of o.also) { const ag = (a || '').trim(); if (ag) push(ag, it) }
+    }
+  }
+  // Built-in Reports directory (code-level default, EVERY tenant unless opted out). Each surviving report
+  // href is duplicated into its category — SAME object, so identical gating. Iterated in REPORT_DIRECTORY
+  // order (grouped by category) so categories appear in REPORT_CATEGORIES order after the module groups.
+  if (!layout?.hideReportsDirectory) {
+    for (const [href, catKey] of REPORT_DIRECTORY) {
+      const it = surviving.get(href)
+      const cat = REPORT_CATEGORY_LABEL[catKey]
+      if (it && cat) { moduleByGroup[cat] = moduleByGroup[cat] || it.module; push(cat, it) }
     }
   }
   const seen = new Set<string>(); const order: string[] = []
