@@ -4,6 +4,7 @@ import { api, ORG_ID, fmt, fmtN, localToday } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { MultiSelect } from '@/lib/multiselect'
 
 const CATS = [
   { key: 'activations', label: 'Activations', unit: 'count' },
@@ -55,8 +56,13 @@ export default function DailyTargetsPage() {
   const [calCat, setCalCat] = useState<CatKey>('activations')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [freshness, setFreshness] = useState<{ daily?: any; dlar?: any } | null>(null)
+  // RULE FIVE standardized filters — store(s) / market(s) / rep(s), applied SERVER-SIDE to the summary.
+  const [selStores, setSelStores] = useState<string[]>([])
+  const [selMarkets, setSelMarkets] = useState<string[]>([])
+  const [selReps, setSelReps] = useState<string[]>([])
+  const [filterOpts, setFilterOpts] = useState<{ stores: any[]; markets: string[]; reps: string[] }>({ stores: [], markets: [], reps: [] })
 
-  useEffect(() => { loadSummary() }, [period])
+  useEffect(() => { loadSummary() }, [period, selStores, selMarkets, selReps])
   useEffect(() => { if (storeCode) loadDetail() }, [storeCode, scope, rep, period])
   useEffect(() => { loadFreshness() }, [period])
 
@@ -75,9 +81,16 @@ export default function DailyTargetsPage() {
   async function loadSummary() {
     setLoadingSum(true)
     try {
-      const d = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/summary?org_id=${ORG_ID}&today=${localToday()}`)
+      const qs = new URLSearchParams()
+      qs.set('org_id', ORG_ID); qs.set('today', localToday())
+      selStores.forEach((s) => qs.append('stores', s))
+      selMarkets.forEach((s) => qs.append('markets', s))
+      selReps.forEach((s) => qs.append('reps', s))
+      const d = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/summary?${qs.toString()}`)
       setSummary(d.stores || [])
-      if (!storeCode && d.stores?.length) setStoreCode(d.stores[0].store_code)
+      setFilterOpts(d.filters || { stores: [], markets: [], reps: [] })
+      // keep the detail panel in sync with the filter — if the selected store is filtered out, jump to the first shown.
+      if (d.stores?.length && !d.stores.some((s: any) => s.store_code === storeCode)) setStoreCode(d.stores[0].store_code)
     } catch (e) { console.error(e) }
     setLoadingSum(false)
   }
@@ -131,6 +144,29 @@ export default function DailyTargetsPage() {
     }
   }
 
+  // All-stores summary export (Excel/PDF/Print/Send) — includes the Trending columns and honors the
+  // active RULE FIVE filters (the `summary` rows are already server-filtered).
+  function buildSummaryPayload(): ExportPayload {
+    const cols = [
+      { header: 'Store', get: (s: any) => s.address || s.store_code },
+      { header: 'Market', get: (s: any) => s.market || '' },
+      { header: 'Monthly', get: (s: any) => s.categories?.activations?.monthly ?? 0 },
+      { header: 'Achieved', get: (s: any) => s.categories?.activations?.achieved_mtd ?? 0 },
+      { header: 'Need', get: (s: any) => s.categories?.activations?.need ?? 0 },
+      { header: "Today's Target", get: (s: any) => s.categories?.activations?.today_target ?? 0 },
+      { header: 'Pace/day', get: (s: any) => s.categories?.activations?.pace ?? 0 },
+      { header: 'Trending Box', get: (s: any) => s.trending_box ?? 0 },
+      { header: 'Trending Acc. $', get: (s: any) => s.trending_acc_sales ?? 0, money: true },
+      { header: 'Conversion %', get: (s: any) => s.conversion ? s.conversion.rate : '' },
+    ]
+    return {
+      title: 'Daily Targets — Store Summary',
+      subtitle: `${period} · Activations & Trending`,
+      filename: `Daily-Targets-Summary-${period.replace(/\s+/g, '-')}`,
+      sheets: [{ name: 'Store Summary', columns: cols, rows: summary }],
+    }
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
@@ -147,10 +183,21 @@ export default function DailyTargetsPage() {
 
       <FreshnessBanner daily={freshness?.daily} dlar={freshness?.dlar} period={period} />
 
+      {/* RULE FIVE standardized filter bar — store(s) / market(s) / rep(s), pick-don't-type over the org's
+          real data, applied server-side so the store summary + rep breakdown reflect the selection. */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
+        {filterOpts.stores.length > 0 && <MultiSelect allLabel="All stores" width={160} value={selStores} options={filterOpts.stores} onChange={setSelStores} searchable />}
+        {filterOpts.markets.length > 0 && <MultiSelect allLabel="All markets" width={140} value={selMarkets} options={filterOpts.markets} onChange={setSelMarkets} />}
+        {filterOpts.reps.length > 0 && <MultiSelect allLabel="All reps" width={150} value={selReps} options={filterOpts.reps} onChange={setSelReps} searchable />}
+        {(selStores.length > 0 || selMarkets.length > 0 || selReps.length > 0) && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => { setSelStores([]); setSelMarkets([]); setSelReps([]) }}>Clear filters</button>}
+        {selReps.length > 0 && <span style={{ fontSize: 11, color: 'var(--text3)' }}>rep filter narrows the per‑store breakdown; store totals stay whole‑store</span>}
+      </div>
+
       {/* ── All-stores summary ── */}
       <div className="card" style={{ padding: 0, marginBottom: 24, overflowX: 'auto' }}>
-        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600 }}>
-          Store Summary — Activations
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span>Store Summary — Activations &amp; Trending</span>
+          {summary.length > 0 && <span style={{ display: 'flex', gap: 8 }}><ExportButtons payload={buildSummaryPayload} compact /><SendReportButton exportPayload={buildSummaryPayload} compact /></span>}
         </div>
         {loadingSum ? (
           <div style={{ textAlign: 'center', padding: 30, color: 'var(--text3)' }}>Loading…</div>
@@ -162,7 +209,7 @@ export default function DailyTargetsPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-                {['Store', 'Monthly', 'Achieved', 'Need', "Today's Target", 'Pace/day', 'Conversion', ''].map(h => <th key={h} style={th}>{h}</th>)}
+                {['Store', 'Monthly', 'Achieved', 'Need', "Today's Target", 'Pace/day', 'Trending Box', 'Trending Acc.', 'Conversion', ''].map(h => <th key={h} style={th}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -190,6 +237,8 @@ export default function DailyTargetsPage() {
                     <td style={{ ...td, color: a?.need > 0 ? '#b45309' : 'var(--green)' }}>{fmtN(a?.need, 0)}</td>
                     <td style={{ ...td, fontWeight: 700, color: 'var(--accent)' }}>{fmtN(a?.today_target, 1)}</td>
                     <td style={td}>{fmtN(a?.pace, 1)}</td>
+                    <td style={{ ...td, color: 'var(--accent)', fontWeight: 600 }} title="Projected month-end activations (same source as Executive MTD)">{fmtN(s.trending_box, 0)}</td>
+                    <td style={{ ...td, color: 'var(--accent)', fontWeight: 600 }} title="Projected month-end accessory $ (same source as Executive MTD)">{fmt(s.trending_acc_sales)}</td>
                     <td style={{ ...td, fontWeight: 600, color: convColor(s.conversion) }}>
                       {s.conversion ? `${s.conversion.rate}%` : '—'}
                       {s.conversion && (
@@ -216,6 +265,8 @@ export default function DailyTargetsPage() {
                     </td>
                     <td style={td}></td>
                     <td style={{ ...td, fontSize: 12 }}>{fmtN(rp.activations, 0)}</td>
+                    <td style={td}></td>
+                    <td style={td}></td>
                     <td style={td}></td>
                     <td style={td}></td>
                     <td style={td}></td>
