@@ -157,6 +157,9 @@ export default function DailyTargetsPage() {
       { header: 'Pace/day', get: (s: any) => s.categories?.activations?.pace ?? 0 },
       { header: 'Trending Box', get: (s: any) => s.trending_box ?? 0 },
       { header: 'Trending Acc. $', get: (s: any) => s.trending_acc_sales ?? 0, money: true },
+      { header: "Acc. Today's Target", get: (s: any) => s.categories?.accessories?.today_target ?? 0, money: true },
+      { header: 'Acc. $/day needed', get: (s: any) => s.categories?.accessories?.pace ?? 0, money: true },
+      { header: 'Device set-up fee (MTD, in acc.)', get: (s: any) => s.categories?.accessories?.setup_fee_mtd ?? 0, money: true },
       { header: 'Conversion %', get: (s: any) => s.conversion ? s.conversion.rate : '' },
     ]
     return {
@@ -209,12 +212,14 @@ export default function DailyTargetsPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-                {['Store', 'Monthly', 'Achieved', 'Need', "Today's Target", 'Pace/day', 'Trending Box', 'Trending Acc.', 'Conversion', ''].map(h => <th key={h} style={th}>{h}</th>)}
+                {['Store', 'Monthly', 'Achieved', 'Need', "Today's Target", 'Pace/day', 'Trending Box', 'Trending Acc.', 'Acc. Today', 'Acc. $/day', 'Conversion', ''].map(h => <th key={h} style={th}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
               {summary.flatMap((s, i) => {
                 const a: CatMetrics = s.categories?.activations
+                const ac: CatMetrics = s.categories?.accessories
+                const setupMtd = Number((ac as any)?.setup_fee_mtd || 0)
                 const storeRow = (
                   <tr key={s.store_code} style={{ borderBottom: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
                     <td style={td}>
@@ -239,6 +244,8 @@ export default function DailyTargetsPage() {
                     <td style={td}>{fmtN(a?.pace, 1)}</td>
                     <td style={{ ...td, color: 'var(--accent)', fontWeight: 600 }} title="Projected month-end activations (same source as Executive MTD)">{fmtN(s.trending_box, 0)}</td>
                     <td style={{ ...td, color: 'var(--accent)', fontWeight: 600 }} title="Projected month-end accessory $ (same source as Executive MTD)">{fmt(s.trending_acc_sales)}</td>
+                    <td style={{ ...td, fontWeight: 700, color: 'var(--accent)' }} title={`Accessory $ needed today${setupMtd ? ` · includes ${fmt(setupMtd)} device set-up fee in achieved` : ''}`}>{fmt(ac?.today_target)}</td>
+                    <td style={td} title={`Accessory $ needed per open day left${setupMtd ? ` · set-up fee counted toward the accessory target (${fmt(setupMtd)} MTD)` : ''}`}>{fmt(ac?.pace)}</td>
                     <td style={{ ...td, fontWeight: 600, color: convColor(s.conversion) }}>
                       {s.conversion ? `${s.conversion.rate}%` : '—'}
                       {s.conversion && (
@@ -261,10 +268,12 @@ export default function DailyTargetsPage() {
                   <tr key={s.store_code + ':' + rp.rep} style={{ borderBottom: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
                     <td style={{ ...td, paddingLeft: 28 }}>
                       <div style={{ fontSize: 12, color: 'var(--text2)' }}>↳ {rp.rep}{rp.below_store && rp.conversion?.billpays > 0 ? ' ⚠️ below store' : ''}</div>
-                      <div style={{ fontSize: 10, color: 'var(--text3)' }}>{fmtN(rp.upgrades, 0)} upg · {fmt(rp.accessories)} acc</div>
+                      <div style={{ fontSize: 10, color: 'var(--text3)' }}>{fmtN(rp.upgrades, 0)} upg · {fmt(rp.accessories)} acc{rp.accessory_setup_fee ? ` (incl ${fmt(rp.accessory_setup_fee)} set-up fee)` : ''}</div>
                     </td>
                     <td style={td}></td>
                     <td style={{ ...td, fontSize: 12 }}>{fmtN(rp.activations, 0)}</td>
+                    <td style={td}></td>
+                    <td style={td}></td>
                     <td style={td}></td>
                     <td style={td}></td>
                     <td style={td}></td>
