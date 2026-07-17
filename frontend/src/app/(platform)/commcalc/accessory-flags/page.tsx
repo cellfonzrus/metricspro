@@ -36,7 +36,9 @@ export default function AccessoryFlagsPage() {
   const [storeF, setStoreF] = useState('')
   const [selStores, setSelStores] = useState<string[]>([])
   const [selMarkets, setSelMarkets] = useState<string[]>([])
-  const [assetStores, setAssetStores] = useState<{ store: string; market: string }[]>([])
+  // Universal, org-scoped filter options (stores + markets) returned by the accessory-flags endpoint
+  // itself (RULE FIVE) — replaces the asset-module /asset/filter-options a non-asset user couldn't read.
+  const [filterOpts, setFilterOpts] = useState<{ stores: { value: string; market?: string }[]; markets: string[] }>({ stores: [], markets: [] })
   const [repF, setRepF] = useState('')
   const [reasonF, setReasonF] = useState<'' | 'over' | 'under'>('')
   const [rows, setRows] = useState<Row[]>([])
@@ -61,7 +63,6 @@ export default function AccessoryFlagsPage() {
     }).catch(() => {})
   }, [])
   useEffect(() => { loadRules() }, [loadRules])
-  useEffect(() => { api('/api/v1/asset/filter-options').then((d: any) => setAssetStores(d?.stores || [])).catch(() => {}) }, [])
 
   async function saveRules() {
     setMsg('')
@@ -84,6 +85,7 @@ export default function AccessoryFlagsPage() {
       const rws: Row[] = r.rows || []
       setRows(rws)
       setSummary(r.summary || null); setByRep(r.by_rep || []); setByStore(r.by_store || []); setByStoreRep(r.by_store_rep || [])
+      setFilterOpts(r.filters || { stores: [], markets: [] })
       setThreshold(Number(r.threshold ?? threshold)); setDefaultCb(Number(r.default_chargeback ?? defaultCb))
       setMinThreshold(Number(r.min_threshold ?? minThreshold))
       setAmts(Object.fromEntries(rws.map(x => [x.dedupe_key, x.chargeback_amount])))
@@ -101,13 +103,14 @@ export default function AccessoryFlagsPage() {
     setReceiptBusy(false)
   }
 
-  const stores = Array.from(new Set(rows.map(r => r.store || '').filter(Boolean))).sort()
+  // Market/store options come from the endpoint's universal org-scoped `filters` (RULE FIVE). Map a store
+  // string → its market via store_mapping (with a leading-number fallback so an address vs code still maps).
   const _mktAddr: Record<string, string> = {}, _mktNum: Record<string, string> = {}
   const _lead = (a: string) => (a.match(/^\s*([0-9][0-9-]*)/)?.[1] || '').replace(/\D/g, '')
-  assetStores.forEach(s => { const a = (s.store || '').trim().toLowerCase(); if (!a || !s.market) return; _mktAddr[a] = s.market; const nk = _lead(a); if (nk && !_mktNum[nk]) _mktNum[nk] = s.market })
+  filterOpts.stores.forEach(s => { const a = (s.value || '').trim().toLowerCase(); if (!a || !s.market) return; _mktAddr[a] = s.market; const nk = _lead(a); if (nk && !_mktNum[nk]) _mktNum[nk] = s.market })
   const marketOf = (st: string) => { const a = (st || '').trim().toLowerCase(); if (_mktAddr[a]) return _mktAddr[a]; const nk = _lead(a); return (nk && _mktNum[nk]) || '' }
-  const marketList = Array.from(new Set(stores.map(marketOf).filter(Boolean))).sort()
-  const storeOpts = stores.filter(s => !selMarkets.length || selMarkets.includes(marketOf(s))).map(s => ({ value: s }))
+  const marketList = filterOpts.markets.length ? filterOpts.markets : Array.from(new Set(filterOpts.stores.map(s => s.market || '').filter(Boolean))).sort()
+  const storeOpts = filterOpts.stores.filter(s => !selMarkets.length || selMarkets.includes(s.market || marketOf(s.value))).map(s => ({ value: s.value }))
   const reps = Array.from(new Set(rows.map(r => r.rep || '').filter(Boolean))).sort()
   const filtered = rows.filter(r => (!storeF || r.store === storeF) && (!repF || r.rep === repF) && (!reasonF || r.flag_reason === reasonF)
     && (!selStores.length || selStores.includes(r.store || '')) && (!selMarkets.length || selMarkets.includes(marketOf(r.store || ''))))
