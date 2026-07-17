@@ -1,7 +1,9 @@
 'use client'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { api } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
 
 // Auto-remediation console. Describe an operational issue → the agent (Claude) classifies it data-vs-
 // code, and for a DATA issue picks a WHITELISTED playbook + a dry-run preview, then sends the assignee a
@@ -20,6 +22,10 @@ export default function RemediationConsole() {
   const [err, setErr] = useState('')
   const [requests, setRequests] = useState<any[]>([])
   const [playbooks, setPlaybooks] = useState<any[]>([])
+  // RULE FIVE (§3d): remediation requests are system-ops records with no store/market/rep dimension
+  // (documented deviation — core set applied where meaningful), so only the period (date range) applies.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const visibleRequests = useMemo(() => filterRows(requests, filt, { date: (r: any) => r.created_at }), [requests, filt])
 
   const load = useCallback(() => {
     api('/api/v1/remediation/requests').then((r: any) => setRequests(r.requests || [])).catch(() => {})
@@ -109,10 +115,16 @@ export default function RemediationConsole() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
           <div style={{ fontWeight: 700 }}>Recent requests</div>
           <span style={{ flex: 1 }} />
-          {requests.length > 0 && <ReportExportBar title="Remediation requests" filename="remediation_requests" columns={reqCols} rows={requests} />}
+          {requests.length > 0 && <ReportExportBar title="Remediation requests" filename="remediation_requests" columns={reqCols} rows={visibleRequests} />}
         </div>
+        {requests.length > 0 && (
+          <StandardFilterBar
+            value={filt} onChange={setFilt} periodMode="range"
+            show={{ period: true, stores: false, markets: false, reps: false }}
+          />
+        )}
         {!requests.length && <div style={{ color: 'var(--text3)', fontSize: 13 }}>None yet.</div>}
-        {requests.map(r => (
+        {visibleRequests.map(r => (
           <div key={r.id} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '8px 0',
             borderTop: '1px solid var(--border)' }}>
             <span className={`badge ${STATUS_TONE[r.status] || 'badge-slate'}`}

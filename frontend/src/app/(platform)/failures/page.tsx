@@ -1,7 +1,9 @@
 'use client'
-import { useEffect, useState, useCallback, Fragment } from 'react'
+import { useEffect, useState, useCallback, useMemo, Fragment } from 'react'
 import { api } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 
 // Failure Logs — a system log of failures the app hits (e.g. a valid rep rejected by kiosk face-match),
 // each WITH a how-to-fix note, so admins can diagnose recurring issues. Admin-only by default (RBAC —
@@ -24,6 +26,10 @@ export default function FailureLogsPage() {
   const [openCount, setOpenCount] = useState(0)
   const [fStatus, setFStatus] = useState('open')
   const [fCat, setFCat] = useState('')
+  // RULE FIVE (§3d) standard filter bar. failure_log has no `market` column, so market is omitted here
+  // (documented deviation — the doctrine applies the core set WHERE MEANINGFUL). Period is a date range
+  // over created_at; store/person options are derived from the loaded (org-scoped) rows.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   const [expanded, setExpanded] = useState<string | null>(null)
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(true)
@@ -69,8 +75,14 @@ export default function FailureLogsPage() {
   const when = (iso: string) => { try { return new Date(iso).toLocaleString() } catch { return iso } }
   const cell: React.CSSProperties = { padding: '8px 10px', fontSize: 13, borderTop: '1px solid var(--border)', verticalAlign: 'top' }
 
+  // Standard-filter accessors + derived (org-scoped) options, and the visible (filtered) rows that drive
+  // BOTH the table and the exports (what-you-see-is-what-exports).
+  const acc = { store: (r: Row) => r.store_code, rep: (r: Row) => r.employee_name, date: (r: Row) => r.created_at }
+  const opts = useMemo(() => optionsFromRows(rows, acc), [rows])
+  const visibleRows = useMemo(() => filterRows(rows, filt, acc), [rows, filt])
+
   // RULE FOUR (§3c) exports — the currently-loaded rows already reflect the status/type filters (applied
-  // server-side), so `rows` IS the visible view. Interactive table below is kept; this only adds exports.
+  // server-side) PLUS the standard filter bar (client-side), so `visibleRows` IS the visible view.
   const exportCols: ExportColumn[] = [
     { header: 'When', field: 'created_at', type: 'date', get: r => when(r.created_at) },
     { header: 'Type', field: 'category', get: r => labelOf(r.category) },
@@ -136,9 +148,17 @@ export default function FailureLogsPage() {
           {types.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
         </select>
         <button className="btn btn-sm" onClick={load}>Refresh</button>
-        <span style={{ flex: 1 }} />
-        <ReportExportBar title="Failure Logs" filename="failure_logs" columns={exportCols} rows={rows} />
       </div>
+
+      {/* RULE FIVE (§3d) standard universal filter bar — period (range) · store(s) · person(s). Drives the
+          table AND the export. Market omitted (failure_log carries no market). */}
+      <StandardFilterBar
+        value={filt} onChange={setFilt} periodMode="range"
+        show={{ period: true, stores: true, markets: false, reps: true }}
+        storeOptions={opts.stores} repOptions={opts.reps}
+        storeLabel="Stores…" repLabel="Employees…"
+        right={<><span style={{ flex: 1 }} /><ReportExportBar title="Failure Logs" filename="failure_logs" columns={exportCols} rows={visibleRows} /></>}
+      />
 
       {err && <div className="card" style={{ padding: 14, color: '#dc2626' }}>{err}{err.includes('112') && ' — run migration 112_failure_log.sql in Supabase.'}</div>}
       {loading ? <div className="card" style={{ padding: 16 }}>Loading…</div> : (
@@ -149,8 +169,8 @@ export default function FailureLogsPage() {
                 <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {rows.length === 0 && <tr><td style={cell} colSpan={6}>No failures for this filter. 🎉</td></tr>}
-              {rows.map(r => (
+              {visibleRows.length === 0 && <tr><td style={cell} colSpan={6}>No failures for this filter. 🎉</td></tr>}
+              {visibleRows.map(r => (
                 <Fragment key={r.id}>
                   <tr>
                     <td style={{ ...cell, whiteSpace: 'nowrap', color: 'var(--text3)' }}>{when(r.created_at)}</td>

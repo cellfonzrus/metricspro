@@ -1,11 +1,13 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { api, ORG_ID } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import AiAssistant from '@/components/AiAssistant'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 
 const enc = encodeURIComponent
 type Ticket = {
@@ -36,6 +38,9 @@ export default function HelpdeskInbox() {
   const [q, setQ] = useState('')
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
+  // RULE FIVE (§3d) standard filter bar. Helpdesk tickets have no store/market dimension (documented
+  // deviation — core set applied where meaningful): period = created-date range, people = requester.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
 
   useEffect(() => {
     api(`/api/v1/helpdesk/config/bootstrap?org_id=${ORG_ID}`)
@@ -54,8 +59,14 @@ export default function HelpdeskInbox() {
   }, [isAgent, requester, view, statusKey, priorityKey, q])
   useEffect(() => { load() }, [load])
 
+  // Standard-filter accessors + org-scoped options derived from the loaded tickets; visibleTickets drives
+  // the list AND the export (what-you-see-is-what-exports).
+  const acc = { rep: (t: Ticket) => t.requester_name || t.requester_email || '', date: (t: Ticket) => t.created_at }
+  const opts = useMemo(() => optionsFromRows(tickets, { ...acc, repEmail: (t: Ticket) => t.requester_email }), [tickets])
+  const visibleTickets = useMemo(() => filterRows(tickets, filt, acc), [tickets, filt])
+
   // RULE FOUR (§3c) exports — the loaded `tickets` already reflect the view/status/priority/search filters
-  // (applied server-side + already scoped to what the caller may see), so what's listed is what exports.
+  // (server-side) PLUS the standard filter bar (client-side), so what's listed is what exports.
   const exportCols: ExportColumn[] = [
     { header: 'Number', field: 'display_number', get: t => t.display_number },
     { header: 'Subject', field: 'subject', get: t => t.subject },
@@ -96,15 +107,22 @@ export default function HelpdeskInbox() {
           {priorities.map(p => <option key={p.id} value={p.key}>{p.label}</option>)}
         </select>
         <input className="input" placeholder="Search subject…" value={q} onChange={e => setQ(e.target.value)} style={{ width: 200 }} />
-        <span style={{ flex: 1 }} />
-        <ReportExportBar title="Helpdesk tickets" filename="helpdesk_tickets" columns={exportCols} rows={tickets} />
       </div>
+
+      {/* RULE FIVE (§3d) standard universal filter bar — period (created-date range) · requester. Store/
+          market omitted (a ticket has no store/market dimension). Drives the list AND the export. */}
+      <StandardFilterBar
+        value={filt} onChange={setFilt} periodMode="range"
+        show={{ period: true, stores: false, markets: false, reps: true }}
+        repOptions={opts.reps} repLabel="Requester…"
+        right={<><span style={{ flex: 1 }} /><ReportExportBar title="Helpdesk tickets" filename="helpdesk_tickets" columns={exportCols} rows={visibleTickets} /></>}
+      />
 
       {err && <div className="card" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 12, marginBottom: 12 }}>{err}</div>}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {loading ? <div style={{ padding: 30, color: 'var(--text3)' }}>Loading…</div>
-          : tickets.length === 0 ? <div style={{ padding: 30, color: 'var(--text3)' }}>No tickets. <Link href="/helpdesk/new" style={{ color: '#2563eb' }}>Raise one →</Link></div>
-          : tickets.map(t => (
+          : visibleTickets.length === 0 ? <div style={{ padding: 30, color: 'var(--text3)' }}>No tickets. <Link href="/helpdesk/new" style={{ color: '#2563eb' }}>Raise one →</Link></div>
+          : visibleTickets.map(t => (
             <div key={t.id} onClick={() => router.push(`/helpdesk/${t.id}`)}
               style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 14px', cursor: 'pointer',
                 borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>

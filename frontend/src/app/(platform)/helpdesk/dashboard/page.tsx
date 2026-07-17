@@ -1,7 +1,9 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api, ORG_ID } from '@/lib/client'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 
 function Tile({ label, value, color }: { label: string; value: any; color?: string }) {
   return (
@@ -15,10 +17,18 @@ function Tile({ label, value, color }: { label: string; value: any; color?: stri
 export default function HelpdeskDashboard() {
   const [d, setD] = useState<any>(null)
   const [err, setErr] = useState('')
-  useEffect(() => { api(`/api/v1/helpdesk/stats/dashboard?org_id=${ORG_ID}`).then(setD).catch(e => setErr(e?.message || 'Failed')) }, [])
+  // RULE FIVE (§3d): the tiles are aggregates with no store/market/rep dimension (documented deviation),
+  // so only the period (date range) applies — it re-fetches the server-side aggregate for that window.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const load = useCallback(() => {
+    const q = new URLSearchParams({ org_id: ORG_ID })
+    if (filt.period) q.set('date_from', filt.period)
+    if (filt.periodTo) q.set('date_to', filt.periodTo)
+    setErr(''); api(`/api/v1/helpdesk/stats/dashboard?${q.toString()}`).then(setD).catch(e => setErr(e?.message || 'Failed'))
+  }, [filt])
+  useEffect(() => { load() }, [load])
 
   if (err) return <div style={{ padding: 24, color: '#c0392b' }}>{err}</div>
-  if (!d) return <div style={{ padding: 24, color: 'var(--text3)' }}>Loading…</div>
 
   return (
     <div style={{ padding: 24, maxWidth: 900 }}>
@@ -26,6 +36,10 @@ export default function HelpdeskDashboard() {
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📊 Helpdesk Dashboard</h1>
         <span style={{ flex: 1 }} /><Link href="/helpdesk" className="btn">🎫 Inbox</Link>
       </div>
+      <StandardFilterBar value={filt} onChange={setFilt} periodMode="range"
+        show={{ period: true, stores: false, markets: false, reps: false }} />
+      {!d ? <div style={{ padding: 24, color: 'var(--text3)' }}>Loading…</div> : (
+      <>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <Tile label="Total tickets" value={d.total} />
         <Tile label="Open" value={d.open} color="#f59e0b" />
@@ -46,6 +60,8 @@ export default function HelpdeskDashboard() {
               <span>{k}</span><b>{String(v)}</b></div>))}
         </div>
       </div>
+      </>
+      )}
     </div>
   )
 }
