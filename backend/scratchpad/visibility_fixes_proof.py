@@ -52,6 +52,22 @@ class FakeQuery:
     def limit(self, n): return self
     def order(self, *a, **k): return self
 
+    def upsert(self, row, on_conflict=None):
+        rows = self.store.setdefault(self.t, [])
+        recs = row if isinstance(row, list) else [row]
+        key = on_conflict or 'org_id'
+        for rec in recs:
+            for col in rec:  # emulate a missing-column 500
+                if col in self.miss:
+                    raise Exception(f'column {self.t}.{col} does not exist')
+            existing = next((r for r in rows if all(r.get(k) == rec.get(k) for k in key.split(','))), None)
+            if existing:
+                existing.update(rec)
+            else:
+                rows.append(dict(rec))
+        self._up = True
+        return self
+
     def _m(self, r):
         for k, c, v in self.f:
             if k == 'eq' and r.get(c) != v: return False
@@ -59,6 +75,8 @@ class FakeQuery:
         return True
 
     def execute(self):
+        if getattr(self, '_up', False):
+            return FakeResult([])
         return FakeResult([dict(r) for r in self.store.get(self.t, []) if self._m(r)])
 
 
@@ -221,6 +239,108 @@ res_dm = R.accessory_flags(org_id=ORG)
 check("DM span sees ONLY their store's flags", len(res_dm['rows']) == 1 and res_dm['rows'][0]['store'] == '1 Main St', [r['store'] for r in res_dm['rows']])
 check("DM filter options narrowed to their span (North only)", res_dm['filters']['markets'] == ['North'], res_dm['filters']['markets'])
 check("DM store options narrowed to their store", {s['value'] for s in res_dm['filters']['stores']} == {'1 Main St'}, res_dm['filters']['stores'])
+R.sb = _orig_sb
+
+# ── REWORK 1 — employee sees ONLY their own KPI/commission row ────────────────────────────────────
+print("── REWORK 1 (B2) get_commissions self-scope = own row only ──")
+import asyncio
+SO._rbac_enabled = lambda org: True
+CORE._uid_from_token = lambda a: (a.replace('uid:', '') if a and a.startswith('uid:') else None)
+store_r1 = {
+    'app_users': [
+        {'org_id': ORG, 'auth_id': 'rep1', 'role': 'rep', 'employee_id': 'E1'},
+        {'org_id': ORG, 'auth_id': 'repX', 'role': 'rep', 'employee_id': 'E9'},  # maps to no rep row
+        {'org_id': ORG, 'auth_id': 'boss', 'role': 'admin', 'employee_id': 'E0'},
+    ],
+    'employees': [{'org_id': ORG, 'employee_id': 'E1', 'name': 'Alice Smith'},
+                  {'org_id': ORG, 'employee_id': 'E9', 'name': 'Ghost Rep'}],
+    'name_map': [{'org_id': ORG, 'epay_salesperson': 'ASMITH', 'storeops_name': 'Alice Smith'}],
+    'rep_aliases': [],
+    'rep_commissions': [
+        {'org_id': ORG, 'period': '2026-06', 'storeops_name': 'Alice Smith', 'epay_salesperson': 'ASMITH',
+         'salesperson': 'Alice Smith', 'store': 'S1', 'total_payout': 500.0, 'kpi_values': {'atu': 60}},
+        {'org_id': ORG, 'period': '2026-06', 'storeops_name': 'Bob Jones', 'epay_salesperson': 'BJONES',
+         'salesperson': 'Bob Jones', 'store': 'S1', 'total_payout': 700.0, 'kpi_values': {'atu': 40}},
+    ],
+    'chargeback_items': [],
+}
+R.sb = lambda: FakeClient(store_r1)
+SO._role_scope = lambda org, role: {'rep': 'self', 'admin': 'all', 'dm': 'market'}.get((role or '').lower(), 'all')
+
+res_self = asyncio.run(R.get_commissions('2026-06', authorization='uid:rep1', org_id=ORG))
+check("self rep gets exactly ONE row", len(res_self) == 1, len(res_self))
+check("self rep gets ONLY their own row (Alice, via storeops_name)", res_self and res_self[0]['storeops_name'] == 'Alice Smith', res_self)
+check("self rep NEVER sees a coworker's pay (no Bob)", all(r['storeops_name'] != 'Bob Jones' for r in res_self))
+
+# alias path: a rep row keyed only by an epay alias that name_map canonicalizes to the employee's name
+store_r1['rep_commissions'] = [
+    {'org_id': ORG, 'period': '2026-06', 'storeops_name': '', 'epay_salesperson': 'ASMITH',
+     'salesperson': '', 'store': 'S1', 'total_payout': 500.0},
+    {'org_id': ORG, 'period': '2026-06', 'storeops_name': 'Bob Jones', 'epay_salesperson': 'BJONES',
+     'salesperson': 'Bob Jones', 'store': 'S1', 'total_payout': 700.0},
+]
+res_alias = asyncio.run(R.get_commissions('2026-06', authorization='uid:rep1', org_id=ORG))
+check("self rep matched via ALIAS (epay ASMITH → Alice) → own row", len(res_alias) == 1 and res_alias[0]['epay_salesperson'] == 'ASMITH', res_alias)
+
+# self rep that maps to NO rep row → empty, never other people's data
+res_none = asyncio.run(R.get_commissions('2026-06', authorization='uid:repX', org_id=ORG))
+check("self rep with no rep mapping → EMPTY (not coworkers' rows)", res_none == [], res_none)
+
+# admin unchanged (sees all; scope_keyset governs)
+SO.scope_keyset = lambda auth, org=ORG: None
+res_admin = asyncio.run(R.get_commissions('2026-06', authorization='uid:boss', org_id=ORG))
+check("admin sees ALL rows (unchanged)", len(res_admin) == 2, len(res_admin))
+
+# market DM unchanged: _caller_rep_keys returns None (not self) → scope_keyset store filter governs
+store_r1['app_users'].append({'org_id': ORG, 'auth_id': 'dm1', 'role': 'dm', 'employee_id': 'E5'})
+store_r1['rep_commissions'] = [
+    {'org_id': ORG, 'period': '2026-06', 'storeops_name': 'Alice Smith', 'epay_salesperson': 'ASMITH',
+     'salesperson': 'Alice Smith', 'store': 'S1', 'total_payout': 500.0},
+    {'org_id': ORG, 'period': '2026-06', 'storeops_name': 'Carol Far', 'epay_salesperson': 'CFAR',
+     'salesperson': 'Carol Far', 'store': 'S9', 'total_payout': 700.0},
+]
+SO.scope_keyset = lambda auth, org=ORG: {'S1'}
+res_dm = asyncio.run(R.get_commissions('2026-06', authorization='uid:dm1', org_id=ORG))
+check("market DM = store-scoped commission rows (S1 only, whole store — unchanged)",
+      {r['store'] for r in res_dm} == {'S1'}, [r['store'] for r in res_dm])
+R.sb = _orig_sb
+
+# ── REWORK 2 — box_departments + setup_fee_keywords are ADMIN-EDITABLE config (not SQL-only) ───────
+print("── REWORK 2 (B3) accessory-config UI surfaces + persists box_departments + setup_fee_keywords ──")
+_orig_req = R.require_org
+R.require_org = lambda org: None
+store_r2 = {'accessory_config': [{'org_id': ORG, 'departments': ['Ondigo'], 'categories': [],
+                                  'product_keywords': [], 'acima_tenders': [],
+                                  'box_departments': ['Android - XP', 'IPHONE - XP', 'TABLET - XP'],
+                                  'setup_fee_keywords': ['Device Setup Charge']}],
+            'gp_category_map': [], 'daily_sales_feed': [], 'raw_sales': [
+                {'org_id': ORG, 'period': '2026-06', 'department': 'Total-Android', 'category': '',
+                 'product_desc': '', 'contract_type': 'Activation', 'tender_type': '', 'trans_type': ''}]}
+R.sb = lambda: FakeClient(store_r2)
+gac = R.get_accessory_config(ORG)
+check("get_accessory_config returns box_departments", gac['box_departments'] == ['Android - XP', 'IPHONE - XP', 'TABLET - XP'])
+check("get_accessory_config returns setup_fee_keywords", gac['setup_fee_keywords'] == ['Device Setup Charge'])
+# owner adds the Total device department via the UI (pick-don't-type: it's a real raw_sales dept)
+R.put_accessory_config({'box_departments': ['Android - XP', 'IPHONE - XP', 'TABLET - XP', 'Total-Android'],
+                        'setup_fee_keywords': ['Device Setup Charge', 'Set Up Fee']}, ORG)
+gac2 = R.get_accessory_config(ORG)
+check("put persists the ADDED Total box department", 'Total-Android' in gac2['box_departments'], gac2['box_departments'])
+check("put persists an ADDED set-up-fee keyword", 'Set Up Fee' in gac2['setup_fee_keywords'], gac2['setup_fee_keywords'])
+sf = R.sales_fields(period='2026-06', org_id=ORG)
+check("sales-fields offers the DISTINCT raw_sales department as a pick option (RULE THREE)", 'Total-Android' in sf['departments'], sf['departments'])
+check("sales-fields returns current box_departments (for the UI)", 'Total-Android' in sf['box_departments'])
+check("sales-fields returns current setup_fee_keywords (for the UI)", 'Set Up Fee' in sf['setup_fee_keywords'])
+# graceful: a pre-218/217 tenant (columns missing) still saves the legacy lists
+store_r2b = {'accessory_config': [{'org_id': ORG, 'departments': ['Ondigo'], 'categories': [],
+                                   'product_keywords': [], 'acima_tenders': []}], 'gp_category_map': [],
+             'daily_sales_feed': [], 'raw_sales': []}
+R.sb = lambda: FakeClient(store_r2b, missing={'accessory_config': ('box_departments', 'setup_fee_keywords')})
+try:
+    R.put_accessory_config({'departments': ['Ondigo', 'Wireless'], 'box_departments': ['X']}, ORG)
+    check("put degrades gracefully when box/setup columns missing (no 500)", True)
+except Exception as e:
+    check("put degrades gracefully when box/setup columns missing (no 500)", False, str(e))
+R.require_org = _orig_req
 R.sb = _orig_sb
 
 print(f"\n{'='*54}\n  {PASS} passed · {FAIL} failed\n{'='*54}")

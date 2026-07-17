@@ -4032,13 +4032,29 @@ def _accessory_config(client, org_id):
         box_depts = []
     if not box_depts:
         box_depts = list(_BOX_DEPTS)
+    # Device SET-UP FEE keywords (mig 217 — Package A field, surfaced here so the shared Classification-
+    # settings UI can edit it; CONSUMPTION of it — _is_setup_fee / accessory-target folding — lives in
+    # Package A). Fetched in its OWN defensive query; missing column/empty → the code default
+    # ['Device Setup Charge']. CROSS-PACKAGE OVERLAP: pkg A also resolves this identically (clean merge).
+    setup_kws = []
+    try:
+        srows = (client.schema("commcalc").table("accessory_config")
+                 .select("setup_fee_keywords").eq("org_id", org_id).limit(1).execute().data) or []
+        if srows:
+            setup_kws = [k for k in (srows[0].get("setup_fee_keywords") or []) if k]
+    except Exception:
+        setup_kws = []
+    if not setup_kws:
+        setup_kws = ["Device Setup Charge"]
     return {"departments": {d.strip().lower() for d in depts},
             "categories": {c.strip().lower() for c in cats},
             "products": {k.strip().lower() for k in kws},
             "departments_list": depts, "categories_list": cats, "products_list": kws,
             "acima_tenders_list": acima,
             "box_departments": {b.strip() for b in box_depts},
-            "box_departments_list": box_depts}
+            "box_departments_list": box_depts,
+            "setup_fee_products": {k.strip().lower() for k in setup_kws},
+            "setup_fee_keywords_list": setup_kws}
 
 
 def _is_accessory(dept, category, product, acfg):
@@ -5766,6 +5782,59 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
 
 
 # ── Report endpoints ──────────────────────────────────────────
+def _caller_rep_keys(authorization: str, org_id: str):
+    """For a SELF-scoped (rep) caller, the UPPER name keys identifying THEIR OWN rep rows in rep_commissions
+    — the caller's storeops employee name (app_user.employee_id → employees.name) PLUS any epay/alias that
+    canonicalizes to it (name_map / rep_aliases). Returns:
+      • None       — not self-scoped (admin / unrestricted / a real manager span → scope_keyset governs).
+      • {keys}     — a self rep → keep ONLY the rows matching these keys.
+      • set()       — a self rep we could NOT map to a rep → the caller sees NOTHING (never another rep's
+                      row; the KPI page shows an empty state + hint, not other people's pay).
+    Same identity path My Targets uses (app_user → employee → rep name). Reads app_users/employees
+    (public schema) READ-ONLY, org-scoped. Never raises."""
+    try:
+        from app.modules.storeops.router import _rbac_enabled, _role_scope
+        from app.modules.core.router import _uid_from_token
+    except Exception:
+        return None
+    try:
+        if not _rbac_enabled(org_id):
+            return None
+        uid = _uid_from_token(authorization)
+        if not uid:
+            return None
+        urows = (sb().table("app_users").select("role,employee_id")
+                 .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
+        if not urows:
+            return None
+        u = urows[0]
+        if _role_scope(org_id, (u.get("role") or "").strip()) != "self":
+            return None
+        name = ""
+        eid = (u.get("employee_id") or "").strip()
+        if eid:
+            try:
+                emp = (sb().table("employees").select("name")
+                       .eq("org_id", org_id).eq("employee_id", eid).limit(1).execute().data) or []
+                if emp:
+                    name = str(emp[0].get("name") or "").strip()
+            except Exception:
+                name = ""
+        keys = set()
+        if name:
+            keys.add(name.upper())
+            try:
+                cmap = _rep_canon_map(sb(), org_id)
+                for alias, canon in cmap.items():
+                    if str(canon).strip().upper() == name.upper():
+                        keys.add(str(alias).strip().upper())
+            except Exception:
+                pass
+        return keys   # empty set = self rep with no resolvable rep → sees nothing
+    except Exception:
+        return None
+
+
 @router.get("/commissions/{period}")
 async def get_commissions(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
@@ -5786,6 +5855,21 @@ async def get_commissions(period: str, authorization: str = Header(default=""), 
         cr['chargeback_deduction'] = d
         cr['final_payout'] = safe_float(cr.get('total_payout')) - safe_float(d)
     from app.modules.storeops.router import scope_keyset, in_keyset
+    # SELF scope (B2): an employee sees ONLY their OWN rep row(s) — their own KPIs/commission, never a
+    # coworker's pay. scope_keyset returns an empty set for a self rep (would hide everything); instead we
+    # match the caller's own rep identity by name (canon-aware). A self rep we can't map sees nothing.
+    rep_keys = _caller_rep_keys(authorization, org_id)
+    if rep_keys is not None:
+        cmap = _rep_canon_map(client, org_id)
+        def _mine(c):
+            cand = set()
+            for f in ('storeops_name', 'epay_salesperson', 'salesperson'):
+                v = str(c.get(f) or '').strip()
+                if v:
+                    cand.add(v.upper())
+                    cand.add(str(_canon(v, cmap)).strip().upper())
+            return bool(cand & rep_keys)
+        return [c for c in comms if _mine(c)]
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
     return [c for c in comms if in_keyset(ks, c.get('store'), c.get('store_code'))]
 
@@ -7635,7 +7719,8 @@ def get_accessory_config(org_id: str = ORG_ID):
     c = _accessory_config(sb(), org_id)
     return {"departments": c["departments_list"], "categories": c["categories_list"],
             "product_keywords": c["products_list"], "acima_tenders": c["acima_tenders_list"],
-            "box_departments": c["box_departments_list"]}
+            "box_departments": c["box_departments_list"],
+            "setup_fee_keywords": c["setup_fee_keywords_list"]}
 
 
 @router.put("/accessory-config")
@@ -7665,14 +7750,22 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID):
     # counting then falls back to the code default _BOX_DEPTS).
     row["box_departments"] = ([str(x).strip() for x in (body.get("box_departments") or []) if str(x).strip()]
                               if "box_departments" in body else cur["box_departments_list"])
-    try:
-        client.schema("commcalc").table("accessory_config").upsert(row, on_conflict="org_id").execute()
-    except Exception:
-        row.pop("box_departments", None)
+    # Device SET-UP FEE keywords (mig 217, pkg A field — editable from the shared Classification-settings UI).
+    row["setup_fee_keywords"] = ([str(x).strip() for x in (body.get("setup_fee_keywords") or []) if str(x).strip()]
+                                 if "setup_fee_keywords" in body else cur["setup_fee_keywords_list"])
+    # Persist defensively: pre-mig-217/218 those columns don't exist, so a save carrying them 500s — retry
+    # progressively dropping the newest columns so editing the accessory lists never breaks before the
+    # migrations run (box → _BOX_DEPTS default, set-up fee → 'Device Setup Charge' default).
+    for _drop in ([], ["setup_fee_keywords"], ["setup_fee_keywords", "box_departments"]):
+        attempt = dict(row)
+        for k in _drop:
+            attempt.pop(k, None)
         try:
-            client.schema("commcalc").table("accessory_config").upsert(row, on_conflict="org_id").execute()
+            client.schema("commcalc").table("accessory_config").upsert(attempt, on_conflict="org_id").execute()
+            break
         except Exception as e2:
-            raise HTTPException(500, f"save failed — run migration 208_commission_accessory_config.sql first: {e2}")
+            if _drop == ["setup_fee_keywords", "box_departments"]:
+                raise HTTPException(500, f"save failed — run migration 208_commission_accessory_config.sql first: {e2}")
     return get_accessory_config(org_id)
 
 
@@ -7719,7 +7812,10 @@ def sales_fields(period: str = "", org_id: str = ORG_ID):
     return {"departments": sorted(depts), "categories": sorted(cats), "products": top_products,
             "tenders": sorted(tenders), "contract_types": sorted(ctypes), "trans_types": sorted(ttypes),
             "accessory_departments": cur["departments_list"], "accessory_categories": cur["categories_list"],
-            "accessory_product_keywords": cur["products_list"], "acima_tenders": cur["acima_tenders_list"]}
+            "accessory_product_keywords": cur["products_list"], "acima_tenders": cur["acima_tenders_list"],
+            # Box (device-unit) departments + device set-up-fee keywords for the Classification-settings UI —
+            # options are the DISTINCT `departments`/`products` above (pick-don't-type, RULE THREE).
+            "box_departments": cur["box_departments_list"], "setup_fee_keywords": cur["setup_fee_keywords_list"]}
 
 
 @router.get("/commission-drill")
