@@ -11,7 +11,7 @@ import { MultiSelect } from '@/lib/multiselect'
 // summary endpoint (categories.accessories). Expand a store to see each rep's accessory contribution.
 // RULE FIVE: store/market/rep filter bar drives the page + exports (server-side). Trending Acc. = the
 // projected month-end accessory $ read straight from Executive MTD (one source, moves together).
-type Acc = { unit: string; monthly: number; achieved_mtd: number; need: number; base_today: number; today_target: number; pace: number; open_days_left: number }
+type Acc = { unit: string; monthly: number; achieved_mtd: number; need: number; base_today: number; today_target: number; pace: number; open_days_left: number; setup_fee_mtd?: number }
 type MSOpt = { value: string; label?: string }
 
 export default function AccessoryTargetsPage() {
@@ -50,6 +50,7 @@ export default function AccessoryTargetsPage() {
   const clearFilters = () => { setSelStores([]); setSelMarkets([]); setSelReps([]) }
 
   const acc = (s: any): Acc => s.categories?.accessories || { unit: 'dollars', monthly: 0, achieved_mtd: 0, need: 0, base_today: 0, today_target: 0, pace: 0, open_days_left: 0 }
+  const setupFee = (s: any): number => Number(acc(s).setup_fee_mtd || 0)
   const trend = (s: any): number => Number(s.trending_acc_sales || 0)
   const pct = (a: Acc) => a.monthly ? Math.min(100, Math.round(100 * a.achieved_mtd / a.monthly)) : 0
   const onTrack = (a: Acc) => a.achieved_mtd >= (a.base_today || 0) - 0.01
@@ -65,6 +66,7 @@ export default function AccessoryTargetsPage() {
         { header: 'Store', get: (s: any) => s.address || s.store_code },
         { header: 'Target $', get: (s: any) => acc(s).monthly, money: true },
         { header: 'Achieved MTD $', get: (s: any) => acc(s).achieved_mtd, money: true },
+        { header: 'of which set-up fee $', get: (s: any) => setupFee(s), money: true },
         { header: 'Trending $', get: (s: any) => trend(s), money: true },
         { header: '% to goal', get: (s: any) => pct(acc(s)) },
         { header: 'Remaining $', get: (s: any) => Math.max(0, acc(s).need), money: true },
@@ -122,7 +124,7 @@ export default function AccessoryTargetsPage() {
           <div className="card" style={{ padding: 0, overflow: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
               <thead><tr style={{ background: 'var(--surface2)', fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
-                {['Store', 'Target', 'Achieved', 'Trending', '% to goal', 'Remaining', "Today's target", '$/day needed', 'Days left', 'Status'].map(h =>
+                {['Store', 'Target', 'Achieved', 'Set-up fee', 'Trending', '% to goal', 'Remaining', "Today's target", '$/day needed', 'Days left', 'Status'].map(h =>
                   <th key={h} style={{ textAlign: h === 'Store' ? 'left' : 'right', padding: '9px 12px', whiteSpace: 'nowrap' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -135,6 +137,7 @@ export default function AccessoryTargetsPage() {
                         <td style={{ padding: '9px 12px', fontSize: 13, fontWeight: 600 }}>{(s.reps?.length) ? (open[s.store_code] ? '▾ ' : '▸ ') : ''}{s.address || s.store_code}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13 }}>{fmt(a.monthly)}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: '#16a34a' }}>{fmt(a.achieved_mtd)}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--text3)' }} title="Device set-up fee counted toward the accessory target (reported separately)">{fmt(setupFee(s))}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--accent)', fontWeight: 600 }}>{fmt(trend(s))}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 12 }}>
                           <div style={{ display: 'inline-block', width: 70, height: 7, background: 'var(--surface2)', borderRadius: 4, overflow: 'hidden', verticalAlign: 'middle', marginRight: 6 }}>
@@ -156,7 +159,8 @@ export default function AccessoryTargetsPage() {
                           <td style={{ padding: '5px 12px 5px 30px', color: 'var(--text2)' }}>{rp.rep || '(unnamed)'}</td>
                           <td colSpan={1} />
                           <td style={{ padding: '5px 12px', textAlign: 'right', color: '#16a34a' }}>{fmt(rp.accessories || 0)}</td>
-                          <td colSpan={7} style={{ padding: '5px 12px', color: 'var(--text3)' }}>accessory $ contributed</td>
+                          <td style={{ padding: '5px 12px', textAlign: 'right', color: 'var(--text3)' }}>{fmt(rp.accessory_setup_fee || 0)}</td>
+                          <td colSpan={7} style={{ padding: '5px 12px', color: 'var(--text3)' }}>accessory $ contributed (set-up fee shown separately)</td>
                         </tr>
                       ))}
                     </Fragment>
@@ -170,8 +174,10 @@ export default function AccessoryTargetsPage() {
             month‑end accessory $ (MTD × days‑in‑month ÷ complete days elapsed) taken from the SAME source as
             Executive MTD — the two always agree. "$/day needed" spreads the remaining target over the open
             days left in the month. Stores with accessory sales but marked <b>No target</b> still appear here
-            so achieved $ is tracked — set a target for them in Target Settings to get pacing. Achieved MTD is
-            accessory sales revenue (matches rep commissions).
+            so achieved $ is tracked — set a target for them in Target Settings to get pacing. <b>Achieved MTD
+            counts accessory sales revenue PLUS the device set-up fee</b> (owner directive) — the set-up-fee
+            portion is broken out in its own <b>Set-up fee</b> column so nothing is blended silently. The
+            set-up-fee lines are identified per-tenant in the Sales Report → Accessory settings.
           </p>
         </>
       )}

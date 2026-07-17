@@ -167,6 +167,12 @@ export default function MyTargetsPage() {
                     <span style={{ fontWeight: 600 }}>{val(m.unit, m.monthly)}</span>
                     <span style={{ color: 'var(--text2)' }}>Achieved so far</span>
                     <span style={{ fontWeight: 600 }}>{val(m.unit, m.achieved_mtd)}</span>
+                    {c.key === 'accessories' && Number(m.setup_fee_mtd || 0) > 0 && (
+                      <>
+                        <span style={{ color: 'var(--text3)', fontSize: 11 }}>↳ incl. device set-up fee</span>
+                        <span style={{ fontWeight: 600, fontSize: 11, color: 'var(--text3)' }}>{fmt(m.setup_fee_mtd)}</span>
+                      </>
+                    )}
                   </div>
                 </div>
               )

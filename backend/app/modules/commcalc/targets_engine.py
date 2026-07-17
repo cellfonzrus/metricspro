@@ -88,11 +88,14 @@ def scope_actuals_by_day(actuals: list[dict], store_code: str, rep_name: str | N
         if not d:
             continue
         agg = out.setdefault(d, {'prem': 0.0, 'byod': 0.0, 'upg': 0.0, 'acc': 0.0,
-                                 'box': 0.0, 'billpay': 0.0})
+                                 'setup': 0.0, 'box': 0.0, 'billpay': 0.0})
         agg['prem'] += safe_float(a.get('prem_count'))
         agg['byod'] += safe_float(a.get('byod_count'))
         agg['upg'] += safe_float(a.get('upg_count'))
+        # `acc` (acc_gp) ALREADY includes the device set-up fee (folded in _compute_feed_actuals_py so the
+        # accessory attainment counts it); `setup` carries the same set-up fee SEPARATELY for reporting.
         agg['acc'] += safe_float(a.get('acc_gp'))
+        agg['setup'] += safe_float(a.get('setup_fee'))
         agg['box'] += safe_float(a.get('box_count'))
         agg['billpay'] += safe_float(a.get('billpay_count'))
     return out
@@ -133,13 +136,17 @@ def scope_achieved_mtd(actuals: list[dict], store_code: str, rep_name: str | Non
     """Sum a scope's MTD achieved (activations / upgrades / byod / accessory $)
     across every day up to `today`. Used for the per-rep store breakdown."""
     by_day = scope_actuals_by_day(actuals, store_code, rep_name)
-    prem = byod = upg = acc = 0.0
+    prem = byod = upg = acc = setup = 0.0
     for d, a in by_day.items():
         if today is not None and d > today:
             continue
         prem += a['prem']; byod += a['byod']; upg += a['upg']; acc += a['acc']
+        setup += a.get('setup', 0.0)
+    # `accessories` INCLUDES the device set-up fee (attainment basis); `accessory_setup_fee` is the set-up
+    # fee portion of that, reported separately so nothing is silently blended.
     return {'activations': round(prem + byod, 1), 'byod': round(byod, 1),
-            'upgrades': round(upg, 1), 'accessories': round(acc, 2)}
+            'upgrades': round(upg, 1), 'accessories': round(acc, 2),
+            'accessory_setup_fee': round(setup, 2)}
 
 
 def project_future_hours(hours_by_day: dict, today: date, month_end: date) -> dict:
@@ -243,6 +250,16 @@ def compute_scope(
             'pace': maybe_round(cat, pace),
             'open_days_left': days_left,
         }
+
+    # Device SET-UP FEE (MTD) — the set-up-fee portion of the accessories achieved, exposed SEPARATELY
+    # (the accessory attainment above already COUNTS it; this reports it on its own line/column so nothing
+    # is silently blended). Same MTD date-cut as achieved_mtd.
+    if 'accessories' in categories:
+        setup_mtd = 0.0
+        for d in actuals_by_day:
+            if d <= today:
+                setup_mtd += (actuals_by_day.get(d) or {}).get('setup', 0.0)
+        categories['accessories']['setup_fee_mtd'] = round(setup_mtd, 2)
 
     # Day-by-day calendar (combined across categories)
     calendar = []

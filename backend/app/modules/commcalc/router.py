@@ -4016,11 +4016,28 @@ def _accessory_config(client, org_id):
         pass
     if not depts and not cats and not kws:
         depts = ["Ondigo"]
+    # ── Device SET-UP FEE keywords (mig 217; per-org, admin-editable). Fetched in its OWN defensive query
+    #    so a missing column (pre-217) can NEVER disturb the accessory resolution above — it just falls back
+    #    to the code default ['Device Setup Charge'] (the canonical b2bsoft token used by calculator.py /
+    #    gp_report.py). Product-desc CONTAINS match (case-insensitive). Reported SEPARATELY; never blended
+    #    into the accessory$ number.
+    setup_kws = []
+    try:
+        srows = (client.schema("commcalc").table("accessory_config")
+                 .select("setup_fee_keywords").eq("org_id", org_id).limit(1).execute().data) or []
+        if srows:
+            setup_kws = [k for k in (srows[0].get("setup_fee_keywords") or []) if k]
+    except Exception:
+        setup_kws = []
+    if not setup_kws:
+        setup_kws = ["Device Setup Charge"]
     return {"departments": {d.strip().lower() for d in depts},
             "categories": {c.strip().lower() for c in cats},
             "products": {k.strip().lower() for k in kws},
             "departments_list": depts, "categories_list": cats, "products_list": kws,
-            "acima_tenders_list": acima}
+            "acima_tenders_list": acima,
+            "setup_fee_products": {k.strip().lower() for k in setup_kws},
+            "setup_fee_keywords_list": setup_kws}
 
 
 def _is_accessory(dept, category, product, acfg):
@@ -4037,6 +4054,18 @@ def _is_accessory(dept, category, product, acfg):
         if p and any(k in p for k in acfg["products"]):
             return True
     return False
+
+
+def _is_setup_fee(product, acfg):
+    """A sale line is a DEVICE SET-UP FEE if its product description contains a configured set-up-fee
+    keyword (mig 217; default ['Device Setup Charge']). Config-driven (RULE TWO) — no engine hard-codes the
+    string. Kept SEPARATE from _is_accessory: the set-up fee is counted toward the accessory TARGET but
+    reported on its own line/column, never silently blended into the accessory$ number."""
+    kws = acfg.get("setup_fee_products") or set()
+    if not kws:
+        return False
+    p = (product or "").strip().lower()
+    return bool(p) and any(k in p for k in kws)
 
 
 def _load_item_map(client, org_id):
@@ -7574,10 +7603,13 @@ def upload_trace(period: str = "", upload_type: str = "", source: str = "",
 
 @router.get("/accessory-config")
 def get_accessory_config(org_id: str = ORG_ID):
-    """The configured accessory dept/category/product-keyword lists + the ACIMA-lease tender(s)."""
+    """The configured accessory dept/category/product-keyword lists + the ACIMA-lease tender(s) + the
+    device SET-UP-FEE keyword(s) (mig 217; product-desc substrings counted toward the accessory TARGET and
+    reported separately)."""
     c = _accessory_config(sb(), org_id)
     return {"departments": c["departments_list"], "categories": c["categories_list"],
-            "product_keywords": c["products_list"], "acima_tenders": c["acima_tenders_list"]}
+            "product_keywords": c["products_list"], "acima_tenders": c["acima_tenders_list"],
+            "setup_fee_keywords": c["setup_fee_keywords_list"]}
 
 
 @router.put("/accessory-config")
@@ -7602,10 +7634,19 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID):
         row["product_keywords"] = [str(x).strip() for x in (body.get("product_keywords") or []) if str(x).strip()]
     if "acima_tenders" in body:
         row["acima_tenders"] = [str(x).strip() for x in (body.get("acima_tenders") or []) if str(x).strip()]
+    # Device SET-UP-FEE keywords (mig 217). Included in the upsert defensively: pre-217 the column doesn't
+    # exist, so a save carrying it 500s — we retry WITHOUT it so editing the accessory lists never breaks
+    # before 217 is applied (the set-up fee then falls back to the code default ['Device Setup Charge']).
+    row["setup_fee_keywords"] = ([str(x).strip() for x in (body.get("setup_fee_keywords") or []) if str(x).strip()]
+                                 if "setup_fee_keywords" in body else cur["setup_fee_keywords_list"])
     try:
         client.schema("commcalc").table("accessory_config").upsert(row, on_conflict="org_id").execute()
     except Exception as e:
-        raise HTTPException(500, f"save failed — run migration 208_commission_accessory_config.sql first: {e}")
+        row.pop("setup_fee_keywords", None)
+        try:
+            client.schema("commcalc").table("accessory_config").upsert(row, on_conflict="org_id").execute()
+        except Exception as e2:
+            raise HTTPException(500, f"save failed — run migration 208_commission_accessory_config.sql first: {e2}")
     return get_accessory_config(org_id)
 
 
@@ -8684,7 +8725,8 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None):
             a = agg[k] = {'store': store, 'salesperson': rep, 'trans_date': date, 'login': None,
                           '_txn': set(), '_prem': set(), '_byod': set(), '_upg': set(),
                           '_port': set(), '_swap': set(), '_billpay': set(),
-                          'lines': 0, 'revenue': 0.0, 'gp': 0.0, 'accessory_rev': 0.0, 'box_count': 0,
+                          'lines': 0, 'revenue': 0.0, 'gp': 0.0, 'accessory_rev': 0.0, 'setup_fee_rev': 0.0,
+                          'box_count': 0,
                           'total_phones': 0, 'bill_qty': 0, 'bill_amt': 0.0, 'activation_fee': 0.0,
                           'protect': 0}
         if a['login'] is None and r.get('user_login'):
@@ -8711,7 +8753,16 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None):
             a['_swap'].add(tid)
         # Accessory$ — the ONE shared _is_accessory classifier (all three agree; Exec MTD no longer uses
         # its own exec_metric_config['accessory'] token match for the number — see the handoff note).
-        if _is_accessory(dept, r.get('category'), r.get('product_desc'), acfg):
+        # DEVICE SET-UP FEE (mig 217) is tallied in its OWN accumulator, SEPARATE from accessory_rev, and
+        # is EXCLUDED from accessory_rev so the two never double-count when the targets attainment folds
+        # them together (accessory_rev + setup_fee_rev). For the house/Boost org the set-up-fee line lives
+        # in a fee/'other' department (not the accessory department), so `not _setup` never removes an
+        # accessory line → accessory_rev stays BYTE-IDENTICAL (Sales Report / Exec MTD / productivity
+        # unchanged). Pre-217 / empty config → _is_setup_fee is False → no-op.
+        _setup = _is_setup_fee(r.get('product_desc'), acfg)
+        if _setup:
+            a['setup_fee_rev'] += ext
+        elif _is_accessory(dept, r.get('category'), r.get('product_desc'), acfg):
             a['accessory_rev'] += ext
         # Targets extension metrics (cheap, config-free).
         if dept in _BOX_DEPTS:
@@ -8811,12 +8862,16 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed', 
         if not o:
             o = agg[k] = {'store_code': code, 'store': store, 'rep_name': rep, 'login': a.get('login'),
                           'trans_date': date, '_prem': set(), '_byod': set(), '_upg': set(),
-                          'acc_gp': 0.0, 'box_count': 0, '_billpay': set()}
+                          'acc_gp': 0.0, 'setup_fee': 0.0, 'box_count': 0, '_billpay': set()}
         o['_prem'] |= a['_prem']
         o['_byod'] |= a['_byod']
         o['_upg'] |= a['_upg']
         o['_billpay'] |= a['_billpay']
-        o['acc_gp'] += a['accessory_rev']   # accessory "achieved" = accessory SALES revenue (ext_price)
+        # Accessory "achieved" for TARGET attainment = accessory sales revenue + device set-up fee
+        # (owner directive 2026-07-17). setup_fee is ALSO carried separately (reported on its own line).
+        # accessory_rev already EXCLUDES set-up-fee lines (see _sales_cell_agg) → no double-count.
+        o['setup_fee'] += a['setup_fee_rev']
+        o['acc_gp'] += a['accessory_rev'] + a['setup_fee_rev']
         o['box_count'] += a['box_count']
     out = []
     for o in agg.values():
@@ -8824,6 +8879,7 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed', 
                     'login': o['login'], 'trans_date': o['trans_date'],
                     'prem_count': len(o['_prem']), 'byod_count': len(o['_byod']),
                     'upg_count': len(o['_upg']), 'acc_gp': round(o['acc_gp'], 2),
+                    'setup_fee': round(o['setup_fee'], 2),
                     'box_count': o['box_count'], 'billpay_count': len(o['_billpay'])})
     return out
 
@@ -10566,7 +10622,10 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
             metrics.append({'cat': cat, 'label': _AP_CAT_LABEL.get(cat, cat),
                             'unit': m.get('unit', 'count'), 'target': m.get('monthly', 0),
                             'achieved': m.get('achieved_mtd', 0), 'need': m.get('need', 0),
-                            'pace': m.get('pace', 0), 'today_target': m.get('today_target', 0)})
+                            'pace': m.get('pace', 0), 'today_target': m.get('today_target', 0),
+                            # device set-up fee portion of accessory achieved (0 for non-accessory cats),
+                            # reported separately (owner directive 2026-07-17).
+                            'setup_fee_mtd': m.get('setup_fee_mtd', 0)})
 
         rep_plans = []
         for rep_name in targets_engine.reps_in_scope(shifts, actuals, code):
