@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/client'
+import { supabase, api } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import { safeHomeFor } from '@/lib/rbac'
 
@@ -9,7 +9,8 @@ export default function LoginPage() {
   const router = useRouter()
   const { session, permissions, loading, provisioned, active, user, signOut,
           tenants, needsTenantChoice, switchTenant,
-          pendingConnections, connectTenant, disableAndSwitch, dismissPending } = useAuth()
+          pendingConnections, connectTenant, disableAndSwitch, dismissPending,
+          needs2fa, twofa, startTwoFactor, verifyTwoFactor } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -20,15 +21,40 @@ export default function LoginPage() {
   const [panelBusy, setPanelBusy] = useState(false)
   const [panelErr, setPanelErr] = useState('')
   const [disabledInfo, setDisabledInfo] = useState<any>(null)
+  // 2FA OTP screen (auth-hardening):
+  const [otp, setOtp] = useState('')
+  const [remember, setRemember] = useState(false)
+  const [otpBusy, setOtpBusy] = useState(false)
+  const [otpMsg, setOtpMsg] = useState('')
+  const [otpErr, setOtpErr] = useState('')
+  const [otpSent, setOtpSent] = useState(false)
+  // Forgot-password flow (auth-hardening): 'signin' → 'forgot' (request) → 'reset' (code + new pw).
+  const [mode, setMode] = useState<'signin' | 'forgot' | 'reset'>('signin')
+  const [fpEmail, setFpEmail] = useState('')
+  const [fpCode, setFpCode] = useState('')
+  const [fpPw, setFpPw] = useState('')
+  const [fpBusy, setFpBusy] = useState(false)
+  const [fpMsg, setFpMsg] = useState('')
+  const [fpErr, setFpErr] = useState('')
+
+  // Auto-send the first 2FA code once the OTP screen appears.
+  useEffect(() => {
+    if (needs2fa && !otpSent && session) {
+      setOtpSent(true)
+      startTwoFactor().then((r: any) => setOtpMsg(r?.message || 'A code was sent.'))
+        .catch((e: any) => setOtpErr(e?.message || 'Could not send a code'))
+    }
+  }, [needs2fa, otpSent, session, startTwoFactor])
 
   // Already signed in → bounce to the role's home (or password reset if required). Pause the redirect
-  // while a pending account-link invite is unresolved (the panel below handles it first).
+  // while a pending account-link invite OR an unmet 2FA challenge is unresolved (handled by the panels).
   useEffect(() => {
     if (loading || !session || !provisioned || !active) return
     if (pendingConnections.length) return
+    if (needs2fa) return
     if (user?.must_reset_password) router.replace('/account/password')
     else router.replace(safeHomeFor(permissions))
-  }, [loading, session, provisioned, active, permissions, user, router, pendingConnections])
+  }, [loading, session, provisioned, active, permissions, user, router, pendingConnections, needs2fa])
 
   // Credentials accepted but the login belongs to MORE THAN ONE tenant and none is chosen yet →
   // show a tenant picker (platform-core-9). Picking one loads that tenant's profile, and the effect
@@ -71,6 +97,53 @@ export default function LoginPage() {
           </button>
         </div>
       </div>
+    )
+  }
+
+  // Signed in, password OK, but the tenant/user requires 2FA and this session isn't verified yet →
+  // show the OTP screen. A code is auto-sent on mount; the user can resend or switch channel.
+  if (!loading && session && provisioned && active && !needsTenantChoice && !pendingConnections.length && needs2fa) {
+    return (
+      <Shell>
+        <div style={{ textAlign: 'center', fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}>
+          Verify it's you
+        </div>
+        <div style={{ fontSize: 13, color: '#334155', margin: '4px 0 14px' }}>
+          Enter the one-time code we sent to your {(twofa.user_channels || ['email'])[0] === 'whatsapp' ? 'WhatsApp' : 'email'}.
+        </div>
+        <label style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Verification code</label>
+        <input value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, ''))} autoFocus inputMode="numeric"
+          maxLength={6} style={{ ...inp, letterSpacing: 4, fontFamily: 'monospace' }} placeholder="6-digit code" />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#475569', marginTop: 12 }}>
+          <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
+          Remember this device for 30 days
+        </label>
+        {otpMsg && !otpErr && <div style={{ color: '#059669', fontSize: 12, marginTop: 10 }}>{otpMsg}</div>}
+        {otpErr && <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>{otpErr}</div>}
+        <button disabled={otpBusy || otp.length < 4} style={{ ...primaryBtn, opacity: (otpBusy || otp.length < 4) ? 0.6 : 1 }}
+          onClick={async () => {
+            setOtpErr(''); setOtpBusy(true)
+            try { await verifyTwoFactor(otp.trim(), remember) }
+            catch (e: any) { setOtpErr(e?.message || 'Invalid or expired code.') }
+            finally { setOtpBusy(false) }
+          }}>
+          {otpBusy ? 'Verifying…' : 'Verify'}
+        </button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12 }}>
+          <button onClick={async () => {
+            setOtpErr(''); setOtpMsg('Sending…')
+            try { const r = await startTwoFactor(); setOtpMsg(r?.message || 'A new code was sent.') }
+            catch (e: any) { setOtpErr(e?.message || 'Could not send a code'); setOtpMsg('') }
+          }} style={linkBtn}>Resend code</button>
+          <button onClick={async () => {
+            setOtpErr(''); setOtpMsg('Sending…')
+            try { const r = await startTwoFactor('email'); setOtpMsg(r?.message || 'Code sent by email.') }
+            catch (e: any) { setOtpErr(e?.message || 'Could not send a code'); setOtpMsg('') }
+          }} style={linkBtn}>Use email instead</button>
+        </div>
+        <button onClick={() => signOut()} style={{ marginTop: 16, width: '100%', background: 'none',
+          border: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer' }}>Sign out</button>
+      </Shell>
     )
   }
 
@@ -179,6 +252,69 @@ export default function LoginPage() {
     // onAuthStateChange in AuthProvider loads the profile; the effect above redirects.
   }
 
+  // Forgot-password (public): request a code, then set a new password with it. Anti-enumeration — the
+  // request step ALWAYS reports the same generic message whether or not the account exists.
+  if (!session && (mode === 'forgot' || mode === 'reset')) {
+    return (
+      <Shell>
+        <div style={{ textAlign: 'center', fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 6 }}>
+          Reset your password
+        </div>
+        {mode === 'forgot' ? (
+          <>
+            <div style={{ fontSize: 13, color: '#334155', margin: '4px 0 14px' }}>
+              Enter your email and we'll send a one-time code.
+            </div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Email</label>
+            <input type="email" value={fpEmail} onChange={e => setFpEmail(e.target.value)} autoFocus style={inp} placeholder="you@company.com" />
+            {fpMsg && <div style={{ color: '#059669', fontSize: 13, marginTop: 10 }}>{fpMsg}</div>}
+            {fpErr && <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>{fpErr}</div>}
+            <button disabled={fpBusy || !fpEmail.trim()} style={{ ...primaryBtn, opacity: (fpBusy || !fpEmail.trim()) ? 0.6 : 1 }}
+              onClick={async () => {
+                setFpErr(''); setFpBusy(true)
+                try {
+                  const r = await api('/api/v1/core/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: fpEmail.trim() }) })
+                  setFpMsg(r?.message || 'If this email has an account, a code has been sent.')
+                  setMode('reset')
+                } catch (e: any) { setFpErr(e?.message || 'Something went wrong') }
+                finally { setFpBusy(false) }
+              }}>{fpBusy ? 'Sending…' : 'Send reset code'}</button>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 13, color: '#334155', margin: '4px 0 14px' }}>
+              Enter the code we sent and choose a new password.
+            </div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Email</label>
+            <input type="email" value={fpEmail} onChange={e => setFpEmail(e.target.value)} style={inp} placeholder="you@company.com" />
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#475569', marginTop: 12, display: 'block' }}>Code</label>
+            <input value={fpCode} onChange={e => setFpCode(e.target.value.replace(/\D/g, ''))} inputMode="numeric" maxLength={6}
+              style={{ ...inp, letterSpacing: 4, fontFamily: 'monospace' }} placeholder="6-digit code" />
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#475569', marginTop: 12, display: 'block' }}>New password</label>
+            <input type="password" value={fpPw} onChange={e => setFpPw(e.target.value)} style={inp} placeholder="New password" />
+            {fpMsg && <div style={{ color: '#059669', fontSize: 13, marginTop: 10 }}>{fpMsg}</div>}
+            {fpErr && <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>{fpErr}</div>}
+            <button disabled={fpBusy || !fpCode.trim() || !fpPw} style={{ ...primaryBtn, opacity: (fpBusy || !fpCode.trim() || !fpPw) ? 0.6 : 1 }}
+              onClick={async () => {
+                setFpErr(''); setFpBusy(true)
+                try {
+                  const r = await api('/api/v1/core/auth/reset-password', { method: 'POST',
+                    body: JSON.stringify({ email: fpEmail.trim(), code: fpCode.trim(), new_password: fpPw }) })
+                  setFpMsg(r?.message || 'Your password has been updated.')
+                  setTimeout(() => { setMode('signin'); setFpCode(''); setFpPw(''); setFpMsg('') }, 1200)
+                } catch (e: any) { setFpErr(e?.message || 'Invalid or expired code.') }
+                finally { setFpBusy(false) }
+              }}>{fpBusy ? 'Updating…' : 'Set new password'}</button>
+          </>
+        )}
+        <button onClick={() => { setMode('signin'); setFpErr(''); setFpMsg('') }}
+          style={{ marginTop: 16, width: '100%', background: 'none', border: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer' }}>
+          Back to sign in
+        </button>
+      </Shell>
+    )
+  }
+
   return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
       background: 'linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%)', padding: 20 }}>
@@ -203,7 +339,12 @@ export default function LoginPage() {
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-        <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', marginTop: 18 }}>
+        <div style={{ textAlign: 'center', marginTop: 14 }}>
+          <button onClick={() => { setMode('forgot'); setFpEmail(email); setErr('') }} style={linkBtn}>
+            Forgot password?
+          </button>
+        </div>
+        <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', marginTop: 10 }}>
           Trouble signing in? Contact your administrator.
         </div>
       </div>
@@ -223,6 +364,9 @@ const primaryBtn: React.CSSProperties = {
 const secondaryBtn: React.CSSProperties = {
   width: '100%', padding: '9px 0', borderRadius: 9, border: '1px solid #cbd5e1',
   background: 'white', color: '#1e3a5f', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+}
+const linkBtn: React.CSSProperties = {
+  background: 'none', border: 'none', color: '#1e3a5f', fontSize: 12, fontWeight: 600, cursor: 'pointer',
 }
 
 // The centered white card used by every login-page state.

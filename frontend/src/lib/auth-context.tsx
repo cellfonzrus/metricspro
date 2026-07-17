@@ -1,6 +1,6 @@
 'use client'
 import { createContext, useContext, useEffect, useState, useCallback } from 'react'
-import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg } from './client'
+import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken } from './client'
 import type { Permissions, CarrierRef } from './rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -29,6 +29,15 @@ export type TenantMembership = {
 // inviting tenant's name (zero cross-tenant disclosure). The user chooses connect / disable / not-now.
 export type PendingConnection = { org_id: string; tenant_name: string; invited_at?: string | null }
 
+// 2FA gate for the active tenant/user (auth-hardening). required && !verified ⇒ show the OTP screen.
+export type TwoFactorState = {
+  required: boolean; verified: boolean; mode?: string; user_channels?: string[]
+}
+export type PasswordPolicy = {
+  min_length: number; max_length: number
+  require_upper: boolean; require_lower: boolean; require_digit: boolean; require_special: boolean
+}
+
 type AuthState = {
   loading: boolean
   session: any | null
@@ -49,6 +58,12 @@ type AuthState = {
   connectTenant: (orgId: string, code: string) => Promise<void> // attach the tenant onto this login
   disableAndSwitch: (orgId: string, code: string) => Promise<any> // disable old login, take a fresh one
   dismissPending: (orgId: string) => void                       // "not now" — proceed, invite stays pending
+  // Two-factor authentication (auth-hardening):
+  twofa: TwoFactorState                                         // required/verified for the active tenant
+  needs2fa: boolean                                            // required && !verified ⇒ OTP screen
+  passwordPolicy: PasswordPolicy | null                        // active tenant policy (client-side hints)
+  startTwoFactor: (channel?: string) => Promise<any>           // request an OTP over a channel
+  verifyTwoFactor: (code: string, remember?: boolean) => Promise<void> // verify + store the marker
   signOut: () => Promise<void>
   refresh: () => Promise<void>
 }
@@ -58,6 +73,8 @@ const Ctx = createContext<AuthState>({
   active: false, tenant: null, token: null, tenants: [], activeOrg: null, needsTenantChoice: false,
   switchTenant: async () => {}, pendingConnections: [], connectTenant: async () => {},
   disableAndSwitch: async () => ({}), dismissPending: () => {},
+  twofa: { required: false, verified: true }, needs2fa: false, passwordPolicy: null,
+  startTwoFactor: async () => ({}), verifyTwoFactor: async () => {},
   signOut: async () => {}, refresh: async () => {},
 })
 
@@ -77,10 +94,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [needsTenantChoice, setNeedsTenantChoice] = useState(false)
   const [pendingConnections, setPendingConnections] = useState<PendingConnection[]>([])
   const [dismissed, setDismissed] = useState<string[]>([])
+  const [twofa, setTwofa] = useState<TwoFactorState>({ required: false, verified: true })
+  const [passwordPolicy, setPasswordPolicy] = useState<PasswordPolicy | null>(null)
 
   const resetProfile = useCallback(() => {
     setUser(null); setPermissions({}); setProvisioned(false); setActive(false)
     setTenant(null); setCarriers([]); setSessionOrgId(null)
+    setTwofa({ required: false, verified: true }); setPasswordPolicy(null)
   }, [])
 
   // Fetch /core/me for the given active tenant and populate the profile state.
@@ -98,6 +118,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setActive(d.active !== false)
       setTenant(d.tenant || null)
       setCarriers(d.carriers || [])
+      setTwofa(d.twofa || { required: false, verified: true })
+      setPasswordPolicy(d.password_policy || null)
     } catch {
       resetProfile()
     }
@@ -185,6 +207,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setDismissed(d => (d.includes(orgId) ? d : [...d, orgId]))
   }, [])
 
+  // Request a 2FA OTP over a channel (email default). Returns {sent, channel, masked_dest, message}.
+  const startTwoFactor = useCallback(async (channel?: string) => {
+    if (!session?.access_token) throw new Error('not signed in')
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' }
+    if (activeOrg) headers['x-active-org'] = activeOrg
+    const res = await fetch(`${API_URL}/api/v1/core/me/2fa/start`, {
+      method: 'POST', headers, body: JSON.stringify({ channel }) })
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Could not send a code')
+    return res.json()
+  }, [session, activeOrg])
+
+  // Verify a 2FA code → store the signed marker (client.ts sends it as x-2fa-token) → reload profile so
+  // twofa.verified flips true and the app opens.
+  const verifyTwoFactor = useCallback(async (code: string, remember?: boolean) => {
+    if (!session?.access_token) throw new Error('not signed in')
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' }
+    if (activeOrg) headers['x-active-org'] = activeOrg
+    const res = await fetch(`${API_URL}/api/v1/core/me/2fa/verify`, {
+      method: 'POST', headers, body: JSON.stringify({ code, remember: !!remember }) })
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Invalid or expired code.')
+    const d = await res.json()
+    set2faToken(d.token || null)
+    await loadMe(session.access_token, activeOrg)   // re-fetch /core/me → twofa.verified now true
+  }, [session, activeOrg, loadMe])
+
   useEffect(() => {
     let mounted = true
     supabase.auth.getSession().then(async ({ data }) => {
@@ -204,7 +253,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
-    setActiveOrg(null)
+    setActiveOrg(null); set2faToken(null)
     resetProfile(); setSession(null); setTenants([]); setActiveOrgState(null); setNeedsTenantChoice(false)
     setPendingConnections([]); setDismissed([])
   }, [resetProfile])
@@ -216,13 +265,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loadProfile])
 
   const visiblePending = pendingConnections.filter(p => !dismissed.includes(p.org_id))
+  const needs2fa = !!twofa.required && !twofa.verified
 
   return (
     <Ctx.Provider value={{
       loading, session, user, permissions, carriers, provisioned, active, tenant,
       token: session?.access_token || null, tenants, activeOrg, needsTenantChoice,
       switchTenant, pendingConnections: visiblePending, connectTenant, disableAndSwitch,
-      dismissPending, signOut, refresh,
+      dismissPending, twofa, needs2fa, passwordPolicy, startTwoFactor, verifyTwoFactor,
+      signOut, refresh,
     }}>
       {children}
     </Ctx.Provider>

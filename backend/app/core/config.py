@@ -35,10 +35,28 @@ class Settings(BaseSettings):
     # QUICK-REPLY buttons ("Approve" idx0, "Reject" idx1). Payloads are injected per-send.
     WHATSAPP_APPROVAL_TEMPLATE: str = "remediation_approval"
     WHATSAPP_APPROVAL_LANG: str = "en"
+    # ── WhatsApp OTP delivery (auth 2FA / password reset) ─────────────────────────────────
+    # An approved AUTHENTICATION-category template whose single BODY var carries the code (Meta's
+    # verification-code template shape). When UNSET, WhatsApp OTP falls back to a plain text message,
+    # which Meta only delivers inside the 24h customer-service window → UNCONFIRMED for cold sends.
+    # ⚠️ OWNER: WhatsApp OTP delivery has never been live-verified — needs one real-number test.
+    WHATSAPP_OTP_TEMPLATE: str = ""
+    WHATSAPP_OTP_LANG: str = "en"
     # Webhook (Meta App → WhatsApp → Configuration): the verify token you set on the callback URL,
     # and the app secret to validate X-Hub-Signature-256 on inbound POSTs (optional but recommended).
     WHATSAPP_VERIFY_TOKEN: str = ""
     WHATSAPP_APP_SECRET: str = ""
+
+    # ── Auth hardening (OTP / 2FA / invite delivery) ─────────────────────────────
+    # Pepper mixed into the SHA-256 hash of every stored OTP code (core.auth_otp.code_hash), so a DB
+    # read alone can't brute-force a 6-digit code offline. Falls back to SUPABASE_SERVICE_KEY when
+    # unset (already a high-entropy secret only the backend holds) — so it is never a trivial/blank
+    # pepper in prod. Set an independent value to rotate without touching the service key.
+    AUTH_OTP_PEPPER: str = ""
+    # HMAC secret signing the post-2FA "verified session" marker (x-2fa-token). Falls back to
+    # SUPABASE_SERVICE_KEY when unset. Rotating it invalidates every outstanding 2FA marker (users
+    # re-verify on their next request) — safe, never a lockout (they just re-run the OTP step).
+    AUTH_2FA_SECRET: str = ""
 
     # ── Account Module — Claude-powered accounting engine (#8/#9/#10) ─────────────
     # Drives statement assembly + narrative + the #10 missed-days recon. The engine
