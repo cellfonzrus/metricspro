@@ -487,6 +487,17 @@ async def _upload_file_impl(
                 as_of = str(v)[:10]
                 break
         saved = b2b_sweep.write_inventory_values(client, org_id, store_values, as_of)
+        # v2 (owner directive 2026-07-17): the SAME file carries a per-DEVICE cost the device-history
+        # lookup needs → also persist per-device rows (imei/serial + unit_cost + received/aging date)
+        # into commcalc.inventory_aging_device. Additive + org-scoped; degrades gracefully until mig 216
+        # is run (a missing table must NOT break the per-store inventory_value ingest above).
+        devices_saved = 0
+        try:
+            devices = b2b_sweep.extract_inventory_devices(rows, as_of_date=as_of)
+            if devices:
+                devices_saved = b2b_sweep.write_inventory_devices(client, org_id, devices, as_of)
+        except Exception as e:
+            print(f"WARN inventory_aging per-device persist skipped (mig 216 pending?): {e}")
         try:
             client.schema('commcalc').table('upload_log').insert(
                 {'org_id': org_id, 'file_type': 'inventory_aging', 'period': as_of,
@@ -500,18 +511,23 @@ async def _upload_file_impl(
         # so the email-imports history (which renders skipped/error) shows what's wrong instead of a ✓.
         # `saved` is carried on BOTH branches so the sweep's rows_saved read is honest (a successful
         # ingest now records N, not 0, so its dedup finally marks it done instead of re-pulling hourly).
-        if not saved:
+        if not saved and not devices_saved:
             diag = b2b_sweep.inventory_diagnostics(rows)
+            ddiag = b2b_sweep.device_diagnostics(rows)
             found = ', '.join(str(c) for c in diag['columns'][:25]) or '(no columns — empty/misread file)'
-            note = (f"parsed 0 stores from {diag['n_rows']} row(s) — need a STORE column "
-                    f"(Store / Store Name / Location / Site / Branch) and a VALUE column "
-                    f"(Cost / Ext Cost / Total Value). Found columns: {found}."
+            note = (f"parsed 0 stores + 0 devices from {diag['n_rows']} row(s) — need either a STORE "
+                    f"column (Store / Store Name / Location / Site / Branch) + a VALUE column "
+                    f"(Cost / Ext Cost / Total Value), OR a per-device IMEI/Serial + Cost column. "
+                    f"Found columns: {found}."
                     + (" A grouped 'Store:' header was seen but no priced detail rows followed it."
-                       if diag['grouped'] else ""))
+                       if diag['grouped'] else "")
+                    + (f" (imei col: {ddiag['imei_col'] or ddiag['serial_col'] or 'none'}, "
+                       f"cost col: {ddiag['cost_col'] or 'none'})"))
             return {'success': False, 'file_type': 'inventory_aging', 'stores': 0, 'saved': 0,
-                    'skipped': 'inventory_no_stores', 'as_of': as_of, 'rows_read': len(rows), 'note': note}
+                    'devices': 0, 'skipped': 'inventory_no_stores', 'as_of': as_of,
+                    'rows_read': len(rows), 'note': note}
         return {'success': True, 'file_type': 'inventory_aging', 'stores': saved, 'saved': saved,
-                'as_of': as_of, 'rows_read': len(rows)}
+                'devices': devices_saved, 'as_of': as_of, 'rows_read': len(rows)}
 
     # POS "X report": daily takings BY TENDER TYPE per store → commcalc.pos_tender_summary, for the tender
     # reconciliation against the daily closing sheet. Flexible column detection (any POS). Periodless.
@@ -7982,7 +7998,9 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
         return out
 
     # ── B2B SALE (raw_sales authoritative, daily_sales_feed fallback) ──────────────────────────────
-    sale_cols = "trans_id,trans_date,store,salesperson,product_desc,contract_type,ext_price,mdn,serial_1"
+    # gp is selected so the at-sale POS cost can be derived (ext_price − GP) — there is no explicit
+    # cost column on raw_sales / daily_sales_feed; the 78-col export carries GP + Ext Price.
+    sale_cols = "trans_id,trans_date,store,salesperson,product_desc,contract_type,ext_price,gp,mdn,serial_1"
     sale_rows = [r for r in _rows("raw_sales", sale_cols, ("serial_1", "mdn"))
                  if device_history.keys_match(cands, r.get("serial_1"), r.get("mdn"))]
     sale_source = "raw_sales" if sale_rows else None
@@ -8004,6 +8022,7 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
             "sold_by_us": True,
             "sold_date": dates[0] if dates else (str(dev.get("trans_date"))[:10] if dev.get("trans_date") else None),
             "sale_price": round(safe_float(dev.get("ext_price")), 2),
+            "gp": (round(safe_float(dev.get("gp")), 2) if dev.get("gp") is not None else None),
             "store": (dev.get("store") or "").strip() or None,
             "salesperson": (dev.get("salesperson") or "").strip() or None,
             "contract_type": (dev.get("contract_type") or "").strip() or None,
@@ -8037,12 +8056,21 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
     payment_matches = [{"period": _pay_period(r), "amount": safe_float(r.get("amount")),
                         "payment_type": r.get("payment_type")} for r in pay_rows]
 
-    # ── AGING + OUR PURCHASE PRICE (asset_ledger; UNGATED — reps may see cost per owner directive) ──
-    # Aging is a VIP / asset-lending concept → sourced from commcalc.asset_ledger (matched on
-    # esn_imei / phone_number). A tenant with no asset_ledger row for this device gets an HONEST
-    # 'no inventory record' line (never a fake zero) — b2bsoft/Total tenants have no per-IMEI
-    # inventory-cost table (b2b_inventory is category-qty; inventory_value is per-store $), so aging
-    # + purchase price are genuinely absent there and say so. Org-scoped via the shared `_rows`.
+    # ── AGING + OUR PURCHASE PRICE (UNGATED — reps may see cost per owner directive 2026-07-17) ─────
+    # v2: the purchase price is UNIVERSAL / POS-SKU based — owed_to_vip is NOT universal (VIP/house
+    # only) so it is DEMOTED to last resort. Source priority (first real number wins), all org-scoped:
+    #   ① per-IMEI inventory-aging cost   commcalc.inventory_aging_device.unit_cost   (POS/SKU, universal)
+    #   ② at-sale POS cost                raw_sales/daily_sales_feed  ext_price − GP   (universal, b2bsoft)
+    #   ③ MA marketplace order price      raw_ma_commission.imei → .activation_order →
+    #                                     raw_ma_fulfillment.order_number → .price     (Total/MA)
+    #   ④ asset_ledger.raw_row explicit device-cost column                             (VIP/house)
+    #   ⑤ asset_ledger.owed_to_vip — LAST RESORT, VIP billing basis (house only)
+    # A tenant with none of these gets an HONEST 'no cost on file' line (never a fabricated 0).
+    from datetime import date as _dh_date
+    today_iso = _dh_date.today().isoformat()
+    sale_sold_date = device.get("sold_date") if device else None
+
+    # asset_ledger (VIP / asset-lending — house aging path + sources ④⑤). Org-scoped via `_rows`.
     asset_cols = ("id,esn_imei,phone_number,store,market,device_model,category,status,acquired_date,"
                   "due_date,payg_date,reimbursement_date,trigger_date,billing_friday,bill_path,"
                   "date_sold,owed_to_vip,reimbursement,selling_price,raw_row")
@@ -8050,27 +8078,73 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
                   if device_history.keys_match(cands, r.get("esn_imei"), r.get("phone_number"))]
     asset_row = None
     if asset_rows:
-        # prefer a row whose ESN matched (the device line over a phone-only hit), then latest acquired.
         asset_row = max(asset_rows, key=lambda r: (
             1 if device_history.keys_match(cands, r.get("esn_imei")) else 0,
             str(r.get("acquired_date") or "")))
-    from datetime import date as _dh_date
-    today_iso = _dh_date.today().isoformat()
-    sale_sold_date = device.get("sold_date") if device else None
-    aging = device_history.build_aging(asset_row, sale_sold_date, today_iso)
 
-    # our purchase price — source-priority pick with provenance (UNGATED).
+    # per-IMEI inventory-aging device row (source ① + non-VIP aging path). Latest snapshot wins.
+    inv_cols = "id,imei,serial,sku,item,store,unit_cost,received_date,days_in_stock,as_of_date"
+    inv_rows = [r for r in _rows("inventory_aging_device", inv_cols, ("imei", "serial"))
+                if device_history.keys_match(cands, r.get("imei"), r.get("serial"))]
+    inv_row = max(inv_rows, key=lambda r: str(r.get("as_of_date") or "")) if inv_rows else None
+
+    # MA marketplace linkage (source ③): imei → raw_ma_commission.activation_order → fulfillment price.
+    ma_comm_rows = [r for r in _rows("raw_ma_commission", "imei,activation_order,sku,tx_date", ("imei",))
+                    if device_history.keys_match(cands, r.get("imei"))]
+    ma_fulfil_rows = []
+    ord_cands = device_history.order_candidates(
+        [r.get("activation_order") for r in ma_comm_rows])
+    if ord_cands:
+        try:
+            ma_fulfil_rows = (client.schema("commcalc").table("raw_ma_fulfillment")
+                              .select("order_number,price,product_name,date_ordered")
+                              .eq("org_id", org_id).in_("order_number", ord_cands)
+                              .limit(2000).execute().data) or []
+        except Exception as e:
+            print(f"WARN device-history raw_ma_fulfillment read failed: {e}")
+    ma_price = device_history.pick_ma_marketplace_price(ma_comm_rows, ma_fulfil_rows)
+
+    # aging: house/VIP asset_ledger when present, else the non-VIP inventory-aging device row.
+    if asset_row:
+        aging = device_history.build_aging(asset_row, sale_sold_date, today_iso)
+    elif inv_row:
+        aging = device_history.build_aging_inventory(inv_row, sale_sold_date, today_iso)
+    else:
+        aging = device_history.build_aging(None, sale_sold_date, today_iso)
+
+    # our purchase price — source-priority pick (①→⑤) with provenance (UNGATED).
     price_candidates = []
+    # ① per-IMEI inventory-aging cost (POS/SKU — universal)
+    if inv_row:
+        inv_amt, inv_sku = device_history.inv_device_cost(inv_row)
+        if inv_amt is not None:
+            price_candidates.append({
+                "amount": inv_amt, "source": "inventory_aging_device.unit_cost",
+                "label": ("POS inventory cost" + (f" — SKU {inv_sku}" if inv_sku else " (SKU-based)"))})
+    # ② at-sale POS cost = ext_price − GP (universal for every b2bsoft tenant incl. house)
+    if device:
+        pos_cost = device_history.pos_cost_from_sale(device.get("sale_price"), device.get("gp"))
+        if pos_cost is not None:
+            price_candidates.append({
+                "amount": pos_cost, "source": f"{sale_source or 'raw_sales'} (ext − GP)",
+                "label": "POS sale line (ext − GP)"})
+    # ③ MA marketplace order price (Total/MA tenants)
+    if ma_price.get("found"):
+        price_candidates.append({
+            "amount": ma_price["amount"], "source": "raw_ma_fulfillment.price",
+            "label": ("MA marketplace order" + (f" {ma_price['order_number']}" if ma_price.get("order_number") else ""))})
+    # ④ asset_ledger.raw_row explicit device-cost column (VIP/house)
     if asset_row:
         rr_amt, rr_hdr = device_history.scan_raw_row_price((asset_row.get("raw_row") or {}))
         if rr_amt is not None:
             price_candidates.append({"amount": rr_amt,
                                      "source": f"asset_ledger.raw_row[{rr_hdr}]",
                                      "label": f"VIP asset ledger — {rr_hdr}"})
+        # ⑤ asset_ledger.owed_to_vip — LAST RESORT, VIP billing basis (house only)
         owed = safe_float(asset_row.get("owed_to_vip"))
         price_candidates.append({"amount": (round(owed, 2) if owed > 0 else None),
                                  "source": "asset_ledger.owed_to_vip",
-                                 "label": "VIP device cost (Owed to VIP)"})
+                                 "label": "VIP billing basis (house — Owed to VIP)"})
     purchase_price = device_history.pick_purchase_price(price_candidates)
 
     # ── MONEY TABLE (gated: admin-only by default via the 'device_commission' grant) ───────────────
@@ -8086,7 +8160,7 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
 
     return {
         "query": q, "detected": shape, "org_id": org_id,
-        "found": bool(sale_rows or mi_rows or pay_rows or asset_rows),
+        "found": bool(sale_rows or mi_rows or pay_rows or asset_rows or inv_rows or ma_comm_rows),
         "device": device,
         "sold_by_us": sold_by_us,
         "prompt": device_history.prompt_for(sold_by_us, device.get("sold_date") if device else None),

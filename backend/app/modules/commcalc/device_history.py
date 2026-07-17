@@ -324,12 +324,164 @@ def pick_purchase_price(candidates):
             chosen = c
     if chosen is None:
         return {"found": False, "amount": None, "source": None, "label": None,
-                "provenance": "No purchase-price record on file for this device.",
+                "provenance": ("No purchase-price record on file yet for this device — no POS/SKU "
+                               "inventory cost, at-sale cost, marketplace order, or VIP basis. "
+                               "Inventory/POS cost feed pending."),
                 "candidates_considered": considered}
     return {"found": True, "amount": round(float(chosen["amount"]), 2),
             "source": chosen.get("source"), "label": chosen.get("label"),
             "provenance": f"{chosen.get('label')} · source: {chosen.get('source')}",
             "candidates_considered": considered}
+
+
+# ── v2: UNIVERSAL POS/SKU purchase-price sources (owner directive 2026-07-17) ─────────────────────────
+# owed_to_vip is NOT universal (VIP/house only). The universal cost signal is POS/SKU-based:
+#   ① per-IMEI inventory-aging cost (POS on-hand cost keyed by device/SKU)   [inv_device_cost]
+#   ② at-sale POS cost = the B2B sale line's ext_price − GP                    [pos_cost_from_sale]
+#   ③ MA marketplace order price (Total/MA: imei → activation_order → order)  [pick_ma_marketplace_price]
+#   ④ asset_ledger.raw_row explicit device-cost column                        [scan_raw_row_price]
+#   ⑤ asset_ledger.owed_to_vip — LAST RESORT, VIP billing basis (house only)
+# All pure over dicts/strings; the router supplies the org-scoped DB rows.
+
+def pos_cost_from_sale(ext_price, gp):
+    """At-sale POS cost derived from the B2B sale LINE: cost = ext_price − GP (the 78-col Sales
+    Transaction Details export carries GP + Ext Price; there is NO explicit cost column on raw_sales /
+    daily_sales_feed). Returns the derived cost as a float, or None (honest — never a fake 0) when:
+      • ext_price is unknown/blank, or
+      • GP is unknown/blank (GP=None ≠ GP=0 — a real 0 GP is a valid signal → cost = ext_price), or
+      • the derived cost is ≤ 0 (gp ≥ ext_price: a $0-line or sold-below-cost anomaly is NOT a cost).
+    A negative GP (sold below cost) legitimately yields cost = ext + |gp| > ext (kept)."""
+    ext = to_amount(ext_price)
+    g = to_amount(gp)
+    if ext is None or g is None:
+        return None
+    cost = round(ext - g, 2)
+    return cost if cost > 0 else None
+
+
+def inv_device_cost(inv_row):
+    """Per-IMEI inventory-aging device COST from an inventory_aging_device row (dict). Returns
+    (amount, sku) or (None, None). The unit_cost is the POS on-hand cost captured by the b2bsoft/POS
+    Inventory Aging report; a 0/blank cost is treated as no-signal (honest empty)."""
+    if not isinstance(inv_row, dict):
+        return (None, None)
+    amt = to_amount(inv_row.get("unit_cost"))
+    if amt is None or amt <= 0:
+        return (None, None)
+    sku = (str(inv_row.get("sku") or "").strip() or None)
+    return (round(amt, 2), sku)
+
+
+def norm_order(v):
+    """Comparable form of an order key (activation_order / order_number): strip, drop a trailing '.0',
+    lowercase. Empty → ''."""
+    s = ("" if v is None else str(v)).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s.lower()
+
+
+def order_candidates(orders):
+    """Exact-match spellings an order key could be stored as (for an .in_() over raw_ma_fulfillment):
+    the raw stripped value + its '.0'-stripped form. De-duped, empties dropped. (The final match is
+    still confirmed in Python via norm_order, so light case/format drift can't silently miss.)"""
+    out = set()
+    for o in orders or []:
+        s = ("" if o is None else str(o)).strip()
+        if not s:
+            continue
+        out.add(s)
+        if s.endswith(".0"):
+            out.add(s[:-2])
+    return sorted(out)
+
+
+def pick_ma_marketplace_price(commission_rows, fulfillment_rows):
+    """MA (Total/VidaPay) per-IMEI purchase price. VERIFIED join (mig 083):
+        raw_ma_commission.imei  →  raw_ma_commission.activation_order  (the order key on the
+        commission side; there is NO order_number column on raw_ma_commission)  →
+        raw_ma_fulfillment.order_number  →  raw_ma_fulfillment.price  (the handset purchase price).
+    `commission_rows` are ALREADY imei-matched + org-scoped by the router; `fulfillment_rows` are the
+    candidate marketplace-order rows. Pure. Returns a dict:
+      • hit           → {found True, amount, order_number, product_name}
+      • order but no price row → {found False, note '…no marketplace fulfillment price…', linked_order}
+      • no commission order    → {found False, note '…no MA commission/order row…'}"""
+    orders = [norm_order(r.get("activation_order")) for r in (commission_rows or [])]
+    orders = [o for o in orders if o]
+    if not orders:
+        return {"found": False, "amount": None, "order_number": None, "product_name": None,
+                "note": "No MA commission (activation-order) row links this IMEI to a marketplace order."}
+    price_by_order = {}
+    for f in (fulfillment_rows or []):
+        o = norm_order(f.get("order_number"))
+        amt = to_amount(f.get("price"))
+        if o and amt is not None and amt > 0 and o not in price_by_order:
+            price_by_order[o] = (round(amt, 2), (str(f.get("order_number") or "").strip() or None),
+                                 (str(f.get("product_name") or "").strip() or None))
+    for o in orders:
+        if o in price_by_order:
+            amt, ordnum, prod = price_by_order[o]
+            return {"found": True, "amount": amt, "order_number": ordnum, "product_name": prod, "note": None}
+    linked = next((r.get("activation_order") for r in commission_rows
+                   if norm_order(r.get("activation_order"))), None)
+    return {"found": False, "amount": None, "order_number": (str(linked).strip() if linked else None),
+            "product_name": None,
+            "note": ("MA commission order linked to this IMEI, but no marketplace fulfillment price "
+                     "row matched its order number.")}
+
+
+def build_aging_inventory(inv_row, sale_sold_date, today):
+    """Aging section for a NON-VIP tenant, sourced from an inventory_aging_device row (the b2bsoft/POS
+    Inventory Aging report's per-device line) instead of asset_ledger. Same OUTPUT SHAPE as build_aging
+    so the UI/exports are unchanged. Aging basis:
+      • received_date present → received → sold (if a B2B sale matched) else received → today (unsold);
+      • else days_in_stock from the report → used as-is (as of the file's as_of_date);
+      • else honest 'no aging date' note.
+    inv_row None/empty → honest 'no inventory record' (delegates to build_aging(None, …))."""
+    asof = iso_date(today) or (today if isinstance(today, str) else None)
+    if not inv_row:
+        return build_aging(None, sale_sold_date, today)
+    acquired = iso_date(inv_row.get("received_date"))
+    match_sold = iso_date(sale_sold_date)
+    sold = match_sold  # the aging report is an ON-HAND snapshot; only a B2B sale supplies a sold date
+    is_sold = bool(sold)
+    days = None
+    basis = None
+    if acquired is not None:
+        end = sold if is_sold else asof
+        days = days_between(acquired, end)
+        if days is not None:
+            basis = ("days on inventory (received → sold)" if is_sold
+                     else "current age (received → today, unsold)")
+    note = None
+    dis = inv_row.get("days_in_stock")
+    if days is None and dis is not None:
+        try:
+            days = int(dis)
+            basis = "days in stock (from the inventory-aging report" + (
+                f", as of {iso_date(inv_row.get('as_of_date'))}" if inv_row.get("as_of_date") else "") + ")"
+        except (TypeError, ValueError):
+            days = None
+    if acquired is None and days is None:
+        note = "Inventory record found but no received/aging date — cannot compute age."
+    model = ((str(inv_row.get("item") or "").strip()) or (str(inv_row.get("sku") or "").strip()) or None)
+    return {
+        "found": True, "source": "inventory_aging_device", "asof": asof,
+        "acquired_date": acquired,
+        "store": ((str(inv_row.get("store") or "").strip()) or None),
+        "market": None,
+        "device_model": model,
+        "category": "On Inventory",
+        "status": None,
+        "is_sold": is_sold,
+        "sold_date": sold,
+        "sold_source": ("raw_sales_match" if is_sold else None),
+        "days_on_inventory": days,
+        "age_basis": basis,
+        "bucket": aging_bucket(days),
+        "billing": None,
+        "note": note,
+    }
 
 
 # ── money-table categorization (COMMISSION vs REBATE — never blended) ────────────────────────────────

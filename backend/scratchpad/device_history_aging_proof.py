@@ -257,6 +257,208 @@ check("NO-REC: aging.found False + honest note", resNone["aging"]["found"] is Fa
 check("NO-REC: purchase_price.found False (not $0)", resNone["purchase_price"]["found"] is False and resNone["purchase_price"]["amount"] is None)
 
 
+# ══ V2-A. pos_cost_from_sale — at-sale POS cost = ext_price − GP (universal) ═════════════════════════
+print("── V2-A. pos_cost_from_sale (ext − GP) ──")
+check("normal: 699 − 200 = 499", dh.pos_cost_from_sale(699, 200) == 499.0)
+check("GP 0 (BYOD cost==price) → cost = ext (799)", dh.pos_cost_from_sale(799, 0) == 799.0)
+check("GP None (unknown) → None (not a fake ext)", dh.pos_cost_from_sale(699, None) is None)
+check("ext None → None", dh.pos_cost_from_sale(None, 200) is None)
+check("negative GP (sold below cost) → cost = ext + |gp| (1000−(−50)=1050)", dh.pos_cost_from_sale(1000, -50) == 1050.0)
+check("GP ≥ ext (cost ≤ 0 anomaly) → None", dh.pos_cost_from_sale(100, 150) is None)
+check("$0 line (ext 0, gp 0) → None (bad-export guard)", dh.pos_cost_from_sale(0, 0) is None)
+check("money-formatted strings parse ('$699.00','$200')", dh.pos_cost_from_sale("$699.00", "$200") == 499.0)
+check("blank gp → None", dh.pos_cost_from_sale(699, "") is None)
+
+
+# ══ V2-B. inv_device_cost — per-IMEI inventory-aging unit cost ════════════════════════════════════════
+print("── V2-B. inv_device_cost (inventory_aging_device.unit_cost) ──")
+a, s = dh.inv_device_cost({"unit_cost": 349.0, "sku": "APL-15-128"})
+check("unit_cost + sku returned", a == 349.0 and s == "APL-15-128")
+check("0 unit_cost → (None,None) (no-signal, not fake 0)", dh.inv_device_cost({"unit_cost": 0}) == (None, None))
+check("missing unit_cost → (None,None)", dh.inv_device_cost({"sku": "X"}) == (None, None))
+check("non-dict → (None,None)", dh.inv_device_cost(None) == (None, None))
+a2, s2 = dh.inv_device_cost({"unit_cost": "$1,050.00"})
+check("money-formatted unit_cost parsed, sku None ok", a2 == 1050.0 and s2 is None)
+
+
+# ══ V2-C. MA marketplace linkage — imei → activation_order → order_number → price ═════════════════════
+print("── V2-C. pick_ma_marketplace_price (MA join) ──")
+comm = [{"imei": "355000000000001", "activation_order": "ORD-9001"}]
+ful = [{"order_number": "ORD-9001", "price": 529.99, "product_name": "Galaxy A15"},
+       {"order_number": "ORD-0000", "price": 111.0}]
+hit = dh.pick_ma_marketplace_price(comm, ful)
+check("HIT: price 529.99 via ORD-9001", hit["found"] and hit["amount"] == 529.99 and hit["order_number"] == "ORD-9001")
+check("HIT: product name carried", hit["product_name"] == "Galaxy A15")
+no_order = dh.pick_ma_marketplace_price([{"imei": "355000000000002", "activation_order": "ORD-XYZ"}], ful)
+check("ORDER-BUT-NO-PRICE: found False + honest note + linked order surfaced",
+      no_order["found"] is False and "no marketplace fulfillment price" in no_order["note"]
+      and no_order["order_number"] == "ORD-XYZ")
+no_comm = dh.pick_ma_marketplace_price([], ful)
+check("IMEI-MISSING (no commission row) → found False + honest note",
+      no_comm["found"] is False and "No MA commission" in no_comm["note"])
+check("norm_order collapses '.0' + case", dh.norm_order("ORD-9001.0") == "ord-9001")
+hit2 = dh.pick_ma_marketplace_price([{"imei": "x", "activation_order": "ord-9001"}],
+                                    [{"order_number": "ORD-9001", "price": 529.99}])
+check("case/format drift still matches (ord-9001 ↔ ORD-9001)", hit2["found"] and hit2["amount"] == 529.99)
+check("order_candidates gives raw + '.0'-stripped forms", set(dh.order_candidates(["ORD-1.0", "ORD-2"])) == {"ORD-1.0", "ORD-1", "ORD-2"})
+check("MA fulfillment 0/negative price ignored", dh.pick_ma_marketplace_price(
+    [{"imei": "x", "activation_order": "O1"}], [{"order_number": "O1", "price": 0}])["found"] is False)
+
+
+# ══ V2-D. build_aging_inventory — non-VIP inventory-aging aging path ══════════════════════════════════
+print("── V2-D. build_aging_inventory (non-VIP aging) ──")
+inv_recv = {"received_date": (date.today() - timedelta(days=52)).isoformat(), "store": "TOTAL-1",
+            "item": "Galaxy A15", "sku": "SMS-A15"}
+ai = dh.build_aging_inventory(inv_recv, None, TODAY)
+check("received→today unsold current-age = 52 + source", ai["days_on_inventory"] == 52
+      and ai["source"] == "inventory_aging_device")
+check("bucket warn (52) + device_model from item", ai["bucket"]["key"] == "warn" and ai["device_model"] == "Galaxy A15")
+check("current-age basis names 'received → today'", "received → today" in ai["age_basis"])
+ai_sold = dh.build_aging_inventory({"received_date": "2026-01-01", "store": "T2"}, "2026-02-20", TODAY)
+check("sold via sale-match: days 50 + is_sold", ai_sold["is_sold"] and ai_sold["days_on_inventory"] == 50)
+ai_dis = dh.build_aging_inventory({"days_in_stock": 73, "as_of_date": "2026-07-01", "sku": "X"}, None, TODAY)
+check("days_in_stock used when no received_date (73 → missed)", ai_dis["days_on_inventory"] == 73
+      and ai_dis["bucket"]["key"] == "missed")
+check("days_in_stock basis names the report", "inventory-aging report" in ai_dis["age_basis"])
+ai_none = dh.build_aging_inventory({"sku": "X"}, None, TODAY)
+check("no date at all → note + days None", ai_none["days_on_inventory"] is None and "no received/aging date" in ai_none["note"])
+check("empty inv_row → honest 'no inventory record' (found False)", dh.build_aging_inventory(None, None, TODAY)["found"] is False)
+
+
+# ══ V2-E. per-IMEI ingest parse — extract_inventory_devices (flat + grouped + honest) ════════════════
+print("── V2-E. extract_inventory_devices (ingest parse) ──")
+from app.modules.commcalc import b2b_sweep as B
+flat = [
+    {"Store": "A-STORE", "IMEI": "355111111111111", "SKU": "APL-15", "Item": "iPhone 15",
+     "Unit Cost": "$549.00", "Received Date": "2026-05-01", "Days In Stock": "60"},
+    {"Store": "A-STORE", "Serial": "SN-2222", "SKU": "SMS-A15", "Item": "Galaxy A15",
+     "Cost": "199.99", "Received Date": "06/10/2026"},
+    {"Store": "A-STORE", "Item": "no-device-id row (skipped)", "Cost": "9.99"},  # no imei/serial → skip
+]
+dev_flat = B.extract_inventory_devices(flat, as_of_date="2026-07-01")
+check("flat: 2 device rows (the no-id row is skipped honestly)", len(dev_flat) == 2)
+check("flat: imei row cost 549 + received parsed", dev_flat[0]["imei"] == "355111111111111"
+      and dev_flat[0]["unit_cost"] == 549.0 and dev_flat[0]["received_date"] == "2026-05-01")
+check("flat: serial-only row uses serial as device key + US date → ISO", dev_flat[1]["imei"] == "SN-2222"
+      and dev_flat[1]["received_date"] == "2026-06-10" and dev_flat[1]["unit_cost"] == 199.99)
+check("flat: days_in_stock parsed to int", dev_flat[0]["days_in_stock"] == 60)
+check("flat: as_of stamped + raw_row captured", dev_flat[0]["as_of_date"] == "2026-07-01" and isinstance(dev_flat[0]["raw_row"], dict))
+# GROUPED layout: uniform columns (as pandas reads them); first col = a line field that is populated
+# on detail rows and empty on subtotals; the store is a 'Store: <addr>' HEADER row (mirrors
+# normalize_inventory's grouped convention). The store fills DOWN onto the detail row from cur_store.
+grouped = [
+    {"Line": "Store: B-STORE", "IMEI": "", "SKU": "", "Unit Cost": "", "Item": ""},        # header row
+    {"Line": "1", "IMEI": "355222222222222", "SKU": "PXL-8", "Unit Cost": "429.00", "Item": "Pixel 8"},  # detail
+    {"Line": "", "IMEI": "", "SKU": "", "Unit Cost": "", "Item": ""},                        # subtotal/blank → skipped
+]
+dev_grp = B.extract_inventory_devices(grouped, as_of_date="2026-07-01")
+check("grouped: 1 device row, store filled DOWN from 'Store:' header", len(dev_grp) == 1
+      and dev_grp[0]["store"] == "B-STORE" and dev_grp[0]["imei"] == "355222222222222")
+# honest 0-device parse (no imei/serial + no cost columns anywhere).
+none_file = [{"Category": "Phones", "Qty": "12", "Value": "3000"}]
+check("honest: no per-device columns → [] (never faked)", B.extract_inventory_devices(none_file) == [])
+ddiag = B.device_diagnostics(none_file)
+check("device_diagnostics names missing imei/cost cols honestly",
+      ddiag["imei_col"] is None and ddiag["cost_col"] is None and ddiag["n_rows"] == 1)
+ddiag2 = B.device_diagnostics(flat)
+check("device_diagnostics finds imei + cost cols on a real file (matched candidate)",
+      ddiag2["imei_col"] in ("imei", "IMEI") and ddiag2["cost_col"] == "Unit Cost")
+
+
+# ══ V2-F. REAL router — source priority ①→⑤, POS/MA integration, ORG ISOLATION of new reads ═════════
+print("── V2-F. get_device_history v2 (priority + org isolation of new sources) ──")
+IMEI_INV = "355444444444444"     # tenant C: has an inventory_aging_device cost (source ①)
+IMEI_POS = "355555555555555"     # tenant C: sold via raw_sales (source ②) — no inventory row
+IMEI_MA  = "355666666666666"     # tenant D: MA marketplace order (source ③)
+STORE2 = {
+    "inventory_aging_device": [
+        {"org_id": "C", "imei": IMEI_INV, "serial": None, "sku": "APL-15-128", "item": "iPhone 15",
+         "store": "C-STORE", "unit_cost": 549.0, "received_date": (date.today() - timedelta(days=52)).isoformat(),
+         "days_in_stock": None, "as_of_date": "2026-07-01"},
+        # tenant D has a DIFFERENT cost for the SAME imei — must never leak into C.
+        {"org_id": "D", "imei": IMEI_INV, "serial": None, "sku": "X", "item": "Galaxy",
+         "store": "D-STORE", "unit_cost": 999.0, "received_date": "2026-01-01",
+         "days_in_stock": None, "as_of_date": "2026-07-01"},
+    ],
+    "raw_sales": [
+        {"org_id": "C", "serial_1": IMEI_POS, "mdn": "5551110000", "trans_date": "2026-06-15",
+         "store": "C-STORE", "salesperson": "Rep C", "product_desc": "Moto G", "contract_type": "New",
+         "ext_price": 299.0, "gp": 120.0, "trans_id": "T1"},
+    ],
+    "raw_ma_commission": [
+        {"org_id": "D", "imei": IMEI_MA, "activation_order": "ORD-D-1", "sku": "S", "tx_date": "2026-06-01"},
+    ],
+    "raw_ma_fulfillment": [
+        {"org_id": "D", "order_number": "ORD-D-1", "price": 259.5, "product_name": "TCL 40",
+         "date_ordered": "2026-05-20"},
+        {"org_id": "C", "order_number": "ORD-D-1", "price": 1.0},   # C must not see D's order
+    ],
+}
+R.sb = lambda: FakeClient(STORE2)
+
+# ① inventory-aging cost wins (universal POS/SKU), owed_to_vip absent for this tenant.
+rInv = asyncio.run(R.get_device_history(q=IMEI_INV, authorization="", org_id="C"))
+check("① inv-aging cost 549 chosen + provenance names POS inventory cost",
+      rInv["purchase_price"]["amount"] == 549.0 and "POS inventory cost" in rInv["purchase_price"]["label"])
+check("① aging from inventory_aging_device (non-VIP path), current-age 52",
+      rInv["aging"]["source"] == "inventory_aging_device" and rInv["aging"]["days_on_inventory"] == 52)
+check("① found True via inventory row", rInv["found"] is True)
+# ORG ISOLATION — C never sees D's 999 for the same imei.
+rInvD = asyncio.run(R.get_device_history(q=IMEI_INV, authorization="", org_id="D"))
+check("ISO: D inv cost 999 (its own), C stays 549", rInvD["purchase_price"]["amount"] == 999.0
+      and rInv["purchase_price"]["amount"] == 549.0)
+check("ISO: C aging store C-STORE, never D-STORE", rInv["aging"]["store"] == "C-STORE")
+
+# ② at-sale POS cost (ext − GP = 299 − 120 = 179) when there is NO inventory row.
+rPos = asyncio.run(R.get_device_history(q=IMEI_POS, authorization="", org_id="C"))
+check("② POS at-sale cost 179 (299−120) + provenance 'ext − GP'",
+      rPos["purchase_price"]["amount"] == 179.0 and "ext − GP" in rPos["purchase_price"]["label"])
+check("② sold_by_us True + device model from sale", rPos["sold_by_us"] and rPos["device"]["phone_model"] == "Moto G")
+
+# ③ MA marketplace order price (tenant D) — imei → activation_order → order_number → price.
+rMa = asyncio.run(R.get_device_history(q=IMEI_MA, authorization="", org_id="D"))
+check("③ MA marketplace price 259.5 + provenance names the order",
+      rMa["purchase_price"]["amount"] == 259.5 and "MA marketplace order" in rMa["purchase_price"]["label"])
+check("③ found via MA commission row", rMa["found"] is True)
+# ORG ISOLATION of MA — C asking for D's imei sees NOTHING of D's order/price.
+rMaC = asyncio.run(R.get_device_history(q=IMEI_MA, authorization="", org_id="C"))
+check("ISO: C never sees D's MA order/price (honest empty for C)",
+      rMaC["purchase_price"]["found"] is False and rMaC["found"] is False)
+
+# ④/⑤ asset_ledger raw_row beats owed_to_vip; owed_to_vip is LAST RESORT, relabeled house-basis.
+STORE2["asset_ledger"] = [
+    {"org_id": "C", "esn_imei": "355777777777777", "phone_number": "5550000001", "store": "C-STORE",
+     "market": "PA", "device_model": "iPhone 14", "category": "On Inventory", "status": "In Stock",
+     "acquired_date": "2026-01-01", "owed_to_vip": 300, "raw_row": {"Device Cost": "410.00"}},
+    {"org_id": "C", "esn_imei": "355888888888888", "phone_number": "5550000002", "store": "C-STORE",
+     "market": "PA", "device_model": "iPhone 13", "category": "On Inventory", "status": "In Stock",
+     "acquired_date": "2026-01-01", "owed_to_vip": 275, "raw_row": {}},
+]
+r4 = asyncio.run(R.get_device_history(q="355777777777777", authorization="", org_id="C"))
+check("④ raw_row Device Cost 410 wins over owed 300", r4["purchase_price"]["amount"] == 410.0)
+r5 = asyncio.run(R.get_device_history(q="355888888888888", authorization="", org_id="C"))
+check("⑤ owed_to_vip 275 LAST RESORT + relabeled 'VIP billing basis (house...)'",
+      r5["purchase_price"]["amount"] == 275.0 and "VIP billing basis" in r5["purchase_price"]["label"])
+
+# full priority: an inventory-aging cost OUTRANKS an asset_ledger owed_to_vip for the SAME device.
+STORE2["asset_ledger"].append(
+    {"org_id": "C", "esn_imei": "355999999999999", "phone_number": "5550000003", "store": "C-STORE",
+     "market": "PA", "device_model": "iPhone 15", "acquired_date": "2026-01-01", "owed_to_vip": 800, "raw_row": {}})
+STORE2["inventory_aging_device"].append(
+    {"org_id": "C", "imei": "355999999999999", "sku": "APL-15", "item": "iPhone 15", "store": "C-STORE",
+     "unit_cost": 500.0, "received_date": "2026-06-01", "as_of_date": "2026-07-01"})
+rPri = asyncio.run(R.get_device_history(q="355999999999999", authorization="", org_id="C"))
+check("PRIORITY: inv-aging 500 (①) beats owed_to_vip 800 (⑤) for same device",
+      rPri["purchase_price"]["amount"] == 500.0 and rPri["purchase_price"]["source"] == "inventory_aging_device.unit_cost")
+check("PRIORITY: asset_ledger still drives aging when present (house path)",
+      rPri["aging"]["source"] == "asset_ledger")
+
+# honest empty across ALL v2 sources — unknown device, no rows anywhere.
+rEmpty = asyncio.run(R.get_device_history(q="000000000000001", authorization="", org_id="C"))
+check("EMPTY: no source → purchase_price.found False (never $0)", rEmpty["purchase_price"]["found"] is False)
+check("EMPTY: provenance mentions the pending feed", "feed pending" in rEmpty["purchase_price"]["provenance"])
+
+
 # ══ 8. regression — the existing device_history_proof.py must still be green ═════════════════════════
 print("── 8. regression: existing device_history_proof.py ──")
 _here = os.path.dirname(__file__)
@@ -264,6 +466,18 @@ _r = subprocess.run([sys.executable, os.path.join(_here, "device_history_proof.p
                     capture_output=True, text=True)
 _tail = _r.stdout.strip().splitlines()[-1] if _r.stdout.strip() else ""
 check(f"existing device_history_proof.py exits green ({_tail})", _r.returncode == 0)
+
+
+# ══ 9. regression — the frontend export builder proof (RULE FOUR) must still be green ════════════════
+print("── 9. regression: frontend export mjs (prove_device_history_export.mjs) ──")
+_mjs = os.path.abspath(os.path.join(_here, "..", "..", "frontend", "scratchpad", "prove_device_history_export.mjs"))
+_node = subprocess.run(["bash", "-lc", "command -v node || true"], capture_output=True, text=True).stdout.strip()
+if _node and os.path.exists(_mjs):
+    _rm = subprocess.run([_node, _mjs], capture_output=True, text=True)
+    _mtail = _rm.stdout.strip().splitlines()[-1] if _rm.stdout.strip() else ""
+    check(f"export mjs exits green ({_mtail})", _rm.returncode == 0, _rm.stderr[-300:])
+else:
+    print("  SKIP  export mjs (node not on PATH here — run it directly; see verify note)")
 
 
 print(f"\n==== device-history AGING+PRICE proof: {_pass} passed, {_fail} failed ====")

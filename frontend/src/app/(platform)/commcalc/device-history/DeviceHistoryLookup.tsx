@@ -173,7 +173,7 @@ export default function DeviceHistoryLookup() {
                       <td style={{ ...cellR, fontWeight: 700 }}>
                         {res.purchase_price?.found
                           ? fmt(res.purchase_price.amount)
-                          : <span style={{ color: 'var(--text3)', fontWeight: 400 }}>— no cost on file</span>}
+                          : <span style={{ color: 'var(--text3)', fontWeight: 400 }}>— no POS cost record yet</span>}
                       </td>
                     </tr>
                     {res.purchase_price?.found && (
