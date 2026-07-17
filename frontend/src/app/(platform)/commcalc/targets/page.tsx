@@ -157,6 +157,7 @@ export default function DailyTargetsPage() {
       { header: 'Pace/day', get: (s: any) => s.categories?.activations?.pace ?? 0 },
       { header: 'Trending Box', get: (s: any) => s.trending_box ?? 0 },
       { header: 'Trending Acc. $', get: (s: any) => s.trending_acc_sales ?? 0, money: true },
+      { header: 'Acc. Achieved (MTD)', get: (s: any) => s.categories?.accessories?.achieved_mtd ?? 0, money: true },
       { header: "Acc. Today's Target", get: (s: any) => s.categories?.accessories?.today_target ?? 0, money: true },
       { header: 'Acc. $/day needed', get: (s: any) => s.categories?.accessories?.pace ?? 0, money: true },
       { header: 'Device set-up fee (MTD, in acc.)', get: (s: any) => s.categories?.accessories?.setup_fee_mtd ?? 0, money: true },
@@ -212,7 +213,7 @@ export default function DailyTargetsPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-                {['Store', 'Monthly', 'Achieved', 'Need', "Today's Target", 'Pace/day', 'Trending Box', 'Trending Acc.', 'Acc. Today', 'Acc. $/day', 'Conversion', ''].map(h => <th key={h} style={th}>{h}</th>)}
+                {['Store', 'Monthly', 'Achieved', 'Need', "Today's Target", 'Pace/day', 'Trending Box', 'Trending Acc.', 'Acc. Ach.', 'Acc. Today', 'Acc. $/day', 'Conversion', ''].map(h => <th key={h} style={th}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -244,6 +245,7 @@ export default function DailyTargetsPage() {
                     <td style={td}>{fmtN(a?.pace, 1)}</td>
                     <td style={{ ...td, color: 'var(--accent)', fontWeight: 600 }} title="Projected month-end activations (same source as Executive MTD)">{fmtN(s.trending_box, 0)}</td>
                     <td style={{ ...td, color: 'var(--accent)', fontWeight: 600 }} title="Projected month-end accessory $ (same source as Executive MTD)">{fmt(s.trending_acc_sales)}</td>
+                    <td style={td} title="Accessory $ achieved MTD (incl. device set-up fee) — the actual accessory sales flowing from the feed">{fmt(ac?.achieved_mtd)}</td>
                     <td style={{ ...td, fontWeight: 700, color: 'var(--accent)' }} title={`Accessory $ needed today${setupMtd ? ` · includes ${fmt(setupMtd)} device set-up fee in achieved` : ''}`}>{fmt(ac?.today_target)}</td>
                     <td style={td} title={`Accessory $ needed per open day left${setupMtd ? ` · set-up fee counted toward the accessory target (${fmt(setupMtd)} MTD)` : ''}`}>{fmt(ac?.pace)}</td>
                     <td style={{ ...td, fontWeight: 600, color: convColor(s.conversion) }}>

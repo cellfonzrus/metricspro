@@ -39,6 +39,7 @@ export default function SalesReportPage() {
   const [accMsg, setAccMsg] = useState('')
   const [kwInput, setKwInput] = useState('')
   const [setupInput, setSetupInput] = useState('')
+  const [ctMap, setCtMap] = useState<Record<string, string>>({})   // contract_type -> activation bucket (mig 213)
   const [selMarkets, setSelMarkets] = useState<string[]>([])   // multi-select market filter
   const [selStores, setSelStores] = useState<string[]>([])     // multi-select store filter
 
@@ -54,6 +55,7 @@ export default function SalesReportPage() {
       setAccFields(f)
       setAccSel({ d: f.accessory_departments || [], c: f.accessory_categories || [], p: f.accessory_product_keywords || [],
         a: f.acima_tenders || [], box: f.box_departments || [], setup: f.setup_fee_keywords || [] })
+      setCtMap(f.contract_type_map || {})
     }).catch(e => setAccMsg('❌ ' + (e?.message || e)))
   }
   async function saveAccCfg() {
@@ -66,7 +68,7 @@ export default function SalesReportPage() {
     try {
       await api('/api/v1/commcalc/accessory-config', { method: 'PUT', body: JSON.stringify({
         departments: accSel.d, categories: accSel.c, product_keywords: kws, acima_tenders: accSel.a,
-        box_departments: accSel.box, setup_fee_keywords: setupKws }) })
+        box_departments: accSel.box, setup_fee_keywords: setupKws, contract_type_map: ctMap }) })
       setAccMsg('✅ Saved.'); setAccOpen(false); load()
     } catch (e: any) { setAccMsg('❌ ' + (e?.message || e)) }
   }
@@ -460,6 +462,28 @@ export default function SalesReportPage() {
                           onChange={() => setAccSel(s => ({ ...s, box: toggle(s.box, v) }))} />
                         {v}
                       </label>
+                    ))}
+                  </div>
+                </div>
+                {/* CONTRACT TYPE -> activation bucket — map the tenant's OBSERVED Contract Type values to
+                    the activation buckets so a Total/non-Boost POS whose labels differ from the built-in
+                    keyword set still counts activations/upgrades/BYOD on the Sales Report, Exec MTD & Daily
+                    Targets. 'Auto' = built-in classifier; 'Not an activation' excludes a label. DISPLAY only. */}
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Contract type &rarr; activation bucket <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(map each Contract Type value your POS uses to an activation bucket &mdash; for tenants whose labels differ from the built-in Activation / Port-In / Upgrade / BYOD set. &ldquo;Auto&rdquo; uses the built-in classifier; &ldquo;Not an activation&rdquo; excludes a label. Drives the Sales Report, Executive MTD &amp; Daily-Targets activation / upgrade counts &mdash; display only, no pay change.)</span></div>
+                  <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
+                    {(accFields.contract_types || []).length === 0 ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>no contract types in this period</div> : (accFields.contract_types || []).map((v: string) => (
+                      <div key={v} style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between', fontSize: 13, padding: '3px 0' }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v}>{v}</span>
+                        <select style={{ ...sel, width: 190, flex: 'none' }} value={ctMap[v] || ''}
+                          onChange={e => setCtMap(m => { const n = { ...m }; if (e.target.value) n[v] = e.target.value; else delete n[v]; return n })}>
+                          <option value="">Auto (built-in)</option>
+                          <option value="premium">Activation</option>
+                          <option value="upgrade">Upgrade</option>
+                          <option value="byod">BYOD</option>
+                          <option value="none">Not an activation</option>
+                        </select>
+                      </div>
                     ))}
                   </div>
                 </div>

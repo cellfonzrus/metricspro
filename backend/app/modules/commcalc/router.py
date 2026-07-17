@@ -4046,6 +4046,29 @@ def _accessory_config(client, org_id):
         setup_kws = []
     if not setup_kws:
         setup_kws = ["Device Setup Charge"]
+    # CONTRACT-TYPE -> activation-bucket map (mig 213; per-org, admin-editable) — lets a Total-carrier tenant
+    # whose b2bsoft Contract Type labels don't match the hard-coded classify_contract_type keyword set map
+    # its OBSERVED values to the DISPLAY activation buckets. Fetched in its OWN defensive query so a missing
+    # column (pre-213) can NEVER disturb the resolution above — it falls back to an EMPTY map, and the shared
+    # aggregation then falls straight through to classify_contract_type -> house/Boost display BYTE-IDENTICAL.
+    # DISPLAY ONLY: consumed by _sales_cell_agg (Sales Report / Exec MTD / Daily Targets); no payout path.
+    ct_map_raw = {}
+    try:
+        crows = (client.schema("commcalc").table("accessory_config")
+                 .select("contract_type_map").eq("org_id", org_id).limit(1).execute().data) or []
+        if crows and isinstance(crows[0].get("contract_type_map"), dict):
+            ct_map_raw = crows[0]["contract_type_map"] or {}
+    except Exception:
+        ct_map_raw = {}
+    # Normalized {stripped-lowercased contract_type : bucket} for O(1) case-insensitive matching; buckets are
+    # limited to the classifier's own vocabulary + 'none' (force-exclude). Unknown buckets/blank keys dropped.
+    _CT_BUCKETS = {"premium", "upgrade", "byod", "none"}
+    ct_map = {}
+    for _k, _v in (ct_map_raw or {}).items():
+        _kk = str(_k or "").strip().lower()
+        _vv = str(_v or "").strip().lower()
+        if _kk and _vv in _CT_BUCKETS:
+            ct_map[_kk] = _vv
     return {"departments": {d.strip().lower() for d in depts},
             "categories": {c.strip().lower() for c in cats},
             "products": {k.strip().lower() for k in kws},
@@ -4054,7 +4077,8 @@ def _accessory_config(client, org_id):
             "box_departments": {b.strip() for b in box_depts},
             "box_departments_list": box_depts,
             "setup_fee_products": {k.strip().lower() for k in setup_kws},
-            "setup_fee_keywords_list": setup_kws}
+            "setup_fee_keywords_list": setup_kws,
+            "contract_type_map": ct_map, "contract_type_map_raw": ct_map_raw}
 
 
 def _is_accessory(dept, category, product, acfg):
@@ -7760,7 +7784,8 @@ def get_accessory_config(org_id: str = ORG_ID):
     return {"departments": c["departments_list"], "categories": c["categories_list"],
             "product_keywords": c["products_list"], "acima_tenders": c["acima_tenders_list"],
             "box_departments": c["box_departments_list"],
-            "setup_fee_keywords": c["setup_fee_keywords_list"]}
+            "setup_fee_keywords": c["setup_fee_keywords_list"],
+            "contract_type_map": c["contract_type_map_raw"]}
 
 
 @router.put("/accessory-config")
@@ -7793,10 +7818,21 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID):
     # Device SET-UP FEE keywords (mig 217, pkg A field — editable from the shared Classification-settings UI).
     row["setup_fee_keywords"] = ([str(x).strip() for x in (body.get("setup_fee_keywords") or []) if str(x).strip()]
                                  if "setup_fee_keywords" in body else cur["setup_fee_keywords_list"])
-    # Persist defensively: pre-mig-217/218 those columns don't exist, so a save carrying them 500s — retry
-    # progressively dropping the newest columns so editing the accessory lists never breaks before the
-    # migrations run (box → _BOX_DEPTS default, set-up fee → 'Device Setup Charge' default).
-    for _drop in ([], ["setup_fee_keywords"], ["setup_fee_keywords", "box_departments"]):
+    # CONTRACT-TYPE -> activation-bucket map (mig 213 — editable from the shared Classification-settings UI).
+    # Sanitize to {str contract_type : bucket} with bucket in premium|upgrade|byod|none (unknown dropped).
+    if "contract_type_map" in body:
+        _raw = body.get("contract_type_map") or {}
+        _ok = {"premium", "upgrade", "byod", "none"}
+        row["contract_type_map"] = {str(k).strip(): str(v).strip().lower()
+                                    for k, v in ((_raw.items()) if isinstance(_raw, dict) else [])
+                                    if str(k).strip() and str(v).strip().lower() in _ok}
+    else:
+        row["contract_type_map"] = cur["contract_type_map_raw"]
+    # Persist defensively: pre-mig-213/217/218 those columns don't exist, so a save carrying them 500s —
+    # retry progressively dropping the newest columns so editing the accessory lists never breaks before the
+    # migrations run (contract-type map → empty/classifier, box → _BOX_DEPTS, set-up fee → 'Device Setup Charge').
+    for _drop in ([], ["contract_type_map"], ["contract_type_map", "setup_fee_keywords"],
+                  ["contract_type_map", "setup_fee_keywords", "box_departments"]):
         attempt = dict(row)
         for k in _drop:
             attempt.pop(k, None)
@@ -7804,7 +7840,7 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID):
             client.schema("commcalc").table("accessory_config").upsert(attempt, on_conflict="org_id").execute()
             break
         except Exception as e2:
-            if _drop == ["setup_fee_keywords", "box_departments"]:
+            if _drop == ["contract_type_map", "setup_fee_keywords", "box_departments"]:
                 raise HTTPException(500, f"save failed — run migration 208_commission_accessory_config.sql first: {e2}")
     return get_accessory_config(org_id)
 
@@ -7855,7 +7891,10 @@ def sales_fields(period: str = "", org_id: str = ORG_ID):
             "accessory_product_keywords": cur["products_list"], "acima_tenders": cur["acima_tenders_list"],
             # Box (device-unit) departments + device set-up-fee keywords for the Classification-settings UI —
             # options are the DISTINCT `departments`/`products` above (pick-don't-type, RULE THREE).
-            "box_departments": cur["box_departments_list"], "setup_fee_keywords": cur["setup_fee_keywords_list"]}
+            "box_departments": cur["box_departments_list"], "setup_fee_keywords": cur["setup_fee_keywords_list"],
+            # Contract-type -> activation-bucket map (mig 213) + its pick-don't-type options (`contract_types`
+            # above): the Classification-settings "Contract type -> activation bucket" editor.
+            "contract_type_map": cur["contract_type_map_raw"]}
 
 
 @router.get("/commission-drill")
@@ -8857,12 +8896,34 @@ _ACTUALS_COLS = ("trans_id,trans_date,store,salesperson,user_login,contract_type
 _VOID_TOKENS = ('true', 'yes', '1', 'voided', 'void')   # the Sales Report's set = the source of truth
 
 
+def _resolve_ct_bucket(ct, ct_map=None):
+    """DISPLAY-path contract-type classification with a per-org override (mig 213). Returns
+    'byod' | 'upgrade' | 'premium' | None — the SAME vocabulary as calculator.classify_contract_type.
+
+    `ct_map` = the org's {stripped-lowercased contract_type : bucket} map from
+    accessory_config['contract_type_map'] (bucket in 'premium'|'upgrade'|'byod'|'none'). A MAPPED value wins
+    ('none' -> None, i.e. force-excluded); an UNMAPPED value falls back to the hard-coded classifier — so an
+    empty map (the house/Boost default) is BYTE-IDENTICAL to calling classify_contract_type directly, and a
+    tenant only needs to map the labels the hard-coded set misses. Pure; never raises.
+
+    DISPLAY ONLY: used by _sales_cell_agg (Sales Report / Executive MTD / Daily Targets). The Boost payout
+    path (calculator.classify_contract_type) and plan-mode payout (commission_engine) do NOT call this, so a
+    mapping never moves a commission/payout number."""
+    if ct_map:
+        b = ct_map.get(str(ct or "").strip().lower())
+        if b:
+            return None if b == "none" else b
+    return classify_contract_type(ct)
+
+
 def _sales_cell_agg(rows, acfg, exec_cfg=None):
     """Aggregate raw sales lines → {(store, rep, day): cell}. `acfg` = _accessory_config(...) (the ONE
     accessory classifier). `exec_cfg` (optional _exec_metric_config result) turns ON the Executive-MTD
     extension line-metrics + the configurable Port sub-split; when None those are skipped (Sales Report /
     Targets). See the block comment above."""
     act_rules = (exec_cfg.get('activation', {}) or {}).get('rules', {}) if exec_cfg else {}
+    # Per-org contract-type -> bucket override (mig 213); empty for the house -> byte-identical classifier.
+    ct_map = acfg.get('contract_type_map') if acfg else None
     agg = {}
     for r in rows:
         # ── THE canonical skip rules — shared by all three (was three slightly different predicates).
@@ -8899,7 +8960,8 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None):
         a['revenue'] += ext
         a['gp'] += gp
         # SHARED activation classifier (money-adjacent; identical to commissions + targets), DISTINCT-txn.
-        _cls = classify_contract_type(ct)
+        # Config-driven per-org override (mig 213) wins for a mapped label; else the hard-coded classifier.
+        _cls = _resolve_ct_bucket(ct, ct_map)
         if tid and _cls == 'byod':
             a['_byod'].add(tid)
         elif tid and _cls == 'upgrade':
@@ -8952,10 +9014,22 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None):
 
 
 def _store_code_resolver(client, org_id):
-    """Return resolve(store_string) -> canonical store_code — the SAME mapping the Daily-Targets actuals
-    use so a store's Exec-MTD trending attaches to the matching target row. coa.store_resolver (exact
-    address → store_aliases → store_code → unambiguous leading number) then store_mapping address→code.
-    Never raises; falls back to the raw string when nothing resolves."""
+    """Return resolve(store_string) -> canonical store_code — the SAME mapping the Daily-Targets actuals +
+    trending use so a store's sales/Exec-MTD numbers attach to the matching target row.
+
+    Resolution: coa.store_resolver (exact address → store_aliases → store_code → unambiguous leading number)
+    then commcalc.store_mapping address→code. When that yields NO store_mapping code (the tenant hasn't set
+    up commcalc.store_mapping — the luxelink case: its b2bsoft sales-store strings never resolved to its
+    storeops store_codes, so the Daily-Targets JOIN missed and EVERY achieved/trending metric read 0 even
+    with sales present), fall back to the org's OWN storeops.stores roster — the SAME roster the Daily-Targets
+    page iterates — matching the sales-store string against a storeops address OR store_code. This closes the
+    actuals→targets loop without a separate commcalc.store_mapping (RULE TWO: resolve against the org's real
+    roster, not a hard-coded map).
+
+    Superset-only: it NEVER overrides an existing store_mapping resolution (so the house/Boost org, whose
+    store_mapping is populated, stays BYTE-IDENTICAL) — it only fills a MISS that previously returned the raw
+    string. DISPLAY-ONLY (two callers: _compute_feed_actuals_py + _targets_trending_by_code, both Daily
+    Targets). Never raises; falls back to the cleaned raw string when nothing resolves."""
     try:
         from app.modules.account import coa
         _resolve_store = coa.store_resolver(client, org_id)
@@ -8972,10 +9046,40 @@ def _store_code_resolver(client, org_id):
         c = (m.get('store_code') or '').strip()
         if a and c:
             addr_to_code[a] = c
+    # storeops.stores fallback maps (the Daily-Targets join target). so_addr_to_code: address -> store_code;
+    # so_codes: valid store_codes (upper) so a raw string that IS already a storeops code is preserved.
+    so_addr_to_code, so_codes = {}, set()
+    try:
+        so = (client.schema('storeops').table('stores')
+              .select('store_code,address').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        so = []
+    for s in so:
+        c = (s.get('store_code') or '').strip()
+        a = (s.get('address') or '').strip().lower()
+        if c:
+            so_codes.add(c.upper())
+            if a:
+                so_addr_to_code[a] = c
 
     def _resolve(store):
         canon = (_resolve_store(store) if (_resolve_store and store) else None) or store
-        return addr_to_code.get(str(canon).strip().lower(), canon)
+        ck = str(canon).strip().lower()
+        # 1) existing store_mapping hit — UNCHANGED (house byte-identical).
+        if ck in addr_to_code:
+            return addr_to_code[ck]
+        # 2) store_mapping MISS → try the storeops roster: canon-as-address, raw-as-address, then
+        #    canon/raw already-a-code. Only ADDS resolutions where the raw string was previously returned.
+        raw = str(store or '').strip().lower()
+        if ck and ck in so_addr_to_code:
+            return so_addr_to_code[ck]
+        if raw and raw in so_addr_to_code:
+            return so_addr_to_code[raw]
+        if ck and str(canon).strip().upper() in so_codes:
+            return str(canon).strip()
+        if raw and raw.upper() in so_codes:
+            return str(store).strip()
+        return canon
     return _resolve
 
 
