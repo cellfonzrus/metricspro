@@ -354,6 +354,41 @@ def _page_text(page):
         return ""
 
 
+def _main_frame_text(page):
+    """VISIBLE innerText of the TOP frame only (title + document.body.innerText). Excludes <script>/<style>,
+    display:none elements, HTML comments, and ALL child frames — i.e. what the operator actually SEES on the
+    main page. _classify's auth-vs-2FA word decision prefers THIS over the raw HTML soup (_page_text uses
+    page.content(), which serializes hidden + script + comment text), so a STALE or HIDDEN 2FA phrase — or a
+    stray token like 'otp' in a script/data-attr — can't pin the state at 'twofa' when the real Main Panel
+    is on screen (incident 3, 2026-07-17). Never raises → '' on failure."""
+    try:
+        t = page.evaluate(
+            "() => ((document.title || '') + ' ' + ((document.body && document.body.innerText) || ''))")
+        return (t or "").lower()
+    except Exception:
+        return ""
+
+
+def _all_frames_text(page):
+    """VISIBLE innerText concatenated across EVERY frame (main + children) — the fallback signal when the
+    top frame's text carries no auth/2FA marker (e.g. an app that renders its Main Panel inside a child
+    frame). Still VISIBLE text only (per-frame document.body.innerText), so hidden/script 2FA noise stays
+    excluded. Never raises → '' on failure."""
+    parts = []
+    for fr in _frames(page):
+        try:
+            t = fr.evaluate("() => ((document.body && document.body.innerText) || '')")
+            if t:
+                parts.append(t)
+        except Exception:
+            continue
+    try:
+        parts.append(page.title() or "")
+    except Exception:
+        pass
+    return " ".join(parts).lower()
+
+
 def _looks_like_cloudflare(page):
     body = _page_text(page)
     return ("cf-chl" in body or "challenge-platform" in body or
@@ -579,20 +614,32 @@ def _classify(page):
         return "proxy_error"
     if _looks_like_bot_wall(page) and not _password_frame(page)[1]:
         return "botwall"
-    body = _page_text(page)
     fr, pw = _password_frame(page)
     code_field = _code_field(page)
     twofa_words = ("verification code", "verify your", "two-factor", "two factor", "2-step",
                    "authentication code", "code sent", "enter the code", "one-time",
                    "we sent", "security code", "otp")
-    if (code_field and not pw) or any(w in body for w in twofa_words):
-        return "twofa"
-    if pw:
-        return "login"
     auth_words = ("logout", "log out", "sign out", "main panel", "dashboard", "commission",
                   "welcome", "my account")
-    if any(w in body for w in auth_words):
+    # STRUCTURAL signals first — a VISIBLE strict 2FA-code input or a password field is unambiguous and
+    # cannot be faked by leftover page text.
+    if code_field and not pw:
+        return "twofa"                                   # row 1 — real 2FA code-entry page
+    if pw:
+        return "login"                                   # row 2
+    # No structural login/2FA control on the page. Decide by the VISIBLE text (what the operator SEES),
+    # preferring the TOP frame and falling back to all frames — NOT _page_text's raw HTML/script soup, in
+    # which a stale/hidden 2FA phrase (or a script/data-attr 'otp') survives and used to permanently pin
+    # 'twofa' over the authenticated Main Panel (incident 3). Per the matrix an AUTHENTICATED marker BEATS
+    # a 2FA marker (row 3 — Main Panel wins even if a stale 'we sent…' also appears); a 2FA marker with NO
+    # auth marker (the 'New Sign In → Next' interstitial, which has no code box) stays 'twofa' (row 4).
+    main = _main_frame_text(page)
+    text = main if (any(w in main for w in auth_words) or any(w in main for w in twofa_words)) \
+        else _all_frames_text(page)
+    if any(w in text for w in auth_words):
         return "authenticated"
+    if any(w in text for w in twofa_words):
+        return "twofa"
     return "unknown"
 
 
