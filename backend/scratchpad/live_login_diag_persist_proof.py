@@ -230,7 +230,7 @@ class FakeVP:
         return "proxy_error"
 
     @staticmethod
-    def _proxy_error_message(url, proxy_url):
+    def _proxy_error_message(url, proxy_url, reported_url=None):
         return "PROXY DIED (squid) for %s" % (url or "?")
 
     # used only by _do_submit

@@ -197,9 +197,17 @@ def _https_upgrade_url(url):
     else:
         host = hostport.split(":")[0]
     host = host.lower()
+    # GUARD (incident 4): a hostless / path-only value ("http:///path" or a malformed request URL) must
+    # NEVER become a hostless Location — squid rejects it ("Missing hostname" / "Invalid URL"). Refuse it.
+    if not host:
+        return None
     if (host in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
             or host.startswith("127.") or host.endswith(".localhost")):
         return None
+    # Encode a RAW space (illegal in a request-URI — "Main Panel.aspx" → "Main%20Panel.aspx"; squid also
+    # rejects the raw space). Only the literal space is touched, so an already-%xx-encoded returnto
+    # (…returnto=http%3a%2f%2f…) survives byte-for-byte and is NOT double-escaped.
+    rest = rest.replace(" ", "%20")
     return "https://" + rest
 
 
@@ -253,6 +261,11 @@ def _new_context(browser, storage_state=None, proxy=None):
             try:
                 https = _https_upgrade_url(route.request.url)
             except Exception:
+                https = None
+            # Only emit a 307 when we have a GUARANTEED-ABSOLUTE https Location (scheme + host). A hostless
+            # or relative Location would make the browser/proxy build a malformed request ("Missing
+            # hostname", incident 4) — in that case pass the original request through untouched instead.
+            if https and not https.lower().startswith("https://"):
                 https = None
             try:
                 if https:
@@ -406,28 +419,72 @@ def _looks_like_bot_wall(page):
 # localhost (squid)". The https-upgrade route in _new_context stops VidaPay's http-redirect from
 # producing this, but if a proxy still mangles a request we must NAME the proxy as the failure point —
 # NOT misread it as an expired session and blunder into report pulls with confusing calibration errors.
-_PROXY_ERR_PHRASES = ("requested url could not be retrieved", "your cache administrator", "(squid)")
+_PROXY_ERR_PHRASES = ("requested url could not be retrieved", "your cache administrator", "(squid)",
+                      "invalid url", "missing or incorrect access protocol", "missing hostname",
+                      "illegal double-escape in the url-path")
 
 
 def _looks_like_proxy_error(page):
-    body = _page_text(page)
-    return any(pph in body for pph in _PROXY_ERR_PHRASES)
+    # Check the HTML soup (title + page.content()) AND the VISIBLE top-frame text — page.content() can be
+    # flaky on a proxy-error commit (the request failed at the network layer), so the visible squid body is
+    # a second, more reliable read. Either hit → it's the egress proxy's own page.
+    try:
+        if any(pph in _page_text(page) for pph in _PROXY_ERR_PHRASES):
+            return True
+    except Exception:
+        pass
+    try:
+        if any(pph in _main_frame_text(page) for pph in _PROXY_ERR_PHRASES):
+            return True
+    except Exception:
+        pass
+    return False
 
 
-def _proxy_error_message(failing_url, proxy_url):
+# Squid's error page states the URL it FAILED to retrieve, e.g.
+#   "... while trying to retrieve the URL: <a href="...">/Default.aspx?returnto=http%3a%2f%2f…</a>"
+# Extracting it (from the RAW html, case preserved) tells the NEXT incident the EXACT (possibly malformed,
+# host-less, double-escaped) form squid saw — without needing a screenshot. Best-effort.
+import re as _re
+_SQUID_URL_RE = _re.compile(r"retriev(?:e|ing)\s+the\s+url:?\s*(?:<a[^>]*>)?\s*([^<>\s\"']{3,400})", _re.I)
+
+
+def _squid_reported_url(page):
+    """The URL squid says it could not retrieve (raw, case-preserved), or None. Never raises."""
+    try:
+        raw = page.content() or ""
+    except Exception:
+        raw = ""
+    if not raw:
+        return None
+    try:
+        m = _SQUID_URL_RE.search(raw)
+    except Exception:
+        m = None
+    if not m:
+        return None
+    u = (m.group(1) or "").strip().replace("&amp;", "&")
+    return u[:400] or None
+
+
+def _proxy_error_message(failing_url, proxy_url, reported_url=None):
     """A clear, actionable error for the egress-proxy's own rejection page — names the failing URL and
     states the request died AT THE EGRESS PROXY (NOT an expired session, NOT the portal). Mirrors the
-    per-egress WAF error style (egress_hint / commit f60f1e1)."""
+    per-egress WAF error style (egress_hint / commit f60f1e1). `reported_url` is squid's OWN reported URL
+    (see _squid_reported_url) — appended so a NEXT incident carries the exact malformed form."""
     arg = _proxy_arg(proxy_url)
     server = arg.get("server") if arg else None
     via = (" (%s)" % server) if server else ""
+    rep = ""
+    if reported_url:
+        rep = " Squid reported the URL as: %s." % str(reported_url)[:200]
     return ("The request died AT THE EGRESS PROXY%s, which returned its OWN error page (squid: \"the "
-            "requested URL could not be retrieved\") for %s. This is NOT a session/2FA problem and the "
+            "requested URL could not be retrieved\") for %s.%s This is NOT a session/2FA problem and the "
             "portal is fine — the proxy rejected the request (typically a plain-http absolute-form URL "
             "its squid won't tunnel). The portal's http→https redirects are now auto-upgraded, so if you "
             "still see this, verify the egress proxy is a working HTTPS CONNECT proxy (Decodo ISP wants "
             "http://USER:PASS@isp.decodo.com:10001), click Test proxy (expect routed + US), then retry."
-            % (via, (failing_url or "?")[:200]))
+            % (via, (failing_url or "?")[:200], rep))
 
 
 # A visible "I'm not a robot" human-check widget on the login/2FA form. We must NOT auto-submit past one
@@ -1149,41 +1206,69 @@ def _goto_with_retry(page, url, *, timeout=60000, wait_until="domcontentloaded",
         "to a fresh residential IP." % (marker, attempts))
 
 
-def _recover_from_proxy_error(page, attempts=2):
-    """Belt-and-suspenders recovery for the T-CETRA http-302 hop that Playwright's http→https route CANNOT
-    intercept. The _new_context ctx.route rewrites fresh http:// navigations (window.location / goto) to
-    https, but a SERVER-SIDE 302 from https://…/Main%20Panel.aspx to plain-http
-    …/Default.aspx?returnto=http%3a… is followed INSIDE the same request chain at network level — the route
-    never sees the http hop, so Chromium reaches the egress proxy's squid raw and renders its "requested
-    URL could not be retrieved" page. This re-navigates to the HTTPS TWIN of the current (http) URL and
-    re-settles: a PURE GET re-navigation (bounded to `attempts` re-gotos) — it CANNOT re-submit a form or
-    resend a 2FA code, so it is safe pre-auth AND post-login/post-code. Returns True if the squid page
-    cleared (caller proceeds as if it never appeared); False otherwise (caller surfaces the friendly egress
-    error). When the current URL is already https (i.e. NOT the http-hop case) it does nothing → returns
-    False → straight to the friendly error. Never raises."""
-    for _ in range(max(1, attempts)):
+def _https_force(url):
+    """Coerce a destination URL to https (our known-good destinations are https-only). None for empty."""
+    u = (url or "").strip()
+    if not u:
+        return None
+    if u.lower().startswith("http://"):
+        return "https://" + u[len("http://"):]
+    if "://" not in u:
+        return "https://" + u.lstrip("/")
+    return u
+
+
+def _recover_from_proxy_error(page, attempts=2, dest_url=None):
+    """Recover from the egress proxy's OWN squid rejection page (the T-CETRA http-302 hop Playwright's
+    http→https route can't intercept — a SERVER-SIDE 302 to plain-http …/Default.aspx?returnto=http%3a… is
+    followed at network level, so Chromium reaches squid raw and renders "requested URL could not be
+    retrieved"). Pure GET re-navigation, bounded — it CANNOT re-submit a form or resend a 2FA code, so it is
+    safe pre-auth AND post-login/post-code. Returns True if the squid page cleared, False otherwise.
+
+    v2 (incident 4). Two phases:
+      1. HTTPS-TWIN re-goto keyed off page.url — works when squid reports a FULL http:// absolute URL.
+      2. DESTINATION FALLBACK — when page.url is NOT a usable http absolute (about:blank / chrome-error://
+         / a host-less path-only form / already https) OR the twin re-goto keeps squid'ing, do a DIRECT
+         goto of the KNOWN-good https `dest_url` (pre-auth → the id-server LOGIN_URL; post-submit/post-auth
+         → the https base/Main-Panel). Immune to URL mangling: context cookies persist, so if the login
+         completed server-side the direct goto lands authenticated (auth-detect _classify concludes it);
+         if not, it lands on the login/2FA screen and the normal flow resumes.
+    Never raises."""
+    def _is_squid():
         try:
-            if not _looks_like_proxy_error(page):
-                return True                      # already clean (or cleared by the previous re-goto)
+            return _looks_like_proxy_error(page)
         except Exception:
             return False
+
+    def _try(u):
+        try:
+            page.goto(u, timeout=60000, wait_until="domcontentloaded")
+            _wait_settle(page)
+            page.wait_for_timeout(1500)
+            return True
+        except Exception:
+            return False
+
+    # Phase 1 — HTTPS-TWIN re-goto off the current URL (v1 path; the incident-2 full-absolute-http case).
+    for _ in range(max(1, attempts)):
+        if not _is_squid():
+            return True
         try:
             cur = page.url or ""
         except Exception:
             cur = ""
         https = _https_upgrade_url(cur)
         if not https:
-            return False                          # already https / non-http → nothing to upgrade
-        try:
-            page.goto(https, timeout=60000, wait_until="domcontentloaded")
-            _wait_settle(page)
-            page.wait_for_timeout(1500)
-        except Exception:
-            return False
-    try:
-        return not _looks_like_proxy_error(page)
-    except Exception:
-        return False
+            break                                 # url unusable → go to the destination fallback
+        if not _try(https):
+            break
+    # Phase 2 — DESTINATION FALLBACK: one direct goto of the known-good https destination (retrying the
+    # SAME url would just re-squid, so a single attempt is enough and clearly bounded).
+    if _is_squid() and dest_url:
+        d = _https_force(dest_url)
+        if d:
+            _try(d)
+    return not _is_squid()
 
 
 def _goto_login(page, base_url):
@@ -1200,7 +1285,9 @@ def _goto_login(page, base_url):
     _goto_with_retry(page, base_url, timeout=60000, wait_until="domcontentloaded")
     _wait_settle(page)
     page.wait_for_timeout(2500)
-    _recover_from_proxy_error(page)
+    # PRE-AUTH recovery destination is the https id-server LOGIN_URL (a clean https page with the login
+    # form — it never triggers the www returnto→http hop that produces squid).
+    _recover_from_proxy_error(page, dest_url=LOGIN_URL)
     fr, pw = _wait_for_password(page, timeout_s=20)
     if pw:
         return
@@ -1208,7 +1295,7 @@ def _goto_login(page, base_url):
         try:
             _goto_with_retry(page, LOGIN_URL, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
-            _recover_from_proxy_error(page)
+            _recover_from_proxy_error(page, dest_url=LOGIN_URL)
             _wait_for_password(page, timeout_s=20)
         except VidaPayLoginError:
             raise
@@ -1381,7 +1468,9 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             if not pw_el:
                 diag = _snapshot(page)
                 if _looks_like_proxy_error(page):
-                    raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(diag))
+                    raise VidaPayLoginError(
+                        _proxy_error_message(page.url, proxy_url, _squid_reported_url(page))
+                        + " Diagnostic: " + str(diag))
                 if _looks_like_bot_wall(page):
                     raise VidaPayLoginError(
                         "VidaPay served an anti-automation page (\"Something doesn't look right\") instead "
@@ -1400,11 +1489,13 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             page.wait_for_timeout(3500)
             _wait_settle(page)
             state = _classify(page)
-            if state == "proxy_error" and _recover_from_proxy_error(page):
+            if state == "proxy_error" and _recover_from_proxy_error(page, dest_url=base_url):
                 state = _classify(page)            # http-302→squid hop recovered (GET-only, no re-submit)
             diag = _snapshot(page)
             if state == "proxy_error":
-                raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(diag))
+                raise VidaPayLoginError(
+                    _proxy_error_message(page.url, proxy_url, _squid_reported_url(page))
+                    + " Diagnostic: " + str(diag))
             if state == "twofa":
                 return _twofa_result(page, ctx)
             if state == "authenticated":
@@ -1511,7 +1602,9 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                 if not pw_el:
                     diag = _snapshot(page)
                     if _looks_like_proxy_error(page):
-                        raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(diag))
+                        raise VidaPayLoginError(
+                            _proxy_error_message(page.url, proxy_url, _squid_reported_url(page))
+                            + " Diagnostic: " + str(diag))
                     if _looks_like_bot_wall(page):
                         raise VidaPayLoginError(
                             "b2bsoft served an anti-automation page instead of the password form — reach it from a "
@@ -1574,8 +1667,10 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
                 except Exception:
                     pass
                 return _twofa_result(page, ctx, {"filled": _filled})
-            if _looks_like_proxy_error(page):
-                raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(_snapshot(page)))
+            if _looks_like_proxy_error(page) and not _recover_from_proxy_error(page, dest_url=base_url):
+                raise VidaPayLoginError(
+                    _proxy_error_message(page.url, proxy_url, _squid_reported_url(page))
+                    + " Diagnostic: " + str(_snapshot(page)))
             state = _classify(page)
             diag = _snapshot(page)
             try:
@@ -1628,10 +1723,13 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
             page.goto(nav_url or base_url, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
             page.wait_for_timeout(2500)
-            # The http-302→squid hop can appear here too; recover by re-goto of the https twin (GET-only,
-            # NEVER re-submits the form / re-sends a code). Only error out if the squid page persists.
-            if _looks_like_proxy_error(page) and not _recover_from_proxy_error(page):
-                raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(_snapshot(page)))
+            # The http-302→squid hop can appear here too; recover by re-goto (v2: https twin, then a direct
+            # goto of the https base — GET-only, NEVER re-submits the form / re-sends a code). Cookies are
+            # already set, so a completed login lands authenticated. Only error out if squid persists.
+            if _looks_like_proxy_error(page) and not _recover_from_proxy_error(page, dest_url=base_url):
+                raise VidaPayLoginError(
+                    _proxy_error_message(page.url, proxy_url, _squid_reported_url(page))
+                    + " Diagnostic: " + str(_snapshot(page)))
             if _classify(page) == "authenticated":
                 return {"status": "authenticated", "storage_state": capture_session_state(page, ctx),
                         "diag": _snapshot(page), "screenshot_b64": _shot_b64(page)}
@@ -1716,10 +1814,13 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
             page.goto(nav_url or base_url, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
             page.wait_for_timeout(2500)
-            # The http-302→squid hop can appear here too; recover by re-goto of the https twin (GET-only,
-            # NEVER re-submits the form / re-sends a code). Only error out if the squid page persists.
-            if _looks_like_proxy_error(page) and not _recover_from_proxy_error(page):
-                raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(_snapshot(page)))
+            # The http-302→squid hop can appear here too; recover by re-goto (v2: https twin, then a direct
+            # goto of the https base — GET-only, NEVER re-submits the form / re-sends a code). Cookies are
+            # already set, so a completed login lands authenticated. Only error out if squid persists.
+            if _looks_like_proxy_error(page) and not _recover_from_proxy_error(page, dest_url=base_url):
+                raise VidaPayLoginError(
+                    _proxy_error_message(page.url, proxy_url, _squid_reported_url(page))
+                    + " Diagnostic: " + str(_snapshot(page)))
             on_2fa = bool(page.query_selector("#TwoFactorCode")) or "twofactor" in (page.url or "").lower()
             if not on_2fa and _classify(page) == "authenticated":
                 return {"status": "authenticated", "storage_state": capture_session_state(page, ctx), "diag": _snapshot(page),
@@ -2111,10 +2212,10 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
             _wait_settle(page)
             page.wait_for_timeout(2500)
             state = _classify(page)
-            if state == "proxy_error" and _recover_from_proxy_error(page):
+            if state == "proxy_error" and _recover_from_proxy_error(page, dest_url=base_url):
                 state = _classify(page)            # http-302→squid hop recovered (GET-only, no re-submit)
             if state == "proxy_error":
-                raise VidaPayPortalError(_proxy_error_message(page.url, proxy_url))
+                raise VidaPayPortalError(_proxy_error_message(page.url, proxy_url, _squid_reported_url(page)))
             if state in ("login", "twofa", "botwall"):
                 raise VidaPayAuthError(
                     "The VidaPay session has expired — please re-authenticate (Log in + 2FA).")
@@ -2155,9 +2256,10 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
             _goto_with_retry(page, base_url, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
             page.wait_for_timeout(2500)
-            # http-302→squid hop recovery (GET-only re-goto of the https twin; never re-submits).
-            if _looks_like_proxy_error(page) and not _recover_from_proxy_error(page):
-                raise VidaPayPortalError(_proxy_error_message(page.url, proxy_url))
+            # http-302→squid hop recovery (v2: https twin, then a direct goto of the https base; GET-only,
+            # never re-submits). Cookies persist → a live session lands on the app if it's still valid.
+            if _looks_like_proxy_error(page) and not _recover_from_proxy_error(page, dest_url=base_url):
+                raise VidaPayPortalError(_proxy_error_message(page.url, proxy_url, _squid_reported_url(page)))
             # b2bsoft-specific validity check (the generic _classify can misread the wsreports app as a
             # login page): the session is invalid ONLY if we're on the SSO login (#companyId) or 2FA screen.
             u = (page.url or "").lower()
