@@ -32,6 +32,7 @@ from app.modules.commcalc import target_registry
 from app.modules.commcalc import commission_ledger
 from app.modules.commcalc import device_history
 from app.modules.commcalc import custom_report
+from app.modules.commcalc import productivity as _prod
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 # Plain names too: 45+ call sites across this router use bare datetime/timezone/timedelta (all the
@@ -9595,6 +9596,544 @@ def put_exec_metric_config(body: dict, org_id: str = ORG_ID):
         return {"ok": True, "bucket": bucket}
     except Exception as e:
         return {"ok": False, "hint": "run migration 204 (exec_metric_config)", "error": str(e)[:200]}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# PRODUCTIVITY · STACK-RANKING · PERFORMANCE-REVIEW  (mod-commission — NON-money, display/analytics)
+# ---------------------------------------------------------------------------------------------------
+# Feature 1: per-employee output-per-hour vs the store's own baseline. Feature 2: weighted stack ranking.
+# Feature 3: performance review scorecard. ONE unified per-org item registry (commcalc.productivity_item,
+# mig 215) drives both the ranker and the review. Hours come from StoreOps time-clock punches
+# (storeops.timelog — the SAME closed-punch basis payroll_raw + the Daily-Closing 'who worked' use), joined
+# to the SHARED commission sales aggregation (_sales_rows_union → _sales_cell_agg) — no forked classifier.
+# The commission tie-in (perf KPI keys) is INERT: no calc engine reads this; activation is owner-gated.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+
+def _prod_org_rows(client, org_id):
+    """The tenant's productivity_item override rows (mig 215). Degrades to [] (code defaults only)."""
+    try:
+        return (client.schema('commcalc').table('productivity_item').select('*')
+                .eq('org_id', org_id).execute().data) or []
+    except Exception:
+        return []
+
+
+def _prod_registry(client, org_id):
+    return _prod.resolve_registry(_prod_org_rows(client, org_id))
+
+
+def _prod_store_maps(client, org_id):
+    """Resolvers so a raw sales store string joins to a storeops store_code (which is what timelog carries)
+    and to a market. Mirrors _compute_feed_actuals_py / the sales-report resolver — never raises."""
+    try:
+        from app.modules.account import coa
+        _resolve_store = coa.store_resolver(client, org_id)
+    except Exception:
+        _resolve_store = None
+    try:
+        sm = (client.schema('commcalc').table('store_mapping')
+              .select('store_code,store_address,market').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        sm = []
+    addr_to_code, code_to_addr, code_set = {}, {}, set()
+    mkt_by_code, mkt_by_addr, mkt_by_num, all_markets = {}, {}, {}, set()
+    for m in sm:
+        code = str(m.get('store_code') or '').strip()
+        addr = str(m.get('store_address') or '').strip()
+        mk = str(m.get('market') or '').strip()
+        if code:
+            code_set.add(code)
+        if addr and code:
+            addr_to_code[addr.lower()] = code
+            code_to_addr.setdefault(code, addr)
+        if mk:
+            all_markets.add(mk)
+            if code:
+                mkt_by_code[code] = mk
+            if addr:
+                mkt_by_addr[addr.lower()] = mk
+            mm = re.match(r'\s*(\d+)', addr)
+            if mm:
+                mkt_by_num.setdefault(mm.group(1), mk)
+    num_to_code = {}
+    for code, addr in code_to_addr.items():
+        mm = re.match(r'\s*(\d+)', addr)
+        if mm:
+            num_to_code.setdefault(mm.group(1), code)
+
+    def resolve_code(store_str):
+        s = str(store_str or '').strip()
+        if not s:
+            return ''
+        if s in code_set:
+            return s
+        canon = s
+        if _resolve_store:
+            try:
+                canon = _resolve_store(s) or s
+            except Exception:
+                canon = s
+        code = addr_to_code.get(str(canon).strip().lower()) or addr_to_code.get(s.lower())
+        if code:
+            return code
+        mm = re.match(r'\s*(\d+)', s)
+        if mm and mm.group(1) in num_to_code:
+            return num_to_code[mm.group(1)]
+        return s  # unresolved → raw string (won't match a timelog store_code; surfaces as no-hours)
+
+    def market_for_code(code):
+        c = str(code or '').strip()
+        addr = code_to_addr.get(c, '')
+        mm = re.match(r'\s*(\d+)', addr or c)
+        return (mkt_by_code.get(c) or mkt_by_addr.get(addr.lower())
+                or (mkt_by_num.get(mm.group(1)) if mm else '') or '')
+
+    def label_for_code(code):
+        c = str(code or '').strip()
+        return code_to_addr.get(c) or c
+
+    return {'resolve_code': resolve_code, 'market_for_code': market_for_code,
+            'label_for_code': label_for_code, 'all_markets': all_markets}
+
+
+def _prod_kpi_by_rep(client, org_id, period, cmap):
+    """Per-rep KPI values (rep_commissions.kpi_values — the SAME snapshot the KPI Metrics page reads) plus a
+    composite kpi_attainment (% of the 6 KPIs meeting their configured target). Keyed by canonical rep
+    (UPPER). Degrades to {} (⇒ n/a). Targets from payout_config with the KPI-page defaults."""
+    KPI = [('atu', 'kpi_atu', 'kpi_atu_target', 55.0), ('protect', 'kpi_protect', 'kpi_protect_target', 80.0),
+           ('byod', 'kpi_byod', 'kpi_byod_target', 35.0), ('familyplan', 'kpi_familyplan', 'kpi_familyplan_target', 45.0),
+           ('tmr3', 'kpi_tmr3', 'kpi_tmr3_target', 70.0), ('aal', 'kpi_aal', 'kpi_aal_target', 5.0)]
+    cfg = {}
+    try:
+        c = (client.schema('commcalc').table('payout_config').select('*')
+             .eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute().data) or []
+        cfg = c[0] if c else {}
+    except Exception:
+        cfg = {}
+    tgt = {rk: (safe_float(cfg.get(tc)) if cfg.get(tc) is not None else dv) for (rk, sk, tc, dv) in KPI}
+    out = {}
+    try:
+        rows = (client.schema('commcalc').table('rep_commissions')
+                .select('salesperson,epay_salesperson,kpi_values')
+                .eq('org_id', org_id).in_('period', _pvariants(period)).limit(20000).execute().data) or []
+    except Exception:
+        rows = []
+    for r in rows:
+        nm = (r.get('salesperson') or r.get('epay_salesperson') or '').strip()
+        if not nm:
+            continue
+        key = _canon(nm, cmap).strip().upper()
+        kv = r.get('kpi_values') or {}
+        vals, met, total = {}, 0, 0
+        for (rk, sk, tc, dv) in KPI:
+            v = kv.get(rk)
+            if v is None:
+                continue
+            fv = safe_float(v)
+            vals[sk] = fv
+            total += 1
+            if fv >= tgt[rk]:
+                met += 1
+        if total:
+            vals['kpi_attainment'] = round(met / total * 100, 1)
+        d = out.setdefault(key, {})
+        for k, v in vals.items():
+            d[k] = v  # first non-empty wins per key (a rep appears once per period)
+        for k, v in vals.items():
+            d.setdefault(k, v)
+    return out
+
+
+def _prod_upkeep_by_code(client, org_id, start_iso, end_iso):
+    """DM store-visit upkeep per store_code — the AVERAGE checklist pass-rate (checked ÷ total responses)
+    across the COMPLETED (status='submitted') visits whose check_in_at falls in the period, ×100. A store
+    with no completed visit in the period → absent (⇒ n/a). Read-only cross-module read (storeops schema)."""
+    out = {}
+    try:
+        visits = (client.schema('storeops').table('store_visits')
+                  .select('id,store_code,status,check_in_at').eq('org_id', org_id)
+                  .gte('check_in_at', start_iso).lt('check_in_at', end_iso).limit(5000).execute().data) or []
+    except Exception:
+        return out
+    vids = [v.get('id') for v in visits if v.get('status') == 'submitted' and v.get('store_code') and v.get('id')]
+    if not vids:
+        return out
+    try:
+        resp = (client.schema('storeops').table('store_visit_responses')
+                .select('visit_id,checked').eq('org_id', org_id).in_('visit_id', vids)
+                .limit(100000).execute().data) or []
+    except Exception:
+        return out
+    by_visit = {}
+    for r in resp:
+        d = by_visit.setdefault(r.get('visit_id'), [0, 0])
+        d[1] += 1
+        if r.get('checked'):
+            d[0] += 1
+    rate_by_visit = {vid: (c[0] / c[1] * 100.0) for vid, c in by_visit.items() if c[1] > 0}
+    acc = {}
+    for v in visits:
+        vid = v.get('id')
+        code = str(v.get('store_code') or '').strip()
+        if v.get('status') != 'submitted' or vid not in rate_by_visit or not code:
+            continue
+        a = acc.setdefault(code, [0.0, 0])
+        a[0] += rate_by_visit[vid]
+        a[1] += 1
+    for code, a in acc.items():
+        if a[1] > 0:
+            out[code] = round(a[0] / a[1], 1)
+    return out
+
+
+def _prod_targets_by_code(client, org_id, period, maps):
+    """Daily-Targets ACTIVATION attainment per store_code — store MTD activations achieved ÷ the store's
+    activation target ×100 (the SAME targets table + _fetch_actuals + scope_achieved_mtd the Daily Targets
+    pages use). Applied to the store's reps (a store metric → rep, like upkeep). Degrades to {} (⇒ n/a)."""
+    out = {}
+    try:
+        actuals = _fetch_actuals(client, org_id, period)
+    except Exception:
+        return out
+    try:
+        trows = (client.schema('commcalc').table('targets').select('*')
+                 .eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
+    except Exception:
+        trows = []
+    tgt_by_code = {}
+    for t in trows:
+        code = str(t.get('store_code') or '').strip().upper()
+        av = t.get('activations_monthly')
+        if code and av is not None:
+            tgt_by_code[code] = safe_float(av)
+    if not tgt_by_code:
+        return out
+    for code, tv in tgt_by_code.items():
+        if tv <= 0:
+            continue
+        try:
+            ach = targets_engine.scope_achieved_mtd(actuals, code, None, None)
+        except Exception:
+            continue
+        out[code] = round(safe_float(ach.get('activations')) / tv * 100, 1)
+    return out
+
+
+def _prod_gather(client, org_id, period, stores=None, markets=None, reps=None, today=None):
+    """Assemble everything the three productivity surfaces need from ONE pass of the shared sales
+    aggregation + StoreOps hours + the cross-module source reads. Returns store_reps / hours_by_key /
+    per_rep_values / filters / labels. RULE FIVE filters (stores/markets/reps) are applied SERVER-SIDE to
+    the sales rows AND the hours before aggregation, so tables + exports stay consistent. Never raises on a
+    cross-module read (each degrades to n/a)."""
+    acfg = _accessory_config(client, org_id)
+    cmap = _rep_canon_map(client, org_id)
+    maps = _prod_store_maps(client, org_id)
+    resolve_code = maps['resolve_code']
+    rows, meta = _sales_rows_union(client, org_id, period)
+
+    # ── filter OPTIONS from the UNFILTERED union (+ storeops roster) — pick-don't-type over real data.
+    opt_stores, opt_reps = set(), set()
+    for r in rows:
+        st = str(r.get('store') or '').strip()
+        if st:
+            opt_stores.add(st)
+        rp = str(r.get('salesperson') or '').strip()
+        if rp and rp.lower() != 'admin':
+            opt_reps.add(_canon(rp, cmap))
+    try:
+        for s in (client.schema('storeops').table('stores').select('address')
+                  .eq('org_id', org_id).execute().data) or []:
+            a = str(s.get('address') or '').strip()
+            if a:
+                opt_stores.add(a)
+    except Exception:
+        pass
+    filters = {'stores': sorted(opt_stores), 'markets': sorted(maps['all_markets']), 'reps': sorted(opt_reps)}
+
+    store_sel = {str(s).strip().lower() for s in (stores or []) if str(s).strip()}
+    rep_sel = {str(s).strip().lower() for s in (reps or []) if str(s).strip()}
+    market_sel = {str(s).strip().lower() for s in (markets or []) if str(s).strip()}
+    applied = {'stores': sorted(store_sel), 'markets': sorted(market_sel), 'reps': sorted(rep_sel)}
+    sel_codes = {resolve_code(s) for s in store_sel} if store_sel else None
+
+    def _keep(r):
+        st = str(r.get('store') or '').strip()
+        if store_sel and st.lower() not in store_sel:
+            return False
+        if rep_sel and _canon(str(r.get('salesperson') or '').strip(), cmap).strip().lower() not in rep_sel:
+            return False
+        if market_sel and maps['market_for_code'](resolve_code(st)).strip().lower() not in market_sel:
+            return False
+        return True
+    if store_sel or rep_sel or market_sel:
+        rows = [r for r in rows if _keep(r)]
+
+    cells = _sales_cell_agg(rows, acfg)
+    store_reps, display_by_key, store_label, market_by_code = {}, {}, {}, {}
+    rep_store_map = {}   # rep_key -> set(code)
+    for (store_str, rep_str, day), a in cells.items():
+        code = resolve_code(store_str)
+        canon = _canon(rep_str, cmap)
+        rep_key = canon.strip().upper()
+        if not rep_key:
+            continue
+        display_by_key.setdefault(rep_key, canon or rep_str)
+        store_label.setdefault(code, maps['label_for_code'](code) or store_str)
+        market_by_code.setdefault(code, maps['market_for_code'](code))
+        c = store_reps.get((code, rep_key))
+        if not c:
+            c = store_reps[(code, rep_key)] = {'store_label': store_label[code], 'market': market_by_code[code],
+                                               'rep_label': display_by_key[rep_key], 'boxes': 0.0, 'acc_sales': 0.0,
+                                               'activations': 0, 'upgrades': 0, 'swaps': 0, 'txns': 0}
+        c['boxes'] += a['box_count']
+        c['acc_sales'] += a['accessory_rev']
+        c['activations'] += len(a['_prem'])
+        c['upgrades'] += len(a['_upg'])
+        c['swaps'] += len(a['_swap'])
+        c['txns'] += len(a['_txn'])
+        rep_store_map.setdefault(rep_key, set()).add(code)
+    sales_codes = {code for (code, _rk) in store_reps.keys()}
+
+    # ── StoreOps time-clock hours (closed punches only — the payroll_raw / who-worked basis), per
+    #    (store_code, rep). Filtered to the same selection. Only kept at stores that had sales (avoids
+    #    phantom stores from a store_code mismatch); a rep clocked-in-but-no-sales at a selling store is
+    #    added with 0 output (real: on the clock, sold nothing → below baseline).
+    hours_by_key, per_rep_hours = {}, {}
+    try:
+        start, end, _t = _period_bounds(period, today or '')
+        tl = (client.schema('storeops').table('timelog')
+              .select('employee_name,store_code,hours,clock_out,work_date').eq('org_id', org_id)
+              .gte('work_date', start.isoformat()).lt('work_date', end.isoformat()).limit(50000).execute().data) or []
+    except Exception:
+        tl = []
+    for t in tl:
+        if not (t.get('clock_out') and t.get('hours') is not None):
+            continue
+        code = str(t.get('store_code') or '').strip()
+        rep_key = _canon(t.get('employee_name'), cmap).strip().upper()
+        if not rep_key:
+            continue
+        if sel_codes is not None and code not in sel_codes:
+            continue
+        if rep_sel and display_by_key.get(rep_key, '').strip().lower() not in rep_sel \
+                and _canon(t.get('employee_name'), cmap).strip().lower() not in rep_sel:
+            continue
+        hrs = safe_float(t.get('hours'))
+        per_rep_hours[rep_key] = per_rep_hours.get(rep_key, 0.0) + hrs
+        if code in sales_codes:
+            hours_by_key[(code, rep_key)] = hours_by_key.get((code, rep_key), 0.0) + hrs
+            if (code, rep_key) not in store_reps:
+                display_by_key.setdefault(rep_key, _canon(t.get('employee_name'), cmap) or (t.get('employee_name') or ''))
+                store_reps[(code, rep_key)] = {'store_label': store_label.get(code, code),
+                                               'market': market_by_code.get(code, ''),
+                                               'rep_label': display_by_key.get(rep_key), 'boxes': 0.0, 'acc_sales': 0.0,
+                                               'activations': 0, 'upgrades': 0, 'swaps': 0, 'txns': 0}
+                rep_store_map.setdefault(rep_key, set()).add(code)
+
+    # ── store-metric sources (upkeep, targets attainment) → applied to each store's reps.
+    upkeep_by_code, targets_by_code = {}, {}
+    try:
+        s, e, _t = _period_bounds(period, today or '')
+        upkeep_by_code = _prod_upkeep_by_code(client, org_id, s.isoformat(), e.isoformat())
+    except Exception:
+        upkeep_by_code = {}
+    targets_by_code = _prod_targets_by_code(client, org_id, period, maps)
+    # targets/upkeep tables key store_code case-sensitively in different places — index case-insensitively.
+    upkeep_ci = {str(k).strip().upper(): v for k, v in upkeep_by_code.items()}
+    targets_ci = {str(k).strip().upper(): v for k, v in targets_by_code.items()}
+    kpi_by_rep = _prod_kpi_by_rep(client, org_id, period, cmap)
+
+    # ── per-rep value map (across stores) for the ranker + review.
+    per_rep_values = {}
+    all_reps = set(rep_store_map.keys())
+    for (code, rk) in store_reps.keys():
+        all_reps.add(rk)
+    for rk in all_reps:
+        agg = {'acc_sales': 0.0, 'activations': 0, 'upgrades': 0, 'swaps': 0, 'boxes': 0.0}
+        for (code, r2), c in store_reps.items():
+            if r2 != rk:
+                continue
+            agg['acc_sales'] += c['acc_sales']; agg['activations'] += c['activations']
+            agg['upgrades'] += c['upgrades']; agg['swaps'] += c['swaps']; agg['boxes'] += c['boxes']
+        hrs = per_rep_hours.get(rk, 0.0)
+        codes = sorted(rep_store_map.get(rk, set()))
+        upk = [upkeep_ci[c.upper()] for c in codes if c.upper() in upkeep_ci]
+        tga = [targets_ci[c.upper()] for c in codes if c.upper() in targets_ci]
+        kp = kpi_by_rep.get(rk, {})
+        vals = {
+            'acc_sales': round(agg['acc_sales'], 2), 'activations': agg['activations'],
+            'upgrades': agg['upgrades'], 'swaps': agg['swaps'], 'boxes': round(agg['boxes'], 2),
+            'hours_worked': round(hrs, 2),
+            'boxes_per_hour': (round(agg['boxes'] / hrs, 3) if hrs > 0 else None),
+            'acc_per_hour': (round(agg['acc_sales'] / hrs, 2) if hrs > 0 else None),
+            'store_upkeep': (round(sum(upk) / len(upk), 1) if upk else None),
+            'targets_attainment': (round(sum(tga) / len(tga), 1) if tga else None),
+            'kpi_attainment': kp.get('kpi_attainment'),
+            'kpi_atu': kp.get('kpi_atu'), 'kpi_protect': kp.get('kpi_protect'), 'kpi_byod': kp.get('kpi_byod'),
+            'kpi_familyplan': kp.get('kpi_familyplan'), 'kpi_tmr3': kp.get('kpi_tmr3'), 'kpi_aal': kp.get('kpi_aal'),
+            '_label': display_by_key.get(rk, rk),
+            '_market': (market_by_code.get(codes[0], '') if codes else ''),
+            '_stores': [store_label.get(c, c) for c in codes],
+        }
+        per_rep_values[rk] = vals
+
+    return {'store_reps': store_reps, 'hours_by_key': hours_by_key, 'per_rep_values': per_rep_values,
+            'filters': filters, 'applied': applied, 'store_label': store_label,
+            'market_by_code': market_by_code, 'source_meta': meta}
+
+
+@router.get("/productivity/sources")
+def get_productivity_sources(org_id: str = ORG_ID):
+    """The pickable SOURCE CATALOG for the 'add item' affordance (RULE THREE — pick, don't type)."""
+    require_org(org_id)
+    return {"sources": _prod.source_catalog()}
+
+
+@router.get("/productivity/config")
+def get_productivity_config(org_id: str = ORG_ID):
+    """The unified item registry (code defaults overlaid by the org overrides) + the source catalog + the
+    perf KPI keys the (inert) commission tie-in exposes. Drives the ⚙️ admin config tab."""
+    require_org(org_id)
+    reg = _prod_registry(sb(), org_id)
+    return {"items": reg, "sources": _prod.source_catalog(), "kpi_keys": _prod.perf_kpi_keys(reg),
+            "value_types": ["number", "dollar", "percent", "score"]}
+
+
+@router.put("/productivity/config")
+def put_productivity_config(body: dict, org_id: str = ORG_ID):
+    """Upsert ONE registry item (add a custom item or edit/enable/disable a default). item_key required;
+    source_key must be in the SOURCE CATALOG (pick-don't-type — no free-form formula). Degrades with a hint
+    if mig 215 isn't applied."""
+    require_org(org_id)
+    item_key = str(body.get('item_key') or '').strip()
+    if not item_key:
+        raise HTTPException(400, "item_key required")
+    source_key = str(body.get('source_key') or '').strip()
+    if source_key and source_key not in _prod.SOURCE_CATALOG:
+        raise HTTPException(400, f"unknown source_key (pick from the catalog): {source_key}")
+    row = {'org_id': org_id, 'item_key': item_key}
+    for c in ('label', 'source_key', 'standard_type'):
+        if body.get(c) is not None:
+            row[c] = str(body.get(c))
+    if 'standard' in body:
+        row['standard'] = None if body.get('standard') in (None, '') else safe_float(body.get('standard'))
+    if 'weight' in body:
+        row['weight'] = safe_float(body.get('weight'))
+    for b in ('count_in_stack_ranker', 'count_in_review', 'enabled', 'hidden'):
+        if b in body:
+            row[b] = bool(body.get(b))
+    if 'sort' in body:
+        row['sort'] = int(safe_float(body.get('sort')))
+    row['is_seed_default'] = item_key in {d['item_key'] for d in _prod.DEFAULT_ITEMS}
+    row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
+    try:
+        sb().schema('commcalc').table('productivity_item').upsert(row, on_conflict='org_id,item_key').execute()
+        return {"ok": True, "item_key": item_key}
+    except Exception as e:
+        return {"ok": False, "hint": "run migration 215 (productivity_item)", "error": str(e)[:200]}
+
+
+@router.delete("/productivity/config/{item_key}")
+def delete_productivity_config(item_key: str, org_id: str = ORG_ID):
+    """Delete an item. A CUSTOM item is hard-deleted; a seed DEFAULT can't be removed from code, so it's
+    persisted as a hidden override (restored by 'reset to defaults')."""
+    require_org(org_id)
+    ik = str(item_key or '').strip()
+    is_default = ik in {d['item_key'] for d in _prod.DEFAULT_ITEMS}
+    try:
+        if is_default:
+            sb().schema('commcalc').table('productivity_item').upsert(
+                {'org_id': org_id, 'item_key': ik, 'hidden': True, 'is_seed_default': True,
+                 'updated_at': _datetime.now(_timezone.utc).isoformat()}, on_conflict='org_id,item_key').execute()
+        else:
+            sb().schema('commcalc').table('productivity_item').delete().eq('org_id', org_id).eq('item_key', ik).execute()
+        return {"ok": True, "item_key": ik, "hidden": is_default}
+    except Exception as e:
+        return {"ok": False, "hint": "run migration 215 (productivity_item)", "error": str(e)[:200]}
+
+
+@router.post("/productivity/config/reset")
+def reset_productivity_config(org_id: str = ORG_ID):
+    """Reset the registry to the code defaults (delete all org overrides)."""
+    require_org(org_id)
+    try:
+        sb().schema('commcalc').table('productivity_item').delete().eq('org_id', org_id).execute()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "hint": "run migration 215 (productivity_item)", "error": str(e)[:200]}
+
+
+@router.get("/productivity/{period}")
+def get_productivity(period: str, org_id: str = ORG_ID, today: str = "",
+                     stores: Optional[List[str]] = Query(default=None),
+                     markets: Optional[List[str]] = Query(default=None),
+                     reps: Optional[List[str]] = Query(default=None)):
+    """FEATURE 1 — per-employee productivity (boxes/hr, accessory $/hr) vs the store's own baseline, grouped
+    by store with rep rows. Hours = StoreOps time-clock closed punches. Zero-hours reps are surfaced (never
+    divide by zero). RULE FIVE filters + RULE FOUR exports. DISPLAY-ONLY (no calc, no recompute)."""
+    require_org(org_id)
+    g = _prod_gather(sb(), org_id, period, stores=stores, markets=markets, reps=reps, today=today)
+    res = _prod.compute_productivity(g['store_reps'], g['hours_by_key'])
+    return {"period": period, "org_id": org_id, **res,
+            "filters": g['filters'], "applied": g['applied'], "source_meta": g['source_meta']}
+
+
+@router.get("/productivity/rankings/{period}")
+def get_productivity_rankings(period: str, org_id: str = ORG_ID, today: str = "",
+                              stores: Optional[List[str]] = Query(default=None),
+                              markets: Optional[List[str]] = Query(default=None),
+                              reps: Optional[List[str]] = Query(default=None)):
+    """FEATURE 2 — weighted stack ranking over the registry's count_in_stack_ranker items. Per-metric
+    attainment is returned so a rep can see WHY their rank is what it is. RULE FIVE + RULE FOUR. NON-money."""
+    require_org(org_id)
+    client = sb()
+    g = _prod_gather(client, org_id, period, stores=stores, markets=markets, reps=reps, today=today)
+    reg = _prod_registry(client, org_id)
+    res = _prod.compute_rankings(reg, g['per_rep_values'])
+    return {"period": period, "org_id": org_id, **res,
+            "filters": g['filters'], "applied": g['applied']}
+
+
+@router.get("/productivity/review/{period}")
+def get_productivity_review(period: str, org_id: str = ORG_ID, today: str = "",
+                            stores: Optional[List[str]] = Query(default=None),
+                            markets: Optional[List[str]] = Query(default=None),
+                            reps: Optional[List[str]] = Query(default=None)):
+    """FEATURE 3 — per-employee performance-review scorecard over the registry's count_in_review items,
+    each measured against its definable standard (attainment %, weight, weighted score, total). A
+    missing-source item shows n/a and is excluded from the total. RULE FIVE + RULE FOUR. NON-money."""
+    require_org(org_id)
+    client = sb()
+    g = _prod_gather(client, org_id, period, stores=stores, markets=markets, reps=reps, today=today)
+    reg = _prod_registry(client, org_id)
+    res = _prod.compute_review(reg, g['per_rep_values'])
+    return {"period": period, "org_id": org_id, **res,
+            "filters": g['filters'], "applied": g['applied']}
+
+
+@router.get("/productivity/kpi-values/{period}")
+def get_productivity_kpi_values(period: str, org_id: str = ORG_ID,
+                                stores: Optional[List[str]] = Query(default=None),
+                                markets: Optional[List[str]] = Query(default=None),
+                                reps: Optional[List[str]] = Query(default=None)):
+    """COMMISSION TIE-IN (INERT / read-only) — per-rep performance KPI values a payout engine COULD
+    reference: 'performance_score' (weighted review score) + 'perf:<item_key>' (per-item attainment %).
+    INERT: no calc engine reads this; wiring it into payout is a separate owner-gated, money-touching step
+    (see the module return). Zero payout change until then."""
+    require_org(org_id)
+    client = sb()
+    g = _prod_gather(client, org_id, period, stores=stores, markets=markets, reps=reps)
+    reg = _prod_registry(client, org_id)
+    review = _prod.compute_review(reg, g['per_rep_values'])
+    keys = _prod.perf_kpi_keys(reg)
+    out = []
+    for r in review['rows']:
+        vals = {k['kpi_key']: _prod.perf_kpi_value(k['kpi_key'], r['review_score'], r['items']) for k in keys}
+        out.append({"rep": r['rep'], "rep_key": r['rep_key'], "values": vals})
+    return {"period": period, "org_id": org_id, "kpi_keys": keys, "rows": out,
+            "inert": True, "note": "Registerable in a Commission Plan; inert until an engine is wired to "
+            "resolve these keys AND the owner recalcs."}
 
 
 def _acc_flags_by_rep(client, org_id, period):

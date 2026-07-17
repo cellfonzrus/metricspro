@@ -137,6 +137,9 @@ export default function KPIPage() {
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             {period} · From DLAR Elevate Go report · {count} {view === 'rep' ? 'reps' : 'stores'} with KPI data
           </p>
+          <a href="/commcalc/productivity" style={{ fontSize: 12.5, color: 'var(--accent)', display: 'inline-block', marginTop: 4 }}>
+            🏅 Productivity &amp; Reviews (per-employee output/hour · stack ranking · performance review) →
+          </a>
         </div>
         {!loading && count > 0 && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
       </div>
