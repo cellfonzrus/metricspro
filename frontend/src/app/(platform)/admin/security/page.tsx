@@ -2,6 +2,39 @@
 import { useEffect, useState } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import EntityPicker from '@/components/EntityPicker'
+import PhoneInput from '@/components/PhoneInput'
+
+// Common country codes for the tenant-default picker (RULE THREE: pick, with an "Other…" affordance).
+const CC_OPTIONS = [
+  { code: '+1', label: '+1 · US / Canada' }, { code: '+44', label: '+44 · United Kingdom' },
+  { code: '+52', label: '+52 · Mexico' }, { code: '+91', label: '+91 · India' },
+  { code: '+61', label: '+61 · Australia' }, { code: '+63', label: '+63 · Philippines' },
+]
+function normCcClient(raw?: string): string {
+  const d = String(raw || '').replace(/\D/g, '')
+  const c = '+' + d
+  return d && /^\+\d{1,3}$/.test(c) ? c : '+1'
+}
+function CcPicker({ value, disabled, onChange }: { value: string; disabled: boolean; onChange: (cc: string) => void }) {
+  const cc = normCcClient(value)
+  const known = CC_OPTIONS.some(o => o.code === cc)
+  const isOther = !known
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <select value={isOther ? '__other__' : cc} disabled={disabled}
+        onChange={e => onChange(e.target.value === '__other__' ? (isOther ? cc : '+') : e.target.value)}
+        style={{ padding: '7px 8px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, width: 160 }}>
+        {CC_OPTIONS.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}
+        <option value="__other__">Other…</option>
+      </select>
+      {isOther && (
+        <input value={cc} disabled={disabled} placeholder="+000"
+          onChange={e => onChange('+' + e.target.value.replace(/\D/g, '').slice(0, 3))}
+          style={{ padding: '7px 8px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, width: 70 }} />
+      )}
+    </div>
+  )
+}
 
 // Client echo of the server password policy (server is authoritative). [] = OK.
 function pwErrors(pw: string, p: any): string[] {
@@ -34,6 +67,12 @@ export default function SecuritySettingsPage() {
   const [setPw, setSetPw] = useState('')
   const [requireChange, setRequireChange] = useState(true)
   const [setMsg2, setSetMsg2] = useState('')
+
+  // self-service 2FA phone enrollment card
+  const [enrollPhone, setEnrollPhone] = useState('')
+  const [enrollCode, setEnrollCode] = useState('')
+  const [enrollSent, setEnrollSent] = useState(false)
+  const [enrollMsg, setEnrollMsg] = useState('')
 
   async function load() {
     try {
@@ -81,6 +120,23 @@ export default function SecuritySettingsPage() {
       setSetMsg2(`Password set for ${setEmail}. Hand it over securely.`)
       setSetPw('')
     } catch (e: any) { setSetMsg2('Failed: ' + (e?.message || e)) }
+  }
+
+  async function sendPhoneCode() {
+    setEnrollMsg('')
+    try {
+      const r = await api('/api/v1/core/me/phone', { method: 'POST', body: JSON.stringify({ phone: enrollPhone }) })
+      setEnrollSent(true)
+      setEnrollMsg(r?.message || `A verification code was sent to ${r?.masked || 'your phone'}.`)
+    } catch (e: any) { setEnrollMsg('Could not send: ' + (e?.message || e)) }
+  }
+  async function verifyPhoneCode() {
+    setEnrollMsg('')
+    try {
+      await api('/api/v1/core/me/phone/verify', { method: 'POST', body: JSON.stringify({ code: enrollCode.trim() }) })
+      setEnrollMsg('✅ Phone verified — WhatsApp is now available for two-factor sign-in.')
+      setEnrollSent(false); setEnrollCode('')
+    } catch (e: any) { setEnrollMsg('Verification failed: ' + (e?.message || e)) }
   }
 
   if (!loaded) return <div style={{ padding: 20 }}>Loading…</div>
@@ -157,6 +213,14 @@ export default function SecuritySettingsPage() {
                 </label>
               ))}
             </div>
+            <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0 12px' }} />
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 4 }}>Default country code</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>
+              Applied when someone enters a 10-digit phone number (2FA phones, report recipients) — e.g. 5162330422 → {normCcClient(tw.default_cc)}5162330422.
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <CcPicker value={tw.default_cc || '+1'} disabled={!canEdit} onChange={cc => setTw({ ...tw, default_cc: cc })} />
+            </div>
             {tw.mode === 'required' && roles.length > 0 && (
               <>
                 <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 4 }}>
@@ -175,6 +239,28 @@ export default function SecuritySettingsPage() {
             {canEdit && <button className="btn btn-primary" disabled={busy} onClick={saveTwofa}>💾 Save 2FA policy</button>}
           </>
         )}
+      </div>
+
+      {/* Self-service 2FA phone enrollment */}
+      <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>My two-factor phone (WhatsApp)</div>
+        <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
+          Add or update the phone that receives your WhatsApp sign-in codes. Enter a 10-digit number — the
+          country code ({normCcClient(tw?.default_cc)}) is added automatically; pick another if needed.
+        </div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <PhoneInput value={enrollPhone} defaultCc={normCcClient(tw?.default_cc)}
+            onChange={v => { setEnrollPhone(v); setEnrollSent(false) }} placeholder="Phone number" style={{ minWidth: 260 }} />
+          <button className="btn btn-primary" disabled={!enrollPhone} onClick={sendPhoneCode}>Send code</button>
+        </div>
+        {enrollSent && (
+          <div style={{ display: 'flex', gap: 10, marginTop: 12, alignItems: 'center' }}>
+            <input value={enrollCode} onChange={e => setEnrollCode(e.target.value)} placeholder="6-digit code"
+              inputMode="numeric" style={{ ...num, width: 140 }} />
+            <button className="btn btn-primary" disabled={!enrollCode.trim()} onClick={verifyPhoneCode}>Verify</button>
+          </div>
+        )}
+        {enrollMsg && <div style={{ marginTop: 10, fontSize: 13, color: enrollMsg.includes('failed') || enrollMsg.includes('Could not') ? '#dc2626' : '#059669' }}>{enrollMsg}</div>}
       </div>
 
       {/* Admin-assigned password */}

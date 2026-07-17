@@ -4,6 +4,8 @@
 // manages saved recipients and the scheduled subscriptions that pg_cron fires.
 import { useState, useEffect, useCallback } from 'react'
 import { api, ORG_ID } from '@/lib/client'
+import { useAuth } from '@/lib/auth-context'
+import PhoneInput from '@/components/PhoneInput'
 
 type Report = { key: string; label: string; filters: string[] }
 type Saved = { id: string; name: string | null; email: string | null; phone: string | null }
@@ -80,6 +82,7 @@ export default function NotifyPage() {
 function Recipients({ saved, employees, onChange, setMsg }: {
   saved: Saved[]; employees: Emp[]; onChange: () => void; setMsg: (s: string) => void
 }) {
+  const { defaultCc } = useAuth()
   const [form, setForm] = useState({ name: '', email: '', phone: '' })
   async function add(body: any) {
     try { await api(`/api/v1/notify/recipients?org_id=${ORG_ID}`, { method: 'POST', body: JSON.stringify(body) }); onChange() }
@@ -96,7 +99,7 @@ function Recipients({ saved, employees, onChange, setMsg }: {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <input style={inp} placeholder="Name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
           <input style={inp} placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
-          <input style={inp} placeholder="Phone (E.164)" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
+          <PhoneInput value={form.phone} defaultCc={defaultCc} onChange={v => setForm({ ...form, phone: v })} placeholder="Phone (optional)" style={{ minWidth: 240 }} />
           <button className="btn btn-primary" onClick={() => { add(form); setForm({ name: '', email: '', phone: '' }) }}>Add</button>
         </div>
       </div>
