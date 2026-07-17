@@ -26,9 +26,9 @@ const REPORT_EXACT: Record<string, string> = { '/commcalc': 'commissions', '/rep
 // Report page TREES (prefix → area), boundary-matched; longest prefix wins.
 const REPORT_TREES: [string, string][] = [
   ['/commcalc/exec', 'commissions'], ['/commcalc/reports', 'commissions'], ['/commcalc/gp', 'commissions'],
-  ['/commcalc/kpi', 'commissions'], ['/commcalc/coaching', 'commissions'], ['/commcalc/sales-analyzer', 'commissions'],
+  ['/commcalc/coaching', 'commissions'], ['/commcalc/sales-analyzer', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
-  ['/commcalc/accessory-flags', 'commissions'], ['/commcalc/discrepancy', 'commissions'], ['/commcalc/sales-recon', 'commissions'],
+  ['/commcalc/discrepancy', 'commissions'], ['/commcalc/sales-recon', 'commissions'],
   ['/commcalc/asset', 'asset'], ['/commcalc/vip', 'vip'], ['/accounts', 'accounts'],
   ['/storeops/reports', 'storeops'], ['/storeops/payroll', 'storeops'], ['/storeops/payroll-tax', 'storeops'],
   ['/closing/recon', 'closing'],
@@ -471,7 +471,7 @@ function pageOverrideForPath(perms: Permissions, path: string): boolean | undefi
 }
 
 // Pages a self-scoped (rep) user may always reach, on top of their home.
-const SELF_ALLOWED = ['/commcalc/targets/my', '/account/password', '/reports', '/helpdesk']
+const SELF_ALLOWED = ['/commcalc/targets/my', '/commcalc/kpi', '/account/password', '/reports', '/helpdesk']
 
 export function canAccessPath(perms: Permissions, path: string): boolean {
   if (path === '/' || path.startsWith('/account/password')) return true
