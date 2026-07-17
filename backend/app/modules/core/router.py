@@ -15,13 +15,17 @@ import secrets
 import uuid
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Request
 from app.core.database import get_supabase, get_supabase_admin
 from app.core.config import settings
 from app.modules.core.entitlements import (
     MODULE_CATALOG, ROLE_GATE_KEYS, load_module_catalog,
     sync_tenant, sync_all_tenants, needs_sync,
 )
+# Auth-hardening (2026-07-17): PURE password-policy / OTP / 2FA-marker helpers (unit-proven) + the
+# delivery bridge that reuses notify's Resend/WhatsApp creds logic (no duplication).
+from app.modules.core import auth_security as _sec
+from app.modules.core import auth_notify as _anotify
 # Canonical tenant-membership primitives — the ONE rule for "which tenant is this login acting as",
 # shared so every module (e.g. storeops._caller_identity) resolves it identically (no drift).
 from app.modules.core.membership import (
@@ -171,7 +175,8 @@ async def my_tenants(authorization: str = Header(default="")):
 
 
 @router.get("/me")
-async def whoami(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+async def whoami(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                 x_2fa_token: str = Header(default="")):
     """The logged-in user's profile + resolved role permissions FOR THE ACTIVE TENANT. Token-verified
     — the frontend sends the Supabase session access token as `Authorization: Bearer <token>` and, for
     a login that belongs to >1 tenant, the chosen tenant as `x-active-org`. The active tenant is
@@ -229,8 +234,17 @@ async def whoami(authorization: str = Header(default=""), x_active_org: str = He
                     for c in cr if c.get("name")]
     except Exception:
         pass
+    # Auth-hardening: the tenant password policy (client-side strength hints) + the 2FA gate for the
+    # active tenant/user. Best-effort — un-run migs degrade to code defaults / 2FA off (no lockout).
+    org_id = u.get("org_id") or ORG_ID
+    pw_policy = _load_password_policy(client, org_id)
+    tw_policy = _load_twofa_policy(client, org_id)
+    twofa = {"required": _twofa_required_for(tw_policy, u.get("role"), u.get("twofa_enabled")),
+             "verified": bool(_sec.twofa_token_valid_for(x_2fa_token, uid, org_id, _sec.now_ts())),
+             "mode": tw_policy["mode"], "user_channels": u.get("twofa_channels") or ["email"]}
     return {"provisioned": True, "user": u, "permissions": perms,
-            "active": bool(u.get("is_active", True)), "tenant": tenant, "carriers": carriers}
+            "active": bool(u.get("is_active", True)), "tenant": tenant, "carriers": carriers,
+            "password_policy": pw_policy, "twofa": twofa}
 
 
 @router.post("/me/password-changed")
@@ -330,7 +344,7 @@ def _provision_tenant(client, name, admin_email, admin_name=None, password=None,
         sync_tenant(client, new_org)
     except Exception:
         pass  # entitlement engine (mig 053/076) may be absent in some envs — non-fatal
-    pw = password or ("Mp" + secrets.token_urlsafe(6))
+    pw = password or _gen_temp_pw()
     auth_id, created, err = _create_or_link_auth(get_supabase_admin(), admin_email, pw)
     client.schema("storeops").table("app_users").insert({
         "org_id": new_org, "auth_id": auth_id, "email": admin_email,
@@ -390,7 +404,7 @@ async def create_super_admin(body: dict, authorization: str = Header(default="")
         return {"email": email, "elevated": True, "created": False, "temp_password": None}
     # New login (or an orphan row without an auth account) → create/link auth + stamp super_admin.
     chose_pw = bool((body.get("temp_password") or "").strip())
-    pw = (body.get("temp_password") or "").strip() or ("Mp" + secrets.token_urlsafe(6))
+    pw = (body.get("temp_password") or "").strip() or _gen_temp_pw()
     auth_id, created, err = _create_or_link_auth(get_supabase_admin(), email, pw)
     if not auth_id:
         raise HTTPException(500, f"could not create login: {err}")
@@ -472,10 +486,14 @@ async def signup(body: dict):
     name = (body.get("name") or "").strip()
     admin_email = (body.get("admin_email") or "").strip().lower()
     password = body.get("password") or ""
-    if not name or not admin_email or len(password) < 8:
-        raise HTTPException(400, "company name, email, and an 8+ character password are required")
+    if not name or not admin_email:
+        raise HTTPException(400, "company name and email are required")
     if "@" not in admin_email or "." not in admin_email.split("@")[-1]:
         raise HTTPException(400, "a valid email is required")
+    # New company has no tenant row yet → enforce the owner DEFAULT policy on the chosen password.
+    perr = _sec.password_errors(_sec.DEFAULT_PASSWORD_POLICY, password)
+    if perr:
+        raise HTTPException(400, " ".join(perr))
     client = sb()
     if client.schema("storeops").table("app_users").select("id").eq("email", admin_email).limit(1).execute().data:
         raise HTTPException(409, "an account with this email already exists")
@@ -566,6 +584,136 @@ def _tenant_row(client, org_id):
     return r[0] if r else None
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# AUTH HARDENING (2026-07-17) — password policy · self-serve reset · admin-set passwords · OTP · 2FA.
+# Every password-setting path routes through validate_password(); temp passwords come from the
+# owner-default-satisfying generator; OTP lifecycle uses the PURE decisions in auth_security.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+def _load_password_policy(client, org_id):
+    """The tenant's effective password policy (override merged over owner defaults, all bounds clamped).
+    Best-effort: any read error / un-run mig 709 → the code defaults (so enforcement is never lost)."""
+    raw = None
+    try:
+        t = _tenant_row(client, org_id) or {}
+        raw = t.get("password_policy")
+    except Exception:
+        raw = None
+    return _sec.normalize_policy(raw)
+
+
+def validate_password(client, org_id, pw):
+    """Enforce the tenant policy on ONE candidate password. Raises HTTPException(400) with a helpful,
+    combined reason (this is used on password-SET surfaces where a helpful message is correct — the
+    caller already proved control of the account). The HARD 128-cap is enforced first inside
+    password_errors regardless of tenant config."""
+    errs = _sec.password_errors(_load_password_policy(client, org_id), pw or "")
+    if errs:
+        raise HTTPException(400, " ".join(errs))
+
+
+def _gen_temp_pw(client=None, org_id=None):
+    """A random temp password guaranteed to satisfy the owner DEFAULT policy (>=8, all four classes),
+    and the tenant policy too when org_id is given. Replaces the old 'Mp'+token_urlsafe generator that
+    could omit a digit/upper/special."""
+    policy = _load_password_policy(client, org_id) if (client is not None and org_id) else None
+    return _sec.gen_temp_password(policy)
+
+
+# ── OTP store (best-effort; degrades to 503-style when mig 710 is un-run) ─────────────────────────
+class OtpUnavailable(Exception):
+    """core.auth_otp is unreachable (mig 710 un-run). Surfaced as a generic 503, never a stack trace."""
+
+
+def _masked_500(client, org_id, source, exc):
+    """Log the real internal error to core.failure_log under a short reference id and return a GENERIC
+    HTTPException(500) carrying only that id (directive item 5b — no SQL / provider / migration string
+    ever reaches the client). Caller does: `raise _masked_500(...)`."""
+    ref = secrets.token_hex(4)
+    try:
+        client.schema("core").table("failure_log").insert({
+            "org_id": org_id or ORG_ID, "category": "system_error", "severity": "error",
+            "source": str(source)[:200], "message": f"Auth error [{ref}] at {source}"[:1000],
+            "detail": {"ref": ref, "error": str(exc)[:1200]},
+            "remediation": "Search core.failure_log for this reference id to see the internal detail.",
+        }).execute()
+    except Exception:
+        pass
+    return HTTPException(500, f"A system error occurred. Reference: {ref}")
+
+
+OTP_TTL_MIN = 10
+OTP_MAX_ATTEMPTS = 5
+OTP_RATE_MAX = 5          # max codes issued per email+purpose per window
+OTP_RATE_WINDOW_MIN = 15
+
+
+def _client_ip(request):
+    try:
+        xff = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+        return xff or (request.client.host if request and request.client else None)
+    except Exception:
+        return None
+
+
+def _issue_otp(client, *, email, purpose, channel, org_id=None, auth_id=None, dest=None, ip=None):
+    """Create + persist a hashed OTP for (email, purpose). Returns the plaintext code (to send) or
+    raises OtpUnavailable (mig un-run) / HTTPException(429) (rate-limited). PURE decisions delegated to
+    auth_security so they're unit-proven."""
+    email = (email or "").strip().lower()
+    now = datetime.now(timezone.utc)
+    try:
+        since = (now - timedelta(minutes=OTP_RATE_WINDOW_MIN)).isoformat()
+        recent = (client.schema("core").table("auth_otp").select("id")
+                  .eq("email", email).eq("purpose", purpose).gte("created_at", since)
+                  .execute().data) or []
+    except Exception:
+        raise OtpUnavailable()
+    if _sec.otp_rate_limited(len(recent), OTP_RATE_MAX):
+        raise HTTPException(429, "Too many codes requested — please wait a few minutes and try again.")
+    code = _sec.gen_otp()
+    row = {
+        "org_id": org_id, "email": email, "auth_id": auth_id, "purpose": purpose,
+        "channel": channel, "code_hash": _sec.hash_otp(code, email), "dest": dest,
+        "attempts": 0, "max_attempts": OTP_MAX_ATTEMPTS,
+        "expires_at": (now + timedelta(minutes=OTP_TTL_MIN)).isoformat(),
+        "request_ip": ip,
+    }
+    try:
+        client.schema("core").table("auth_otp").insert(row).execute()
+    except Exception:
+        raise OtpUnavailable()
+    return code
+
+
+def _verify_otp(client, *, email, purpose, code):
+    """Verify a submitted code against the newest live OTP for (email, purpose). Returns (ok, reason).
+    Increments attempts on a mismatch; consumes the row on success. Best-effort; a store error →
+    (False,'unavailable')."""
+    email = (email or "").strip().lower()
+    now_ts = _sec.now_ts()
+    try:
+        rows = (client.schema("core").table("auth_otp").select("*")
+                .eq("email", email).eq("purpose", purpose).is_("consumed_at", "null")
+                .order("created_at", desc=True).limit(1).execute().data) or []
+    except Exception:
+        return (False, "unavailable")
+    if not rows:
+        return (False, "missing")
+    row = rows[0]
+    ok, reason = _sec.otp_verify_decision(row, code, email, now_ts, max_attempts=OTP_MAX_ATTEMPTS)
+    try:
+        if ok:
+            client.schema("core").table("auth_otp").update(
+                {"consumed_at": datetime.now(timezone.utc).isoformat()}).eq("id", row["id"]).execute()
+        elif reason == "mismatch":
+            client.schema("core").table("auth_otp").update(
+                {"attempts": int(row.get("attempts") or 0) + 1}).eq("id", row["id"]).execute()
+    except Exception:
+        pass
+    return (ok, reason)
+
+
 # ── Per-setting edit permissions ─────────────────────────────────────────────────────────────
 # Every editable settings area is registered here so a tenant admin can grant/deny editing of each
 # one PER ROLE (permissions.settings[<key>] = true/false), on top of the role's data scope. Add a
@@ -583,6 +731,7 @@ SETTING_AREAS = [
     {"key": "labels",            "label": "Display Labels"},
     {"key": "menu",              "label": "Menu Layout"},
     {"key": "failures",          "label": "Failure Logs (clock-in sensitivity, logged categories)"},
+    {"key": "security",          "label": "Security (password policy · 2FA · admin-set passwords)"},
 ]
 
 
@@ -1424,7 +1573,9 @@ def _create_pending_invite(client, org_id, email, invited_by=None, role=None):
             .eq("org_id", org_id).eq("email", email).eq("status", "pending").execute()
         client.schema("core").table("account_link_invite").insert(row).execute()
     except Exception as e:
-        raise HTTPException(500, f"invite could not be recorded — run migration 707 first: {str(e)[:200]}")
+        # Loud degrade, but MASKED: the client gets a generic ref (item 5b); the real cause (e.g. mig 707
+        # un-run) lands in failure_log so an admin can diagnose without exposing internals.
+        raise _masked_500(client, org_id, "core.create_pending_invite (mig 707?)", e)
     _audit_auth_event(client, "invite_created", email=email, org_id=org_id,
                       actor=(f"admin:{invited_by}" if invited_by else "admin"), detail={"role": role})
     return code
@@ -1488,6 +1639,34 @@ def _set_auth_ban(admin, auth_id, banned):
         return False
 
 
+async def _deliver_access_code(client, org_id, email, code, *, record_on_invite=False):
+    """EMAIL the access/invite code to the invitee via the notify Resend path (item 1a). NEVER raises —
+    a send failure degrades to a visible {'delivery_status':'failed'} state, so create-login/invite
+    creation still succeeds. When record_on_invite, persists the outcome + resend accounting onto the
+    pending invite row (mig 712 columns; best-effort)."""
+    tname = None
+    try:
+        t = _tenant_row(client, org_id) or {}
+        tname = t.get("name")
+    except Exception:
+        tname = None
+    ok, channel, err = await _anotify.send_invite_email(email, code, tname or "MetricsPro")
+    status = "sent" if ok else "failed"
+    if record_on_invite:
+        try:
+            client.schema("core").table("account_link_invite").update({
+                "delivery_channel": channel, "delivery_status": status,
+                "delivery_error": err, "delivered_at": (datetime.now(timezone.utc).isoformat() if ok else None),
+                "last_sent_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("org_id", org_id).eq("email", email).eq("status", "pending").execute()
+        except Exception:
+            pass  # mig 712 un-run → outcome still returned in the response + audited below
+    _audit_auth_event(client, ("invite_sent" if ok else "invite_send_failed"),
+                      email=email, org_id=org_id, actor="system",
+                      detail={"channel": channel, "status": status, "error": err})
+    return {"delivery_status": status, "delivery_channel": channel, "delivery_error": err}
+
+
 @router.post("/users/create-login")
 async def create_login(body: dict, org_id: str = ORG_ID):
     """Create (or relink) the Supabase Auth account for ONE assigned user and store auth_id. Returns
@@ -1506,7 +1685,10 @@ async def create_login(body: dict, org_id: str = ORG_ID):
     if not cur:
         raise HTTPException(400, "assign a role to this email first (/users/assign)")
     admin = get_supabase_admin()
-    temp_pw = body.get("temp_password") or ("Mp" + secrets.token_urlsafe(6))
+    chosen_pw = (body.get("temp_password") or "").strip()
+    if chosen_pw:
+        validate_password(client, org_id, chosen_pw)   # an admin-chosen temp pw must pass tenant policy
+    temp_pw = chosen_pw or _gen_temp_pw(client, org_id)
     separate_login = bool(body.get("separate_login"))
     try:
         login_email, auth_id, created, aliased, shared = _provision_login(
@@ -1516,14 +1698,18 @@ async def create_login(body: dict, org_id: str = ORG_ID):
         # connect token. Same shape/note as the fresh path below ⇒ no enumeration signal.
         code = _create_pending_invite(client, org_id, email, invited_by=body.get("invited_by"),
                                       role=cur[0].get("role"))
-        return _login_ready_response(email, code)
+        delivery = await _deliver_access_code(client, org_id, email, code, record_on_invite=True)
+        return {**_login_ready_response(email, code), **delivery}
     if aliased:
         # Reached ONLY via explicit {separate_login:true}, so it carries no enumeration signal — the
-        # admin already asked for a separate login. Uniform shape + an honest alias note.
-        return {**_login_ready_response(login_email, temp_pw), "aliased": True,
+        # admin already asked for a separate login. Uniform shape + an honest alias note. (Alias reaches
+        # the same inbox, so we email the code to the base address.)
+        delivery = await _deliver_access_code(client, org_id, email, temp_pw)
+        return {**_login_ready_response(login_email, temp_pw), "aliased": True, **delivery,
                 "note": (f"A separate, isolated login “{login_email}” was created for this tenant "
                          f"(it reaches the same inbox). Hand out the access code below.")}
-    return _login_ready_response(email, temp_pw)
+    delivery = await _deliver_access_code(client, org_id, email, temp_pw)
+    return {**_login_ready_response(email, temp_pw), **delivery}
 
 
 # ── Account linking — the user resolves a pending invite on their own next sign-in ────────────────
@@ -1601,7 +1787,7 @@ async def connect_tenant(body: dict, authorization: str = Header(default="")):
         client.schema("storeops").table("app_users").update(
             {"auth_id": uid, "must_reset_password": False}).eq("id", row["id"]).execute()
     except Exception as e:
-        raise HTTPException(500, f"could not connect (run migration 706?): {str(e)[:200]}")
+        raise _masked_500(client, target_org, "core.connect_tenant (mig 706?)", e)
     _resolve_invite(client, inv, "accepted", uid)
     _audit_auth_event(client, "connect", email=email, auth_id=uid, org_id=target_org, actor=f"self:{email}")
     return {"ok": True, "connected": True, "org_id": target_org}
@@ -1635,7 +1821,7 @@ async def disable_and_switch(body: dict, authorization: str = Header(default="")
         raise HTTPException(409, "the invitation's account is no longer set up — ask the admin to re-add you")
     # 1) mint the fresh isolated login for the inviting tenant FIRST (email X is held by the old acct
     #    → a tenant alias). If this fails we abort BEFORE disabling anything.
-    new_pw = "Mp" + secrets.token_urlsafe(6)
+    new_pw = _gen_temp_pw()
     new_email, new_auth, created, aliased, shared = _mint_tenant_alias(
         client, admin, target_row[0], target_org, email, new_pw)
     # 2) disable the OLD login everywhere it is bound.
@@ -1684,6 +1870,570 @@ async def reinstate_login(body: dict, authorization: str = Header(default="")):
     return {"ok": True, "reinstated": True, "auth_id": auth_id, "unbanned": unbanned}
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# AUTH HARDENING — endpoints (password policy · self-serve reset · admin-set pw · invite resend/reveal
+# · two-factor). Every OTP/2FA event audits via _audit_auth_event; failures degrade to generic states.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+# ── Password policy (RULE TWO: config + admin UI) ──────────────────────────────────────────────────
+@router.get("/password-policy/public")
+async def password_policy_public():
+    """PUBLIC: the owner DEFAULT password policy — drives client-side strength hints on UNAUTHENTICATED
+    screens (signup / self-serve reset). The tenant's REAL policy (server-enforced) rides on /core/me;
+    exposing only the default here avoids any per-email enumeration."""
+    return {"policy": dict(_sec.DEFAULT_PASSWORD_POLICY), "hard_max": _sec.HARD_MAX_PASSWORD,
+            "special_chars": _sec.SPECIAL_CHARS}
+
+
+def _normalize_twofa_policy(raw):
+    p = {"mode": "off", "channels": ["email"], "required_roles": []}
+    if isinstance(raw, dict):
+        m = str(raw.get("mode") or "off").lower()
+        p["mode"] = m if m in ("off", "optional", "required") else "off"
+        ch = raw.get("channels")
+        if isinstance(ch, list):
+            p["channels"] = [c for c in ch if c in ("email", "whatsapp", "sms")] or ["email"]
+        rr = raw.get("required_roles")
+        if isinstance(rr, list):
+            p["required_roles"] = [str(r) for r in rr if str(r).strip()]
+    return p
+
+
+def _load_twofa_policy(client, org_id):
+    try:
+        t = _tenant_row(client, org_id) or {}
+        return _normalize_twofa_policy(t.get("twofa_policy"))
+    except Exception:
+        return _normalize_twofa_policy(None)
+
+
+def _twofa_required_for(policy, role, user_opted_in):
+    """Does THIS user need 2FA? off→never; required→yes (all, or only required_roles); optional→only if
+    the user opted in (twofa_enabled)."""
+    mode = policy.get("mode")
+    if mode == "off":
+        return False
+    if mode == "required":
+        rr = policy.get("required_roles") or []
+        return (not rr) or ((role or "") in rr)
+    return bool(user_opted_in)   # optional
+
+
+@router.get("/security-settings")
+async def get_security_settings(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """The tenant's password + 2FA policy (admin Security Settings UI). Any signed-in user may READ (so
+    pages can show the policy); only a 'security'-setting editor may WRITE."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    caller = _resolve_caller(client, uid, x_active_org)
+    if not caller:
+        raise HTTPException(403, "no tenant for this login")
+    org_id = caller["org_id"]
+    return {"org_id": org_id,
+            "password_policy": _load_password_policy(client, org_id),
+            "default_password_policy": dict(_sec.DEFAULT_PASSWORD_POLICY),
+            "hard_max": _sec.HARD_MAX_PASSWORD,
+            "twofa_policy": _load_twofa_policy(client, org_id),
+            "channels_status": _anotify.channels_status(),
+            "can_edit": _can_edit_setting(caller, "security")}
+
+
+@router.put("/security-settings")
+async def put_security_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Update the tenant password policy and/or 2FA policy. Gated on the 'security' setting permission.
+    Values are normalized + clamped (max_length <= 128 hard cap) before persisting."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    caller = _resolve_caller(client, uid, x_active_org)
+    if not _can_edit_setting(caller, "security"):
+        raise HTTPException(403, "you don't have permission to edit Security settings")
+    org_id = caller["org_id"]
+    upd = {}
+    if "password_policy" in body:
+        upd["password_policy"] = _sec.normalize_policy(body.get("password_policy"))
+    if "twofa_policy" in body:
+        upd["twofa_policy"] = _normalize_twofa_policy(body.get("twofa_policy"))
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    try:
+        client.schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(500, "Could not save — the Security settings migration (709/711) may not be applied yet.")
+    _audit_auth_event(client, "security_settings_updated", org_id=org_id,
+                      actor=f"admin:{caller.get('role')}", detail={"keys": list(upd.keys())})
+    return {"ok": True, **upd}
+
+
+# ── Authenticated self password change (reroutes the client-side supabase-js set → policy enforced) ──
+@router.post("/me/set-password")
+async def set_own_password(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """The signed-in user sets their OWN password (must-reset first-login screen + normal change). Routed
+    through the backend so the tenant password policy CANNOT be bypassed client-side (the old screen
+    called supabase.auth.updateUser directly). Validates → sets via the admin API → clears must_reset."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    caller = _resolve_caller(client, uid, x_active_org)
+    org_id = (caller or {}).get("org_id") or ORG_ID
+    pw = body.get("new_password") or body.get("password") or ""
+    validate_password(client, org_id, pw)
+    try:
+        get_supabase_admin().auth.admin.update_user_by_id(uid, {"password": pw})
+    except Exception:
+        raise HTTPException(400, "Could not update the password. Please try again.")
+    try:
+        client.schema("storeops").table("app_users").update(
+            {"must_reset_password": False}).eq("auth_id", uid).execute()
+    except Exception:
+        pass
+    _audit_auth_event(client, "password_set", auth_id=uid, org_id=org_id, actor="self")
+    return {"ok": True}
+
+
+# ── Self-serve password reset (PUBLIC — allowlisted in tenant_middleware) ────────────────────────────
+def _otp_store_ok(client):
+    """A harmless probe: is core.auth_otp reachable? Used to return a UNIFORM 503 (independent of whether
+    an account exists) when mig 710 is un-run — so the un-run state is not an enumeration oracle."""
+    try:
+        client.schema("core").table("auth_otp").select("id").limit(1).execute()
+        return True
+    except Exception:
+        return False
+
+
+_RESET_GENERIC = {"ok": True, "message": "If this email has an account, a reset code has been sent."}
+_UNAVAIL = {"ok": False, "message": "Password reset is temporarily unavailable. Please try again shortly."}
+
+
+@router.post("/auth/forgot-password")
+async def forgot_password(body: dict, request: Request):
+    """PUBLIC: request a reset code. ANTI-ENUMERATION — the response is ALWAYS the same generic message
+    (and same code path/timing) whether or not the account exists; existence, tenant membership and
+    disabled status are NEVER revealed. Sends over email (+ verified WhatsApp phone if on file)."""
+    email = (body.get("email") or "").strip().lower()
+    client = sb()
+    if not _otp_store_ok(client):
+        return _UNAVAIL   # uniform for ALL emails (global infra state, not per-email) → no oracle
+    if not email or "@" not in email:
+        return _RESET_GENERIC
+    # equalize work regardless of existence (a constant hash op either way)
+    _ = _sec.hash_otp("000000", email)
+    try:
+        rows = (client.schema("storeops").table("app_users")
+                .select("org_id,auth_id,phone,phone_verified").eq("email", email).execute().data) or []
+    except Exception:
+        rows = []
+    live = [r for r in rows if r.get("auth_id")]
+    if not live:
+        return _RESET_GENERIC   # no account → say the same thing, send nothing
+    org_id = live[0].get("org_id")
+    phone = next((r.get("phone") for r in live if r.get("phone_verified") and r.get("phone")), None)
+    channels = ["email"] + (["whatsapp"] if phone else [])
+    try:
+        code = _issue_otp(client, email=email, purpose="reset", channel="email", org_id=org_id,
+                          dest=_sec.mask_email(email), ip=_client_ip(request))
+    except OtpUnavailable:
+        return _UNAVAIL
+    except HTTPException as he:
+        if he.status_code == 429:
+            return _RESET_GENERIC   # rate-limited → still generic (never reveal via a 429)
+        raise
+    await _anotify.send_reset_otp(email, code, channels=channels, phone=phone or "")
+    _audit_auth_event(client, "reset_requested", email=email, org_id=org_id, actor="self")
+    return _RESET_GENERIC
+
+
+@router.post("/auth/reset-password")
+async def reset_password_otp(body: dict):
+    """PUBLIC: complete a reset with {email, code, new_password}. Uniform 'Invalid or expired code.' for
+    every failure mode (missing/expired/attempts/wrong) so nothing is revealed. The new password is
+    validated against the tenant policy ONLY AFTER a valid code is proven (so policy detail is never a
+    pre-code oracle), and the code is consumed ONLY once the password also passes (good UX on a weak pw)."""
+    email = (body.get("email") or "").strip().lower()
+    code = (body.get("code") or "").strip()
+    new_pw = body.get("new_password") or body.get("password") or ""
+    if not email or not code or not new_pw:
+        raise HTTPException(400, "email, code and a new password are required")
+    client = sb()
+    if not _otp_store_ok(client):
+        raise HTTPException(503, "Password reset is temporarily unavailable. Please try again shortly.")
+    # newest live reset OTP for this email
+    try:
+        otp_rows = (client.schema("core").table("auth_otp").select("*")
+                    .eq("email", email).eq("purpose", "reset").is_("consumed_at", "null")
+                    .order("created_at", desc=True).limit(1).execute().data) or []
+    except Exception:
+        raise HTTPException(503, "Password reset is temporarily unavailable. Please try again shortly.")
+    row = otp_rows[0] if otp_rows else None
+    ok, reason = _sec.otp_verify_decision(row, code, email, _sec.now_ts(), max_attempts=OTP_MAX_ATTEMPTS)
+    if not ok:
+        if reason == "mismatch" and row:
+            try:
+                client.schema("core").table("auth_otp").update(
+                    {"attempts": int(row.get("attempts") or 0) + 1}).eq("id", row["id"]).execute()
+            except Exception:
+                pass
+        raise HTTPException(400, "Invalid or expired code.")
+    # valid code proven → now find the account + enforce the tenant policy on the new password.
+    try:
+        au = (client.schema("storeops").table("app_users").select("org_id,auth_id")
+              .eq("email", email).execute().data) or []
+    except Exception:
+        au = []
+    live = [r for r in au if r.get("auth_id")]
+    if not live:
+        raise HTTPException(400, "Invalid or expired code.")
+    org_id = live[0].get("org_id")
+    auth_id = live[0].get("auth_id")
+    validate_password(client, org_id, new_pw)   # a policy error here does NOT consume the code (retry-friendly)
+    try:
+        get_supabase_admin().auth.admin.update_user_by_id(auth_id, {"password": new_pw})
+    except Exception:
+        raise HTTPException(400, "Could not update the password. Please try again.")
+    # consume the code + clear the reset flag
+    try:
+        client.schema("core").table("auth_otp").update(
+            {"consumed_at": datetime.now(timezone.utc).isoformat()}).eq("id", row["id"]).execute()
+    except Exception:
+        pass
+    try:
+        client.schema("storeops").table("app_users").update(
+            {"must_reset_password": False}).eq("email", email).execute()
+    except Exception:
+        pass
+    _audit_auth_event(client, "password_reset", email=email, auth_id=auth_id, org_id=org_id, actor="self")
+    return {"ok": True, "message": "Your password has been updated. You can now sign in."}
+
+
+# ── Invite RESEND + code REVEAL + admin-assigned password ────────────────────────────────────────────
+def _resend_rate_ok(client, email):
+    """Server-side resend throttle: <=5 invite sends per email per hour. Best-effort (unavailable → allow
+    rather than block the admin)."""
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        rows = (client.schema("core").table("auth_event").select("id")
+                .eq("email", (email or "").strip().lower())
+                .in_("event", ["invite_sent", "invite_send_failed"])
+                .gte("created_at", since).execute().data) or []
+        return len(rows) < 5
+    except Exception:
+        return True
+
+
+@router.post("/users/resend-invite")
+async def resend_invite(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                        x_active_org: str = Header(default="")):
+    """Admin: RESEND the access/invite code for an assigned email in THIS tenant (newest-wins). Refreshes
+    a pending account-link invite (new code + expiry) OR re-issues a temp password for a fresh/reset
+    login, then re-emails it. Rate-limited (5/hr per email). Anti-enumeration: uniform response shape."""
+    uid = _uid_from_token(authorization)
+    caller = _resolve_caller(sb(), uid, x_active_org) if uid else None
+    if not caller or not (caller.get("super_admin") or (caller.get("role") or "").lower() == "admin"
+                          or _can_edit_setting(caller, "security")):
+        raise HTTPException(403, "admin only")
+    email = (body.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "email required")
+    client = sb()
+    if not _resend_rate_ok(client, email):
+        raise HTTPException(429, "Too many resends for this email in the last hour — please wait.")
+    cur = (client.schema("storeops").table("app_users").select("*").eq("org_id", org_id)
+           .eq("email", email).limit(1).execute().data) or []
+    if not cur:
+        raise HTTPException(400, "assign a role to this email first")
+    admin = get_supabase_admin()
+    temp_pw = _gen_temp_pw(client, org_id)
+    try:
+        login_email, auth_id, created, aliased, shared = _provision_login(
+            client, admin, cur[0], org_id, email, temp_pw)
+        code = temp_pw
+        record_on_invite = False
+    except PendingConnectionRequired:
+        code = _create_pending_invite(client, org_id, email,
+                                      invited_by=(caller.get("role") or "admin"), role=cur[0].get("role"))
+        record_on_invite = True
+    # bump resend accounting on the invite row (best-effort: read-then-increment)
+    if record_on_invite:
+        try:
+            existing = (client.schema("core").table("account_link_invite").select("id,resent_count")
+                        .eq("org_id", org_id).eq("email", email).eq("status", "pending").limit(1)
+                        .execute().data) or []
+            if existing:
+                client.schema("core").table("account_link_invite").update(
+                    {"resent_count": int(existing[0].get("resent_count") or 0) + 1}).eq("id", existing[0]["id"]).execute()
+        except Exception:
+            pass
+    delivery = await _deliver_access_code(client, org_id, email, code, record_on_invite=record_on_invite)
+    _audit_auth_event(client, "invite_resent", email=email, org_id=org_id, actor=f"admin:{caller.get('role')}")
+    return {"ok": True, "email": email, "access_code": code, "temp_password": code, **delivery}
+
+
+@router.post("/users/reveal-code")
+async def reveal_code(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                      x_active_org: str = Header(default="")):
+    """Reveal the CURRENT active invite/access code for troubleshooting hand-off. Allowed for a
+    super-admin OR the tenant's own admin (their own tenant's data — doctrine-compatible; NEVER exposes
+    which OTHER tenants an email belongs to). AUDITED (who revealed which invite, when). A fresh
+    temp-password login stores no code (passwords aren't retained) → returns code_available:false with a
+    hint to use Resend."""
+    uid = _uid_from_token(authorization)
+    caller = _resolve_caller(sb(), uid, x_active_org) if uid else None
+    if not caller or not (caller.get("super_admin") or (caller.get("role") or "").lower() == "admin"
+                          or _can_edit_setting(caller, "security")):
+        raise HTTPException(403, "admin only")
+    email = (body.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "email required")
+    client = sb()
+    inv = _find_pending_invite(client, email, org_id)   # scoped to THIS tenant only (no cross-tenant peek)
+    _audit_auth_event(client, "code_revealed", email=email, org_id=org_id,
+                      actor=f"admin:{caller.get('role')}", detail={"found": bool(inv)})
+    if not inv:
+        return {"email": email, "code_available": False,
+                "hint": "No stored access code for this login (temp passwords aren't retained). Use Resend to issue a new code."}
+    return {"email": email, "code_available": True, "access_code": inv.get("connect_token"),
+            "status": inv.get("status"), "expires_at": inv.get("expires_at"),
+            "created_at": inv.get("created_at"), "last_sent_at": inv.get("last_sent_at"),
+            "delivery_status": inv.get("delivery_status"), "delivery_error": inv.get("delivery_error"),
+            "resent_count": inv.get("resent_count") or 0}
+
+
+@router.post("/users/set-password")
+async def admin_set_password(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                             x_active_org: str = Header(default="")):
+    """Admin: set a SPECIFIC password for an employee in THIS tenant (generalizes create-login / Reset
+    pw — one path, not a fork). Gated on the 'security' setting permission. The password must pass the
+    tenant policy (server-enforced). Sets must_reset_password=True by default (toggle require_change).
+    For an email that already logs in elsewhere, we CANNOT set their password (consent) → records an
+    invite with the same uniform response (anti-enumeration)."""
+    uid = _uid_from_token(authorization)
+    caller = _resolve_caller(sb(), uid, x_active_org) if uid else None
+    if not _can_edit_setting(caller, "security"):
+        raise HTTPException(403, "you don't have permission to set passwords (Security setting)")
+    email = (body.get("email") or "").strip().lower()
+    pw = body.get("password") or ""
+    require_change = bool(body.get("require_change", True))
+    if not email:
+        raise HTTPException(400, "email required")
+    client = sb()
+    validate_password(client, org_id, pw)
+    cur = (client.schema("storeops").table("app_users").select("*").eq("org_id", org_id)
+           .eq("email", email).limit(1).execute().data) or []
+    if not cur:
+        raise HTTPException(400, "assign a role to this email first (Roles & Access)")
+    admin = get_supabase_admin()
+    try:
+        login_email, auth_id, created, aliased, shared = _provision_login(
+            client, admin, cur[0], org_id, email, pw)
+    except PendingConnectionRequired:
+        code = _create_pending_invite(client, org_id, email,
+                                      invited_by=(caller.get("role") or "admin"), role=cur[0].get("role"))
+        delivery = await _deliver_access_code(client, org_id, email, code, record_on_invite=True)
+        return {"ok": True, "email": email, "invited": True, **delivery,
+                "note": "This person already uses MetricsPro — they were invited to connect this company (their password can't be set for them)."}
+    try:
+        client.schema("storeops").table("app_users").update(
+            {"must_reset_password": require_change}).eq("id", cur[0]["id"]).execute()
+    except Exception:
+        pass
+    _audit_auth_event(client, "password_admin_set", email=email, auth_id=auth_id, org_id=org_id,
+                      actor=f"admin:{caller.get('role')}", detail={"require_change": require_change})
+    return {"ok": True, "email": email, "require_change": require_change}
+
+
+# ── Two-factor authentication ─────────────────────────────────────────────────────────────────────────
+@router.get("/me/2fa")
+async def get_2fa_status(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                         x_2fa_token: str = Header(default="")):
+    """The signed-in user's 2FA status for the active tenant: whether it's required, whether THIS session
+    is already verified (a valid x-2fa-token), the tenant's allowed channels, the user's phone state."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    u = _pick_membership(_memberships(client, uid), (x_active_org or "").strip() or None)
+    if not u:
+        return {"required": False, "verified": True}
+    org_id = u.get("org_id") or ORG_ID
+    policy = _load_twofa_policy(client, org_id)
+    required = _twofa_required_for(policy, u.get("role"), u.get("twofa_enabled"))
+    verified = _sec.twofa_token_valid_for(x_2fa_token, uid, org_id, _sec.now_ts())
+    return {"required": required, "verified": bool(verified), "mode": policy["mode"],
+            "tenant_channels": policy["channels"],
+            "user_channels": u.get("twofa_channels") or ["email"],
+            "phone_on_file": bool(u.get("phone")), "phone_masked": _sec.mask_phone(u.get("phone") or ""),
+            "phone_verified": bool(u.get("phone_verified")),
+            "channels_status": _anotify.channels_status()}
+
+
+@router.post("/me/2fa/start")
+async def start_2fa(body: dict, request: Request, authorization: str = Header(default=""),
+                    x_active_org: str = Header(default="")):
+    """Issue a 2FA OTP over the chosen channel (email always available; whatsapp only if a verified phone
+    is on file). Best-effort delivery; the code row exists regardless so a channel hiccup isn't fatal."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    u = _pick_membership(_memberships(client, uid), (x_active_org or "").strip() or None)
+    if not u:
+        raise HTTPException(403, "no tenant for this login")
+    org_id = u.get("org_id") or ORG_ID
+    email = (u.get("email") or _email_for_uid(client, uid) or "").strip().lower()
+    policy = _load_twofa_policy(client, org_id)
+    want = (body.get("channel") or "").strip().lower()
+    channel = want if want in policy["channels"] else policy["channels"][0]
+    if channel == "whatsapp" and not (u.get("phone_verified") and u.get("phone")):
+        channel = "email"   # no verified phone → fall back to email
+    phone = u.get("phone") if channel == "whatsapp" else ""
+    dest = _sec.mask_phone(phone or "") if channel == "whatsapp" else _sec.mask_email(email)
+    try:
+        code = _issue_otp(client, email=email, purpose="2fa", channel=channel, org_id=org_id,
+                          auth_id=uid, dest=dest, ip=_client_ip(request))
+    except OtpUnavailable:
+        raise HTTPException(503, "Two-factor is temporarily unavailable. Please try again shortly.")
+    ok, ch, err = await _anotify.send_2fa_otp(email, code, channel, phone=phone or "")
+    _audit_auth_event(client, "2fa_sent", email=email, auth_id=uid, org_id=org_id,
+                      actor="self", detail={"channel": ch, "ok": ok})
+    return {"sent": bool(ok), "channel": ch, "masked_dest": dest,
+            "message": (f"A code was sent to {dest}." if ok else
+                        "We couldn't send a code on that channel — try another channel.")}
+
+
+@router.post("/me/2fa/verify")
+async def verify_2fa(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Verify a 2FA code and mint a signed 'verified session' marker (x-2fa-token) the client sends on
+    every request. 'remember' → a 30-day device marker; otherwise a 12-hour session marker. Uniform
+    'Invalid or expired code.' on any failure."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    u = _pick_membership(_memberships(client, uid), (x_active_org or "").strip() or None)
+    if not u:
+        raise HTTPException(403, "no tenant for this login")
+    org_id = u.get("org_id") or ORG_ID
+    email = (u.get("email") or _email_for_uid(client, uid) or "").strip().lower()
+    code = (body.get("code") or "").strip()
+    ok, reason = _verify_otp(client, email=email, purpose="2fa", code=code)
+    if not ok:
+        if reason == "unavailable":
+            raise HTTPException(503, "Two-factor is temporarily unavailable. Please try again shortly.")
+        raise HTTPException(400, "Invalid or expired code.")
+    remember = bool(body.get("remember"))
+    device = (body.get("device_id") or "").strip() or secrets.token_urlsafe(9)
+    ttl = (30 * 86400) if remember else (12 * 3600)
+    exp = _sec.now_ts() + ttl
+    token = _sec.mint_2fa_token(uid, org_id, device, exp)
+    try:
+        client.schema("core").table("twofa_device").insert({
+            "auth_id": uid, "org_id": org_id, "device_id": device,
+            "label": (body.get("label") or None),
+            "expires_at": datetime.fromtimestamp(exp, tz=timezone.utc).isoformat()}).execute()
+    except Exception:
+        pass  # mig 711 un-run → the stateless marker still works; the device audit row is best-effort
+    _audit_auth_event(client, "2fa_verified", email=email, auth_id=uid, org_id=org_id,
+                      actor="self", detail={"remember": remember})
+    return {"ok": True, "token": token, "device_id": device, "remember": remember,
+            "expires_at": datetime.fromtimestamp(exp, tz=timezone.utc).isoformat()}
+
+
+@router.post("/me/2fa/settings")
+async def set_2fa_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """The user turns 2FA on/off for themselves (matters under the 'optional' tenant mode) and picks
+    channels. Cannot turn OFF when the tenant policy is 'required'."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    u = _pick_membership(_memberships(client, uid), (x_active_org or "").strip() or None)
+    if not u:
+        raise HTTPException(403, "no tenant for this login")
+    org_id = u.get("org_id") or ORG_ID
+    policy = _load_twofa_policy(client, org_id)
+    enabled = bool(body.get("enabled"))
+    if policy["mode"] == "required":
+        enabled = True   # can't self-disable a required policy
+    channels = [c for c in (body.get("channels") or []) if c in ("email", "whatsapp")] or ["email"]
+    try:
+        client.schema("storeops").table("app_users").update(
+            {"twofa_enabled": enabled, "twofa_channels": channels}).eq("id", u["id"]).execute()
+    except Exception:
+        raise HTTPException(500, "Could not save — the 2FA migration (711) may not be applied yet.")
+    _audit_auth_event(client, "2fa_settings", auth_id=uid, org_id=org_id, actor="self",
+                      detail={"enabled": enabled, "channels": channels})
+    return {"ok": True, "enabled": enabled, "channels": channels}
+
+
+@router.post("/me/phone")
+async def set_phone(body: dict, request: Request, authorization: str = Header(default=""),
+                    x_active_org: str = Header(default="")):
+    """Set/replace the user's phone (unverified) and send a WhatsApp verification code. The phone becomes
+    a usable 2FA channel only AFTER it's verified."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    u = _pick_membership(_memberships(client, uid), (x_active_org or "").strip() or None)
+    if not u:
+        raise HTTPException(403, "no tenant for this login")
+    org_id = u.get("org_id") or ORG_ID
+    email = (u.get("email") or _email_for_uid(client, uid) or "").strip().lower()
+    phone = "".join(c for c in (body.get("phone") or "") if c.isdigit() or c == "+")
+    if len(phone) < 8:
+        raise HTTPException(400, "Enter a valid phone number (with country code).")
+    try:
+        client.schema("storeops").table("app_users").update(
+            {"phone": phone, "phone_verified": False}).eq("id", u["id"]).execute()
+    except Exception:
+        raise HTTPException(500, "Could not save the phone — the 2FA migration (711) may not be applied yet.")
+    try:
+        code = _issue_otp(client, email=email, purpose="phone_verify", channel="whatsapp", org_id=org_id,
+                          auth_id=uid, dest=_sec.mask_phone(phone), ip=_client_ip(request))
+    except OtpUnavailable:
+        raise HTTPException(503, "Phone verification is temporarily unavailable. Please try again shortly.")
+    ok, ch, err = await _anotify.send_phone_verify_otp(phone, code)
+    _audit_auth_event(client, "phone_verify_sent", auth_id=uid, org_id=org_id, actor="self",
+                      detail={"ok": ok})
+    return {"sent": bool(ok), "channel": "whatsapp", "masked": _sec.mask_phone(phone),
+            "message": ("A verification code was sent by WhatsApp." if ok else
+                        "We couldn't send a WhatsApp code — check the number or try email 2FA instead.")}
+
+
+@router.post("/me/phone/verify")
+async def verify_phone(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Verify the phone with the WhatsApp code → mark it verified + enable WhatsApp as a 2FA channel."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    u = _pick_membership(_memberships(client, uid), (x_active_org or "").strip() or None)
+    if not u:
+        raise HTTPException(403, "no tenant for this login")
+    org_id = u.get("org_id") or ORG_ID
+    email = (u.get("email") or _email_for_uid(client, uid) or "").strip().lower()
+    ok, reason = _verify_otp(client, email=email, purpose="phone_verify", code=(body.get("code") or "").strip())
+    if not ok:
+        if reason == "unavailable":
+            raise HTTPException(503, "Phone verification is temporarily unavailable. Please try again shortly.")
+        raise HTTPException(400, "Invalid or expired code.")
+    chans = [c for c in (u.get("twofa_channels") or ["email"]) if c in ("email", "whatsapp")]
+    if "whatsapp" not in chans:
+        chans.append("whatsapp")
+    try:
+        client.schema("storeops").table("app_users").update(
+            {"phone_verified": True, "twofa_channels": chans}).eq("id", u["id"]).execute()
+    except Exception:
+        pass
+    _audit_auth_event(client, "phone_verified", auth_id=uid, org_id=org_id, actor="self")
+    return {"ok": True, "verified": True}
+
+
 @router.post("/users/reset-password")
 async def reset_password(body: dict, authorization: str = Header(default="")):
     """Super-admin: reset ANY user's password by email, ACROSS ALL TENANTS (not org-scoped, unlike
@@ -1698,11 +2448,17 @@ async def reset_password(body: dict, authorization: str = Header(default="")):
     existing = _find_auth_user_by_email(admin, email)
     if not existing:
         raise HTTPException(404, f"no auth account exists for {email} — create their login first (Roles & Access).")
-    temp_pw = body.get("temp_password") or ("Mp" + secrets.token_urlsafe(6))
+    chosen = (body.get("temp_password") or "").strip()
+    if chosen:
+        # Cross-tenant reset (no single org) → enforce the owner DEFAULT policy on an admin-chosen pw.
+        perr = _sec.password_errors(_sec.DEFAULT_PASSWORD_POLICY, chosen)
+        if perr:
+            raise HTTPException(400, " ".join(perr))
+    temp_pw = chosen or _gen_temp_pw()
     try:
         admin.auth.admin.update_user_by_id(existing, {"password": temp_pw})
     except Exception as e:
-        raise HTTPException(500, f"could not reset password: {str(e)[:200]}")
+        raise _masked_500(sb(), ORG_ID, "core.reset_password.update_auth", e)
     # Force a reset-on-next-login flag wherever this email is provisioned (any org).
     try:
         sb().schema("storeops").table("app_users").update(
@@ -1748,11 +2504,14 @@ async def reset_tenant_admin_password(org_id: str, body: dict = None, authorizat
     existing = _find_auth_user_by_email(admin, target_email)
     if not existing:
         raise HTTPException(404, f"no auth account exists for {target_email} — create their login first (Roles & Access).")
-    temp_pw = body.get("temp_password") or ("Mp" + secrets.token_urlsafe(6))
+    chosen = (body.get("temp_password") or "").strip()
+    if chosen:
+        validate_password(client, org_id, chosen)   # tenant policy for this tenant's admin pw
+    temp_pw = chosen or _gen_temp_pw(client, org_id)
     try:
         admin.auth.admin.update_user_by_id(existing, {"password": temp_pw})
     except Exception as e:
-        raise HTTPException(500, f"could not reset password: {str(e)[:200]}")
+        raise _masked_500(sb(), ORG_ID, "core.reset_password.update_auth", e)
     # force reset-on-next-login for THIS tenant's admin row (scoped to org + email)
     try:
         client.schema("storeops").table("app_users").update({"must_reset_password": True}) \
@@ -1780,7 +2539,7 @@ async def bulk_provision(body: dict, org_id: str = ORG_ID):
             continue
         if want and email not in want:
             continue
-        temp_pw = "Mp" + secrets.token_urlsafe(6)
+        temp_pw = _gen_temp_pw(client, org_id)
         auth_id, was_new, err = _create_or_link_auth(admin, email, temp_pw)
         if not auth_id:
             results.append({"email": email, "ok": False, "error": err})

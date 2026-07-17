@@ -260,6 +260,7 @@ export const NAV: NavGroup[] = [
     { href: '/admin/tenant-settings', label: 'Pay Period & Work-Week', icon: '📅', module: 'admin' },
     { href: '/admin/billing', label: 'Billing (Tenants)', icon: '💳', module: 'admin' },
     { href: '/admin/roles', label: 'Roles & Access', icon: '🔐', module: 'admin' },
+    { href: '/admin/security', label: 'Security Settings', icon: '🛡️', module: 'admin' },
     { href: '/admin/org', label: 'Org Structure', icon: '🌳', module: 'admin' },
     { href: '/admin/org-chart', label: 'Employee Org Chart', icon: '👥', module: 'admin' },
     { href: '/admin/labels', label: 'Display Labels', icon: '🏷️', module: 'admin' },

@@ -61,6 +61,7 @@ export default function RolesAdminPage() {
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
   const [tempPw, setTempPw] = useState<Record<string, string>>({})
+  const [revealed, setRevealed] = useState<Record<string, any>>({})
   const [search, setSearch] = useState('')
   const [enforce, setEnforce] = useState<boolean | null>(null)
   const [np, setNp] = useState({ name: '', email: '', role: '', market: '', store: '' })
@@ -265,8 +266,37 @@ export default function RolesAdminPage() {
       // Optimistic UNIFORM state — "invited" until the user completes access, identical for a fresh
       // login and a pending cross-tenant invite (no enumeration signal).
       setEmp(e.id, { login_status: 'invited' })
-      setMsg(`Access set up for ${e.name} — hand out the access code below.`)
+      const deliv = res.delivery_status === 'sent'
+        ? ' — the access code was emailed to them.'
+        : (res.delivery_status === 'failed' ? ' — ⚠️ we could NOT email the code (hand it over below).' : '')
+      setMsg(`Access set up for ${e.name}${deliv}`)
     } catch (err: any) { setMsg('Create-login failed: ' + (err?.message || err)) }
+  }
+
+  // RESEND the invite/access code (newest-wins) + re-email it. Rate-limited server-side (5/hr).
+  async function resendInvite(e: Emp) {
+    if (!e.email) return
+    setMsg('')
+    try {
+      const res = await api('/api/v1/core/users/resend-invite', { method: 'POST', body: JSON.stringify({ email: e.email }) })
+      setTempPw(p => ({ ...p, [e.email!]: res.access_code ?? res.temp_password }))
+      setEmp(e.id, { login_status: 'invited' })
+      const deliv = res.delivery_status === 'sent'
+        ? 'emailed the new code' : '⚠️ could NOT email the code — hand it over below'
+      setMsg(`Resent to ${e.email} — ${deliv}.`)
+    } catch (err: any) { setMsg('Resend failed: ' + (err?.message || err)) }
+  }
+
+  // REVEAL the current active invite/access code (super-admin / own-tenant admin) for troubleshooting.
+  // Server-side gated + audited; NEVER exposes other tenants an email belongs to.
+  async function revealCode(e: Emp) {
+    if (!e.email) return
+    setMsg('')
+    try {
+      const res = await api('/api/v1/core/users/reveal-code', { method: 'POST', body: JSON.stringify({ email: e.email }) })
+      setRevealed(r => ({ ...r, [e.email!]: res }))
+      if (!res.code_available) setMsg(res.hint || 'No stored code — use Resend to issue a new one.')
+    } catch (err: any) { setMsg('Reveal failed: ' + (err?.message || err)) }
   }
   async function provisionAll() {
     if (!confirm('Create logins for every employee who has an email + a role assigned and no login yet?')) return
@@ -695,6 +725,12 @@ export default function RolesAdminPage() {
                         <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => assign(e)}>Save</button>{' '}
                         {e.email && <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => createLogin(e)}>
                           {e.has_login ? 'Reset pw' : 'Create login'}</button>}{' '}
+                        {e.email && (e.login_status === 'invited' || e.has_login) && (
+                          <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} title="Re-email the access/invite code (rate-limited)"
+                            onClick={() => resendInvite(e)}>📧 Resend</button>)}{' '}
+                        {e.email && (e.login_status === 'invited' || e.has_login) && (
+                          <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} title="Reveal the current invite/access code (audited)"
+                            onClick={() => revealCode(e)}>👁 Reveal</button>)}{' '}
                         {e.app_role && <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} title="Per-person dashboard widgets"
                           onClick={() => setWidgetEmp(widgetEmp === e.id ? null : e.id)}>
                           🎛️ Widgets{ovCount ? ` (${ovCount})` : ''}</button>}{' '}
@@ -702,6 +738,26 @@ export default function RolesAdminPage() {
                           onClick={() => setEditEmp(editEmp === e.id ? null : e.id)}>✏️ Edit</button>
                       </td>
                     </tr>
+                    {e.email && revealed[e.email] && (
+                      <tr style={{ background: '#f0f9ff' }}>
+                        <td colSpan={7} style={{ padding: '10px 16px', borderTop: '1px dashed var(--border)', fontSize: 12 }}>
+                          {revealed[e.email].code_available ? (
+                            <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
+                              <span>Access code: <strong style={{ fontFamily: 'monospace' }}>{revealed[e.email].access_code}</strong></span>
+                              <span>Status: <strong>{revealed[e.email].status}</strong></span>
+                              {revealed[e.email].expires_at && <span>Expires: {String(revealed[e.email].expires_at).slice(0, 10)}</span>}
+                              <span>Delivery: <strong style={{ color: revealed[e.email].delivery_status === 'failed' ? '#dc2626' : '#059669' }}>
+                                {revealed[e.email].delivery_status || 'not attempted'}</strong></span>
+                              {(revealed[e.email].resent_count || 0) > 0 && <span>Resent ×{revealed[e.email].resent_count}</span>}
+                            </div>
+                          ) : (
+                            <span style={{ color: 'var(--text2)' }}>{revealed[e.email].hint}</span>
+                          )}
+                          <button className="btn" style={{ fontSize: 11, padding: '2px 8px', marginLeft: 12 }}
+                            onClick={() => setRevealed(r => { const n = { ...r }; delete n[e.email!]; return n })}>Hide</button>
+                        </td>
+                      </tr>
+                    )}
                     {widgetEmp === e.id && (
                       <tr style={{ background: '#f8fafc' }}>
                         <td colSpan={7} style={{ padding: '10px 16px', borderTop: '1px dashed var(--border)' }}>

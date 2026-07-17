@@ -133,6 +133,50 @@ async def send_text(to: str, body: str) -> str:
         return ""
 
 
+def otp_configured() -> bool:
+    """True when a dedicated approved OTP/authentication template is set. Without it, OTP delivery
+    falls back to a plain text message (24h-window only) and is best-effort/unconfirmed."""
+    return bool(is_configured() and settings.WHATSAPP_OTP_TEMPLATE)
+
+
+async def send_otp(to: str, code: str, purpose: str = "verification") -> str:
+    """Deliver a one-time code to `to`. Prefers an approved AUTHENTICATION template (single body var =
+    the code) when WHATSAPP_OTP_TEMPLATE is configured; otherwise falls back to a plain text message
+    (Meta delivers text only inside the 24h service window → cold sends may silently not arrive). Marks
+    UNCONFIRMED in the handoff. Returns the message id; raises RuntimeError on a hard send failure."""
+    if not is_configured():
+        raise RuntimeError("WhatsApp not configured (set WHATSAPP_ACCESS_TOKEN / PHONE_NUMBER_ID / TEMPLATE_NAME)")
+    if settings.WHATSAPP_OTP_TEMPLATE:
+        msg = {
+            "messaging_product": "whatsapp", "to": to, "type": "template",
+            "template": {
+                "name": settings.WHATSAPP_OTP_TEMPLATE,
+                "language": {"code": settings.WHATSAPP_OTP_LANG or "en"},
+                "components": [
+                    {"type": "body", "parameters": [{"type": "text", "text": _clean_var(code, 32)}]},
+                    # AUTHENTICATION templates require the code echoed as the button parameter too.
+                    {"type": "button", "sub_type": "url", "index": "0",
+                     "parameters": [{"type": "text", "text": _clean_var(code, 32)}]},
+                ],
+            },
+        }
+        async with httpx.AsyncClient(timeout=30) as cx:
+            r = await cx.post(f"{_base()}/messages", headers=_headers(), json=msg)
+            # If the template has no URL button, retry body-only (mirrors send_document's self-heal).
+            if r.status_code >= 300:
+                msg["template"]["components"] = [msg["template"]["components"][0]]
+                r = await cx.post(f"{_base()}/messages", headers=_headers(), json=msg)
+        if r.status_code >= 300:
+            raise RuntimeError(f"WhatsApp OTP send {r.status_code}: {r.text[:300]}")
+        try:
+            return (r.json().get("messages") or [{}])[0].get("id", "")
+        except Exception:
+            return ""
+    # Fallback: plain text (24h-window only). Best-effort; returns "" outside the window.
+    return await send_text(to, f"Your MetricsPro {purpose} code is {code}. It expires shortly. "
+                               f"Do not share it with anyone.")
+
+
 async def send_document(to: str, data: bytes, mime: str, filename: str, body_text: str) -> str:
     """Send the approved template to `to`. Attaches the file as a document header when the
     template supports one (WHATSAPP_TEMPLATE_DOC_HEADER), else sends body-only with the link.

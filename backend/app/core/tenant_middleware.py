@@ -50,6 +50,9 @@ _PUBLIC_EXACT = frozenset({
     "/api/v1/core/signup",                # self-serve tenant signup (env-gated SIGNUPS_OPEN; anonymous)
     "/api/v1/core/signup-status",         # /signup page checks whether signups are open, pre-login
     "/api/v1/core/tenants/sync",          # dual-auth: NOTIFY_RUN_SECRET header OR super-admin; cron has no JWT
+    "/api/v1/core/password-policy/public",  # PUBLIC: owner DEFAULT policy for pre-login strength hints
+    "/api/v1/core/auth/forgot-password",  # PUBLIC self-serve reset request (anti-enumeration; anonymous)
+    "/api/v1/core/auth/reset-password",   # PUBLIC self-serve reset completion (code-gated; anonymous)
 })
 
 # Public path PREFIXES, matched at a SEGMENT BOUNDARY only (path == p or path.startswith(p + "/")),
@@ -90,6 +93,74 @@ def _require_auth() -> bool:
     return os.environ.get("REQUIRE_AUTH", "1").lower() not in ("0", "false", "no", "off")
 
 
+# ── 2FA enforcement (auth-hardening 2026-07-17) — ADDITIVE, super-admin always bypassed ─────────────
+# Break-glass: TWOFA_ENFORCE default ON, but per-tenant policy defaults OFF (NULL twofa_policy → mode
+# 'off'), so a deploy locks NObody out. Set TWOFA_ENFORCE=0 to kill enforcement globally (a bad deploy
+# can't strand the owner). A missing mig 711 column → the policy read errors → treated 'off' → no-op.
+_twofa_cache: dict = {}          # org_id -> (policy_dict, expiry_epoch)
+_TWOFA_TTL = 60.0
+
+
+def _twofa_enforce() -> bool:
+    return os.environ.get("TWOFA_ENFORCE", "1").lower() not in ("0", "false", "no", "off")
+
+
+def _tenant_2fa_policy(org: str) -> dict:
+    """Best-effort cached read of a tenant's twofa_policy. {'mode':'off'} on any error / un-run mig 711
+    (→ no enforcement). Normalized to a safe shape here (independent of the router's copy)."""
+    now = time.time()
+    hit = _twofa_cache.get(org)
+    if hit and hit[1] > now:
+        return hit[0]
+    policy = {"mode": "off", "required_roles": []}
+    try:
+        from app.core.database import get_supabase
+        rows = (get_supabase().schema("storeops").table("tenants").select("twofa_policy")
+                .eq("org_id", org).limit(1).execute().data) or []
+        raw = rows[0].get("twofa_policy") if rows else None
+        if isinstance(raw, dict):
+            m = str(raw.get("mode") or "off").lower()
+            policy["mode"] = m if m in ("off", "optional", "required") else "off"
+            rr = raw.get("required_roles")
+            if isinstance(rr, list):
+                policy["required_roles"] = [str(r) for r in rr if str(r).strip()]
+    except Exception:
+        policy = {"mode": "off", "required_roles": []}
+    _twofa_cache[org] = (policy, now + _TWOFA_TTL)
+    return policy
+
+
+def _tenant_needs_2fa(org: str, role, twofa_enabled) -> bool:
+    """Does THIS (org, user) require 2FA? Middleware enforces tenant-wide 'required' (optionally
+    role-scoped). 'optional' is user-opt-in (twofa_enabled); 'off' → never."""
+    policy = _tenant_2fa_policy(org)
+    mode = policy.get("mode")
+    if mode == "off":
+        return False
+    if mode == "required":
+        rr = policy.get("required_roles") or []
+        return (not rr) or ((role or "") in rr)
+    return bool(twofa_enabled)   # optional → only the users who turned it on
+
+
+def _twofa_marker_ok(token: str, uid: str, org: str) -> bool:
+    """Verify the stateless x-2fa-token for this login/org. FAILS OPEN on a verifier import/error so a
+    library glitch can never lock anyone out (the safe direction under 'never strand the owner')."""
+    try:
+        from app.modules.core.auth_security import twofa_token_valid_for, now_ts
+        return twofa_token_valid_for(token, uid, org, now_ts())
+    except Exception:
+        return True
+
+
+async def _reject_2fa(send):
+    body = b'{"detail":"two-factor authentication required","code":"2fa_required"}'
+    await send({"type": "http.response.start", "status": 401,
+                "headers": [(b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
+
+
 def _is_public(path: str) -> bool:
     if path in _PUBLIC_EXACT:
         return True
@@ -102,32 +173,35 @@ def _is_public(path: str) -> bool:
 
 
 def _fetch_memberships(client, uid):
-    """Every (org_id, super_admin, is_default_org) app_users row for this auth_id, earliest first.
-    Tolerant of mig 706 being un-run: is_default_org is a post-706 column, so fall back to the lean
-    columns when it (or created_at ordering) is absent — pre-706 there is at most one row anyway."""
+    """Every app_users row for this auth_id, earliest first. Also selects role + twofa_enabled (used by
+    the 2FA gate). Tolerant of post-706/711 columns being un-run: falls back through progressively
+    leaner column lists so a missing column never breaks identity resolution (pre-706 there is at most
+    one row anyway; a missing twofa_enabled just means 2FA-off)."""
     tbl = client.schema("storeops").table("app_users")
-    try:
-        return (tbl.select("org_id,super_admin,is_default_org")
-                .eq("auth_id", uid).order("created_at").execute().data) or []
-    except Exception:
+    for cols in ("org_id,super_admin,is_default_org,role,twofa_enabled",
+                 "org_id,super_admin,is_default_org,role",
+                 "org_id,super_admin,is_default_org"):
         try:
-            return (tbl.select("org_id,super_admin")
-                    .eq("auth_id", uid).execute().data) or []
+            return (tbl.select(cols).eq("auth_id", uid).order("created_at").execute().data) or []
         except Exception:
-            return []
+            continue
+    try:
+        return (tbl.select("org_id,super_admin").eq("auth_id", uid).execute().data) or []
+    except Exception:
+        return []
 
 
 def _resolve_identity(token: str):
     """Verify the Supabase JWT and resolve the login's MEMBERSHIP set. Cached (positive only).
 
-    Returns (authenticated, super_admin, member_orgs, default_org):
-      (True,  True,  (...),      _)     — verified SUPER-ADMIN → NO rewrite, client org_id honored
-                                          (cross-tenant admin; behaviour UNCHANGED).
-      (True,  False, (orgs...),  org)   — verified normal user → rewrite org_id to the ACTIVE member
-                                          org (chosen via x-active-org, else `default_org`).
-      (True,  False, (),         None)  — verified user with NO app_users row yet → member set empty
-                                          ⇒ no rewrite (client org honored). UNCHANGED behaviour.
-      (False, False, (),         None)  — token missing/expired/unverifiable → caller must REJECT.
+    Returns (authenticated, super_admin, member_orgs, default_org, org_info, uid):
+      • org_info = {org_id: {"role","twofa_enabled"}} for the 2FA gate (additive; empty pre-migration).
+      • uid = the auth account id (for verifying the 2FA marker binds to this login).
+    The first four elements are UNCHANGED in meaning from before:
+      (True,  True,  (...),      _,   …) — verified SUPER-ADMIN → NO rewrite, client org_id honored.
+      (True,  False, (orgs...),  org, …) — verified normal user → rewrite org_id to the ACTIVE org.
+      (True,  False, (),         None,…) — verified user with NO app_users row → no rewrite.
+      (False, False, (),         None,…) — token missing/expired/unverifiable → caller must REJECT.
 
     Blocking — call via to_thread. Negative results are NOT cached, so a transient Supabase hiccup
     never pins a good user out for the TTL, and an expired token re-checks on refresh."""
@@ -141,18 +215,20 @@ def _resolve_identity(token: str):
         user = getattr(resp, "user", None) or resp
         uid = getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else None)
         if not uid:
-            return (False, False, (), None)   # token did not resolve to a user → not authenticated
+            return (False, False, (), None, {}, None)   # token did not resolve → not authenticated
         rows = _fetch_memberships(get_supabase(), uid)
         super_admin = any(r.get("super_admin") for r in rows)
         member_orgs = tuple(r.get("org_id") for r in rows if r.get("org_id"))
         # default membership: the row flagged is_default_org, else the earliest (rows are ordered).
         default_org = next((r.get("org_id") for r in rows if r.get("is_default_org")),
                            (member_orgs[0] if member_orgs else None))
-        result = (True, super_admin, member_orgs, default_org)
+        org_info = {r.get("org_id"): {"role": r.get("role"), "twofa_enabled": bool(r.get("twofa_enabled"))}
+                    for r in rows if r.get("org_id")}
+        result = (True, super_admin, member_orgs, default_org, org_info, uid)
         _cache[token] = (result, now + _TTL)
         return result
     except Exception:
-        return (False, False, (), None)   # verification error / bad token → treat as unauthenticated
+        return (False, False, (), None, {}, None)   # verification error / bad token → unauthenticated
 
 
 def _pick_active_org(member_orgs, default_org, requested):
@@ -187,8 +263,9 @@ class TenantScopeMiddleware:
         headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
         auth = headers.get("authorization", "")
         token = auth.split(" ", 1)[1].strip() if auth.lower().startswith("bearer ") else ""
-        ok, super_admin, member_orgs, default_org = (
-            (await asyncio.to_thread(_resolve_identity, token)) if token else (False, False, (), None))
+        ok, super_admin, member_orgs, default_org, org_info, uid = (
+            (await asyncio.to_thread(_resolve_identity, token)) if token
+            else (False, False, (), None, {}, None))
         if not ok:
             # No valid identity. Kill switch OFF (REQUIRE_AUTH=0) ⇒ old pass-through (client org_id
             # honored). Kill switch ON (default) ⇒ reject — no request reaches a tenant's data
@@ -203,6 +280,16 @@ class TenantScopeMiddleware:
         # else fall back to their default membership. Empty membership ⇒ no rewrite (unprovisioned).
         requested = (headers.get(_ACTIVE_ORG_HEADER, "") or "").strip()
         org = _pick_active_org(member_orgs, default_org, requested)
+        # 2FA gate (auth-hardening) — ADDITIVE, super-admins already returned above. Enforced only when
+        # the global break-glass TWOFA_ENFORCE is on (default) AND the active tenant requires 2FA for
+        # this user AND a valid x-2fa-token is absent. The OTP start/verify endpoints live under the
+        # allowlisted /api/v1/core/me prefix, so a user can always obtain + submit a code. Any error /
+        # un-run mig 711 → _tenant_needs_2fa is False → no-op (never a lockout). TWOFA_ENFORCE=0 kills it.
+        if org and _twofa_enforce():
+            info = org_info.get(org) or {}
+            if _tenant_needs_2fa(org, info.get("role"), info.get("twofa_enabled")):
+                if not _twofa_marker_ok(headers.get("x-2fa-token", ""), uid, org):
+                    return await _reject_2fa(send)
         if org:
             qs = parse_qs(scope.get("query_string", b"").decode(), keep_blank_values=True)
             qs["org_id"] = [org]   # override any client-supplied org_id with the resolved active tenant

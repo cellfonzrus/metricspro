@@ -49,6 +49,29 @@ export function activeOrgHeader(): Record<string, string> {
   return o ? { 'x-active-org': o } : {}
 }
 
+// ── 2FA verified-session marker (auth-hardening) ───────────────────────────────────────────────────
+// After passing the sign-in OTP the backend mints a stateless signed marker; the client presents it on
+// EVERY request as x-2fa-token. tenant_middleware enforces it only when the tenant policy requires 2FA
+// (default OFF), so this header is inert for every tenant that hasn't turned 2FA on. Kept in
+// localStorage — the server re-verifies the HMAC/expiry each request, so the header is a proof, not a
+// trust. Cleared on sign-out.
+const TWOFA_KEY = 'mp_2fa_token'
+export function get2faToken(): string | null {
+  try { return typeof window !== 'undefined' ? (window.localStorage.getItem(TWOFA_KEY) || null) : null }
+  catch { return null }
+}
+export function set2faToken(tok: string | null | undefined) {
+  try {
+    if (typeof window === 'undefined') return
+    if (tok) window.localStorage.setItem(TWOFA_KEY, tok)
+    else window.localStorage.removeItem(TWOFA_KEY)
+  } catch { /* ignore */ }
+}
+export function twofaHeader(): Record<string, string> {
+  const t = get2faToken()
+  return t ? { 'x-2fa-token': t } : {}
+}
+
 // ── org_id APPEND (super-admin house-default hole — NEEDS CORE from mod-commission, 2026-07-14) ────
 // The tenant middleware does NOT rewrite org_id for a super-admin (their client-supplied org_id is
 // honored — that is what makes cross-tenant admin work). But ~17 commcalc/report READ pages call api()
@@ -112,7 +135,7 @@ export async function api(path: string, opts: RequestInit = {}) {
   const authHeader = await bearer()
   const res = await fetch(`${API_URL}${withOrgScope(path)}`, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', ...authHeader, ...activeOrgHeader(), ...opts.headers },
+    headers: { 'Content-Type': 'application/json', ...authHeader, ...activeOrgHeader(), ...twofaHeader(), ...opts.headers },
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -127,7 +150,7 @@ export async function api(path: string, opts: RequestInit = {}) {
 export async function apiUpload(path: string, form: FormData) {
   const authHeader = await bearer()
   const res = await fetch(`${API_URL}${withOrgScope(path)}`, { method: 'POST', body: form,
-    headers: { ...authHeader, ...activeOrgHeader() } })
+    headers: { ...authHeader, ...activeOrgHeader(), ...twofaHeader() } })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(errMsg(err, res.status))
