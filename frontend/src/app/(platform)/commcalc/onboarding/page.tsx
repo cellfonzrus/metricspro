@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
-import { api } from '@/lib/client'
+import { api, apiUpload } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 import EntityPicker from '@/components/EntityPicker'
@@ -17,7 +17,7 @@ const STEPS = ['Company', 'Carrier', 'Connector & reports', 'Upload & columns', 
 const SWEEP_KINDS = ['manual', 'epay', 'vip', 'dlar', 'b2b', 'google_closing']
 
 export default function OnboardingWizard() {
-  const { period } = usePeriod()
+  const { period, periods } = usePeriod()
   const [step, setStep] = useState(0)
   const [msg, setMsg] = useState('')
 
@@ -186,7 +186,7 @@ export default function OnboardingWizard() {
 
         {/* STEP 4 — Upload & columns */}
         {step === 3 && (
-          <ColumnsStep reportKey={report?.report_key || ''} targetTable={report?.target_table || ''} carrierId={carrierId} setMsg={setMsg} />
+          <ColumnsStep reportKey={report?.report_key || ''} targetTable={report?.target_table || ''} carrierId={carrierId} periods={periods} setMsg={setMsg} />
         )}
 
         {/* STEP 5 — Categories */}
@@ -234,7 +234,7 @@ export default function OnboardingWizard() {
 }
 
 // ── Step 4: compact column mapper (reuses the A2 endpoints) ─────────────────────────────────────
-function ColumnsStep({ reportKey, targetTable, carrierId, setMsg }: { reportKey: string; targetTable: string; carrierId: string; setMsg: (s: string) => void }) {
+function ColumnsStep({ reportKey, targetTable, carrierId, periods, setMsg }: { reportKey: string; targetTable: string; carrierId: string; periods: string[]; setMsg: (s: string) => void }) {
   const [fields, setFields] = useState<any[]>([])
   const [src, setSrc] = useState<Record<string, string>>({})
   const [headers, setHeaders] = useState<string[]>([])
@@ -257,7 +257,9 @@ function ColumnsStep({ reportKey, targetTable, carrierId, setMsg }: { reportKey:
   async function seed() { try { const d: any = await api(`/api/v1/commcalc/column-mapping/seed?report_key=${encodeURIComponent(reportKey)}${carrierId ? `&carrier_id=${carrierId}` : ''}`, { method: 'POST' }); setMsg(`✅ Seeded ${d?.seeded ?? 0} defaults.`); load() } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } }
   async function detect(file: File) {
     const fd = new FormData(); fd.append('report_key', reportKey); if (carrierId) fd.append('carrier_id', carrierId); fd.append('file', file)
-    try { const d: any = await api('/api/v1/commcalc/column-mapping/detect', { method: 'POST', body: fd }); setHeaders(d?.headers || []); const s: Record<string, string> = {}; for (const sg of d?.suggestions || []) if (sg.suggested_source) s[sg.target_field] = sg.suggested_source; setSrc(prev => ({ ...prev, ...s })); setMsg(`🔍 Detected ${d?.headers?.length || 0} columns; matches pre-filled.`) } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    // apiUpload (NOT api): api() forces Content-Type: application/json, which strips the multipart
+    // boundary so the backend can't parse the file → the sample upload silently 422'd. (bug 1)
+    try { const d: any = await apiUpload('/api/v1/commcalc/column-mapping/detect', fd); setHeaders(d?.headers || []); const s: Record<string, string> = {}; for (const sg of d?.suggestions || []) if (sg.suggested_source) s[sg.target_field] = sg.suggested_source; setSrc(prev => ({ ...prev, ...s })); setMsg(`🔍 Detected ${d?.headers?.length || 0} columns; matches pre-filled.`) } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
   async function saveAll() {
     let n = 0
@@ -276,7 +278,9 @@ function ColumnsStep({ reportKey, targetTable, carrierId, setMsg }: { reportKey:
     fd.append('period', period.trim())
     fd.append('file', file)
     try {
-      const r: any = await api('/api/v1/commcalc/upload-mapped', { method: 'POST', body: fd })
+      // apiUpload (NOT api): a JSON content-type breaks the multipart file part → "Import full file"
+      // errored on every attempt. (bug 3)
+      const r: any = await apiUpload('/api/v1/commcalc/upload-mapped', fd)
       // The ingest guards (price-coverage refusal / row-count shrink) return HTTP-200; render them
       // honestly instead of a green "✅ 0 row(s)" that looks identical to a broken upload.
       const o = readUploadOutcome(r, 'row(s)')
@@ -297,7 +301,11 @@ function ColumnsStep({ reportKey, targetTable, carrierId, setMsg }: { reportKey:
         <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => fileRef.current?.click()}>📄 Upload sample to auto-detect</button>
         <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={saveAll}>Save mappings</button>
         <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--border)', margin: '0 2px' }} />
-        <input style={{ ...sel, width: 130 }} placeholder="Period e.g. June 2026" value={period} onChange={e => setPeriod(e.target.value)} />
+        {/* RULE THREE §3b pick-don't-type: period is a DROPDOWN of real months, not free text. (bug 2) */}
+        <select style={{ ...sel, width: 150 }} value={period} onChange={e => setPeriod(e.target.value)} aria-label="Period">
+          <option value="">Period…</option>
+          {periods.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
         <input ref={importRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) importFile(f); e.target.value = '' }} />
         <button className="btn" style={{ fontSize: 13, background: '#16a34a', color: '#fff' }} disabled={importing} onClick={() => importRef.current?.click()}>
           {importing ? '⏳ Importing…' : '⬆️ Import full file → load data'}</button>

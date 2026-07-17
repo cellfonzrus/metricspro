@@ -27,6 +27,7 @@ from app.modules.commcalc import comp_trend
 from app.modules.commcalc import carrier_map
 from app.modules.commcalc import column_mapping
 from app.modules.commcalc import commission_catalog
+from app.modules.commcalc import ma_upload
 from app.modules.commcalc import target_registry
 from app.modules.commcalc import commission_ledger
 from app.modules.commcalc import device_history
@@ -11650,6 +11651,371 @@ def reseed_report_pull_map(org_id: str = ORG_ID):
         client.schema("commcalc").table("report_pull_map").insert(row).execute()
         inserted.append(s["report_key"])
     return {"ok": True, "inserted": inserted, "already_present": sorted(have)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# PER-CARRIER MANUAL UPLOAD (mig 212) — the SAP-style manual track that runs in PARALLEL to the flaky
+# live portal pull (owner directive 2026-07-17). A user picks a carrier, sees that carrier's report
+# types with their mapping status, maps a sample ONCE (or inherits the report_pull default), then
+# uploads data files — HISTORICAL (one file spanning many months, split per row's own date) or APPEND
+# (dedup-and-append, like the Boost feed). INGEST-ONLY: nothing here recomputes a payout. The mapping
+# store is commcalc.manual_report_mapping (per org,carrier,report_key), decoupled from the scraper's
+# report_pull_map; absent an override the report_pull default column_map is used, so the MA reports are
+# pre-mapped and uploads work with mig 212 unrun. ─────────────────────────────────────────────────
+def _ma_effective_spec(org_id, report_key):
+    """The report_pull spec for a report_key (this org's report_pull_map override wins over the house
+    default, else the Python default). Returns the spec dict or None if the report_key is unknown."""
+    from app.modules.commcalc import report_pull as rp
+    try:
+        specs = rp.resolve_report_specs(sb(), org_id, processor=None, only_enabled=False)
+    except Exception:
+        specs = [{**s, "org_id": org_id} for s in rp.default_specs(None)]
+    for s in specs:
+        if s.get("report_key") == report_key:
+            return dict(s)
+    return None
+
+
+def _ma_all_specs(org_id):
+    from app.modules.commcalc import report_pull as rp
+    try:
+        return [dict(s) for s in rp.resolve_report_specs(sb(), org_id, processor=None, only_enabled=True)]
+    except Exception:
+        return [{**s, "org_id": org_id} for s in rp.default_specs(None)]
+
+
+def _ma_saved_mapping(org_id, carrier_id, report_key):
+    """The manual_report_mapping override row for (org,carrier,report_key), or None. Never raises (mig
+    212 unrun ⇒ None ⇒ the report_pull default is used)."""
+    if not carrier_id:
+        return None
+    try:
+        rows = (sb().schema("commcalc").table("manual_report_mapping").select("*")
+                .eq("org_id", org_id).eq("carrier_id", carrier_id).eq("report_key", report_key)
+                .limit(1).execute().data) or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def _ma_eff_column_map(org_id, carrier_id, report_key, spec=None):
+    """The column_map the manual upload will use: a saved override wins, else the report_pull default."""
+    spec = spec or _ma_effective_spec(org_id, report_key) or {}
+    saved = _ma_saved_mapping(org_id, carrier_id, report_key)
+    return ma_upload.effective_column_map((saved or {}).get("column_map"), spec.get("column_map")), saved, spec
+
+
+@router.get("/manual-upload/reports")
+def manual_upload_reports(carrier_id: str = "", org_id: str = ORG_ID):
+    """The report catalog for a carrier's manual upload, each with its saved-mapping STATUS so a user
+    never re-maps what already exists. Reports come from the config catalog (report_pull specs); the
+    per-carrier division + mapping live in commcalc.manual_report_mapping."""
+    require_org(org_id)
+    if not carrier_id:
+        raise HTTPException(400, "carrier_id is required (uploads are divided per carrier)")
+    out = []
+    for spec in _ma_all_specs(org_id):
+        rk = spec.get("report_key")
+        saved = _ma_saved_mapping(org_id, carrier_id, rk)
+        status = ma_upload.mapping_status(saved, spec.get("column_map"))
+        ps = spec.get("param_spec") or {}
+        out.append({
+            "report_key": rk,
+            "display_name": spec.get("display_name") or rk,
+            "target_table": spec.get("target_table"),
+            "calibration": bool(ps.get("calibration")),
+            "date_field": ma_upload.date_field_for(rk, spec),
+            "dedup_keys": list(ma_upload.DEDUP_KEYS.get(rk, ())),
+            "join_note": ("Activation Order ↔ MA Daily Tx Order Number"
+                          if rk in ("ma_commission", "ma_daily_tx") else None),
+            **status,
+        })
+    return {"carrier_id": carrier_id, "reports": out,
+            "money_note": "Ingest only — no payout is recalculated on upload."}
+
+
+@router.get("/manual-upload/mapping")
+def manual_upload_get_mapping(report_key: str, carrier_id: str = "", org_id: str = ORG_ID):
+    """The effective column mapping for (org,carrier,report_key): the saved override if present, else
+    the report_pull default — plus the target-field catalog for the mapping editor (pick-don't-type)."""
+    require_org(org_id)
+    if not carrier_id:
+        raise HTTPException(400, "carrier_id is required")
+    eff, saved, spec = _ma_eff_column_map(org_id, carrier_id, report_key)
+    return {
+        "report_key": report_key, "carrier_id": carrier_id,
+        "target_table": spec.get("target_table"),
+        "column_map": eff,
+        "target_fields": ma_upload.target_field_catalog(eff or spec.get("column_map")),
+        "status": ma_upload.mapping_status(saved, spec.get("column_map")),
+        "sample_headers": (saved or {}).get("sample_headers"),
+    }
+
+
+@router.post("/manual-upload/detect")
+async def manual_upload_detect(report_key: str = Form(...), carrier_id: str = Form(""),
+                               file: UploadFile = File(...), org_id: str = ORG_ID):
+    """Read an uploaded SAMPLE file's headers → suggest a source-header ⇢ dest-field mapping and detect
+    which MONTHS the file spans (for the period picker + a multi-month preview). No ingest."""
+    require_org(org_id)
+    if not carrier_id:
+        raise HTTPException(400, "carrier_id is required")
+    from app.modules.commcalc import report_pull as rp
+    contents = await file.read()
+    try:
+        rows = rp.parse_export_bytes(contents, getattr(file, "filename", ""))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file: {e}")
+    headers = list(rows[0].keys()) if rows else []
+    eff, saved, spec = _ma_eff_column_map(org_id, carrier_id, report_key)
+    eff_map = eff or spec.get("column_map") or {}
+    # derive periods via the SAME per-row mapping the ingest uses
+    mapped = rp.apply_column_map(rows, {**spec, "column_map": eff_map}, org_id)
+    date_col = ma_upload.date_field_for(report_key, spec)
+    return {
+        "headers": headers, "rows_in": len(rows),
+        "target_fields": ma_upload.target_field_catalog(eff_map),
+        "suggestions": ma_upload.suggest_sources(headers, eff_map),
+        "detected_periods": ma_upload.detected_periods(mapped, date_col),
+    }
+
+
+@router.post("/manual-upload/mapping")
+def manual_upload_save_mapping(body: dict, org_id: str = ORG_ID):
+    """Persist the per-(org,carrier,report_key) manual column mapping. Accepts either a ready column_map
+    or a {dest_col: source_header} selection (field_sources) — the latter inherits value TYPES from the
+    report_pull default so numeric/date casting is preserved. SAP: map once, upload against it forever."""
+    require_org(org_id)
+    rk = (body.get("report_key") or "").strip()
+    carrier_id = (body.get("carrier_id") or "").strip()
+    if not rk or not carrier_id:
+        raise HTTPException(400, "report_key and carrier_id are required")
+    spec = _ma_effective_spec(org_id, rk) or {}
+    default_map = spec.get("column_map") or {}
+    column_map = body.get("column_map")
+    if not (isinstance(column_map, dict) and column_map):
+        column_map = ma_upload.build_column_map(body.get("field_sources") or {}, default_map)
+    if not column_map:
+        raise HTTPException(400, "no columns mapped")
+    row = {
+        "org_id": org_id, "carrier_id": carrier_id, "report_key": rk,
+        "target_table": spec.get("target_table"),
+        "column_map": column_map,
+        "sample_headers": body.get("sample_headers"),
+        "saved_by": (body.get("saved_by") or None),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    client = sb()
+    try:
+        existing = (client.schema("commcalc").table("manual_report_mapping").select("id")
+                    .eq("org_id", org_id).eq("carrier_id", carrier_id).eq("report_key", rk)
+                    .limit(1).execute().data) or []
+        if existing:
+            client.schema("commcalc").table("manual_report_mapping").update(row)\
+                .eq("org_id", org_id).eq("carrier_id", carrier_id).eq("report_key", rk).execute()
+            return {"ok": True, "updated": True, "columns": len(column_map)}
+        r = client.schema("commcalc").table("manual_report_mapping").insert(row).execute()
+        return {"ok": True, "id": (r.data or [{}])[0].get("id"), "columns": len(column_map)}
+    except Exception as e:
+        raise HTTPException(400, f"Could not save mapping — is migration 212 applied? {e}")
+
+
+@router.post("/manual-upload/reset-mapping")
+def manual_upload_reset_mapping(body: dict, org_id: str = ORG_ID):
+    """Drop the saved override for (org,carrier,report_key) so it falls back to the report_pull default."""
+    require_org(org_id)
+    rk = (body.get("report_key") or "").strip()
+    carrier_id = (body.get("carrier_id") or "").strip()
+    if not rk or not carrier_id:
+        raise HTTPException(400, "report_key and carrier_id are required")
+    try:
+        sb().schema("commcalc").table("manual_report_mapping").delete()\
+            .eq("org_id", org_id).eq("carrier_id", carrier_id).eq("report_key", rk).execute()
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+def _ma_existing_keys(client, org_id, table, report_key, win_start, win_end, date_col):
+    """The set of natural dedup keys already present in `table` for this org within [win_start, win_end]
+    (by date_col). Used by APPEND to skip rows already ingested (from ANY source — a manual append never
+    re-duplicates rows the portal pull already has). Paginated + ordered for stable reads. Best-effort."""
+    cols = ma_upload.DEDUP_KEYS.get(report_key)
+    keys = set()
+    try:
+        sel = ",".join(dict.fromkeys(list(cols or ()) + ([date_col] if date_col else [])))
+        if not sel:
+            return keys
+        start, page = 0, 1000
+        while True:
+            q = (client.schema("commcalc").table(table).select(sel)
+                 .eq("org_id", org_id).order("id"))
+            if date_col and win_start:
+                q = q.gte(date_col, win_start)
+            if date_col and win_end:
+                q = q.lte(date_col, win_end)
+            rows = (q.range(start, start + page - 1).execute().data) or []
+            for r in rows:
+                keys.add(ma_upload.natural_key(report_key, r))
+            if len(rows) < page:
+                break
+            start += page
+            if start > 500000:      # hard safety cap
+                break
+    except Exception:
+        pass
+    return keys
+
+
+def _ma_counterpart_order_numbers(client, org_id, report_key, win_start, win_end):
+    """For the Activation-Order ↔ Order-Number linkage indicator: the counterpart table's order-number
+    values within the window. ma_commission ↔ raw_ma_daily_tx.order_number; ma_daily_tx ↔
+    raw_ma_commission.activation_order. Best-effort, capped."""
+    if report_key == "ma_commission":
+        table, col, dcol = "raw_ma_daily_tx", "order_number", "tx_date"
+    elif report_key == "ma_daily_tx":
+        table, col, dcol = "raw_ma_commission", "activation_order", "tx_date"
+    else:
+        return set()
+    out = set()
+    try:
+        start, page = 0, 1000
+        while True:
+            q = (client.schema("commcalc").table(table).select(col).eq("org_id", org_id).order("id"))
+            if win_start:
+                q = q.gte(dcol, win_start)
+            if win_end:
+                q = q.lte(dcol, win_end)
+            rows = (q.range(start, start + page - 1).execute().data) or []
+            for r in rows:
+                if r.get(col):
+                    out.add(r.get(col))
+            if len(rows) < page:
+                break
+            start += page
+            if start > 500000:
+                break
+    except Exception:
+        pass
+    return out
+
+
+@router.post("/manual-upload/ingest")
+async def manual_upload_ingest(
+    report_key: str = Form(...),
+    carrier_id: str = Form(...),
+    mode: str = Form("append"),          # 'append' (dedup-and-add) | 'historical' (replace covered months)
+    date_from: str = Form(""),           # optional scope clip (YYYY-MM-DD) within the file
+    date_to: str = Form(""),
+    file: UploadFile = File(...),
+    org_id: str = ORG_ID,
+):
+    """Manual ingest of an MA report file. Splits rows to their real months from the file's OWN date
+    column (never forces a single period label onto multi-month data), then either APPENDs with dedup or
+    HISTORICALly replaces each covered month's manual rows. INGEST-ONLY — no payout is recomputed."""
+    require_org(org_id)
+    if not carrier_id:
+        raise HTTPException(400, "carrier_id is required (uploads are divided per carrier)")
+    from app.modules.commcalc import report_pull as rp
+    started = _datetime.now(timezone.utc)
+    mode = (mode or "append").strip().lower()
+    if mode not in ("append", "historical"):
+        raise HTTPException(400, "mode must be 'append' or 'historical'")
+
+    eff, saved, spec = _ma_eff_column_map(org_id, carrier_id, report_key)
+    table = (spec.get("target_table") or "").strip()
+    eff_map = eff or spec.get("column_map") or {}
+    if not table:
+        raise HTTPException(400, f"No target_table for report_key '{report_key}'.")
+    if not eff_map:
+        raise HTTPException(400, f"'{report_key}' has no column mapping. Map a sample first.")
+
+    contents = await file.read()
+    try:
+        rows = rp.parse_export_bytes(contents, getattr(file, "filename", ""))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file: {e}")
+
+    stamp_carrier = carrier_id if _table_has_column(sb(), table, "carrier_id") else None
+    mapped = rp.apply_column_map(rows, {**spec, "column_map": eff_map}, org_id,
+                                 source_id=None, carrier_id=stamp_carrier)
+    date_col = ma_upload.date_field_for(report_key, spec)
+
+    # optional scope clip (day / week / custom range chosen in the UI)
+    df, dt = (date_from or "").strip()[:10], (date_to or "").strip()[:10]
+    if df or dt:
+        def _in(r):
+            d = str(r.get(date_col) or "")[:10] if date_col else ""
+            if df and (not d or d < df):
+                return False
+            if dt and (not d or d > dt):
+                return False
+            return True
+        mapped = [r for r in mapped if _in(r)]
+
+    # in-file dedupe always applies (a file listing the same line twice never double-inserts)
+    mapped, within_dropped = ma_upload.dedupe_within(mapped, report_key)
+    win_start, win_end = ma_upload.date_span(mapped, date_col)
+    client = sb()
+
+    to_insert = []
+    dupes_dropped = within_dropped
+    replaced_periods = []
+    if mode == "append":
+        existing = _ma_existing_keys(client, org_id, table, report_key, win_start, win_end, date_col)
+        to_insert, extra = ma_upload.filter_new(existing, mapped, report_key)
+        # filter_new re-dedupes internally; account only the already-present portion beyond within_dropped
+        dupes_dropped = extra
+    else:  # historical — replace each covered month's MANUAL rows (never touches portal-pulled rows)
+        by_period = ma_upload.group_by_period(mapped)
+        for period, prows in by_period.items():
+            if period:
+                try:
+                    d = (client.schema("commcalc").table(table).delete()
+                         .eq("org_id", org_id).in_("period", _pvariants(period)).is_("source_id", "null"))
+                    d.execute()
+                    replaced_periods.append(period)
+                except Exception:
+                    pass
+            to_insert.extend(prows)
+
+    saved_n = 0
+    for i in range(0, len(to_insert), 500):
+        chunk = to_insert[i:i + 500]
+        try:
+            client.schema("commcalc").table(table).insert(chunk).execute()
+            saved_n += len(chunk)
+        except Exception as e:
+            raise HTTPException(500, f"Insert into {table} failed at row {i}: {e}")
+
+    # cheap post-upload linkage indicator (Activation Order ↔ Order Number) — recon is future work
+    linkage = None
+    try:
+        counterpart = _ma_counterpart_order_numbers(client, org_id, report_key, win_start, win_end)
+        if counterpart or report_key in ("ma_commission", "ma_daily_tx"):
+            linkage = ma_upload.linkage_counts(report_key, to_insert, counterpart)
+    except Exception:
+        linkage = None
+
+    periods = ma_upload.period_counts(to_insert)
+    dcounts = ma_upload.date_counts(to_insert, date_col)
+    note = (f"manual {mode}: {saved_n} row(s) saved, {dupes_dropped} duplicate(s) skipped"
+            + (f"; replaced months {', '.join(replaced_periods)}" if replaced_periods else "")
+            + (f"; span {win_start}..{win_end}" if win_start else ""))
+    result = {
+        "saved": saved_n, "rows_in": len(rows), "mode": mode,
+        "report_key": report_key, "target_table": table, "carrier_id": carrier_id,
+        "periods": periods, "date_span": [win_start, win_end],
+        "dupes_dropped": dupes_dropped, "replaced_periods": replaced_periods,
+        "linkage": linkage, "note": note,
+        "money_note": "Ingest only — no payout recomputed. Review the loaded numbers before any recalc.",
+        "_trace": {"rows_in": len(rows), "target_table": table,
+                   "periods": periods, "date_counts": dcounts},
+    }
+    _write_upload_trace(org_id, source="manual", filename=getattr(file, "filename", None),
+                        upload_type=report_key, period="", result=result,
+                        duration_ms=int((_datetime.now(timezone.utc) - started).total_seconds() * 1000))
+    return result
 
 
 @router.post("/data-sources/sweep/run-due")
