@@ -15,7 +15,7 @@ import secrets
 import uuid
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, HTTPException, Header, Request
+from fastapi import APIRouter, HTTPException, Header, Request, BackgroundTasks
 from app.core.database import get_supabase, get_supabase_admin
 from app.core.config import settings
 from app.modules.core.entitlements import (
@@ -1919,6 +1919,19 @@ def _twofa_required_for(policy, role, user_opted_in):
     return bool(user_opted_in)   # optional
 
 
+def _enforce_self_2fa(client, org_id, uid, role, twofa_enabled, x_2fa_token):
+    """Guard the sensitive SELF-service 2FA endpoints (/me/2fa/settings, /me/phone, /me/phone/verify)
+    that live UNDER the marker-exempt /core/me prefix, so the middleware 2FA gate never runs on them.
+    When 2FA is CURRENTLY required for this user (mode 'required', or 'optional' with them opted-in), a
+    valid x-2fa-token is required — else a password-only attacker could disable 2FA or swap in their own
+    phone (channel bypass). BOOTSTRAP-SAFE: a user not yet required (optional-not-opted-in / policy off)
+    passes through, and the email start/verify path — which mints the FIRST marker — never calls this."""
+    policy = _load_twofa_policy(client, org_id)
+    if _twofa_required_for(policy, role, twofa_enabled):
+        if not _sec.twofa_token_valid_for(x_2fa_token, uid, org_id, _sec.now_ts()):
+            raise HTTPException(401, detail={"message": "Two-factor verification required.", "code": "2fa_required"})
+
+
 @router.get("/security-settings")
 async def get_security_settings(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The tenant's password + 2FA policy (admin Security Settings UI). Any signed-in user may READ (so
@@ -2011,10 +2024,12 @@ _UNAVAIL = {"ok": False, "message": "Password reset is temporarily unavailable. 
 
 
 @router.post("/auth/forgot-password")
-async def forgot_password(body: dict, request: Request):
+async def forgot_password(body: dict, request: Request, background: BackgroundTasks):
     """PUBLIC: request a reset code. ANTI-ENUMERATION — the response is ALWAYS the same generic message
     (and same code path/timing) whether or not the account exists; existence, tenant membership and
-    disabled status are NEVER revealed. Sends over email (+ verified WhatsApp phone if on file)."""
+    disabled status are NEVER revealed. Sends over email (+ verified WhatsApp phone if on file). The
+    email send is dispatched AFTER the response (BackgroundTasks) so the network round-trip isn't an
+    inline timing delta for existing accounts."""
     email = (body.get("email") or "").strip().lower()
     client = sb()
     if not _otp_store_ok(client):
@@ -2043,7 +2058,10 @@ async def forgot_password(body: dict, request: Request):
         if he.status_code == 429:
             return _RESET_GENERIC   # rate-limited → still generic (never reveal via a 429)
         raise
-    await _anotify.send_reset_otp(email, code, channels=channels, phone=phone or "")
+    # Dispatch the actual send AFTER the response returns → equalizes the inline timing between an
+    # existing account (which sends) and a non-existent one (which returns early). A residual, smaller
+    # delta remains from the in-request OTP insert; acceptable (documented in the handoff).
+    background.add_task(_anotify.send_reset_otp, email, code, channels, phone or "")
     _audit_auth_event(client, "reset_requested", email=email, org_id=org_id, actor="self")
     return _RESET_GENERIC
 
@@ -2146,6 +2164,13 @@ async def resend_invite(body: dict, org_id: str = ORG_ID, authorization: str = H
            .eq("email", email).limit(1).execute().data) or []
     if not cur:
         raise HTTPException(400, "assign a role to this email first")
+    # Footgun guard: a resend that falls into the in-tenant 'reset' path RESETS an active login's
+    # password. Refuse when the login is already ACTIVE (bound + has signed in — the SAME logic the
+    # roster uses for login_status='active') UNLESS a pending cross-tenant invite exists (the legit
+    # resend target). Invited-but-never-signed-in logins (auth_id set, no last_login) still resend.
+    pending = _find_pending_invite(client, email, org_id)
+    if not pending and cur[0].get("auth_id") and cur[0].get("last_login"):
+        raise HTTPException(400, "This login is already active — use Reset pw or Set password to change their credentials.")
     admin = get_supabase_admin()
     temp_pw = _gen_temp_pw(client, org_id)
     try:
@@ -2344,9 +2369,12 @@ async def verify_2fa(body: dict, authorization: str = Header(default=""), x_acti
 
 
 @router.post("/me/2fa/settings")
-async def set_2fa_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+async def set_2fa_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                          x_2fa_token: str = Header(default="")):
     """The user turns 2FA on/off for themselves (matters under the 'optional' tenant mode) and picks
-    channels. Cannot turn OFF when the tenant policy is 'required'."""
+    channels. Cannot turn OFF when the tenant policy is 'required'. When 2FA is currently required for
+    this user, a valid 2FA marker is required to change these settings (prevents a password-only
+    attacker from disabling it)."""
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
@@ -2355,6 +2383,7 @@ async def set_2fa_settings(body: dict, authorization: str = Header(default=""), 
     if not u:
         raise HTTPException(403, "no tenant for this login")
     org_id = u.get("org_id") or ORG_ID
+    _enforce_self_2fa(client, org_id, uid, u.get("role"), u.get("twofa_enabled"), x_2fa_token)
     policy = _load_twofa_policy(client, org_id)
     enabled = bool(body.get("enabled"))
     if policy["mode"] == "required":
@@ -2372,9 +2401,11 @@ async def set_2fa_settings(body: dict, authorization: str = Header(default=""), 
 
 @router.post("/me/phone")
 async def set_phone(body: dict, request: Request, authorization: str = Header(default=""),
-                    x_active_org: str = Header(default="")):
+                    x_active_org: str = Header(default=""), x_2fa_token: str = Header(default="")):
     """Set/replace the user's phone (unverified) and send a WhatsApp verification code. The phone becomes
-    a usable 2FA channel only AFTER it's verified."""
+    a usable 2FA channel only AFTER it's verified. When 2FA is currently required for this user, a valid
+    2FA marker is required — else a password-only attacker could swap in their own number and receive the
+    2FA codes (channel bypass)."""
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
@@ -2383,6 +2414,7 @@ async def set_phone(body: dict, request: Request, authorization: str = Header(de
     if not u:
         raise HTTPException(403, "no tenant for this login")
     org_id = u.get("org_id") or ORG_ID
+    _enforce_self_2fa(client, org_id, uid, u.get("role"), u.get("twofa_enabled"), x_2fa_token)
     email = (u.get("email") or _email_for_uid(client, uid) or "").strip().lower()
     phone = "".join(c for c in (body.get("phone") or "") if c.isdigit() or c == "+")
     if len(phone) < 8:
@@ -2406,8 +2438,11 @@ async def set_phone(body: dict, request: Request, authorization: str = Header(de
 
 
 @router.post("/me/phone/verify")
-async def verify_phone(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
-    """Verify the phone with the WhatsApp code → mark it verified + enable WhatsApp as a 2FA channel."""
+async def verify_phone(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                       x_2fa_token: str = Header(default="")):
+    """Verify the phone with the WhatsApp code → mark it verified + enable WhatsApp as a 2FA channel. When
+    2FA is currently required for this user, a valid 2FA marker is required (same channel-bypass guard as
+    /me/phone: a marker-less caller must not be able to promote an attacker-controlled number)."""
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
@@ -2416,6 +2451,7 @@ async def verify_phone(body: dict, authorization: str = Header(default=""), x_ac
     if not u:
         raise HTTPException(403, "no tenant for this login")
     org_id = u.get("org_id") or ORG_ID
+    _enforce_self_2fa(client, org_id, uid, u.get("role"), u.get("twofa_enabled"), x_2fa_token)
     email = (u.get("email") or _email_for_uid(client, uid) or "").strip().lower()
     ok, reason = _verify_otp(client, email=email, purpose="phone_verify", code=(body.get("code") or "").strip())
     if not ok:

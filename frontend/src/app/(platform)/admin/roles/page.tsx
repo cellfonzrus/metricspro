@@ -725,7 +725,7 @@ export default function RolesAdminPage() {
                         <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => assign(e)}>Save</button>{' '}
                         {e.email && <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => createLogin(e)}>
                           {e.has_login ? 'Reset pw' : 'Create login'}</button>}{' '}
-                        {e.email && (e.login_status === 'invited' || e.has_login) && (
+                        {e.email && e.login_status === 'invited' && (
                           <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} title="Re-email the access/invite code (rate-limited)"
                             onClick={() => resendInvite(e)}>📧 Resend</button>)}{' '}
                         {e.email && (e.login_status === 'invited' || e.has_login) && (

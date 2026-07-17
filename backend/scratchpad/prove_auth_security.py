@@ -135,13 +135,15 @@ class _FakeReq:
     headers = {}
     class client: host = "1.2.3.4"
 
+from starlette.background import BackgroundTasks
+
 async def _run_forgot(email):
     store_client = _FakeClient()
     R.sb = lambda: store_client                          # patch DB
     async def _noop_send(*a, **k): return [(True, "email", None)]
-    R._anotify.send_reset_otp = _noop_send               # patch sender
+    R._anotify.send_reset_otp = _noop_send               # patch sender (also never run — backgrounded)
     R._audit_auth_event = lambda *a, **k: None           # silence audit
-    return await R.forgot_password({"email": email}, _FakeReq())
+    return await R.forgot_password({"email": email}, _FakeReq(), BackgroundTasks())
 
 body_exists = asyncio.run(_run_forgot("exists@known.com"))
 body_missing = asyncio.run(_run_forgot("nobody@unknown.com"))
@@ -149,6 +151,33 @@ ck("existing-email response == non-existing-email response (byte-identical)",
    json.dumps(body_exists, sort_keys=True) == json.dumps(body_missing, sort_keys=True))
 ck("both are the generic 'if this email has an account' message",
    body_exists.get("message", "").lower().startswith("if this email has an account"))
+
+print("H. self-service 2FA endpoints require a marker when 2FA is active (REWORK 1 — channel-bypass fix)")
+from fastapi import HTTPException as _HTTPExc
+
+def _self2fa_raises(policy, role, twofa_enabled, marker):
+    R._load_twofa_policy = lambda client, org: policy   # patch policy read
+    try:
+        R._enforce_self_2fa(None, "org-A", "auth-1", role, twofa_enabled, marker)
+        return None
+    except _HTTPExc as e:
+        return e
+
+good_marker = S.mint_2fa_token("auth-1", "org-A", "dev", S.now_ts() + 300)
+# required mode → marker mandatory
+e1 = _self2fa_raises({"mode": "required", "required_roles": []}, "sales_rep", False, "")
+ck("required + NO marker → 401 raised", e1 is not None and e1.status_code == 401)
+ck("401 body carries code '2fa_required'", isinstance(e1.detail, dict) and e1.detail.get("code") == "2fa_required")
+ck("required + VALID marker → allowed", _self2fa_raises({"mode": "required", "required_roles": []}, "sales_rep", False, good_marker) is None)
+ck("required + wrong-login marker → 401", _self2fa_raises({"mode": "required", "required_roles": []}, "sales_rep", False, S.mint_2fa_token("attacker", "org-A", "d", S.now_ts() + 300)) is not None)
+# optional mode
+ck("optional + opted-IN + no marker → 401 (can't self-disable)", _self2fa_raises({"mode": "optional"}, "sales_rep", True, "") is not None)
+ck("optional + NOT opted-in + no marker → allowed (bootstrap)", _self2fa_raises({"mode": "optional"}, "sales_rep", False, "") is None)
+# off mode / non-2FA tenant
+ck("off mode + no marker → allowed (unaffected)", _self2fa_raises({"mode": "off"}, "admin", True, "") is None)
+# role-scoped required
+ck("required(admin only) + sales_rep + no marker → allowed (not in scope)", _self2fa_raises({"mode": "required", "required_roles": ["admin"]}, "sales_rep", False, "") is None)
+ck("required(admin only) + admin + no marker → 401", _self2fa_raises({"mode": "required", "required_roles": ["admin"]}, "admin", False, "") is not None)
 
 print(f"\n{'PASS' if F == 0 else 'FAIL'}: {P} passed, {F} failed")
 sys.exit(1 if F else 0)
