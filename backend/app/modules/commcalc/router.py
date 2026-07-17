@@ -6382,28 +6382,63 @@ def set_nav_label(body: dict, org_id: str = ORG_ID):
 @router.post("/nav-layout")
 def set_nav_layout(body: dict, org_id: str = ORG_ID):
     """Save the per-tenant sidebar LAYOUT (admin config): which group each nav item appears under, plus
-    hidden items. Body = {items: {<href>: {group?: str, hidden?: bool}}}. Stored as ONE JSON row in
-    commcalc.ui_label_override (scope='layout', reusing mig 068 — no new migration); an empty items map
-    clears it (reverts to the built-in menu). Display-only — never touches routes, data, or access control."""
+    hidden items. Body = {items: {<href>: {group?: str, hidden?: bool, also?: [str]}}, groups?: [str]}.
+      · group  — the item's PRIMARY group (a MOVE from its built-in group)
+      · also   — ADDITIONAL groups the SAME item is DUPLICATED into (extra sidebar links to one href)
+      · hidden — remove the item everywhere
+      · groups — admin-created group names that may have NO items yet (so the designer can keep an empty
+                 group; the sidebar itself ignores empty groups)
+    ADDITIVE / BACKWARD-COMPATIBLE: a legacy body carrying only group/hidden stores byte-identically to
+    before (no `also`/`groups` written when absent). Stored as ONE JSON row in commcalc.ui_label_override
+    (scope='layout', reusing mig 068 — no new migration); an empty layout (no items AND no groups) clears
+    it (reverts to the built-in menu). Display-only — never touches routes, data, or access control."""
     import json as _json
-    items = (body or {}).get('items') or {}
-    # keep only meaningful overrides (a group move or a hide)
-    items = {h: v for h, v in items.items()
-             if isinstance(v, dict) and ((v.get('group') or '').strip() or v.get('hidden'))}
+    raw_items = (body or {}).get('items') or {}
+    items = {}
+    for h, v in raw_items.items():
+        if not isinstance(v, dict):
+            continue
+        g = (v.get('group') or '').strip()
+        # sanitize `also`: non-empty trimmed group names, de-duped, never the primary group
+        also = []
+        for a in (v.get('also') or []):
+            a = (a or '').strip() if isinstance(a, str) else ''
+            if a and a != g and a not in also:
+                also.append(a)
+        # keep only meaningful overrides (a move, a hide, or a duplicate)
+        if not (g or v.get('hidden') or also):
+            continue
+        entry = {}
+        if g:
+            entry['group'] = g
+        if v.get('hidden'):
+            entry['hidden'] = True
+        if also:
+            entry['also'] = also
+        items[h] = entry
+    # admin-created group names (may be empty of items) — de-duped, non-empty
+    groups = []
+    for gname in ((body or {}).get('groups') or []):
+        gname = (gname or '').strip() if isinstance(gname, str) else ''
+        if gname and gname not in groups:
+            groups.append(gname)
     client = sb()
     try:
-        if not items:
+        if not items and not groups:
             client.schema('commcalc').table('ui_label_override').delete() \
                 .eq('org_id', org_id).eq('scope', 'layout').eq('key', '__nav__').execute()
             return {"ok": True, "cleared": True}
+        payload = {"items": items}
+        if groups:
+            payload["groups"] = groups
         client.schema('commcalc').table('ui_label_override').upsert(
             {"org_id": org_id, "scope": "layout", "key": "__nav__",
-             "label": _json.dumps({"items": items}),
+             "label": _json.dumps(payload),
              "updated_at": _datetime.now(_timezone.utc).isoformat()},
             on_conflict="org_id,scope,key").execute()
     except Exception as e:
         raise HTTPException(400, f"Could not save menu layout — run migration 068_ui_label_override.sql first. [{e}]")
-    return {"ok": True, "items": items}
+    return {"ok": True, "items": items, "groups": groups}
 
 
 @router.get("/distributors")

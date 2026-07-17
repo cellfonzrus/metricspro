@@ -1,65 +1,186 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api } from '@/lib/client'
 import { NAV } from '@/lib/rbac'
 
-// Admin-only: rearrange the sidebar for the whole tenant — move any item to a different group or hide
-// it. Saved per-org to commcalc.ui_label_override (scope='layout') and applied on top of the built-in
-// menu in (platform)/layout.tsx via applyNavLayout. Items you don't touch keep their default place, and
-// a newly-shipped item still appears automatically.
-type Ov = Record<string, { group?: string; hidden?: boolean }>
+// Admin-only: rearrange the sidebar for the whole tenant — MOVE any item to a different group, show a
+// DUPLICATE copy of it in additional group(s), hide it, or create brand-new groups. Saved per-org to
+// commcalc.ui_label_override (scope='layout') and applied on top of the built-in menu in
+// (platform)/layout.tsx via applyNavLayout. Items you don't touch keep their default place, and a
+// newly-shipped item still appears automatically. A duplicate is a SECOND LINK to the SAME href — it
+// carries the identical permission gate (never a second permission surface).
+type ItemOv = { group?: string; hidden?: boolean; also?: string[] }
+type Ov = Record<string, ItemOv>
 const inp: React.CSSProperties = { padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
 export default function MenuLayoutPage() {
-  const defaultGroups = Array.from(new Set(NAV.map(g => g.group)))
+  const defaultGroups = useMemo(() => Array.from(new Set(NAV.map(g => g.group))), [])
+  // built-in group for each href (used to know an item's DEFAULT placement)
+  const defGroupByHref = useMemo(() => {
+    const m: Record<string, string> = {}
+    NAV.forEach(g => g.items.forEach(it => { m[it.href] = g.group }))
+    return m
+  }, [])
+  const labelByHref = useMemo(() => {
+    const m: Record<string, { label: string; icon: string }> = {}
+    NAV.forEach(g => g.items.forEach(it => { m[it.href] = { label: it.label, icon: it.icon } }))
+    return m
+  }, [])
+
   const [ov, setOv] = useState<Ov>({})
   const [extraGroups, setExtraGroups] = useState<string[]>([])
   const [newGroup, setNewGroup] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
+  // Move/Duplicate choice dialog when an item is assigned to a DIFFERENT group.
+  const [choice, setChoice] = useState<{ href: string; from: string; to: string } | null>(null)
 
   useEffect(() => {
     api('/api/v1/commcalc/nav-config').then((c: any) => {
       const items: Ov = c?.layout?.items || {}
       setOv(items)
-      const extra = Array.from(new Set(Object.values(items).map(v => v?.group).filter(g => g && !defaultGroups.includes(g)))) as string[]
+      // Extra groups persist from TWO sources so a group survives a reload even with no items assigned:
+      // (1) the saved `layout.groups` list (admin-created, possibly empty); (2) any group referenced by
+      // an item override's primary `group` or `also[]` that isn't a built-in group.
+      const referenced: string[] = []
+      Object.values(items).forEach(v => {
+        if (v?.group) referenced.push(v.group)
+        ;(v?.also || []).forEach(g => referenced.push(g))
+      })
+      const saved: string[] = Array.isArray(c?.layout?.groups) ? c.layout.groups : []
+      const extra = Array.from(new Set([...saved, ...referenced].filter(g => g && !defaultGroups.includes(g)))) as string[]
       setExtraGroups(extra)
     }).catch(() => {}).finally(() => setLoading(false))
-  }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [defaultGroups])
 
   const groupOptions = [...defaultGroups, ...extraGroups]
-  const groupOf = (href: string, def: string) => ov[href]?.group || def
-  const setGroup = (href: string, def: string, g: string) => setOv(o => ({ ...o, [href]: { ...o[href], group: g === def ? undefined : g } }))
-  const setHidden = (href: string, h: boolean) => setOv(o => ({ ...o, [href]: { ...o[href], hidden: h || undefined } }))
-  const addGroup = () => { const g = newGroup.trim(); if (g && !groupOptions.includes(g)) setExtraGroups(x => [...x, g]); setNewGroup('') }
-  const dirty = Object.values(ov).filter(v => v && ((v.group || '').trim() || v.hidden)).length
+  const primaryOf = (href: string) => ov[href]?.group || defGroupByHref[href] || ''
+  const alsoOf = (href: string) => ov[href]?.also || []
+  const hiddenOf = (href: string) => !!ov[href]?.hidden
 
-  async function save() {
-    setSaving(true); setMsg('')
+  // MOVE: set the primary group (undefined when it equals the built-in default). Also drop the target
+  // from `also` so it never lives in one group twice.
+  const moveTo = (href: string, g: string) => setOv(o => {
+    const def = defGroupByHref[href]
+    const cur = o[href] || {}
+    const also = (cur.also || []).filter(x => x !== g)
+    const next: ItemOv = { ...cur, group: g === def ? undefined : g, also: also.length ? also : undefined }
+    return { ...o, [href]: next }
+  })
+  // DUPLICATE: add the target group to `also` (unless it's already the primary or already there).
+  const addAlso = (href: string, g: string) => setOv(o => {
+    const cur = o[href] || {}
+    if (g === primaryOf(href) || (cur.also || []).includes(g)) return o
+    return { ...o, [href]: { ...cur, also: [...(cur.also || []), g] } }
+  })
+  const removeAlso = (href: string, g: string) => setOv(o => {
+    const cur = o[href] || {}
+    const also = (cur.also || []).filter(x => x !== g)
+    return { ...o, [href]: { ...cur, also: also.length ? also : undefined } }
+  })
+  const setHidden = (href: string, h: boolean) => setOv(o => ({ ...o, [href]: { ...o[href], hidden: h || undefined } }))
+
+  // When the Group dropdown targets a DIFFERENT group, ASK move-or-duplicate (RULE THREE explicit pick).
+  const onGroupPick = (href: string, g: string) => {
+    const cur = primaryOf(href)
+    if (!g || g === cur) return
+    setChoice({ href, from: cur, to: g })
+  }
+
+  const addGroup = () => {
+    const g = newGroup.trim()
+    if (g && !groupOptions.includes(g)) setExtraGroups(x => [...x, g])
+    setNewGroup('')
+  }
+  const removeGroup = (g: string) => {
+    const users = allHrefs.filter(h => primaryOf(h) === g || alsoOf(h).includes(g))
+    if (users.length && !confirm(`"${g}" still holds ${users.length} item(s). Removing the group will move those items back to their default group / drop the duplicate. Continue?`)) return
+    setOv(o => {
+      const next: Ov = {}
+      Object.entries(o).forEach(([h, v]) => {
+        const def = defGroupByHref[h]
+        const group = v.group === g ? undefined : v.group  // primary pointing here → revert to default
+        const also = (v.also || []).filter(x => x !== g)
+        const entry: ItemOv = { ...v, group: group === def ? undefined : group, also: also.length ? also : undefined }
+        if (entry.group || entry.hidden || (entry.also && entry.also.length)) next[h] = entry
+      })
+      return next
+    })
+    setExtraGroups(x => x.filter(x2 => x2 !== g))
+  }
+
+  const allHrefs = useMemo(() => NAV.flatMap(g => g.items.map(it => it.href)), [])
+  const dirty = Object.values(ov).filter(v => v && ((v.group || '').trim() || v.hidden || (v.also && v.also.length))).length
+
+  function buildPayload() {
     const items: Ov = {}
     Object.entries(ov).forEach(([h, v]) => {
       const g = (v?.group || '').trim()
-      if (g || v?.hidden) items[h] = { ...(g ? { group: g } : {}), ...(v?.hidden ? { hidden: true } : {}) }
+      const also = (v?.also || []).map(x => (x || '').trim()).filter((x, i, a) => x && x !== g && a.indexOf(x) === i)
+      if (g || v?.hidden || also.length) {
+        items[h] = { ...(g ? { group: g } : {}), ...(v?.hidden ? { hidden: true } : {}), ...(also.length ? { also } : {}) }
+      }
     })
-    try { await api('/api/v1/commcalc/nav-layout', { method: 'POST', body: JSON.stringify({ items }) }); setMsg('Saved ✓ — reload the page to see the menu update.') }
+    return { items, groups: extraGroups }
+  }
+
+  async function save() {
+    setSaving(true); setMsg('')
+    try { await api('/api/v1/commcalc/nav-layout', { method: 'POST', body: JSON.stringify(buildPayload()) }); setMsg('Saved ✓ — reload the page to see the menu update.') }
     catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) }
     setSaving(false)
   }
   async function resetAll() {
     if (!confirm('Reset the whole menu back to the built-in layout?')) return
     setSaving(true); setMsg('')
-    try { await api('/api/v1/commcalc/nav-layout', { method: 'POST', body: JSON.stringify({ items: {} }) }); setOv({}); setExtraGroups([]); setMsg('Reset to defaults — reload to see it.') }
+    try { await api('/api/v1/commcalc/nav-layout', { method: 'POST', body: JSON.stringify({ items: {}, groups: [] }) }); setOv({}); setExtraGroups([]); setMsg('Reset to defaults — reload to see it.') }
     catch (e: any) { setMsg('Reset failed: ' + (e?.message || e)) }
     setSaving(false)
   }
+
+  const chip = (text: string, onRemove?: () => void, color = 'var(--accent)') => (
+    <span style={{ fontSize: 11, color, background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 10, padding: '1px 6px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      {text}{onRemove && <button onClick={onRemove} title="Remove" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text3)', padding: 0, fontSize: 12, lineHeight: 1 }}>✕</button>}
+    </span>
+  )
+
+  const itemRow = (href: string, homeGroup: string) => {
+    const meta = labelByHref[href] || { label: href, icon: '•' }
+    const primary = primaryOf(href)
+    const also = alsoOf(href)
+    const hidden = hiddenOf(href)
+    const moved = primary !== homeGroup
+    return (
+      <div key={href} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid var(--border)', opacity: hidden ? 0.55 : 1, flexWrap: 'wrap' }}>
+        <span style={{ width: 22, textAlign: 'center' }}>{meta.icon}</span>
+        <span style={{ flex: 1, fontSize: 13, minWidth: 160 }}>
+          {meta.label}
+          {moved && <span style={{ fontSize: 11, color: 'var(--accent)', marginLeft: 6 }}>→ {primary}</span>}
+          {also.map(g => <span key={g} style={{ marginLeft: 6 }}>{chip('also: ' + g, () => removeAlso(href, g))}</span>)}
+        </span>
+        <label style={{ fontSize: 12, color: 'var(--text3)' }}>Group&nbsp;
+          <select style={inp} value={primary} onChange={e => onGroupPick(href, e.target.value)}>
+            {groupOptions.map(gn => <option key={gn} value={gn}>{gn}</option>)}
+          </select>
+        </label>
+        <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+          <input type="checkbox" checked={hidden} onChange={e => setHidden(href, e.target.checked)} /> Hide
+        </label>
+      </div>
+    )
+  }
+
+  // items whose PRIMARY group is an extra (admin-created) group, so a moved item shows under it too.
+  const itemsWithPrimary = (g: string) => allHrefs.filter(h => primaryOf(h) === g)
+  const itemsAlsoIn = (g: string) => allHrefs.filter(h => primaryOf(h) !== g && alsoOf(h).includes(g))
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Menu Layout</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Move any sidebar item to a different group or hide it — applies to everyone in your company.</p>
+          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Move any sidebar item to a different group, show a duplicate copy in another group, hide it, or create new groups — applies to everyone in your company.</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{msg}</span>}
@@ -69,37 +190,74 @@ export default function MenuLayoutPage() {
       </div>
 
       <div className="card" style={{ padding: 12, marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: 'var(--text2)' }}>Need a new menu group? Create one, then assign items to it:</span>
+        <span style={{ fontSize: 12, color: 'var(--text2)' }}>Need a new menu group? Create one — it stays even before you add items, then assign items to it below:</span>
         <input style={{ ...inp, width: 180 }} placeholder="New group name" value={newGroup} onChange={e => setNewGroup(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addGroup() }} />
         <button className="btn" onClick={addGroup}>＋ Add group</button>
       </div>
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
-      ) : NAV.map(g => (
-        <div key={g.group} className="card" style={{ marginBottom: 14, padding: 14 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>{g.group}</div>
-          {g.items.map(it => {
-            const tgt = groupOf(it.href, g.group)
-            const hidden = !!ov[it.href]?.hidden
-            const moved = tgt !== g.group
+      ) : (
+        <>
+          {NAV.map(g => (
+            <div key={g.group} className="card" style={{ marginBottom: 14, padding: 14 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>{g.group}</div>
+              {g.items.map(it => itemRow(it.href, g.group))}
+            </div>
+          ))}
+
+          {extraGroups.map(g => {
+            const primaries = itemsWithPrimary(g)
+            const dups = itemsAlsoIn(g)
             return (
-              <div key={it.href} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid var(--border)', opacity: hidden ? 0.55 : 1 }}>
-                <span style={{ width: 22, textAlign: 'center' }}>{it.icon}</span>
-                <span style={{ flex: 1, fontSize: 13 }}>{it.label}{moved && <span style={{ fontSize: 11, color: 'var(--accent)', marginLeft: 6 }}>→ {tgt}</span>}</span>
-                <label style={{ fontSize: 12, color: 'var(--text3)' }}>Group&nbsp;
-                  <select style={inp} value={tgt} onChange={e => setGroup(it.href, g.group, e.target.value)}>
-                    {groupOptions.map(gn => <option key={gn} value={gn}>{gn}</option>)}
-                  </select>
-                </label>
-                <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={hidden} onChange={e => setHidden(it.href, e.target.checked)} /> Hide
-                </label>
+              <div key={g} className="card" style={{ marginBottom: 14, padding: 14, borderColor: 'var(--accent)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>{g}</span>
+                  <span style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--bg2)', borderRadius: 8, padding: '0 6px' }}>new group</span>
+                  <span style={{ flex: 1 }} />
+                  <button className="btn btn-sm" onClick={() => removeGroup(g)}>🗑 Remove group</button>
+                </div>
+                {primaries.length === 0 && dups.length === 0
+                  ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>No items yet — use an item&apos;s <b>Group</b> dropdown above to <b>move</b> or add a <b>duplicate</b> here. This empty group is saved and will still be here next time.</div>
+                  : (
+                    <>
+                      {primaries.map(h => itemRow(h, g))}
+                      {dups.map(h => {
+                        const meta = labelByHref[h] || { label: h, icon: '•' }
+                        return (
+                          <div key={'dup-' + h} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+                            <span style={{ width: 22, textAlign: 'center' }}>{meta.icon}</span>
+                            <span style={{ flex: 1, fontSize: 13 }}>{meta.label} {chip('duplicate — primary in ' + primaryOf(h))}</span>
+                            <button className="btn btn-sm" onClick={() => removeAlso(h, g)}>Remove copy</button>
+                          </div>
+                        )
+                      })}
+                    </>
+                  )}
               </div>
             )
           })}
-        </div>
-      ))}
+        </>
+      )}
+
+      {choice && (() => {
+        const meta = labelByHref[choice.href] || { label: choice.href, icon: '•' }
+        return (
+          <div onClick={() => setChoice(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}>
+            <div onClick={e => e.stopPropagation()} className="card" style={{ padding: 20, maxWidth: 420, width: '90%' }}>
+              <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>{meta.icon} {meta.label}</div>
+              <p style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 16px' }}>
+                Assign to <b>{choice.to}</b> — do you want to <b>move</b> it out of <b>{choice.from}</b>, or keep it in <b>{choice.from}</b> and also show a <b>duplicate</b> copy under <b>{choice.to}</b>?
+              </p>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button className="btn" onClick={() => setChoice(null)}>Cancel</button>
+                <button className="btn" onClick={() => { addAlso(choice.href, choice.to); setChoice(null) }}>＋ Add duplicate in {choice.to}</button>
+                <button className="btn btn-primary" onClick={() => { moveTo(choice.href, choice.to); setChoice(null) }}>→ Move to {choice.to}</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

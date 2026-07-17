@@ -266,11 +266,23 @@ export const NAV: NavGroup[] = [
   ]},
 ]
 
-export type NavLayout = { items?: Record<string, { group?: string; hidden?: boolean }> }
+// Per-item override: `group` = the item's PRIMARY group (a MOVE); `also` = ADDITIONAL groups the SAME
+// item also appears in (DUPLICATE links to the same href — never a second permission surface); `hidden`
+// removes it everywhere. `groups` = admin-created group names that may have no items yet (kept so the
+// designer can show an empty group); the sidebar ignores empty groups. BACKWARD-COMPATIBLE: a legacy
+// layout carrying only `{group?, hidden?}` behaves exactly as before (`also`/`groups` absent → no-op).
+export type NavLayout = {
+  items?: Record<string, { group?: string; hidden?: boolean; also?: string[] }>
+  groups?: string[]
+}
 
 // Apply a per-org sidebar layout (admin config) ON TOP of the already-filtered groups: move an item to
-// a different group, or hide it. Items with no override keep their built-in group. Default group order
-// is preserved; a brand-new group name lands at the end. Returns groups ready to render.
+// a different group, DUPLICATE it into additional groups (`also`), or hide it. Items with no override
+// keep their built-in group. Default group order is preserved; a brand-new group name lands at the end.
+// A DUPLICATE reuses the SAME NavItem object — and applyNavLayout runs AFTER access filtering, so an item
+// only exists here if it passed canSeeItem/carrierOK/capOK, meaning every copy is identically RBAC-gated.
+// Returns groups ready to render. Empty groups (a created group with no items) are dropped from the
+// sidebar; `layout.groups` is intentionally ignored here (it exists only for the designer's persistence).
 export function applyNavLayout(groups: NavGroup[], layout?: NavLayout): NavGroup[] {
   const ov = layout?.items
   if (!ov || !Object.keys(ov).length) return groups
@@ -281,7 +293,17 @@ export function applyNavLayout(groups: NavGroup[], layout?: NavLayout): NavGroup
   for (const g of groups) for (const it of g.items) {
     const o = ov[it.href]
     if (o?.hidden) continue
-    targets.push({ group: (o?.group && o.group.trim()) || g.group, it })
+    const primary = (o?.group && o.group.trim()) || g.group
+    targets.push({ group: primary, it })
+    // Additional placements (duplicates). Dedup within one item so the same href never renders twice in
+    // one group (React-key + visual dup), and never re-adds its own primary group.
+    if (o?.also && o.also.length) {
+      const placed = new Set<string>([primary])
+      for (const a of o.also) {
+        const ag = (a || '').trim()
+        if (ag && !placed.has(ag)) { placed.add(ag); targets.push({ group: ag, it }) }
+      }
+    }
   }
   const seen = new Set<string>(); const order: string[] = []
   defaultOrder.forEach(g => { if (targets.some(t => t.group === g)) { order.push(g); seen.add(g) } })
