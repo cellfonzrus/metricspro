@@ -30,8 +30,12 @@ export function buildDeviceHistorySheets(res: any): ExportSheet[] {
   const d = res.device || {}
   const t = res.tenure || {}
   const p = res.prompt || {}
+  const pp = res.purchase_price || {}
+  const ag = res.aging || {}
+  const bill = ag.billing || {}
 
-  // ── Sheet 1: ungated device / sale / tenure summary (always) ──
+  // ── Sheet 1: ungated device / sale / tenure + aging & purchase summary (always) ──
+  // Aging + purchase price are UNGATED (owner directive) so they ride in the always-exported sheet.
   const info: { k: string; v: any }[] = [
     { k: 'Query', v: res.query ?? '' },
     { k: 'Prompt', v: [p.icon, p.text].filter(Boolean).join(' ') },
@@ -43,6 +47,14 @@ export function buildDeviceHistorySheets(res: any): ExportSheet[] {
     { k: 'Sold by', v: d.salesperson || '—' },
     { k: 'Contract', v: d.contract_type || '—' },
     { k: 'MDN / IMEI', v: [d.mdn, d.imei].filter(Boolean).join(' · ') || '—' },
+    { k: 'Our purchase price', v: pp.found ? pp.amount : '—' },
+    { k: 'Purchase price source', v: pp.found ? `${pp.label} · ${pp.source}` : (pp.provenance || '—') },
+    { k: 'Acquired (inventory)', v: ag.acquired_date || '—' },
+    { k: 'Inventory store', v: ag.store || '—' },
+    { k: ag.is_sold ? 'Days on inventory (at sale)' : 'Current age (unsold)', v: ag.days_on_inventory != null ? ag.days_on_inventory : '—' },
+    { k: 'Aging bucket', v: ag.bucket ? `${ag.bucket.label} (${ag.bucket.range})` : (ag.found ? '—' : 'no inventory record') },
+    { k: 'PayGo date', v: bill.payg_date || '—' },
+    { k: 'Billing Friday', v: bill.billing_friday || '—' },
     { k: 'Activated (residual)', v: t.activation_period || '—' },
     { k: 'Months active', v: t.months_active != null ? `${t.months_active} (${t.basis || 'residual months'})` : '—' },
     { k: 'Last seen', v: t.last_seen_period || '—' },

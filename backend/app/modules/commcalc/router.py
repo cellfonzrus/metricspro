@@ -8037,6 +8037,42 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
     payment_matches = [{"period": _pay_period(r), "amount": safe_float(r.get("amount")),
                         "payment_type": r.get("payment_type")} for r in pay_rows]
 
+    # ── AGING + OUR PURCHASE PRICE (asset_ledger; UNGATED — reps may see cost per owner directive) ──
+    # Aging is a VIP / asset-lending concept → sourced from commcalc.asset_ledger (matched on
+    # esn_imei / phone_number). A tenant with no asset_ledger row for this device gets an HONEST
+    # 'no inventory record' line (never a fake zero) — b2bsoft/Total tenants have no per-IMEI
+    # inventory-cost table (b2b_inventory is category-qty; inventory_value is per-store $), so aging
+    # + purchase price are genuinely absent there and say so. Org-scoped via the shared `_rows`.
+    asset_cols = ("id,esn_imei,phone_number,store,market,device_model,category,status,acquired_date,"
+                  "due_date,payg_date,reimbursement_date,trigger_date,billing_friday,bill_path,"
+                  "date_sold,owed_to_vip,reimbursement,selling_price,raw_row")
+    asset_rows = [r for r in _rows("asset_ledger", asset_cols, ("esn_imei", "phone_number"))
+                  if device_history.keys_match(cands, r.get("esn_imei"), r.get("phone_number"))]
+    asset_row = None
+    if asset_rows:
+        # prefer a row whose ESN matched (the device line over a phone-only hit), then latest acquired.
+        asset_row = max(asset_rows, key=lambda r: (
+            1 if device_history.keys_match(cands, r.get("esn_imei")) else 0,
+            str(r.get("acquired_date") or "")))
+    from datetime import date as _dh_date
+    today_iso = _dh_date.today().isoformat()
+    sale_sold_date = device.get("sold_date") if device else None
+    aging = device_history.build_aging(asset_row, sale_sold_date, today_iso)
+
+    # our purchase price — source-priority pick with provenance (UNGATED).
+    price_candidates = []
+    if asset_row:
+        rr_amt, rr_hdr = device_history.scan_raw_row_price((asset_row.get("raw_row") or {}))
+        if rr_amt is not None:
+            price_candidates.append({"amount": rr_amt,
+                                     "source": f"asset_ledger.raw_row[{rr_hdr}]",
+                                     "label": f"VIP asset ledger — {rr_hdr}"})
+        owed = safe_float(asset_row.get("owed_to_vip"))
+        price_candidates.append({"amount": (round(owed, 2) if owed > 0 else None),
+                                 "source": "asset_ledger.owed_to_vip",
+                                 "label": "VIP device cost (Owed to VIP)"})
+    purchase_price = device_history.pick_purchase_price(price_candidates)
+
     # ── MONEY TABLE (gated: admin-only by default via the 'device_commission' grant) ───────────────
     from app.modules.commcalc.discrepancy_engine import parse_payment_type
     can_money = _can_view_device_commission(authorization, org_id)
@@ -8050,12 +8086,14 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
 
     return {
         "query": q, "detected": shape, "org_id": org_id,
-        "found": bool(sale_rows or mi_rows or pay_rows),
+        "found": bool(sale_rows or mi_rows or pay_rows or asset_rows),
         "device": device,
         "sold_by_us": sold_by_us,
         "prompt": device_history.prompt_for(sold_by_us, device.get("sold_date") if device else None),
         "tenure": tenure,
         "residual_periods": tenure["months_active"],
+        "aging": aging,
+        "purchase_price": purchase_price,
         "commission_visible": can_money,
         "money": money,
         "money_locked": money_locked,

@@ -19,6 +19,19 @@ import { buildDeviceHistoryExport } from './deviceHistoryExport'
 const cell: React.CSSProperties = { padding: '6px 10px', borderTop: '1px solid var(--border)', fontSize: 13 }
 const cellR: React.CSSProperties = { ...cell, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
 
+function AgingBadge({ bucket }: { bucket: any }) {
+  const c = bucket?.key === 'missed'
+    ? { bg: '#fde8e8', fg: '#c81e1e', bd: '#f8b4b4' }
+    : bucket?.key === 'warn'
+      ? { bg: '#fff4e5', fg: '#b45309', bd: '#fed7aa' }
+      : { bg: '#e6f7ec', fg: '#16794a', bd: '#b7e4c7' }
+  return (
+    <span style={{ background: c.bg, color: c.fg, border: `1px solid ${c.bd}`, borderRadius: 6, padding: '2px 8px', fontSize: 12, fontWeight: 700 }}>
+      {bucket?.label} · {bucket?.range}
+    </span>
+  )
+}
+
 function MoneySection({ title, section }: { title: string; section: any }) {
   const rows: any[] = section?.rows || []
   return (
@@ -146,6 +159,63 @@ export default function DeviceHistoryLookup() {
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Sale from the daily feed (current month — not yet promoted to the monthly basis).</div>
               )}
             </div>
+
+            {/* AGING & PURCHASE — inventory aging trail + OUR cost. Ungated: reps may see the price
+                (owner directive 2026-07-17). Honest empty states — never a fake zero. */}
+            {(res.purchase_price || res.aging) && (
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 4 }}>Aging &amp; purchase</div>
+                {/* our purchase price (with provenance) */}
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <tbody>
+                    <tr>
+                      <td style={cell}>Our purchase price</td>
+                      <td style={{ ...cellR, fontWeight: 700 }}>
+                        {res.purchase_price?.found
+                          ? fmt(res.purchase_price.amount)
+                          : <span style={{ color: 'var(--text3)', fontWeight: 400 }}>— no cost on file</span>}
+                      </td>
+                    </tr>
+                    {res.purchase_price?.found && (
+                      <tr><td style={{ ...cell, color: 'var(--text3)', fontSize: 11 }} colSpan={2}>Source: {res.purchase_price.label} · {res.purchase_price.source}</td></tr>
+                    )}
+                    {!res.purchase_price?.found && res.purchase_price?.provenance && (
+                      <tr><td style={{ ...cell, color: 'var(--text3)', fontSize: 11 }} colSpan={2}>{res.purchase_price.provenance}</td></tr>
+                    )}
+                  </tbody>
+                </table>
+                {/* aging trail */}
+                {res.aging?.found ? (
+                  <>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 6 }}>
+                      <tbody>
+                        <tr><td style={cell}>Acquired</td><td style={{ ...cell, textAlign: 'right' }}>{res.aging.acquired_date || '—'}</td></tr>
+                        {res.aging.store && <tr><td style={cell}>Inventory store</td><td style={{ ...cell, textAlign: 'right' }}>{res.aging.store}</td></tr>}
+                        <tr>
+                          <td style={cell}>{res.aging.is_sold ? 'Days on inventory (at sale)' : 'Current age (unsold)'}</td>
+                          <td style={cellR}>{res.aging.days_on_inventory != null ? `${res.aging.days_on_inventory} days` : '—'}</td>
+                        </tr>
+                        {res.aging.bucket && (
+                          <tr><td style={cell}>Aging bucket</td><td style={{ ...cell, textAlign: 'right' }}><AgingBadge bucket={res.aging.bucket} /></td></tr>
+                        )}
+                        {res.aging.sold_date && <tr><td style={cell}>Sold</td><td style={{ ...cell, textAlign: 'right' }}>{res.aging.sold_date}</td></tr>}
+                        {res.aging.billing?.payg_date && <tr><td style={cell}>PayGo date</td><td style={{ ...cell, textAlign: 'right' }}>{res.aging.billing.payg_date}</td></tr>}
+                        {res.aging.billing?.billing_friday && <tr><td style={cell}>Billing Friday</td><td style={{ ...cell, textAlign: 'right' }}>{res.aging.billing.billing_friday}</td></tr>}
+                        {res.aging.billing?.due_date && <tr><td style={cell}>Due date</td><td style={{ ...cell, textAlign: 'right' }}>{res.aging.billing.due_date}</td></tr>}
+                      </tbody>
+                    </table>
+                    {res.aging.age_basis && (
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Age basis: {res.aging.age_basis}. As of {res.aging.asof}.</div>
+                    )}
+                    {res.aging.note && (
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>ⓘ {res.aging.note}</div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>{res.aging?.note || 'No inventory (asset-ledger) record on file for this device.'}</div>
+                )}
+              </div>
+            )}
 
             {/* ACTIVATION + TENURE (residual months) */}
             <div>
