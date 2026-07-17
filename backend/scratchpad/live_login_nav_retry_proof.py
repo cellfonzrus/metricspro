@@ -648,25 +648,25 @@ print("\n[11] SOURCE-level — the http→https recovery is wired into every pro
 
 # vidapay_sweep: _goto_login (base + fallback), begin_login post-submit, complete_2fa, complete_2fa_b2bsoft,
 # run_vidapay_sweep, run_b2bsoft_sweep all call _recover_from_proxy_error before surfacing a proxy error.
-check("11a: _goto_login runs _recover_from_proxy_error after the base goto", "_recover_from_proxy_error(page)" in _gl)
+check("11a: _goto_login runs _recover_from_proxy_error after the base goto", "_recover_from_proxy_error(page" in _gl)
 check("11b: _goto_login's fallback also triggers on a squid page (not just the bot-wall)",
       "_looks_like_proxy_error(page)" in _gl and "or _looks_like_proxy_error" in _gl)
 _bl = vsrc[vsrc.index("def begin_login("):vsrc.index("def begin_login_b2bsoft(")]
 check("11c: begin_login post-submit recovers before erroring",
-      "_recover_from_proxy_error(page)" in _bl)
+      "_recover_from_proxy_error(page" in _bl)
 check("11d: complete_2fa recovers before erroring (GET-only, no code resend)",
-      "not _recover_from_proxy_error(page)" in _c2)
-check("11e: complete_2fa_b2bsoft recovers before erroring", "not _recover_from_proxy_error(page)" in _c2b)
-check("11f: run_vidapay_sweep recovers before erroring", "_recover_from_proxy_error(page)" in _rv)
-check("11g: run_b2bsoft_sweep recovers before erroring", "not _recover_from_proxy_error(page)" in _rb)
+      "not _recover_from_proxy_error(page" in _c2)
+check("11e: complete_2fa_b2bsoft recovers before erroring", "not _recover_from_proxy_error(page" in _c2b)
+check("11f: run_vidapay_sweep recovers before erroring", "_recover_from_proxy_error(page" in _rv)
+check("11g: run_b2bsoft_sweep recovers before erroring", "not _recover_from_proxy_error(page" in _rb)
 
 # live_login: _preauth_detect + _drive post-login + _do_submit post-code all attempt _recover_proxy first.
-check("11h: live_login._preauth_detect attempts _recover_proxy on proxy_error", "_recover_proxy(vp, page)" in lsrc)
+check("11h: live_login._preauth_detect attempts _recover_proxy on proxy_error", "_recover_proxy(vp, page" in lsrc)
 check("11i: live_login has a _recover_proxy wrapper delegating to vp._recover_from_proxy_error",
-      "def _recover_proxy(vp, page):" in lsrc and "vp._recover_from_proxy_error(page)" in lsrc)
+      "def _recover_proxy(vp, page" in lsrc and "vp._recover_from_proxy_error(page" in lsrc)
 _dosub = lsrc[lsrc.index("def _do_submit("):]
 check("11j: _do_submit (post-code) recovers before erroring (GET-only, never resends the code)",
-      "_recover_proxy(vp, page)" in _dosub)
+      "_recover_proxy(vp, page" in _dosub)
 
 
 print("\n==== %d ok, %d fail ====" % (_ok, _fail))
