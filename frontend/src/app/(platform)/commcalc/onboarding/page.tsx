@@ -291,10 +291,20 @@ function ColumnsStep({ reportKey, targetTable, carrierId, periods, setMsg }: { r
     } catch (e: any) { setMsg('❌ Import failed: ' + (e?.message || e)) } finally { setImporting(false) }
   }
 
+  // Convergence pointer: the MA reports also have a dedicated wizard (/commcalc/ma-upload) with safer
+  // dedup/append modes + source-aware replace. This flow still works (now source-scoped + restore-guarded),
+  // but nudge the safer path — do NOT remove this one.
+  const isMaReport = ['ma_commission', 'ma_daily_tx', 'ma_marketplace_orders'].includes(reportKey)
+
   if (!reportKey) return <div><h3 style={{ marginTop: 0 }}>4. Upload &amp; map columns</h3><p style={{ color: 'var(--text3)' }}>Pick a report in step 3 first.</p></div>
   return (
     <div>
       <h3 style={{ marginTop: 0 }}>4. Upload a sample &amp; map its columns → <code>{reportKey}</code>{targetTable ? ` (${targetTable})` : ''}</h3>
+      {isMaReport && (
+        <p style={{ fontSize: 12, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', margin: '0 0 10px' }}>
+          💡 This is an MA report — safer dedup/append modes (and per-month historical replace) live on the dedicated <Link href="/commcalc/ma-upload">MA Upload page →</Link>. This flow also works and won&apos;t touch portal-pulled rows.
+        </p>
+      )}
       <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
         <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={seed}>Seed default layout</button>
         <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) detect(f); e.target.value = '' }} />

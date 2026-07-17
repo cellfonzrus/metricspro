@@ -176,7 +176,63 @@ TABLE_MAP = {
     "sales": "raw_sales",
     "carrier_commission": "carrier_commission",
     "commission_ledger": "commission_ledger",
+    # MA reports (Total/VidaPay). Seeds + target table are DERIVED from report_pull below so the
+    # onboarding /upload-mapped path is pre-mapped for MA files (previously: NO seed → load_rules
+    # returned [] → the onboarding import 400'd "No column mapping configured" = nothing uploaded).
+    "ma_commission": "raw_ma_commission",
+    "ma_daily_tx": "raw_ma_daily_tx",
+    "ma_marketplace_orders": "raw_ma_fulfillment",
 }
+
+
+# ── MA report seeds — DERIVED from report_pull.DEFAULT_REPORT_SPECS (ONE source of truth) ─────────
+# The MA reports never had a static TARGET_FIELDS entry, so the onboarding column-mapper showed "new
+# report key (no default field registry)" and /upload-mapped had no rules → it 400'd and no MA data
+# uploaded. Rather than hand-copy the column list (drift risk vs the raw_ma_* schema), we derive the
+# seed fields from the SAME column_map report_pull.py already proves against the raw_ma_* tables and the
+# ma-upload wizard reuses. report_pull does not import this module, so the lazy import can't cycle.
+_MA_REPORT_KEYS = ("ma_commission", "ma_daily_tx", "ma_marketplace_orders")
+_MA_TYPE_TO_TRANSFORM = {"date": "date10", "num": "number", "text": "text"}
+
+
+def _ma_field_tuples(report_key):
+    """Field tuples for an MA report_key derived from report_pull's default column_map, in the same
+    (target_field, label, transform, required, default_source_header, aliases) shape as TARGET_FIELDS.
+    Returns [] if report_pull is unavailable or the key isn't a wizard-covered MA report — so every
+    caller degrades byte-for-byte to today's behaviour for non-MA keys."""
+    if report_key not in _MA_REPORT_KEYS:
+        return []
+    try:
+        from app.modules.commcalc import report_pull
+    except Exception:
+        return []
+    spec = next((s for s in getattr(report_pull, "DEFAULT_REPORT_SPECS", [])
+                 if s.get("report_key") == report_key), None)
+    if not spec:
+        return []
+    out, seen = [], set()
+    for src_h, spec_v in (spec.get("column_map") or {}).items():
+        if isinstance(spec_v, dict):
+            col, typ = spec_v.get("col"), (spec_v.get("type") or "text")
+        else:
+            col, typ = spec_v, "text"
+        if not col or col in seen:
+            continue
+        seen.add(col)
+        label = str(col).replace("_", " ").strip().capitalize()
+        transform = _MA_TYPE_TO_TRANSFORM.get(str(typ).lower(), "text")
+        out.append((col, label, transform, False, src_h, []))
+    return out
+
+
+def _base_fields(report_key):
+    """The seed field tuples for a report_key: the hard-coded TARGET_FIELDS entry, else the derived MA
+    seeds, else []. This is the ONE seed source _registry_overlay / default_mapping / known_report_keys /
+    suggest all read, so MA reports become pre-mapped everywhere the wizard uses them."""
+    base = TARGET_FIELDS.get(report_key)
+    if base is not None:
+        return list(base)
+    return _ma_field_tuples(report_key)
 
 
 def _registry_overlay(report_key, client=None, org_id=None):
@@ -185,7 +241,7 @@ def _registry_overlay(report_key, client=None, org_id=None):
     registry-only fields are APPENDED. Pure defaults when no client/org_id or the table is absent — so
     every caller below degrades byte-for-byte to today's behaviour. The merge mirrors
     commission_catalog.merged_target_fields but generalised to ANY report_key (C-Phase2)."""
-    base = list(TARGET_FIELDS.get(report_key, []))
+    base = _base_fields(report_key)
     if client is None or not org_id:
         return base
     try:
@@ -207,7 +263,7 @@ def _registry_overlay(report_key, client=None, org_id=None):
 def known_report_keys(client=None, org_id=None):
     """The seeded report keys, plus any report_key a tenant introduced via the registry (so a brand-new
     report type appears in the mapping picker + readiness matrix). Pure list when no client/org_id."""
-    keys = list(TARGET_FIELDS.keys())
+    keys = list(TARGET_FIELDS.keys()) + [k for k in _MA_REPORT_KEYS if k not in TARGET_FIELDS]
     if client is not None and org_id:
         try:
             from app.modules.commcalc import target_registry

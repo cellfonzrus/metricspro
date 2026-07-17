@@ -71,7 +71,7 @@ _TRACE_TARGET_TABLE = {
 
 
 def _write_upload_trace(org_id, *, source="manual", filename=None, upload_type=None, period="",
-                        result=None, duration_ms=None, error=None):
+                        result=None, duration_ms=None, error=None, status=None):
     """Record ONE row in commcalc.upload_trace for an ingest attempt (the owner's debug-first surface).
     Best-effort and NON-RAISING: any failure (mig 202 unrun, transient DB error) is swallowed so it can
     never break an upload. `result` is the dict the ingest returned; a rich `result['_trace']`
@@ -85,15 +85,16 @@ def _write_upload_trace(org_id, *, source="manual", filename=None, upload_type=N
         if rows_saved is None:
             rows_saved = res.get("tenants", res.get("stores", res.get("rows")))
         skipped = res.get("skipped") or (None if res.get("success", True) else res.get("skipped"))
-        if error:
-            status = "error"
-        elif res.get("skipped") == "price_guard_partial":
-            status = "partial"
-        elif res.get("skipped") or res.get("success") is False:
-            status = "skipped"
-        else:
-            status = "ok"
-        guard = res.get("shrink") or res.get("guarded_dates") or res.get("note")
+        if status is None:
+            if error:
+                status = "error"
+            elif res.get("skipped") == "price_guard_partial":
+                status = "partial"
+            elif res.get("skipped") or res.get("success") is False:
+                status = "skipped"
+            else:
+                status = "ok"
+        guard = res.get("shrink") or res.get("guarded_dates") or res.get("guard") or res.get("note")
         row = {
             "org_id": org_id, "source": source, "filename": filename,
             "upload_type": upload_type,
@@ -2230,6 +2231,77 @@ def _table_has_column(client, table, col):
         return False
 
 
+# Positive-only column cache (persist per (table,col) for the process; a genuinely-absent column is
+# re-probed each time so a just-run migration is picked up without a redeploy). Bounds the pre-validation
+# probe cost on the hot path while never caching a stale "missing".
+_TABLE_COL_PRESENT: dict = {}
+
+
+def _known_columns(client, table, cols):
+    """The subset of `cols` that are REAL columns on commcalc.<table> (cached-positive probe per column).
+    Used to strip stray/misnamed mapped keys BEFORE the insert so a delete-first replace can never 42703
+    (which wipes the period AND errors — the owner's double symptom)."""
+    out = set()
+    for c in cols:
+        key = (table, c)
+        if _TABLE_COL_PRESENT.get(key):
+            out.add(c)
+            continue
+        if _table_has_column(client, table, c):
+            _TABLE_COL_PRESENT[key] = True
+            out.add(c)
+    return out
+
+
+_RESTORE_STRIP_COLS = ("id", "created_at", "updated_at")
+
+
+def _select_replace_slice(client, table, org_id, period, *, source_null_only=False, chunk=1000):
+    """SELECT the (org, period[, source_id IS NULL]) slice that a manual replace is about to delete, so a
+    failed insert can restore it. Chunked + id-ordered (stable pagination); serial/default cols stripped
+    for clean re-insert. MEMORY BOUND: at most ONE such slice is held at a time, read `chunk` rows per
+    round-trip. Raises on read failure so the caller can refuse to delete without a safety net."""
+    rows, start = [], 0
+    while True:
+        q = (client.schema("commcalc").table(table).select("*")
+             .eq("org_id", org_id).in_("period", _pvariants(period)))
+        if source_null_only:
+            q = q.is_("source_id", "null")
+        try:
+            page = (q.order("id").range(start, start + chunk - 1).execute().data) or []
+        except Exception:
+            # table without an `id` column (none of ours today) — best-effort single unordered read.
+            q2 = (client.schema("commcalc").table(table).select("*")
+                  .eq("org_id", org_id).in_("period", _pvariants(period)))
+            if source_null_only:
+                q2 = q2.is_("source_id", "null")
+            page = (q2.execute().data) or []
+            rows.extend(page)
+            break
+        if not page:
+            break
+        rows.extend(page)
+        if len(page) < chunk:
+            break
+        start += chunk
+    return [{k: v for k, v in r.items() if k not in _RESTORE_STRIP_COLS} for r in rows]
+
+
+def _restore_rows(client, table, rows, chunk=500):
+    """Re-insert a saved slice (from _select_replace_slice) to compensate a failed import. Returns
+    (restored_count, error_or_None) — a partial restore reports how many made it back so the caller can
+    surface exactly what may have been lost. Never raises."""
+    restored = 0
+    for i in range(0, len(rows), chunk):
+        part = rows[i:i + chunk]
+        try:
+            client.schema("commcalc").table(table).insert(part).execute()
+            restored += len(part)
+        except Exception as e:
+            return restored, e
+    return restored, None
+
+
 @router.post("/upload-mapped")
 async def upload_mapped(
     report_key: str = Form(...),
@@ -2254,8 +2326,17 @@ async def upload_mapped(
         raise HTTPException(400, f"No target_table for report_key '{report_key}'. Pass target_table or set it on the report definition.")
 
     rules = column_mapping.load_rules(sb(), org_id, report_key, carrier_id or None)
+    used_defaults = False
     if not rules:
-        raise HTTPException(400, f"No column mapping configured for '{report_key}'. Map its columns first (or seed defaults).")
+        # No SAVED column_mapping rows → fall back to the code-default seed layout (report_pull-derived for
+        # the MA reports, TARGET_FIELDS for the Boost layouts) so the onboarding import works out of the box
+        # without a manual "Seed default layout" click. Previously this raised 400 → the MA reports (which
+        # had NO seed at all) could never import from onboarding. A genuinely-unmapped key still 400s below.
+        rules = column_mapping.default_mapping(report_key, sb(), org_id)
+        used_defaults = bool(rules)
+    if not rules:
+        raise HTTPException(400, f"No column mapping configured for '{report_key}' and no default layout "
+                                 f"exists to seed. Map its columns first on the Column Mapping page.")
 
     contents = await file.read()
     try:
@@ -2285,27 +2366,109 @@ async def upload_mapped(
             m['total_commission'] = round(sum(safe_float(m.get(a)) for a in amt_fields), 2)
 
     client = sb()
-    # GUARD: only clear the period once we actually have rows — an empty/misaligned file never wipes.
+    started = _datetime.now(timezone.utc)
+    fname = getattr(file, "filename", None)
+    parsed_n = len(df)
+
+    def _trace(status, rows_saved, note, error=None):
+        # mig-202 upload_trace (source='onboarding-import') so 🩺 Ingest health sees these imports too.
+        guard = {"dropped_columns": dropped_columns} if dropped_columns else None
+        _write_upload_trace(
+            org_id, source="onboarding-import", filename=fname, upload_type=report_key, period=period,
+            result={"saved": rows_saved, "note": note, "guard": guard,
+                    "_trace": {"rows_in": parsed_n, "target_table": table}},
+            duration_ms=int((_datetime.now(timezone.utc) - started).total_seconds() * 1000),
+            error=error, status=status)
+
+    # ── (a) PRE-VALIDATE columns: keep only keys that are REAL columns on the target table so a stray
+    #     unmapped/misnamed field can NEVER 42703 the insert (which — with a delete-first — wipes the
+    #     period AND errors: the owner's "no data uploads / manual data overwritten" double symptom). Base
+    #     keys (org_id/period/carrier_id) are ours and always kept; dropped keys are reported, not swallowed.
+    always_keep = set(base.keys())
+    dropped_columns: list = []
+    if mapped:
+        seen_keys: set = set()
+        for m in mapped:
+            seen_keys.update(m.keys())
+        candidate = [k for k in seen_keys if k not in always_keep]
+        valid = _known_columns(client, table, candidate)
+        dropped_columns = sorted(k for k in candidate if k not in valid)
+        if dropped_columns:
+            keep = always_keep | valid
+            mapped = [{k: v for k, v in m.items() if k in keep} for m in mapped]
+        # Friendly 400 (never a raw Postgres 500) when the mapping is so misaligned NOTHING would land.
+        if not any(any(k not in always_keep for k in m) for m in mapped):
+            _trace("error", 0, "no known columns after mapping — nothing changed",
+                   error=f"unknown columns: {', '.join(dropped_columns) or '(none)'}")
+            raise HTTPException(400, f"None of the mapped columns exist on commcalc.{table}. "
+                f"Unknown column(s): {', '.join(dropped_columns) or '(none)'}. "
+                f"Fix the column mapping for '{report_key}' and re-import — no data was changed.")
+
+    # ── (b) SOURCE-AWARE + COMPENSATING-RESTORE replace. On the raw_ma_* family (source_id column) the
+    #     manual replace scopes its delete to source_id IS NULL — portal-pulled rows survive (report_pull's
+    #     coexistence contract, mirrors ma_upload HISTORICAL). Legacy tables (no source_id) keep the full-
+    #     period replace. Either way: snapshot the to-be-deleted slice FIRST; on ANY insert failure restore
+    #     it so a failed import leaves the table AT LEAST as full as before (no DB transactions in supabase-py).
+    source_aware = _table_has_column(client, table, "source_id")
+    saved = 0
     if mapped and period:
         try:
-            client.schema("commcalc").table(table).delete().eq("org_id", org_id).in_("period", _pvariants(period)).execute()
+            snapshot = _select_replace_slice(client, table, org_id, period, source_null_only=source_aware)
         except Exception as e:
-            raise HTTPException(500, f"Failed to clear existing data for {table}/{period}: {e}")
-    saved = 0
-    for i in range(0, len(mapped), 500):
+            _trace("error", 0, "aborted before delete — could not snapshot existing rows", error=str(e))
+            raise HTTPException(500, f"Could not snapshot existing {table}/{period} rows for a safe replace; "
+                                     f"aborted to avoid data loss: {e}")
         try:
-            client.schema("commcalc").table(table).insert(mapped[i:i + 500]).execute()
-            saved += len(mapped[i:i + 500])
+            d = (client.schema("commcalc").table(table).delete()
+                 .eq("org_id", org_id).in_("period", _pvariants(period)))
+            if source_aware:
+                d = d.is_("source_id", "null")
+            d.execute()
         except Exception as e:
-            raise HTTPException(500, f"Insert into {table} failed at row {i}: {e}")
+            _trace("error", 0, "delete failed — nothing deleted", error=str(e))
+            raise HTTPException(500, f"Failed to clear existing data for {table}/{period}: {e}")
+        try:
+            for i in range(0, len(mapped), 500):
+                client.schema("commcalc").table(table).insert(mapped[i:i + 500]).execute()
+                saved += len(mapped[i:i + 500])
+        except Exception as e:
+            # RESTORE the snapshot so the table is at least as full as before this failed import.
+            restored, rerr = _restore_rows(client, table, snapshot)
+            if rerr is not None:
+                lost = max(0, len(snapshot) - restored)
+                note = (f"insert failed after delete AND restore INCOMPLETE — {restored}/{len(snapshot)} prior "
+                        f"row(s) re-inserted, {lost} at risk. Re-pull (portal) or re-upload (manual) {report_key}.")
+                _trace("restore_failed", saved, note, error=f"{e} | restore error: {rerr}")
+                raise HTTPException(500, f"Insert into {table} failed AND restore was incomplete "
+                    f"({restored}/{len(snapshot)} prior rows restored, {lost} at risk). Original error: {e}")
+            note = (f"insert failed at row {saved}; restored {restored} prior row(s) — no data lost.")
+            _trace("error", 0, note, error=str(e))
+            raise HTTPException(400, f"Import failed: {e}. Restored {restored} prior row(s) for {table}/{period} — "
+                                     f"no data lost. Fix the file/mapping and re-import.")
+    else:
+        # No period ⇒ pure append (never deletes). Guard each chunk; nothing to restore.
+        try:
+            for i in range(0, len(mapped), 500):
+                client.schema("commcalc").table(table).insert(mapped[i:i + 500]).execute()
+                saved += len(mapped[i:i + 500])
+        except Exception as e:
+            _trace("partial" if saved else "error", saved, "append insert failed (no delete performed)", error=str(e))
+            raise HTTPException(500, f"Insert into {table} failed at row {saved}: {e}")
+
     try:
         client.schema("commcalc").table("upload_log").insert(
             {"org_id": org_id, "file_type": report_key, "period": period or None,
-             "filename": getattr(file, "filename", None), "rows_saved": saved}).execute()
+             "filename": fname, "rows_saved": saved}).execute()
     except Exception as e:
         print(f"WARN upload_log insert failed: {e}")
+    note = (f"onboarding import: {saved} row(s) into {table}"
+            + (f" (default layout)" if used_defaults else "")
+            + (f"; scoped to manual rows (source_id IS NULL) — portal-pulled rows preserved" if source_aware and period else "")
+            + (f"; dropped {len(dropped_columns)} unknown column(s): {', '.join(dropped_columns)}" if dropped_columns else ""))
+    _trace("partial" if dropped_columns else "ok", saved, note)
     return {"saved": saved, "report_key": report_key, "target_table": table, "period": period,
-            "rules_used": len(rules), "mapped": len(mapped)}
+            "rules_used": len(rules), "used_defaults": used_defaults, "mapped": len(mapped),
+            "dropped_columns": dropped_columns, "source_scoped": bool(source_aware and period), "note": note}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
