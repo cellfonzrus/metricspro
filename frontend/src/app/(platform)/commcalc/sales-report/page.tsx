@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
+import ReportExportBar from '@/components/ReportExportBar'
 import { MultiSelect } from '@/lib/multiselect'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 
@@ -124,6 +125,31 @@ export default function SalesReportPage() {
     { header: 'GP $', get: r => r.gp, money: true },
   ]
 
+  // Drill-down export (RULE FOUR): one row per transaction LINE — what the modal shows. `Device` = the
+  // phone sold on that transaction (repeated per line for a flat export), `Product` = the item on the line
+  // (the phone itself on a device line; the accessory/feature on the others), plus SKU where present.
+  const detailCols: ExportColumn[] = [
+    { header: 'Trans ID', get: r => r.trans_id },
+    { header: 'Date', get: r => r.trans_date, type: 'date' },
+    { header: 'Customer', get: r => r.customer || '' },
+    { header: 'Device', get: r => r.device || '' },
+    { header: 'Department', get: r => r.department || '' },
+    { header: 'Category', get: r => r.category || '' },
+    { header: 'Contract', get: r => r.contract_type || '' },
+    { header: 'Product', get: r => r.product || '' },
+    { header: 'SKU', get: r => r.sku || '' },
+    { header: 'MDN', get: r => r.mdn || '' },
+    { header: 'Serial', get: r => r.serial || '' },
+    { header: 'Price', get: r => r.ext_price, money: true },
+    { header: 'GP', get: r => r.gp, money: true },
+  ]
+  const detailRows: any[] = (detail?.transactions || []).flatMap((t: any) =>
+    (t.lines || []).map((l: any) => ({
+      trans_id: t.trans_id, trans_date: t.trans_date, customer: t.customer, device: t.device,
+      department: l.department, category: l.category, contract_type: l.contract_type,
+      product: l.product, sku: l.sku, mdn: l.mdn, serial: l.serial, ext_price: l.ext_price, gp: l.gp,
+    })))
+
   const Tile = ({ label, value }: { label: string; value: string }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 120 }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
@@ -228,7 +254,19 @@ export default function SalesReportPage() {
                 <div style={{ fontSize: 16, fontWeight: 700 }}>{drill.store} · {drill.salesperson}</div>
                 <div style={{ fontSize: 12, color: 'var(--text3)' }}>{drill.trans_date} · {detail?.txn_count ?? drill.txns} transaction{(detail?.txn_count ?? drill.txns) === 1 ? '' : 's'}</div>
               </div>
-              <button className="btn btn-secondary" style={{ padding: '2px 10px' }} onClick={() => setDrill(null)}>✕</button>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {/* RULE FOUR: the drill-down line detail (incl. the phone sold + SKU) exports — what you see is what exports. */}
+                {detailRows.length > 0 && (
+                  <ReportExportBar
+                    title={`Sales detail — ${drill.store} · ${drill.salesperson}`}
+                    subtitle={`${drill.trans_date} · ${detail?.txn_count ?? 0} transaction${(detail?.txn_count ?? 0) === 1 ? '' : 's'}`}
+                    filename={`sales-detail-${(drill.store || '').replace(/\s+/g, '-')}-${drill.trans_date || period}`}
+                    columns={detailCols}
+                    rows={detailRows}
+                  />
+                )}
+                <button className="btn btn-secondary" style={{ padding: '2px 10px' }} onClick={() => setDrill(null)}>✕</button>
+              </div>
             </div>
             {drillBusy ? (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>Loading transactions…</div>
@@ -247,6 +285,8 @@ export default function SalesReportPage() {
                         <span style={{ color: 'var(--text3)', width: 12 }}>{open ? '▾' : '▸'}</span>
                         <span style={{ fontFamily: 'monospace', fontSize: 12 }}>#{t.trans_id}</span>
                         {t.customer && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{t.customer}</span>}
+                        {/* Which phone was sold — visible without expanding (owner request 2026-07-17). */}
+                        {t.device && <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>📱 {t.device}</span>}
                         <span style={{ fontSize: 11, color: 'var(--text3)' }}>{t.line_count} line{t.line_count === 1 ? '' : 's'}</span>
                         <div style={{ flex: 1 }} />
                         <span style={{ fontSize: 12, color: 'var(--text3)' }}>GP {fmt(t.gp)}</span>
@@ -265,7 +305,7 @@ export default function SalesReportPage() {
                                   <td style={{ padding: '5px 8px' }}>{l.department || '—'}</td>
                                   <td style={{ padding: '5px 8px' }}>{l.category || '—'}</td>
                                   <td style={{ padding: '5px 8px' }}>{l.contract_type || '—'}</td>
-                                  <td style={{ padding: '5px 8px' }}>{l.product || '—'}{l.sku ? <span style={{ color: 'var(--text3)' }}> · {l.sku}</span> : ''}</td>
+                                  <td style={{ padding: '5px 8px', fontWeight: l.is_device ? 600 : 400 }}>{l.is_device ? '📱 ' : ''}{l.product || '—'}{l.sku ? <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {l.sku}</span> : ''}</td>
                                   <td style={{ padding: '5px 8px' }}>{l.mdn || '—'}</td>
                                   <td style={{ padding: '5px 8px', fontFamily: 'monospace', fontSize: 11 }}>{l.serial || '—'}</td>
                                   <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(l.ext_price)}</td>
