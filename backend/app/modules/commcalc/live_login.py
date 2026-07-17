@@ -106,6 +106,28 @@ def _captcha_present(vp, page):
         return False
 
 
+def _clean_err(msg):
+    """Strip Playwright's raw 'Call log:' block (and everything after) from an exception string so an
+    operator NEVER sees the internal trace ("... Call log: - navigating to ... waiting until
+    domcontentloaded"). Keeps the text UP TO the marker; a no-op when there is no call log. Module-level
+    (no vp dependency) so both _run's crash handler and _drive's goto guard can use it."""
+    s = str(msg or "")
+    i = s.find("Call log:")
+    if i != -1:
+        s = s[:i]
+    return s.strip()
+
+
+def _recover_proxy(vp, page):
+    """Attempt the http→https squid recovery via the driver (a fresh GET re-navigation of the https twin —
+    it NEVER re-submits a form / resends a 2FA code). Best-effort; a fake vp may lack the helper. Returns
+    True if the egress squid page cleared (the caller proceeds as if it never appeared), else False."""
+    try:
+        return bool(vp._recover_from_proxy_error(page))
+    except Exception:
+        return False
+
+
 class LiveLoginSession:
     """One persistent browser-backed login session. Owns a single worker thread for its whole life."""
 
@@ -419,7 +441,10 @@ class LiveLoginSession:
                 with sync_playwright() as p:
                     self._drive(p)
             except Exception as e:
-                self._set(phase="error", message="Live login crashed: " + str(e)[:300])
+                # Belt-and-suspenders: _drive already lands its own stops in phase="error", but if ANY
+                # path escapes it the session must not hang in phase="login" — set error here too, and
+                # _clean_err strips a raw Playwright 'Call log:' so the operator never sees the trace.
+                self._set(phase="error", message=_clean_err("Live login crashed: " + str(e))[:300])
         finally:
             # Every stop (proxy_error / auth failure / idle timeout / operator Close / crash / import
             # failure) persists the last live frame + status line to the diag store that
@@ -439,13 +464,19 @@ class LiveLoginSession:
             base = vp._norm_url(self.url, vp.B2BSOFT_URL if self._is_b2b else vp.DEFAULT_URL)
             try:
                 vp._goto_login(page, base)
-            except vp.VidaPayLoginError as e:
-                msg = str(e)
-                if "egress" in msg.lower() or "waf" in msg.lower():
-                    try:
-                        msg += vp.egress_hint(self.proxy_url)
-                    except Exception:
-                        pass
+            except Exception as e:
+                # BROAD by design. _goto_login already converts a CONNECTION-CLASS proxy drop into a
+                # friendly VidaPayLoginError (named failure + attempts, NO Playwright 'Call log:'), and
+                # retries it. But a NON-connection error (a raw net::ERR_ from another path, a selector
+                # timeout) would otherwise escape this narrow handler, hit _run's crash handler, and the
+                # RAW 'Call log:' reaches the UI (the 2026-07-17 incident). So catch EVERYTHING here:
+                # strip the call log and append the egress hint (proxy_url is available at this call site),
+                # then land in phase="error" — never leaking the trace.
+                msg = _clean_err(str(e))
+                try:
+                    msg += vp.egress_hint(self.proxy_url)
+                except Exception:
+                    pass
                 self._set(phase="error", message=msg[:400])
                 self._capture(page)
                 return
@@ -540,9 +571,17 @@ class LiveLoginSession:
                 self._capture(page)
                 return
             if state == "proxy_error":
-                # The egress proxy served its OWN squid rejection page (NOT the portal, NOT a 2FA screen).
-                # Stop here with an actionable message — lingering on the code screen showing the squid page
-                # would be misleading. _persist_diag then writes THIS squid frame to '📷 What the browser saw'.
+                # The egress proxy served its OWN squid rejection page (NOT the portal, NOT a 2FA screen) —
+                # the T-CETRA http-302 hop can strike here (post-submit) too. Try the GET-only https-twin
+                # recovery FIRST (it never re-submits the login / resends a code); on success drop into the
+                # normal pre-auth loop (which re-detects auth / 2FA). Only surface the friendly egress
+                # message if recovery can't clear it — _persist_diag then writes THIS squid frame to
+                # '📷 What the browser saw'.
+                if _recover_proxy(vp, page):
+                    self._set(phase="login", message="Reconnected — finishing sign-in…")
+                    self._capture(page)
+                    self._preauth_loop(page, ctx, vp)
+                    return
                 try:
                     pmsg = vp._proxy_error_message(page.url, self.proxy_url)
                 except Exception:
@@ -677,13 +716,24 @@ class LiveLoginSession:
         except Exception:
             state = "unknown"
         if state == "proxy_error":
-            try:
-                pmsg = vp._proxy_error_message(page.url, self.proxy_url)
-            except Exception:
-                pmsg = "The request died at the egress proxy — check the proxy route, then retry."
-            self._set(phase="error", message=pmsg[:400])
-            self._capture(page)
-            return
+            # The http-302→squid hop can strike at ANY point (T-CETRA's edge changed). Try the GET-only
+            # https-twin recovery FIRST; only surface the friendly error if it can't clear (or the URL
+            # wasn't the http-hop case). On success, drop back into the normal pre-auth flow below by
+            # re-reading state (the page is now the real portal/login/2FA screen, not squid).
+            if _recover_proxy(vp, page):
+                try:
+                    state = vp._classify(page)
+                except Exception:
+                    state = "unknown"
+                self._capture(page)
+            if state == "proxy_error":
+                try:
+                    pmsg = vp._proxy_error_message(page.url, self.proxy_url)
+                except Exception:
+                    pmsg = "The request died at the egress proxy — check the proxy route, then retry."
+                self._set(phase="error", message=pmsg[:400])
+                self._capture(page)
+                return
         if state == "authenticated":
             try:
                 on_trust = any(w in vp._page_text(page) for w in vp._TRUST_PAGE_WORDS)
@@ -921,8 +971,24 @@ class LiveLoginSession:
             self._on_authenticated(page, ctx, vp)
             return True
         if state == "proxy_error":
-            # Code accepted, but the post-code navigation died at the egress proxy — retrying the code
-            # can't help. Stop with a clear proxy message; _persist_diag writes the squid frame + status.
+            # Code accepted, but the post-code navigation hit the T-CETRA http-302→squid hop. Recovery here
+            # is a GET-only re-goto of the https twin — it CANNOT resend the code, so it's safe. Try it
+            # first; if it clears, re-check auth (the code was already accepted, so the app should load).
+            if _recover_proxy(vp, page):
+                try:
+                    recl = vp._classify(page)
+                except Exception:
+                    recl = "unknown"
+                self._capture(page)
+                if recl == "authenticated":
+                    self._on_authenticated(page, ctx, vp)
+                    return True
+                # Cleared the squid page but not conclusively authenticated → hand back to the pre-auth
+                # loop's detection (it concludes auth / keeps the code screen) rather than falsely erroring.
+                self._set(phase="verifying", message="Reconnected — finishing sign-in…")
+                self._capture(page)
+                return False
+            # retrying the code can't help. Stop with a clear proxy message; _persist_diag writes the frame.
             try:
                 pmsg = vp._proxy_error_message(page.url, self.proxy_url)
             except Exception:

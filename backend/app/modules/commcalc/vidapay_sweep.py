@@ -1027,19 +1027,141 @@ def _twofa_result(page, ctx, extra=None):
             "screenshot_b64": _shot_b64(page)}
 
 
+# CONNECTION-CLASS Chromium/net errors — a transport failure BETWEEN the browser and the portal (a
+# rotating residential-proxy exit went bad, a severed TLS tunnel, a DNS blip). Through Decodo's rotating
+# residential proxy a single bad exit / severed TLS gives net::ERR_CONNECTION_CLOSED on ONE navigation,
+# so a FRESH ENTRY navigation (nothing clicked/submitted yet → no 2FA-resend risk) is SAFE to retry.
+# NOT in this set on purpose: selector timeouts (Timeout ...), WAF/bot walls, auth rejections — those are
+# NOT transient transport blips and must surface on the first try.
+_CONNECTION_ERR_MARKERS = (
+    "ERR_CONNECTION_CLOSED", "ERR_CONNECTION_RESET", "ERR_CONNECTION_REFUSED",
+    "ERR_EMPTY_RESPONSE", "ERR_TIMED_OUT", "ERR_TUNNEL_CONNECTION_FAILED",
+    "ERR_PROXY_CONNECTION_FAILED", "ERR_SOCKET_NOT_CONNECTED", "ERR_NAME_NOT_RESOLVED",
+)
+
+
+def _is_connection_error(exc):
+    """True if `exc` is a transport/connection-class navigation failure (vs a selector timeout, a WAF/bot
+    wall, or an auth rejection). Matched on the net::ERR_ marker text so it's processor-generic (VidaPay +
+    b2bsoft) and independent of the concrete Playwright error type."""
+    s = str(exc or "")
+    return any(m in s for m in _CONNECTION_ERR_MARKERS)
+
+
+def _first_conn_marker(exc):
+    """The specific net::ERR_ marker in `exc` (for the operator message); a generic fallback if none."""
+    s = str(exc or "")
+    for m in _CONNECTION_ERR_MARKERS:
+        if m in s:
+            return m
+    return "ERR_CONNECTION"
+
+
+def _strip_call_log(msg):
+    """Drop Playwright's raw 'Call log:' block (and everything after it) so an operator never sees the
+    internal trace ("Call log: - navigating to ... waiting until domcontentloaded"). Keeps the text UP TO
+    the marker; a no-op when there is no call log."""
+    s = str(msg or "")
+    i = s.find("Call log:")
+    if i != -1:
+        s = s[:i]
+    return s.strip()
+
+
+def _goto_with_retry(page, url, *, timeout=60000, wait_until="domcontentloaded",
+                     attempts=3, backoffs=(1.5, 3.0)):
+    """page.goto with a BOUNDED retry on CONNECTION-CLASS failures only. A rotating residential proxy can
+    hand back a dead exit / severed TLS, so a single navigation dies with net::ERR_CONNECTION_CLOSED even
+    though the very next attempt succeeds. SAFE only for a FRESH ENTRY navigation where nothing has been
+    clicked/submitted (no 2FA-resend risk) — callers MUST NOT use it for a post-login / post-code (2FA)
+    navigation. A NON-connection error (selector timeout, WAF) is re-raised on the FIRST failure (never
+    retried). On the final connection-class failure raises a VidaPayLoginError with an operator-friendly
+    message that NEVER carries the Playwright 'Call log:' block."""
+    last = None
+    for i in range(attempts):
+        try:
+            page.goto(url, timeout=timeout, wait_until=wait_until)
+            return
+        except Exception as e:
+            last = e
+            if not _is_connection_error(e):
+                raise                                   # not a transient proxy drop → surface immediately
+            if i < attempts - 1:
+                try:
+                    delay = backoffs[i] if i < len(backoffs) else backoffs[-1]
+                    page.wait_for_timeout(int(delay * 1000))
+                except Exception:
+                    pass
+                continue
+    marker = _first_conn_marker(last)
+    raise VidaPayLoginError(
+        "The portal connection dropped at/behind the egress proxy (net::%s) — it kept dropping across %d "
+        "attempts before the portal page could load. This is a transport failure between the server and "
+        "the portal (a rotating residential-proxy exit went bad or the TLS tunnel was severed), NOT your "
+        "credentials and NOT a 2FA problem. Retry in a moment; if it persists, click Test proxy and rotate "
+        "to a fresh residential IP." % (marker, attempts))
+
+
+def _recover_from_proxy_error(page, attempts=2):
+    """Belt-and-suspenders recovery for the T-CETRA http-302 hop that Playwright's http→https route CANNOT
+    intercept. The _new_context ctx.route rewrites fresh http:// navigations (window.location / goto) to
+    https, but a SERVER-SIDE 302 from https://…/Main%20Panel.aspx to plain-http
+    …/Default.aspx?returnto=http%3a… is followed INSIDE the same request chain at network level — the route
+    never sees the http hop, so Chromium reaches the egress proxy's squid raw and renders its "requested
+    URL could not be retrieved" page. This re-navigates to the HTTPS TWIN of the current (http) URL and
+    re-settles: a PURE GET re-navigation (bounded to `attempts` re-gotos) — it CANNOT re-submit a form or
+    resend a 2FA code, so it is safe pre-auth AND post-login/post-code. Returns True if the squid page
+    cleared (caller proceeds as if it never appeared); False otherwise (caller surfaces the friendly egress
+    error). When the current URL is already https (i.e. NOT the http-hop case) it does nothing → returns
+    False → straight to the friendly error. Never raises."""
+    for _ in range(max(1, attempts)):
+        try:
+            if not _looks_like_proxy_error(page):
+                return True                      # already clean (or cleared by the previous re-goto)
+        except Exception:
+            return False
+        try:
+            cur = page.url or ""
+        except Exception:
+            cur = ""
+        https = _https_upgrade_url(cur)
+        if not https:
+            return False                          # already https / non-http → nothing to upgrade
+        try:
+            page.goto(https, timeout=60000, wait_until="domcontentloaded")
+            _wait_settle(page)
+            page.wait_for_timeout(1500)
+        except Exception:
+            return False
+    try:
+        return not _looks_like_proxy_error(page)
+    except Exception:
+        return False
+
+
 def _goto_login(page, base_url):
-    """Navigate to the portal and settle. If it lands on the bot-wall with no form, retry straight
-    at the id-server login endpoint (deep links are flagged more often than the login URL itself)."""
-    page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+    """Navigate to the portal and settle. If it lands on the bot-wall (or the egress squid page) with no
+    form, retry straight at the id-server login endpoint (deep links are flagged more often than the login
+    URL itself, AND the https id-server is the real pre-auth destination — going there skips the www
+    http-redirect chain that produces the squid hop entirely).
+
+    Both navigations here are PRE-LOGIN entry navigations (nothing has been clicked/submitted — no 2FA
+    has been dispatched), so each goes through _goto_with_retry: a transient connection-class drop through
+    the residential proxy is retried, and an exhausted failure surfaces as a clean VidaPayLoginError (never
+    a raw Playwright 'Call log:'). Non-connection errors are NOT retried. After each goto we also run
+    _recover_from_proxy_error (the http-302→squid hop; GET-only, no resubmit)."""
+    _goto_with_retry(page, base_url, timeout=60000, wait_until="domcontentloaded")
     _wait_settle(page)
     page.wait_for_timeout(2500)
+    _recover_from_proxy_error(page)
     fr, pw = _wait_for_password(page, timeout_s=20)
     if pw:
         return
-    if _looks_like_bot_wall(page):
+    if _looks_like_bot_wall(page) or _looks_like_proxy_error(page):
         try:
-            page.goto(LOGIN_URL, timeout=60000, wait_until="domcontentloaded")
+            _goto_with_retry(page, LOGIN_URL, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
+            _recover_from_proxy_error(page)
             _wait_for_password(page, timeout_s=20)
         except VidaPayLoginError:
             raise
@@ -1231,6 +1353,8 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             page.wait_for_timeout(3500)
             _wait_settle(page)
             state = _classify(page)
+            if state == "proxy_error" and _recover_from_proxy_error(page):
+                state = _classify(page)            # http-302→squid hop recovered (GET-only, no re-submit)
             diag = _snapshot(page)
             if state == "proxy_error":
                 raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(diag))
@@ -1457,7 +1581,9 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
             page.goto(nav_url or base_url, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
             page.wait_for_timeout(2500)
-            if _looks_like_proxy_error(page):
+            # The http-302→squid hop can appear here too; recover by re-goto of the https twin (GET-only,
+            # NEVER re-submits the form / re-sends a code). Only error out if the squid page persists.
+            if _looks_like_proxy_error(page) and not _recover_from_proxy_error(page):
                 raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(_snapshot(page)))
             if _classify(page) == "authenticated":
                 return {"status": "authenticated", "storage_state": capture_session_state(page, ctx),
@@ -1543,7 +1669,9 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
             page.goto(nav_url or base_url, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
             page.wait_for_timeout(2500)
-            if _looks_like_proxy_error(page):
+            # The http-302→squid hop can appear here too; recover by re-goto of the https twin (GET-only,
+            # NEVER re-submits the form / re-sends a code). Only error out if the squid page persists.
+            if _looks_like_proxy_error(page) and not _recover_from_proxy_error(page):
                 raise VidaPayLoginError(_proxy_error_message(page.url, proxy_url) + " Diagnostic: " + str(_snapshot(page)))
             on_2fa = bool(page.query_selector("#TwoFactorCode")) or "twofactor" in (page.url or "").lower()
             if not on_2fa and _classify(page) == "authenticated":
@@ -1928,10 +2056,16 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
         ctx = _new_context(browser, storage_state=session_state, proxy=_proxy_arg(proxy_url))
         page = ctx.new_page()
         try:
-            page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+            # FRESH ENTRY navigation of a cold-restore browser — nothing is clicked/submitted here (no 2FA
+            # resend risk), so a transient connection-class drop through the residential proxy is retried
+            # (same guard as _goto_login). A squid proxy-error PAGE (goto succeeds, renders squid) is still
+            # caught below by _classify → proxy_error; the retry only covers goto that RAISES a net::ERR_.
+            _goto_with_retry(page, base_url, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
             page.wait_for_timeout(2500)
             state = _classify(page)
+            if state == "proxy_error" and _recover_from_proxy_error(page):
+                state = _classify(page)            # http-302→squid hop recovered (GET-only, no re-submit)
             if state == "proxy_error":
                 raise VidaPayPortalError(_proxy_error_message(page.url, proxy_url))
             if state in ("login", "twofa", "botwall"):
@@ -1967,10 +2101,15 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
         ctx = _new_context(browser, storage_state=session_state, proxy=_proxy_arg(proxy_url))
         page = ctx.new_page()
         try:
-            page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+            # FRESH ENTRY navigation of a cold-restore browser — nothing clicked/submitted here (no 2FA
+            # resend risk), so a transient connection-class drop through the residential proxy is retried
+            # (same guard as _goto_login). A squid proxy-error PAGE is still caught below by
+            # _looks_like_proxy_error; the retry only covers goto that RAISES a net::ERR_.
+            _goto_with_retry(page, base_url, timeout=60000, wait_until="domcontentloaded")
             _wait_settle(page)
             page.wait_for_timeout(2500)
-            if _looks_like_proxy_error(page):
+            # http-302→squid hop recovery (GET-only re-goto of the https twin; never re-submits).
+            if _looks_like_proxy_error(page) and not _recover_from_proxy_error(page):
                 raise VidaPayPortalError(_proxy_error_message(page.url, proxy_url))
             # b2bsoft-specific validity check (the generic _classify can misread the wsreports app as a
             # login page): the session is invalid ONLY if we're on the SSO login (#companyId) or 2FA screen.
