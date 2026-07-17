@@ -8460,6 +8460,34 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None):
     return agg
 
 
+def _store_code_resolver(client, org_id):
+    """Return resolve(store_string) -> canonical store_code — the SAME mapping the Daily-Targets actuals
+    use so a store's Exec-MTD trending attaches to the matching target row. coa.store_resolver (exact
+    address → store_aliases → store_code → unambiguous leading number) then store_mapping address→code.
+    Never raises; falls back to the raw string when nothing resolves."""
+    try:
+        from app.modules.account import coa
+        _resolve_store = coa.store_resolver(client, org_id)
+    except Exception:
+        _resolve_store = None
+    try:
+        sm = (client.schema('commcalc').table('store_mapping')
+              .select('store_code,store_address').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        sm = []
+    addr_to_code = {}
+    for m in sm:
+        a = (m.get('store_address') or '').strip().lower()
+        c = (m.get('store_code') or '').strip()
+        if a and c:
+            addr_to_code[a] = c
+
+    def _resolve(store):
+        canon = (_resolve_store(store) if (_resolve_store and store) else None) or store
+        return addr_to_code.get(str(canon).strip().lower(), canon)
+    return _resolve
+
+
 def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed', rows=None):
     """The ONE processed sales source, computed in Python so the whole targets/recon system agrees.
 
@@ -8491,19 +8519,7 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed', 
     # key on the RAW feed spelling (e.g. "3 Palisade Ave Yonkers") while the Daily Target keys on the
     # canonical store_code (B-3PL) → scope_achieved_mtd matches nothing → the store shows 0 activations
     # even though its sales are in the feed. Any store needing an alias/leading-number was silently 0.
-    try:
-        from app.modules.account import coa
-        _resolve_store = coa.store_resolver(client, org_id)
-    except Exception:
-        _resolve_store = None
-    sm = (client.schema('commcalc').table('store_mapping')
-          .select('store_code,store_address').eq('org_id', org_id).execute().data) or []
-    addr_to_code = {}
-    for m in sm:
-        a = (m.get('store_address') or '').strip().lower()
-        c = (m.get('store_code') or '').strip()
-        if a and c:
-            addr_to_code[a] = c
+    _resolve_code = _store_code_resolver(client, org_id)
     # THE shared per-(store, rep, day) pass — identical skip rules + classification + distinct-txn counting
     # as the Sales Report + Executive MTD (see _sales_cell_agg). Targets then re-keys each cell to the
     # canonical store_code (so scope_achieved_mtd matches the Daily Target's store_code) and rep.upper(),
@@ -8513,8 +8529,7 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed', 
     for (store, rep, date), a in cells.items():
         if not date:
             continue
-        canon = (_resolve_store(store) if (_resolve_store and store) else None) or store
-        code = addr_to_code.get(str(canon).strip().lower(), canon)
+        code = _resolve_code(store)
         k = (code, rep.upper(), date)
         o = agg.get(k)
         if not o:
@@ -8558,6 +8573,37 @@ def _fetch_actuals(client, org_id, period):
         if r.get('rep_name'):
             r['rep_name'] = _canon(r.get('rep_name'), cmap)
     return rows
+
+
+def _targets_trending_by_code(client, org_id, period, today=None):
+    """Per-store-code TRENDING (projected month-end) accessory$ + activation/box count, taken DIRECTLY
+    from the Executive-MTD computation (`_exec_mtd`) so the Daily-Targets / Accessory-Targets pages show
+    the SAME trending numbers as Executive MTD — ONE source, both move together when the shared
+    aggregation or the trend formula changes. Exec MTD keys `by_location` on the raw store string; this
+    folds each row into the canonical store_code via the SAME resolver the actuals use, so a store's
+    trending attaches to its Daily-Targets row (raw spellings that resolve to one code sum together).
+    Display-only; never raises (a trending failure must not break the targets summary)."""
+    try:
+        ex = _exec_mtd(client, org_id, period, today=today)
+    except Exception as e:
+        print(f"WARN _targets_trending_by_code exec-mtd failed: {e}")
+        return {}, {}
+    resolve = _store_code_resolver(client, org_id)
+    by_code = {}
+    for r in (ex.get('by_location', {}) or {}).get('rows', []) or []:
+        code = str(resolve(r.get('store')) or '').strip().upper()
+        if not code:
+            continue
+        d = by_code.setdefault(code, {'trending_acc_sales': 0.0, 'trending_box': 0,
+                                      'acc_sales': 0.0, 'total_activation': 0})
+        d['trending_acc_sales'] += safe_float(r.get('trending_acc_sales'))
+        d['trending_box'] += int(r.get('trending_box') or 0)
+        d['acc_sales'] += safe_float(r.get('acc_sales'))
+        d['total_activation'] += int(r.get('total_activation') or 0)
+    for d in by_code.values():
+        d['trending_acc_sales'] = round(d['trending_acc_sales'], 2)
+        d['acc_sales'] = round(d['acc_sales'], 2)
+    return by_code, (ex.get('trending', {}) or {})
 
 
 def _byod_pct_default(client, period, org_id=ORG_ID):
@@ -8828,29 +8874,67 @@ async def get_target_calendar(
 
 @router.get("/targets/{period}/summary")
 async def get_targets_summary(period: str, today: str = "", include_untargeted: bool = False,
+                              stores: Optional[List[str]] = Query(default=None),
+                              markets: Optional[List[str]] = Query(default=None),
+                              reps: Optional[List[str]] = Query(default=None),
                               authorization: str = Header(default=""), org_id: str = ORG_ID):
     """All-stores overview: store-level today/pace/need/monthly/achieved per category. When RBAC
     enforcement is on, a non-admin manager only sees the stores in their org-unit span (Phase 5).
     include_untargeted=1 also returns stores that have sales/achieved but no target set (so the
-    Accessory tab can track achieved accessory $ even before per-store accessory targets exist)."""
+    Accessory tab can track achieved accessory $ even before per-store accessory targets exist).
+
+    RULE FIVE standardized filters (2026-07-17): optional repeated `stores` (store_code or address) /
+    `markets` / `reps` query params filter the returned stores SERVER-SIDE. store/market pick which stores
+    are shown (and thus the tiles + the trending sum); rep narrows the per-rep breakdown to the selected
+    reps and keeps only stores where they worked/sold — the store-level target/achieved/trending stay
+    WHOLE-STORE (a store target can't be split per rep). Filter OPTIONS are returned in `filters`
+    (pick-don't-type over the org's real stores/markets/reps).
+
+    TRENDING (2026-07-17): each store carries `trending_acc_sales` + `trending_box` (projected month-end)
+    read DIRECTLY from Executive MTD's `_exec_mtd` (`_targets_trending_by_code`) so the Targets pages show
+    the SAME trending numbers as Exec MTD — one shared aggregation + trend formula, both move together."""
     client = sb()
     start, end, today = _period_bounds(period, today)
     byod_def = _byod_pct_default(client, period, org_id)
 
     trows = (client.schema('commcalc').table('targets')
              .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
-    by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
-    stores = (client.schema('storeops').table('stores')
-              .select('store_code,address,market,monthly_target').eq('org_id', org_id).execute().data) or []
+    tgt_by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
+    store_rows = (client.schema('storeops').table('stores')
+                  .select('store_code,address,market,monthly_target').eq('org_id', org_id).execute().data) or []
     shifts = _fetch_shifts(client, start, end, org_id)
     actuals = _fetch_actuals(client, org_id, period)
+    # Whole-store projected-month-end trending, straight from Executive MTD (one source, moves together).
+    trend_by_code, trend_meta = _targets_trending_by_code(client, org_id, period, today=today)
+
+    # ── RULE FIVE filter OPTIONS (pick-don't-type over real data), computed from the FULL universe so a
+    #    selection can always be changed. Store value = store_code (label = address); market = storeops
+    #    market; rep = canonical rep name present in the period's actuals.
+    store_opts = [{'value': str(s.get('store_code') or '').strip(),
+                   'label': str(s.get('address') or s.get('store_code') or '').strip()}
+                  for s in store_rows if str(s.get('store_code') or '').strip()]
+    market_opts = sorted({str(s.get('market') or '').strip() for s in store_rows if str(s.get('market') or '').strip()})
+    rep_opts = sorted({str(a.get('rep_name') or '').strip() for a in actuals if str(a.get('rep_name') or '').strip()})
+    filters = {'stores': store_opts, 'markets': market_opts, 'reps': rep_opts}
+
+    store_sel = {str(x).strip().lower() for x in (stores or []) if str(x).strip()}
+    market_sel = {str(x).strip().lower() for x in (markets or []) if str(x).strip()}
+    rep_sel = {str(x).strip().upper() for x in (reps or []) if str(x).strip()}
+    applied = {'stores': sorted(store_sel), 'markets': sorted(market_sel), 'reps': sorted(rep_sel)}
 
     out = []
-    for s in stores:
+    for s in store_rows:
         code = str(s.get('store_code', '') or '').strip()
         if not code:
             continue
-        trow = by_code.get(code.upper())
+        addr = str(s.get('address') or '').strip()
+        mkt = str(s.get('market') or '').strip()
+        # store / market filters select which stores are shown (whole-store math unchanged).
+        if store_sel and code.lower() not in store_sel and addr.lower() not in store_sel:
+            continue
+        if market_sel and mkt.lower() not in market_sel:
+            continue
+        trow = tgt_by_code.get(code.upper())
         if not trow:
             trow = {'accessories_monthly': safe_float(s.get('monthly_target'))}
         monthly = targets_engine.derive_monthly_by_cat(trow, byod_def)
@@ -8869,26 +8953,35 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
         store_conv = targets_engine.scope_conversion(actuals, code, None, today)
         # Reps who worked/sold at this store + their MTD performance, so the store
         # row breaks down into the people driving it (for corrective action).
-        reps = []
+        reps_out = []
         for rep_name in targets_engine.reps_in_scope(shifts, actuals, code):
             ach = targets_engine.scope_achieved_mtd(actuals, code, rep_name, today)
             rconv = targets_engine.scope_conversion(actuals, code, rep_name, today)
-            reps.append({'rep': rep_name, **ach, 'conversion': rconv,
-                         'below_store': rconv['rate'] < store_conv['rate']})
-        reps.sort(key=lambda r: -r['activations'])
+            reps_out.append({'rep': rep_name, **ach, 'conversion': rconv,
+                             'below_store': rconv['rate'] < store_conv['rate']})
+        # rep filter: narrow the per-rep breakdown to the selected reps + drop stores none of them touch.
+        if rep_sel:
+            reps_out = [r for r in reps_out if str(r['rep']).strip().upper() in rep_sel]
+            if not reps_out:
+                continue
+        reps_out.sort(key=lambda r: -r['activations'])
+        trend = trend_by_code.get(code.upper(), {})
         out.append({
             'store_code': code, 'address': s.get('address'), 'market': s.get('market'),
             'scheduled_hours_total': res['scheduled_hours_total'],
             'categories': res['categories'],
             'conversion': store_conv,
-            'reps': reps,
+            'trending_acc_sales': safe_float(trend.get('trending_acc_sales')),
+            'trending_box': int(trend.get('trending_box') or 0),
+            'reps': reps_out,
         })
     out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         out = [s for s in out if in_keyset(ks, s.get('store_code'), s.get('address'))]
-    return {'period': period, 'today': today.isoformat(), 'stores': out}
+    return {'period': period, 'today': today.isoformat(), 'stores': out,
+            'filters': filters, 'applied': applied, 'trending': trend_meta}
 
 
 # KPI → commission tier inputs (mirrors calculator.py KPI defaults).
