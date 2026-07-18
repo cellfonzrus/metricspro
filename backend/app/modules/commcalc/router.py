@@ -6279,6 +6279,19 @@ async def preview_plan_installments(period: str, org_id: str = ORG_ID):
         raise HTTPException(500, f"installment preview failed: {type(e).__name__}: {e}")
 
 
+@router.get("/plan-installments/gate-impact/{period}")
+async def preview_installment_gate_impact(period: str, org_id: str = ORG_ID):
+    """READ-ONLY impact preview for the mig-223 config-driven paid gate (Gate-2 review artifact). Lists every
+    installment row that FLIPS withheld_unpaid → payable under the new master-agent gate (vs the legacy
+    raw_mi-only gate), with per-rep + total dollars. For a Boost-mode org it returns zero flips (boost_safe=
+    true). Writes nothing; never triggers a real calculate/persist."""
+    require_org(org_id)
+    try:
+        return sale_installment_engine.preview_gate_impact(sb(), org_id, period)
+    except Exception as e:
+        raise HTTPException(500, f"gate-impact preview failed: {type(e).__name__}: {e}")
+
+
 # ── ACTIVATION-PAYMENT MATCHER (mig 210): what counts as "payment received at activation" (per-tenant) ─
 @router.get("/plan-installments/activation-matcher")
 async def get_activation_matcher(period: str = "", org_id: str = ORG_ID):
