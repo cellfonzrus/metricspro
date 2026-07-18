@@ -13,6 +13,8 @@ explicit later step the user approves (mirror of installment_engine.py).
 
 Degrades to an empty/ready:false result if migration 059 isn't applied yet (tables absent) — never a 500.
 """
+import re
+
 from app.modules.commcalc.calculator import safe_float
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -82,14 +84,47 @@ def _load_plans(client, org_id):
     return out, True
 
 
-def _resolve_plan_for(rep_name, store, market, plans):
-    """Most-specific assignment wins: employee > store > market > default. Returns the plan dict or None.
+def _canon_person(s):
+    """Canonicalize a person-name for name-ORDER-insensitive equality matching. PURE (no I/O).
 
-    employee scope_value is matched to the rep's name (raw_sales.salesperson, case-insensitive); store to
-    raw_sales.store; market to the rep's store_mapping market. priority breaks ties within a scope.
+    Steps, in order: casefold · trim · collapse internal whitespace runs to one space · then
+    IF the result contains EXACTLY ONE comma, treat it as "Last, First" and reorder to "First Last"
+    (the pre-comma part is the surname — possibly multi-token — and is appended AFTER the post-comma
+    first-part, preserving each part's internal token order): "Islam Khan, Ariful" -> "ariful islam khan".
+    More than one comma, or an empty side, -> the non-reordered folded string, unchanged.
+
+    Deliberately NOT fuzzy: no token dropping, no middle-name stripping, no spelling tolerance.
+    "natasha cabrera" != "natasha nicole cabrera" stays UNMATCHED by design (data hygiene, not matching).
+    For comma-free ASCII single-spaced input this equals the previous `.strip().lower()` byte-for-byte,
+    so store/market/default and comma-free house employee data are unaffected."""
+    folded = re.sub(r"\s+", " ", ("" if s is None else str(s)).strip().casefold())
+    if folded.count(",") == 1:
+        last, first = (x.strip() for x in folded.split(","))
+        if last and first:
+            return f"{first} {last}"
+    return folded
+
+
+def _resolve_plan_for(rep_name, store, market, plans, rep_role=None):
+    """Most-specific assignment wins: employee > role > store > market > default. Returns the plan or None.
+
+    EMPLOYEE scope_value is matched to the rep's name name-order-insensitively via `_canon_person`
+    (raw_sales.salesperson emits "Last, First"; assignments are usually "First Last" — both canonicalize
+    to the same string). ROLE scope_value is matched (case-insensitively) to the rep's JOB ROLE
+    (`rep_role`, resolved from the storeops roster by the SAME `_canon_person` name bridge — see
+    `_read_employee_roles`); an EMPLOYEE assignment for the same rep OVERRIDES their role assignment
+    (employee outranks role). STORE/MARKET/DEFAULT matching is byte-identical to before (plain
+    casefold/trim, no reorder). priority breaks ties within a scope; across equal-key ties the first
+    plan in name order (from _load_plans' .order("name")) wins deterministically.
+
+    HOUSE-SAFE: when NO role assignments exist and rep_role is unused, the winner is byte-identical to
+    the pre-role ranks — SCOPE_RANK values are only compared RELATIVELY and employee>store>market>default
+    order is preserved (role slots strictly between employee and store).
     """
-    SCOPE_RANK = {"employee": 3, "store": 2, "market": 1, "default": 0}
-    rn, sv_store, sv_mkt = (rep_name or "").strip().lower(), (store or "").strip().lower(), (market or "").strip().lower()
+    SCOPE_RANK = {"employee": 4, "role": 3, "store": 2, "market": 1, "default": 0}
+    rn_canon = _canon_person(rep_name)
+    rr = (rep_role or "").strip().lower()
+    sv_store, sv_mkt = (store or "").strip().lower(), (market or "").strip().lower()
     best, best_key = None, (-1, -1)
     for p in plans:
         if not p.get("is_active", True):
@@ -97,16 +132,41 @@ def _resolve_plan_for(rep_name, store, market, plans):
         for a in p.get("assignments", []):
             scope = (a.get("scope") or "default").strip().lower()
             val = (a.get("scope_value") or "").strip().lower()
-            ok = ((scope == "default") or
-                  (scope == "employee" and val and val == rn) or
-                  (scope == "store" and val and val == sv_store) or
-                  (scope == "market" and val and val == sv_mkt))
+            if scope == "employee":
+                ok = bool(val) and _canon_person(a.get("scope_value")) == rn_canon
+            elif scope == "role":
+                ok = bool(val) and bool(rr) and val == rr
+            else:
+                ok = ((scope == "default") or
+                      (scope == "store" and val and val == sv_store) or
+                      (scope == "market" and val and val == sv_mkt))
             if not ok:
                 continue
             key = (SCOPE_RANK.get(scope, 0), int(a.get("priority") or 0))
             if key > best_key:
                 best, best_key = p, key
     return best
+
+
+def _read_employee_roles(client, org_id):
+    """{_canon_person(employee name) -> job role (lower-cased)} from the org's storeops roster.
+
+    The name bridge (`_canon_person`) lets a sales row's POS "Last, First" salesperson find the roster's
+    "First Last" row and thus the rep's ROLE, so a scope='role' assignment can pay every rep with that
+    role. Org-scoped, one query, called ONCE per preview/installment pass. Degrades to {} (role scope
+    simply can't match; employee/store/market/default unaffected) if storeops is unreachable."""
+    out = {}
+    try:
+        rows = (client.schema("storeops").table("employees")
+                .select("name,role,is_active").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        return out
+    for e in rows:
+        nm = _canon_person(e.get("name"))
+        role = (e.get("role") or "").strip().lower()
+        if nm and role:
+            out.setdefault(nm, role)   # first roster row for a canon-name wins (stable)
+    return out
 
 
 # ── reads ─────────────────────────────────────────────────────────────────────────────────────────
@@ -288,6 +348,7 @@ def preview(client, org_id, period, plan_id=None):
     mrc_by_mdn, mrc_by_sub = _read_mi_mrc(client, org_id, period)
     cost_by_pid = _read_catalog_cost(client, org_id)
     store_market = _read_store_market(client, org_id)
+    role_by_rep = _read_employee_roles(client, org_id)   # {_canon_person(name) -> role} for scope='role'
 
     # group lines per rep
     reps = {}  # key (upper rep name) -> {name, store, lines:[...]}
@@ -305,7 +366,8 @@ def preview(client, org_id, period, plan_id=None):
     for key, e in reps.items():
         store = e["store"]
         market = store_market.get(store.lower()) or store_market.get(store.split(" ")[0].lower(), "")
-        plan = forced_plan or _resolve_plan_for(e["name"], store, market, plans)
+        rep_role = role_by_rep.get(_canon_person(e["name"]))
+        plan = forced_plan or _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role)
         if not plan:
             continue
         rules = plan.get("rules") or []

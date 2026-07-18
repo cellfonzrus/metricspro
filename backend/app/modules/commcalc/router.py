@@ -2033,6 +2033,10 @@ def payout_plans_diagnose(period: str, org_id: str = ORG_ID):
                                   for a in (p.get("assignments") or [])]} for p in plans]
     n_assign = sum(len(p.get("assignments") or []) for p in plans)
     scoped = [a for p in plans for a in (p.get('assignments') or []) if a.get('scope') in ('market', 'store')]
+    role_assigns = [a for p in plans for a in (p.get('assignments') or []) if a.get('scope') == 'role']
+    # SAME name->role map preview() uses, so this narration can never disagree with what pays.
+    role_map = commission_engine._read_employee_roles(client, org_id)
+    roster_roles = sorted({r for r in role_map.values() if r})
 
     try:
         prev = commission_engine.preview(client, org_id, period)
@@ -2062,6 +2066,17 @@ def payout_plans_diagnose(period: str, org_id: str = ORG_ID):
         reasons.append("Payout schedules exist but there is no raw_mi for this period — multi-month installments have no subscriber/rep rows to pay on. Import the carrier MI/commission file for this period.")
     if scoped:
         reasons.append(f"{len(scoped)} assignment(s) use STORE/MARKET scope — those attach to a rep only if the rep's store (raw_sales.store) resolves to that store/market via Store Matching. An unmapped store → the plan won't attach. If unsure, use EMPLOYEE-scope assignments (rep name must match raw_sales.salesperson / raw_mi rep).")
+    if role_assigns:
+        bad_roles = sorted({(a.get('scope_value') or '').strip() for a in role_assigns
+                            if (a.get('scope_value') or '').strip().lower() not in roster_roles})
+        msg = (f"{len(role_assigns)} assignment(s) use ROLE scope — each attaches to EVERY rep whose storeops "
+               f"roster role equals it (the rep's sales name is bridged to their roster row name-order-"
+               f"insensitively, so 'Antunez, Diana' finds 'Diana Antunez'). A rep missing from the roster, or "
+               f"with a blank role, can't match a role assignment — add them to storeops or use an EMPLOYEE "
+               f"assignment (which OVERRIDES their role). Roster roles present: {roster_roles or 'none'}.")
+        if bad_roles:
+            msg += f" These role assignment values match NO roster role: {bad_roles}."
+        reasons.append(msg)
     if not prev_reps and not inst_reps:
         reasons.append("Neither the plan engine nor the installment engine produced ANY rep for this period → nothing to write. Fix the data/assignment issues above.")
     elif len(rc) == 0:

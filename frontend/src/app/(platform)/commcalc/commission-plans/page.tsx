@@ -47,6 +47,21 @@ const FIELD_HELP: Record<string, string> = {
   any: 'matches every line (a blanket rule)',
 }
 
+// Assignment scope hierarchy (mirrors commission_engine._resolve_plan_for SCOPE_RANK: higher = more
+// specific = wins). ROLE (mig — none needed; scope is free TEXT) sits between employee and store: an
+// employee assignment OVERRIDES a rep's role assignment.
+const SCOPE_META: Record<string, { rank: number; color: string; bg: string; help: string }> = {
+  employee: { rank: 4, color: '#166534', bg: '#dcfce7', help: 'one specific rep (overrides their role)' },
+  role:     { rank: 3, color: '#1e40af', bg: '#dbeafe', help: 'every rep with this job role' },
+  store:    { rank: 2, color: '#92400e', bg: '#fef3c7', help: 'every rep at this store' },
+  market:   { rank: 1, color: '#6d28d9', bg: '#ede9fe', help: 'every rep in this market' },
+  default:  { rank: 0, color: '#475569', bg: '#f1f5f9', help: 'all reps (fallback)' },
+}
+const ScopeBadge = ({ scope }: { scope: string }) => {
+  const m = SCOPE_META[scope] || SCOPE_META.default
+  return <span title={m.help} style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 8, background: m.bg, color: m.color, whiteSpace: 'nowrap' }}>{scope}</span>
+}
+
 const blankRule = (): Rule => ({ label: '', match_field: 'contract_type', match_op: 'equals', match_value: '', qualifies: true, payout_kind: 'flat_per_unit', amount: 0, pct: 0, tiered: false })
 const blankPlan = (): Plan => ({ name: '', carrier_id: '', base_tier_metric: 'none', is_active: true, notes: '', rules: [], tiers: [], assignments: [] })
 
@@ -87,6 +102,21 @@ export default function CommissionPlansPage() {
 
   const markets = Array.from(new Set(stores.map(s => (s.market || '').trim()).filter(Boolean))).sort()
   const carrierName = (id?: string | null) => carriers.find(c => c.id === id)?.name || ''
+
+  // EMPLOYEE picker (pick-don't-type, §3b): id = roster NAME (what scope_value stores; the backend bridges
+  // the POS "Last, First" sales name to this "First Last" roster name order-insensitively). Sublabel shows
+  // the rep's ROLE + email so a manager who doesn't remember names can still assign the right person.
+  const employeeOptions = employees
+    .map(e => ({ id: String(e.name || ''), label: String(e.name || ''),
+                 sublabel: [e.role, e.email].filter(Boolean).join(' · ') || undefined }))
+    .filter(o => o.id)
+  // ROLE picker: distinct job roles from the org's roster with an employee-count preview. Writing scope=
+  // 'role' scope_value=<role> assigns the plan to EVERY rep with that role.
+  const roleCounts = employees.reduce((m: Record<string, number>, e) => {
+    const r = String(e.role || '').trim(); if (r) m[r] = (m[r] || 0) + 1; return m
+  }, {})
+  const roleOptions = Object.entries(roleCounts).sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([r, n]) => ({ id: r, label: `${r} — ${n} employee${n === 1 ? '' : 's'}` }))
 
   // ── plan-level mutators ──
   const upd = (patch: Partial<Plan>) => setDraft(d => d ? { ...d, ...patch } : d)
@@ -171,6 +201,9 @@ export default function CommissionPlansPage() {
               <span style={{ fontWeight: 700 }}>{p.name}</span>
               {p.carrier_id && <span style={{ fontSize: 12, color: 'var(--text3)' }}>{carrierName(p.carrier_id)}</span>}
               <span style={{ fontSize: 11, color: 'var(--text3)' }}>{(p.rules?.length || 0)} rules · {(p.tiers?.length || 0)} tiers · {(p.assignments?.length || 0)} assignments</span>
+              {Array.from(new Set((p.assignments || []).map(a => a.scope || 'default')))
+                .sort((a, b) => (SCOPE_META[b]?.rank ?? 0) - (SCOPE_META[a]?.rank ?? 0))
+                .map(s => <ScopeBadge key={s} scope={s} />)}
               {p.base_tier_metric && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#ede9fe', color: '#6d28d9' }}>tier: {p.base_tier_metric}</span>}
               {!p.is_active && <span style={{ fontSize: 11, color: '#b45309' }}>inactive</span>}
               <span style={{ flex: 1 }} />
@@ -298,7 +331,7 @@ export default function CommissionPlansPage() {
           <button className="btn btn-secondary" style={{ fontSize: 12, marginBottom: 16 }} onClick={addTier}>➕ Add tier</button>
 
           {/* ASSIGNMENTS */}
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Assignments — who this plan applies to <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(precedence employee &gt; store &gt; market &gt; default)</span></div>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Assignments — who this plan applies to <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(precedence employee &gt; role &gt; store &gt; market &gt; default — a more specific scope overrides a broader one)</span></div>
           <div style={{ overflowX: 'auto', marginBottom: 8 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: 620 }}>
               <thead><tr>{['Scope', 'Value', 'Priority', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
@@ -306,16 +339,20 @@ export default function CommissionPlansPage() {
                 {(draft.assignments || []).map((a, i) => (
                   <tr key={i}>
                     <td style={td}>
-                      <select style={{ ...sel, width: 110 }} value={a.scope} onChange={e => updAssign(i, { scope: e.target.value, scope_value: '' })}>
-                        {['employee', 'store', 'market', 'default'].map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <ScopeBadge scope={a.scope} />
+                        <select style={{ ...sel, width: 104 }} value={a.scope} onChange={e => updAssign(i, { scope: e.target.value, scope_value: '' })}>
+                          {['employee', 'role', 'store', 'market', 'default'].map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
                     </td>
                     <td style={td}>
                       {a.scope === 'employee' ? (
-                        <select style={{ ...sel, width: 220 }} value={a.scope_value || ''} onChange={e => updAssign(i, { scope_value: e.target.value })}>
-                          <option value="">— pick employee —</option>
-                          {employees.map(e => { const v = (e.epay_salesperson || e.name || ''); return v ? <option key={e.id || v} value={v}>{e.name}{e.epay_salesperson ? ` (${e.epay_salesperson})` : ''}</option> : null })}
-                        </select>
+                        <EntityPicker options={employeeOptions} value={a.scope_value || null} width={240}
+                          placeholder="pick employee…" onChange={v => updAssign(i, { scope_value: v || '' })} />
+                      ) : a.scope === 'role' ? (
+                        <EntityPicker options={roleOptions} value={a.scope_value || null} width={240}
+                          placeholder="pick role — assigns all reps with it…" onChange={v => updAssign(i, { scope_value: v || '' })} />
                       ) : a.scope === 'store' ? (
                         <select style={{ ...sel, width: 220 }} value={a.scope_value || ''} onChange={e => updAssign(i, { scope_value: e.target.value })}>
                           <option value="">— pick store —</option>

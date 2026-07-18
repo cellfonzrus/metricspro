@@ -41,6 +41,7 @@ from app.modules.commcalc.installment_engine import (
 )
 from app.modules.commcalc.commission_engine import (
     _load_plans, _resolve_plan_for, _read_sales, _read_store_market, _rule_matches, _norm_mdn,
+    _read_employee_roles, _canon_person,
 )
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -448,6 +449,7 @@ def compute_sale_installments(client, org_id, pay_period, persist=False):
     ccmap = _load_ccmap(client, org_id)
     acc = _acc_sets(client, org_id)
     store_market = _read_store_market(client, org_id)
+    role_by_rep = _read_employee_roles(client, org_id)   # {_canon_person(name) -> role} for scope='role'
 
     pay_idx = _period_index(pay_period)
     if pay_idx is None:
@@ -501,7 +503,7 @@ def compute_sale_installments(client, org_id, pay_period, persist=False):
                 continue
             store = str(line.get("store", "") or "").strip()
             market = store_market.get(store.lower()) or store_market.get(store.split(" ")[0].lower(), "")
-            plan = _resolve_plan_for(rep, store, market, plans)
+            plan = _resolve_plan_for(rep, store, market, plans, rep_role=role_by_rep.get(_canon_person(rep)))
             if not plan:
                 continue
             for sched in scheds:
