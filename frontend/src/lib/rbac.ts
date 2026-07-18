@@ -119,6 +119,9 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️', module: 'commissions' },
     { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', icon: '🔁', module: 'commissions', scopes: ['all', 'market'] },
+    // Agency (Master/Sub-Agent) console — config + billing, admin/owner scope only (NEEDS CORE for
+    // agency-phase1). Intentionally NOT in REPORT_DIRECTORY: it is a config+invoicing surface, not a report.
+    { href: '/commcalc/agency', label: 'Agency', icon: '🏢', module: 'commissions', scopes: ['all'] },
   ]},
   // ── Commission Payout Plans ────────────────────────────────────────────────────────────────
   // ONE home for HOW reps get paid, per carrier. 'Overview' maps each enabled carrier to the engine
