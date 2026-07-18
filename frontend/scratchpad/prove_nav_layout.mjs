@@ -142,5 +142,22 @@ ok('legacy: undefined layout unchanged', eq(shape(applyNavLayout(base(), undefin
   ok('empty group not rendered in sidebar', !out.some(g => g.group === 'Empty Group') && eq(shape(out), shape(base())))
 }
 
+// 9. HIDE-REPORTS toggle (OWNER 2026-07-18) — the flag rides in the SAME layout object; buildPayload
+//    (mirror of admin/menu) emits it ONLY when ON, so OFF is a byte-identical legacy payload.
+{
+  const buildPayload = (items, groups, hideReports) => ({ items, groups, ...(hideReports ? { hideReportsDirectory: true } : {}) })
+  const loadFlag = navcfg => !!navcfg?.layout?.hideReportsDirectory
+  ok('toggle OFF omits the key (legacy-identical payload)', eq(buildPayload({}, [], false), { items: {}, groups: [] }))
+  ok('toggle ON carries hideReportsDirectory:true', buildPayload({}, [], true).hideReportsDirectory === true)
+  ok('save→load round-trips the flag', loadFlag({ layout: buildPayload({}, [], true) }) === true)
+  ok('absent flag loads as OFF (legacy)', loadFlag({ layout: { items: {}, groups: [] } }) === false)
+  // the flag never disturbs the override mechanics: item moves/hides still apply with the flag ON
+  const out = applyNavLayoutFull(base(), { items: { '/commcalc/sales-report': { group: 'Assets' } }, hideReportsDirectory: true })
+  ok('flag ON does not disturb move/hide mechanics', eq(shape(out), [
+    { group: 'Commissions', items: ['/commcalc'] },
+    { group: 'Assets', items: ['/commcalc/sales-report', '/commcalc/asset'] },
+  ]))
+}
+
 console.log(`\napplyNavLayout: ${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

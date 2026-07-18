@@ -178,5 +178,39 @@ ok('report categories render in declared order, after module groups', eq(rgLabel
      activeGroup === 'Commissions')
 }
 
+// ── F. HIDE-REPORTS TOGGLE (OWNER DIRECTIVE 2026-07-18) — designer round-trip + full suppression ─────
+// buildPayload / loadFlag mirror the admin/menu designer: the flag rides in the SAME nav-layout object,
+// emitted ONLY when ON, so a tenant that never toggles it stores byte-identically to before.
+function buildPayload(items, extraGroups, hideReports) {
+  return { items, groups: extraGroups, ...(hideReports ? { hideReportsDirectory: true } : {}) }
+}
+const loadFlag = navcfg => !!navcfg?.layout?.hideReportsDirectory
+
+// F1: OFF (default) → no key emitted → byte-identical to a pre-flag payload
+ok('toggle OFF: payload omits hideReportsDirectory (byte-identical to before)', eq(buildPayload({}, [], false), { items: {}, groups: [] }))
+// F2: ON → key present and true
+ok('toggle ON: payload carries hideReportsDirectory:true', buildPayload({}, [], true).hideReportsDirectory === true)
+// F3: load ← save round-trip through the one layout object, honored end-to-end by applyNavLayout
+{
+  const saved = buildPayload({ '/commcalc/sales-report': { hidden: true } }, ['Field Ops'], true)
+  ok('round-trip: load reads the flag back as ON', loadFlag({ layout: saved }) === true)
+  ok('round-trip: flag rides alongside items+groups in ONE object', 'items' in saved && 'groups' in saved && saved.hideReportsDirectory === true)
+  const out = applyNavLayout(NAV, saved)
+  ok('round-trip: the persisted ON object suppresses the directory via applyNavLayout', reportGroups(out).length === 0)
+}
+// F4: absent flag (legacy layout) loads as OFF
+ok('load: legacy layout with no flag → toggle OFF', loadFlag({ layout: { items: {}, groups: [] } }) === false && loadFlag({}) === false)
+// F5: FULL SUPPRESSION rigor — flag ON yields ZERO "Reports ·" groups, no empty stub, no orphan entry,
+//     and module groups are byte-identical (order + membership + count) to the flag-OFF module groups.
+{
+  const on = applyNavLayout(NAV, { hideReportsDirectory: true })
+  const offModules = moduleGroups(applyNavLayout(NAV, undefined))
+  ok('suppress: no group label starts with "Reports ·"', on.every(g => !g.group.startsWith('Reports ·')))
+  ok('suppress: no empty group stub survives', on.every(g => g.items.length > 0))
+  ok('suppress: module groups byte-identical to the flag-off module groups', eq(shape(on), shape(offModules)))
+  ok('suppress: total item count equals module-only count (no lingering directory duplicates)',
+     on.reduce((n, g) => n + g.items.length, 0) === offModules.reduce((n, g) => n + g.items.length, 0))
+}
+
 console.log(`\nReports directory: ${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

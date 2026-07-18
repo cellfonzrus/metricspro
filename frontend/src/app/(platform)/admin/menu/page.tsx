@@ -29,6 +29,9 @@ export default function MenuLayoutPage() {
 
   const [ov, setOv] = useState<Ov>({})
   const [extraGroups, setExtraGroups] = useState<string[]>([])
+  // OWNER DIRECTIVE 2026-07-18: hide the categorized "Reports ·" directory entirely. Persisted as
+  // layout.hideReportsDirectory in the SAME nav-layout JSON; honored by applyNavLayout. Default = shown.
+  const [hideReports, setHideReports] = useState(false)
   const [newGroup, setNewGroup] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -40,6 +43,7 @@ export default function MenuLayoutPage() {
     api('/api/v1/commcalc/nav-config').then((c: any) => {
       const items: Ov = c?.layout?.items || {}
       setOv(items)
+      setHideReports(!!c?.layout?.hideReportsDirectory)
       // Extra groups persist from TWO sources so a group survives a reload even with no items assigned:
       // (1) the saved `layout.groups` list (admin-created, possibly empty); (2) any group referenced by
       // an item override's primary `group` or `also[]` that isn't a built-in group.
@@ -122,7 +126,9 @@ export default function MenuLayoutPage() {
         items[h] = { ...(g ? { group: g } : {}), ...(v?.hidden ? { hidden: true } : {}), ...(also.length ? { also } : {}) }
       }
     })
-    return { items, groups: extraGroups }
+    // hideReportsDirectory rides in the SAME layout object (no new storage). Only emitted when true, so a
+    // tenant that never toggles it stores byte-identically to before.
+    return { items, groups: extraGroups, ...(hideReports ? { hideReportsDirectory: true } : {}) }
   }
 
   async function save() {
@@ -134,7 +140,7 @@ export default function MenuLayoutPage() {
   async function resetAll() {
     if (!confirm('Reset the whole menu back to the built-in layout?')) return
     setSaving(true); setMsg('')
-    try { await api('/api/v1/commcalc/nav-layout', { method: 'POST', body: JSON.stringify({ items: {}, groups: [] }) }); setOv({}); setExtraGroups([]); setMsg('Reset to defaults — reload to see it.') }
+    try { await api('/api/v1/commcalc/nav-layout', { method: 'POST', body: JSON.stringify({ items: {}, groups: [] }) }); setOv({}); setExtraGroups([]); setHideReports(false); setMsg('Reset to defaults — reload to see it.') }
     catch (e: any) { setMsg('Reset failed: ' + (e?.message || e)) }
     setSaving(false)
   }
@@ -187,6 +193,18 @@ export default function MenuLayoutPage() {
           <button className="btn" onClick={resetAll} disabled={saving}>↺ Reset to defaults</button>
           <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? '…' : `💾 Save${dirty ? ` (${dirty})` : ''}`}</button>
         </div>
+      </div>
+
+      <div className="card" style={{ padding: 12, marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+          <input type="checkbox" checked={!hideReports} onChange={e => setHideReports(!e.target.checked)} />
+          Show the Reports directory (categorized report shortcuts below the module groups)
+        </label>
+        <span style={{ fontSize: 12, color: 'var(--text2)' }}>
+          Turn this OFF to hide the entire “Reports · …” shortcut area from the sidebar for everyone in your
+          company. Your module groups are unchanged — each report still appears in its own module group.
+          Click <b>Save</b> to apply.
+        </span>
       </div>
 
       <div className="card" style={{ padding: 12, marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
