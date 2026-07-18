@@ -61,6 +61,9 @@ export default function DailyTargetsPage() {
   const [selMarkets, setSelMarkets] = useState<string[]>([])
   const [selReps, setSelReps] = useState<string[]>([])
   const [filterOpts, setFilterOpts] = useState<{ stores: any[]; markets: string[]; reps: string[] }>({ stores: [], markets: [], reps: [] })
+  // Explicit "configure X" hints from the server (e.g. no roster/targets, or sales not matched to a target
+  // store) so the page never shows a silent blank when a setup step is missing.
+  const [setupHint, setSetupHint] = useState<string[]>([])
 
   useEffect(() => { loadSummary() }, [period, selStores, selMarkets, selReps])
   useEffect(() => { if (storeCode) loadDetail() }, [storeCode, scope, rep, period])
@@ -88,6 +91,7 @@ export default function DailyTargetsPage() {
       selReps.forEach((s) => qs.append('reps', s))
       const d = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/summary?${qs.toString()}`)
       setSummary(d.stores || [])
+      setSetupHint(Array.isArray(d.setup_hint) ? d.setup_hint : [])
       setFilterOpts(d.filters || { stores: [], markets: [], reps: [] })
       // keep the detail panel in sync with the filter — if the selected store is filtered out, jump to the first shown.
       if (d.stores?.length && !d.stores.some((s: any) => s.store_code === storeCode)) setStoreCode(d.stores[0].store_code)
@@ -203,11 +207,23 @@ export default function DailyTargetsPage() {
           <span>Store Summary — Activations &amp; Trending</span>
           {summary.length > 0 && <span style={{ display: 'flex', gap: 8 }}><ExportButtons payload={buildSummaryPayload} compact /><SendReportButton exportPayload={buildSummaryPayload} compact /></span>}
         </div>
+        {setupHint.length > 0 && summary.length > 0 && (
+          <div style={{ margin: '10px 16px 0', padding: '9px 12px', borderRadius: 6, fontSize: 12.5,
+            background: 'var(--warning-bg, #fff7ed)', border: '1px solid var(--warning, #f59e0b)', color: 'var(--text2)' }}>
+            {setupHint.map((h, i) => <div key={i}>⚙️ {h}</div>)}
+          </div>
+        )}
         {loadingSum ? (
           <div style={{ textAlign: 'center', padding: 30, color: 'var(--text3)' }}>Loading…</div>
         ) : summary.length === 0 ? (
           <div style={{ textAlign: 'center', padding: 30, color: 'var(--text3)' }}>
-            No targets set. Add monthly targets in <strong>Target Settings</strong>.
+            {setupHint.length > 0 ? (
+              <div style={{ display: 'inline-block', textAlign: 'left', maxWidth: 560 }}>
+                {setupHint.map((h, i) => <div key={i} style={{ marginBottom: 6 }}>⚙️ {h}</div>)}
+              </div>
+            ) : (
+              <>No targets set. Add monthly targets in <strong>Target Settings</strong>.</>
+            )}
           </div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>

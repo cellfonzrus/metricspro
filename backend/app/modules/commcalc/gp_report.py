@@ -50,11 +50,16 @@ def calc_gp_report(
     period: str,
     comp_rows: list[dict] = None,
     gp_category_map: list[dict] = None,
+    resolve_store_code=None,
 ) -> dict:
     """
     Returns store_rows (by store) and rep_rows (by rep).
     gp_category_map (commcalc.gp_category_map): optional per-tenant department→GP-category overrides;
     None/empty = the built-in Boost buckets (byte-identical to before this was added).
+    resolve_store_code: optional callable raw-store-string -> canonical store_code, used ONLY to attach
+    expenses (keyed by the org's storeops store_code) when the store_mapping street-number join yields no
+    store_code — i.e. a tenant with no commcalc.store_mapping. Gated on an empty derived store_code so the
+    house (store_mapping populated) is byte-identical. None = disabled (pre-existing behavior).
     """
     classify = _dept_classifier(gp_category_map)
     # ── Catalog cost map ──────────────────────────────────────────
@@ -180,7 +185,13 @@ def calc_gp_report(
 
         total_rev  = acc_gp + setup_gp + phone_sales + plan_gp + other_gp + comm_recv + reimb + mdf + chargeback + unmapped + mi_amt + atu_amt
         rep_pay    = rep_pay_by_store.get(num, 0)
-        exp_total  = exp_by_code.get(store_code, 0)
+        # Expenses are keyed by the org's storeops store_code (the Expenses page picks from storeops.stores).
+        # When the store_mapping street-number join yielded a store_code, use it (house — byte-identical).
+        # When it did NOT (a tenant with no commcalc.store_mapping → store_code=''), resolve the raw store
+        # string to the storeops store_code so the tenant's configured expenses attach. This changes ONLY
+        # exp_total for rows that had no store_code; the row's displayed store_code/market are untouched.
+        exp_code   = store_code or (str(resolve_store_code(store) or '').strip() if resolve_store_code else '')
+        exp_total  = exp_by_code.get(exp_code, 0)
         net_phone_cost = phone_sales + reimb  # cash from customer + Boost reimbursement
 
         net_profit     = total_rev - rep_pay - exp_total - net_phone_cost

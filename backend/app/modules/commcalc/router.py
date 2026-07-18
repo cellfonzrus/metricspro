@@ -7183,8 +7183,13 @@ def _compute_gp(client, org_id, period, market=""):
         gp_cat_map = sc.table('gp_category_map').select('department,category').eq('org_id', org_id).execute().data or []
     except Exception:
         gp_cat_map = []
+    # Universal store-code resolution (store_mapping → storeops roster → explicit store_aliases) so a
+    # tenant with NO commcalc.store_mapping (e.g. luxelink) still attaches its configured store_expenses,
+    # which are keyed by the org's storeops store_code. House byte-identical (store_mapping populated →
+    # calc_gp_report's own street-number join yields the code and the fallback never fires).
+    _resolve_code = _store_code_resolver(client, org_id)
     result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period,
-                            comp_rows=comp_rows, gp_category_map=gp_cat_map)
+                            comp_rows=comp_rows, gp_category_map=gp_cat_map, resolve_store_code=_resolve_code)
     if market:
         result['store_rows'] = [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]
     return result
@@ -9876,18 +9881,55 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     tgt_by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
     store_rows = (client.schema('storeops').table('stores')
                   .select('store_code,address,market,monthly_target').eq('org_id', org_id).execute().data) or []
-    shifts = _fetch_shifts(client, start, end, org_id)
-    actuals = _fetch_actuals(client, org_id, period)
+    # A report must NEVER 500. A failure in the shift read or the sales aggregation degrades to "targets
+    # render, achieved 0" instead of a blank page — the targets universe below does not depend on either.
+    try:
+        shifts = _fetch_shifts(client, start, end, org_id)
+    except Exception as e:
+        print(f"WARN targets summary shifts failed: {e}"); shifts = []
+    try:
+        actuals = _fetch_actuals(client, org_id, period)
+    except Exception as e:
+        print(f"WARN targets summary actuals failed: {e}"); actuals = []
     # Whole-store projected-month-end trending, straight from Executive MTD (one source, moves together).
     trend_by_code, trend_meta = _targets_trending_by_code(client, org_id, period, today=today)
 
-    # ── RULE FIVE filter OPTIONS (pick-don't-type over real data), computed from the FULL universe so a
-    #    selection can always be changed. Store value = store_code (label = address); market = storeops
-    #    market; rep = canonical rep name present in the period's actuals.
+    # ── UNIVERSAL store universe: storeops.stores roster UNION every targeted store_code. A tenant can have
+    #    Target Settings saved for stores that are NOT in its storeops roster (or whose roster store_codes
+    #    don't line up with the target codes) — sourcing the summary ONLY from storeops.stores then rendered
+    #    NOTHING even though targets exist (the luxelink "not showing anything" symptom). Unioning the targeted
+    #    codes guarantees a target row ALWAYS renders. For the house this is a no-op: its target codes are a
+    #    subset of its storeops roster (targets are created by picking storeops stores) → roster == store_rows
+    #    → byte-identical. Address/market for a target-only code are enriched from commcalc.store_mapping when
+    #    present (else blank → the store_code is the label). Never raises.
+    smap_by_code = {}
+    try:
+        for m in (client.schema('commcalc').table('store_mapping')
+                  .select('store_code,store_address,market').eq('org_id', org_id).execute().data) or []:
+            cu = str(m.get('store_code') or '').strip().upper()
+            if cu:
+                smap_by_code.setdefault(cu, {'address': str(m.get('store_address') or '').strip(),
+                                             'market': str(m.get('market') or '').strip()})
+    except Exception:
+        smap_by_code = {}
+    roster = list(store_rows)
+    seen_codes = {str(s.get('store_code') or '').strip().upper()
+                  for s in store_rows if str(s.get('store_code') or '').strip()}
+    for cu, trow in tgt_by_code.items():
+        if cu and cu not in seen_codes:
+            seen_codes.add(cu)
+            meta = smap_by_code.get(cu, {})
+            roster.append({'store_code': str(trow.get('store_code') or cu).strip(),
+                           'address': meta.get('address', ''), 'market': meta.get('market', ''),
+                           'monthly_target': 0})
+
+    # ── RULE FIVE filter OPTIONS (pick-don't-type over real data), computed from the FULL roster universe so
+    #    a selection can always be changed. Store value = store_code (label = address); market = store market;
+    #    rep = canonical rep name present in the period's actuals.
     store_opts = [{'value': str(s.get('store_code') or '').strip(),
                    'label': str(s.get('address') or s.get('store_code') or '').strip()}
-                  for s in store_rows if str(s.get('store_code') or '').strip()]
-    market_opts = sorted({str(s.get('market') or '').strip() for s in store_rows if str(s.get('market') or '').strip()})
+                  for s in roster if str(s.get('store_code') or '').strip()]
+    market_opts = sorted({str(s.get('market') or '').strip() for s in roster if str(s.get('market') or '').strip()})
     rep_opts = sorted({str(a.get('rep_name') or '').strip() for a in actuals if str(a.get('rep_name') or '').strip()})
     filters = {'stores': store_opts, 'markets': market_opts, 'reps': rep_opts}
 
@@ -9897,7 +9939,7 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     applied = {'stores': sorted(store_sel), 'markets': sorted(market_sel), 'reps': sorted(rep_sel)}
 
     out = []
-    for s in store_rows:
+    for s in roster:
         code = str(s.get('store_code', '') or '').strip()
         if not code:
             continue
@@ -9960,8 +10002,23 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
         ks = self_ks
     if ks is not None:
         out = [s for s in out if in_keyset(ks, s.get('store_code'), s.get('address'))]
+    # Config-required conditions surfaced as an EXPLICIT setup hint so the page can show a "configure X"
+    # message instead of a silent blank. House (roster + matched sales) → empty hint (additive field).
+    setup_hint = []
+    sold_codes = {str(a.get('store_code') or '').strip().upper()
+                  for a in actuals if str(a.get('store_code') or '').strip()}
+    rendered_codes = {str(s.get('store_code') or '').strip().upper() for s in out}
+    if not tgt_by_code and not store_rows:
+        setup_hint.append("No store roster or targets for this tenant yet — add your stores (Store Admin) "
+                          "and set monthly targets in Target Settings for this month.")
+    elif not out and tgt_by_code:
+        setup_hint.append("Targets are set but none could be shown — check that the target store codes "
+                          "match your store roster / your area (RBAC) scope.")
+    if sold_codes and not (sold_codes & rendered_codes):
+        setup_hint.append("Sales were found but none matched a target store — map your POS store names to "
+                          "stores in Store Matching so achieved numbers attach.")
     return {'period': period, 'today': today.isoformat(), 'stores': out,
-            'filters': filters, 'applied': applied, 'trending': trend_meta}
+            'filters': filters, 'applied': applied, 'trending': trend_meta, 'setup_hint': setup_hint}
 
 
 # KPI → commission tier inputs (mirrors calculator.py KPI defaults).
