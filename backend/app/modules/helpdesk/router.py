@@ -470,10 +470,21 @@ def attachment_url(tid: str, aid: str, org_id: str = ORG_ID):
 
 # ── Dashboard (this tenant only; uses the fixed lifecycle stage so renamed labels still group) ──
 @router.get("/stats/dashboard")
-def dashboard(org_id: str = ORG_ID):
+def dashboard(org_id: str = ORG_ID, date_from: str = "", date_to: str = ""):
+    """Aggregate tiles. `date_from`/`date_to` (YYYY-MM-DD, optional) = the RULE FIVE §3d period range over
+    created_at; omitted → all tickets (backward-compatible). Tiles are aggregates with no store/market/rep
+    dimension, so only the period core-filter applies here (documented deviation)."""
     _require_module(org_id)
     st, _, _, _ = _maps(org_id)
     tickets = db("tickets").select("status_id,created_at,resolved_at").eq("org_id", org_id).limit(5000).execute().data or []
+    df, dt = (date_from or "").strip()[:10], (date_to or "").strip()[:10]
+    if df or dt:
+        def _in_range(t):
+            d = str(t.get("created_at") or "")[:10]
+            if not d:
+                return False
+            return (not df or d >= df) and (not dt or d <= dt)
+        tickets = [t for t in tickets if _in_range(t)]
     by_stage = {"open": 0, "pending": 0, "done": 0}
     open_count = 0
     res_hours = []
