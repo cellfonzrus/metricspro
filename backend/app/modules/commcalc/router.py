@@ -2037,6 +2037,7 @@ def payout_plans_diagnose(period: str, org_id: str = ORG_ID):
     # SAME name->role map preview() uses, so this narration can never disagree with what pays.
     role_map = commission_engine._read_employee_roles(client, org_id)
     roster_roles = sorted({r for r in role_map.values() if r})
+    name_collisions = commission_engine._role_name_collisions(client, org_id)
 
     try:
         prev = commission_engine.preview(client, org_id, period)
@@ -2077,6 +2078,16 @@ def payout_plans_diagnose(period: str, org_id: str = ORG_ID):
         if bad_roles:
             msg += f" These role assignment values match NO roster role: {bad_roles}."
         reasons.append(msg)
+    if name_collisions:
+        parts = []
+        for c in name_collisions:
+            roles = [f"{r.get('name')}={r.get('role') or '(no role)'}" for r in c.get('rows', [])]
+            tag = " ROLE CONFLICT" if c.get('role_conflict') else ""
+            parts.append(f"'{c.get('canon')}' ({', '.join(roles)}) → uses '{c.get('winner_role') or '(no role)'}'{tag}")
+        reasons.append(f"{len(name_collisions)} roster name collision(s) — multiple storeops employees share "
+                       f"a canonical name, so employee/role resolution uses the LOWEST-id row deterministically: "
+                       f"{'; '.join(parts)}. If a conflicting rep should pay differently, give them distinct "
+                       f"roster names or an explicit EMPLOYEE assignment.")
     if not prev_reps and not inst_reps:
         reasons.append("Neither the plan engine nor the installment engine produced ANY rep for this period → nothing to write. Fix the data/assignment issues above.")
     elif len(rc) == 0:

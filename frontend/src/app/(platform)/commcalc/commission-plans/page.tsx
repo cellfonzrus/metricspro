@@ -87,7 +87,9 @@ export default function CommissionPlansPage() {
       setPlans(r.plans || []); setReady(r.ready !== false)
       if (r.ready === false) setMsg(r.note || 'Run migration 059 to enable.')
       setCarriers(await api('/api/v1/commcalc/carriers').catch(() => []))
-      setEmployees(await api('/api/v1/storeops/employees?all_company=true').catch(() => []))
+      // include_inactive: the role-count preview must agree with the engine, which matches INACTIVE reps
+      // too (a mid-month-terminated rep's sales still pay under their role). We show active/inactive split.
+      setEmployees(await api('/api/v1/storeops/employees?all_company=true&include_inactive=true').catch(() => []))
       setStores(await api('/api/v1/storeops/stores').catch(() => []))
       // distinct observed values for the match_value picker (all periods; read-only)
       const sf: any = await api('/api/v1/commcalc/sales-fields').catch(() => ({}))
@@ -103,20 +105,32 @@ export default function CommissionPlansPage() {
   const markets = Array.from(new Set(stores.map(s => (s.market || '').trim()).filter(Boolean))).sort()
   const carrierName = (id?: string | null) => carriers.find(c => c.id === id)?.name || ''
 
-  // EMPLOYEE picker (pick-don't-type, §3b): id = roster NAME (what scope_value stores; the backend bridges
-  // the POS "Last, First" sales name to this "First Last" roster name order-insensitively). Sublabel shows
-  // the rep's ROLE + email so a manager who doesn't remember names can still assign the right person.
+  // EMPLOYEE picker (pick-don't-type, §3b). scope_value = epay_salesperson || name — the rep's EXPLICIT
+  // ePay/POS name when set (the escape hatch for POS strings that differ beyond word order — initials,
+  // nicknames — which the name bridge alone can't reconcile), else the roster name. Sublabel shows role +
+  // email, plus an "epay: <x>" hint when the stored ePay name differs from the display name. Active only.
   const employeeOptions = employees
-    .map(e => ({ id: String(e.name || ''), label: String(e.name || ''),
-                 sublabel: [e.role, e.email].filter(Boolean).join(' · ') || undefined }))
+    .filter(e => e.is_active !== false)
+    .map(e => {
+      const nm = String(e.name || ''), epay = String(e.epay_salesperson || '')
+      const idVal = epay || nm
+      const hint = epay && epay !== nm ? `epay: ${epay}` : null
+      return { id: idVal, label: nm || idVal,
+               sublabel: [e.role, e.email, hint].filter(Boolean).join(' · ') || undefined }
+    })
     .filter(o => o.id)
   // ROLE picker: distinct job roles from the org's roster with an employee-count preview. Writing scope=
-  // 'role' scope_value=<role> assigns the plan to EVERY rep with that role.
-  const roleCounts = employees.reduce((m: Record<string, number>, e) => {
-    const r = String(e.role || '').trim(); if (r) m[r] = (m[r] || 0) + 1; return m
+  // 'role' scope_value=<role> assigns the plan to EVERY rep with that role. Count shows "N active (+M
+  // inactive)" because the engine matches inactive reps too — so the number agrees with what pays.
+  const roleStats = employees.reduce((m: Record<string, { active: number; inactive: number }>, e) => {
+    const r = String(e.role || '').trim(); if (!r) return m
+    const s = m[r] || (m[r] = { active: 0, inactive: 0 })
+    if (e.is_active === false) s.inactive++; else s.active++
+    return m
   }, {})
-  const roleOptions = Object.entries(roleCounts).sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([r, n]) => ({ id: r, label: `${r} — ${n} employee${n === 1 ? '' : 's'}` }))
+  const roleOptions = Object.entries(roleStats).sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([r, s]) => ({ id: r,
+      label: `${r} — ${s.active} active${s.inactive ? ` (+${s.inactive} inactive)` : ''}` }))
 
   // ── plan-level mutators ──
   const upd = (patch: Partial<Plan>) => setDraft(d => d ? { ...d, ...patch } : d)

@@ -154,18 +154,53 @@ def _read_employee_roles(client, org_id):
     The name bridge (`_canon_person`) lets a sales row's POS "Last, First" salesperson find the roster's
     "First Last" row and thus the rep's ROLE, so a scope='role' assignment can pay every rep with that
     role. Org-scoped, one query, called ONCE per preview/installment pass. Degrades to {} (role scope
-    simply can't match; employee/store/market/default unaffected) if storeops is unreachable."""
+    simply can't match; employee/store/market/default unaffected) if storeops is unreachable.
+
+    INACTIVE employees are INCLUDED by design (no is_active filter): a mid-month-terminated rep still has
+    sale lines in the period, and those sales must still pay under their role — filtering to active would
+    silently drop their pay. (The UI role-count preview shows active + inactive separately so the numbers
+    agree with what this matches.) ORDERED by `id` so, when two roster rows canonicalize to the SAME name
+    (F1: same-named employees with different roles), the LOWEST-id row wins DETERMINISTICALLY across
+    recalcs instead of DB heap order; `_role_name_collisions` surfaces such ambiguity in diagnose."""
     out = {}
     try:
         rows = (client.schema("storeops").table("employees")
-                .select("name,role,is_active").eq("org_id", org_id).execute().data) or []
+                .select("id,name,role").eq("org_id", org_id).order("id").execute().data) or []
     except Exception:
         return out
     for e in rows:
         nm = _canon_person(e.get("name"))
         role = (e.get("role") or "").strip().lower()
         if nm and role:
-            out.setdefault(nm, role)   # first roster row for a canon-name wins (stable)
+            out.setdefault(nm, role)   # id-ordered → lowest-id roster row wins (deterministic)
+    return out
+
+
+def _role_name_collisions(client, org_id):
+    """Roster rows whose NAMES collapse to the same `_canon_person` key → role resolution is ambiguous
+    (the lowest-id row wins in `_read_employee_roles`). Returns
+    [{canon, winner_role, rows:[{id,name,role}...]}] for the /payout-plans/diagnose panel so the operator
+    can SEE the ambiguity ("2 roster rows collapse to 'luis martinez' — role resolution uses the lowest
+    id"). Read-only; org-scoped; [] on any failure. Only same-name groups of size > 1 are returned."""
+    groups = {}
+    try:
+        rows = (client.schema("storeops").table("employees")
+                .select("id,name,role").eq("org_id", org_id).order("id").execute().data) or []
+    except Exception:
+        return []
+    for e in rows:
+        nm = _canon_person(e.get("name"))
+        if not nm:
+            continue
+        groups.setdefault(nm, []).append(
+            {"id": e.get("id"), "name": e.get("name"), "role": (e.get("role") or "").strip()})
+    out = []
+    for canon, rws in groups.items():
+        distinct_roles = {r["role"].strip().lower() for r in rws if r["role"]}
+        if len(rws) > 1:
+            out.append({"canon": canon, "rows": rws,
+                        "winner_role": (rws[0].get("role") or "").strip(),
+                        "role_conflict": len(distinct_roles) > 1})
     return out
 
 

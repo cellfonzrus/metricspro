@@ -280,7 +280,7 @@ class FakeQuery:
     def execute(self):
         rows = [dict(r) for r in self.store.get(self.t, []) if self._m(r)]
         if self.ordk:
-            rows.sort(key=lambda r: (r.get(self.ordk) is None, r.get(self.ordk)), reverse=self.orddesc)
+            rows.sort(key=lambda r: (r.get(self.ordk) is None, str(r.get(self.ordk))), reverse=self.orddesc)
         if self.rng:
             a, b = self.rng
             rows = rows[a:b + 1]
@@ -538,6 +538,123 @@ class Boom:
         return _S()
 check("_read_employee_roles degrades to {} when storeops read raises",
       CE._read_employee_roles(Boom(), "lux") == {})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# 13. F1 — same-canon roster collision resolves DETERMINISTICALLY (lowest id) + diagnose flags it
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+print("\n== 13. F1: roster canon-name collision -> deterministic lowest-id winner + diagnose flag ==")
+check("two roster rows canon to the same name",
+      _canon_person("Luis Martinez") == _canon_person("Martinez, Luis") == "luis martinez")
+
+
+def collide_roster(order):
+    emps = [
+        {"id": 2, "org_id": "lux", "name": "Luis Martinez", "role": "Store Manager"},
+        {"id": 7, "org_id": "lux", "name": "Martinez, Luis", "role": "Sales Rep"},
+    ]
+    return FakeClient({"employees": [emps[i] for i in order]})
+
+
+winners = set()
+for order in ([0, 1], [1, 0]):   # shuffle the fake-DB heap order
+    winners.add(CE._read_employee_roles(collide_roster(order), "lux").get("luis martinez"))
+check("winner DETERMINISTIC across shuffled DB order (lowest id=2 -> 'store manager')",
+      winners == {"store manager"}, f"winners={winners}")
+cols = CE._role_name_collisions(collide_roster([1, 0]), "lux")
+check("_role_name_collisions reports the collision", len(cols) == 1 and cols[0]["canon"] == "luis martinez")
+check("collision winner_role = lowest-id row's role ('Store Manager')", cols[0]["winner_role"] == "Store Manager")
+check("collision flagged role_conflict (two DIFFERENT roles)", cols[0]["role_conflict"] is True)
+check("no collision reported when canon-names are distinct",
+      CE._role_name_collisions(FakeClient({"employees": [
+          {"id": 1, "org_id": "lux", "name": "Ann Lee", "role": "Rep"},
+          {"id": 2, "org_id": "lux", "name": "Bob Fox", "role": "Rep"}]}), "lux") == [])
+check("same name SAME role -> collision reported but NOT a role_conflict",
+      (lambda c: len(c) == 1 and c[0]["role_conflict"] is False)(
+          CE._role_name_collisions(FakeClient({"employees": [
+              {"id": 1, "org_id": "lux", "name": "Sam Roe", "role": "Rep"},
+              {"id": 2, "org_id": "lux", "name": "Roe, Sam", "role": "Rep"}]}), "lux")))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# 14. F2 — INACTIVE rep's role still matches (engine ignores is_active) + UI count-consistency
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+print("\n== 14. F2: inactive rep still paid by role + UI count exposes active/inactive ==")
+INACT_STORE = {
+    "commission_plan": [{"id": "IP", "org_id": "lux", "name": "Role Plan", "is_active": True,
+                         "carrier_id": None, "base_tier_metric": "none"}],
+    "commission_rule": [{"id": "IR", "org_id": "lux", "plan_id": "IP", "match_field": "any",
+                         "match_op": "equals", "match_value": "", "qualifies": True,
+                         "payout_kind": "flat_per_unit", "amount": 7.0, "pct": 0, "tiered": False, "sort": 0}],
+    "commission_tier": [],
+    "commission_plan_assignment": [{"id": "IA", "org_id": "lux", "plan_id": "IP", "scope": "role",
+                                    "scope_value": "Sales Rep", "priority": 0}],
+    "employees": [
+        {"id": 1, "org_id": "lux", "name": "Gone Guy", "role": "Sales Rep", "is_active": False},   # TERMINATED
+        {"id": 2, "org_id": "lux", "name": "Here Gal", "role": "Sales Rep", "is_active": True},
+    ],
+    "raw_sales": [sale("lux", "Guy, Gone", "TG"), sale("lux", "Gal, Here", "TH")],
+    "raw_mi": [], "raw_catalog": [], "store_mapping": [], "daily_sales_feed": [],
+}
+ic = FakeClient(INACT_STORE)
+check("_read_employee_roles INCLUDES the inactive rep's role", CE._read_employee_roles(ic, "lux").get("gone guy") == "sales rep")
+ipaid = {r["rep"]: r["total_payout"] for r in (preview(ic, "lux", PERIOD).get("by_rep") or [])}
+check("INACTIVE terminated rep 'Guy, Gone' STILL paid via role plan ($7)",
+      abs(ipaid.get("Guy, Gone", 0) - 7.0) < 1e-9, f"ipaid={ipaid}")
+check("active rep also paid ($7)", abs(ipaid.get("Gal, Here", 0) - 7.0) < 1e-9)
+
+
+def ui_role_stats(emps):   # mirrors commission-plans/page.tsx roleStats over the include_inactive roster
+    m = {}
+    for e in emps:
+        r = (e.get("role") or "").strip()
+        if not r:
+            continue
+        s = m.setdefault(r, {"active": 0, "inactive": 0})
+        s["inactive" if e.get("is_active") is False else "active"] += 1
+    return m
+
+
+stats = ui_role_stats(INACT_STORE["employees"])
+check("UI role-count exposes active+inactive split (1 active +1 inactive) == 2 engine-matched reps",
+      stats["Sales Rep"] == {"active": 1, "inactive": 1}
+      and (stats["Sales Rep"]["active"] + stats["Sales Rep"]["inactive"]) == len(ipaid), f"stats={stats}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# 15. F3 — employee assignment stores epay_salesperson || name (POS escape hatch beyond word-order)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+print("\n== 15. F3: assignment stores epay_salesperson || name (rescues initials/nicknames) ==")
+
+
+def ui_emp_option_id(e):   # mirrors commission-plans/page.tsx employeeOptions id derivation
+    return (str(e.get("epay_salesperson") or "")) or (str(e.get("name") or ""))
+
+
+check("option id = epay_salesperson when set",
+      ui_emp_option_id({"name": "Diana Antunez", "epay_salesperson": "Antunez, D"}) == "Antunez, D")
+check("option id falls back to name when epay blank",
+      ui_emp_option_id({"name": "Diana Antunez", "epay_salesperson": ""}) == "Diana Antunez")
+check("roster NAME alone would NOT canon-match the initial POS string (why epay matters)",
+      _canon_person("Diana Antunez") != _canon_person("Antunez, D"))
+EPAY_STORE = {
+    "commission_plan": [{"id": "EP", "org_id": "lux", "name": "Emp Plan", "is_active": True,
+                         "carrier_id": None, "base_tier_metric": "none"}],
+    "commission_rule": [{"id": "ER", "org_id": "lux", "plan_id": "EP", "match_field": "any",
+                         "match_op": "equals", "match_value": "", "qualifies": True,
+                         "payout_kind": "flat_per_unit", "amount": 8.0, "pct": 0, "tiered": False, "sort": 0}],
+    "commission_tier": [],
+    # scope_value = the EPAY value the UI now stores (NOT the roster name)
+    "commission_plan_assignment": [{"id": "EA", "org_id": "lux", "plan_id": "EP", "scope": "employee",
+                                    "scope_value": "Antunez, D", "priority": 0}],
+    "employees": [{"id": 1, "org_id": "lux", "name": "Diana Antunez", "epay_salesperson": "Antunez, D",
+                   "role": "Sales Rep", "is_active": True}],
+    "raw_sales": [sale("lux", "Antunez, D", "TE1"), sale("lux", "Antunez, D", "TE2")],
+    "raw_mi": [], "raw_catalog": [], "store_mapping": [], "daily_sales_feed": [],
+}
+epaid = {r["rep"]: r["total_payout"] for r in (preview(FakeClient(EPAY_STORE), "lux", PERIOD).get("by_rep") or [])}
+check("epay-valued assignment matches POS 'Antunez, D' ($8 x 2 = $16) where roster-name would be DEAD",
+      abs(epaid.get("Antunez, D", 0) - 16.0) < 1e-9, f"epaid={epaid}")
 
 
 print(f"\n{'='*60}\nPASS={PASS}  FAIL={FAIL}")
