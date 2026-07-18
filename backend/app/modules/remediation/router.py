@@ -315,6 +315,86 @@ def _digits(s):
     return "".join(c for c in str(s or "") if c.isdigit())
 
 
+# ── WhatsApp delivery-status ingestion (owner incident 2026-07-18: silent drops made VISIBLE) ────────
+# Meta delivers message STATUS events on the SAME webhook subscription:
+#   entry[].changes[].value.statuses[] = [{id:<wamid>, status:sent|delivered|read|failed, timestamp,
+#                                          errors?:[{code,title,message,error_data}]}]
+# We record the latest status onto the matching notify.send_log row(s) (provider_message_id == wamid),
+# so a message Meta ACCEPTED ('sent') but then dropped never reaching 'delivered' is visible in the log.
+_DELIVERY_RANK = {"sent": 1, "delivered": 2, "read": 3, "failed": 4}
+
+
+def _merge_delivery_status(current, incoming):
+    """PURE. The latest delivery status, monotonic by rank sent<delivered<read with failed ALWAYS winning.
+    Never regresses (a later 'delivered' after 'read' keeps 'read'); an unknown/empty incoming keeps the
+    current value. Returns the winning status string (lowercased) or the unchanged current."""
+    inc = (incoming or "").strip().lower()
+    inc_r = _DELIVERY_RANK.get(inc, 0)
+    if inc_r == 0:
+        return current
+    cur_r = _DELIVERY_RANK.get((current or "").strip().lower(), 0)
+    return inc if inc_r >= cur_r else current
+
+
+def _flatten_delivery_errors(errors):
+    """PURE. Flatten a Meta status `errors[]` array into one short human string for send_log.delivery_error.
+    Each error: {code, title, message, error_data:{details}}. Best-effort; '' when there are none."""
+    if not errors:
+        return ""
+    parts = []
+    for e in errors:
+        if not isinstance(e, dict):
+            parts.append(str(e)[:200])
+            continue
+        code = e.get("code")
+        title = e.get("title") or e.get("message") or ""
+        ed = e.get("error_data")
+        detail = ed.get("details") if isinstance(ed, dict) else ""
+        seg = (f"[{code}] {title}" if code is not None else str(title)).strip()
+        if detail:
+            seg = f"{seg} — {detail}".strip(" —")
+        if seg:
+            parts.append(seg)
+    return " | ".join(parts)[:500]
+
+
+def _record_delivery_statuses(statuses):
+    """Best-effort: write Meta delivery-status events onto notify.send_log. GLOBAL wamid lookup
+    (`provider_message_id == id`) — wamids are globally unique, so NO org filter (an org filter could miss
+    the row). Writes ONLY the three delivery columns; the status is monotonic (never regresses; failed
+    wins). GRACEFUL pre-mig-714: any missing-column / query error drops the whole batch to a silent no-op
+    (the webhook MUST always 200 — Meta disables a subscription that repeatedly errors). Never raises."""
+    try:
+        log = get_supabase().schema("notify").table("send_log")
+    except Exception:
+        return
+    now_iso = _now()
+    for st in statuses or []:
+        if not isinstance(st, dict):
+            continue
+        wamid = st.get("id")
+        status = (st.get("status") or "").strip().lower()
+        if not wamid or status not in _DELIVERY_RANK:
+            continue
+        try:
+            rows = (log.select("id, delivery_status")
+                    .eq("provider_message_id", wamid).execute().data) or []
+        except Exception:
+            return  # missing column (un-run mig 714) / query error → no-op for the whole batch
+        if not rows:
+            continue  # unknown wamid → nothing to update (no crash)
+        err = _flatten_delivery_errors(st.get("errors")) if status == "failed" else ""
+        for r in rows:
+            merged = _merge_delivery_status(r.get("delivery_status"), status)
+            upd = {"delivery_status": merged, "delivery_updated_at": now_iso}
+            if err:
+                upd["delivery_error"] = err
+            try:
+                log.update(upd).eq("id", r.get("id")).execute()
+            except Exception:
+                return  # graceful: a missing column on write → no-op
+
+
 def _valid_signature(sig_header, body):
     """Validate Meta's X-Hub-Signature-256 when an app secret is configured (else allow — the payload
     token still gates every mutation)."""
@@ -408,4 +488,10 @@ async def whatsapp_inbound(request: Request):
                     text = (m.get("text") or {}).get("body")
                 if frm and (payload or text):
                     await _handle_inbound(client, frm, payload, text)
+            # Delivery-STATUS events (sent/delivered/read/failed) ride the same subscription → record them
+            # onto send_log so a silently-dropped send is visible. Fully guarded → never 500s the webhook.
+            try:
+                _record_delivery_statuses((ch.get("value", {}) or {}).get("statuses", []) or [])
+            except Exception:
+                pass
     return {"ok": True}

@@ -25,9 +25,27 @@ Needs env (see app/core/config.py):
   WHATSAPP_TEMPLATE_DOC_HEADER (default false — set true only when the approved template has a real
   document header; see the owner setup steps in docs/handoffs/platform-core.md).
 """
+import re
+
 import httpx
 
 from app.core.config import settings
+
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+def _strip_link(text: str) -> str:
+    """Remove any http(s) URL (and a dangling ' — '/'-'/'|'/':' separator left where it was) from template
+    body text. Used ONLY on the doc-header rung, where the ACTUAL file is attached: the tokenized download
+    URL adds nothing there but a target for Meta's link-safety crawler — which fetches the URL out of the
+    body variable and then SILENTLY DROPS the message (owner incident 2026-07-18). The caller builds the
+    body as '<title> — <download-url>', so stripping the URL leaves the title only. The link fallback rung
+    (rung 3) keeps its URL — it IS the deliverable there."""
+    t = _URL_RE.sub("", str(text or "")).strip()
+    for sep in ("—", "-", "|", ":"):
+        if t.endswith(sep):
+            t = t[: -len(sep)].strip()
+    return t
 
 
 def is_configured() -> bool:
@@ -75,8 +93,15 @@ def _template_msg(to: str, filename: str, media_id: str, body_text: str, with_do
     if with_doc_header and media_id:
         components.append({"type": "header", "parameters": [
             {"type": "document", "document": {"id": media_id, "filename": filename}}]})
+        # Doc-header rung: the real file is ATTACHED, so the body carries the TITLE ONLY (link stripped +
+        # flattened). Keeping the tokenized download URL here invited Meta's link-safety crawler, which
+        # fetched it and silently dropped the message (owner incident 2026-07-18).
+        body_val = _clean_var(_strip_link(body_text))
+    else:
+        # Link-fallback rung (rung 3): the URL in the body IS the deliverable — keep the caller's text.
+        body_val = (body_text or "")[:1024]
     components.append({"type": "body", "parameters": [
-        {"type": "text", "text": (body_text or "")[:1024]}]})
+        {"type": "text", "text": body_val}]})
     return {
         "messaging_product": "whatsapp",
         "to": to,

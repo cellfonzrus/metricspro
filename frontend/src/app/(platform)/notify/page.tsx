@@ -19,6 +19,7 @@ type Sub = {
 type LogRow = {
   id: string; report_key: string; channel: string; target: string; status: string
   error: string | null; triggered_by: string | null; created_at: string
+  delivery_status?: string | null; delivery_error?: string | null; delivery_updated_at?: string | null
 }
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -311,22 +312,36 @@ function Subscriptions({ reports, saved, subs, onChange, setMsg }: {
   )
 }
 
+function deliveryColor(s?: string | null): string {
+  const v = (s || '').toLowerCase()
+  if (v === 'delivered' || v === 'read') return 'green'
+  if (v === 'failed') return '#c00'
+  if (v === 'sent') return '#b45309'   // accepted by Meta but not confirmed delivered yet (or silently dropped)
+  return '#64748b'
+}
+
 function SendLog({ log }: { log: LogRow[] }) {
   return (
     <div style={card}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>Recent sends</div>
+      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>
+        “Delivery” is the latest Meta/WhatsApp status (delivered/read = confirmed on the handset; a WhatsApp
+        row stuck on <b>sent</b> with no delivery was accepted by Meta but not confirmed delivered).
+      </div>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead><tr><th style={th}>When</th><th style={th}>Report</th><th style={th}>Channel</th><th style={th}>Target</th><th style={th}>Status</th><th style={th}>By</th><th style={th}>Error</th></tr></thead>
+        <thead><tr><th style={th}>When</th><th style={th}>Report</th><th style={th}>Channel</th><th style={th}>Target</th><th style={th}>Status</th><th style={th}>Delivery</th><th style={th}>By</th><th style={th}>Error</th></tr></thead>
         <tbody>
           {log.map(l => (
             <tr key={l.id}>
               <td style={td}>{d10(l.created_at)}</td><td style={td}>{l.report_key}</td><td style={td}>{l.channel}</td>
               <td style={td}>{l.target}</td>
               <td style={{ ...td, color: l.status === 'sent' ? 'green' : '#c00' }}>{l.status}</td>
-              <td style={td}>{l.triggered_by}</td><td style={{ ...td, color: '#c00', fontSize: 11 }}>{l.error}</td>
+              <td style={{ ...td, color: deliveryColor(l.delivery_status) }}>{l.delivery_status || '—'}</td>
+              <td style={td}>{l.triggered_by}</td>
+              <td style={{ ...td, color: '#c00', fontSize: 11 }}>{l.delivery_error || l.error}</td>
             </tr>
           ))}
-          {log.length === 0 && <tr><td style={td} colSpan={7}>No sends yet.</td></tr>}
+          {log.length === 0 && <tr><td style={td} colSpan={8}>No sends yet.</td></tr>}
         </tbody>
       </table>
     </div>

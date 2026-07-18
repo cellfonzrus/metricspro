@@ -120,5 +120,54 @@ ok("_to_number +E.164 → digits only", W._to_number("+15162330422") == "1516233
 ok("_to_number formatted → digits only", W._to_number("(516) 233-0422") == "15162330422")
 ok("_to_number intl kept", W._to_number("+447911123456") == "447911123456")
 
+
+# ── ITEM 2 (owner incident 2026-07-18): rung-1 (doc-header) body = TITLE ONLY, no URL; rung-3 keeps URL ──
+# The router builds the body as "<title> — <no-login download url>". When the real file is ATTACHED
+# (doc-header rung) the tokenized URL just baits Meta's link-safety crawler, which then silently drops the
+# message. So the doc-header rung must carry the title only; the link-fallback rung keeps the URL (it IS
+# the deliverable there).
+DL = "https://metricspro-production.up.railway.app/api/v1/notify/dl/abc.def.ghijkl"
+BODY = f"June Sales Report — {DL}"
+
+
+def _body_text(msg):
+    for c in msg["template"]["components"]:
+        if c.get("type") == "body":
+            return c["parameters"][0]["text"]
+    return None
+
+
+def _has_doc_header(msg):
+    return any(c.get("type") == "header" and c["parameters"][0].get("type") == "document"
+               for c in msg["template"]["components"])
+
+
+rung1 = W._template_msg("+15162330422", "june.pdf", "MEDIA123", BODY, True)   # doc-header rung
+rung3 = W._template_msg("+15162330422", "june.pdf", "", BODY, False)          # link-fallback rung
+
+ok("rung-1 attaches the document header", _has_doc_header(rung1) is True)
+ok("rung-1 body carries NO url (crawler bait removed)", "http" not in _body_text(rung1).lower())
+ok("rung-1 body is the TITLE ONLY", _body_text(rung1) == "June Sales Report")
+ok("rung-3 has NO doc header", _has_doc_header(rung3) is False)
+ok("rung-3 body STILL carries the download url (it is the deliverable)", DL in _body_text(rung3))
+ok("rung-3 body unchanged from caller text", _body_text(rung3) == BODY)
+
+# _strip_link unit cases (the flattener used for the doc-header body)
+ok("_strip_link removes url + dangling em-dash", W._strip_link(f"Title — {DL}") == "Title")
+ok("_strip_link removes url + dangling hyphen", W._strip_link(f"Title - {DL}") == "Title")
+ok("_strip_link no-url passthrough", W._strip_link("Just a title") == "Just a title")
+ok("_strip_link empty → empty", W._strip_link("") == "")
+ok("_strip_link keeps a title that itself has an em-dash",
+   W._strip_link(f"Q2 — Store 42 — {DL}") == "Q2 — Store 42")
+
+# doc-header rung tolerates an empty/None body without crashing (still just a header + empty-safe body)
+ok("rung-1 empty body → _clean_var placeholder, no url",
+   "http" not in _body_text(W._template_msg("+1", "f.pdf", "M", "", True)).lower())
+
+# invariant: a doc-header rung NEVER leaks a URL regardless of body content
+for b in (BODY, f"{DL}", f"see {DL} now", "no link here", ""):
+    ok(f"doc-header rung strips any url ({b[:20]!r})",
+       "http" not in _body_text(W._template_msg("+1", "f.pdf", "M", b, True)).lower())
+
 print(f"\nprove_whatsapp_delivery: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
