@@ -216,7 +216,13 @@ uni_rows, uni_meta = router._sales_rows_union(FakeClient(uni_tables), "o", "July
 check("union meta.primary == daily_sales_feed (open month)", uni_meta["primary"] == "daily_sales_feed")
 check("union meta.richer_days == ['2026-07-08']", uni_meta["richer_days"] == ["2026-07-08"])
 check("union meta.filled_days == ['2026-07-09']", uni_meta["filled_days"] == ["2026-07-09"])
-check("union shown_rows == 135", uni_meta["shown_rows"] == 135 and len(uni_rows) == 135)
+# UPDATED 2026-07-18 (agent/commission/sales-capture-fix): `_sales_rows_union` now dedups a
+# completeness backfill BY trans_id. This day-grain fixture gives feed vs raw DISJOINT trans_id prefixes
+# on 07-07 ("p" vs "o"), i.e. 55 raw-only transactions the feed lacks that day → they are now surfaced
+# (135 cell-merge rows + 55 backfilled = 190). The day-grain swap/fill invariants above are unchanged.
+check("union shown_rows == 190 (135 cell-merge + 55 raw-only 07-07 backfilled)",
+      uni_meta["shown_rows"] == 190 and len(uni_rows) == 190)
+check("union completeness_rows == 55 (raw-only 07-07 transactions)", uni_meta["completeness_rows"] == 55)
 check("union never-raises on a read error (patched to throw) → degrades",
       True)  # exercised below
 

@@ -9288,6 +9288,26 @@ def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
     # mask the other stores' rows on a day it leads (the luxelink July 2026 incident).
     merged, richer_cells, filled_cells = _merge_cells_richer(prows, orows, _cell)
 
+    # ── COMPLETENESS backfill (2026-07-18; luxelink '957 Pennsylvania Ave' undercount) ──────────
+    # `_merge_cells_richer` is winner-take-all PER (day x store) CELL: on a cell the primary (the feed,
+    # open month) leads, every OTHER-source (raw_sales) transaction the primary lacks for that cell is
+    # DROPPED — the documented 'narrow completeness edge' (see _fetch_actuals). For a tenant whose
+    # hourly feed is chronically INCOMPLETE (luxelink), that silently hides real raw_sales transactions
+    # on a store-day the feed also sold. The cell-grain merge above still decides source COVERAGE and
+    # the degradation guard; here we UNION back any OTHER-source row whose non-blank trans_id isn't
+    # already in the merged set — DEDUPED BY trans_id, so a transaction present in BOTH sources is
+    # never double-counted (identical philosophy to _sales_rows_union_txn). An authoritative raw_sales
+    # transaction is therefore never dropped. In the healthy feed-only / fully-promoted state
+    # (open month: raw_sales trans_ids subset of the feed; closed month: feed subset of raw_sales)
+    # NOTHING is added -> byte-identical (Boost/house unchanged). Blank trans_ids can't be deduped and
+    # are left to the cell-grain decision. DISPLAY ONLY — not on any payout path. Pure; never raises.
+    _merged_tids = {str(r.get('trans_id')).strip() for r in merged if str(r.get('trans_id') or '').strip()}
+    completeness = [r for r in orows
+                    if str(r.get('trans_id') or '').strip()
+                    and str(r.get('trans_id')).strip() not in _merged_tids]
+    if completeness:
+        merged = merged + completeness
+
     feed_rows = len(prows) if primary == 'daily_sales_feed' else len(orows)
     raw_rows = len(prows) if primary == 'raw_sales' else len(orows)
     filled_set, richer_set = set(filled_cells), set(richer_cells)
@@ -9313,6 +9333,7 @@ def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
         'filled_rows': fill_rows, 'filled_days': filled_days, 'filled_cells': len(filled_cells),
         'richer_rows': richer_rows, 'richer_days': richer_days, 'richer_cells': len(richer_cells),
         'shown_rows': len(merged),
+        'completeness_rows': len(completeness),
         'stores_shown': len(shown_stores), 'primary_stores': len(p_stores),
         'other_stores': len(o_stores), 'stores_from_other': len(stores_from_other),
     }

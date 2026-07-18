@@ -93,8 +93,15 @@ D1, D2 = f"{OPEN}-01", f"{OPEN}-02"          # two open-month days
 CD1, CD2 = f"{CLOSED}-01", f"{CLOSED}-02"    # two closed-month days
 
 
+# NOTE (2026-07-18, agent/commission/sales-capture-fix): trans_id is keyed on (store, day, n) and does
+# NOT embed `src`, so the feed copy and the raw_sales copy of the SAME store-day transaction share ONE
+# trans_id — as they do in production (a POS transaction carries the same B2B Soft id in both tables).
+# This matters now that `_sales_rows_union` dedups a completeness backfill BY trans_id: winner-take-all
+# still drops the loser source's copy of a SHARED transaction (no double count), while a genuinely
+# raw-ONLY transaction the feed missed is surfaced. `_src` (separate field) still marks which side a row
+# came from for the source-coverage assertions.
 def srow(store, day, src, n=0, cat="Accessory", rep="REP", ct="", dept="", pdesc="", ext=10.0):
-    return {"trans_id": f"{src}-{store}-{day}-{n}", "trans_date": day, "store": store,
+    return {"trans_id": f"{store}-{day}-{n}", "trans_date": day, "store": store,
             "salesperson": rep, "category": cat, "contract_type": ct, "department": dept,
             "product_desc": pdesc, "ext_price": ext, "gp": 5.0, "voided": "", "trans_type": "",
             "_src": src, "org_id": "o", "period": OPEN}
