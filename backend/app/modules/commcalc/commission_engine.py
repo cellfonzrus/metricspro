@@ -105,7 +105,32 @@ def _canon_person(s):
     return folded
 
 
-def _resolve_plan_for(rep_name, store, market, plans, rep_role=None):
+def _assignment_miss_reason(scope, val, rn_canon, rr, sv_store, sv_mkt, scope_value_raw):
+    """Plain-language 'why this assignment did NOT attach to the rep', for the drill-down nearest-miss
+    list. PURE. It only NARRATES a branch of the SAME predicate `_resolve_plan_for` evaluates — it is
+    never a second matching implementation (the caller passes the exact `ok`; this just explains ¬ok)."""
+    if scope == "employee":
+        if not val:
+            return "employee assignment has no name"
+        return f"employee '{scope_value_raw}' (canonical '{_canon_person(scope_value_raw)}') != rep '{rn_canon}'"
+    if scope == "role":
+        if not val:
+            return "role assignment has no value"
+        if not rr:
+            return f"rep has no roster role, so role '{scope_value_raw}' cannot match"
+        return f"role '{val}' != rep role '{rr}'"
+    if scope == "store":
+        if not val:
+            return "store assignment has no value"
+        return f"store scope '{val}' != rep store '{sv_store or '(none)'}'"
+    if scope == "market":
+        if not val:
+            return "market assignment has no value"
+        return f"market scope '{val}' != rep market '{sv_mkt or '(none)'}'"
+    return f"scope '{scope}' did not match"
+
+
+def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=False):
     """Most-specific assignment wins: employee > role > store > market > default. Returns the plan or None.
 
     EMPLOYEE scope_value is matched to the rep's name name-order-insensitively via `_canon_person`
@@ -120,14 +145,27 @@ def _resolve_plan_for(rep_name, store, market, plans, rep_role=None):
     HOUSE-SAFE: when NO role assignments exist and rep_role is unused, the winner is byte-identical to
     the pre-role ranks — SCOPE_RANK values are only compared RELATIVELY and employee>store>market>default
     order is preserved (role slots strictly between employee and store).
-    """
+
+    explain=False (default) → returns the winning plan (or None), BYTE-IDENTICAL to before. The extra
+    `best_assign` bookkeeping does not affect the returned value; the `if explain` blocks never run.
+    explain=True → returns {"plan", "winner", "considered"} for the drill-down narration (the SINGLE
+    source of truth so the narration can never disagree with what pays): `winner` is the winning
+    assignment {plan_id, plan_name, scope, scope_value, priority, rank} (None if no plan attached);
+    `considered` is EVERY assignment evaluated, each with matched:bool + a miss `reason`."""
     SCOPE_RANK = {"employee": 4, "role": 3, "store": 2, "market": 1, "default": 0}
     rn_canon = _canon_person(rep_name)
     rr = (rep_role or "").strip().lower()
     sv_store, sv_mkt = (store or "").strip().lower(), (market or "").strip().lower()
-    best, best_key = None, (-1, -1)
+    best, best_key, best_assign = None, (-1, -1), None
+    considered = [] if explain else None
     for p in plans:
         if not p.get("is_active", True):
+            if explain:
+                for a in p.get("assignments", []):
+                    considered.append({"plan_id": p.get("id"), "plan_name": p.get("name"),
+                                       "scope": (a.get("scope") or "default"), "scope_value": a.get("scope_value"),
+                                       "priority": int(a.get("priority") or 0), "rank": None,
+                                       "matched": False, "reason": "plan is inactive"})
             continue
         for a in p.get("assignments", []):
             scope = (a.get("scope") or "default").strip().lower()
@@ -140,11 +178,28 @@ def _resolve_plan_for(rep_name, store, market, plans, rep_role=None):
                 ok = ((scope == "default") or
                       (scope == "store" and val and val == sv_store) or
                       (scope == "market" and val and val == sv_mkt))
+            if explain:
+                considered.append({
+                    "plan_id": p.get("id"), "plan_name": p.get("name"),
+                    "scope": scope, "scope_value": a.get("scope_value"),
+                    "priority": int(a.get("priority") or 0), "rank": SCOPE_RANK.get(scope, 0),
+                    "matched": bool(ok),
+                    "reason": None if ok else _assignment_miss_reason(
+                        scope, val, rn_canon, rr, sv_store, sv_mkt, a.get("scope_value")),
+                })
             if not ok:
                 continue
             key = (SCOPE_RANK.get(scope, 0), int(a.get("priority") or 0))
             if key > best_key:
-                best, best_key = p, key
+                best, best_key, best_assign = p, key, a
+    if explain:
+        winner = None
+        if best is not None and best_assign is not None:
+            winner = {"plan_id": best.get("id"), "plan_name": best.get("name"),
+                      "scope": (best_assign.get("scope") or "default"),
+                      "scope_value": best_assign.get("scope_value"),
+                      "priority": int(best_assign.get("priority") or 0), "rank": best_key[0]}
+        return {"plan": best, "winner": winner, "considered": considered}
     return best
 
 
@@ -353,11 +408,19 @@ def _tier_multiplier(plan, qualifying_units):
 
 
 # ── preview ────────────────────────────────────────────────────────────────────────────────────
-def preview(client, org_id, period, plan_id=None):
+def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None):
     """READ-ONLY: apply plan rules to a period's raw_sales. Writes nothing.
 
     Returns {ready, period, by_rep:[...], totals, plans, note}. If plan_id is given, that plan is applied
     to ALL reps; otherwise each rep gets the plan resolved by assignment precedence.
+
+    detail=False / only_rep=None (the defaults used by the live calc path in _apply_new_engines) →
+    output is BYTE-IDENTICAL to before. detail=True (drill-down) additionally attaches, per rep: the
+    winning `assignment` + `considered` nearest-miss list (from _resolve_plan_for(explain=True)), the
+    plan's tier config, and per-rule `lines` (the individual matched sale lines with date / trans_id /
+    imei / mdn / product / contract_type / ext_price / gp / per-line amount) — including rules that
+    matched 0 lines, so "plan attached but nothing paid" is explainable. only_rep restricts the rep
+    grouping (canon or token-subset match) so a single-rep drill is cheap.
     """
     plans, ready = _load_plans(client, org_id)
     if not ready:
@@ -397,12 +460,33 @@ def preview(client, org_id, period, plan_id=None):
             e = reps[key] = {"name": rep, "store": str(r.get("store", "") or "").strip(), "lines": []}
         e["lines"].append(r)
 
+    # only_rep (drill-down): restrict the rep grouping to the one rep — canon match, else token subset
+    # (mirrors the tolerant match the commission-drill endpoint uses). Default None → no filter.
+    if only_rep:
+        orc = _canon_person(only_rep)
+        otok = set(re.sub(r"[^a-z0-9]+", " ", str(only_rep or "").lower()).split())
+
+        def _rep_pick(nm):
+            if _canon_person(nm) == orc:
+                return True
+            st = set(re.sub(r"[^a-z0-9]+", " ", str(nm or "").lower()).split())
+            return bool(st and otok) and (st <= otok or otok <= st)
+        reps = {k: e for k, e in reps.items() if _rep_pick(e["name"])}
+
     out_rows, grand = [], 0.0
     for key, e in reps.items():
         store = e["store"]
         market = store_market.get(store.lower()) or store_market.get(store.split(" ")[0].lower(), "")
         rep_role = role_by_rep.get(_canon_person(e["name"]))
-        plan = forced_plan or _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role)
+        resolution = None
+        if detail:
+            resolution = _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role, explain=True)
+            plan = forced_plan or resolution.get("plan")
+        else:
+            # money path: EXACTLY the original lazy short-circuit — when plan_id forces a plan,
+            # _resolve_plan_for is never called (so the delta vs the pre-drill engine is exactly zero,
+            # incl. the case where a non-numeric assignment field would make the resolver raise).
+            plan = forced_plan or _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role)
         if not plan:
             continue
         rules = plan.get("rules") or []
@@ -422,18 +506,39 @@ def preview(client, org_id, period, plan_id=None):
                 "rule_id": rid, "label": rule.get("label") or rule.get("match_value") or rule.get("match_field"),
                 "payout_kind": kind, "tiered": is_tiered, "qualifies": qualifies,
                 "matched_lines": 0, "qualifying_units": 0, "payout": 0.0})
+            if detail and "match_field" not in rb:
+                rb["match_field"] = rule.get("match_field") or "any"
+                rb["match_op"] = rule.get("match_op") or "equals"
+                rb["match_value"] = rule.get("match_value")
+                rb["amount"] = safe_float(rule.get("amount"))
+                rb["pct"] = safe_float(rule.get("pct"))
             for row in e["lines"]:
                 if not _rule_matches(row, rule):
                     continue
                 rb["matched_lines"] += 1
+                ldet = None
+                if detail:
+                    ldet = {"date": str(row.get("trans_date") or "")[:10],
+                            "trans_id": str(row.get("trans_id") or "").strip(),
+                            "imei": _norm_mdn(row.get("serial_1")), "mdn": _norm_mdn(row.get("mdn")),
+                            "product": row.get("product_desc"), "contract_type": row.get("contract_type"),
+                            "ext_price": round(safe_float(row.get("ext_price")), 2),
+                            "gp": round(safe_float(row.get("gp")), 2),
+                            "qualifies": bool(qualifies), "amount": 0.0}
+                    rb.setdefault("lines", []).append(ldet)
                 if not qualifies:
                     continue
                 rb["qualifying_units"] += 1
                 if kind == "flat":
                     flat_pending[rid] = safe_float(rule.get("amount"))  # once per rep
+                    if ldet is not None:
+                        ldet["amount"] = None          # flat bonus: paid once per rep, not per line
+                        ldet["flat_once"] = True
                     continue
                 pay = _line_payout(row, rule, mrc_by_mdn, mrc_by_sub, cost_by_pid)
                 rb["payout"] = round(rb["payout"] + pay, 2)
+                if ldet is not None:
+                    ldet["amount"] = pay
                 if is_tiered:
                     tiered_total += pay
                 else:
@@ -460,9 +565,18 @@ def preview(client, org_id, period, plan_id=None):
             "qualifying_units": qualifying_units, "tier_multiplier": mult,
             "base_payout": round(base_total, 2), "tiered_payout": round(tiered_total, 2),
             "total_payout": total,
-            "rules": sorted([rb for rb in rule_breakdown.values() if rb["matched_lines"]],
+            # default: only rules that matched ≥1 line. detail: EVERY rule (so a rule that matched
+            # nothing is still shown, to explain why it paid $0).
+            "rules": sorted([rb for rb in rule_breakdown.values() if (detail or rb["matched_lines"])],
                             key=lambda x: -(x.get("payout") or 0)),
         })
+        if detail:
+            out_rows[-1]["assignment"] = (resolution or {}).get("winner")
+            out_rows[-1]["considered"] = (resolution or {}).get("considered")
+            out_rows[-1]["base_tier_metric"] = (plan.get("base_tier_metric") or "none")
+            out_rows[-1]["tiers"] = [{"min_count": int(t.get("min_count") or 0),
+                                      "multiplier": safe_float(t.get("multiplier"))}
+                                     for t in (plan.get("tiers") or [])]
 
     out_rows.sort(key=lambda x: -(x.get("total_payout") or 0))
     return {"ready": True, "period": period, "by_rep": out_rows,

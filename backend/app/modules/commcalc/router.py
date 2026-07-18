@@ -8322,6 +8322,44 @@ def commission_drill(period: str, rep: str = "", org_id: str = ORG_ID):
             "accessories": _bucket(acc), "setup": _bucket(setup), "acima": _bucket(acima)}
 
 
+@router.get("/commission-explain")
+def commission_explain(period: str, rep: str = "", org_id: str = ORG_ID):
+    """READ-ONLY 'how was this commission calculated' for ONE rep + period. Returns the PLAN component
+    (which plan attached, VIA WHICH assignment — reused from _resolve_plan_for(explain=True), the same
+    matcher the live calc uses — plus per-rule matched sale lines), the MULTI-MONTH component (per-device
+    M1–M6 installment rows with gate status/held-reason + the MA-file cross-reference), a $0 explanation,
+    and a reconciliation against the last calc's rep_commissions row. Writes nothing; changes no payout
+    number; never touches the live /calculate path. See commission_drilldown."""
+    require_org(org_id)
+    if not rep:
+        raise HTTPException(400, "rep required")
+    client = sb()
+    carriers = (client.schema('commcalc').table('carrier').select('*').eq('org_id', org_id).execute().data) or []
+    mode = _resolve_carrier_mode(carriers)
+    from app.modules.commcalc import commission_drilldown
+    try:
+        return commission_drilldown.explain_rep(client, org_id, period, rep, carrier_mode=mode)
+    except Exception as e:
+        raise HTTPException(500, f"commission-explain failed: {e}")
+
+
+@router.get("/commission-device")
+def commission_device(imei: str, period: str = "", org_id: str = ORG_ID):
+    """READ-ONLY device search: paste an IMEI → its full commission story across reps/periods (sale
+    line(s), plan pay attributable, multi-month installments + gate reasons, MA-file matches, rebate).
+    Optional `period` merges that period's live installment compute when the calc hasn't been re-run.
+    Writes nothing. See commission_drilldown.device_story."""
+    require_org(org_id)
+    if not imei:
+        raise HTTPException(400, "imei required")
+    client = sb()
+    from app.modules.commcalc import commission_drilldown
+    try:
+        return commission_drilldown.device_story(client, org_id, imei, period=period or None)
+    except Exception as e:
+        raise HTTPException(500, f"commission-device failed: {e}")
+
+
 # ─────────────────────────────────────────────
 # SALES FEED RECON (Theme 5) — monthly authoritative vs daily B2B feed, trans_id grain
 # ─────────────────────────────────────────────
