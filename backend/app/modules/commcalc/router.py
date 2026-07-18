@@ -4104,6 +4104,20 @@ def _accessory_config(client, org_id):
     # house/Boost conversion BYTE-IDENTICAL; a NON-empty list switches to case-insensitive EXACT match on the
     # picked product values (RULE THREE — observed, not typed). DISPLAY ONLY: consumed by _sales_cell_agg's
     # `_billpay` conversion set; no payout path (calculator.py / commission_engine.py never read it).
+    # BLANK-CONTRACT_TYPE activation rules (mig 224; per-org, admin-editable). A list of transaction-level
+    # rules that classify a transaction whose Contract Type is BLANK into a display activation bucket from
+    # OTHER line fields (department / category / product_desc / trans_type). Fetched in its OWN defensive
+    # query so a missing column (pre-224) can NEVER disturb the resolution above — it falls back to an
+    # EMPTY list, and the blank-ct engine is then a no-op (house/Boost display BYTE-IDENTICAL). DISPLAY
+    # ONLY: consumed by _sales_cell_agg; no payout path reads it.
+    activation_rules = []
+    try:
+        arows = (client.schema("commcalc").table("accessory_config")
+                 .select("activation_rules").eq("org_id", org_id).limit(1).execute().data) or []
+        if arows and isinstance(arows[0].get("activation_rules"), list):
+            activation_rules = [r for r in (arows[0].get("activation_rules") or []) if isinstance(r, dict)]
+    except Exception:
+        activation_rules = []
     billpay_products = []
     try:
         prows = (client.schema("commcalc").table("accessory_config")
@@ -4123,7 +4137,8 @@ def _accessory_config(client, org_id):
             "setup_fee_keywords_list": setup_kws,
             "billpay_products": {p.strip().lower() for p in billpay_products},
             "billpay_products_list": billpay_products,
-            "contract_type_map": ct_map, "contract_type_map_raw": ct_map_raw}
+            "contract_type_map": ct_map, "contract_type_map_raw": ct_map_raw,
+            "activation_rules": activation_rules}
 
 
 def _is_accessory(dept, category, product, acfg):
@@ -7807,7 +7822,9 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
     # trans_id per bucket (a multi-line AAL transaction = 1, not N), and the swaps tally. This IS the
     # aggregation the owner calls correct — Exec MTD now derives its cumulative numbers from the very same
     # cells (rolled up by store/employee with an MTD date-cut) instead of its old per-line/config loop.
-    agg = _sales_cell_agg(rows, acfg)
+    # Canonical store grouping (P0): collapse spelling variants of one store into a single report row,
+    # via the shipped store-resolution machinery. Degrades to case/whitespace fold if the resolver errors.
+    agg = _sales_cell_agg(rows, acfg, store_key=_canonical_store_key_fn(client, org_id))
 
     # Resolve each store to its market (store_mapping) so the report can filter by market —
     # keyed by address, store_code, or leading store-number, matching commission-trend's resolver.
@@ -7870,8 +7887,14 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
     # still a valid pick). The page's market/store MultiSelects render EMPTY without these keys.
     filter_stores = sorted({r["store"] for r in out if r.get("store")})
     filter_markets = sorted({m for m in ([r.get("market") for r in out] + list(all_markets)) if m})
+    # Activation-classification VISIBILITY (mig 213/224): surface blank / unrecognized contract types so a
+    # tenant whose activations read 0 sees WHY and where to map them — never a silent 0 again. Pure; safe.
+    try:
+        _cls_gaps = _classification_gaps(rows, acfg)
+    except Exception:
+        _cls_gaps = {'note': None}
     return {"period": period, "source": source, "org_id": org_id, "rows": out, "totals": totals,
-            "periods": sorted(periods, reverse=True),
+            "periods": sorted(periods, reverse=True), "classification_gaps": _cls_gaps,
             "stores": filter_stores, "markets": filter_markets,
             # Transparency (owner's debug-first mandate): exactly what this read used, so a truncated or
             # wrong-tenant view is self-evident. `org_id` above surfaces the super-admin org-resolution
@@ -8107,7 +8130,8 @@ def get_accessory_config(org_id: str = ORG_ID):
             "box_departments": c["box_departments_list"],
             "setup_fee_keywords": c["setup_fee_keywords_list"],
             "billpay_products": c["billpay_products_list"],
-            "contract_type_map": c["contract_type_map_raw"]}
+            "contract_type_map": c["contract_type_map_raw"],
+            "activation_rules": c["activation_rules"]}
 
 
 @router.put("/accessory-config")
@@ -8160,13 +8184,51 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
                                     if str(k).strip() and str(v).strip().lower() in _ok}
     else:
         row["contract_type_map"] = cur["contract_type_map_raw"]
+    # BLANK-CONTRACT_TYPE activation rules (mig 224 — editable from the shared Classification-settings UI).
+    # Sanitize each rule to {bucket in premium|upgrade|byod, all_of:[cond], none_of:[cond]} where a cond is
+    # {field:str, contains_any:[str], equals_any:[str]}; malformed rules/conds dropped. Empty list = the
+    # blank-ct engine is a no-op (Boost byte-identical).
+    if "activation_rules" in body:
+        def _san_cond(c):
+            if not isinstance(c, dict):
+                return None
+            f = str(c.get('field') or '').strip()
+            ca = [str(x).strip() for x in (c.get('contains_any') or []) if str(x).strip()]
+            ea = [str(x).strip() for x in (c.get('equals_any') or []) if str(x).strip()]
+            if not f or (not ca and not ea):
+                return None
+            o = {'field': f}
+            if ca:
+                o['contains_any'] = ca
+            if ea:
+                o['equals_any'] = ea
+            return o
+        _rules = []
+        for _r in (body.get('activation_rules') or []):
+            if not isinstance(_r, dict):
+                continue
+            _b = str(_r.get('bucket') or '').strip().lower()
+            if _b not in ('premium', 'upgrade', 'byod'):
+                continue
+            _alls = [x for x in (_san_cond(c) for c in (_r.get('all_of') or [])) if x]
+            if not _alls:
+                continue
+            _nones = [x for x in (_san_cond(c) for c in (_r.get('none_of') or [])) if x]
+            _rule = {'bucket': _b, 'all_of': _alls}
+            if _nones:
+                _rule['none_of'] = _nones
+            _rules.append(_rule)
+        row["activation_rules"] = _rules
+    else:
+        row["activation_rules"] = cur["activation_rules"]
     # Persist defensively: pre-mig-214/213/217/218 those columns don't exist, so a save carrying them 500s —
     # retry progressively dropping the NEWEST columns first (billpay_products is the newest, mig 214) so
     # editing the accessory lists never breaks before the migrations run (billpay → Boost-token fallback,
     # contract-type map → empty/classifier, box → _BOX_DEPTS, set-up fee → 'Device Setup Charge').
-    _drop_final = ["billpay_products", "contract_type_map", "setup_fee_keywords", "box_departments"]
-    for _drop in ([], ["billpay_products"], ["billpay_products", "contract_type_map"],
-                  ["billpay_products", "contract_type_map", "setup_fee_keywords"], _drop_final):
+    _drop_final = ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords", "box_departments"]
+    for _drop in ([], ["activation_rules"], ["activation_rules", "billpay_products"],
+                  ["activation_rules", "billpay_products", "contract_type_map"],
+                  ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords"], _drop_final):
         attempt = dict(row)
         for k in _drop:
             attempt.pop(k, None)
@@ -9469,7 +9531,158 @@ def _resolve_ct_bucket(ct, ct_map=None):
     return classify_contract_type(ct)
 
 
-def _sales_cell_agg(rows, acfg, exec_cfg=None):
+def _line_cond_hit(cond, lines):
+    """True if >=1 line satisfies `cond`: the line's <field> (case-insensitively) CONTAINS any of
+    `contains_any` OR EQUALS any of `equals_any`. `field` is any row column (department / category /
+    product_desc / trans_type / …), default product_desc. Pure; never raises."""
+    if not isinstance(cond, dict):
+        return False
+    field = str(cond.get('field') or 'product_desc')
+    pats = [str(p).strip().lower() for p in (cond.get('contains_any') or []) if str(p).strip()]
+    eqs = [str(p).strip().lower() for p in (cond.get('equals_any') or []) if str(p).strip()]
+    if not pats and not eqs:
+        return False
+    for l in lines:
+        v = str(l.get(field) or '').strip().lower()
+        if not v:
+            continue
+        if eqs and v in eqs:
+            return True
+        if pats and any(p in v for p in pats):
+            return True
+    return False
+
+
+def _classify_blank_ct_txn(lines, rules):
+    """Config-driven activation classification for a transaction whose Contract Type is BLANK, from OTHER
+    line fields. `rules` = the org's accessory_config.activation_rules (mig 224); EMPTY => None (no-op =>
+    Boost byte-identical). Each rule: {bucket:'premium'|'upgrade'|'byod', all_of:[cond,...],
+    none_of:[cond,...]} where a cond = {field, contains_any:[...], equals_any:[...]} matched against ANY
+    line. A rule FIRES when EVERY all_of cond is met by >=1 line AND NO none_of cond is met by any line.
+    Rules are tried IN ORDER; the first that fires wins (config controls precedence — e.g. a BYOD
+    'SIM without branded device' rule before the PREMIUM 'branded device + plan' rule). Returns the
+    bucket or None. Pure; never raises."""
+    if not rules:
+        return None
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        bucket = str(rule.get('bucket') or '').strip().lower()
+        if bucket not in ('premium', 'upgrade', 'byod'):
+            continue
+        alls = rule.get('all_of') or []
+        if not alls or not all(_line_cond_hit(c, lines) for c in alls):
+            continue
+        if any(_line_cond_hit(c, lines) for c in (rule.get('none_of') or [])):
+            continue
+        return bucket
+    return None
+
+
+def _blank_ct_bucket_map(rows, ct_map, rules):
+    """trans_id -> activation bucket for transactions with NO contract_type-based classification, via the
+    per-org activation_rules (mig 224). Only fires for a tid where NO line resolves to premium/upgrade/byod
+    through contract_type (so it NEVER overrides a labeled classification). EMPTY rules => {} => no-op =>
+    Boost byte-identical. Pure; never raises."""
+    if not rules:
+        return {}
+    txn, classed = {}, set()
+    for r in rows:
+        t = str(r.get('trans_id') or '').strip()
+        if not t:
+            continue
+        txn.setdefault(t, []).append(r)
+        if _resolve_ct_bucket(str(r.get('contract_type') or ''), ct_map):
+            classed.add(t)
+    out = {}
+    for t, lns in txn.items():
+        if t in classed:
+            continue
+        b = _classify_blank_ct_txn(lns, rules)
+        if b:
+            out[t] = b
+    return out
+
+
+def _classification_gaps(rows, acfg):
+    """Report-level VISIBILITY into activation-classification gaps so a tenant's activations never silently
+    read 0 again. Over the (voided/Return-skipped) rows already in memory, returns:
+      unrecognized_contract_types : [{contract_type, lines, transactions}] for NON-blank ct values that
+        resolve to None (not activation/upgrade/byod, not a swap) -> map them in the ct-map.
+      blank_ct_transactions : distinct tids with a blank-ct line and NO ct-based activation on any line.
+      blank_ct_unrecovered  : of those, how many the per-org activation_rules did NOT rescue (still 0).
+      rescued_by_rules      : how many blank-ct tids the activation_rules DID classify.
+      note                  : a human sentence (or None) telling the owner exactly where to map them.
+    DISPLAY ONLY. Pure; never raises. Empty everything (house/Boost, no blank/unknown labels) -> note None."""
+    from collections import Counter
+    ct_map = (acfg or {}).get('contract_type_map')
+    rules = (acfg or {}).get('activation_rules') or []
+    blank_bucket = _blank_ct_bucket_map(rows, ct_map, rules)
+    unrec_lines, unrec_txn = Counter(), {}
+    txn_blank, txn_classed = set(), set()
+    for r in rows:
+        if str(r.get('voided') or '').strip().lower() in _VOID_TOKENS:
+            continue
+        if str(r.get('trans_type') or '').strip() == 'Return':
+            continue
+        tid = str(r.get('trans_id') or '').strip()
+        ct = str(r.get('contract_type') or '').strip()
+        cls = _resolve_ct_bucket(ct, ct_map)
+        if cls:
+            if tid:
+                txn_classed.add(tid)
+        elif ct:
+            if 'swap' not in ct.lower():
+                unrec_lines[ct] += 1
+                if tid:
+                    unrec_txn.setdefault(ct, set()).add(tid)
+        elif tid:
+            txn_blank.add(tid)
+    txn_blank -= txn_classed
+    unrecovered = sorted(t for t in txn_blank if t not in blank_bucket)
+    unrecognized = sorted(
+        [{'contract_type': ct, 'lines': n, 'transactions': len(unrec_txn.get(ct, set()))}
+         for ct, n in unrec_lines.items()], key=lambda x: -x['lines'])
+    parts = []
+    if unrecovered:
+        parts.append(f"{len(unrecovered)} transaction(s) have no contract type and no activation rule matched")
+    if unrecognized:
+        _top = ', '.join(f"{u['contract_type']}×{u['transactions']}" for u in unrecognized[:5])
+        parts.append(f"{len(unrecognized)} contract-type value(s) are unrecognized ({_top})")
+    note = None
+    if parts:
+        note = ('; '.join(parts) + ' — map them in Sales Report ⚙ Classification (contract-type map / '
+                'blank-contract-type activation rules) so they count as activations.')
+    return {'unrecognized_contract_types': unrecognized,
+            'blank_ct_transactions': len(txn_blank),
+            'blank_ct_unrecovered': len(unrecovered),
+            'rescued_by_rules': len(blank_bucket),
+            'note': note}
+
+
+def _canonical_store_key_fn(client, org_id):
+    """Return store_str -> canonical GROUPING key using the shipped store-resolution machinery
+    (_store_code_resolver: store_aliases → store_mapping → storeops roster → leading-number), then
+    _cell_store_key to fold case/whitespace. So 'Ave'/'Avenue'/case/whitespace variants of ONE store
+    that resolve to the same code collapse to ONE key, while two GENUINELY different stores keep
+    distinct keys. org-scoped, config-driven (no hard-coded store names). NEVER raises — on any
+    resolver error it degrades to _cell_store_key (case/whitespace fold only), so the report never 500s.
+    An org with no aliases/mapping is byte-identical to _cell_store_key alone."""
+    try:
+        _resolve = _store_code_resolver(client, org_id)
+    except Exception:
+        _resolve = None
+
+    def _key(store):
+        try:
+            base = _resolve(store) if _resolve else store
+        except Exception:
+            base = store
+        return _cell_store_key(base)
+    return _key
+
+
+def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None):
     """Aggregate raw sales lines → {(store, rep, day): cell}. `acfg` = _accessory_config(...) (the ONE
     accessory classifier). `exec_cfg` (optional _exec_metric_config result) turns ON the Executive-MTD
     extension line-metrics + the configurable Port sub-split; when None those are skipped (Sales Report /
@@ -9481,6 +9694,11 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None):
     # case-insensitive EXACT match on product_desc; empty/unset -> the hard-coded Boost-token fallback below
     # (house conversion byte-identical). See _accessory_config + _BILLPAY_DEFAULT_TOKENS.
     billpay_products = acfg.get('billpay_products') if acfg else None
+    # Per-org blank-contract_type activation rules (mig 224). A tid appears here ONLY when no line of it
+    # classifies via contract_type — so this SUPPLEMENTS, never overrides, the ct classifier. Empty rules
+    # (the house/Boost default) -> {} -> the supplement below is a no-op (BYTE-IDENTICAL).
+    _act_rules = acfg.get('activation_rules') if acfg else None
+    blank_bucket = _blank_ct_bucket_map(rows, ct_map, _act_rules)
     agg = {}
     for r in rows:
         # ── THE canonical skip rules — shared by all three (was three slightly different predicates).
@@ -9492,6 +9710,12 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None):
         if not rep or rep.lower() == 'admin':
             continue
         store = str(r.get('store') or '').strip()
+        # Canonical store GROUPING key (P0 double-listing fix): `store_key` (from the caller — the shipped
+        # _store_code_resolver → _cell_store_key) collapses spelling variants of ONE store ('957
+        # Pennsylvania Ave' / 'Avenue', case, whitespace) into a single group so a store can't render as
+        # two rows. DEFAULT None => the raw stripped string => BYTE-IDENTICAL to before. The DISPLAY name
+        # stays the first-seen RAW spelling (drill-down matches the DB value normalized).
+        sk = store_key(store) if store_key else store
         date = str(r.get('trans_date') or '')[:10]
         tid = str(r.get('trans_id') or '').strip()
         ct = str(r.get('contract_type') or '')
@@ -9499,7 +9723,7 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None):
         dept = str(r.get('department') or '').strip()
         ext = safe_float(r.get('ext_price'))
         gp = safe_float(r.get('gp'))
-        k = (store, rep, date)
+        k = (sk, rep, date)
         a = agg.get(k)
         if not a:
             a = agg[k] = {'store': store, 'salesperson': rep, 'trans_date': date, 'login': None,
@@ -9529,6 +9753,16 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None):
             # exec_metric_config-configurable; only needed when exec_cfg is present (Exec MTD).
             if exec_cfg and _exec_act_class(ct, act_rules) == 'port':
                 a['_port'].add(tid)
+        elif tid and not _cls and tid in blank_bucket:
+            # Blank-contract_type transaction rescued by the per-org activation_rules (mig 224). DISTINCT-
+            # txn like the ct branches; the tid was proven above to have NO ct classification on any line.
+            _bb = blank_bucket[tid]
+            if _bb == 'byod':
+                a['_byod'].add(tid)
+            elif _bb == 'upgrade':
+                a['_upg'].add(tid)
+            elif _bb == 'premium':
+                a['_prem'].add(tid)
         # Swaps — distinct-txn, contract_type contains 'swap' (independent tally; changes none of the above).
         if tid and 'swap' in ctl:
             a['_swap'].add(tid)
@@ -9880,12 +10114,13 @@ def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed', 
     # as the Sales Report + Executive MTD (see _sales_cell_agg). Targets then re-keys each cell to the
     # canonical store_code (so scope_achieved_mtd matches the Daily Target's store_code) and rep.upper(),
     # merging any raw-store spellings that resolve to the same code by UNIONing the distinct-txn sets.
-    cells = _sales_cell_agg(rows, acfg)
+    cells = _sales_cell_agg(rows, acfg, store_key=_canonical_store_key_fn(client, org_id))
     agg = {}
     for (store, rep, date), a in cells.items():
         if not date:
             continue
-        code = _resolve_code(store)
+        # `store` is now the canonical grouping key; resolve the code off the display RAW spelling.
+        code = _resolve_code(a.get('store') or store)
         k = (code, rep.upper(), date)
         o = agg.get(k)
         if not o:
@@ -10967,7 +11202,7 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     # cell, so SUMMING the per-cell distinct-txn counts across a store's cells == that store's distinct-txn
     # total. Activation = premium−port (Port is a sub-split of premium); Total Activation = prem+byod+upg,
     # which EQUALS the Sales Report's (activations+byod+upgrades) over the same rows.
-    cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg)
+    cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg, store_key=_canonical_store_key_fn(client, org_id))
 
     def _blank():
         return {'activation': 0, 'port': 0, 'byod': 0, 'upgrade': 0, 'total_phones': 0,
@@ -10977,7 +11212,12 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         if cut and date and date > cut:
             continue
         prem, port = len(a['_prem']), len(a['_port'])
-        for d in (by_store.setdefault(st or '—', _blank()), by_emp.setdefault(rep or '—', _blank())):
+        # by_store is keyed on the CANONICAL store key `st` (so spelling variants collapse to one row),
+        # but LABELLED with the first-seen RAW display spelling `a['store']` (not the lowercased key).
+        ds = by_store.setdefault(st or '—', _blank())
+        if '_name' not in ds:
+            ds['_name'] = a.get('store') or st
+        for d in (ds, by_emp.setdefault(rep or '—', _blank())):
             d['activation'] += prem - port
             d['port'] += port
             d['byod'] += len(a['_byod'])
@@ -11004,7 +11244,8 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
                 'total_protect': d['protect']}
 
     def _finish(agg, label_key):
-        out = [_row(n, label_key, d) for n, d in agg.items()]
+        # by_store rows carry a '_name' display label (raw spelling); by_employee rows use the rep key.
+        out = [_row(d.get('_name', n), label_key, d) for n, d in agg.items()]
         out.sort(key=lambda x: -x['total_activation'])
         return out
 
