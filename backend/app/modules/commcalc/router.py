@@ -6428,6 +6428,164 @@ async def mrc_mapping_confirm(body: dict, authorization: str = Header(default=""
     return {"saved": saved}
 
 
+# ── BULK classify + write-in filter + cross-menu conflict guard (owner directive 2026-07-18) ─────────
+# Assign ONE classification (category) to MANY plan/product MRC mappings in a single call — the bulk
+# companion to /mrc-mapping/confirm, driven by the write-in filter on the plan-installments MRC card
+# ("type 'rtr' → all RTR plans come up → assign one category to all"). Two design facts make this safe:
+#   1. product_mrc.classification is DISPLAY/config only — the installment PAY engine classifies each line
+#      LIVE via classify_line() and reads the catalog only for the $ MRC (mrc), so bulk-setting the
+#      classification never changes a payout number. Nothing recalculates until Run Calculation.
+#   2. product_mrc.classification and item_mapping.sales_category share the SAME mig-210 sales vocabulary,
+#      so the cross-menu guard compares them DIRECTLY (no lossy crosswalk). The guard is READ-ONLY: it
+#      never writes item_mapping (which WOULD move money — item_mapping.sales_category feeds the month-1
+#      activation-payment pay gate + KPI/sales reporting), so two-way AUTO-sync is deferred to the owner.
+_MRC_SHARED_VOCAB = {"accessory", "activation", "upgrade", "swap", "bill_payment", "rebate", "misc_other"}
+
+
+def _mrc_norm(s):
+    """Normalize a product/category string for matching: lowercased, single-spaced, trimmed."""
+    return re.sub(r"\s+", " ", str(s or "").strip().lower())
+
+
+def _mrc_crossmenu_conflicts(item_rows, plans, classification):
+    """READ-ONLY cross-menu guard. For each requested plan, find item_mapping rows for the SAME product
+    (normalized equality on item_key OR item_desc) whose sales_category is a DIFFERENT, CONFIDENT value in
+    the shared sales vocabulary. Never writes anything, never moves a money number. Returns a list of
+    {plan, assigning, other_menu, other_key, other_category}. Conservative by design: exact normalized
+    match only (no substring) and both sides must be confident (in-vocab and not 'misc_other') to flag —
+    so a spurious block is unlikely, and any block is user-overridable by fixing the other menu."""
+    want = _mrc_norm(classification)
+    if want not in _MRC_SHARED_VOCAB or want == "misc_other":
+        return []  # assigning an unknown/"other" category is non-committal — never conflicts
+    idx = {}  # normalized item_key/item_desc -> [(row, sales_category)]
+    for r in (item_rows or []):
+        sc = _mrc_norm(r.get("sales_category"))
+        if sc not in _MRC_SHARED_VOCAB or sc == "misc_other":
+            continue
+        for k in (r.get("item_key"), r.get("item_desc")):
+            nk = _mrc_norm(k)
+            if nk:
+                idx.setdefault(nk, []).append((r, sc))
+    conflicts, seen = [], set()
+    for it in (plans or []):
+        raw_plan = (it.get("plan") if isinstance(it, dict) else it)
+        np = _mrc_norm(raw_plan)
+        if not np:
+            continue
+        for r, sc in idx.get(np, []):
+            if sc != want:
+                sig = (np, r.get("id") or r.get("item_key"))
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                conflicts.append({
+                    "plan": str(raw_plan).strip(),
+                    "assigning": classification,
+                    "other_menu": "Item / Model Mapping",
+                    "other_key": r.get("item_desc") or r.get("item_key"),
+                    "other_category": sc,
+                })
+    return conflicts
+
+
+@router.post("/mrc-mapping/bulk-classify")
+async def mrc_mapping_bulk_classify(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Assign ONE classification to MANY product_mrc mappings in a single round trip (bulk companion to
+    /mrc-mapping/confirm). Body: {items:[{plan, mrc?, source_desc?, prefill_mrc?} | str], classification,
+    carrier_id?, match_op?, dry_run?}. CROSS-MENU GUARD: every plan is checked against the Item / Model
+    Mapping (item_mapping.sales_category, shared vocab); if ANY same product already carries a DIFFERENT
+    category there the WHOLE batch is blocked (409, writes nothing) with the conflict list — the user
+    resolves the divergence on the other menu (two-way auto-sync is an owner decision: writing item_mapping
+    moves the activation-payment pay gate + KPI numbers). dry_run=true returns the guard result + a
+    would-apply count without writing. Update-or-insert by id so an existing MRC dollar is NEVER clobbered.
+    Money-safe: classification is display/config, not a pay input; nothing recalculates until Run
+    Calculation. Admin-gated (money config surface)."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    classification = (body.get("classification") or "").strip()
+    if not classification:
+        raise HTTPException(400, "classification is required")
+    carrier_id = body.get("carrier_id") or None
+    match_op = (body.get("match_op") or "equals").strip() or "equals"
+    dry_run = bool(body.get("dry_run"))
+    # de-dupe the requested plans (case-insensitive), preserving any per-plan mrc/prefill payload
+    items, seen = [], set()
+    for it in (body.get("items") or []):
+        plan = str((it.get("plan") if isinstance(it, dict) else it) or "").strip()
+        if not plan or plan.lower() in seen:
+            continue
+        seen.add(plan.lower())
+        items.append(it if isinstance(it, dict) else {"plan": plan})
+    if not items:
+        raise HTTPException(400, "no plans selected")
+    client = sb()
+    # cross-menu conflict guard (READ-ONLY — never writes item_mapping, never moves money)
+    item_rows = list(_load_item_map(client, org_id).values())
+    conflicts = _mrc_crossmenu_conflicts(item_rows, items, classification)
+    if dry_run:
+        return {"ok": True, "count": len(items), "conflicts": conflicts,
+                "would_apply": 0 if conflicts else len(items)}
+    if conflicts:
+        raise HTTPException(status_code=409, detail={
+            "error": "cross_menu_conflict",
+            "message": (f"{len(conflicts)} selected product(s) already carry a different category on the "
+                        "Item / Model Mapping menu. Resolve the divergence there first, or change your "
+                        "selection — nothing was saved."),
+            "conflicts": conflicts, "applied": 0})
+    # preload existing rows so we UPDATE by id (never clobber an existing mrc $) or INSERT fresh
+    try:
+        existing_rows = (client.schema('commcalc').table('product_mrc')
+                         .select('id,carrier_id,plan_pattern,match_op,mrc').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        raise HTTPException(400, "Run migration 074_product_mrc.sql first.")
+    existing = {((e.get('carrier_id') or ''), _mrc_norm(e.get('plan_pattern')), (e.get('match_op') or 'equals')): e
+                for e in existing_rows}
+    applied = 0
+    results = []
+    for it in items:
+        plan = str(it.get('plan') or '').strip()
+        ex = existing.get(((carrier_id or ''), _mrc_norm(plan), match_op))
+        try:
+            if ex:
+                patch = {"classification": classification, "confirmed": True, "is_active": True}
+                if it.get("mrc") is not None:
+                    patch["mrc"] = safe_float(it.get("mrc"))
+                client.schema('commcalc').table('product_mrc').update(patch)                     .eq('id', ex['id']).eq('org_id', org_id).execute()
+                applied += 1
+                results.append({"plan": plan, "saved": True, "action": "updated"})
+            else:
+                row = {"org_id": org_id, "carrier_id": carrier_id, "plan_pattern": plan, "match_op": match_op,
+                       "mrc": safe_float(it.get("mrc")) if it.get("mrc") is not None else 0.0,
+                       "priority": 100, "is_active": True, "confirmed": True, "classification": classification}
+                if it.get("source_desc") is not None:
+                    row["source_desc"] = it.get("source_desc")
+                if it.get("prefill_mrc") is not None:
+                    row["prefill_mrc"] = safe_float(it.get("prefill_mrc"))
+                client.schema('commcalc').table('product_mrc').insert(row).execute()
+                applied += 1
+                results.append({"plan": plan, "saved": True, "action": "inserted"})
+        except Exception as e:
+            # graceful degrade (pre-mig-201: classification/confirmed cols absent) — retry money-only so
+            # the mapping still lands; report per-row so a bad row never aborts the batch.
+            try:
+                if ex and it.get("mrc") is not None:
+                    client.schema('commcalc').table('product_mrc').update({"mrc": safe_float(it.get("mrc")), "is_active": True})                         .eq('id', ex['id']).eq('org_id', org_id).execute()
+                    applied += 1
+                    results.append({"plan": plan, "saved": True, "action": "updated", "note": "without classification (pre-mig-201)"})
+                elif not ex:
+                    client.schema('commcalc').table('product_mrc').insert({
+                        "org_id": org_id, "carrier_id": carrier_id, "plan_pattern": plan, "match_op": match_op,
+                        "mrc": safe_float(it.get("mrc")) if it.get("mrc") is not None else 0.0,
+                        "priority": 100, "is_active": True}).execute()
+                    applied += 1
+                    results.append({"plan": plan, "saved": True, "action": "inserted", "note": "without classification (pre-mig-201)"})
+                else:
+                    results.append({"plan": plan, "saved": False, "error": str(e)})
+            except Exception as e2:
+                results.append({"plan": plan, "saved": False, "error": str(e2)})
+    return {"ok": True, "applied": applied, "classification": classification, "results": results, "conflicts": []}
+
+
 # ── Multi-month payout SCHEDULES (migration 057) — generic per-carrier installment payouts ────────
 # A schedule spreads one activation's commission over N months (flat or %MRC), with months 2..N gated
 # on the bill being paid + residual received that month. With no schedule, payouts are single-month
