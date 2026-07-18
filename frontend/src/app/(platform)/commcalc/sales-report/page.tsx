@@ -233,6 +233,7 @@ export default function SalesReportPage() {
             Reading <b>{data.source_meta.primary === 'daily_sales_feed' ? 'daily email feed' : 'monthly raw_sales'}</b>
             {' '}({data.shown_rows ?? 0} rows shown · feed {data.feed_rows ?? 0} · raw_sales {data.raw_rows ?? 0})
             {(data.filled_days || []).length > 0 && <> · pulled <b>{(data.filled_days || []).length}</b> extra day(s) from raw_sales that the feed didn’t have</>}
+            {(data.source_meta.completeness_rows ?? 0) > 0 && <> · recovered <b>{data.source_meta.completeness_rows}</b> sale line(s) present in raw_sales that the feed missed on a shared store-day</>}
           </span>
           {data.org_id && <span style={{ color: 'var(--text3)' }}>org <code style={{ fontSize: 11 }}>{String(data.org_id).slice(0, 8)}…</code></span>}
         </div>

@@ -9163,6 +9163,21 @@ def _cell_store_key(store):
     return ' '.join(str(store or '').split()).casefold()
 
 
+def _norm_sale_tid(v):
+    """Normalize a trans_id for the completeness dedup, MIRRORING the ingest normalization
+    (upload_file / _daily_feed_map: `str(Trans ID).replace('.0','').strip()`), so a float-formatted
+    '1624.0' and a plain '1624' — which a feed export and a monthly export can spell differently —
+    can't split into two 'distinct' transactions and double-count. Also collapses leading-zero padding
+    for an all-digit id ('01624' == '1624'). The row's ORIGINAL trans_id is preserved in the output;
+    this only normalizes the DEDUP KEY. Pure; never raises."""
+    t = str(v or '').strip()
+    if t.endswith('.0'):
+        t = t[:-2]
+    if t.isdigit():
+        t = t.lstrip('0') or '0'
+    return t
+
+
 def _merge_cells_richer(prows, orows, cell_fn, min_rows=_RICHER_CELL_MIN_ROWS, ratio=_RICHER_CELL_RATIO):
     """Per-(day × store)-CELL merge of a PRIMARY and OTHER row set — the store-aware successor to
     `_merge_days_richer`. The primary keeps every cell it has EXCEPT a cell whose primary copy is
@@ -9301,6 +9316,47 @@ def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
     # mask the other stores' rows on a day it leads (the luxelink July 2026 incident).
     merged, richer_cells, filled_cells = _merge_cells_richer(prows, orows, _cell)
 
+    # ── COMPLETENESS backfill (2026-07-18; luxelink '957 Pennsylvania Ave' undercount) ──────────
+    # `_merge_cells_richer` is winner-take-all PER (day x store) CELL: on a cell the feed leads, every
+    # raw_sales transaction whose trans_id the feed lacked for that cell is DROPPED — the documented
+    # 'narrow completeness edge' (see _fetch_actuals). For a tenant whose hourly feed is chronically
+    # INCOMPLETE (luxelink) that hides real raw_sales transactions on a store-day the feed also sold.
+    # The cell-grain merge above still decides source COVERAGE + the degradation guard; here we UNION
+    # back any raw_sales row whose (store-cell, trans_id) isn't already in the merged set.
+    #   • M2 (raw-only source): the backfill runs ONLY when the OTHER source is raw_sales — i.e. an
+    #     open month the FEED leads. On a raw_sales-led month (closed month, or the feed-has-no-Category
+    #     open-month case) we NEVER resurrect a feed-only trans_id into the authoritative raw-led view
+    #     (a transaction deleted from the POS must stay gone).
+    #   • M1 (store-scoped key): the dedup key is (canonical store cell, normalized trans_id), NOT a
+    #     bare tenant-wide trans_id — otherwise feed '1624' @ Store A would suppress a REAL raw-only
+    #     '1624' @ Store B and the bug would persist cross-store.
+    #   • m2 (id format): `_norm_sale_tid` mirrors ingest ('1624.0'/'01624' == '1624') so a format
+    #     skew between the feed and the monthly export can't double-count.
+    # A transaction present in BOTH sources keeps the FEED copy (feed leads) — never double-counted
+    # (same philosophy as _sales_rows_union_txn). In the healthy feed-only / fully-promoted state
+    # (raw_sales (store,tid) subset of the feed) NOTHING is added -> byte-identical (Boost unchanged).
+    # Blank trans_ids can't be deduped and are left to the cell-grain decision.
+    # LINE-SET LIMITATION (n2): dedup is per TRANSACTION — for a trans_id present in BOTH sources the
+    # feed's line set wins, so if raw_sales holds MORE line items for that same transaction the extra
+    # lines are NOT merged in (the materially-degraded-cell case is handled separately by the richer
+    # guard). The fix targets whole raw-ONLY transactions, which is the reported bug. Pure; never raises.
+    completeness = []
+    if other == 'raw_sales':
+        def _bk_key(r):
+            return (_cell_store_key(r.get('store')), _norm_sale_tid(r.get('trans_id')))
+        _merged_keys = {_bk_key(r) for r in merged if _norm_sale_tid(r.get('trans_id'))}
+        completeness = [r for r in orows
+                        if _norm_sale_tid(r.get('trans_id')) and _bk_key(r) not in _merged_keys]
+        if completeness:
+            merged = merged + completeness
+    # n1: the transparency count reflects real recovered SALES — exclude voided / Return lines (they
+    # never count as sales in _sales_cell_agg anyway). The rows are still in `merged` (the agg drops
+    # them), only the surfaced number is sales-only.
+    completeness_sales = sum(
+        1 for r in completeness
+        if str(r.get('voided') or '').strip().lower() not in _VOID_TOKENS
+        and str(r.get('trans_type') or '').strip() != 'Return')
+
     feed_rows = len(prows) if primary == 'daily_sales_feed' else len(orows)
     raw_rows = len(prows) if primary == 'raw_sales' else len(orows)
     filled_set, richer_set = set(filled_cells), set(richer_cells)
@@ -9326,6 +9382,7 @@ def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
         'filled_rows': fill_rows, 'filled_days': filled_days, 'filled_cells': len(filled_cells),
         'richer_rows': richer_rows, 'richer_days': richer_days, 'richer_cells': len(richer_cells),
         'shown_rows': len(merged),
+        'completeness_rows': completeness_sales,
         'stores_shown': len(shown_stores), 'primary_stores': len(p_stores),
         'other_stores': len(o_stores), 'stores_from_other': len(stores_from_other),
     }

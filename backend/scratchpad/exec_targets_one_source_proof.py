@@ -13,6 +13,14 @@ Drives the REAL router functions over an in-memory FakeClient (house style; no D
   (d) the REAL luxelink Total-Wireless sample driven through all three shared paths → they agree.
 
 Run:  cd backend && python3 scratchpad/exec_targets_one_source_proof.py
+
+UPDATED 2026-07-18 (agent/commission/sales-capture-fix): `_sales_rows_union` gained a dedup-by-trans_id
+COMPLETENESS backfill (luxelink '957 Pennsylvania Ave' undercount). The winner-take-all cell-grain merge
+used to DROP a raw_sales transaction whose trans_id the feed lacked on a feed-led store-day — but that IS a
+real sale the incomplete hourly feed missed (the owner's bug). The fix keeps the feed's copy of SHARED
+trans_ids (a STALE duplicate like 'A' below, same trans_id, is still dropped) and only surfaces raw-ONLY
+trans_ids ('Z' below). The all-three-surfaces-agree invariant is UNCHANGED (they call the same union); the
+ground-truth values here rise by exactly the recovered raw-only transaction. See the updated (a0)/(a1)/(b).
 """
 import os, sys, asyncio, calendar as _cal
 from datetime import date as _date
@@ -152,11 +160,13 @@ feed = [
     row('S1', 'ALICE', 'RET', 'Activation', ext=100.0, tt='Return'),     # Return → dropped
     row('S1', 'admin', 'ADM', 'Activation', ext=100.0),                  # 'admin' rep → dropped
 ]
-# RAW store S1/day10 (feed leads the cell → these are DROPPED, incl. a STALE copy of A) + RAW store
+# RAW store S1/day10 (feed leads the cell): 'A' shares the feed's trans_id → its STALE raw copy is
+# DROPPED by the trans_id dedup (feed wins shared trans_ids); 'Z' is a raw-ONLY trans_id the feed missed
+# → the completeness backfill now SURFACES it (a real sale, the luxelink undercount fix). + RAW store
 # S2/day10 (feed has NO S2 rows → this cell is FILLED from raw): D = Upgrade, E = accessory.
 raw = [
-    row('S1', 'ALICE', 'A', 'Activation', ext=999.0, period=MONTHNAME),   # stale dup of A → dropped
-    row('S1', 'ZED', 'Z', 'Activation', ext=999.0, period=MONTHNAME),     # feed-cell extra → dropped
+    row('S1', 'ALICE', 'A', 'Activation', ext=999.0, period=MONTHNAME),   # stale dup of A (shared id) → dropped
+    row('S1', 'ZED', 'Z', 'Activation', ext=999.0, period=MONTHNAME),     # raw-only trans_id → now backfilled
     row('S2', 'DAN', 'D', 'Upgrade', ext=100.0, period=MONTHNAME),
     row('S2', 'DAN', 'E', '', cat='Accessory', ext=60.0, period=MONTHNAME),
 ]
@@ -184,15 +194,18 @@ GT = {
 print("(a0) the cell-grain union resolved the feed↔raw disagreement (feed wins S1, raw fills S2)")
 shown_stores = {r['store'] for r in urows}
 check("union shows BOTH stores (S1 feed-led, S2 filled from raw)", shown_stores == {'S1', 'S2'}, shown_stores)
-check("S1's stale raw dup of A + extra Z were DROPPED (feed won the cell)",
-      not any(r['trans_id'] in ('Z',) or (r['trans_id'] == 'A' and r['ext_price'] == 999.0) for r in urows))
+check("S1's STALE raw dup of A (shared trans_id) was DROPPED (feed wins shared ids)",
+      not any(r['trans_id'] == 'A' and r['ext_price'] == 999.0 for r in urows))
+check("S1's raw-ONLY Z (feed missed it) is now BACKFILLED (completeness fix)",
+      any(r['trans_id'] == 'Z' for r in urows))
 check("S2 (feed-less) filled from raw_sales (D + E present)",
       {r['trans_id'] for r in urows if r['store'] == 'S2'} == {'D', 'E'})
 
 print("\n(a1) INDEPENDENT hand model of the resolved union == the shared _sales_cell_agg rollup")
-# valid txns: A(prem), P(prem+port), B(byod), U(upg), SW(swap-only), ACC(acc); S2: D(upg), E(acc)
-HAND = {'txns': 8, 'activations': 2, 'byod': 1, 'upgrades': 2, 'swaps': 1,
-        'accessory_rev': 100.0, 'revenue': 750.0, 'gp': 180.0}
+# valid txns: A(prem), P(prem+port), B(byod), U(upg), SW(swap-only), ACC(acc), Z(prem, raw-only backfill);
+# S2: D(upg), E(acc). Z adds one activation/txn + its ext 999 / gp 20 (the recovered raw-only sale).
+HAND = {'txns': 9, 'activations': 3, 'byod': 1, 'upgrades': 2, 'swaps': 1,
+        'accessory_rev': 100.0, 'revenue': 1749.0, 'gp': 200.0}
 for k, v in HAND.items():
     check(f"ground-truth {k} == {v}", GT[k] == v, f"got {GT[k]}")
 
@@ -253,8 +266,9 @@ ex_full = R._exec_mtd(cb, ORG, OPEN, today=_date(_T.year, _T.month, DIM))  # mon
 sr_act = sr_b['totals']['activations']
 cut_act = ex_cut['by_location']['total']['activation'] + ex_cut['by_location']['total']['port']
 full_act = ex_full['by_location']['total']['activation'] + ex_full['by_location']['total']['port']
-check("Sales Report (no cut) counts the post-cut FUT row (activations == 3)", sr_act == 3, f"got {sr_act}")
-check("Exec MTD (cut=15th) EXCLUDES the day-20 FUT row (activations == 2)", cut_act == 2, f"got {cut_act}")
+# base activations now 3 (A, P + the backfilled raw-only Z, all on day10) + FUT (day20) = 4 with no cut.
+check("Sales Report (no cut) counts the post-cut FUT row (activations == 4)", sr_act == 4, f"got {sr_act}")
+check("Exec MTD (cut=15th) EXCLUDES the day-20 FUT row (activations == 3)", cut_act == 3, f"got {cut_act}")
 check("difference is EXACTLY the one post-cut activation", sr_act - cut_act == 1)
 check("Exec MTD (today=month-end) re-includes FUT → equals Sales Report (3)", full_act == sr_act, f"{full_act} vs {sr_act}")
 
