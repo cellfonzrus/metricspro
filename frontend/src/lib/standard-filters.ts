@@ -24,6 +24,13 @@ export type FieldAccessors<T> = {
 
 const norm = (v: any): string => (v == null ? '' : String(v)).trim()
 
+/** Case-insensitive comparison key (OWNER DIRECTIVE 2026-07-18 "do a case insensitive match"). Trim +
+ *  lowercase. Used ONLY for equality/dedup — DISPLAY labels always keep their original (first-seen) casing.
+ *  Consequence: case-variant duplicates of one store/rep collapse to a single option, and picking it now
+ *  matches every casing of that value (previously the other variant's rows were silently excluded). For
+ *  data whose casing is already consistent this is a no-op (fold(x) vs fold(y) === x vs y). */
+const foldKey = (v: any): string => norm(v).toLowerCase()
+
 /** A row date normalized to YYYY-MM-DD (best-effort; '' when unparseable). */
 export function ymd(v: any): string {
   const s = norm(v)
@@ -62,9 +69,12 @@ function periodOk(rowDate: string, sel: StandardFilterValue): boolean {
 }
 
 export function matchesStandardFilter<T>(row: T, sel: StandardFilterValue, acc: FieldAccessors<T>): boolean {
-  if (sel.stores.length && acc.store && !sel.stores.includes(norm(acc.store(row)))) return false
-  if (sel.markets.length && acc.market && !sel.markets.includes(norm(acc.market(row)))) return false
-  if (sel.reps.length && acc.rep && !sel.reps.includes(norm(acc.rep(row)))) return false
+  // Case-insensitive membership (foldKey): a selection stored with any casing matches a row of any casing,
+  // so a case-variant of a selected store/rep is INCLUDED (was silently excluded), and a pre-fix selection
+  // held in component state (original casing) still round-trips after option dedupe.
+  if (sel.stores.length && acc.store) { const k = foldKey(acc.store(row)); if (!sel.stores.some(s => foldKey(s) === k)) return false }
+  if (sel.markets.length && acc.market) { const k = foldKey(acc.market(row)); if (!sel.markets.some(m => foldKey(m) === k)) return false }
+  if (sel.reps.length && acc.rep) { const k = foldKey(acc.rep(row)); if (!sel.reps.some(r => foldKey(r) === k)) return false }
   if (acc.date && (sel.period || sel.periodTo) && !periodOk(acc.date(row) as string, sel)) return false
   return true
 }
@@ -79,17 +89,19 @@ export function filterRows<T>(rows: T[], sel: StandardFilterValue, acc: FieldAcc
 export function optionsFromRows<T>(
   rows: T[], acc: FieldAccessors<T> & { repEmail?: (r: T) => string | null | undefined },
 ): { stores: string[]; markets: string[]; reps: { id: string; label: string; sublabel?: string }[] } {
-  const stores = new Set<string>(), markets = new Set<string>()
-  const reps = new Map<string, string>()   // rep name → email (best-effort disambiguation)
+  // foldKey → first-seen ORIGINAL-casing display value. Dedup is case-insensitive (one "Store A"/"store a"
+  // option, not two) but the label shown is whatever casing appeared first in the rows.
+  const stores = new Map<string, string>(), markets = new Map<string, string>()
+  const reps = new Map<string, { label: string; email: string }>()  // foldKey → first-seen name + email
   for (const r of rows) {
-    if (acc.store) { const v = norm(acc.store(r)); if (v) stores.add(v) }
-    if (acc.market) { const v = norm(acc.market(r)); if (v) markets.add(v) }
-    if (acc.rep) { const v = norm(acc.rep(r)); if (v && !reps.has(v)) reps.set(v, norm(acc.repEmail?.(r))) }
+    if (acc.store) { const v = norm(acc.store(r)); if (v) { const k = foldKey(v); if (!stores.has(k)) stores.set(k, v) } }
+    if (acc.market) { const v = norm(acc.market(r)); if (v) { const k = foldKey(v); if (!markets.has(k)) markets.set(k, v) } }
+    if (acc.rep) { const v = norm(acc.rep(r)); if (v) { const k = foldKey(v); if (!reps.has(k)) reps.set(k, { label: v, email: norm(acc.repEmail?.(r)) }) } }
   }
   return {
-    stores: [...stores].sort(),
-    markets: [...markets].sort(),
-    reps: [...reps.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([id, email]) => (email ? { id, label: id, sublabel: email } : { id, label: id })),
+    stores: [...stores.values()].sort(),
+    markets: [...markets.values()].sort(),
+    reps: [...reps.values()].sort((a, b) => a.label.localeCompare(b.label))
+      .map(({ label, email }) => (email ? { id: label, label, sublabel: email } : { id: label, label })),
   }
 }

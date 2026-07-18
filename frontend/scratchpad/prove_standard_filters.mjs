@@ -6,6 +6,7 @@ function ok(name, cond) { if (cond) { pass++ } else { fail++; console.log('  FAI
 
 // ── verbatim re-impl ────────────────────────────────────────────────────────────────────────────
 const norm = v => (v == null ? '' : String(v)).trim()
+const foldKey = v => norm(v).toLowerCase()   // OWNER 2026-07-18 case-insensitive key (display keeps orig casing)
 function ymd(v) {
   const s = norm(v); if (!s) return ''
   const m = s.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/)
@@ -27,23 +28,23 @@ function periodOk(rowDate, sel) {
   return true
 }
 function matchesStandardFilter(row, sel, acc) {
-  if (sel.stores.length && acc.store && !sel.stores.includes(norm(acc.store(row)))) return false
-  if (sel.markets.length && acc.market && !sel.markets.includes(norm(acc.market(row)))) return false
-  if (sel.reps.length && acc.rep && !sel.reps.includes(norm(acc.rep(row)))) return false
+  if (sel.stores.length && acc.store) { const k = foldKey(acc.store(row)); if (!sel.stores.some(s => foldKey(s) === k)) return false }
+  if (sel.markets.length && acc.market) { const k = foldKey(acc.market(row)); if (!sel.markets.some(m => foldKey(m) === k)) return false }
+  if (sel.reps.length && acc.rep) { const k = foldKey(acc.rep(row)); if (!sel.reps.some(r => foldKey(r) === k)) return false }
   if (acc.date && (sel.period || sel.periodTo) && !periodOk(acc.date(row), sel)) return false
   return true
 }
 const filterRows = (rows, sel, acc) => rows.filter(r => matchesStandardFilter(r, sel, acc))
 function optionsFromRows(rows, acc) {
-  const stores = new Set(), markets = new Set(), reps = new Map()
+  const stores = new Map(), markets = new Map(), reps = new Map()
   for (const r of rows) {
-    if (acc.store) { const v = norm(acc.store(r)); if (v) stores.add(v) }
-    if (acc.market) { const v = norm(acc.market(r)); if (v) markets.add(v) }
-    if (acc.rep) { const v = norm(acc.rep(r)); if (v && !reps.has(v)) reps.set(v, norm(acc.repEmail?.(r))) }
+    if (acc.store) { const v = norm(acc.store(r)); if (v) { const k = foldKey(v); if (!stores.has(k)) stores.set(k, v) } }
+    if (acc.market) { const v = norm(acc.market(r)); if (v) { const k = foldKey(v); if (!markets.has(k)) markets.set(k, v) } }
+    if (acc.rep) { const v = norm(acc.rep(r)); if (v) { const k = foldKey(v); if (!reps.has(k)) reps.set(k, { label: v, email: norm(acc.repEmail?.(r)) }) } }
   }
   return {
-    stores: [...stores].sort(), markets: [...markets].sort(),
-    reps: [...reps.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([id, email]) => (email ? { id, label: id, sublabel: email } : { id, label: id })),
+    stores: [...stores.values()].sort(), markets: [...markets.values()].sort(),
+    reps: [...reps.values()].sort((a, b) => a.label.localeCompare(b.label)).map(({ label, email }) => (email ? { id: label, label, sublabel: email } : { id: label, label })),
   }
 }
 
@@ -89,6 +90,45 @@ ok('isActive true w/ store', isStandardFilterActive({ ...emptyStandardFilter(), 
 ok('isActive period only counts in range mode', !isStandardFilterActive({ period: '2026-07', periodTo: '', stores: [], markets: [], reps: [] }) && isStandardFilterActive({ period: '2026-07-01', periodTo: '', stores: [], markets: [], reps: [] }, true))
 // 12) accessor absent → that dimension ignored (surface without a store column isn't wrongly emptied)
 ok('missing accessor ignored', filterRows(rows, { ...emptyStandardFilter(), stores: ['S1'] }, { rep: r => r.rep }).length === 4)
+
+// ── OWNER DIRECTIVE 2026-07-18 "do a case insensitive match" (NEW) ──────────────────────────────
+const cvRows = [
+  { store: 'Main St', market: 'North', rep: 'Ann Lee', email: 'ann@x.com', d: '2026-07-01' },
+  { store: 'MAIN ST', market: 'north', rep: 'ANN LEE', email: 'ann2@x.com', d: '2026-07-02' },
+  { store: 'main st', market: 'North', rep: 'ann lee', email: '', d: '2026-07-03' },
+  { store: 'Elm Ave', market: 'South', rep: 'Bob Ray', email: 'bob@x.com', d: '2026-07-04' },
+]
+const cvAcc = { store: r => r.store, market: r => r.market, rep: r => r.rep, date: r => r.d, repEmail: r => r.email }
+
+// (a) variant dedupe — case-variants collapse to ONE option, first-seen casing kept as the label
+{
+  const o = optionsFromRows(cvRows, cvAcc)
+  ok('fold: store variants collapse to one option (first-seen casing)', eq(o.stores, ['Elm Ave', 'Main St']))
+  ok('fold: market variants collapse (North/north → one)', eq(o.markets, ['North', 'South']))
+  ok('fold: rep variants collapse to one option, first-seen name + first-seen email',
+    eq(o.reps, [{ id: 'Ann Lee', label: 'Ann Lee', sublabel: 'ann@x.com' }, { id: 'Bob Ray', label: 'Bob Ray', sublabel: 'bob@x.com' }]))
+}
+// (b) case-insensitive match — selecting ONE casing now INCLUDES all variant rows (were silently excluded)
+ok('fold: select "Main St" matches all 3 casings', filterRows(cvRows, { ...emptyStandardFilter(), stores: ['Main St'] }, cvAcc).length === 3)
+ok('fold: select lowercase "main st" also matches all 3', filterRows(cvRows, { ...emptyStandardFilter(), stores: ['main st'] }, cvAcc).length === 3)
+ok('fold: rep "ANN LEE" matches all 3 Ann rows', filterRows(cvRows, { ...emptyStandardFilter(), reps: ['ANN LEE'] }, cvAcc).length === 3)
+ok('fold: market "NORTH" matches North + north (3 rows)', filterRows(cvRows, { ...emptyStandardFilter(), markets: ['NORTH'] }, cvAcc).length === 3)
+// (c) selected-value round-trip — option picked from the deduped list, and a pre-fix stored casing, both match
+{
+  const o = optionsFromRows(cvRows, cvAcc)
+  const pickedStore = o.stores.find(s => foldKey(s) === foldKey('main st'))   // 'Main St'
+  ok('fold: option value picked from the deduped list matches every variant row', filterRows(cvRows, { ...emptyStandardFilter(), stores: [pickedStore] }, cvAcc).length === 3)
+  ok('fold: a PRE-FIX stored selection ("MAIN ST") still round-trips after dedupe', filterRows(cvRows, { ...emptyStandardFilter(), stores: ['MAIN ST'] }, cvAcc).length === 3)
+}
+// (d) consistent-casing invariant — ZERO behavior change vs pre-fold on the original `rows`
+{
+  const o = optionsFromRows(rows, acc)
+  ok('fold: consistent-case options identical (no dupes introduced/removed)', eq(o.stores, ['S1', 'S2', 'S3']) && eq(o.markets, ['North', 'South']))
+  ok('fold: consistent-case store filter unchanged (S1 → 2 rows)', filterRows(rows, { ...emptyStandardFilter(), stores: ['S1'] }, acc).length === 2)
+  ok('fold: consistent-case non-existent selection still excludes all', filterRows(rows, { ...emptyStandardFilter(), stores: ['S9'] }, acc).length === 0)
+}
+// (e) AND semantics preserved under folding
+ok('fold: store+rep AND, both case-variant → still matches', filterRows(cvRows, { ...emptyStandardFilter(), stores: ['MAIN ST'], reps: ['ann lee'] }, cvAcc).length === 3)
 
 console.log(`\nstandard-filters: ${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

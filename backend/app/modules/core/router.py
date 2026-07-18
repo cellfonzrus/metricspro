@@ -730,6 +730,7 @@ SETTING_AREAS = [
     {"key": "kpi",               "label": "KPI Metrics"},
     {"key": "performance_review", "label": "Performance Review / Productivity config"},
     {"key": "notify_policy",     "label": "Notify (report-delivery policy · download-link expiry)"},
+    {"key": "classification",    "label": "Sales Classification settings (accessory / box / bill-payment / set-up-fee / contract-type map)"},
     {"key": "expenses",          "label": "Store Expenses"},
     {"key": "labels",            "label": "Display Labels"},
     {"key": "menu",              "label": "Menu Layout"},
