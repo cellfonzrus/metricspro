@@ -31,6 +31,7 @@ from app.modules.commcalc import ma_upload
 from app.modules.commcalc import target_registry
 from app.modules.commcalc import commission_ledger
 from app.modules.commcalc import device_history
+from app.modules.commcalc import template_clone
 from app.modules.commcalc import custom_report
 from app.modules.commcalc import productivity as _prod
 from app.core.config import settings
@@ -6671,6 +6672,61 @@ async def product_mrc_coverage(period: str = "", org_id: str = ORG_ID):
                     "mrc": mrc, "matched": mrc is not None})
     out.sort(key=lambda x: (x["matched"], -x["subscribers"]))
     return {"plans": out, "catalog_size": len(catalog), "period": period, "ready": True}
+
+
+# ── Carrier payout-template CLONER (mig 221) — universal, SAP-configurable ─────────────────────────
+# Import ANOTHER org's SHAREABLE carrier payout config (carrier + payout_schedule/_line + product_mrc)
+# into THIS tenant — re-stamped with new UUIDs, org_id, FKs remapped. It is a CLONE, not a move (the
+# house keeps its own Total pipeline). Idempotent + re-runnable (matching target rows skipped, a
+# hand-edited copy survives). Cross-org read is gated ENTIRELY on carrier.template_shared. Cloning only
+# CREATES config — it never touches rep_commissions and never fires a calc; pay changes only on a later
+# owner recalc. Logic lives in template_clone.py; these are the thin, commcalc-mounted endpoints.
+def _require_carrier_template_edit(authorization, org_id):
+    """Importing a carrier template CREATES money-config (carrier + schedules + product_mrc). Gate on the
+    existing per-setting 'commission_plans' permission (Commission Plans & Payout Schedules) — admin by
+    default, grantable via Roles. Structure mirrors _require_perf_review_edit / _can_edit_classification:
+    the caller is resolved FOR THE ACTING ORG (`_resolve_caller(sb(), uid, org_id)` — NOT the login's
+    default-org membership, so a user who is admin in org A but only a rep in the acting org B is gated by
+    B's role), and ONLY the resolution path degrades on error → caller=None → allowed (RBAC off / house
+    admin, never locks out the house). The DECISION (`_can_edit_setting`) is OUTSIDE the broad except, so an
+    error in the permission check itself propagates (fails closed), never fails open."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller, _can_edit_setting
+    except Exception:
+        return  # core unavailable — same posture as the rest of the module (require_org-only)
+    try:
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid, org_id) if uid else None
+    except Exception:
+        caller = None  # resolution failure (no token / rbac off) — degrade per house posture
+    if caller is not None and not _can_edit_setting(caller, "commission_plans"):
+        raise HTTPException(403, "You need the 'Commission Plans & Payout Schedules' setting permission to "
+                                 "import a carrier payout template.")
+
+
+@router.get("/carrier-template/sources")
+def carrier_template_sources(org_id: str = ORG_ID):
+    """Carriers ANY org has marked shareable (carrier.template_shared) + their schedule/line/product_mrc
+    counts — the importer's pick list. This is the ONE deliberate cross-org read, gated on template_shared.
+    Empty + ready=false (never 500) until mig 221 is applied."""
+    require_org(org_id)
+    return template_clone.list_shared_sources(sb(), org_id)
+
+
+@router.post("/carrier-template/clone")
+def carrier_template_clone(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Clone a shareable source carrier's payout config into THIS org (org_id = target, from the JWT via
+    middleware). Body: {source_org_id, source_carrier_id, dry_run?}. dry_run=true returns the full
+    would-create/would-skip manifest and writes nothing; the real run returns the same shape with created
+    ids. Refuses a non-shared source (403). Money-config only — no calc is fired."""
+    require_org(org_id)
+    _require_carrier_template_edit(authorization, org_id)
+    return template_clone.clone_carrier_template(
+        sb(), target_org_id=org_id,
+        source_org_id=(body.get("source_org_id") or "").strip(),
+        source_carrier_id=(body.get("source_carrier_id") or "").strip(),
+        dry_run=bool(body.get("dry_run", False)),
+    )
 
 
 # ── Distributors (suppliers) + universal payment-funding ledger (migration 058) ───────────────────
