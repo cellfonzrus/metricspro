@@ -1,15 +1,20 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, optionsFromRows, isStandardFilterActive, type StandardFilterValue } from '@/lib/standard-filters'
 
 export default function CompTrendPage() {
   // 'rep' = the commission WE pay each rep (rep_commissions.total_payout) — what "commission being
   // paid to the sales rep" means. 'account' = the legacy account-level carrier-comp trend.
   const [view, setView] = useState<'rep' | 'account'>('rep')
   const [months, setMonths] = useState(6)
-  const [storeFilter, setStoreFilter] = useState('')
+  const [storeFilter, setStoreFilter] = useState('')   // account-view free-text (accounts have no store_mapping market)
+  // RULE FIVE (§3d) standard bar for the per-REP view — store(s)/market/rep(s) multi over the loaded
+  // org-scoped rep rows (period comes from the Window selector, so period is omitted from the bar).
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   const [monthFilter, setMonthFilter] = useState('')
   const [data, setData] = useState<any>(null)
   const [repData, setRepData] = useState<any>(null)
@@ -42,9 +47,11 @@ export default function CompTrendPage() {
   // ── per-rep view (the commission WE pay each rep) ──
   const repMonths: string[] = repData?.months || []
   const repsAll: any[] = repData?.reps || []
-  const reps = repsAll.filter((r: any) => !storeFilter ||
-    (r.store || '').toLowerCase().includes(storeFilter.toLowerCase()) ||
-    (r.rep || '').toLowerCase().includes(storeFilter.toLowerCase()))
+  const repAcc = { store: (r: any) => r.store, market: (r: any) => r.market, rep: (r: any) => r.rep }
+  const repOpts = useMemo(() => optionsFromRows(repsAll, repAcc), [repsAll])   // eslint-disable-line react-hooks/exhaustive-deps
+  // FILTERED reps drive the table, the tiles (recomputed below) AND the export (WYSIWYG §3c).
+  const reps = useMemo(() => filterRows(repsAll, filt, repAcc), [repsAll, filt])   // eslint-disable-line react-hooks/exhaustive-deps
+  const repFilterActive = isStandardFilterActive(filt)
   const latestRepMonth = repMonths[repMonths.length - 1] || ''
   const repPerMonth = (m: string) => reps.reduce((s: number, r: any) => s + (r.by_period?.[m] || 0), 0)
   const repGrandTotal = reps.reduce((s: number, r: any) => s + (r.total || 0), 0)
@@ -52,7 +59,7 @@ export default function CompTrendPage() {
 
   function buildRepPayload(): ExportPayload {
     return {
-      title: 'Commission Paid per Rep', subtitle: `total_payout · last ${months} months${storeFilter ? ` · ${storeFilter}` : ''}`,
+      title: 'Commission Paid per Rep', subtitle: `total_payout · last ${months} months${repFilterActive ? ' · filtered' : ''}`,
       filename: `commission-per-rep`,
       sheets: [{ name: 'By rep', rows: reps, columns: [
         { header: 'Rep', get: (r: any) => r.rep },
@@ -113,12 +120,18 @@ export default function CompTrendPage() {
               <option value={3}>3 months</option><option value={6}>6 months</option><option value={12}>12 months</option>
             </select>
           </label>
-          <input className="select" placeholder={view === 'rep' ? 'filter rep / store…' : 'filter store / business…'} value={storeFilter} onChange={e => setStoreFilter(e.target.value)} style={{ width: 180 }} />
+          {view === 'account' && <input className="select" placeholder="filter store / business…" value={storeFilter} onChange={e => setStoreFilter(e.target.value)} style={{ width: 180 }} />}
           {view === 'rep'
             ? (repData?.reps?.length ? <><ExportButtons payload={buildRepPayload} /><SendReportButton exportPayload={buildRepPayload} compact /></> : null)
             : (data?.totals_by_month ? <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></> : null)}
         </div>
       </div>
+
+      {/* RULE FIVE standard bar — per-REP view (store(s)/market/rep(s) multi; period = the Window selector). */}
+      {view === 'rep' && (repsAll.length > 0 || repFilterActive) && (
+        <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false }}
+          storeOptions={repOpts.stores} marketOptions={repOpts.markets} repOptions={repOpts.reps} repLabel="Reps…" />
+      )}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>

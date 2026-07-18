@@ -1,7 +1,10 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, fmt } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import { type EntityOption } from '@/lib/entity-picker-core'
 
 // Total Processor (VidaPay / Total Access) commission report — the MA Commission Details + MA Daily
 // Tx roll-up (mig 083). Sign-flipped: positive = money the dealer RECEIVES. Org-scoped: shows the
@@ -22,14 +25,31 @@ export default function MaCommissionPage() {
   const [d, setD] = useState<any>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  // RULE FIVE (§3d): store(s)/rep(s) multi. Server-side narrowing (stores/reps params) keeps the tiles +
+  // tables + export all correct under a filter (WYSIWYG §3c). No `market` — account-keyed processor data.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
 
-  async function load(p = period) {
+  async function load(p = period, f: StandardFilterValue = filt) {
     setBusy(true); setMsg('')
-    try { setD(await api(`/api/v1/commcalc/ma-commission/summary?period=${encodeURIComponent(p.trim())}`)) }
+    try {
+      const qs = new URLSearchParams({ period: p.trim() })
+      if (f.stores.length) qs.set('stores', f.stores.join(','))
+      if (f.reps.length) qs.set('reps', f.reps.join(','))
+      setD(await api(`/api/v1/commcalc/ma-commission/summary?${qs.toString()}`))
+    }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     setBusy(false)
   }
   useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  // Re-fetch (server re-aggregates) when the store/rep filter changes — skip the initial mount.
+  const didMount = useRef(false)
+  useEffect(() => {
+    if (!didMount.current) { didMount.current = true; return }
+    load(period, filt)   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filt])   // eslint-disable-line react-hooks/exhaustive-deps
+  // Stable pick-don't-type options from the backend (computed pre-filter, so the list never collapses).
+  const storeOpts: EntityOption[] = (d?.store_options || []).map((o: any) => ({ id: o.id, label: o.label }))
+  const repOpts: EntityOption[] = (d?.rep_options || []).map((r: string) => ({ id: r, label: r }))
 
   // RULE FOUR export: tiles summary + the by-store / by-rep / spiff-by-month report tables.
   const storeCols: ExportColumn[] = [
@@ -80,6 +100,11 @@ export default function MaCommissionPage() {
         <div style={{ flex: 1 }} />
         {d?.ready && !d.note && <ReportExportBar title={`Total Processor Commissions ${period}`} filename={`total_processor_${period.replace(/\s+/g, '_')}`} sheets={exportSheets} />}
       </div>
+      {/* RULE FIVE standard bar — store(s)/rep(s) multi (period = the input above; no market dimension). */}
+      {(storeOpts.length > 0 || repOpts.length > 0 || filt.stores.length > 0 || filt.reps.length > 0) && (
+        <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false, markets: false }}
+          storeOptions={storeOpts} repOptions={repOpts} storeLabel="Accounts…" repLabel="Reps…" />
+      )}
       {msg && <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
       {d && d.ready === false && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {d.note}</div>}
       {d?.ready && d.note && <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13, color: 'var(--text2)' }}>{d.note}</div>}

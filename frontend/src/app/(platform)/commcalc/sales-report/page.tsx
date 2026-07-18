@@ -1,10 +1,12 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import ReportExportBar from '@/components/ReportExportBar'
 import { MultiSelect } from '@/lib/multiselect'
+import EntityPicker from '@/components/EntityPicker'
+import { optionsFromRows } from '@/lib/standard-filters'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 
 // Targeted super-admin org-resolution mitigation (see NEEDS CORE): the sales-report reads carry NO org_id
@@ -41,6 +43,7 @@ export default function SalesReportPage() {
   const [setupInput, setSetupInput] = useState('')
   const [selMarkets, setSelMarkets] = useState<string[]>([])   // multi-select market filter
   const [selStores, setSelStores] = useState<string[]>([])     // multi-select store filter
+  const [selReps, setSelReps] = useState<string[]>([])         // RULE FIVE rep(s) multi (pick-don't-type)
 
   function openDiag() {
     setDiag({}); setDiagBusy(true)
@@ -91,11 +94,15 @@ export default function SalesReportPage() {
   const rows: any[] = data?.rows || []
   const marketOpts: string[] = data?.markets || []
   const storeOpts: string[] = data?.stores || []
-  // Apply the multi-select market/store filters in-memory; ReportShell handles the rest.
+  // RULE FIVE rep(s) picker — options straight from the already-org-scoped rows (pick-don't-type §3b).
+  const repOpts = useMemo(() => optionsFromRows(rows, { rep: (r: any) => r.salesperson }).reps, [rows])
+  // Apply the multi-select market/store/rep filters in-memory (AND-composed); ReportShell's own By-rep
+  // column dropdown still works, now narrowed to this filtered set.
   const fRows = rows.filter(r =>
     (selMarkets.length === 0 || selMarkets.includes(r.market)) &&
-    (selStores.length === 0 || selStores.includes(r.store)))
-  const filtered = selMarkets.length > 0 || selStores.length > 0
+    (selStores.length === 0 || selStores.includes(r.store)) &&
+    (selReps.length === 0 || selReps.includes(r.salesperson)))
+  const filtered = selMarkets.length > 0 || selStores.length > 0 || selReps.length > 0
   // Tiles reflect the current filter (fall back to the backend period totals when nothing is filtered).
   const sum = (k: string) => fRows.reduce((s, r) => s + (Number(r[k]) || 0), 0)
   const t = filtered
@@ -178,7 +185,8 @@ export default function SalesReportPage() {
         </label>
         {marketOpts.length > 0 && <MultiSelect allLabel="All markets" width={150} value={selMarkets} options={marketOpts} onChange={setSelMarkets} />}
         {storeOpts.length > 0 && <MultiSelect allLabel="All stores" width={150} value={selStores} options={storeOpts} onChange={setSelStores} searchable />}
-        {filtered && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => { setSelMarkets([]); setSelStores([]) }}>Clear filters</button>}
+        {repOpts.length > 0 && <EntityPicker multi options={repOpts} value={selReps} onChange={setSelReps} placeholder="Reps…" width={180} ariaLabel="Filter by rep" />}
+        {filtered && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => { setSelMarkets([]); setSelStores([]); setSelReps([]) }}>Clear filters</button>}
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openDiag}>🔍 Data diagnostics</button>
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openAccCfg}>⚙️ Classification settings</button>
         <WhereAreMyRowsButton period={period} />
@@ -223,7 +231,7 @@ export default function SalesReportPage() {
       ) : fRows.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
           {filtered
-            ? <>No sales match the selected market/store filter for {period}. <span style={{ color: 'var(--accent)', cursor: 'pointer' }} onClick={() => { setSelMarkets([]); setSelStores([]) }}>Clear filters</span>.</>
+            ? <>No sales match the selected market/store/rep filter for {period}. <span style={{ color: 'var(--accent)', cursor: 'pointer' }} onClick={() => { setSelMarkets([]); setSelStores([]); setSelReps([]) }}>Clear filters</span>.</>
             : <>No sales for {period}. Sales come from the imported Sales Transaction Details — check the month, or that the daily feed / monthly upload has loaded on the Imports pages.</>}
         </div>
       ) : (
