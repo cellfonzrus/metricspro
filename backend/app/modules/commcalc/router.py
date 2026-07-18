@@ -6830,6 +6830,8 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
     it (reverts to the built-in menu). Display-only — never touches routes, data, or access control."""
     import json as _json
     raw_items = (body or {}).get('items') or {}
+    # platform-core hide-reports-directory toggle: preserve the flag through the layout payload
+    hide = bool((body or {}).get('hideReportsDirectory'))
     items = {}
     for h, v in raw_items.items():
         if not isinstance(v, dict):
@@ -6860,13 +6862,15 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
             groups.append(gname)
     client = sb()
     try:
-        if not items and not groups:
+        if not items and not groups and not hide:
             client.schema('commcalc').table('ui_label_override').delete() \
                 .eq('org_id', org_id).eq('scope', 'layout').eq('key', '__nav__').execute()
             return {"ok": True, "cleared": True}
         payload = {"items": items}
         if groups:
             payload["groups"] = groups
+        if hide:
+            payload["hideReportsDirectory"] = True
         client.schema('commcalc').table('ui_label_override').upsert(
             {"org_id": org_id, "scope": "layout", "key": "__nav__",
              "label": _json.dumps(payload),
