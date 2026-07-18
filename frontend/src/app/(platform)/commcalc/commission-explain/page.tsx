@@ -22,6 +22,7 @@ const REASON_LABEL: Record<string, string> = {
   paid: 'Paid', no_mi_match: 'Held — dealer not paid (no raw_mi row)',
   line_inactive: 'Held — line inactive', residual_not_received: 'Held — residual not received',
   activation_payment_missing: 'Held — no first-month payment', withheld: 'Held',
+  held_stored: 'Held — stored row (see rep explain)',
 }
 const reasonColor = (code: string) => code === 'paid' ? 'var(--green)' : 'var(--red)'
 

@@ -13,13 +13,33 @@ Runs the REAL engine + drilldown code against a synthetic in-memory Supabase-sha
 
 Run: PYTHONPATH=backend python3 backend/scratchpad/commission_drilldown_proof.py
 """
-import sys, os
+import sys, os, json, random, subprocess, importlib.util, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.modules.commcalc import commission_engine as ce
 from app.modules.commcalc import sale_installment_engine as sie
 from app.modules.commcalc import commission_drilldown as dd
+
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+def _vendor_orig_engine():
+    """Load origin/main's commission_engine.py VERBATIM as a separate module, so the differential tests
+    the NEW code against the ACTUAL pre-drill engine (not a self-referential detail=False vs detail=True).
+    Returns the module, or None if origin/main is unavailable."""
+    try:
+        src = subprocess.check_output(
+            ["git", "-C", REPO, "show", "origin/main:backend/app/modules/commcalc/commission_engine.py"],
+            stderr=subprocess.DEVNULL).decode()
+    except Exception:
+        return None
+    with tempfile.NamedTemporaryFile("w", suffix="_ceo.py", delete=False) as f:
+        f.write(src); path = f.name
+    spec = importlib.util.spec_from_file_location("commission_engine_orig", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 # ── minimal chainable fake matching the supabase-py builder surface the code uses ──────────────────
@@ -160,10 +180,120 @@ def check(name, cond, extra=""):
         FAILS.append(name)
 
 
+def _j(o):
+    return json.dumps(o, sort_keys=True, default=str)
+
+
+# ── N1: orig-vendored differential — new engine default/forced output == origin/main's, verbatim ────
+_FIELDS = ["contract_type", "department", "category", "product_desc", "tender_type", "any"]
+_OPS = ["equals", "contains", "in"]
+_KINDS = ["flat_per_unit", "pct_gp", "pct_mrc", "pct_price_over_cost", "flat"]
+_SCOPES = ["employee", "role", "store", "market", "default"]
+_REPS = ["Antunez, Diana", "Diana Antunez", "Bob Nomatch", "Islam Khan, Ariful", "zoe smith"]
+_STORES = ["NYC-1", "NYC-2", "", "LA-9"]
+_VALS = ["activation", "upgrade", "accessories", "byod", "case", "", "sales", "manager"]
+
+
+def _rand_store(rng, org="ORG-F"):
+    nplans = rng.randint(1, 3)
+    plans, rules, tiers, assigns = [], [], [], []
+    for pi in range(nplans):
+        pid = f"P{pi}"
+        plans.append(dict(id=pid, org_id=org, name=f"Plan {pi}", is_active=rng.random() > 0.2,
+                          carrier_id="C1", base_tier_metric=rng.choice(["none", "units"])))
+        for ti in range(rng.randint(0, 2)):
+            tiers.append(dict(id=f"{pid}-t{ti}", org_id=org, plan_id=pid,
+                              min_count=rng.randint(0, 5), multiplier=round(rng.uniform(0.5, 1.5), 2)))
+        for ri in range(rng.randint(0, 4)):
+            rules.append(dict(id=f"{pid}-r{ri}", org_id=org, plan_id=pid, sort=ri,
+                              label=f"r{ri}", match_field=rng.choice(_FIELDS), match_op=rng.choice(_OPS),
+                              match_value=rng.choice(_VALS), payout_kind=rng.choice(_KINDS),
+                              amount=rng.randint(0, 30), pct=round(rng.uniform(0, 0.2), 3),
+                              tiered=rng.random() > 0.5, qualifies=rng.random() > 0.15))
+        for ai in range(rng.randint(0, 3)):
+            assigns.append(dict(id=f"{pid}-a{ai}", org_id=org, plan_id=pid, scope=rng.choice(_SCOPES),
+                                scope_value=rng.choice(_REPS + _STORES + _VALS), priority=rng.randint(0, 3)))
+    sales = []
+    for si in range(rng.randint(0, 20)):
+        sales.append(_sale(org_id=org, salesperson=rng.choice(_REPS), store=rng.choice(_STORES),
+                           contract_type=rng.choice(_VALS), department=rng.choice(_VALS),
+                           category=rng.choice(_VALS), product_desc=rng.choice(["Total 5G $50/mo", "Case", "x"]),
+                           tender_type=rng.choice(_VALS), ext_price=rng.randint(0, 80), gp=rng.randint(0, 40),
+                           mdn=str(rng.randint(1000, 9999)), serial_1=str(rng.randint(10000, 99999)),
+                           trans_id=f"T{si}", voided=rng.choice(["NO", "NO", "YES"]),
+                           trans_type=rng.choice(["Sale", "Sale", "Return"])))
+    return FakeClient({
+        "commcalc.commission_plan": plans, "commcalc.commission_rule": rules,
+        "commcalc.commission_tier": tiers, "commcalc.commission_plan_assignment": assigns,
+        "commcalc.raw_sales": sales, "commcalc.daily_sales_feed": [], "commcalc.raw_mi": [],
+        "commcalc.raw_catalog": [], "commcalc.store_mapping": [
+            dict(org_id=org, store_address="NYC-1", store_code="NYC-1", market="Metro NY")],
+        "storeops.employees": [dict(id=1, org_id=org, name="Diana Antunez", role="sales")],
+    }, ), plans
+
+
+def differential(orig):
+    print("\n[0] orig-vendored differential — NEW engine == origin/main's, verbatim (fuzz 200)")
+    if orig is None:
+        check("origin/main commission_engine available", False, "git show failed — differential skipped")
+        return
+    rng = random.Random(20260718)
+    mism_def = mism_forced = mism_resolve = 0
+    N = 200
+    for _ in range(N):
+        client, plans = _rand_store(rng)
+        # default preview (money path) must match EXACTLY
+        if _j(ce.preview(client, "ORG-F", PER)) != _j(orig.preview(client, "ORG-F", PER)):
+            mism_def += 1
+        # forced-plan preview (used by /payout-plans/preview) must match EXACTLY
+        for p in plans:
+            if _j(ce.preview(client, "ORG-F", PER, plan_id=p["id"])) != \
+               _j(orig.preview(client, "ORG-F", PER, plan_id=p["id"])):
+                mism_forced += 1
+                break
+        # _resolve_plan_for winner (single source of truth) must match
+        np_, _rd = ce._load_plans(client, "ORG-F")
+        op_, _rd2 = orig._load_plans(client, "ORG-F")
+        for rep in _REPS:
+            for store in _STORES:
+                wn = ce._resolve_plan_for(rep, store, "Metro NY", np_, rep_role="sales")
+                wo = orig._resolve_plan_for(rep, store, "Metro NY", op_, rep_role="sales")
+                if (wn or {}).get("id") != (wo or {}).get("id"):
+                    mism_resolve += 1
+                    break
+    check(f"default preview identical across {N} random tenants", mism_def == 0, f"{mism_def} mismatch")
+    check(f"forced-plan preview identical across {N} random tenants", mism_forced == 0, f"{mism_forced} mismatch")
+    check("_resolve_plan_for winner identical", mism_resolve == 0, f"{mism_resolve} mismatch")
+
+    # N2 regression: forced-plan preview with a NON-NUMERIC assignment priority — the lazy short-circuit
+    # means _resolve_plan_for is never called, so BOTH engines succeed and match (the eager drift is gone).
+    bad = FakeClient({
+        "commcalc.commission_plan": [dict(id="PX", org_id="ORG-F", name="X", is_active=True)],
+        "commcalc.commission_rule": [dict(id="rx", org_id="ORG-F", plan_id="PX", sort=0, match_field="any",
+                                          payout_kind="flat_per_unit", amount=5, qualifies=True)],
+        "commcalc.commission_tier": [],
+        "commcalc.commission_plan_assignment": [dict(id="ax", org_id="ORG-F", plan_id="PX",
+                                                     scope="employee", scope_value="Diana Antunez",
+                                                     priority="not-a-number")],
+        "commcalc.raw_sales": [_sale(org_id="ORG-F", salesperson="Diana Antunez", store="NYC-1",
+                                     contract_type="activation", trans_id="T1")],
+        "commcalc.daily_sales_feed": [], "commcalc.raw_mi": [], "commcalc.raw_catalog": [],
+        "commcalc.store_mapping": [], "storeops.employees": [],
+    })
+    try:
+        same = _j(ce.preview(bad, "ORG-F", PER, plan_id="PX")) == _j(orig.preview(bad, "ORG-F", PER, plan_id="PX"))
+        check("N2: forced-plan preview w/ non-numeric priority — lazy, both succeed & match", same)
+    except Exception as e:
+        check("N2: forced-plan preview w/ non-numeric priority — lazy, both succeed & match", False, str(e)[:80])
+
+
 def main():
+    orig = _vendor_orig_engine()
+    differential(orig)
+
     c = build_store()
 
-    print("\n[1] preview default (detail=False) is byte-identical / no key leak")
+    print("\n[1] preview detail-mode preserves the default money + adds no key leak to the default shape")
     pv0 = ce.preview(c, ORG, PER)
     pv1 = ce.preview(c, ORG, PER, detail=True)
     diana0 = next(r for r in pv0["by_rep"] if "antunez" in r["rep"].lower())
@@ -245,6 +375,34 @@ def main():
     dsb = dd.device_story(c, ORGB, IMEI)
     check("org B sees NO sale lines / MA rows for org-A IMEI",
           not dsb["sale_lines"] and not dsb["ma_matches"])
+
+    print("\n[8] held-reason selection matches the actual gate criterion per mode (N3/N4)")
+    mi_inactive = {"subscriber_status": "Deactivated", "actual_mi_payout": 0, "actual_atu_payout": 0}
+    mi_active_nores = {"subscriber_status": "Active", "actual_mi_payout": 0, "actual_atu_payout": 0}
+    def reason(status, gate_mode, mi, gate_kind=None, stored=False):
+        row = {"status": status, "gate_mode": gate_mode}
+        if gate_kind:
+            row["gate_kind"] = gate_kind
+        return dd._installment_reason(row, mi, stored=stored)[0]
+    check("paid_residual + inactive → line_inactive",
+          reason("withheld_unpaid", "paid_residual", mi_inactive) == "line_inactive")
+    check("paid_residual + active+resid0 → residual_not_received",
+          reason("withheld_unpaid", "paid_residual", mi_active_nores) == "residual_not_received")
+    check("N4: nonzero_residual + inactive+resid0 → residual_not_received (NOT line_inactive)",
+          reason("withheld_unpaid", "nonzero_residual", mi_inactive) == "residual_not_received")
+    check("active_status + inactive → line_inactive",
+          reason("withheld_unpaid", "active_status", mi_inactive) == "line_inactive")
+    check("held + no raw_mi + LIVE → no_mi_match",
+          reason("withheld_unpaid", "paid_residual", None, stored=False) == "no_mi_match")
+    check("N3: held + no raw_mi + STORED (no gate_kind) → held_stored (reduced confidence)",
+          reason("withheld_unpaid", "paid_residual", None, stored=True) == "held_stored")
+    check("activation gate held → activation_payment_missing",
+          reason("withheld_unpaid", "paid_residual", None, gate_kind="activation_payment") == "activation_payment_missing")
+
+    print("\n[9] _no_plan_narration carries explicit tier fields (N5 — no blank '× tier =')")
+    nn = dd._no_plan_narration(c, ORG, PER, "Bob Nomatch", ce)
+    check("has base_payout/tiered_payout/tier_multiplier=1.0",
+          nn.get("base_payout") == 0.0 and nn.get("tiered_payout") == 0.0 and nn.get("tier_multiplier") == 1.0)
 
     print("\n" + ("ALL PASS" if not FAILS else f"FAILURES: {FAILS}"))
     return 1 if FAILS else 0

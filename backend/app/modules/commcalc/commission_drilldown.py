@@ -39,10 +39,22 @@ def _name_match(a, b):
 
 
 # ── installment hold-reason narration (reuses the engine's pure gate helpers; never a second gate) ──
-def _installment_reason(led_row, mi_row):
+def _installment_reason(led_row, mi_row, stored=False):
     """(code, human text) for ONE ledger row's gate decision. led_row is the authoritative ledger row
     from compute_sale_installments; mi_row is the raw_mi row the engine's _match_mi found for the pay
-    period (or None). This only NARRATES the ledger's own paid/held verdict — it computes no money."""
+    period (or None). This only NARRATES the ledger's own paid/held verdict — it computes no money.
+
+    The held-reason is selected to match the ACTUAL gate criterion for the row's gate_mode:
+      active_status    → criterion is Active           → line_inactive
+      nonzero_residual → criterion is residual > 0      → residual_not_received (inactivity is NOT the
+                          criterion in this mode, so we never label it line_inactive here)
+      paid_residual    → criterion is Active AND resid  → line_inactive first, else residual_not_received
+
+    `stored=True` marks a row read back from the PERSISTED sale_installment_ledger (device story). That
+    table omits gate_kind (mig 201), so an activation-gated month-1 hold is indistinguishable from a
+    dealer-not-paid hold when no raw_mi row matched — narrate it with REDUCED CONFIDENCE and point to the
+    rep-explain view (which recomputes live and DOES carry gate_kind) for the precise reason. A proper
+    `gate_kind` ledger column is the later fix (200-band; see handoff)."""
     status = str(led_row.get("status") or "").strip()
     gate_kind = str(led_row.get("gate_kind") or "").strip().lower()
     gate_mode = str(led_row.get("gate_mode") or "").strip().lower()
@@ -54,18 +66,32 @@ def _installment_reason(led_row, mi_row):
         if led_row.get("matched_mi_period"):
             return "paid", "Paid: the line is active and receiving residual in the pay period (raw_mi matched)."
         return "paid", "Paid (ungated month)."
-    # withheld / held
-    if gate_kind == "activation_payment":
+    # ── held ──
+    if gate_kind == "activation_payment":   # only LIVE rows carry this (persisted ledger omits it)
         return ("activation_payment_missing",
                 "Held: no qualifying first-month payment line was found on the activation transaction "
                 "(month 1 is gated on the sale's own payment).")
     if mi_row is None:
+        if stored:
+            return ("held_stored",
+                    "Held (stored ledger row): no matching raw_mi row and gate provenance is unavailable "
+                    "for a persisted row — this could be dealer-not-paid OR no first-month payment. Open "
+                    "this rep in Commission Explain for the precise, live reason.")
         return ("no_mi_match",
                 "Held — dealer not shown paid on this line: no matching raw_mi residual row for this "
                 "MDN/IMEI in the pay period. NOTE: for Total / MA-fed carriers residuals arrive in the MA "
                 "file, not raw_mi — check the MA cross-reference below for this device.")
     active = str(mi_row.get("subscriber_status") or "").strip().lower().startswith("activ")
     resid = safe_float(mi_row.get("actual_mi_payout")) + safe_float(mi_row.get("actual_atu_payout"))
+    if gate_mode == "active_status":
+        return ("line_inactive",
+                f"Held: gate 'active_status' — raw_mi row found but subscriber_status="
+                f"'{mi_row.get('subscriber_status') or ''}' is not Active.")
+    if gate_mode == "nonzero_residual":
+        return ("residual_not_received",
+                "Held: gate 'nonzero_residual' — raw_mi row found but no residual (MI+ATU) received for "
+                "the pay period (Active status is not the criterion in this mode).")
+    # paid_residual (default): Active AND residual > 0
     if not active:
         return ("line_inactive",
                 f"Held: raw_mi row found but subscriber_status='{mi_row.get('subscriber_status') or ''}' "
@@ -283,10 +309,11 @@ def explain_rep(client, org_id, period, rep, carrier_mode="plan"):
         mi_row = sie._match_mi({"mdn": r.get("mdn"), "serial_1": r.get("serial_1")}, mi_idx)
         code, text = _installment_reason(r, mi_row)
         paid = str(r.get("status") or "") == "paid"
+        wa = 0.0 if paid else withheld_by_dev.get(ser_n, withheld_by_dev.get(mdn_n))  # None if unknown
         d["installments"].append({
             "month_index": r.get("month_index"), "pay_period": r.get("pay_period"),
             "sale_period": r.get("sale_period"), "amount": safe_float(r.get("amount")),
-            "withheld_amount": 0.0 if paid else safe_float(withheld_by_dev.get(ser_n) or withheld_by_dev.get(mdn_n)),
+            "withheld_amount": wa,
             "status": r.get("status"), "paid": bool(r.get("paid_gate_met")),
             "gate_mode": r.get("gate_mode"), "hold_reason": code, "hold_detail": text,
             "mrc_at_pay": r.get("mrc_at_pay"), "mrc_source": r.get("mrc_source"),
@@ -333,7 +360,10 @@ def _no_plan_narration(client, org_id, period, rep, ce):
     res = ce._resolve_plan_for(rep, store, market, plans, rep_role=rep_role, explain=True)
     return {"plan_name": (res.get("winner") or {}).get("plan_name"), "plan_id": None,
             "assignment": res.get("winner"), "considered": res.get("considered"), "rules": [],
-            "total_payout": 0.0, "store": store, "market": market, "rep_role": rep_role,
+            # explicit zeros/1.0 so the UI's "Subtotal … × tier … =" clause never renders blank
+            "base_payout": 0.0, "tiered_payout": 0.0, "tier_multiplier": 1.0, "qualifying_units": 0,
+            "base_tier_metric": "none", "tiers": [], "total_payout": 0.0,
+            "store": store, "market": market, "rep_role": rep_role,
             "has_sale_lines": has_lines, "plans_configured": len(plans), "ready": ready}
 
 
@@ -419,6 +449,8 @@ def device_story(client, org_id, imei, period=None):
                .eq("org_id", org_id).eq("serial_1", imei_n).order("pay_period").limit(500).execute().data) or []
     except Exception:
         led = []
+    for r in led:
+        r["_provenance"] = "stored"   # persisted ledger rows omit gate_kind → reduced-confidence reason
     live_withheld = {}   # {device key -> would-be $} for the live period's held rows (from its flags)
     if period:
         try:
@@ -427,6 +459,7 @@ def device_story(client, org_id, imei, period=None):
             for r in (live.get("ledger") or []):
                 if _norm_mdn(r.get("serial_1")) == imei_n and \
                    (str(r.get("pay_period")), int(r.get("month_index") or 0)) not in have:
+                    r["_provenance"] = "live"   # live compute carries gate_kind → precise reason
                     led.append(r)
             for f in (live.get("flags") or []):
                 if f.get("source") == "commission_rebate_tracking":
@@ -449,9 +482,12 @@ def device_story(client, org_id, imei, period=None):
     inst = []
     for r in led:
         mi_row = sie._match_mi({"mdn": r.get("mdn"), "serial_1": r.get("serial_1")}, _mi_for(r.get("pay_period")))
-        code, text = _installment_reason(r, mi_row)
+        code, text = _installment_reason(r, mi_row, stored=(r.get("_provenance") == "stored"))
         paid = str(r.get("status") or "") == "paid"
         wk = _norm_mdn(r.get("serial_1")) or _norm_mdn(r.get("mdn"))
+        # withheld_amount: 0.0 when paid; the would-be $ when known (live period); None when unknown
+        # (a stored row from a period we didn't live-recompute). Same None-means-unknown convention as
+        # explain_rep, so the frontend renders "—" for unknown and "$0.00" only for a genuine zero.
         inst.append({"month_index": r.get("month_index"), "pay_period": r.get("pay_period"),
                      "sale_period": r.get("sale_period"), "amount": safe_float(r.get("amount")),
                      "withheld_amount": (0.0 if paid else live_withheld.get(wk)),

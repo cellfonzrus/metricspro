@@ -481,10 +481,12 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None):
         resolution = None
         if detail:
             resolution = _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role, explain=True)
-            resolved = resolution.get("plan")
+            plan = forced_plan or resolution.get("plan")
         else:
-            resolved = _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role)
-        plan = forced_plan or resolved
+            # money path: EXACTLY the original lazy short-circuit — when plan_id forces a plan,
+            # _resolve_plan_for is never called (so the delta vs the pre-drill engine is exactly zero,
+            # incl. the case where a non-numeric assignment field would make the resolver raise).
+            plan = forced_plan or _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role)
         if not plan:
             continue
         rules = plan.get("rules") or []
