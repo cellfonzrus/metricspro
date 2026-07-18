@@ -1,8 +1,11 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import ReportExportBar from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import type { EntityOption } from '@/components/EntityPicker'
 
 const inp: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const PL_TYPES = ['revenue', 'cogs', 'opex', 'other']
@@ -24,6 +27,35 @@ export default function JournalPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
+  // RULE FIVE (§3d) standard store/market filter. Period = section switcher (usePeriod), rep n/a on a
+  // journal entry → only stores + markets shown (deviations documented). The filter narrows the DISPLAY
+  // + EXPORT only; `rows` stays the full editable/save source of truth so filtering never drops entries
+  // (Save preserves every row, including those hidden). A row with no store (or a store outside the
+  // selection / market) is an unattributed entry → hidden while a store/market filter is active.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const [fopts, setFopts] = useState<{ stores?: any[]; markets?: string[] }>({})
+  const filterActive = filt.stores.length > 0 || filt.markets.length > 0
+
+  useEffect(() => {
+    api(`/api/v1/core/filter-options?org_id=${ORG_ID}`).then((d: any) => setFopts(d || {})).catch(() => setFopts({}))
+  }, [])
+  const storeMarket = useMemo(() => {
+    const m: Record<string, string> = {}
+    ;(fopts.stores || []).forEach((s: any) => { if (s.store && s.market) m[s.store] = s.market })
+    return m
+  }, [fopts])
+  const storeOpts: EntityOption[] = useMemo(() =>
+    (fopts.stores || []).map((s: any) => ({ id: s.store, label: s.store, sublabel: s.market || undefined })), [fopts])
+  const marketOpts: string[] = useMemo(() => fopts.markets || [], [fopts])
+  // per-row store/market match (client-side; market resolved from the store's roster market)
+  const matchRow = (r: Row) => {
+    const sa = (r.store_address || '').trim()
+    if (filt.stores.length && !filt.stores.includes(sa)) return false
+    if (filt.markets.length) { const mk = storeMarket[sa]; if (!mk || !filt.markets.includes(mk)) return false }
+    return true
+  }
+  const namedRows = rows.filter(r => r.account_line.trim())
+  const hiddenCount = filterActive ? namedRows.filter(r => !matchRow(r)).length : 0
 
   function load() {
     setLoading(true)
@@ -60,9 +92,10 @@ export default function JournalPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{msg}</span>}
-          {/* RULE FOUR (§3c): export the manual journal for this period (what you see is what exports). */}
-          {rows.some(r => r.account_line.trim()) && <ReportExportBar
-            title={`Manual Journal Entries — ${period}`} subtitle={`${period} · manual entries`}
+          {/* RULE FOUR (§3c) + FIVE (§3d): export the manual journal for this period, honoring the
+              active store/market filter (what you see is what exports). */}
+          {namedRows.length > 0 && <ReportExportBar
+            title={`Manual Journal Entries — ${period}`} subtitle={`${period} · manual entries${filterActive ? ' · filtered' : ''}`}
             filename={`journal-${period.replace(/\s+/g, '-')}`}
             columns={[
               { header: 'Statement', get: (r: any) => r.statement === 'pl' ? 'P&L' : 'Balance Sheet' },
@@ -72,10 +105,21 @@ export default function JournalPage() {
               { header: 'Store', get: (r: any) => r.store_address || '' },
               { header: 'Memo', get: (r: any) => r.memo || '' },
             ]}
-            rows={rows.filter(r => r.account_line.trim())} />}
+            rows={namedRows.filter(r => !filterActive || matchRow(r))} />}
           <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? '…' : '💾 Save entries'}</button>
         </div>
       </div>
+
+      {/* RULE FIVE (§3d) standard filter bar — stores + markets. Period = section switcher; rep n/a. */}
+      <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false, reps: false }}
+        periodMode="none" storeOptions={storeOpts} marketOptions={marketOpts} />
+      {filterActive && (
+        <div style={{ fontSize: 12, color: 'var(--text2)', margin: '-4px 0 12px' }}>
+          Filter active — showing entries for the selected store(s){filt.markets.length ? '/market(s)' : ''}.
+          {hiddenCount > 0 && <> <strong>{hiddenCount}</strong> unattributed / other-store entr{hiddenCount === 1 ? 'y is' : 'ies are'} hidden.</>}
+          {' '}Saving still preserves every entry (clear the filter to edit hidden rows).
+        </div>
+      )}
 
       <div className="card" style={{ padding: 12, marginBottom: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>Quick add:</span>
@@ -103,6 +147,10 @@ export default function JournalPage() {
             </thead>
             <tbody>
               {rows.map((r, i) => {
+                // Hide named entries that don't match the active store/market filter (unattributed
+                // rows included) — blank scaffold rows stay visible so adding is still possible. `i`
+                // stays the true index into `rows`, so edit/delete/save operate on the real entry.
+                if (filterActive && r.account_line.trim() && !matchRow(r)) return null
                 const types = r.statement === 'pl' ? PL_TYPES : BS_TYPES
                 return (
                   <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
