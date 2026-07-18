@@ -41,7 +41,22 @@ from app.modules.core.run_for_tenant import run_for_tenant, TenantNotRunnable, S
 # period filter and count toward every open period.
 _PERIOD_SOURCES = [
     ("raw_sales",           ["created_at"]),
+    # daily_sales_feed is a NON-Boost tenant's PRIMARY sales source (the daily B2B feed, which
+    # coa._sales_union_rows reads for the open month BEFORE/without promotion into raw_sales). Its
+    # ingest column is `uploaded_at`, NOT created_at. Missing here, a feed-only tenant (luxelink)
+    # yields newest_ingest_at=None → recompute_due treats it as "no account data" → the sweep SKIPS
+    # it → its P&L / Balance Sheet snapshots NEVER compute (permanently empty), and the P&L/BS
+    # staleness banner never prompts a recompute. This is the "same data, not wired" root cause: the
+    # coa READ-path was universalized (dcb0807) but this data-DETECTION list was never mirrored.
+    # (created_at kept as a defensive 2nd candidate; a table without uploaded_at falls through.)
+    ("daily_sales_feed",    ["uploaded_at", "created_at"]),
     ("raw_mi",              ["created_at"]),
+    # raw_ma_commission / raw_ma_daily_tx are the VidaPay/MA (Total, luxelink) residual sources that
+    # coa.build_inputs falls through to when a tenant has NO raw_mi — the carrier-agnostic MI/ATU
+    # income lines (dcb0807 / 87c182d). They must count as "this tenant has data for the period" for
+    # the same reason as the feed above, else an MA-only tenant's books never auto-compute / go stale.
+    ("raw_ma_commission",   ["created_at"]),
+    ("raw_ma_daily_tx",     ["created_at"]),
     ("raw_comp_report",     ["created_at"]),
     ("rep_commissions",     ["created_at"]),
     ("store_expenses",      ["created_at"]),
