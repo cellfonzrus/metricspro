@@ -29,7 +29,7 @@ const td: React.CSSProperties = { padding: '8px 12px', fontSize: 13, borderBotto
 const d10 = (s: string | null) => (s ? String(s).slice(0, 16).replace('T', ' ') : '—')
 
 export default function NotifyPage() {
-  const [tab, setTab] = useState<'recipients' | 'subs' | 'log'>('subs')
+  const [tab, setTab] = useState<'recipients' | 'subs' | 'log' | 'settings'>('subs')
   const [reports, setReports] = useState<Report[]>([])
   const [saved, setSaved] = useState<Saved[]>([])
   const [employees, setEmployees] = useState<Emp[]>([])
@@ -64,9 +64,9 @@ export default function NotifyPage() {
         </div>
       )}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {(['subs', 'recipients', 'log'] as const).map(t => (
+        {(['subs', 'recipients', 'log', 'settings'] as const).map(t => (
           <button key={t} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setTab(t)}>
-            {t === 'subs' ? 'Subscriptions' : t === 'recipients' ? 'Recipients' : 'Send History'}
+            {t === 'subs' ? 'Subscriptions' : t === 'recipients' ? 'Recipients' : t === 'log' ? 'Send History' : 'Settings'}
           </button>
         ))}
       </div>
@@ -75,6 +75,54 @@ export default function NotifyPage() {
       {tab === 'recipients' && <Recipients saved={saved} employees={employees} onChange={reload} setMsg={setMsg} />}
       {tab === 'subs' && <Subscriptions reports={reports} saved={saved} subs={subs} onChange={reload} setMsg={setMsg} />}
       {tab === 'log' && <SendLog log={log} />}
+      {tab === 'settings' && <NotifySettings setMsg={setMsg} />}
+    </div>
+  )
+}
+
+function NotifySettings({ setMsg }: { setMsg: (s: string) => void }) {
+  const [days, setDays] = useState<number>(7)
+  const [loaded, setLoaded] = useState(false)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api(`/api/v1/notify/settings?org_id=${ORG_ID}`)
+        setDays(Number(r?.download_link_expiry_days ?? 7))
+      } catch (e: any) { setMsg('Load settings error: ' + (e?.message || e)) }
+      finally { setLoaded(true) }
+    })()
+  }, [setMsg])
+  async function save() {
+    setBusy(true)
+    try {
+      const r = await api(`/api/v1/notify/settings?org_id=${ORG_ID}`, {
+        method: 'PUT', body: JSON.stringify({ download_link_expiry_days: days }),
+      })
+      setDays(Number(r?.download_link_expiry_days ?? days))
+      setMsg('✓ Settings saved.')
+    } catch (e: any) { setMsg('Save error: ' + (e?.message || e)) }
+    finally { setBusy(false) }
+  }
+  return (
+    <div style={card}>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>WhatsApp / download links</div>
+      <div style={{ fontSize: 12, color: 'var(--muted,#888)', marginBottom: 12 }}>
+        When WhatsApp can only deliver a link (a report sent outside the recipient's 24h window with no
+        document-header template), the link is a no-login direct download of the file. Set how long that
+        link stays valid.
+      </div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+        Download link expiry (days)
+        <input type="number" min={1} max={90} value={loaded ? days : ''} disabled={!loaded}
+          onChange={e => setDays(Math.max(1, Math.min(90, Number(e.target.value) || 1)))}
+          style={{ ...inp, width: 90 }} />
+      </label>
+      <div style={{ marginTop: 12 }}>
+        <button className="btn btn-primary" disabled={busy || !loaded} onClick={save}>
+          {busy ? '⏳ Saving…' : 'Save'}
+        </button>
+      </div>
     </div>
   )
 }

@@ -729,6 +729,7 @@ SETTING_AREAS = [
     {"key": "closing",           "label": "Daily Closing / Tender Fields"},
     {"key": "kpi",               "label": "KPI Metrics"},
     {"key": "performance_review", "label": "Performance Review / Productivity config"},
+    {"key": "notify_policy",     "label": "Notify (report-delivery policy · download-link expiry)"},
     {"key": "expenses",          "label": "Store Expenses"},
     {"key": "labels",            "label": "Display Labels"},
     {"key": "menu",              "label": "Menu Layout"},
