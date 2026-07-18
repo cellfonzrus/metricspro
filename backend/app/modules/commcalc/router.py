@@ -7950,10 +7950,16 @@ async def sales_report_detail(period: str = "", store: str = "", salesperson: st
 
     def _n(s):
         return (s or "").strip().lower()
-    ns, nr = _n(store), _n(salesperson)
+    nr = _n(salesperson)
+    # M2 (drill-down canonical-safe): the Sales Report groups stores by the CANONICAL key, so the cell's
+    # `store` label may be one of SEVERAL raw spellings that rolled into that row. Match the drilled store by
+    # the SAME canonical key (not the raw spelling) so EVERY variant-spelling transaction of the merged store
+    # appears here — not just the label's spelling. Falls back to the case/whitespace fold when nothing maps.
+    _ckey = _canonical_store_key_fn(client, org_id)
+    store_ck = _ckey(store) if store else ""
     rows = [r for r in rows
             if (not date or str(r.get("trans_date") or "")[:10] == date)
-            and (not store or _n(r.get("store")) == ns)
+            and (not store or _ckey(r.get("store")) == store_ck)
             and (not salesperson or _n(r.get("salesperson")) == nr)]
 
     # Which POS Departments count as a device "box" — CONFIG-DRIVEN (mig 218, the SAME list the box count
@@ -8189,13 +8195,21 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
     # {field:str, contains_any:[str], equals_any:[str]}; malformed rules/conds dropped. Empty list = the
     # blank-ct engine is a no-op (Boost byte-identical).
     if "activation_rules" in body:
+        # n2 (Gate-1): the cond `field` must be a REAL matchable sales column (pick-don't-type over these);
+        # a typo'd field would silently never match, so drop it at save time.
+        _KNOWN_RULE_FIELDS = {'department', 'category', 'product_desc', 'trans_type', 'contract_type',
+                              'tender_type', 'sku', 'product_id', 'serial_1', 'mdn', 'store', 'salesperson',
+                              'customer', 'email'}
         def _san_cond(c):
             if not isinstance(c, dict):
                 return None
             f = str(c.get('field') or '').strip()
-            ca = [str(x).strip() for x in (c.get('contains_any') or []) if str(x).strip()]
-            ea = [str(x).strip() for x in (c.get('equals_any') or []) if str(x).strip()]
-            if not f or (not ca and not ea):
+            if f not in _KNOWN_RULE_FIELDS:
+                return None
+            _cav, _eav = c.get('contains_any'), c.get('equals_any')
+            ca = [str(x).strip() for x in ([_cav] if isinstance(_cav, str) else (_cav or [])) if str(x).strip()]
+            ea = [str(x).strip() for x in ([_eav] if isinstance(_eav, str) else (_eav or [])) if str(x).strip()]
+            if not ca and not ea:
                 return None
             o = {'field': f}
             if ca:
@@ -9538,8 +9552,17 @@ def _line_cond_hit(cond, lines):
     if not isinstance(cond, dict):
         return False
     field = str(cond.get('field') or 'product_desc')
-    pats = [str(p).strip().lower() for p in (cond.get('contains_any') or []) if str(p).strip()]
-    eqs = [str(p).strip().lower() for p in (cond.get('equals_any') or []) if str(p).strip()]
+    # m1 (Gate-1): a STRING value (e.g. a SQL-seeded/hand-edited `contains_any:"Rtr"` that bypassed the
+    # PUT sanitizer) must NOT be iterated per-CHARACTER (which would match 'r'/'t' substrings). Coerce a
+    # bare string to a one-element list; a list/tuple to its string items; anything else -> [] (skip).
+    def _as_pats(v):
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, (list, tuple)):
+            return []
+        return [str(p).strip().lower() for p in v if str(p).strip()]
+    pats = _as_pats(cond.get('contains_any'))
+    eqs = _as_pats(cond.get('equals_any'))
     if not pats and not eqs:
         return False
     for l in lines:
@@ -9588,6 +9611,13 @@ def _blank_ct_bucket_map(rows, ct_map, rules):
         return {}
     txn, classed = {}, set()
     for r in rows:
+        # m2 (Gate-1): a voided / Return line must not serve as activation EVIDENCE, and a voided
+        # ct-labeled line must not mark its tid 'classed' (which would block the rescue). Same skip
+        # rules as _sales_cell_agg / _classification_gaps.
+        if str(r.get('voided') or '').strip().lower() in _VOID_TOKENS:
+            continue
+        if str(r.get('trans_type') or '').strip() == 'Return':
+            continue
         t = str(r.get('trans_id') or '').strip()
         if not t:
             continue
@@ -9660,25 +9690,87 @@ def _classification_gaps(rows, acfg):
             'note': note}
 
 
+_STORE_STREET_SUFFIX = {
+    "ave", "avenue", "st", "street", "rd", "road", "blvd", "boulevard", "ln", "lane", "dr", "drive",
+    "ct", "court", "pl", "place", "way", "hwy", "highway", "pkwy", "parkway", "ter", "terrace", "cir",
+    "circle", "ste", "suite", "unit", "apt", "fl", "floor", "rm", "room", "bldg", "building",
+    "n", "s", "e", "w", "north", "south", "east", "west", "ne", "nw", "se", "sw",
+}
+
+
+def _store_lead_num(s):
+    m = re.match(r"\s*(\d+)", str(s or ""))
+    return m.group(1) if m else ""
+
+
+def _store_street_tokens(s):
+    """Non-numeric, non-suffix STREET-NAME tokens of a store string (for the leading-number merge
+    guard): '957 Pennsylvania Ave' -> {'pennsylvania'}. Pure."""
+    toks = [t for t in re.split(r"[^a-z0-9]+", str(s or "").lower()) if t]
+    return {t for t in toks if not t.isdigit() and t not in _STORE_STREET_SUFFIX}
+
+
 def _canonical_store_key_fn(client, org_id):
-    """Return store_str -> canonical GROUPING key using the shipped store-resolution machinery
-    (_store_code_resolver: store_aliases → store_mapping → storeops roster → leading-number), then
-    _cell_store_key to fold case/whitespace. So 'Ave'/'Avenue'/case/whitespace variants of ONE store
-    that resolve to the same code collapse to ONE key, while two GENUINELY different stores keep
-    distinct keys. org-scoped, config-driven (no hard-coded store names). NEVER raises — on any
-    resolver error it degrades to _cell_store_key (case/whitespace fold only), so the report never 500s.
-    An org with no aliases/mapping is byte-identical to _cell_store_key alone."""
+    """Return store_str -> canonical GROUPING key for the DISPLAY aggregation, so spelling variants of
+    ONE store ('957 Pennsylvania Ave' / 'Avenue', case, whitespace) collapse to a single Sales-Report /
+    Exec-MTD row, while two GENUINELY DIFFERENT stores stay split. org-scoped, config-driven (no
+    hard-coded store names). NEVER raises — degrades to _cell_store_key (case/whitespace fold) on any
+    error, and an org with NO store_mapping/aliases is exactly _cell_store_key (Boost byte-identical).
+
+    Resolution precedence (self-contained on _store_maps — deliberately NOT coa's leading-number step,
+    which false-merges different streets that share a house number on a PARTIALLY-mapped org — Gate-1 M1):
+      0) EXPLICIT match — the store's _cell_store_key hits a store_alias / store_mapping address /
+         storeops address (whitespace-insensitive: keys are _cell_store_key'd, closing the n1
+         double-space case), OR the string already IS a store_code → that code's key. Explicit mappings
+         are trusted verbatim (an owner alias may legitimately have no token overlap, e.g. a nickname).
+      1) GUARDED leading-number — only when EXACTLY ONE mapped code carries the input's house number AND
+         the input shares >=1 STREET-NAME token (suffixes/directionals dropped) with that code's
+         address. "957 pennsylvania ave" ∩ "957 pennsylvania avenue" = {pennsylvania} ✓ (merge);
+         "100 oak ave" vs the only-mapped "100 main st" = ∅ ✗ (stay SPLIT).
+      2) otherwise _cell_store_key(store) (fold only) — never a false merge."""
     try:
-        _resolve = _store_code_resolver(client, org_id)
+        M = _store_maps(client, org_id)
     except Exception:
-        _resolve = None
+        M = None
+    if not M:
+        return _cell_store_key
+    addr_to_code = M.get("addr_to_code") or {}
+    so_addr_to_code = M.get("so_addr_to_code") or {}
+    alias_to_code = M.get("alias_to_code") or {}
+    so_codes = {str(c).upper() for c in (M.get("so_codes") or set())}
+    # explicit lookup keyed on _cell_store_key (whitespace-insensitive) → store_code
+    explicit = {}
+    for _src in (addr_to_code, so_addr_to_code, alias_to_code):
+        for _a, _c in _src.items():
+            if _a and _c:
+                explicit[_cell_store_key(_a)] = _c
+    # leading-number index + per-code street tokens (from the mapped addresses only)
+    num_to_codes, code_tokens = {}, {}
+    for _a, _c in list(so_addr_to_code.items()) + list(addr_to_code.items()):
+        _n = _store_lead_num(_a)
+        if _n:
+            num_to_codes.setdefault(_n, set()).add(_c)
+        code_tokens.setdefault(_c, set()).update(_store_street_tokens(_a))
 
     def _key(store):
+        raw_fold = _cell_store_key(store)
         try:
-            base = _resolve(store) if _resolve else store
+            # 0) explicit alias / mapped address (whitespace-insensitive)
+            if raw_fold in explicit:
+                return _cell_store_key(explicit[raw_fold])
+            # 0c) the string already IS a store_code
+            if str(store or "").strip().upper() in so_codes:
+                return raw_fold
+            # 1) GUARDED leading-number — unambiguous house-number + shared street-name token
+            _n = _store_lead_num(store)
+            _codes = num_to_codes.get(_n) if _n else None
+            if _codes and len(_codes) == 1:
+                _c = next(iter(_codes))
+                if _store_street_tokens(store) & (code_tokens.get(_c) or set()):
+                    return _cell_store_key(_c)
+            return raw_fold
         except Exception:
-            base = store
-        return _cell_store_key(base)
+            return raw_fold
     return _key
 
 
@@ -11169,10 +11261,15 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     rep_sel = {str(s).strip().lower() for s in (reps or []) if str(s).strip()}
     market_sel = {str(s).strip().lower() for s in (markets or []) if str(s).strip()}
     applied = {'stores': sorted(store_sel), 'markets': sorted(market_sel), 'reps': sorted(rep_sel)}
+    # M2 (filter canonical-safe): the by_location rows are grouped by the CANONICAL store key, so filtering
+    # by a merged store's LABEL must match every variant-spelling row of that store. Canonicalize BOTH the
+    # selection and each row's store through the SAME resolver (the one _sales_cell_agg groups by below).
+    _ckey_ex = _canonical_store_key_fn(client, org_id)
+    store_sel_ck = {_ckey_ex(s) for s in (stores or []) if str(s).strip()}
 
     def _keep(r):
         st = str(r.get('store') or '').strip()
-        if store_sel and st.lower() not in store_sel:
+        if store_sel and _ckey_ex(st) not in store_sel_ck:
             return False
         if rep_sel and str(r.get('salesperson') or '').strip().lower() not in rep_sel:
             return False
@@ -11202,9 +11299,11 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     # cell, so SUMMING the per-cell distinct-txn counts across a store's cells == that store's distinct-txn
     # total. Activation = premium−port (Port is a sub-split of premium); Total Activation = prem+byod+upg,
     # which EQUALS the Sales Report's (activations+byod+upgrades) over the same rows.
-    cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg, store_key=_canonical_store_key_fn(client, org_id))
+    cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg, store_key=_ckey_ex)
 
     def _blank():
+        # NOTE (n3): by_store dicts also gain a '_name' key (the raw display spelling) set in the loop
+        # below — a metric sentinel, NOT a bucket. Any future code iterating these dicts must skip '_name'.
         return {'activation': 0, 'port': 0, 'byod': 0, 'upgrade': 0, 'total_phones': 0,
                 'bill_qty': 0, 'bill_amt': 0.0, 'acc_sales': 0.0, 'activation_fee': 0.0, 'protect': 0}
     by_store, by_emp = {}, {}
