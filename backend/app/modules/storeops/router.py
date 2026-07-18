@@ -255,14 +255,18 @@ def get_payroll(month: str = None, authorization: str = Header(default=""), org_
     
     emp_map = {e["employee_id"]: e for e in employees}
     summary = {}
+    # employee_id -> {store_code: hours-weight}. RULE FIVE (§3d) store filter: a floater's row must
+    # attribute to the store they actually WORKED THE MOST this month, not just whichever shift the
+    # DB happened to return first (the old behavior) or their static home_store.
+    store_hours: dict = {}
     for s in shifts:
         eid = s.get("employee_id")
+        emp = emp_map.get(eid, {})
         if eid not in summary:
-            emp = emp_map.get(eid, {})
             summary[eid] = {
                 "employee_id": eid,
                 "name": s.get("employee_name") or emp.get("name", ""),
-                "store": s.get("store_code") or emp.get("home_store", ""),
+                "store": "",  # filled below from store_hours (dominant store), home_store fallback
                 "pay_rate": float(emp.get("pay_rate") or 0),
                 "scheduled_hours": 0,
                 "actual_hours": 0,
@@ -275,9 +279,17 @@ def get_payroll(month: str = None, authorization: str = Header(default=""), org_
         summary[eid]["scheduled_hours"] += sched
         summary[eid]["actual_hours"]    += act
         summary[eid]["shifts"] += 1
+        st = (s.get("store_code") or "").strip()
+        if st:
+            sh = store_hours.setdefault(eid, {})
+            sh[st] = sh.get(st, 0.0) + sched + act
 
     rows = list(summary.values())
     for r in rows:
+        eid = r["employee_id"]
+        sh = store_hours.get(eid)
+        r["store"] = (max(sh.items(), key=lambda kv: kv[1])[0] if sh
+                      else (emp_map.get(eid, {}).get("home_store") or ""))
         r["scheduled_pay"] = round(r["scheduled_hours"] * r["pay_rate"], 2)
         r["actual_pay"]    = round(r["actual_hours"] * r["pay_rate"], 2)
     ks = scope_keyset(authorization, org_id)
@@ -1598,7 +1610,7 @@ def list_hours_budgets(week: str = "", authorization: str = Header(default=""), 
     ws, we = _work_week_bounds(org_id, ref)
     budgets = {b["store_code"]: float(b.get("weekly_hours") or 0)
                for b in (sb().table("hours_budget").select("store_code,weekly_hours").eq("org_id", org_id).execute().data or [])}
-    stores = (sb().table("stores").select("store_code,address").eq("org_id", org_id).execute().data) or []
+    stores = (sb().table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
     out = []
     for s in stores:
         sc = s.get("store_code")
@@ -1606,8 +1618,9 @@ def list_hours_budgets(week: str = "", authorization: str = Header(default=""), 
             continue
         used = _store_week_hours(org_id, sc, ws, we)
         bud = budgets.get(sc)
-        out.append({"store_code": sc, "address": s.get("address"), "weekly_hours": bud,
-                    "used_hours": round(used, 1), "over": (bud is not None and used > bud + 1e-6),
+        out.append({"store_code": sc, "address": s.get("address"), "market": s.get("market"),
+                    "weekly_hours": bud, "used_hours": round(used, 1),
+                    "over": (bud is not None and used > bud + 1e-6),
                     "override": _budget_override_ok(org_id, sc, ws)})
     return {"week_start": ws, "week_end": we, "budgets": out}
 
@@ -1772,16 +1785,27 @@ def payroll_raw(start: str, end: str, authorization: str = Header(default=""), o
     stale when rates change), per the StoreOps payroll spec."""
     emps = (sb().table("employees").select("employee_id,name,home_store,pay_rate,is_active")
             .eq("org_id", org_id).eq("is_active", True).execute().data) or []
-    tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date")
+    tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
           .eq("org_id", org_id).gte("work_date", start).lte("work_date", end).limit(20000).execute().data) or []
     mh = (sb().table("manual_hours").select("employee_id,hours")
           .eq("org_id", org_id).gte("work_date", start).lte("work_date", end).limit(5000).execute().data) or []
     ps = (sb().table("payroll_settings").select("*").eq("org_id", org_id).execute().data) or []
     settings = {s["employee_id"]: s for s in ps}
     clocked, manual = {}, {}
+    # employee_id -> {store_code: clocked hours}. RULE FIVE (§3d) store filter: attribute to the store the
+    # employee actually CLOCKED IN AT THE MOST this pay period — was unconditionally home_store before,
+    # which made a store filter meaningless for any floater and could hide their hours from the store
+    # manager who actually worked with them.
+    store_hours: dict = {}
     for t in tl:
         if t.get("clock_out") and t.get("hours") is not None:   # only closed punches count
-            clocked[t["employee_id"]] = clocked.get(t["employee_id"], 0.0) + float(t["hours"] or 0)
+            eid = t["employee_id"]
+            hrs = float(t["hours"] or 0)
+            clocked[eid] = clocked.get(eid, 0.0) + hrs
+            st = (t.get("store_code") or "").strip()
+            if st:
+                sh = store_hours.setdefault(eid, {})
+                sh[st] = sh.get(st, 0.0) + hrs
     for m in mh:
         manual[m["employee_id"]] = manual.get(m["employee_id"], 0.0) + float(m["hours"] or 0)
     out = []
@@ -1792,7 +1816,11 @@ def payroll_raw(start: str, end: str, authorization: str = Header(default=""), o
         if ch == 0 and mhh == 0:
             continue
         s = settings.get(eid) or {}
-        out.append({"employee_id": eid, "name": e.get("name"), "store": e.get("home_store"),
+        sh = store_hours.get(eid)
+        # manual_hours carries no store_code (mig 045) — those hours have no shift to attribute to, so
+        # the row still falls back to home_store only when the employee clocked ZERO shifts this period.
+        store = (max(sh.items(), key=lambda kv: kv[1])[0] if sh else (e.get("home_store") or ""))
+        out.append({"employee_id": eid, "name": e.get("name"), "store": store,
                     "pay_rate": float(e.get("pay_rate") or 0), "clocked_hours": ch, "manual_hours": mhh,
                     "total_hours": round(ch + mhh, 2),
                     "settings": {"filing_status": s.get("filing_status") or "Single",

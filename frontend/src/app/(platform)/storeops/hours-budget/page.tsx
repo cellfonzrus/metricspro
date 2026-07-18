@@ -1,13 +1,15 @@
 'use client'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { api } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
 
 // Per-store weekly hours BUDGET + DM-approved overrides (mig 087). A manager sets each store's
 // weekly hours budget; the scheduler blocks going over it and shows an alert here; to exceed, a
 // manager requests DM approval and the DM ticks approve in-app (recorded) — which unlocks that
 // store+week. "Week" = the tenant work-week (from Pay Period & Work-Week settings).
-interface Row { store_code: string; address?: string; weekly_hours: number | null; used_hours: number; over: boolean; override: boolean }
+interface Row { store_code: string; address?: string; market?: string | null; weekly_hours: number | null; used_hours: number; over: boolean; override: boolean }
 interface Ov { id: string; store_code: string; week_start: string; reason?: string; status: string; requested_by?: string; decided_by?: string }
 
 export default function HoursBudgetPage() {
@@ -17,12 +19,37 @@ export default function HoursBudgetPage() {
   const [ovs, setOvs] = useState<Ov[]>([])
   const [edit, setEdit] = useState<Record<string, string>>({})
   const [msg, setMsg] = useState('')
+  // RULE FIVE (§3d): this surface is one row PER STORE (no employee/rep dimension — omitted below,
+  // deviation documented in the handoff) with `market` now returned by the backend. Period stays the
+  // existing native "week" date control above (not substituted).
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
 
   const load = useCallback(() => {
     api(`/api/v1/storeops/hours-budgets${week ? `?week=${week}` : ''}`).then((r: any) => { setRows(r.budgets || []); setWeekStart(r.week_start || '') }).catch((e: any) => setMsg('❌ ' + (e?.message || e)))
     api('/api/v1/storeops/budget-overrides').then((r: any) => setOvs(r.overrides || [])).catch(() => {})
   }, [week])
   useEffect(() => { load() }, [load])
+
+  const storeMarket = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const r of rows) if (r.store_code) m[r.store_code] = r.market || ''
+    return m
+  }, [rows])
+  const storeOptions = useMemo(() => rows
+    .filter(r => r.store_code)
+    .map(r => ({ id: r.store_code, label: r.store_code, sublabel: r.address || r.market || undefined }))
+    .sort((a, b) => a.label.localeCompare(b.label)), [rows])
+  const marketOptions = useMemo(() =>
+    Array.from(new Set(rows.map(r => r.market).filter(Boolean) as string[])).sort(), [rows])
+
+  // Filters narrow BOTH tables (budget rows are already 1-per-store, so this is a plain row filter —
+  // no shift-level aggregation to narrow first here) and drive both exports.
+  const visibleRows = useMemo(() => filterRows(rows, filt, {
+    store: r => r.store_code, market: r => r.market || '',
+  }), [rows, filt])
+  const visibleOvs = useMemo(() => filterRows(ovs, filt, {
+    store: r => r.store_code, market: r => storeMarket[r.store_code] || '',
+  }), [ovs, filt, storeMarket])
 
   async function saveBudget(store: string) {
     const v = edit[store]
@@ -44,7 +71,7 @@ export default function HoursBudgetPage() {
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
 
-  const pending = ovs.filter(o => o.status === 'pending')
+  const pending = visibleOvs.filter(o => o.status === 'pending')
   const inp: React.CSSProperties = { width: 90, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
   // RULE FOUR (§3c): export the visible rows for each table — no PII in either.
@@ -74,14 +101,22 @@ export default function HoursBudgetPage() {
       </p>
       {msg && <div style={{ fontSize: 13, marginBottom: 12 }}>{msg}</div>}
 
+      <StandardFilterBar
+        value={filt} onChange={setFilt}
+        show={{ period: false, reps: false }}
+        periodMode="none"
+        storeOptions={storeOptions} marketOptions={marketOptions}
+        storeLabel="Stores…"
+      />
+
       <div className="card" style={{ padding: 16, marginBottom: 18 }}>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-          <ReportExportBar title="Hours Budget" subtitle={`Week of ${weekStart || '—'}`} filename="hours-budget" columns={budgetCols} rows={rows} />
+          <ReportExportBar title="Hours Budget" subtitle={`Week of ${weekStart || '—'}`} filename="hours-budget" columns={budgetCols} rows={visibleRows} />
         </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>{['Store', 'Weekly budget (h)', 'Scheduled this week', '', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '7px 9px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
           <tbody>
-            {rows.map(r => {
+            {visibleRows.map(r => {
               const editing = r.store_code in edit
               const val = editing ? edit[r.store_code] : (r.weekly_hours ?? '')
               return (
@@ -106,19 +141,19 @@ export default function HoursBudgetPage() {
             })}
           </tbody>
         </table>
-        {rows.length === 0 && <div style={{ fontSize: 13, color: 'var(--text3)', padding: 8 }}>No stores found.</div>}
+        {visibleRows.length === 0 && <div style={{ fontSize: 13, color: 'var(--text3)', padding: 8 }}>No stores found.</div>}
       </div>
 
       <div className="card" style={{ padding: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>Override approvals {pending.length > 0 && <span style={{ color: '#92400e' }}>· {pending.length} pending</span>}</div>
-          {ovs.length > 0 && <ReportExportBar title="Hours Budget — Override Approvals" columns={ovCols} rows={ovs} />}
+          {visibleOvs.length > 0 && <ReportExportBar title="Hours Budget — Override Approvals" columns={ovCols} rows={visibleOvs} />}
         </div>
-        {ovs.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text3)' }}>No override requests.</div> : (
+        {visibleOvs.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text3)' }}>No override requests.</div> : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>{['Store', 'Week', 'Reason', 'Status', 'Requested by', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '7px 9px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
             <tbody>
-              {ovs.slice(0, 40).map(o => (
+              {visibleOvs.slice(0, 40).map(o => (
                 <tr key={o.id} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={{ padding: '7px 9px', fontWeight: 600 }}>{o.store_code}</td>
                   <td style={{ padding: '7px 9px' }}>{o.week_start}</td>

@@ -1,8 +1,10 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api } from '@/lib/client'
 import { computePay, W4 } from '@/lib/payroll-tax'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 
 // Payroll with tax withholding (Part B / B3). Pulls raw inputs (clocked + manual hours, rate, W-4)
 // and computes FICA + federal + state withholding + net client-side. W-4 editable per employee; each
@@ -22,18 +24,54 @@ export default function PayrollTaxPage() {
   const [edit, setEdit] = useState<string>('')        // employee_id whose W-4 is being edited
   const [slip, setSlip] = useState<any>(null)
   const [msg, setMsg] = useState('')
+  const [stores, setStores] = useState<any[]>([])
+  const [empEmail, setEmpEmail] = useState<Record<string, string>>({})
+  // RULE FIVE (§3d): store(s)/rep(s) multi-select, options org-scoped off the loaded roster (pick-don't-
+  // type, §3b). Period stays the existing From/To range above (not substituted).
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
 
   const load = useCallback(() => {
     api(`/api/v1/storeops/payroll-raw?start=${start}&end=${end}`).then((r: any) => setRows(r?.rows || [])).catch((e: any) => setMsg('Load failed (run migration 045?): ' + (e?.message || e)))
   }, [start, end])
   useEffect(() => { load() }, [load])
+  useEffect(() => {
+    api('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
+    api('/api/v1/storeops/employees').then((r: any) => {
+      const m: Record<string, string> = {}
+      for (const e of (Array.isArray(r) ? r : [])) if (e.employee_id) m[e.employee_id] = e.email || ''
+      setEmpEmail(m)
+    }).catch(() => {})
+  }, [])
 
   async function saveW4(eid: string, w4: W4) {
     try { await api(`/api/v1/storeops/payroll-settings/${encodeURIComponent(eid)}`, { method: 'PUT', body: JSON.stringify(w4) }); setMsg('✅ W-4 saved.'); setEdit(''); load() }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
 
-  const lines = rows.map(r => ({ ...r, pay: computePay(r.total_hours, r.pay_rate, r.settings) }))
+  const storeMarket = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
+    return m
+  }, [stores])
+  const storeOptions = useMemo(() => stores
+    .filter(s => s.store_code)
+    .map(s => ({ id: s.store_code, label: s.store_code, sublabel: s.address || s.market || undefined }))
+    .sort((a, b) => a.label.localeCompare(b.label)), [stores])
+  const marketOptions = useMemo(() =>
+    Array.from(new Set(stores.map(s => s.market).filter(Boolean) as string[])).sort(), [stores])
+  const repOptions = useMemo(() => optionsFromRows(rows, {
+    rep: r => r.name, repEmail: r => empEmail[r.employee_id],
+  }).reps, [rows, empEmail])
+
+  // Filters narrow the raw per-employee rows BEFORE the tax calc runs (store attribution follows the
+  // employee's actual clocked-in store — see the GET /payroll-raw backend fix, was unconditionally
+  // home_store before). Gross/Net badges + export re-sum from this filtered set. Empty filter = every
+  // row unchanged → numbers stay byte-identical to before this change.
+  const visibleRows = useMemo(() => filterRows(rows, filt, {
+    store: r => r.store, market: r => storeMarket[r.store] || '', rep: r => r.name,
+  }), [rows, filt, storeMarket])
+
+  const lines = visibleRows.map(r => ({ ...r, pay: computePay(r.total_hours, r.pay_rate, r.settings) }))
   const tot = lines.reduce((a, l) => ({ gross: a.gross + l.pay.gross, ded: a.ded + l.pay.deductions, net: a.net + l.pay.net, emp: a.emp + l.pay.employer_fica }), { gross: 0, ded: 0, net: 0, emp: 0 })
 
   // RULE FOUR (§3c): export the exact rows/columns rendered on screen — a computed withholding
@@ -71,6 +109,14 @@ export default function PayrollTaxPage() {
         <ReportExportBar title="Payroll with Tax" subtitle={`${start} → ${end}`} filename={`payroll-tax-${start}_${end}`} columns={cols} rows={lines} />
         {msg && <span style={{ fontSize: 13, width: '100%' }}>{msg}</span>}
       </div>
+
+      <StandardFilterBar
+        value={filt} onChange={setFilt}
+        show={{ period: false }}
+        periodMode="none"
+        storeOptions={storeOptions} marketOptions={marketOptions} repOptions={repOptions}
+        storeLabel="Stores…" repLabel="Employees…"
+      />
 
       <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1000 }}>
