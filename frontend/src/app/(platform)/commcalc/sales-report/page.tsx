@@ -239,6 +239,17 @@ export default function SalesReportPage() {
         </div>
       )}
 
+      {/* Activation-classification VISIBILITY (mig 213/224): a tenant whose activations read 0 sees exactly
+          WHY (blank / unrecognized contract types) and where to map them — never a silent 0 again. */}
+      {data?.classification_gaps?.note && (
+        <div style={{ fontSize: 12.5, background: 'var(--warn-bg, #fff6e5)', color: 'var(--warn-fg, #7a5200)',
+                      border: '1px solid var(--warn-border, #f0d28a)', borderRadius: 8, padding: '8px 12px', marginBottom: 14 }}>
+          ⚠️ {data.classification_gaps.note}
+          {(data.classification_gaps.rescued_by_rules ?? 0) > 0 &&
+            <> · <b>{data.classification_gaps.rescued_by_rules}</b> blank-contract-type transaction(s) already classified by your activation rules.</>}
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
         <Tile label="Revenue" value={fmt(t.revenue || 0)} />
         <Tile label="Gross Profit" value={fmt(t.gp || 0)} />
