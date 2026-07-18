@@ -4,7 +4,7 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import StandardFilterBar from '@/components/StandardFilterBar'
-import { emptyStandardFilter, filterRows, optionsFromRows, isStandardFilterActive, type StandardFilterValue } from '@/lib/standard-filters'
+import { emptyStandardFilter, isStandardFilterActive, type StandardFilterValue } from '@/lib/standard-filters'
 
 export default function CompTrendPage() {
   // 'rep' = the commission WE pay each rep (rep_commissions.total_payout) — what "commission being
@@ -47,10 +47,53 @@ export default function CompTrendPage() {
   // ── per-rep view (the commission WE pay each rep) ──
   const repMonths: string[] = repData?.months || []
   const repsAll: any[] = repData?.reps || []
-  const repAcc = { store: (r: any) => r.store, market: (r: any) => r.market, rep: (r: any) => r.rep }
-  const repOpts = useMemo(() => optionsFromRows(repsAll, repAcc), [repsAll])   // eslint-disable-line react-hooks/exhaustive-deps
-  // FILTERED reps drive the table, the tiles (recomputed below) AND the export (WYSIWYG §3c).
-  const reps = useMemo(() => filterRows(repsAll, filt, repAcc), [repsAll, filt])   // eslint-disable-line react-hooks/exhaustive-deps
+  const norm = (v: any) => (v == null ? '' : String(v)).trim()
+  // Options come from the per-month POINTS (a floating rep spans multiple stores/markets across the
+  // window), not one collapsed store per rep — pick-don't-type over the org-scoped rows (RULE THREE/FIVE).
+  const repOpts = useMemo(() => {
+    const stores = new Set<string>(), markets = new Set<string>(), repsM = new Set<string>()
+    for (const r of repsAll) {
+      if (norm(r.rep)) repsM.add(norm(r.rep))
+      for (const pt of (r.points || [])) {
+        if (norm(pt.store)) stores.add(norm(pt.store))
+        if (norm(pt.market)) markets.add(norm(pt.market))
+      }
+    }
+    return { stores: [...stores].sort(), markets: [...markets].sort(),
+             reps: [...repsM].sort().map(id => ({ id, label: id })) }
+  }, [repsAll])   // eslint-disable-line react-hooks/exhaustive-deps
+  // FIX 4 — PER-MONTH attribution. A store/market filter narrows the MONTHS within each rep (only the
+  // months worked at that store/market count), never the whole rep by one collapsed store. Totals re-sum
+  // from the narrowed months; a rep with no surviving month drops out. The table, tiles AND export
+  // (WYSIWYG §3c) all read this narrowed set. With no store/market filter, by_period/total are unchanged.
+  const reps = useMemo(() => {
+    const storeSet = new Set(filt.stores.map(norm)), marketSet = new Set(filt.markets.map(norm)), repSet = new Set(filt.reps.map(norm))
+    const hasStore = storeSet.size > 0, hasMarket = marketSet.size > 0, hasRep = repSet.size > 0
+    const out: any[] = []
+    for (const r of repsAll) {
+      if (hasRep && !repSet.has(norm(r.rep))) continue
+      const points: any[] = r.points || []
+      if (!hasStore && !hasMarket) {
+        const seen = new Set<string>()
+        for (const pt of points) if (norm(pt.store)) seen.add(norm(pt.store))
+        out.push({ ...r, _stores: [...seen].sort() })   // by_period/total untouched (byte-identical)
+        continue
+      }
+      const kept = points.filter(pt =>
+        (!hasStore || storeSet.has(norm(pt.store))) && (!hasMarket || marketSet.has(norm(pt.market))))
+      if (kept.length === 0) continue   // this rep worked none of the selected stores/markets → drop
+      const by_period: Record<string, number> = {}
+      const seen = new Set<string>()
+      let total = 0
+      for (const pt of kept) {
+        by_period[pt.period] = (by_period[pt.period] || 0) + (pt.pay || 0)
+        total += pt.pay || 0
+        if (norm(pt.store)) seen.add(norm(pt.store))
+      }
+      out.push({ ...r, by_period, total: Math.round(total * 100) / 100, _stores: [...seen].sort() })
+    }
+    return out.sort((a, b) => (b.total || 0) - (a.total || 0))
+  }, [repsAll, filt])   // eslint-disable-line react-hooks/exhaustive-deps
   const repFilterActive = isStandardFilterActive(filt)
   const latestRepMonth = repMonths[repMonths.length - 1] || ''
   const repPerMonth = (m: string) => reps.reduce((s: number, r: any) => s + (r.by_period?.[m] || 0), 0)
@@ -63,7 +106,7 @@ export default function CompTrendPage() {
       filename: `commission-per-rep`,
       sheets: [{ name: 'By rep', rows: reps, columns: [
         { header: 'Rep', get: (r: any) => r.rep },
-        { header: 'Store', get: (r: any) => r.store || '' },
+        { header: 'Store', get: (r: any) => (r._stores?.length ? r._stores.join(', ') : r.store) || '' },
         ...repMonths.map((m) => ({ header: m, get: (r: any) => r.by_period?.[m] || 0, money: true })),
         { header: 'Total', get: (r: any) => r.total, money: true },
       ] }],
@@ -163,7 +206,7 @@ export default function CompTrendPage() {
                   {reps.map((r: any) => (
                     <tr key={r.rep} style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={{ padding: '7px 12px', fontSize: 13, fontWeight: 600 }}>{r.rep}</td>
-                      <td style={{ padding: '7px 12px', fontSize: 12, color: 'var(--text3)' }}>{r.store || '—'}</td>
+                      <td style={{ padding: '7px 12px', fontSize: 12, color: 'var(--text3)' }}>{(r._stores?.length ? r._stores.join(', ') : r.store) || '—'}</td>
                       {repMonths.map((m) => <td key={m} style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13 }}>{r.by_period?.[m] ? fmt(r.by_period[m]) : '—'}</td>)}
                       <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, fontWeight: 700 }}>{fmt(r.total)}</td>
                     </tr>

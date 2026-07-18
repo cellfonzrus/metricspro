@@ -135,6 +135,13 @@ export default function ReportsPage() {
         </div>
       </div>
 
+      {/* RULE FIVE (§3d) standard bar — ABOVE the tabs so the active filter (which drives the always-visible
+          header total AND both the Breakdown and Compensation tables) is always visible + clearable, on any tab. */}
+      <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false }}
+        storeOptions={opts.stores} marketOptions={opts.markets} repOptions={opts.reps}
+        repLabel="Reps…"
+        right={<span style={{ fontSize: 13, color: 'var(--text2)', alignSelf: 'center' }}>{filtered.length} of {reps.length} rows</span>} />
+
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'var(--surface2)', padding: 4, borderRadius: 10, width: 'fit-content' }}>
         {TABS.map(t => (
@@ -152,12 +159,6 @@ export default function ReportsPage() {
       {/* Rep Breakdown */}
       {tab === 'breakdown' && (
         <div>
-          <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false }}
-            storeOptions={opts.stores} marketOptions={opts.markets} repOptions={opts.reps}
-            repLabel="Reps…"
-            right={<span style={{ fontSize: 13, color: 'var(--text2)', alignSelf: 'center' }}>{filtered.length} of {reps.length} rows</span>} />
-
-
           <div className="table-wrapper">
             <table>
               <thead>

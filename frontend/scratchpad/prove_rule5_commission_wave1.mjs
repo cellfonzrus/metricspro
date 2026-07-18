@@ -150,5 +150,88 @@ const empty = () => ({ period: '', periodTo: '', stores: [], markets: [], reps: 
   ok('ma: options unaffected by an active narrow (stable list)', rep_options.length === 2 && store_options.length === 2)
 }
 
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// 6) ma-commission REP-FILTER airtime caveat (GATE-1 FIX 1). Airtime (raw_ma_daily_tx) has NO rep column,
+//    so under a rep filter airtime can't be narrowed → the page EXCLUDES it (Total payable = rep commission
+//    only), blanks the airtime column + tile, and drops airtime-only stores the rep never touched. Screen
+//    and export apply the SAME transform (verbatim of the page's presentation logic).
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+{
+  const byStore = [
+    { account_id: 'ACC1', activations: 1, payable: 10, airtime_margin: 3 },  // rep touched
+    { account_id: 'ACC2', activations: 1, payable: 5,  airtime_margin: 4 },  // rep touched
+    { account_id: 'ACC3', activations: 0, payable: 0,  airtime_margin: 9 },  // airtime-only — rep never sold here
+  ]
+  const present = (repFilterActive) => byStore
+    .filter(s => !repFilterActive || (s.activations || 0) > 0 || (s.payable || 0) !== 0)   // drop airtime-only
+    .map(s => ({ account_id: s.account_id,
+      airtime: repFilterActive ? null : s.airtime_margin,                                  // blanked under rep filter
+      total: repFilterActive ? s.payable : (s.payable + s.airtime_margin) }))              // rep-commission-only vs mixed
+  ok('ma airtime: no rep filter → airtime shown + Total = payable+airtime (all stores)', eq(present(false), [
+    { account_id: 'ACC1', airtime: 3, total: 13 }, { account_id: 'ACC2', airtime: 4, total: 9 }, { account_id: 'ACC3', airtime: 9, total: 9 }]))
+  const on = present(true)
+  ok('ma airtime: rep filter → airtime-only store (rep never touched) dropped', on.length === 2 && !on.some(r => r.account_id === 'ACC3'))
+  ok('ma airtime: rep filter → Total payable = rep commission only (no all-reps airtime mixed in)', eq(on.map(r => r.total), [10, 5]))
+  ok('ma airtime: rep filter → airtime column blanked (never a mixed number)', on.every(r => r.airtime === null))
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// 7) comp-trend PER-MONTH store/market attribution (GATE-1 FIX 4). A rep floats between stores across
+//    months (luxelink has 2-3 reps per store), so store/market must be stamped PER MONTH, never collapsed
+//    to one store for the whole window. Backend emits points[{period,store,market,pay}]; the page narrows
+//    the MONTHS within each rep under a store/market filter and re-sums the displayed totals.
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+{
+  // (a) backend re-impl: rep_commissions rows → per-(period,store) points (verbatim of compute_rep_pay_trend).
+  const rows = [
+    { period: 'May 2026',  store: 'A', total_payout: 100, storeops_name: 'Flo' },
+    { period: 'June 2026', store: 'B', total_payout: 60,  storeops_name: 'Flo' },
+  ]
+  const d = { by_period: {}, total: 0, _ps: {} }
+  for (const r of rows) {
+    const p = r.period, st = r.store, pay = r.total_payout
+    d.by_period[p] = (d.by_period[p] || 0) + pay; d.total += pay
+    const k = p + ' ' + st; d._ps[k] = (d._ps[k] || 0) + pay
+  }
+  const points = Object.entries(d._ps).map(([k, v]) => { const [p, st] = k.split(' '); return { period: p, store: st, pay: v } })
+  ok('comp-trend backend: points are per-(period,store), never collapsed to one store', eq(points, [
+    { period: 'May 2026', store: 'A', pay: 100 }, { period: 'June 2026', store: 'B', pay: 60 }]))
+  ok('comp-trend backend: by_period still sums per period (backward compat)', eq(d.by_period, { 'May 2026': 100, 'June 2026': 60 }))
+
+  // (b) frontend re-impl: the page's per-month narrowing (verbatim of comp-trend/page.tsx `reps` useMemo).
+  const repsAll = [
+    { rep: 'Flo',  store: 'A', market: 'North', by_period: { 'May 2026': 100, 'June 2026': 60 }, total: 160,
+      points: [{ period: 'May 2026', store: 'A', market: 'North', pay: 100 }, { period: 'June 2026', store: 'B', market: 'South', pay: 60 }] },
+    { rep: 'Stan', store: 'A', market: 'North', by_period: { 'May 2026': 40,  'June 2026': 50 }, total: 90,
+      points: [{ period: 'May 2026', store: 'A', market: 'North', pay: 40 }, { period: 'June 2026', store: 'A', market: 'North', pay: 50 }] },
+  ]
+  const empty7 = () => ({ stores: [], markets: [], reps: [] })
+  const narrow = (filt) => {
+    const storeSet = new Set(filt.stores.map(norm)), marketSet = new Set(filt.markets.map(norm)), repSet = new Set(filt.reps.map(norm))
+    const hasStore = storeSet.size > 0, hasMarket = marketSet.size > 0, hasRep = repSet.size > 0
+    const out = []
+    for (const r of repsAll) {
+      if (hasRep && !repSet.has(norm(r.rep))) continue
+      const pts = r.points || []
+      if (!hasStore && !hasMarket) { const seen = new Set(); for (const pt of pts) if (norm(pt.store)) seen.add(norm(pt.store)); out.push({ ...r, _stores: [...seen].sort() }); continue }
+      const kept = pts.filter(pt => (!hasStore || storeSet.has(norm(pt.store))) && (!hasMarket || marketSet.has(norm(pt.market))))
+      if (kept.length === 0) continue
+      const by_period = {}, seen = new Set(); let total = 0
+      for (const pt of kept) { by_period[pt.period] = (by_period[pt.period] || 0) + pt.pay; total += pt.pay; if (norm(pt.store)) seen.add(norm(pt.store)) }
+      out.push({ ...r, by_period, total: Math.round(total * 100) / 100, _stores: [...seen].sort() })
+    }
+    return out.sort((a, b) => (b.total || 0) - (a.total || 0))
+  }
+  ok('comp-trend: no filter → totals byte-identical to before', eq(narrow(empty7()).map(r => [r.rep, r.total]), [['Flo', 160], ['Stan', 90]]))
+  const b = narrow({ ...empty7(), stores: ['B'] })
+  ok('comp-trend: store-B filter → ONLY the floater, ONLY the June months (re-summed)', b.length === 1 && b[0].rep === 'Flo' && b[0].total === 60 && eq(b[0].by_period, { 'June 2026': 60 }))
+  const a = narrow({ ...empty7(), stores: ['A'] })
+  ok('comp-trend: store-A filter → floater May-only (60 at B excluded) + Stan both months', eq(a.map(r => [r.rep, r.total]), [['Flo', 100], ['Stan', 90]]))
+  ok('comp-trend: store-A filter → floater row shows only the narrowed store', eq(a.find(r => r.rep === 'Flo')._stores, ['A']))
+  const south = narrow({ ...empty7(), markets: ['South'] })
+  ok('comp-trend: market-South filter → only the floater June month counted', south.length === 1 && south[0].rep === 'Flo' && south[0].total === 60)
+  ok('comp-trend: per-month store stamp not collapsed (May→A, June→B)', eq(repsAll[0].points.map(p => [p.period, p.store]), [['May 2026', 'A'], ['June 2026', 'B']]))
+}
+
 console.log(`\nrule5-commission-wave1: ${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

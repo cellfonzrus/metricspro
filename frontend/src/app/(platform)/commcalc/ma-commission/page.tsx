@@ -50,6 +50,13 @@ export default function MaCommissionPage() {
   // Stable pick-don't-type options from the backend (computed pre-filter, so the list never collapses).
   const storeOpts: EntityOption[] = (d?.store_options || []).map((o: any) => ({ id: o.id, label: o.label }))
   const repOpts: EntityOption[] = (d?.rep_options || []).map((r: string) => ({ id: r, label: r }))
+  // Airtime (raw_ma_daily_tx) has NO rep column, so the server narrows commission by rep but CANNOT narrow
+  // airtime — under a rep filter it stays all-reps. To keep a rep-filtered view from mixing rep commission
+  // with all-reps airtime, when a rep filter is active we (a) suppress the airtime tile with a caveat,
+  // (b) blank the airtime column + drop it from Total payable (= rep commission only), and (c) hide
+  // airtime-only stores the selected rep never touched — identically on screen and in the export.
+  const repFilterActive = filt.reps.length > 0
+  const byStoreRows: any[] = (d?.by_store || []).filter((s: any) => !repFilterActive || (s.activations || 0) > 0 || (s.payable || 0) !== 0)
 
   // RULE FOUR export: tiles summary + the by-store / by-rep / spiff-by-month report tables.
   const storeCols: ExportColumn[] = [
@@ -58,8 +65,9 @@ export default function MaCommissionPage() {
     { header: 'Activations', get: (r: any) => r.activations },
     { header: 'Rebates', money: true, get: (r: any) => r.rebates },
     { header: 'Spiffs', money: true, get: (r: any) => r.spiffs },
-    { header: 'Airtime margin', money: true, get: (r: any) => r.airtime_margin },
-    { header: 'Total payable', money: true, get: (r: any) => (r.payable || 0) + (r.airtime_margin || 0) },
+    // Under a rep filter airtime is not rep-attributable → zeroed with a header caveat, and excluded from Total.
+    { header: repFilterActive ? 'Airtime margin (all reps — excluded under rep filter)' : 'Airtime margin', money: true, get: (r: any) => repFilterActive ? 0 : (r.airtime_margin || 0) },
+    { header: repFilterActive ? 'Total payable (rep commission only)' : 'Total payable', money: true, get: (r: any) => repFilterActive ? (r.payable || 0) : ((r.payable || 0) + (r.airtime_margin || 0)) },
   ]
   const repCols: ExportColumn[] = [
     { header: 'Rep (processor login)', field: 'rep', role: 'rep', get: (r: any) => r.rep },
@@ -73,9 +81,9 @@ export default function MaCommissionPage() {
     { name: 'Summary', columns: [{ header: 'Metric', get: (r: any) => r.k }, { header: 'Value', get: (r: any) => r.v }] as ExportColumn[], rows: [
       { k: 'Total payable', v: fmt(d.total_payable) }, { k: 'Activations', v: d.activations?.total },
       { k: 'Rebates', v: fmt(d.components?.rebates) }, { k: 'Spiffs (M1–M6)', v: fmt(d.components?.spiffs_total) },
-      { k: 'Airtime margin', v: fmt(d.airtime?.margin) },
+      { k: 'Airtime margin', v: repFilterActive ? 'all reps — not narrowed by rep filter' : fmt(d.airtime?.margin) },
     ] },
-    { name: 'By store', columns: storeCols, rows: d.by_store || [] },
+    { name: 'By store', columns: storeCols, rows: byStoreRows },
     { name: 'By rep', columns: repCols, rows: d.by_rep || [] },
     { name: 'Spiff by month', columns: [{ header: 'Month', get: (r: any) => r.m }, { header: 'Amount', money: true, get: (r: any) => r.v }] as ExportColumn[],
       rows: Object.entries(d.spiff_by_month || {}).map(([m, v]) => ({ m: m.toUpperCase(), v })) },
@@ -121,8 +129,13 @@ export default function MaCommissionPage() {
           <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Spiffs (M1–M6)</div>
             <div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(d.components.spiffs_total)}</div></div>
           <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Airtime margin</div>
-            <div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(d.airtime.margin)}</div>
-            <div style={{ fontSize: 12, color: 'var(--text3)' }}>{d.airtime.orders} top-ups · {fmt(d.airtime.retail)} retail</div></div>
+            {repFilterActive ? (<>
+              <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text3)' }}>—</div>
+              <div style={{ fontSize: 12, color: '#b45309' }}>airtime = all reps — not narrowed by rep. Clear the rep filter to see it.</div>
+            </>) : (<>
+              <div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(d.airtime.margin)}</div>
+              <div style={{ fontSize: 12, color: 'var(--text3)' }}>{d.airtime.orders} top-ups · {fmt(d.airtime.retail)} retail</div>
+            </>)}</div>
         </div>
 
         <div className="card" style={{ padding: 14, marginBottom: 14 }}>
@@ -141,18 +154,23 @@ export default function MaCommissionPage() {
         </div>
 
         <div className="card" style={{ padding: 0, marginBottom: 14 }}>
-          <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>By store ({d.by_store.length})</div>
+          <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>By store ({byStoreRows.length})</div>
+          {repFilterActive && (
+            <div style={{ padding: '8px 14px', fontSize: 12, color: '#92400e', background: '#fffbeb', borderBottom: '1px solid #fde68a' }}>
+              Rep filter active — <b>Total payable</b> is rep commission only. Airtime margin has no rep dimension (all reps), so it is excluded here; stores the selected rep never touched are hidden.
+            </div>
+          )}
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr style={{ background: 'var(--surface2)' }}>{['Store / account', 'Activations', 'Rebates', 'Spiffs', 'Airtime margin', 'Total payable'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <thead><tr style={{ background: 'var(--surface2)' }}>{['Store / account', 'Activations', 'Rebates', 'Spiffs', repFilterActive ? 'Airtime (n/a — all reps)' : 'Airtime margin', repFilterActive ? 'Total payable (rep only)' : 'Total payable'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
             <tbody>
-              {d.by_store.map((s: any) => (
+              {byStoreRows.map((s: any) => (
                 <tr key={s.account_id} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={{ ...td, fontWeight: 600 }}>{s.name || s.account_id}{s.name && <span style={{ fontSize: 11, color: 'var(--text3)' }}> · {s.account_id}</span>}</td>
                   <td style={td}>{s.activations}</td>
                   <td style={td}>{fmt(s.rebates)}</td>
                   <td style={td}>{fmt(s.spiffs)}</td>
-                  <td style={td}>{fmt(s.airtime_margin)}</td>
-                  <td style={{ ...td, fontWeight: 700 }}>{fmt(s.payable + s.airtime_margin)}</td>
+                  <td style={{ ...td, color: repFilterActive ? 'var(--text3)' : undefined }}>{repFilterActive ? '—' : fmt(s.airtime_margin)}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>{repFilterActive ? fmt(s.payable) : fmt(s.payable + s.airtime_margin)}</td>
                 </tr>
               ))}
             </tbody>

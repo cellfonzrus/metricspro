@@ -91,7 +91,7 @@ def compute_rep_pay_trend(client, org_id, months=6, store=""):
     kept = periods[-months:] if months and months > 0 else periods
     kept_set = set(kept)
 
-    reps = {}                                  # rep -> {"rep","store","by_period":{p:pay},"total"}
+    reps = {}                                  # rep -> {"rep","store","by_period":{p:pay},"total","_ps"}
     totals_by_month = {p: 0.0 for p in kept}
     for r in rows:
         p = (r.get("period") or "").strip()
@@ -102,11 +102,15 @@ def compute_rep_pay_trend(client, org_id, months=6, store=""):
             continue
         rep = (r.get("storeops_name") or r.get("epay_salesperson") or "").strip() or "(unknown)"
         pay = safe_float(r.get("total_payout"))
-        d = reps.setdefault(rep, {"rep": rep, "store": st, "by_period": {}, "total": 0.0})
+        d = reps.setdefault(rep, {"rep": rep, "store": st, "by_period": {}, "total": 0.0, "_ps": {}})
         if st and not d["store"]:
             d["store"] = st
         d["by_period"][p] = d["by_period"].get(p, 0.0) + pay
         d["total"] += pay
+        # Per-(period, store) pay so store/market attribution stays PER-MONTH — never collapsed to one
+        # store for the whole window. A rep floats between stores (luxelink has 2-3 reps per store), so
+        # a single top-level store misattributes every month's dollars under a store/market filter (FIX 4).
+        d["_ps"][(p, st)] = d["_ps"].get((p, st), 0.0) + pay
         totals_by_month[p] += pay
 
     rep_list = sorted(reps.values(), key=lambda x: -x["total"])
@@ -114,6 +118,12 @@ def compute_rep_pay_trend(client, org_id, months=6, store=""):
         d["by_period"] = {p: round(v, 2) for p, v in d["by_period"].items()}
         d["total"] = round(d["total"], 2)
         d["latest"] = d["by_period"].get(kept[-1], 0.0) if kept else 0.0
+        # Per-month attribution points (period × store × pay), chronological. The page filters + re-sums
+        # THESE so a store/market filter counts only the months worked at that store/market (market is
+        # stamped per point in router.py). Top-level `store`/`market` stay for backward-compat display.
+        d["points"] = [{"period": pp, "store": ss, "pay": round(v, 2)}
+                       for (pp, ss), v in sorted(d.pop("_ps").items(),
+                                                 key=lambda kv: (_pkey(kv[0][0]), kv[0][1]))]
     return {
         "months": kept,
         "reps": rep_list,

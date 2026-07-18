@@ -8430,7 +8430,9 @@ async def get_comp_rep_pay_trend(months: int = 6, store: str = "", org_id: str =
         # Compensation page can market-filter the per-rep view client-side. Additive + org-scoped.
         _resolve_market, _ = _store_market_resolver(client, org_id)
         for rr in (result.get('reps') or []):
-            rr['market'] = _resolve_market(rr.get('store'))
+            rr['market'] = _resolve_market(rr.get('store'))          # legacy top-level (backward compat)
+            for pt in (rr.get('points') or []):                      # FIX 4: per-MONTH market so a store/
+                pt['market'] = _resolve_market(pt.get('store'))      # market filter narrows the right months
         return result
     except Exception as e:
         raise HTTPException(500, f"comp-rep-pay-trend failed: {type(e).__name__}: {e}")
