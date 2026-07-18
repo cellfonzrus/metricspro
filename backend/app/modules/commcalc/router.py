@@ -7053,10 +7053,21 @@ async def list_store_aliases(org_id: str = ORG_ID):
     except Exception as e:
         print(f'WARN store_aliases query failed (run 023_store_aliases.sql?): {e}')
         aliases = []
-    stores = (client.schema('commcalc').table('store_mapping')
-              .select('store_code,store_address').eq('org_id', org_id)
-              .order('store_address').execute().data) or []
+    # pick-don't-type source = the org's REAL stores: commcalc.store_mapping (house canon) UNIONed with the
+    # org's storeops.stores roster, so a tenant with NO store_mapping (luxelink) still has options to pick.
+    stores = [{'store_code': s['store_code'], 'store_address': s['address'], 'market': s.get('market', '')}
+              for s in _store_maps(client, org_id)['stores']]
+    stores.sort(key=lambda s: (s.get('store_address') or s.get('store_code') or '').lower())
     return {"aliases": aliases, "stores": stores}
+
+
+@router.get("/store-resolution")
+async def store_resolution(period: str = "", org_id: str = ORG_ID):
+    """Store-Matching UI data: every observed POS/sales store string × its current resolution status
+    (explicit / store_mapping / exact-fallback / unresolved) + ranked smart suggestions. Optional `period`
+    narrows the observed strings to that month; empty = all of the org's sales/feed data."""
+    require_org(org_id)
+    return _store_resolution_report(sb(), org_id, period=(period or None))
 
 
 @router.post("/store-aliases")
@@ -7067,6 +7078,12 @@ async def add_store_alias(body: dict, org_id: str = ORG_ID):
     if not alias or not code:
         raise HTTPException(400, "alias and store_code required")
     client = sb()
+    # pick-don't-type (§3b): the code MUST be one of the org's real stores (store_mapping OR storeops) —
+    # a confirm/suggestion can only ever materialize a mapping to a store that actually exists.
+    M = _store_maps(client, org_id)
+    valid = {s['store_code'].upper() for s in M['stores']}
+    if valid and code.upper() not in valid:
+        raise HTTPException(400, f"'{code}' is not one of your stores — pick from the store list.")
     # replace any existing alias with the same text (case-insensitive) to keep it unique
     existing = (client.schema('commcalc').table('store_aliases').select('id,alias')
                 .eq('org_id', org_id).execute().data) or []
@@ -7075,6 +7092,14 @@ async def add_store_alias(body: dict, org_id: str = ORG_ID):
             client.schema('commcalc').table('store_aliases').delete().eq('id', r['id']).execute()
     row = {'org_id': org_id, 'alias': alias, 'store_code': code,
            'note': (body.get('note') or '').strip() or None}
+    # provenance (mig 219) — how the mapping was made (manual / suggested / fallback-confirmed) + the
+    # suggestion confidence, for the audit trail. Included only if the columns exist → pre-mig-219 graceful.
+    extra = {'source': (body.get('source') or 'manual').strip() or 'manual',
+             'confidence': (body.get('confidence') or '').strip() or None}
+    present = _known_columns(client, 'store_aliases', ['source', 'confidence'])
+    for k, v in extra.items():
+        if k in present:
+            row[k] = v
     res = client.schema('commcalc').table('store_aliases').insert(row).execute()
     return {"alias": (res.data or [row])[0]}
 
@@ -9100,45 +9125,45 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None):
     return agg
 
 
-def _store_code_resolver(client, org_id):
-    """Return resolve(store_string) -> canonical store_code — the SAME mapping the Daily-Targets actuals +
-    trending use so a store's sales/Exec-MTD numbers attach to the matching target row.
-
-    Resolution: coa.store_resolver (exact address → store_aliases → store_code → unambiguous leading number)
-    then commcalc.store_mapping address→code. When that yields NO store_mapping code (the tenant hasn't set
-    up commcalc.store_mapping — the luxelink case: its b2bsoft sales-store strings never resolved to its
-    storeops store_codes, so the Daily-Targets JOIN missed and EVERY achieved/trending metric read 0 even
-    with sales present), fall back to the org's OWN storeops.stores roster — the SAME roster the Daily-Targets
-    page iterates — matching the sales-store string against a storeops address OR store_code. This closes the
-    actuals→targets loop without a separate commcalc.store_mapping (RULE TWO: resolve against the org's real
-    roster, not a hard-coded map).
-
-    Superset-only: it NEVER overrides an existing store_mapping resolution (so the house/Boost org, whose
-    store_mapping is populated, stays BYTE-IDENTICAL) — it only fills a MISS that previously returned the raw
-    string. DISPLAY-ONLY (two callers: _compute_feed_actuals_py + _targets_trending_by_code, both Daily
-    Targets). Never raises; falls back to the cleaned raw string when nothing resolves."""
+def _store_maps(client, org_id):
+    """Build the org's store-resolution maps ONCE, shared by _store_code_resolver AND the Store-Matching
+    UI's /store-resolution report — so the resolver and the audit view can NEVER disagree. Returns:
+      addr_to_code    : commcalc.store_mapping  store_address(lower) -> store_code   (house canon)
+      so_addr_to_code : storeops.stores         address(lower)       -> store_code   (the org's roster)
+      so_codes        : {store_code upper}       — a raw string that already IS a code is preserved
+      alias_to_code   : commcalc.store_aliases   alias(lower)        -> store_code   (the EXPLICIT per-org
+                        mapping — the Store-Matching UI's source of truth; validated against a REAL code so a
+                        stale/typo code can never hijack resolution)
+      stores          : [{store_code, address, market, source}] — the org's canonical roster (store_mapping
+                        UNION storeops.stores) for pick-don't-type dropdowns + smart suggestions
+      resolve_store   : coa.store_resolver (raw -> canonical store_address) or None
+    Org-scoped; never raises."""
     try:
         from app.modules.account import coa
-        _resolve_store = coa.store_resolver(client, org_id)
+        resolve_store = coa.store_resolver(client, org_id)
     except Exception:
-        _resolve_store = None
+        resolve_store = None
     try:
         sm = (client.schema('commcalc').table('store_mapping')
-              .select('store_code,store_address').eq('org_id', org_id).execute().data) or []
+              .select('store_code,store_address,market').eq('org_id', org_id).execute().data) or []
     except Exception:
         sm = []
-    addr_to_code = {}
+    addr_to_code, stores, seen_codes = {}, [], set()
     for m in sm:
         a = (m.get('store_address') or '').strip().lower()
         c = (m.get('store_code') or '').strip()
         if a and c:
             addr_to_code[a] = c
-    # storeops.stores fallback maps (the Daily-Targets join target). so_addr_to_code: address -> store_code;
+        if c and c.upper() not in seen_codes:
+            seen_codes.add(c.upper())
+            stores.append({'store_code': c, 'address': (m.get('store_address') or '').strip(),
+                           'market': (m.get('market') or '').strip(), 'source': 'store_mapping'})
+    # storeops.stores roster (the Daily-Targets join target). so_addr_to_code: address -> store_code;
     # so_codes: valid store_codes (upper) so a raw string that IS already a storeops code is preserved.
     so_addr_to_code, so_codes = {}, set()
     try:
         so = (client.schema('storeops').table('stores')
-              .select('store_code,address').eq('org_id', org_id).execute().data) or []
+              .select('store_code,address,market').eq('org_id', org_id).execute().data) or []
     except Exception:
         so = []
     for s in so:
@@ -9148,16 +9173,67 @@ def _store_code_resolver(client, org_id):
             so_codes.add(c.upper())
             if a:
                 so_addr_to_code[a] = c
+            if c.upper() not in seen_codes:
+                seen_codes.add(c.upper())
+                stores.append({'store_code': c, 'address': (s.get('address') or '').strip(),
+                               'market': (s.get('market') or '').strip(), 'source': 'storeops'})
+    # explicit per-org mapping — keyed on the raw POS/sales-store spelling; a code must be a REAL store
+    # (store_mapping OR storeops) or it is ignored (falls through to today's behaviour).
+    valid_codes = set(so_codes) | {c.upper() for c in addr_to_code.values()}
+    alias_to_code = {}
+    try:
+        al = (client.schema('commcalc').table('store_aliases')
+              .select('alias,store_code').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        al = []
+    for a in al:
+        k = (a.get('alias') or '').strip().lower()
+        c = (a.get('store_code') or '').strip()
+        if k and c and c.upper() in valid_codes:
+            alias_to_code[k] = c
+    return {'addr_to_code': addr_to_code, 'so_addr_to_code': so_addr_to_code, 'so_codes': so_codes,
+            'alias_to_code': alias_to_code, 'stores': stores, 'resolve_store': resolve_store}
+
+
+def _store_code_resolver(client, org_id):
+    """Return resolve(store_string) -> canonical store_code — the SAME mapping the Daily-Targets actuals +
+    trending use so a store's sales/Exec-MTD numbers attach to the matching target row.
+
+    Precedence (UNCHANGED order — explicit mapping → canonical → exact storeops fallback):
+      0. EXPLICIT per-org mapping (commcalc.store_aliases, the Store-Matching UI) — the SOURCE OF TRUTH,
+         consulted FIRST so a confirmed POS-string→store mapping wins for EVERY tenant, incl. one with no
+         commcalc.store_mapping (luxelink). Without this, coa.store_resolver drops such an alias — its
+         alias→address step needs a store_mapping code — so a luxelink admin's confirmed mapping was inert
+         and the store could only resolve via the exact-address storeops fallback (the silent-shift risk).
+         House BYTE-IDENTICAL: its seeded/confirmed aliases all carry store_mapping codes → same code today.
+      1. coa.store_resolver (exact address → store_aliases→code → leading number) → commcalc.store_mapping
+         address→code — UNCHANGED (house byte-identical).
+      2. store_mapping MISS → the org's OWN storeops.stores roster (EXACT address / store_code match) — the
+         Gate-1-flagged fallback: still runs, but now VISIBLE in the Store-Matching UI as 'exact-fallback'
+         with a one-click "confirm as mapping" so the house can prove its map covers every POS string.
+
+    Superset-only: it NEVER overrides an existing store_mapping resolution. DISPLAY-ONLY (two callers:
+    _compute_feed_actuals_py + _targets_trending_by_code, both Daily Targets). An org with no store_aliases
+    rows is byte-identical to before (step 0 is a no-op). Never raises; falls back to the cleaned raw string
+    when nothing resolves."""
+    M = _store_maps(client, org_id)
+    addr_to_code, so_addr_to_code = M['addr_to_code'], M['so_addr_to_code']
+    so_codes, alias_to_code, _resolve_store = M['so_codes'], M['alias_to_code'], M['resolve_store']
 
     def _resolve(store):
+        raw = str(store or '').strip().lower()
         canon = (_resolve_store(store) if (_resolve_store and store) else None) or store
         ck = str(canon).strip().lower()
+        # 0) EXPLICIT per-org mapping WINS (raw POS spelling first, then the canonicalized spelling).
+        if raw and raw in alias_to_code:
+            return alias_to_code[raw]
+        if ck and ck in alias_to_code:
+            return alias_to_code[ck]
         # 1) existing store_mapping hit — UNCHANGED (house byte-identical).
         if ck in addr_to_code:
             return addr_to_code[ck]
         # 2) store_mapping MISS → try the storeops roster: canon-as-address, raw-as-address, then
         #    canon/raw already-a-code. Only ADDS resolutions where the raw string was previously returned.
-        raw = str(store or '').strip().lower()
         if ck and ck in so_addr_to_code:
             return so_addr_to_code[ck]
         if raw and raw in so_addr_to_code:
@@ -9168,6 +9244,146 @@ def _store_code_resolver(client, org_id):
             return str(store).strip()
         return canon
     return _resolve
+
+
+_STORE_SUITE_TOKENS = {'ste', 'suite', 'unit', 'apt', 'apartment', 'fl', 'floor', 'rm', 'room',
+                       'bldg', 'building', 'no', 'num'}
+
+
+def _norm_store_match(s):
+    """Deterministic normalization for smart store matching (case-insensitive everywhere): case-fold, strip
+    punctuation to spaces, drop suite/unit tokens (+ the number that follows) and standalone '#5', collapse
+    whitespace. Pure — same input always yields the same output."""
+    s = (s or '').lower()
+    s = re.sub(r'#\s*\w+', ' ', s)                 # '#5', '# 12b'
+    s = re.sub(r'[^a-z0-9 ]+', ' ', s)             # punctuation -> space
+    toks = [t for t in s.split() if t]
+    out, skip_next_num = [], False
+    for t in toks:
+        if t in _STORE_SUITE_TOKENS:
+            skip_next_num = True
+            continue
+        if skip_next_num and re.fullmatch(r'\d+[a-z]?', t):
+            skip_next_num = False
+            continue
+        skip_next_num = False
+        out.append(t)
+    return ' '.join(out).strip()
+
+
+def _store_leading_num(s):
+    m = re.match(r'\s*(\d+)', s or '')
+    return m.group(1) if m else None
+
+
+def _store_suggest(raw, stores, top=3):
+    """Ranked candidate store matches for an observed POS store string — DETERMINISTIC, never auto-applied
+    (the UI turns a confirm into an explicit mapping). `stores` = [{store_code, address, market, ...}].
+    Score blends exact-normalized address match, leading street-number match, token overlap, and literal
+    store-code containment. Returns up to `top` {store_code, store_address, market, confidence, score,
+    reason}, sorted (score desc, then store_code asc) so ties are stable."""
+    pn = _norm_store_match(raw)
+    ptoks = set(pn.split())
+    pnum = _store_leading_num(pn)
+    praw_up = (raw or '').strip().upper()
+    out = []
+    for st in stores:
+        code = (st.get('store_code') or '').strip()
+        addr = (st.get('address') or st.get('store_address') or '').strip()
+        cn = _norm_store_match(addr)
+        ctoks = set(cn.split())
+        reasons, score = [], 0.0
+        if pn and cn and pn == cn:
+            score = 1.0
+            reasons.append('exact address (normalized)')
+        else:
+            cnum = _store_leading_num(cn)
+            num_ok = bool(pnum and cnum and pnum == cnum)
+            jac = (len(ptoks & ctoks) / len(ptoks | ctoks)) if (ptoks or ctoks) else 0.0
+            score = 0.55 * (1.0 if num_ok else 0.0) + 0.45 * jac
+            if num_ok:
+                reasons.append(f'street # {pnum}')
+            if ptoks & ctoks:
+                reasons.append(f'{len(ptoks & ctoks)} word(s) in common')
+        if code and code.upper() in praw_up:
+            score = max(score, 0.9)
+            reasons.append(f'contains code {code}')
+        if score <= 0:
+            continue
+        conf = ('exact' if score >= 0.999 else 'high' if score >= 0.7 else
+                'medium' if score >= 0.4 else 'low')
+        out.append({'store_code': code, 'store_address': addr, 'market': st.get('market', ''),
+                    'confidence': conf, 'score': round(score, 3),
+                    'reason': ', '.join(reasons) or 'weak match'})
+    out.sort(key=lambda x: (-x['score'], x['store_code']))
+    return out[:top]
+
+
+_STORE_STATUS_ORDER = {'unresolved': 0, 'exact-fallback': 1, 'store_mapping': 2, 'explicit': 3}
+
+
+def _store_resolution_report(client, org_id, period=None, limit=60000):
+    """The Store-Matching UI data: every OBSERVED distinct POS/sales store string in the org's sales + feed
+    data, with its CURRENT resolution status — one of:
+      explicit       : an explicit commcalc.store_aliases mapping resolves it (the source of truth)
+      store_mapping  : resolves via commcalc.store_mapping (the house canon)
+      exact-fallback : resolves ONLY via the exact storeops.stores address/code fallback (the Gate-1 concern
+                       — VISIBLE here so the house can confirm-as-mapping and remove the ambiguity)
+      unresolved     : nothing resolves it → needs a mapping (top smart suggestion shown)
+    plus the code it resolves to and, for anything not already explicit, ranked smart suggestions. The status
+    order MIRRORS _store_code_resolver step-for-step (shared _store_maps) so the audit view cannot drift from
+    the resolver. Read-only; org-scoped; never raises."""
+    M = _store_maps(client, org_id)
+    addr_to_code, so_addr_to_code = M['addr_to_code'], M['so_addr_to_code']
+    so_codes, alias_to_code, _resolve_store = M['so_codes'], M['alias_to_code'], M['resolve_store']
+    stores = M['stores']
+    seen = {}
+    srcs = [('raw_sales', 'store'), ('daily_sales_feed', 'store')]
+    for table, col in srcs:
+        try:
+            q = client.schema('commcalc').table(table).select(col).eq('org_id', org_id)
+            if period:
+                q = q.in_('period', _pvariants(period))
+            rows = (q.limit(limit).execute().data) or []
+        except Exception:
+            continue   # table missing / no org_id → skip that source
+        for r in rows:
+            v = (r.get(col) or '').strip()
+            if not v:
+                continue
+            e = seen.setdefault(v.lower(), {'raw': v, 'sources': set()})
+            e['sources'].add(table)
+    items, counts = [], {'explicit': 0, 'store_mapping': 0, 'exact-fallback': 0, 'unresolved': 0}
+    for e in seen.values():
+        raw = e['raw']
+        low = raw.strip().lower()
+        canon = (_resolve_store(raw) if (_resolve_store and raw) else None) or raw
+        ck = str(canon).strip().lower()
+        if low in alias_to_code:
+            status, code = 'explicit', alias_to_code[low]
+        elif ck in alias_to_code:
+            status, code = 'explicit', alias_to_code[ck]
+        elif ck in addr_to_code:
+            status, code = 'store_mapping', addr_to_code[ck]
+        elif ck and ck in so_addr_to_code:
+            status, code = 'exact-fallback', so_addr_to_code[ck]
+        elif low in so_addr_to_code:
+            status, code = 'exact-fallback', so_addr_to_code[low]
+        elif str(canon).strip().upper() in so_codes:
+            status, code = 'exact-fallback', str(canon).strip()
+        elif low.upper() in so_codes:
+            status, code = 'exact-fallback', raw.strip()
+        else:
+            status, code = 'unresolved', None
+        counts[status] = counts.get(status, 0) + 1
+        sugg = [] if status == 'explicit' else _store_suggest(raw, stores, top=3)
+        items.append({'raw': raw, 'sources': sorted(e['sources']), 'status': status,
+                      'resolved_code': code, 'suggestions': sugg})
+    items.sort(key=lambda x: (_STORE_STATUS_ORDER.get(x['status'], 9), x['raw'].lower()))
+    return {'items': items, 'counts': counts, 'total': len(items),
+            'stores': [{'store_code': s['store_code'], 'store_address': s['address'],
+                        'market': s.get('market', '')} for s in stores],
+            'sources_scanned': [s[0] for s in srcs]}
 
 
 def _compute_feed_actuals_py(client, org_id, period, source='daily_sales_feed', rows=None):
