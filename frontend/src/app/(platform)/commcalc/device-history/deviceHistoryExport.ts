@@ -64,16 +64,37 @@ export function buildDeviceHistorySheets(res: any): ExportSheet[] {
   // ── Sheets 2+3: GATED money rows — present ONLY when the backend granted them ──
   if (res.commission_visible && res.money) {
     const m = res.money
-    const commissionRows = [...(m.commission?.rows || []),
-      { period: '', label: 'Commission subtotal', amount: m.commission?.subtotal || 0 }]
-    const rebateRows = [...(m.rebate?.rows || []),
-      { period: '', label: 'Rebate subtotal', amount: m.rebate?.subtotal || 0 }]
-    sheets.push({ name: 'Commission', columns: moneyCols, rows: commissionRows })
-    sheets.push({ name: 'Rebate', columns: moneyCols, rows: rebateRows })
-    sheets.push({
-      name: 'Total', columns: kv,
-      rows: [{ k: 'Grand total', v: m.grand_total || 0 }],
-    })
+    if (m.kind === 'ma') {
+      // MA-fed (Total / VidaPay): one per-period row carrying every money component (paid-to-dealer).
+      const maCols: ExportColumn[] = [
+        { header: 'Period', get: (r: any) => r.period || '—' },
+        { header: 'M1–M6 spiffs', money: true, get: (r: any) => r.spiff_total },
+        { header: 'Rebate', money: true, get: (r: any) => r.rebate },
+        { header: 'Equipment margin', money: true, get: (r: any) => r.margin_total },
+        { header: 'Plan MRC (info)', money: true, get: (r: any) => r.mrc_net_discount },
+        { header: 'Line status', get: (r: any) => r.line_status || '' },
+      ]
+      const maRows = [...(m.periods || []), {
+        period: 'Subtotals', spiff_total: m.spiff?.subtotal || 0, rebate: m.rebate?.subtotal || 0,
+        margin_total: m.margin?.subtotal || 0, mrc_net_discount: m.mrc?.subtotal || 0, line_status: '',
+      }]
+      sheets.push({ name: 'MA commission', columns: maCols, rows: maRows })
+      sheets.push({
+        name: 'Total', columns: kv,
+        rows: [{ k: 'Grand total (paid to dealer)', v: m.grand_total || 0 }],
+      })
+    } else {
+      const commissionRows = [...(m.commission?.rows || []),
+        { period: '', label: 'Commission subtotal', amount: m.commission?.subtotal || 0 }]
+      const rebateRows = [...(m.rebate?.rows || []),
+        { period: '', label: 'Rebate subtotal', amount: m.rebate?.subtotal || 0 }]
+      sheets.push({ name: 'Commission', columns: moneyCols, rows: commissionRows })
+      sheets.push({ name: 'Rebate', columns: moneyCols, rows: rebateRows })
+      sheets.push({
+        name: 'Total', columns: kv,
+        rows: [{ k: 'Grand total', v: m.grand_total || 0 }],
+      })
+    }
   }
   return sheets
 }

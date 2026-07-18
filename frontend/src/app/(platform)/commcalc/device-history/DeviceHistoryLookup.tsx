@@ -9,7 +9,7 @@
 // money section is gated by the 'device_commission' DATA_GRANT — the backend is the source of truth
 // (returns `commission_visible` + either `money` or `money_locked`); `hasDataGrant` is the frontend
 // mirror used to keep the pre-response UI honest.
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { api, fmt } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import { hasDataGrant } from '@/lib/rbac'
@@ -29,6 +29,105 @@ function AgingBadge({ bucket }: { bucket: any }) {
     <span style={{ background: c.bg, color: c.fg, border: `1px solid ${c.bd}`, borderRadius: 6, padding: '2px 8px', fontSize: 12, fontWeight: 700 }}>
       {bucket?.label} · {bucket?.range}
     </span>
+  )
+}
+
+// MA-fed (Total / VidaPay) money section. raw_ma_commission carries per-IMEI-per-period money: M1–M6
+// spiffs, rebate, equipment margins, plan MRC (informational) + line status. Amounts arrive already
+// paid-to-dealer normalized from the backend (negative=payout → shown positive). Multiple rows per
+// period are aggregated for the totals; each contributing row is kept expandable. Degrades to an explicit
+// "no MA data" note (never a false $0) when nothing has been ingested for the device.
+function MaMoneySection({ money }: { money: any }) {
+  const [open, setOpen] = useState<Record<string, boolean>>({})
+  const periods: any[] = money?.periods || []
+  if (!periods.length) {
+    return (
+      <div style={{ background: 'var(--surface2)', border: '1px dashed var(--border)', borderRadius: 8, padding: '12px 14px', fontSize: 13, color: 'var(--text3)' }}>
+        ⓘ {money?.note || 'No master-agent commission data ingested for this device yet.'}
+      </div>
+    )
+  }
+  const hcell: React.CSSProperties = { padding: '6px 8px', borderBottom: '1px solid var(--border)', fontSize: 11, color: 'var(--text3)', textAlign: 'right', fontWeight: 600 }
+  const dcell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: 'var(--text3)', margin: '2px 0 6px' }}>
+        Master-agent commission ({money?.carrier_label || 'processor data'}) · raw_ma_commission · shown paid-to-dealer
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
+          <thead>
+            <tr>
+              <th style={{ ...hcell, textAlign: 'left' }}>Period</th>
+              <th style={hcell}>M1–M6 spiffs</th>
+              <th style={hcell}>Rebate</th>
+              <th style={hcell}>Equip. margin</th>
+              <th style={hcell}>Plan MRC*</th>
+              <th style={{ ...hcell, textAlign: 'left' }}>Line status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {periods.map((pp: any, i: number) => {
+              const many = (pp.detail?.length || 0) > 1
+              const isOpen = !!open[pp.period]
+              return (
+                <Fragment key={i}>
+                  <tr>
+                    <td style={{ ...dcell, textAlign: 'left', fontWeight: 600 }}>
+                      {many && (
+                        <button onClick={() => setOpen(o => ({ ...o, [pp.period]: !isOpen }))}
+                          style={{ marginRight: 6, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: 12 }}>
+                          {isOpen ? '▾' : '▸'}
+                        </button>
+                      )}
+                      {pp.period}
+                      {many && <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 11 }}> · {pp.detail.length} lines</span>}
+                    </td>
+                    <td style={dcell}>{fmt(pp.spiff_total)}</td>
+                    <td style={dcell}>{fmt(pp.rebate)}</td>
+                    <td style={dcell}>{fmt(pp.margin_total)}</td>
+                    <td style={{ ...dcell, color: 'var(--text3)' }}>{fmt(pp.mrc_net_discount)}</td>
+                    <td style={{ ...dcell, textAlign: 'left', color: 'var(--text3)' }}>{pp.line_status || '—'}</td>
+                  </tr>
+                  {many && isOpen && pp.detail.map((d: any, j: number) => (
+                    <tr key={`${i}-${j}`} style={{ background: 'var(--surface2)' }}>
+                      <td style={{ ...dcell, textAlign: 'left', paddingLeft: 26, color: 'var(--text3)', fontSize: 11.5 }}>
+                        line {j + 1}{d.activation_type2 ? ` · ${d.activation_type2}` : ''}
+                      </td>
+                      <td style={{ ...dcell, fontSize: 11.5, color: 'var(--text3)' }}>{fmt(d.spiff_total)}</td>
+                      <td style={{ ...dcell, fontSize: 11.5, color: 'var(--text3)' }}>{fmt(d.rebate)}</td>
+                      <td style={{ ...dcell, fontSize: 11.5, color: 'var(--text3)' }}>{fmt(d.margin_total)}</td>
+                      <td style={{ ...dcell, fontSize: 11.5, color: 'var(--text3)' }}>{fmt(d.mrc_net_discount)}</td>
+                      <td style={{ ...dcell, textAlign: 'left', fontSize: 11.5, color: 'var(--text3)' }}>{d.line_status || '—'}</td>
+                    </tr>
+                  ))}
+                </Fragment>
+              )
+            })}
+            <tr>
+              <td style={{ ...dcell, textAlign: 'left', fontWeight: 700, borderTop: '2px solid var(--border)' }}>Subtotals</td>
+              <td style={{ ...dcell, fontWeight: 700, borderTop: '2px solid var(--border)' }}>{fmt(money.spiff?.subtotal || 0)}</td>
+              <td style={{ ...dcell, fontWeight: 700, borderTop: '2px solid var(--border)' }}>{fmt(money.rebate?.subtotal || 0)}</td>
+              <td style={{ ...dcell, fontWeight: 700, borderTop: '2px solid var(--border)' }}>{fmt(money.margin?.subtotal || 0)}</td>
+              <td style={{ ...dcell, fontWeight: 700, borderTop: '2px solid var(--border)', color: 'var(--text3)' }}>{fmt(money.mrc?.subtotal || 0)}</td>
+              <td style={{ ...dcell, borderTop: '2px solid var(--border)' }}></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 4 }}>
+        <tbody>
+          <tr>
+            <td style={{ ...cell, borderTop: '2px solid var(--border)', fontWeight: 800 }}>Grand total (paid to dealer)</td>
+            <td style={{ ...cellR, borderTop: '2px solid var(--border)', fontWeight: 800, color: 'var(--accent)' }}>{fmt(money.grand_total || 0)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
+        * Plan MRC is the subscriber&rsquo;s monthly plan price (shown positive, informational) — not a dealer payout, so it is not in the grand total.
+        Grand total = M1–M6 spiffs + rebate + equipment margin. Payout columns follow the carrier&rsquo;s negative-is-payout convention, shown paid-to-dealer.
+      </div>
+    </div>
   )
 }
 
@@ -238,6 +337,9 @@ export default function DeviceHistoryLookup() {
             <div>
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 4 }}>Money received on this line</div>
               {res.commission_visible && res.money ? (
+                res.money.kind === 'ma' ? (
+                  <MaMoneySection money={res.money} />
+                ) : (
                 <>
                   <MoneySection title="Commission" section={res.money.commission} />
                   <MoneySection title="Rebate" section={res.money.rebate} />
@@ -255,6 +357,7 @@ export default function DeviceHistoryLookup() {
                     </div>
                   )}
                 </>
+                )
               ) : (
                 <div style={{ background: 'var(--surface2)', border: '1px dashed var(--border)', borderRadius: 8, padding: '12px 14px', fontSize: 13, color: 'var(--text3)' }}>
                   🔒 {res.money_locked?.note || 'Commission details are restricted.'}

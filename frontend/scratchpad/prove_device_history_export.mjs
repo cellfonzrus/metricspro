@@ -41,9 +41,18 @@ function buildSheets(res) {
   const sheets = [{ name: 'Device & tenure', rows: info }]
   if (res.commission_visible && res.money) {
     const m = res.money
-    sheets.push({ name: 'Commission', rows: [...(m.commission?.rows || []), { period: '', label: 'Commission subtotal', amount: m.commission?.subtotal || 0 }] })
-    sheets.push({ name: 'Rebate', rows: [...(m.rebate?.rows || []), { period: '', label: 'Rebate subtotal', amount: m.rebate?.subtotal || 0 }] })
-    sheets.push({ name: 'Total', rows: [{ k: 'Grand total', v: m.grand_total || 0 }] })
+    if (m.kind === 'ma') {
+      const maRows = [...(m.periods || []), {
+        period: 'Subtotals', spiff_total: m.spiff?.subtotal || 0, rebate: m.rebate?.subtotal || 0,
+        margin_total: m.margin?.subtotal || 0, mrc_net_discount: m.mrc?.subtotal || 0, line_status: '',
+      }]
+      sheets.push({ name: 'MA commission', rows: maRows })
+      sheets.push({ name: 'Total', rows: [{ k: 'Grand total (paid to dealer)', v: m.grand_total || 0 }] })
+    } else {
+      sheets.push({ name: 'Commission', rows: [...(m.commission?.rows || []), { period: '', label: 'Commission subtotal', amount: m.commission?.subtotal || 0 }] })
+      sheets.push({ name: 'Rebate', rows: [...(m.rebate?.rows || []), { period: '', label: 'Rebate subtotal', amount: m.rebate?.subtotal || 0 }] })
+      sheets.push({ name: 'Total', rows: [{ k: 'Grand total', v: m.grand_total || 0 }] })
+    }
   }
   return sheets
 }
@@ -110,6 +119,52 @@ console.log('G5 source parity vs deviceHistoryExport.ts')
   const guardIdx = src.search(guardRe)   // the actual `if (...)` guard, not the doc-comment mention
   ok('device/tenure sheet is built BEFORE the money guard', src.indexOf("name: 'Device & tenure'") < guardIdx)
   ok('builder imports no React/DOM (pure)', !/from 'react'/.test(src) && !src.includes('document.'))
+  // MA branch parity
+  ok('has the MA branch `m.kind === \'ma\'` INSIDE the gate', /if\s*\(\s*m\.kind\s*===\s*'ma'\s*\)/.test(src) && src.search(/if\s*\(\s*m\.kind\s*===\s*'ma'\s*\)/) > guardIdx)
+  ok('MA branch pushes an `MA commission` sheet', src.includes("name: 'MA commission'"))
+}
+
+// ── MA-FED (Total / VidaPay) EXPORT SHAPE (m.kind === 'ma') ──────────────────────────────────────────
+// Two contributing detail lines aggregate into ONE per-period row (spiff 53.75 + 5 = 58.75); MRC is a
+// POSITIVE plan price (45, informational, NOT in the grand total); grand_total = spiff+rebate+margin.
+const maMoney = {
+  kind: 'ma', carrier_label: 'Total by Verizon', grand_total: 607.75,
+  spiff: { subtotal: 58.75 }, rebate: { subtotal: 529 }, margin: { subtotal: 20 }, mrc: { subtotal: 45 },
+  periods: [{
+    period: 'June 2026', spiff_total: 58.75, rebate: 529, margin_total: 20, mrc_net_discount: 45, line_status: null,
+    detail: [
+      { spiff_total: 53.75, rebate: 529, margin_total: 20, mrc_net_discount: 45, line_status: null, activation_type2: 'branded' },
+      { spiff_total: 5, rebate: 0, margin_total: 0, mrc_net_discount: 0, line_status: null, activation_type2: 'branded' },
+    ],
+  }],
+}
+const MA_GRANTED = { found: true, query: '355163568356973', carrier_mode: 'plan', prompt: { icon: '⬆️', text: 'offer an UPGRADE' }, device, tenure, commission_visible: true, money: maMoney }
+const MA_LOCKED = { found: true, query: '355163568356973', carrier_mode: 'plan', prompt: { icon: '⬆️', text: 'offer an UPGRADE' }, device, tenure, commission_visible: false, money_locked: { note: 'restricted' } }
+
+// G6 — MA granted → MA per-period sheet + Total, correct values, POSITIVE MRC, no Boost sheets
+console.log('G6 MA-fed granted → MA per-period export')
+{
+  const s = buildSheets(MA_GRANTED)
+  ok('has `MA commission` + `Total` sheets', names(s).includes('MA commission') && names(s).includes('Total'))
+  ok('does NOT emit the Boost Commission/Rebate sheets', !names(s).some(n => ['Commission', 'Rebate'].includes(n)))
+  const ma = s.find(x => x.name === 'MA commission')
+  ok('two detail lines AGGREGATE to ONE period row (+ 1 subtotal row = 2 rows)', ma.rows.length === 2)
+  ok('per-period row exports the aggregate spiff 58.75', ma.rows[0].spiff_total === 58.75)
+  ok('per-period row exports rebate 529 + margin 20', ma.rows[0].rebate === 529 && ma.rows[0].margin_total === 20)
+  ok('MRC exported POSITIVE (45, not −45)', ma.rows[0].mrc_net_discount === 45)
+  ok('subtotals row present', ma.rows[1].period === 'Subtotals' && ma.rows[1].spiff_total === 58.75)
+  ok('grand total (paid to dealer) 607.75 exported', flat(s).includes('607.75'))
+  ok('grand total EXCLUDES the MRC 45 (607.75 ≠ 652.75)', !flat(s).includes('652.75'))
+}
+
+// G7 — MA locked (no grant) → NO MA money sheet, no amount leak
+console.log('G7 MA-fed locked → NO MA money in export')
+{
+  const s = buildSheets(MA_LOCKED)
+  ok('exactly one sheet (Device & tenure)', s.length === 1 && s[0].name === 'Device & tenure')
+  ok('no `MA commission`/`Total` sheet', !names(s).some(n => ['MA commission', 'Total'].includes(n)))
+  const allVals = s.flatMap(sh => (sh.rows || []).flatMap(r => Object.values(r).map(String)))
+  ok('MA totals (607.75/529/58.75) absent as any cell value', !['607.75', '529', '58.75'].some(a => allVals.includes(a)))
 }
 
 console.log(`\n${pass}/${pass + fail} PASS` + (fail ? ` — ${fail} FAILED` : ''))

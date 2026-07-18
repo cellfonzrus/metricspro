@@ -137,6 +137,29 @@ def tenure_from_periods(periods):
                      f"in the residual/MI report, not calendar months).")}
 
 
+def ma_tenure_from_periods(periods):
+    """Activation + tenure for a NON-Boost / MA-fed (Total / VidaPay) line — same residual-months
+    doctrine + output SHAPE as tenure_from_periods, but sourced from the master-agent RECURRING data
+    (raw_ma_daily_tx residual/recurring rows + raw_ma_commission's 1st–6th-month schedule) instead of
+    raw_mi. Only the wording differs so the tenure section stops falsely saying 'No residual history on
+    file' for an MA tenant that HAS MA periods. Empty history -> None / 0 with an MA-specific note."""
+    seen = []
+    for p in periods:
+        c = canon_display_period(p)
+        if c and c not in seen:
+            seen.append(c)
+    if not seen:
+        return {"activation_period": None, "last_seen_period": None, "months_active": 0,
+                "basis": "residual months (master-agent)",
+                "note": "No master-agent recurring/residual history on file for this line yet."}
+    ordered = sorted(seen, key=period_sort_key)
+    n = len(ordered)
+    return {"activation_period": ordered[0], "last_seen_period": ordered[-1],
+            "months_active": n, "basis": "residual months (master-agent)",
+            "note": (f"Active {n} mo (recurring months — the count of DISTINCT periods this line appears "
+                     f"in the master-agent recurring/residual data, not calendar months).")}
+
+
 # ── the salesperson-facing prompt (ALWAYS shown; never gated) ───────────────────────────────────────
 def prompt_for(sold_by_us, sold_date=None):
     """Sold by us -> offer an UPGRADE; not sold by us -> sell a NEW phone. This is the core
@@ -545,6 +568,146 @@ def build_money_table(mi_matches, payment_matches, comp_of):
         "grand_total": round(comm_sub + reb_sub, 2),
         "excluded": excluded,
     }
+
+
+# ── MA (master-agent / VidaPay-fed) money table — carrier-aware money section ────────────────────────
+# For a non-Boost / MA-fed tenant the "money received on this line" comes from the MA Commission Details
+# feed (commcalc.raw_ma_commission, imei-keyed), NOT raw_mi/raw_payment_detail. Per period the file
+# carries: 1st–6th-month spiffs (spiff_m1..spiff_m6), rebate, equipment margins (device_margin +
+# consumer_margin) and the subscriber plan MRC (mrc_net_discount — INFORMATIONAL, the plan's MRC, not a
+# dealer payout). SIGN: VidaPay/Total follow the canonical negative=payout convention already used across
+# the codebase (commission_ledger.classify/build_row book abs of a negative as the payout; whatif's MA
+# source config normalizes with residual_sign='negate'). We normalize each amount paid-to-dealer = −raw
+# so a payout shows POSITIVE and a charge/clawback shows NEGATIVE — sign info is preserved, never dropped.
+# DISPLAY of already-recorded data only; no pay-path here.
+_MA_SPIFF_KEYS = ("spiff_m1", "spiff_m2", "spiff_m3", "spiff_m4", "spiff_m5", "spiff_m6")
+
+
+def ma_paid(v):
+    """Normalize one raw MA Commission Details PAYOUT cell to a PAID-TO-DEALER value: negate (paid = −raw),
+    so a NEGATIVE cell (money paid to the dealer) shows POSITIVE and a POSITIVE cell (a charge/clawback)
+    shows NEGATIVE. Sign is preserved, never dropped. Blank/None/non-numeric → 0.0 (a blank cell
+    contributes nothing to a sum). Mirrors the canonical negative=payout convention (commission_ledger.py).
+    Use ONLY for payout columns (spiffs / rebate / margins) — NOT for mrc_net_discount, which is a plan
+    price stored positive (see _num0)."""
+    a = to_amount(v)
+    return round(-a, 2) if a is not None else 0.0
+
+
+def _num0(v):
+    """A plain numeric with a 0.0 default (NO sign flip). For a value that is NOT a payout — e.g.
+    mrc_net_discount, the subscriber's plan MRC, which the MA file stores POSITIVE (mig 083) and which the
+    rest of the code reads un-negated (router avg-MRC does `if mrc > 0`)."""
+    a = to_amount(v)
+    return round(a, 2) if a is not None else 0.0
+
+
+def _ma_detail(r):
+    """One per-row MA money detail (a base line OR a later adjustment line). PAYOUT columns (spiffs /
+    rebate / margins) are paid-to-dealer normalized (ma_paid); mrc_net_discount is the subscriber plan
+    price, kept POSITIVE and un-negated (_num0) — it is NOT a payout. Kept so multiple rows per IMEI/period
+    can be aggregated for totals AND shown expandably. line_status may be None — metadata only, NEVER gates
+    the paid display."""
+    sp = {k: ma_paid(r.get(k)) for k in _MA_SPIFF_KEYS}
+    dm, cm = ma_paid(r.get("device_margin")), ma_paid(r.get("consumer_margin"))
+    d = {"period": canon_display_period(r.get("period")),
+         "spiff_total": round(sum(sp.values()), 2),
+         "rebate": ma_paid(r.get("rebate")),
+         "device_margin": dm, "consumer_margin": cm, "margin_total": round(dm + cm, 2),
+         "mrc_net_discount": _num0(r.get("mrc_net_discount")),   # plan price — POSITIVE, not a payout
+         "line_status": (str(r.get("line_status") or "").strip() or None),
+         "activation_type": (str(r.get("activation_type") or "").strip() or None),
+         "activation_type2": (str(r.get("activation_type2") or "").strip() or None),
+         "ban": (str(r.get("ban") or "").strip() or None)}
+    d.update(sp)
+    return d
+
+
+def build_ma_money_table(commission_rows, carrier_label=None):
+    """Assemble the MA money table for a non-Boost / MA-fed tenant from raw_ma_commission rows ALREADY
+    imei-matched + org-scoped by the router. Pure.
+      • MULTIPLE rows per IMEI per period (a base line + later adjustment lines) are AGGREGATED into one
+        per-period total, with every contributing row kept in that period's `detail` list (expandable).
+      • PAYOUT columns are paid-to-dealer normalized (ma_paid: negative=payout → positive; charge →
+        negative). mrc_net_discount is the subscriber plan price → POSITIVE, un-negated, INFORMATIONAL.
+      • Period spelling collapses via canon_display_period so 'June 2026' and '2026-06' are ONE period.
+      • line_status may be NULL — it NEVER gates the paid/active display; nonzero spiff/rebate is the real
+        payment evidence.
+    Sections (all per DISTINCT canonical period):
+      spiff  Σ M1–M6 spiffs      [payout] · rebate Σ rebate [payout] ·
+      margin Σ device+consumer   [payout] · mrc Σ mrc_net_discount [INFORMATIONAL, subscriber plan price,
+                                            not a dealer payout — excluded from the grand total].
+    grand_total = spiff + rebate + margin subtotals (the dealer-payable money).
+    `carrier_label` (the org's resolved carrier name, config-driven — no carrier name in code) rides along
+    for the UI/export heading; None → the UI uses a neutral 'processor data' fallback.
+    Empty input → empty sections + an explicit note (never a silent $0, never a crash)."""
+    per, order = {}, []
+    _SUM_KEYS = _MA_SPIFF_KEYS + ("spiff_total", "rebate", "device_margin", "consumer_margin",
+                                  "margin_total", "mrc_net_discount")
+    for r in (commission_rows or []):
+        det = _ma_detail(r)
+        cp = det["period"]
+        if not cp:
+            try:
+                mo, yr = int(r.get("period_month") or 0), int(r.get("period_year") or 0)
+                if 1 <= mo <= 12 and yr:
+                    cp = canon_display_period(f"{yr}-{mo:02d}")
+            except Exception:
+                cp = ""
+        if not cp:
+            cp = "(no period)"
+        det["period"] = cp
+        d = per.get(cp)
+        if d is None:
+            d = {"period": cp, "line_status": None, "_sk": "", "rows": 0, "detail": []}
+            for k in _SUM_KEYS:
+                d[k] = 0.0
+            per[cp] = d
+            order.append(cp)
+        d["detail"].append(det)
+        d["rows"] += 1
+        for k in _SUM_KEYS:
+            d[k] = round(d[k] + det[k], 2)
+        ls, sk = det["line_status"], str(r.get("status_change_date") or "")
+        if ls and sk >= (d["_sk"] or ""):
+            d["line_status"], d["_sk"] = ls, sk
+        elif ls and not d["line_status"]:
+            d["line_status"] = ls
+
+    periods = sorted(per.values(), key=lambda x: period_sort_key(x["period"]))
+    for d in periods:
+        d.pop("_sk", None)
+
+    def _section(label, field):
+        return {"label": label, "source": "raw_ma_commission",
+                "rows": [{"period": d["period"], "amount": d[field], "label": label,
+                          "source": "raw_ma_commission"} for d in periods],
+                "subtotal": round(sum(d[field] for d in periods), 2)}
+
+    spiff = _section("First-6-month spiffs (M1–M6)", "spiff_total")
+    rebate = _section("Rebate", "rebate")
+    margin = _section("Equipment margin (device + consumer)", "margin_total")
+    mrc = _section("Plan MRC (subscriber plan price — informational)", "mrc_net_discount")
+    grand = round(spiff["subtotal"] + rebate["subtotal"] + margin["subtotal"], 2)
+    note = None
+    if not periods:
+        note = ("No master-agent commission (MA Commission Details) rows ingested for this device yet — "
+                "pull/upload the MA Commission report (Data Imports → payment-processor sources).")
+    return {
+        "kind": "ma", "source": "raw_ma_commission",
+        "carrier_label": (str(carrier_label).strip() or None) if carrier_label else None,
+        "sign_convention": "payout columns negative=payout (shown paid-to-dealer); MRC positive (plan price)",
+        "periods": periods, "spiff": spiff, "rebate": rebate, "margin": margin, "mrc": mrc,
+        "line_status": (periods[-1]["line_status"] if periods else None),
+        "grand_total": grand, "note": note,
+    }
+
+
+def carrier_response_fields(carrier_mode):
+    """The EXTRA top-level device-history response fields for a given carrier_mode. Boost → {} so the
+    Boost payload key-set is BYTE-IDENTICAL to the pre-carrier-aware shape (the owner constraint: Boost
+    unchanged). Non-Boost → {'carrier_mode': <mode>} so an MA-fed caller can see which path served it."""
+    return {} if (carrier_mode or "boost") == "boost" else {"carrier_mode": carrier_mode}
 
 
 # ── the money gate (admin-only by default; grantable via the 'device_commission' DATA_GRANT) ────────
