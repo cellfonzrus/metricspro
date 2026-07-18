@@ -31,6 +31,7 @@ the opt-in that writes the sale_installment_ledger; the pay contribution is wire
 The classifier, the MRC extractor and the gate are PURE functions (config passed as args) so they are
 unit-testable without a database (see scratchpad proof harness).
 """
+import os
 import re
 import calendar
 from datetime import date
@@ -344,13 +345,26 @@ _HOUSE_ORG = ORG_ID
 _GATE_CFG_DEFAULTS = {
     "boost": {"gate_source": "boost_mi", "ma_device_fields": ["imei", "sim"],
               "ma_month_field_prefix": "spiff_m", "ma_max_month": 6,
-              "ma_month1_extra_fields": ["rebate", "device_margin"], "ma_min_amount": 0.01},
+              "ma_month1_extra_fields": ["rebate", "device_margin"], "ma_min_amount": 0.01,
+              "ma_payout_sign": -1},
     "plan":  {"gate_source": "ma_commission", "ma_device_fields": ["imei", "sim"],
               "ma_month_field_prefix": "spiff_m", "ma_max_month": 6,
-              "ma_month1_extra_fields": ["rebate", "device_margin"], "ma_min_amount": 0.01},
+              "ma_month1_extra_fields": ["rebate", "device_margin"], "ma_min_amount": 0.01,
+              "ma_payout_sign": -1},
 }
 _GATE_CFG_KEYS = ("gate_source", "ma_device_fields", "ma_month_field_prefix", "ma_max_month",
-                  "ma_month1_extra_fields", "ma_min_amount")
+                  "ma_month1_extra_fields", "ma_min_amount", "ma_payout_sign")
+
+# L2 KILL SWITCH (reversal layer, owner-mandated 2026-07-18): when env INSTALLMENT_GATE_LEGACY is truthy,
+# compute_sale_installments forces the vendored LEGACY raw_mi gate for ALL orgs/modes — instant Railway env
+# toggle, no redeploy. Read at COMPUTE time (never import-cached) so a restart picks up the toggle.
+_LEGACY_TRUTHY = {"1", "true", "yes", "on", "y", "t"}
+
+
+def _legacy_gate_forced():
+    """True when the INSTALLMENT_GATE_LEGACY kill switch is set truthy. Read fresh from the env every call
+    (no import-time caching) so toggling it on Railway takes effect on the next process restart."""
+    return str(os.getenv("INSTALLMENT_GATE_LEGACY", "")).strip().lower() in _LEGACY_TRUTHY
 
 # raw_ma_commission numeric payout columns aggregated into the gate index (per-month spiffs + the
 # activation-time payouts that count for month 1). Kept as a fixed superset so ONE index serves every
@@ -486,11 +500,18 @@ def _gate_met_ma(sale_line, ma_index, month_index, cfg):
     """(met, evidence): does the sold line qualify to be paid in month `month_index` per the MASTER-AGENT
     statement? Rule (documented in the commit): match the sold device's serial (raw_sales.serial_1, digit-
     normalized) to a raw_ma_commission device in the SALE period; month N is PAID iff at least one of month
-    N's evidence columns has |NET amount| >= min (net = summed across the device's base+adjustment rows;
-    sign-agnostic because MA amounts are negative = payout to dealer). Month N's evidence column is
-    '{prefix}{N}' (spiff_mN); month 1 ALSO counts the configured activation-time payouts (rebate,
-    device_margin) so a plan that pays no M1 spiff but a rebate still qualifies. line_status is deliberately
-    NOT keyed on (NULL in real rows) — a posted payout IS the proof the line is active + paying. PURE."""
+    N's evidence columns has a NET amount in the PAYOUT DIRECTION of at least `min` — i.e.
+    (net * ma_payout_sign) >= min, where net = summed across the device's base+adjustment rows. This is
+    DIRECTION-AWARE, not magnitude: MA amounts are negative = payout to dealer (ma_payout_sign = -1), so a
+    NET CLAWBACK (a reversal that flips the net to a CHARGE) does NOT prove paid — it is held with reason
+    'net_clawback'. Month N's evidence column is '{prefix}{N}' (spiff_mN); month 1 ALSO counts the configured
+    activation-time payouts (rebate, device_margin) so a plan that pays no M1 spiff but a rebate still
+    qualifies. line_status is deliberately NOT keyed on (NULL in real rows) — a posted payout IS the proof
+    the line is active + paying; consequently in MA mode ALL gate_modes (active_status / nonzero_residual /
+    paid_residual) collapse to this same evidence test (the MA feed carries no per-month line status). PURE.
+
+    ma_min_amount is CLAMPED to the code default when a config row sets it <= 0 (0 is NOT a no-minimum
+    sentinel — an all-zero device must not read as paid). ma_payout_sign is coerced to +/-1 (0/invalid → -1)."""
     cand = []
     for f in ("serial_1", "imei"):
         k = _norm_imei(sale_line.get(f))
@@ -501,19 +522,32 @@ def _gate_met_ma(sale_line, ma_index, month_index, cfg):
         return False, {"matched": False, "reason": "no_ma_record"}
     prefix = (cfg.get("ma_month_field_prefix") or "spiff_m")
     max_month = int(cfg.get("ma_max_month") or 6)
-    min_amt = safe_float(cfg.get("ma_min_amount")) if cfg.get("ma_min_amount") is not None else 0.01
+    min_amt = safe_float(cfg.get("ma_min_amount"))
+    if min_amt <= 0:            # m3: 0 is NOT a no-minimum sentinel — clamp to the code default
+        min_amt = 0.01
+    raw_sign = safe_float(cfg.get("ma_payout_sign"))
+    sign = 1.0 if raw_sign > 0 else -1.0    # coerce to +/-1 (0/invalid → -1 = MA negative-is-payout)
     if month_index > max_month:
         return False, {"matched": True, "reason": "month_beyond_ma_columns", "max_month": max_month}
     cols = [f"{prefix}{month_index}"]
     if month_index == 1:
         cols += [str(c).strip() for c in (cfg.get("ma_month1_extra_fields") or []) if str(c).strip()]
-    per_col, paid = {}, False
+    per_col, paid, charged = {}, False, False
     for c in cols:
         net = round(safe_float(agg.get(c)), 2)
         per_col[c] = net
-        if abs(net) >= min_amt:
+        directed = net * sign            # amount IN the payout direction (positive = real payout to dealer)
+        if directed >= min_amt:
             paid = True
-    return paid, {"matched": True, "reason": ("paid" if paid else "no_month_payout"), "evidence": per_col}
+        elif directed <= -min_amt:       # a net CHARGE (reversal beyond the min) — not a payout
+            charged = True
+    if paid:
+        reason = "paid"
+    elif charged:                        # M2: over-reversal / net clawback → honest reason, not "no payout"
+        reason = "net_clawback"
+    else:
+        reason = "no_month_payout"
+    return paid, {"matched": True, "reason": reason, "evidence": per_col, "payout_sign": sign}
 
 
 # ── USER-DEFINED effective window (backfill vs cutover) (PURE) ──────────────────────────────────────
@@ -626,8 +660,13 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
 
     The paid gate's EVIDENCE SOURCE is config-driven per carrier (mig 223): Boost carriers prove paid from
     raw_mi (byte-identical to pre-mig-223); master-agent-fed carriers prove paid from raw_ma_commission
-    per-month spiffs. `_gate_source_override` forces every gate to that source (used by preview_gate_impact
-    to diff new-vs-legacy) — never set it in the live pay path."""
+    per-month spiffs. In MA mode ALL gate_modes (active_status/nonzero_residual/paid_residual) collapse to
+    the same MA-evidence test — the MA feed carries no reliable per-month line status. `_gate_source_override`
+    forces every gate to that source (used by preview_gate_impact to diff new-vs-legacy).
+
+    L2 KILL SWITCH: env INSTALLMENT_GATE_LEGACY truthy forces the vendored LEGACY raw_mi gate for EVERY
+    org/mode (bypassing config resolution entirely) → the exact pre-mig-223 behavior, instant Railway toggle
+    with no redeploy."""
     scheds, lines_by = _load_schedules(client, org_id)
     if not scheds:
         return {"pay_period": pay_period, "by_rep": {}, "ledger": [], "flags": [], "schedules": 0,
@@ -641,6 +680,11 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
     acc = _acc_sets(client, org_id)
     store_market = _read_store_market(client, org_id)
     role_by_rep = _read_employee_roles(client, org_id)   # {_canon_person(name) -> role} for scope='role'
+
+    # L2 KILL SWITCH: env INSTALLMENT_GATE_LEGACY forces the legacy raw_mi gate for ALL orgs/modes. Reuses
+    # the override plumbing so every carrier resolves to 'boost_mi' → the unchanged _gate_met path.
+    if _legacy_gate_forced():
+        _gate_source_override = "boost_mi"
 
     # PAID-GATE EVIDENCE SOURCE per carrier (mig 223; RULE TWO). Resolve once, cache per carrier_id. A Boost
     # carrier → 'boost_mi' (unchanged raw_mi gate); a master-agent carrier → 'ma_commission'. This is the
@@ -890,9 +934,11 @@ def _persist(client, org_id, pay_period, ledger):
 
 # ── IMPACT PREVIEW (read-only; Gate-2 review artifact for mig 223) ──────────────────────────────────
 def _flip_key(r):
-    """Stable per-installment identity for diffing two gate runs."""
+    """Stable per-installment identity for diffing two gate runs. Includes plan_id + schedule_id so two
+    schedules covering the SAME device+month don't collide in the old-status map (n1)."""
     return (r.get("sale_period"), r.get("month_index"), str(r.get("trans_id") or ""),
-            str(r.get("mdn") or ""), str(r.get("serial_1") or ""))
+            str(r.get("mdn") or ""), str(r.get("serial_1") or ""),
+            str(r.get("plan_id") or ""), str(r.get("schedule_id") or ""))
 
 
 def preview_gate_impact(client, org_id, pay_period):

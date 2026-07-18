@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS commcalc.installment_gate_source_config (
   ma_month_field_prefix  TEXT   NOT NULL DEFAULT 'spiff_m',             -- month N payout col = prefix || N  (spiff_m1..spiff_m6)
   ma_max_month           INT    NOT NULL DEFAULT 6,                     -- highest month with a per-month payout column
   ma_month1_extra_fields TEXT[] NOT NULL DEFAULT ARRAY['rebate','device_margin'], -- extra activation-time payout cols that ALSO count for month 1
-  ma_min_amount          NUMERIC NOT NULL DEFAULT 0.01,                 -- |net amount| >= this on a month's evidence col counts as PAID (sign-agnostic; MA amounts are negative = payout to dealer)
+  ma_min_amount          NUMERIC NOT NULL DEFAULT 0.01,                 -- min amount (in the payout direction) on a month's evidence col that counts as PAID. NOTE: 0 is NOT a "no minimum" sentinel — the engine CLAMPS a resolved value <= 0 back to its code default (0.01), else an all-zero device would read as paid.
+  ma_payout_sign         NUMERIC NOT NULL DEFAULT -1,                   -- DIRECTION of a payout in the MA columns (MA amounts are NEGATIVE = payout to dealer → -1). The gate is DIRECTION-AWARE: paid iff (net * ma_payout_sign) >= ma_min_amount, so a net CLAWBACK (a reversal that flips the net to a CHARGE) does NOT prove paid. Coerced to +/-1 (0/invalid → -1).
   is_active     BOOLEAN NOT NULL DEFAULT true,
   notes         TEXT,
   updated_at    TIMESTAMPTZ DEFAULT NOW(),
@@ -48,18 +49,21 @@ COMMENT ON TABLE commcalc.installment_gate_source_config IS
 
 -- Seed the two HOUSE mode-default rows (every tenant inherits them; admins override per carrier).
 -- boost mode = today's behavior byte-identical (raw_mi MI+ATU residual gate).
--- plan mode  = master-agent-fed carriers (raw_ma_commission: nonzero per-month spiff = dealer paid that
---              month; month 1 also honors rebate/device_margin activation payouts; negative = payout).
+-- plan mode  = master-agent-fed carriers (raw_ma_commission: net per-month spiff IN THE PAYOUT DIRECTION =
+--              dealer paid that month; month 1 also honors rebate/device_margin activation payouts).
+-- NOTE (MA gate semantics): the MA feed carries no reliable per-month line status (line_status is NULL in
+-- real rows), so in MA mode ALL schedule gate_modes (active_status/nonzero_residual/paid_residual) collapse
+-- to the SAME evidence test — a posted payout IS the proof the line is active + paying.
 INSERT INTO commcalc.installment_gate_source_config
   (org_id, carrier_id, carrier_mode, gate_source, ma_device_fields, ma_month_field_prefix,
-   ma_max_month, ma_month1_extra_fields, ma_min_amount, notes)
+   ma_max_month, ma_month1_extra_fields, ma_min_amount, ma_payout_sign, notes)
 VALUES
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000000', 'boost',
-   'boost_mi', ARRAY['imei','sim'], 'spiff_m', 6, ARRAY['rebate','device_margin'], 0.01,
+   'boost_mi', ARRAY['imei','sim'], 'spiff_m', 6, ARRAY['rebate','device_margin'], 0.01, -1,
    'House/Boost default — gate proven from ePay raw_mi (subscriber Active + MI+ATU residual > 0). Byte-identical to pre-mig-223.'),
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000000', 'plan',
-   'ma_commission', ARRAY['imei','sim'], 'spiff_m', 6, ARRAY['rebate','device_margin'], 0.01,
-   'Master-agent (VidaPay/Total) default — gate proven from raw_ma_commission: month N is paid when the device''s (IMEI-matched, adjustment rows summed) net spiff_mN is nonzero; month 1 also counts rebate/device_margin activation payouts. Amounts negative = payout to dealer.')
+   'ma_commission', ARRAY['imei','sim'], 'spiff_m', 6, ARRAY['rebate','device_margin'], 0.01, -1,
+   'Master-agent (VidaPay/Total) default — gate proven from raw_ma_commission: month N is paid when the device''s (IMEI-matched, adjustment rows summed) net spiff_mN is a payout of >= ma_min_amount in the ma_payout_sign direction (MA amounts negative = payout → sign -1; a net clawback does NOT pay); month 1 also counts rebate/device_margin activation payouts.')
 ON CONFLICT (org_id, carrier_id, carrier_mode) DO NOTHING;
 
 ALTER TABLE commcalc.installment_gate_source_config ENABLE ROW LEVEL SECURITY;

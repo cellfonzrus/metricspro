@@ -50,19 +50,32 @@ def check(name, cond, extra=""):
         print(f"FAIL  {name}   {extra}")
 
 
-# ── Load the PRISTINE origin/main engine (HEAD == origin/main; my edits are uncommitted) ────────────
+# ── Load the PRISTINE pre-change engine, PINNED to the branch's merge-base with origin/main (m4) ─────
+# NOT `HEAD:` (self-referential once this package is committed). Use the merge-base with origin/main so the
+# genuine pre-mig-223 engine is loaded even after further commits; fall back to the named base SHA 18df5c4.
+_PINNED_BASE = "18df5c4"
+
+
 def _load_old_engine():
     repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    ref = _PINNED_BASE
+    try:
+        ref = subprocess.check_output(
+            ["git", "-C", repo, "merge-base", "HEAD", "origin/main"], text=True).strip() or _PINNED_BASE
+    except Exception:
+        ref = _PINNED_BASE
     src = subprocess.check_output(
-        ["git", "-C", repo, "show", "HEAD:backend/app/modules/commcalc/sale_installment_engine.py"],
+        ["git", "-C", repo, "show", f"{ref}:backend/app/modules/commcalc/sale_installment_engine.py"],
         text=True)
     mod = types.ModuleType("OLD_sale_installment_engine")
     mod.__dict__["__name__"] = "OLD_sale_installment_engine"
     exec(compile(src, "OLD_sale_installment_engine.py", "exec"), mod.__dict__)
+    mod._loaded_from = ref
     return mod
 
 
 OLD = _load_old_engine()
+print(f"(differential pinned to pre-change engine @ {OLD._loaded_from[:10]})")
 
 
 # ═══ In-memory FakeClient (order/range aware; schema-agnostic, unique table names) ═══════════════════
@@ -253,14 +266,43 @@ metr, evr = _gate_met_ma({"serial_1": "111122223333444"}, idx2, 1, cfg_plan)
 check("month 1 PAID via rebate alone (month1 extra field)", metr is True, evr)
 metr2, evr2 = _gate_met_ma({"serial_1": "111122223333444"}, idx2, 2, cfg_plan)
 check("month 2 NOT paid on rebate (extra fields are month-1 only)", metr2 is False, evr2)
-# clawback: full reversal nets to 0 -> not paid
+# clawback: full reversal nets to EXACT 0 -> not paid, reason no_month_payout (no directional charge)
 idx3 = _ma_gate_index([ma_row(LUXE, "June 2026", "222233334444555", spiff_m2=-40),
                        ma_row(LUXE, "June 2026", "222233334444555", spiff_m2=40)])
 metc, evc = _gate_met_ma({"serial_1": "222233334444555"}, idx3, 2, cfg_plan)
-check("full clawback nets to 0 -> NOT paid", metc is False, evc)
+check("exact-zero net -> NOT paid (no_month_payout)", metc is False and evc["reason"] == "no_month_payout", evc)
 # beyond MA month columns
 met7, ev7 = _gate_met_ma({"serial_1": REPRO}, idx, 7, cfg_plan)
 check("month 7 -> month_beyond_ma_columns", met7 is False and ev7["reason"] == "month_beyond_ma_columns", ev7)
+
+print("\n── 2b. M2 DIRECTION-AWARE paid test (net must be a payout, not a charge) ──")
+# over-reversal: -48.75 base + +55.00 reversal = net +6.25 (dealer CHARGED) -> NOT paid, reason net_clawback
+idx_over = _ma_gate_index([ma_row(LUXE, "June 2026", "444455556666777", spiff_m2=-48.75),
+                           ma_row(LUXE, "June 2026", "444455556666777", spiff_m2=55.00)])
+mo, eo = _gate_met_ma({"serial_1": "444455556666777"}, idx_over, 2, cfg_plan)
+check("over-reversal (net +6.25 = charged) -> WITHHELD", mo is False, eo)
+check("over-reversal reason = net_clawback (honest)", eo["reason"] == "net_clawback", eo)
+# partial reversal: -48.75 + +5.00 = net -43.75 (still a payout) -> PAID
+idx_part = _ma_gate_index([ma_row(LUXE, "June 2026", "555566667777888", spiff_m2=-48.75),
+                           ma_row(LUXE, "June 2026", "555566667777888", spiff_m2=5.00)])
+mp, ep = _gate_met_ma({"serial_1": "555566667777888"}, idx_part, 2, cfg_plan)
+check("partial reversal (net -43.75 = still payout) -> PAID", mp is True, ep)
+# a POSITIVE spiff (a plan whose statement pays POSITIVE) with ma_payout_sign=+1 -> paid; with -1 -> charged
+cfg_pos = dict(cfg_plan); cfg_pos["ma_payout_sign"] = 1
+idx_pos = _ma_gate_index([ma_row(LUXE, "June 2026", "666677778888999", spiff_m1=25)])
+check("sign=+1: positive payout -> PAID", _gate_met_ma({"serial_1": "666677778888999"}, idx_pos, 1, cfg_pos)[0] is True)
+check("sign=-1: same +25 reads as a CHARGE -> WITHHELD",
+      _gate_met_ma({"serial_1": "666677778888999"}, idx_pos, 1, cfg_plan)[0] is False)
+
+print("\n── 2c. m3 zero-min CLAMP (0 is not a no-minimum sentinel) ──")
+cfg_zeromin = dict(cfg_plan); cfg_zeromin["ma_min_amount"] = 0
+idx_zero = _ma_gate_index([ma_row(LUXE, "June 2026", "777788889999000")])  # ALL columns zero
+mz, ez = _gate_met_ma({"serial_1": "777788889999000"}, idx_zero, 1, cfg_zeromin)
+check("ma_min_amount=0 clamped -> all-zero device NOT paid", mz is False, ez)
+# a real -5 spiff still pays under the clamped default
+idx_real = _ma_gate_index([ma_row(LUXE, "June 2026", "777788889999000", spiff_m1=-5)])
+check("clamped min still pays a real -5 spiff",
+      _gate_met_ma({"serial_1": "777788889999000"}, idx_real, 1, cfg_zeromin)[0] is True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -401,6 +443,35 @@ check("DEV_B month2 (July pay) WITHHELD (no June spiff_m2)",
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# 5b. L2 KILL SWITCH — INSTALLMENT_GATE_LEGACY=1 ⇒ byte-identical to pre-change engine for BOTH modes
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n── 5b. L2 kill switch (INSTALLMENT_GATE_LEGACY) ──")
+# sanity FIRST: with the switch OFF, the MA org DIVERGES from the pinned pre-change engine (fix is active)
+off_new = NEW.compute_sale_installments(FakeClient(luxe_store()), LUXE, "June 2026")
+off_old = OLD.compute_sale_installments(FakeClient(luxe_store()), LUXE, "June 2026")
+check("switch OFF: MA org DIVERGES from pre-change engine (fix live)", off_new["ledger"] != off_old["ledger"])
+check("switch OFF: pre-change engine pays $0 (all withheld)", off_old["totals"]["paid"] == 0, off_old["totals"])
+
+os.environ["INSTALLMENT_GATE_LEGACY"] = "1"
+try:
+    check("kill switch reads truthy", NEW._legacy_gate_forced() is True)
+    for label, mk in (("BOOST", lambda: boost_store(True)), ("MA/luxelink", luxe_store)):
+        kn = NEW.compute_sale_installments(FakeClient(mk()), HOUSE if label == "BOOST" else LUXE,
+                                           "June 2026")
+        ko = OLD.compute_sale_installments(FakeClient(mk()), HOUSE if label == "BOOST" else LUXE,
+                                           "June 2026")
+        check(f"kill-switch ON: [{label}] ledger == pre-change engine", kn["ledger"] == ko["ledger"], "DIFF")
+        check(f"kill-switch ON: [{label}] by_rep == pre-change", kn["by_rep"] == ko["by_rep"], f"{kn['by_rep']} vs {ko['by_rep']}")
+        check(f"kill-switch ON: [{label}] totals == pre-change", kn["totals"] == ko["totals"], f"{kn['totals']} vs {ko['totals']}")
+        check(f"kill-switch ON: [{label}] NO MA keys leak",
+              not (set().union(*[set(r) for r in kn["ledger"]], set()) &
+                   {"gate_kind", "gate_source", "ma_matched", "ma_evidence", "ma_reason"}))
+finally:
+    os.environ.pop("INSTALLMENT_GATE_LEGACY", None)
+check("kill switch reads falsy after unset", NEW._legacy_gate_forced() is False)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # 6. IMPACT PREVIEW — the Gate-2 review artifact
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n── 6. impact preview (preview_gate_impact) ──")
@@ -419,6 +490,14 @@ check("MA impact: NO regressions (fix only opens gates)", imp["regressions_to_wi
 check("MA impact: legacy totals show all withheld", imp["legacy_totals"]["paid"] == 0, imp["legacy_totals"])
 check("MA impact: new totals show 2 paid", imp["new_totals"]["paid"] == 2, imp["new_totals"])
 check("MA impact: flip row carries ma_evidence", imp["flips_to_payable"][0].get("ma_evidence") is not None)
+
+# n1: _flip_key must include plan_id + schedule_id so two schedules on the same device+month don't collide
+r_a = {"sale_period": "June 2026", "month_index": 1, "trans_id": "t1", "mdn": "", "serial_1": "abc",
+       "plan_id": "p1", "schedule_id": "s1"}
+r_b = {**r_a, "schedule_id": "s2"}
+r_c = {**r_a, "plan_id": "p2"}
+check("n1: _flip_key distinguishes different schedule_id", NEW._flip_key(r_a) != NEW._flip_key(r_b))
+check("n1: _flip_key distinguishes different plan_id", NEW._flip_key(r_a) != NEW._flip_key(r_c))
 
 print("\n─────────────────────────────────────────")
 print(f"IMPACT-PREVIEW SAMPLE (luxelink June 2026):")
