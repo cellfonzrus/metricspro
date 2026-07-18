@@ -4069,6 +4069,22 @@ def _accessory_config(client, org_id):
         _vv = str(_v or "").strip().lower()
         if _kk and _vv in _CT_BUCKETS:
             ct_map[_kk] = _vv
+    # BILL-PAYMENT products (mig 214; per-org, admin-editable) — which product/item values count as a
+    # bill payment (walk-in recharge) for the Daily-Targets CONVERSION metric (boxes ÷ billpays). Fetched in
+    # its OWN defensive query so a missing column (pre-214) can NEVER disturb the resolution above — it falls
+    # back to an EMPTY list. When the list is EMPTY, the shared aggregation (_sales_cell_agg) uses the
+    # hard-coded Boost tokens ('boost rtr'/'xfinity prepaid refill') with the original CONTAINMENT semantics →
+    # house/Boost conversion BYTE-IDENTICAL; a NON-empty list switches to case-insensitive EXACT match on the
+    # picked product values (RULE THREE — observed, not typed). DISPLAY ONLY: consumed by _sales_cell_agg's
+    # `_billpay` conversion set; no payout path (calculator.py / commission_engine.py never read it).
+    billpay_products = []
+    try:
+        prows = (client.schema("commcalc").table("accessory_config")
+                 .select("billpay_products").eq("org_id", org_id).limit(1).execute().data) or []
+        if prows and isinstance(prows[0].get("billpay_products"), list):
+            billpay_products = [str(p).strip() for p in (prows[0].get("billpay_products") or []) if str(p).strip()]
+    except Exception:
+        billpay_products = []
     return {"departments": {d.strip().lower() for d in depts},
             "categories": {c.strip().lower() for c in cats},
             "products": {k.strip().lower() for k in kws},
@@ -4078,6 +4094,8 @@ def _accessory_config(client, org_id):
             "box_departments_list": box_depts,
             "setup_fee_products": {k.strip().lower() for k in setup_kws},
             "setup_fee_keywords_list": setup_kws,
+            "billpay_products": {p.strip().lower() for p in billpay_products},
+            "billpay_products_list": billpay_products,
             "contract_type_map": ct_map, "contract_type_map_raw": ct_map_raw}
 
 
@@ -7776,6 +7794,29 @@ def upload_trace(period: str = "", upload_type: str = "", source: str = "",
     return {"ok": True, "org_id": org_id, "count": len(rows), "records": rows}
 
 
+def _can_edit_classification(authorization, org_id):
+    """Whether the caller may EDIT the Sales-Report Classification settings (accessory dept/category/keyword
+    lists, ACIMA tender, box departments, device set-up-fee keywords, contract-type map, AND bill-payment
+    products). Gated on the 'classification' settings area via core's _can_edit_setting (per-setting pattern —
+    roles.permissions.settings['classification']; owner directive 2026-07-18 "move the accessory definition to
+    settings area gated by permission … defaulted access to only the admin and provided if needed"). Until
+    that area is registered in core.SETTING_AREAS + the Roles UI (NEEDS CORE), _can_edit_setting DEGRADES to
+    admin-only (scope='all' / role='admin') — a SAFE default that never OPENS config to a non-admin. RBAC
+    off / unidentifiable caller → True (unchanged require_org-only behaviour, never locks out the house)."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller, _can_edit_setting
+    except Exception:
+        return True
+    try:
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid, org_id) if uid else None
+    except Exception:
+        caller = None
+    if caller is None:
+        return True   # unresolved (no token / rbac off) — allow, same posture as the rest of the module
+    return bool(_can_edit_setting(caller, 'classification'))
+
+
 @router.get("/accessory-config")
 def get_accessory_config(org_id: str = ORG_ID):
     """The configured accessory dept/category/product-keyword lists + the ACIMA-lease tender(s) + the
@@ -7785,11 +7826,12 @@ def get_accessory_config(org_id: str = ORG_ID):
             "product_keywords": c["products_list"], "acima_tenders": c["acima_tenders_list"],
             "box_departments": c["box_departments_list"],
             "setup_fee_keywords": c["setup_fee_keywords_list"],
+            "billpay_products": c["billpay_products_list"],
             "contract_type_map": c["contract_type_map_raw"]}
 
 
 @router.put("/accessory-config")
-def put_accessory_config(body: dict, org_id: str = ORG_ID):
+def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Set what counts as accessory sales + which Tender Type = an ACIMA lease. Body: {departments:[...],
     categories:[...], product_keywords:[...], acima_tenders:[...]}. A line is an accessory if its
     department OR category is listed OR its product description contains a keyword. ACIMA commission =
@@ -7797,8 +7839,14 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID):
     Sales Report, the Action-Plan accessory tile, and (on recalc) commission accessory + ACIMA pay.
     Persists PER-ORG in commcalc.accessory_config (mig 208) — NOT the flag_rules singleton, whose id=1 PK
     meant a non-house save overwrote the house row's org_id. Only the keys present in the body are updated
-    (a partial save reads the current per-org row and re-writes the untouched lists)."""
+    (a partial save reads the current per-org row and re-writes the untouched lists).
+
+    GATED on the 'classification' settings permission (owner directive 2026-07-18): admin-only by default,
+    grantable via the Roles UI. Degrades to admin-only until the area is registered (NEEDS CORE); never
+    opens to a non-admin. READS stay open (the modal shows read-only for a caller without the permission)."""
     require_org(org_id)
+    if not _can_edit_classification(authorization, org_id):
+        raise HTTPException(403, "You don't have permission to edit Classification settings.")
     client = sb()
     cur = _accessory_config(client, org_id)
     row = {"org_id": org_id, "updated_at": _cb_now(),
@@ -7818,6 +7866,10 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID):
     # Device SET-UP FEE keywords (mig 217, pkg A field — editable from the shared Classification-settings UI).
     row["setup_fee_keywords"] = ([str(x).strip() for x in (body.get("setup_fee_keywords") or []) if str(x).strip()]
                                  if "setup_fee_keywords" in body else cur["setup_fee_keywords_list"])
+    # BILL-PAYMENT products (mig 214 — editable from the shared Classification-settings UI). Empty list =
+    # fall back to the hard-coded Boost tokens in the aggregation (conversion byte-identical for the house).
+    row["billpay_products"] = ([str(x).strip() for x in (body.get("billpay_products") or []) if str(x).strip()]
+                               if "billpay_products" in body else cur["billpay_products_list"])
     # CONTRACT-TYPE -> activation-bucket map (mig 213 — editable from the shared Classification-settings UI).
     # Sanitize to {str contract_type : bucket} with bucket in premium|upgrade|byod|none (unknown dropped).
     if "contract_type_map" in body:
@@ -7828,11 +7880,13 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID):
                                     if str(k).strip() and str(v).strip().lower() in _ok}
     else:
         row["contract_type_map"] = cur["contract_type_map_raw"]
-    # Persist defensively: pre-mig-213/217/218 those columns don't exist, so a save carrying them 500s —
-    # retry progressively dropping the newest columns so editing the accessory lists never breaks before the
-    # migrations run (contract-type map → empty/classifier, box → _BOX_DEPTS, set-up fee → 'Device Setup Charge').
-    for _drop in ([], ["contract_type_map"], ["contract_type_map", "setup_fee_keywords"],
-                  ["contract_type_map", "setup_fee_keywords", "box_departments"]):
+    # Persist defensively: pre-mig-214/213/217/218 those columns don't exist, so a save carrying them 500s —
+    # retry progressively dropping the NEWEST columns first (billpay_products is the newest, mig 214) so
+    # editing the accessory lists never breaks before the migrations run (billpay → Boost-token fallback,
+    # contract-type map → empty/classifier, box → _BOX_DEPTS, set-up fee → 'Device Setup Charge').
+    _drop_final = ["billpay_products", "contract_type_map", "setup_fee_keywords", "box_departments"]
+    for _drop in ([], ["billpay_products"], ["billpay_products", "contract_type_map"],
+                  ["billpay_products", "contract_type_map", "setup_fee_keywords"], _drop_final):
         attempt = dict(row)
         for k in _drop:
             attempt.pop(k, None)
@@ -7840,13 +7894,13 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID):
             client.schema("commcalc").table("accessory_config").upsert(attempt, on_conflict="org_id").execute()
             break
         except Exception as e2:
-            if _drop == ["contract_type_map", "setup_fee_keywords", "box_departments"]:
+            if _drop == _drop_final:
                 raise HTTPException(500, f"save failed — run migration 208_commission_accessory_config.sql first: {e2}")
     return get_accessory_config(org_id)
 
 
 @router.get("/sales-fields")
-def sales_fields(period: str = "", org_id: str = ORG_ID):
+def sales_fields(period: str = "", org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Populate the accessory-settings pickers: the distinct Department + Category values in the sales
     data, plus the top PRODUCT descriptions on the non-phone (blank Contract Type) lines — that's where
     accessories live when a POS carries no dept/category — as keyword suggestions. `period` blank = all.
@@ -7856,6 +7910,7 @@ def sales_fields(period: str = "", org_id: str = ORG_ID):
     client = sb()
     depts, cats, tenders, ctypes, ttypes = set(), set(), set(), set(), set()
     prod = {}
+    allprod = {}   # ALL product_desc frequencies (incl. phone lines) — the bill-payment picker options (mig 214)
     for tbl in ("daily_sales_feed", "raw_sales"):
         try:
             q = client.schema("commcalc").table(tbl).select("department,category,product_desc,contract_type,tender_type,trans_type").eq("org_id", org_id)
@@ -7877,13 +7932,18 @@ def sales_fields(period: str = "", org_id: str = ORG_ID):
                     ctypes.add(ct)
                 if tt:
                     ttypes.add(tt)
-                if not ct:   # non-phone line → candidate accessory
-                    p = (r.get("product_desc") or "").strip()
-                    if p:
+                p = (r.get("product_desc") or "").strip()
+                if p:
+                    allprod[p] = allprod.get(p, 0) + 1
+                    if not ct:   # non-phone line → candidate accessory / set-up-fee keyword
                         prod[p] = prod.get(p, 0) + 1
         except Exception:
             pass
     top_products = [p for p, _ in sorted(prod.items(), key=lambda kv: -kv[1])[:60]]
+    # Bill-payment picker options (mig 214): the most frequent product/item descriptions across ALL lines
+    # (bill-payment lines may carry no dept/category and, unlike accessories, are matched EXACTLY, so the
+    # observed full product strings are what the owner picks). Org-scoped (this whole read is .eq org_id).
+    billpay_options = [p for p, _ in sorted(allprod.items(), key=lambda kv: -kv[1])[:120]]
     cur = _accessory_config(client, org_id)
     return {"departments": sorted(depts), "categories": sorted(cats), "products": top_products,
             "tenders": sorted(tenders), "contract_types": sorted(ctypes), "trans_types": sorted(ttypes),
@@ -7892,9 +7952,15 @@ def sales_fields(period: str = "", org_id: str = ORG_ID):
             # Box (device-unit) departments + device set-up-fee keywords for the Classification-settings UI —
             # options are the DISTINCT `departments`/`products` above (pick-don't-type, RULE THREE).
             "box_departments": cur["box_departments_list"], "setup_fee_keywords": cur["setup_fee_keywords_list"],
+            # Bill-payment products (mig 214): the org's CURRENT configured list + its pick-don't-type OPTIONS
+            # (`billpay_product_options` = observed product descriptions). Empty list = the Boost-token default.
+            "billpay_products": cur["billpay_products_list"], "billpay_product_options": billpay_options,
             # Contract-type -> activation-bucket map (mig 213) + its pick-don't-type options (`contract_types`
             # above): the Classification-settings "Contract type -> activation bucket" editor.
-            "contract_type_map": cur["contract_type_map_raw"]}
+            "contract_type_map": cur["contract_type_map_raw"],
+            # Whether THIS caller may edit Classification settings (owner directive 2026-07-18) — the modal
+            # renders read-only + a permission note when False. Reads stay open; only the PUT is gated.
+            "can_edit": _can_edit_classification(authorization, org_id)}
 
 
 @router.get("/commission-drill")
@@ -8894,6 +8960,10 @@ _ACTUALS_COLS = ("trans_id,trans_date,store,salesperson,user_login,contract_type
 # show; Targets box / bill-payment) are computed in the SAME pass so there is never a divergent second
 # scan. Pure — no I/O, never raises. DISPLAY ONLY: the commission CALC path is deliberately NOT wired here.
 _VOID_TOKENS = ('true', 'yes', '1', 'voided', 'void')   # the Sales Report's set = the source of truth
+# Default bill-payment product tokens (the historical hard-coded Boost/Xfinity walk-in-recharge tokens),
+# matched by lower-cased CONTAINMENT on product_desc. Used ONLY when the org has no billpay_products config
+# (mig 214) — an empty per-org list falls back to these so the house/Boost conversion stays byte-identical.
+_BILLPAY_DEFAULT_TOKENS = ('boost rtr', 'xfinity prepaid refill')
 
 
 def _resolve_ct_bucket(ct, ct_map=None):
@@ -8924,6 +8994,10 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None):
     act_rules = (exec_cfg.get('activation', {}) or {}).get('rules', {}) if exec_cfg else {}
     # Per-org contract-type -> bucket override (mig 213); empty for the house -> byte-identical classifier.
     ct_map = acfg.get('contract_type_map') if acfg else None
+    # Per-org bill-payment product membership (mig 214). A set of lowercased product values; NON-empty ->
+    # case-insensitive EXACT match on product_desc; empty/unset -> the hard-coded Boost-token fallback below
+    # (house conversion byte-identical). See _accessory_config + _BILLPAY_DEFAULT_TOKENS.
+    billpay_products = acfg.get('billpay_products') if acfg else None
     agg = {}
     for r in rows:
         # ── THE canonical skip rules — shared by all three (was three slightly different predicates).
@@ -8994,8 +9068,21 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None):
         if dept in (acfg.get('box_departments') or _BOX_DEPTS):
             a['box_count'] += 1
         _pl = str(r.get('product_desc') or '').lower()
-        if tid and ('boost rtr' in _pl or 'xfinity prepaid refill' in _pl):
-            a['_billpay'].add(tid)
+        # Bill-payment membership is CONFIG-DRIVEN per org (mig 214; acfg['billpay_products']). When the org
+        # has a NON-empty configured list, a line is a bill payment iff its product_desc EXACTLY matches
+        # (case-insensitive) a configured value — the values are PICKED from the org's observed sales product
+        # descriptions (RULE THREE), not typed substrings, so exact match is correct. When the list is
+        # EMPTY/unset (or the column is missing pre-214 → _accessory_config returns an empty set), fall back
+        # to the EXACT historical Boost tokens with the EXACT historical lower-cased CONTAINMENT semantics →
+        # the house/Boost conversion stays byte-identical with no config set. This changes ONLY which lines
+        # are counted as billpays; the conversion FORMULA (boxes ÷ billpays, in targets_engine) is unchanged.
+        # DISPLAY ONLY — feeds the Daily-Targets conversion display, never a payout.
+        if tid:
+            if billpay_products:
+                if _pl.strip() in billpay_products:
+                    a['_billpay'].add(tid)
+            elif any(_tok in _pl for _tok in _BILLPAY_DEFAULT_TOKENS):
+                a['_billpay'].add(tid)
         # Executive-MTD extension LINE metrics — b2bsoft per-line columns (phones / bill payment /
         # activation fee / protect) the Sales Report doesn't carry, so they have NO equality requirement;
         # computed only when exec_cfg is supplied (config-driven, SAP-configurable, unchanged semantics).

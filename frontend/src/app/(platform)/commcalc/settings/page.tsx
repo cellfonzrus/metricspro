@@ -244,6 +244,21 @@ export default function SettingsPage() {
         )}
       </div>
 
+      {/* Classification settings pointer — the accessory / box / bill-payment / contract-type definition
+          lives in the Sales Report ⚙️ modal (kept there for easy access); it's permission-gated
+          ('Classification settings'). Exposed here in the settings hub per owner directive 2026-07-18. */}
+      <a href="/commcalc/sales-report" style={{ textDecoration: 'none' }}>
+        <div className="card" style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>🏷️ Classification settings</div>
+            <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>
+              Define what counts as an accessory, a device &ldquo;box&rdquo;, a bill payment, a device set-up fee, and how Contract Type maps to activation buckets. Opens on the Sales Report (⚙️ Classification settings). Requires the <b>Classification settings</b> permission to edit.
+            </div>
+          </div>
+          <span style={{ color: 'var(--accent)', fontSize: 13, whiteSpace: 'nowrap' }}>Open →</span>
+        </div>
+      </a>
+
       {/* Tab switcher */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'var(--surface2)', padding: 4, borderRadius: 10, width: 'fit-content', flexWrap: 'wrap' }}>
         {tabs.map(t => (

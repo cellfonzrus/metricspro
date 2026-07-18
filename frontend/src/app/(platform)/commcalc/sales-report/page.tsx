@@ -21,6 +21,23 @@ const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: 
 
 function thisMonth() { return new Date().toISOString().slice(0, 7) }
 
+// Contract-type map is keyed by a CANONICAL lowercased contract-type so a re-cased POS label
+// ("PREPAID NEW" vs a saved "Prepaid New") still resolves (Gate-1 f3). Normalizing on load + save also
+// dedupes any pre-existing case-variant keys deterministically: entries are folded in sorted-key order, so
+// the lexicographically-greatest original-case key's bucket wins (stable regardless of object order).
+function normalizeCtMap(raw: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const k of Object.keys(raw || {}).sort()) {
+    const lk = String(k).trim().toLowerCase()
+    if (lk && raw[k]) out[lk] = raw[k]
+  }
+  return out
+}
+// Case-insensitive membership + toggle for the bill-payment picker (backend matches case-insensitively;
+// keep the UI consistent + never store case-variant duplicates).
+const hasCI = (arr: string[], v: string) => arr.some(x => x.toLowerCase() === v.toLowerCase())
+const toggleCI = (arr: string[], v: string) => hasCI(arr, v) ? arr.filter(x => x.toLowerCase() !== v.toLowerCase()) : [...arr, v]
+
 export default function SalesReportPage() {
   const [period, setPeriod] = useState(thisMonth())
   const [data, setData] = useState<any>(null)
@@ -34,12 +51,14 @@ export default function SalesReportPage() {
   const [accOpen, setAccOpen] = useState(false)          // accessory-settings modal
   const [accFields, setAccFields] = useState<any>(null)  // distinct departments/categories + current config
   // d=accessory depts · c=accessory categories · p=accessory product-keywords · a=ACIMA tenders ·
-  // box=device-unit "box" departments (mig 218) · setup=device set-up-fee keywords (mig 217).
-  const [accSel, setAccSel] = useState<{ d: string[]; c: string[]; p: string[]; a: string[]; box: string[]; setup: string[] }>({ d: [], c: [], p: [], a: [], box: [], setup: [] })
+  // box=device-unit "box" departments (mig 218) · setup=device set-up-fee keywords (mig 217) ·
+  // billpay=bill-payment product/item values for the conversion metric (mig 214).
+  const [accSel, setAccSel] = useState<{ d: string[]; c: string[]; p: string[]; a: string[]; box: string[]; setup: string[]; billpay: string[] }>({ d: [], c: [], p: [], a: [], box: [], setup: [], billpay: [] })
   const [accMsg, setAccMsg] = useState('')
   const [kwInput, setKwInput] = useState('')
   const [setupInput, setSetupInput] = useState('')
-  const [ctMap, setCtMap] = useState<Record<string, string>>({})   // contract_type -> activation bucket (mig 213)
+  const [ctMap, setCtMap] = useState<Record<string, string>>({})   // contract_type -> activation bucket (mig 213); keyed lowercased (f3)
+  const [accCanEdit, setAccCanEdit] = useState(true)               // caller may edit Classification settings ('classification' perm)
   const [selMarkets, setSelMarkets] = useState<string[]>([])   // multi-select market filter
   const [selStores, setSelStores] = useState<string[]>([])     // multi-select store filter
 
@@ -54,8 +73,9 @@ export default function SalesReportPage() {
     api(`/api/v1/commcalc/sales-fields?period=${encodeURIComponent(period)}${orgParam()}`).then((f: any) => {
       setAccFields(f)
       setAccSel({ d: f.accessory_departments || [], c: f.accessory_categories || [], p: f.accessory_product_keywords || [],
-        a: f.acima_tenders || [], box: f.box_departments || [], setup: f.setup_fee_keywords || [] })
-      setCtMap(f.contract_type_map || {})
+        a: f.acima_tenders || [], box: f.box_departments || [], setup: f.setup_fee_keywords || [], billpay: f.billpay_products || [] })
+      setCtMap(normalizeCtMap(f.contract_type_map || {}))
+      setAccCanEdit(f.can_edit !== false)
     }).catch(e => setAccMsg('❌ ' + (e?.message || e)))
   }
   async function saveAccCfg() {
@@ -68,7 +88,8 @@ export default function SalesReportPage() {
     try {
       await api('/api/v1/commcalc/accessory-config', { method: 'PUT', body: JSON.stringify({
         departments: accSel.d, categories: accSel.c, product_keywords: kws, acima_tenders: accSel.a,
-        box_departments: accSel.box, setup_fee_keywords: setupKws, contract_type_map: ctMap }) })
+        box_departments: accSel.box, setup_fee_keywords: setupKws, contract_type_map: ctMap,
+        billpay_products: accSel.billpay }) })
       setAccMsg('✅ Saved.'); setAccOpen(false); load()
     } catch (e: any) { setAccMsg('❌ ' + (e?.message || e)) }
   }
@@ -394,6 +415,12 @@ export default function SalesReportPage() {
               <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>{accMsg || 'Loading…'}</div>
             ) : (
               <>
+                {!accCanEdit && (
+                  <div style={{ background: '#fef9c3', border: '1px solid #fde047', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#92400e', marginBottom: 10 }}>
+                    🔒 Read-only. Editing Classification settings requires the <b>Classification settings</b> permission — ask an administrator to grant it (Roles &rarr; settings permissions).
+                  </div>
+                )}
+                <div style={{ pointerEvents: accCanEdit ? 'auto' : 'none', opacity: accCanEdit ? 1 : 0.6 }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                   {([['Department / product-type', 'd', accFields.departments], ['Category', 'c', accFields.categories]] as const).map(([lbl, keyName, list]: any) => (
                     <div key={lbl}>
@@ -465,6 +492,33 @@ export default function SalesReportPage() {
                     ))}
                   </div>
                 </div>
+                {/* BILL-PAYMENT items — which product/item values count as a bill payment (walk-in recharge)
+                    for the Daily-Targets CONVERSION metric (boxes ÷ bill-payments). Pick from the OBSERVED
+                    product descriptions in the sales data (RULE THREE — matched EXACTLY, not typed). Leave
+                    empty to fall back to the built-in Boost defaults (Boost RTR / Xfinity Prepaid Refill).
+                    DISPLAY only — drives conversion, never a payout. */}
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Bill-payment items <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(tick the product/item values that = a bill payment / walk-in recharge — drives the Daily-Targets conversion rate, boxes &divide; bill-payments. Leave empty to use the built-in Boost defaults. Display only, no pay change.)</span></div>
+                  <div style={{ fontSize: 11, marginBottom: 4, color: accSel.billpay.length === 0 ? 'var(--accent)' : 'var(--text3)' }}>
+                    {accSel.billpay.length === 0
+                      ? <>Currently using <b>Boost defaults</b> (product name contains &ldquo;Boost RTR&rdquo; or &ldquo;Xfinity Prepaid Refill&rdquo;).</>
+                      : <><b>{accSel.billpay.length}</b> item(s) active — only these count as bill payments.</>}
+                  </div>
+                  <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
+                    {(() => {
+                      const opts = Array.from(new Set([...(accFields.billpay_product_options || []), ...accSel.billpay]))
+                      return opts.length === 0
+                        ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>no products in this period</div>
+                        : opts.map((v: string) => (
+                          <label key={v} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, padding: '2px 0' }}>
+                            <input type="checkbox" checked={hasCI(accSel.billpay, v)}
+                              onChange={() => setAccSel(s => ({ ...s, billpay: toggleCI(s.billpay, v) }))} />
+                            {v}
+                          </label>
+                        ))
+                    })()}
+                  </div>
+                </div>
                 {/* CONTRACT TYPE -> activation bucket — map the tenant's OBSERVED Contract Type values to
                     the activation buckets so a Total/non-Boost POS whose labels differ from the built-in
                     keyword set still counts activations/upgrades/BYOD on the Sales Report, Exec MTD & Daily
@@ -472,19 +526,34 @@ export default function SalesReportPage() {
                 <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
                   <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Contract type &rarr; activation bucket <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(map each Contract Type value your POS uses to an activation bucket &mdash; for tenants whose labels differ from the built-in Activation / Port-In / Upgrade / BYOD set. &ldquo;Auto&rdquo; uses the built-in classifier; &ldquo;Not an activation&rdquo; excludes a label. Drives the Sales Report, Executive MTD &amp; Daily-Targets activation / upgrade counts &mdash; display only, no pay change.)</span></div>
                   <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
-                    {(accFields.contract_types || []).length === 0 ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>no contract types in this period</div> : (accFields.contract_types || []).map((v: string) => (
-                      <div key={v} style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between', fontSize: 13, padding: '3px 0' }}>
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v}>{v}</span>
-                        <select style={{ ...sel, width: 190, flex: 'none' }} value={ctMap[v] || ''}
-                          onChange={e => setCtMap(m => { const n = { ...m }; if (e.target.value) n[v] = e.target.value; else delete n[v]; return n })}>
-                          <option value="">Auto (built-in)</option>
-                          <option value="premium">Activation</option>
-                          <option value="upgrade">Upgrade</option>
-                          <option value="byod">BYOD</option>
-                          <option value="none">Not an activation</option>
-                        </select>
-                      </div>
-                    ))}
+                    {(() => {
+                      // Case-insensitive keys (f3): each row's select reads/writes ctMap[<lowercased label>].
+                      // Rows = the period's observed contract types PLUS any ORPHANED mapped keys (mapped
+                      // labels no longer present in the observed values) so they stay visible + un-mappable.
+                      const obs: string[] = accFields.contract_types || []
+                      const obsLower = new Set(obs.map(v => v.trim().toLowerCase()))
+                      const orphans = Object.keys(ctMap).filter(k => !obsLower.has(k))
+                      const rows = [
+                        ...obs.map(v => ({ label: v, key: v.trim().toLowerCase(), orphan: false })),
+                        ...orphans.map(k => ({ label: k, key: k, orphan: true })),
+                      ]
+                      if (rows.length === 0) return <div style={{ fontSize: 12, color: 'var(--text3)' }}>no contract types in this period</div>
+                      return rows.map(r => (
+                        <div key={r.key} style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between', fontSize: 13, padding: '3px 0' }}>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.label}>
+                            {r.label}{r.orphan && <span style={{ color: 'var(--text3)', fontSize: 11 }}> (mapped · not in this period)</span>}
+                          </span>
+                          <select style={{ ...sel, width: 190, flex: 'none' }} value={ctMap[r.key] || ''}
+                            onChange={e => setCtMap(m => { const n = { ...m }; if (e.target.value) n[r.key] = e.target.value; else delete n[r.key]; return n })}>
+                            <option value="">Auto (built-in)</option>
+                            <option value="premium">Activation</option>
+                            <option value="upgrade">Upgrade</option>
+                            <option value="byod">BYOD</option>
+                            <option value="none">Not an activation</option>
+                          </select>
+                        </div>
+                      ))
+                    })()}
                   </div>
                 </div>
                 {/* Device SET-UP FEE keywords — product-desc substrings counted toward the accessory TARGET
@@ -517,9 +586,10 @@ export default function SalesReportPage() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, gap: 8 }}>
                   <span style={{ fontSize: 12, color: accMsg.startsWith('❌') ? '#dc2626' : 'var(--text3)' }}>{accMsg}</span>
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => { setAccSel({ d: [], c: [], p: [], a: [], box: [], setup: [] }); setKwInput(''); setSetupInput('') }}>Clear all</button>
-                    <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={saveAccCfg}>Save</button>
+                    <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={!accCanEdit} onClick={() => { setAccSel({ d: [], c: [], p: [], a: [], box: [], setup: [], billpay: [] }); setKwInput(''); setSetupInput('') }}>Clear all</button>
+                    <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={!accCanEdit} onClick={saveAccCfg}>Save</button>
                   </div>
+                </div>
                 </div>
               </>
             )}
