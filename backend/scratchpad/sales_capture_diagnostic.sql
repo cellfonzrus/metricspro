@@ -101,3 +101,23 @@ order by raw_only_transactions desc;
 -- Daily-Targets actuals were under-counting tenant-wide for July before this fix (upper bound: a raw-only
 -- transaction on a store-day the feed did NOT cover was already shown via the cell fill, so the TRUE
 -- recovered set is the subset whose store-day the feed also had — block 2 shows that for the repro store).
+
+
+-- ── 5. M1 DATA-SHAPE — do b2bsoft Trans IDs COLLIDE across stores within luxelink July? ─────────
+-- The fix keys the completeness dedup on (store, trans_id) precisely because a small sequential Trans ID
+-- (1624, 1641, 1721 …) can repeat at DIFFERENT stores in the same month. This confirms whether that
+-- happens for luxelink July (if it does, a bare tenant-wide tid dedup would have suppressed real sales).
+with lux as (select org_id from storeops.tenants
+             where name ilike '%lux%' or slug ilike '%lux%' limit 1)
+select trim(trans_id) as trans_id, count(distinct store) as distinct_stores,
+       string_agg(distinct store, ' | ' order by store) as stores
+from commcalc.raw_sales r, lux
+where r.org_id = lux.org_id and r.period in ('July 2026','2026-07')
+  and coalesce(trim(r.trans_id),'') <> ''
+group by trim(trans_id)
+having count(distinct store) > 1
+order by distinct_stores desc, trans_id
+limit 50;
+-- Any rows here = the same Trans ID at 2+ stores → the store-scoped dedup key (M1 fix) is REQUIRED, and a
+-- bare-tid dedup would have re-dropped the reported bug class cross-store. Zero rows = no collisions this
+-- month (the fix is still correct/harmless; the store scope is the safe default regardless).

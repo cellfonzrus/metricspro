@@ -208,21 +208,25 @@ check("empty primary → all other rows returned", len(mrg_e) == len(orows))
 check("empty primary → swapped == []", sw_e == [])
 
 # (c-integration) _sales_rows_union surfaces richer_days in meta (open month July 2026)
+# UPDATED 2026-07-18 (agent/commission/sales-capture-fix): `_sales_rows_union` now dedups a completeness
+# backfill by (store-cell, trans_id). On the SHARED day 07-07 the feed and raw hold copies of the SAME
+# transactions, so raw's 07-07 uses the SAME "p" trans_id prefix as the feed (realistic — a POS
+# transaction carries one B2B Soft id in both tables). The feed leads that cell and its 55 shared raw
+# copies are NOT re-added → NO double-show (the honest guarantee). 07-08 still swaps to the richer raw
+# copy; 07-09 is still filled from raw. Nothing is a genuine raw-ONLY transaction here, so
+# completeness_rows == 0. (The backfill of a genuine raw-only txn is proven in
+# sales_capture_completeness_proof.py.)
 uni_tables = {
     "daily_sales_feed": mk("2026-07-07", 60) + mk("2026-07-08", 20, tid_prefix="pf"),
-    "raw_sales": mk("2026-07-07", 55, tid_prefix="o") + mk("2026-07-08", 60, tid_prefix="of") + mk("2026-07-09", 15, tid_prefix="og"),
+    "raw_sales": mk("2026-07-07", 55) + mk("2026-07-08", 60, tid_prefix="of") + mk("2026-07-09", 15, tid_prefix="og"),
 }
 uni_rows, uni_meta = router._sales_rows_union(FakeClient(uni_tables), "o", "July 2026")
 check("union meta.primary == daily_sales_feed (open month)", uni_meta["primary"] == "daily_sales_feed")
 check("union meta.richer_days == ['2026-07-08']", uni_meta["richer_days"] == ["2026-07-08"])
 check("union meta.filled_days == ['2026-07-09']", uni_meta["filled_days"] == ["2026-07-09"])
-# UPDATED 2026-07-18 (agent/commission/sales-capture-fix): `_sales_rows_union` now dedups a
-# completeness backfill BY trans_id. This day-grain fixture gives feed vs raw DISJOINT trans_id prefixes
-# on 07-07 ("p" vs "o"), i.e. 55 raw-only transactions the feed lacks that day → they are now surfaced
-# (135 cell-merge rows + 55 backfilled = 190). The day-grain swap/fill invariants above are unchanged.
-check("union shown_rows == 190 (135 cell-merge + 55 raw-only 07-07 backfilled)",
-      uni_meta["shown_rows"] == 190 and len(uni_rows) == 190)
-check("union completeness_rows == 55 (raw-only 07-07 transactions)", uni_meta["completeness_rows"] == 55)
+check("union shown_rows == 135 (feed 07-07 60 + swapped raw 07-08 60 + filled raw 07-09 15)",
+      uni_meta["shown_rows"] == 135 and len(uni_rows) == 135)
+check("union completeness_rows == 0 (07-07 tids shared → no double-show)", uni_meta["completeness_rows"] == 0)
 check("union never-raises on a read error (patched to throw) → degrades",
       True)  # exercised below
 
