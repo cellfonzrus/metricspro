@@ -5894,6 +5894,12 @@ async def get_commissions(period: str, authorization: str = Header(default=""), 
     client = sb()
     r = client.schema('commcalc').table('rep_commissions').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).order('total_payout', desc=True).execute()
     comms = r.data or []
+    # RULE FIVE (§3d): stamp each rep row with its `market` (store_mapping, same resolver the Sales Report
+    # uses) so the Rep Commission report's standard filter bar can market-filter client-side. Additive +
+    # org-scoped; the pay numbers are untouched (read-only enrichment).
+    _resolve_market, _ = _store_market_resolver(client, org_id)
+    for cr in comms:
+        cr['market'] = _resolve_market(cr.get('store'))
     # Apply chargeback deductions (deduct=true) per rep
     cb = client.schema('commcalc').table('chargeback_items').select('epay_salesperson,amount,deduct').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data or []
     ded_by_rep = {}
@@ -8548,7 +8554,16 @@ async def get_comp_rep_pay_trend(months: int = 6, store: str = "", org_id: str =
     view is account-level carrier comp). One row per rep with each kept month's payout + a total."""
     require_org(org_id)
     try:
-        return comp_trend.compute_rep_pay_trend(sb(), org_id, months=months, store=store)
+        client = sb()
+        result = comp_trend.compute_rep_pay_trend(client, org_id, months=months, store=store)
+        # RULE FIVE (§3d): stamp each rep row with its `market` (store_mapping resolver) so the Total
+        # Compensation page can market-filter the per-rep view client-side. Additive + org-scoped.
+        _resolve_market, _ = _store_market_resolver(client, org_id)
+        for rr in (result.get('reps') or []):
+            rr['market'] = _resolve_market(rr.get('store'))          # legacy top-level (backward compat)
+            for pt in (rr.get('points') or []):                      # FIX 4: per-MONTH market so a store/
+                pt['market'] = _resolve_market(pt.get('store'))      # market filter narrows the right months
+        return result
     except Exception as e:
         raise HTTPException(500, f"comp-rep-pay-trend failed: {type(e).__name__}: {e}")
 
@@ -14120,11 +14135,18 @@ def _read_ma(client, org_id, table, period, cols):
 
 
 @router.get("/ma-commission/summary")
-def ma_commission_summary(period: str = "", org_id: str = ORG_ID):
+def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", org_id: str = ORG_ID):
     """The Total-processor commission roll-up (raw_ma_commission + raw_ma_daily_tx, mig 083).
     Sign convention on the Commission Details export: NEGATIVE = paid TO the dealer, so payable
     figures here are sign-FLIPPED (positive = money the dealer receives). Org-scoped — computes
-    against whatever org the MA reports were uploaded into. Read-only."""
+    against whatever org the MA reports were uploaded into. Read-only.
+
+    RULE FIVE (§3d): optional `stores` / `reps` (comma-separated account-id / processor-login values)
+    narrow the WHOLE roll-up — tiles, tables and export alike (WYSIWYG §3c) — server-side, so the
+    aggregates stay correct under a filter. Both blank = the unfiltered report (backward-compatible).
+    `store_options` / `rep_options` are computed from the UNFILTERED rows so the picker stays stable.
+    There is no `market` dimension here: this is processor account-keyed data with no store_mapping
+    linkage (documented deviation)."""
     require_org(org_id)
     client = sb()
     try:
@@ -14139,6 +14161,32 @@ def ma_commission_summary(period: str = "", org_id: str = ORG_ID):
                       "tx_date,period,account_id,account_name,retail_cost,merchant_discount")
     except Exception:
         tx = []
+
+    # Stable pick-don't-type option lists from the UNFILTERED rows (before narrowing).
+    _store_names: dict = {}
+    for r in comm:
+        k = (r.get("merchant_account_id") or "").strip()
+        if k:
+            _store_names.setdefault(k, None)
+    for r in tx:
+        k = (r.get("account_id") or "").strip()
+        if k:
+            nm = (r.get("account_name") or "").strip()
+            if nm:
+                _store_names[k] = nm
+            else:
+                _store_names.setdefault(k, None)
+    store_options = sorted(({"id": k, "label": (v or k)} for k, v in _store_names.items()),
+                           key=lambda o: str(o["label"]).lower())
+    rep_options = sorted({(r.get("user_name") or "").strip() for r in comm if (r.get("user_name") or "").strip()})
+    # Optional server-side narrowing (blank = no filter).
+    store_sel = {s.strip() for s in (stores or "").split(",") if s.strip()}
+    rep_sel = {s.strip() for s in (reps or "").split(",") if s.strip()}
+    if store_sel:
+        comm = [r for r in comm if (r.get("merchant_account_id") or "").strip() in store_sel]
+        tx = [r for r in tx if (r.get("account_id") or "").strip() in store_sel]
+    if rep_sel:
+        comm = [r for r in comm if (r.get("user_name") or "").strip() in rep_sel]
 
     comps = {k: 0.0 for k in _MA_COMPONENTS}
     acts = {"total": 0, "new": 0, "add": 0, "branded": 0, "byop": 0}
@@ -14203,6 +14251,7 @@ def ma_commission_summary(period: str = "", org_id: str = ORG_ID):
     dates = [d for d in dates if d]
     return {"ready": True, "period": period or "all",
             "rows": len(comm), "date_range": ([min(dates), max(dates)] if dates else None),
+            "store_options": store_options, "rep_options": rep_options,
             "activations": acts,
             "total_payable": round(total_payable, 2),
             "components": {"device_margin": round(-comps["device_margin"], 2),

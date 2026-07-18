@@ -5,6 +5,8 @@ import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
 import { TrendChart } from '@/components/TrendChart'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
+import EntityPicker from '@/components/EntityPicker'
+import { optionsFromRows } from '@/lib/standard-filters'
 
 const r2 = (n: number) => Math.round((n || 0) * 100) / 100
 const shortPeriod = (p: string) => {
@@ -51,6 +53,7 @@ export default function GPReportPage() {
   const [view, setView] = useState<'store'|'rep'>('store')
   const [selMarkets, setSelMarkets] = useState<string[]>([])
   const [selStores, setSelStores] = useState<string[]>([])
+  const [selReps, setSelReps] = useState<string[]>([])   // RULE FIVE rep(s) multi — applies to the By-Rep view
   const [data, setData] = useState<any>({})
   const [loading, setLoading] = useState(true)
   const [markets, setMarkets] = useState<string[]>([])
@@ -86,7 +89,14 @@ export default function GPReportPage() {
     if (selStores.length && !selStores.includes(r.store)) return false
     return true
   })
-  const repRows: any[] = (data.rep_rows || [])
+  const allRepRows: any[] = (data.rep_rows || [])
+  const repName = (r: any) => r.storeops_name || r.rep
+  // RULE FIVE rep(s) picker options — from the already-org-scoped rep rows (pick-don't-type §3b).
+  const repOpts = useMemo(() => optionsFromRows(allRepRows, { rep: repName }).reps, [allRepRows])
+  // The By-Rep view honors the store filter (existing) AND the new rep-multi (AND-composed).
+  const repRows: any[] = allRepRows.filter((r: any) =>
+    (!selStores.length || selStores.some(s => r.store?.includes(s.split(' ')[0]))) &&
+    (!selReps.length || selReps.includes(repName(r))))
   const totals: any = {}
   COLS.forEach(c2 => { totals[c2.key] = rows.reduce((s, r) => s + ((r as any)[c2.key] || 0), 0) })
 
@@ -157,6 +167,10 @@ export default function GPReportPage() {
               </button>
             ))}
           </div>
+          {/* RULE FIVE rep(s) multi — meaningful only in the By-Rep view (store rows carry no rep). */}
+          {view === 'rep' && repOpts.length > 0 && (
+            <EntityPicker multi options={repOpts} value={selReps} onChange={setSelReps} placeholder="Reps…" width={170} ariaLabel="Filter by rep" />
+          )}
           <button className="btn btn-secondary" onClick={exportCSV}>📥 CSV</button>
           <SendReportButton reportKey="gp" filters={{ period }} />
         </div>
@@ -209,7 +223,6 @@ export default function GPReportPage() {
             </thead>
             <tbody>
               {repRows
-                .filter((r: any) => !selStores.length || selStores.some(s => r.store?.includes(s.split(' ')[0])))
                 .map((r: any, i: number) => (
                 <tr key={i}>
                   <td style={{ fontWeight: 500 }}>{r.storeops_name || r.rep}</td>

@@ -5,6 +5,8 @@ import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
 import { useAuth } from '@/lib/auth-context'
 import { carrierMode } from '@/lib/rbac'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, optionsFromRows, isStandardFilterActive, type StandardFilterValue } from '@/lib/standard-filters'
 
 interface Rep {
   epay_salesperson: string
@@ -45,8 +47,10 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('breakdown')
   const [selectedRep, setSelectedRep] = useState('')
-  const [filterRep, setFilterRep] = useState('')
-  const [filterStore, setFilterStore] = useState('')
+  // RULE FIVE (§3d) standard filter — period stays global (usePeriod), so the bar renders store(s)/market/
+  // rep(s) multi. Options come from the already-org-scoped rep rows (pick-don't-type); `market` is stamped
+  // on each row by the backend (store_mapping resolver).
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   const [cfg, setCfg] = useState<any>({})
   const [chargebacks, setChargebacks] = useState<any[]>([])
   const [drillComp, setDrillComp] = useState<string | null>(null)   // clicked commission component
@@ -74,15 +78,14 @@ export default function ReportsPage() {
     } catch (e) { console.error(e) }
   }
 
-  const repList  = useMemo(() => [...new Set(reps.map(r => r.epay_salesperson))].sort(), [reps])
-  const storeList = useMemo(() => [...new Set(reps.map(r => r.store).filter(Boolean))].sort(), [reps])
-  const totalPayout = reps.reduce((s, r) => s + (r.total_payout || 0), 0)
-
-  const filtered = reps.filter(r => {
-    if (filterRep   && r.epay_salesperson !== filterRep) return false
-    if (filterStore && !r.store?.includes(filterStore))   return false
-    return true
-  })
+  const repList  = useMemo(() => [...new Set(reps.map(r => r.epay_salesperson))].sort(), [reps])   // Individual-rep tab picker
+  // Standard-bar options straight from the loaded (org-scoped) rows — stores/markets/reps present.
+  const acc = { store: (r: Rep) => r.store, market: (r: Rep) => (r as any).market, rep: (r: Rep) => r.epay_salesperson }
+  const opts = useMemo(() => optionsFromRows(reps, acc), [reps])   // eslint-disable-line react-hooks/exhaustive-deps
+  // FILTERED set drives the breakdown + compensation tables, the header tiles, AND the CSV export (WYSIWYG).
+  const filtered = useMemo(() => filterRows(reps, filt, acc), [reps, filt])   // eslint-disable-line react-hooks/exhaustive-deps
+  const totalPayout = filtered.reduce((s, r) => s + (r.total_payout || 0), 0)
+  const filterActive = isStandardFilterActive(filt)
 
   const currentRep = reps.find(r => r.epay_salesperson === selectedRep) || reps[0]
   // Show the Installment column only when a rep actually has multi-month / Total-carrier pay (keeps the
@@ -115,13 +118,14 @@ export default function ReportsPage() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Rep Commission Report</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            {period} · {reps.length} reps · Total: <strong style={{ color: 'var(--accent)' }}>{fmt(totalPayout)}</strong>
+            {period} · {filtered.length}{filterActive ? ` of ${reps.length}` : ''} reps · Total: <strong style={{ color: 'var(--accent)' }}>{fmt(totalPayout)}</strong>
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn btn-secondary" onClick={() => {
+            // WYSIWYG (§3c): export the FILTERED rows, exactly what the standard bar is showing.
             const csv = ['Rep,Store,Tier,KPIs,PA,BA,UA,Acc GP,Subtotal,Payout']
-            reps.forEach(r => csv.push(`"${r.epay_salesperson}","${r.store}",${Math.round(r.tier*100)}%,${r.kpis_met}/${r.total_kpis},${r.premium_acts},${r.byod_acts},${r.upgrade_acts},${r.acc_comm?.toFixed(2)},${r.subtotal?.toFixed(2)},${r.total_payout?.toFixed(2)}`))
+            filtered.forEach(r => csv.push(`"${r.epay_salesperson}","${r.store}",${Math.round(r.tier*100)}%,${r.kpis_met}/${r.total_kpis},${r.premium_acts},${r.byod_acts},${r.upgrade_acts},${r.acc_comm?.toFixed(2)},${r.subtotal?.toFixed(2)},${r.total_payout?.toFixed(2)}`))
             const a = document.createElement('a'); a.href = 'data:text/csv,' + encodeURIComponent(csv.join('\n'))
             a.download = `commissions-${period.replace(' ','-')}.csv`; a.click()
           }}>
@@ -130,6 +134,13 @@ export default function ReportsPage() {
           <SendReportButton reportKey="commissions" filters={{ period }} />
         </div>
       </div>
+
+      {/* RULE FIVE (§3d) standard bar — ABOVE the tabs so the active filter (which drives the always-visible
+          header total AND both the Breakdown and Compensation tables) is always visible + clearable, on any tab. */}
+      <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false }}
+        storeOptions={opts.stores} marketOptions={opts.markets} repOptions={opts.reps}
+        repLabel="Reps…"
+        right={<span style={{ fontSize: 13, color: 'var(--text2)', alignSelf: 'center' }}>{filtered.length} of {reps.length} rows</span>} />
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'var(--surface2)', padding: 4, borderRadius: 10, width: 'fit-content' }}>
@@ -148,25 +159,6 @@ export default function ReportsPage() {
       {/* Rep Breakdown */}
       {tab === 'breakdown' && (
         <div>
-          <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-            <select className="select" value={filterRep} onChange={e => setFilterRep(e.target.value)}>
-              <option value="">All reps</option>
-              {repList.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-            <select className="select" value={filterStore} onChange={e => setFilterStore(e.target.value)}>
-              <option value="">All stores</option>
-              {storeList.map(s => <option key={s} value={s}>{s.substring(0, 40)}</option>)}
-            </select>
-            {(filterRep || filterStore) && (
-              <button className="btn btn-secondary" onClick={() => { setFilterRep(''); setFilterStore('') }}>
-                ✕ Clear
-              </button>
-            )}
-            <span style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--text2)', alignSelf: 'center' }}>
-              {filtered.length} of {reps.length} rows
-            </span>
-          </div>
-
           <div className="table-wrapper">
             <table>
               <thead>
@@ -447,7 +439,7 @@ export default function ReportsPage() {
               </tr>
             </thead>
             <tbody>
-              {reps.map((r, i) => (
+              {filtered.map((r, i) => (
                 <tr key={i}>
                   <td style={{ fontWeight: 500 }}>{r.storeops_name || r.epay_salesperson}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(r.premium_comm)}</td>

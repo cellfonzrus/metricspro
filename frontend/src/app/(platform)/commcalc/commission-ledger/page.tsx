@@ -1,7 +1,9 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, apiUpload } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import EntityPicker from '@/components/EntityPicker'
+import { optionsFromRows } from '@/lib/standard-filters'
 
 // Canonical Commission Ledger (SAP-style) — normalise ANY carrier's commission/tx file into FIVE canonical
 // buckets: Commission / Spiff / Equipment rebate / Residual-monthly / Auto Pay residual. A payout paid over
@@ -38,6 +40,7 @@ export default function CommissionLedgerPage() {
   const [drill, setDrill] = useState<{ cat: string; rows: any[] } | null>(null)
   const [view, setView] = useState<'cat' | 'rep'>('cat')
   const [byRep, setByRep] = useState<ByRep | null>(null)
+  const [selReps, setSelReps] = useState<string[]>([])   // RULE FIVE rep(s) multi — By-rep view
 
   async function loadTemplates() {
     try {
@@ -60,7 +63,7 @@ export default function CommissionLedgerPage() {
     } catch (e: any) { setMsg(e?.message || 'Load failed') }
   }
   useEffect(() => { loadTemplates() }, [])            // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { loadSummary(); setDrill(null) }, [src, period])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadSummary(); setDrill(null); setSelReps([]) }, [src, period])  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (view === 'rep') loadByRep() }, [view, src, period])  // eslint-disable-line react-hooks/exhaustive-deps
 
   function flash(m: string) { setMsg(m); setTimeout(() => setMsg(''), 4000) }
@@ -104,10 +107,26 @@ export default function CommissionLedgerPage() {
     { header: 'Ledger payout', money: true, get: (r: any) => r.ledger_payout || 0 },
     { header: 'Live payout', money: true, get: (r: any) => r.live_payout ?? 0 },
   ]
+  // RULE FIVE rep(s) picker (By-rep view). The ledger data model carries only rep_user + amounts — no
+  // store/market — so ONLY the rep dimension is meaningful here (store/market omitted, see handoff note).
+  const repRowsAll: RepRow[] = byRep?.reps || []
+  const repOpts = useMemo(() => optionsFromRows(repRowsAll, { rep: (r: any) => r.rep }).reps, [repRowsAll])
+  const filteredReps: RepRow[] = selReps.length ? repRowsAll.filter(r => selReps.includes(r.rep)) : repRowsAll
+  // Totals row + export reflect the FILTERED set (WYSIWYG §3c).
+  const repTotals: Record<string, number> = useMemo(() => {
+    if (!selReps.length) return byRep?.totals || {}
+    const t: Record<string, number> = { ledger_payout: 0, live_payout: 0 }
+    CATS.forEach(c => { t[c] = 0 })
+    filteredReps.forEach(r => {
+      t.ledger_payout += r.ledger_payout || 0; t.live_payout += (r.live_payout || 0)
+      CATS.forEach(c => { t[c] += (r as any)[c] || 0 })
+    })
+    return t
+  }, [byRep, selReps, filteredReps])
   const canExport = summ && summ.line_count > 0
   const exportProps = view === 'cat'
     ? { title: `Commission Ledger — ${src}${period ? ' — ' + period : ''}`, filename: `commission_ledger_${src}`, columns: catExportCols, rows: catExportRows }
-    : { title: `Commission Ledger by rep — ${src}${period ? ' — ' + period : ''}`, filename: `commission_ledger_by_rep_${src}`, columns: repExportCols, rows: byRep?.reps || [] }
+    : { title: `Commission Ledger by rep — ${src}${period ? ' — ' + period : ''}`, filename: `commission_ledger_by_rep_${src}`, columns: repExportCols, rows: filteredReps }
 
   return (
     <div style={{ padding: 24, maxWidth: 1100 }}>
@@ -158,6 +177,9 @@ export default function CommissionLedgerPage() {
                 {v === 'cat' ? 'By category' : 'By rep'}
               </button>
             ))}
+            {view === 'rep' && repOpts.length > 0 && (
+              <EntityPicker multi options={repOpts} value={selReps} onChange={setSelReps} placeholder="Reps…" width={190} ariaLabel="Filter by rep" />
+            )}
             <div style={{ flex: 1 }} />
             {canExport && (view === 'cat' ? catExportRows.length > 0 : (byRep?.reps?.length || 0) > 0) && <ReportExportBar {...exportProps} />}
           </div>
@@ -248,7 +270,7 @@ export default function CommissionLedgerPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {byRep.reps.map((r, i) => (
+                  {filteredReps.map((r, i) => (
                     <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={{ padding: '6px 8px', fontWeight: 600 }}>{r.rep}</td>
                       {CATS.map(c => <td key={c} style={{ padding: '6px 8px', textAlign: 'right', color: r[c] ? 'inherit' : 'var(--text3)' }}>{r[c] ? money(r[c]) : '·'}</td>)}
@@ -259,11 +281,14 @@ export default function CommissionLedgerPage() {
                       </td>
                     </tr>
                   ))}
+                  {filteredReps.length === 0 && (
+                    <tr><td colSpan={CATS.length + 3} style={{ padding: 16, textAlign: 'center', color: 'var(--text3)' }}>No reps match the selected rep filter.</td></tr>
+                  )}
                   <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}>
-                    <td style={{ padding: '6px 8px' }}>Total</td>
-                    {CATS.map(c => <td key={c} style={{ padding: '6px 8px', textAlign: 'right' }}>{money(byRep.totals[c] || 0)}</td>)}
-                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>{money(byRep.totals.ledger_payout || 0)}</td>
-                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>{money(byRep.totals.live_payout || 0)}</td>
+                    <td style={{ padding: '6px 8px' }}>Total{selReps.length ? ` (${filteredReps.length} of ${repRowsAll.length})` : ''}</td>
+                    {CATS.map(c => <td key={c} style={{ padding: '6px 8px', textAlign: 'right' }}>{money(repTotals[c] || 0)}</td>)}
+                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>{money(repTotals.ledger_payout || 0)}</td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>{money(repTotals.live_payout || 0)}</td>
                   </tr>
                 </tbody>
               </table>
