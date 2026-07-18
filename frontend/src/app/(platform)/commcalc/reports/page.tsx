@@ -194,6 +194,10 @@ export default function ReportsPage() {
                       >
                         {r.storeops_name || r.epay_salesperson}
                       </button>
+                      {' '}
+                      <a href={`/commcalc/commission-explain?rep=${encodeURIComponent(r.storeops_name || r.epay_salesperson)}`}
+                        title="How was this commission calculated? (plan + multi-month drill-down)"
+                        style={{ fontSize: 11, textDecoration: 'none' }}>🔬</a>
                     </td>
                     <td style={{ color: 'var(--text3)', fontSize: 12 }}>{r.store?.substring(0, 25)}</td>
                     <td><TierBadge tier={r.tier} /></td>
@@ -236,6 +240,13 @@ export default function ReportsPage() {
               <option value="">Select rep...</option>
               {repList.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
+            {currentRep && (
+              <a className="btn btn-secondary" style={{ textDecoration: 'none' }}
+                href={`/commcalc/commission-explain?rep=${encodeURIComponent(currentRep.storeops_name || currentRep.epay_salesperson)}`}
+                title="Plan + multi-month drill-down: which assignment, per-rule lines, installment gates & MA cross-reference">
+                🔬 How was this calculated?
+              </a>
+            )}
           </div>
 
           {currentRep ? (
