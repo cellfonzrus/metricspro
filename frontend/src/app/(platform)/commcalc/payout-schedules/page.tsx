@@ -37,6 +37,11 @@ export default function PayoutSchedulesPage() {
   const [covPeriod, setCovPeriod] = useState('')
   const [imp, setImp] = useState<any>(null)       // price-sheet import: {file, headers, plan_col, mrc_col, rows, total, carrier_id}
   const [impBusy, setImpBusy] = useState(false)
+  const [sources, setSources] = useState<any[]>([])   // shareable carrier templates (clone sources)
+  const [tplSrc, setTplSrc] = useState('')            // selected `${source_org_id}|${source_carrier_id}`
+  const [tplPreview, setTplPreview] = useState<any>(null)
+  const [tplBusy, setTplBusy] = useState(false)
+  const [tplMsg, setTplMsg] = useState('')
 
   async function load() {
     try {
@@ -50,7 +55,32 @@ export default function PayoutSchedulesPage() {
     try { const r = await api('/api/v1/commcalc/product-mrc'); setMrcItems(r.items || []); setMrcReady(r.ready !== false) }
     catch { setMrcItems([]) }
   }
-  useEffect(() => { load(); loadMrc() }, [])
+  async function loadSources() {
+    try { const r = await api('/api/v1/commcalc/carrier-template/sources'); setSources(r.sources || []) }
+    catch { setSources([]) }
+  }
+  useEffect(() => { load(); loadMrc(); loadSources() }, [])
+
+  // ── Import a carrier payout template (clone another org's shareable config into this tenant) ──────
+  const tplSrcObj = () => { const [o, c] = (tplSrc || '').split('|'); return sources.find(s => s.source_org_id === o && s.source_carrier_id === c) }
+  async function tplPreviewRun() {
+    const s = tplSrcObj(); if (!s) { setTplMsg('Pick a template to import.'); return }
+    setTplBusy(true); setTplMsg(''); setTplPreview(null)
+    try { setTplPreview(await api('/api/v1/commcalc/carrier-template/clone', { method: 'POST', body: JSON.stringify({ source_org_id: s.source_org_id, source_carrier_id: s.source_carrier_id, dry_run: true }) })) }
+    catch (e: any) { setTplMsg('❌ ' + (e?.message || e)) } finally { setTplBusy(false) }
+  }
+  async function tplImport() {
+    const s = tplSrcObj(); if (!s) return
+    const c = tplPreview?.counts || {}
+    if (!confirm(`Import the "${s.carrier_name}" template into your org?\n\nCreates: ${c.carriers_created || 0} carrier, ${c.schedules_created || 0} schedules, ${c.lines_created || 0} lines, ${c.product_mrc_created || 0} MRC.\nSkips (already present): ${c.schedules_skipped || 0} schedules, ${c.product_mrc_skipped || 0} MRC.\n\nThis only ADDS config — no pay changes until you recompute a period.`)) return
+    setTplBusy(true); setTplMsg('')
+    try {
+      const r = await api('/api/v1/commcalc/carrier-template/clone', { method: 'POST', body: JSON.stringify({ source_org_id: s.source_org_id, source_carrier_id: s.source_carrier_id, dry_run: false }) })
+      const rc = r?.counts || {}
+      setTplMsg(`✅ Imported: ${rc.carriers_created || 0} carrier, ${rc.schedules_created || 0} schedules, ${rc.lines_created || 0} lines, ${rc.product_mrc_created || 0} MRC (skipped ${rc.schedules_skipped || 0} schedules, ${rc.product_mrc_skipped || 0} MRC already present). No pay change until you recompute a period.`)
+      setTplPreview(r); load(); loadMrc(); loadSources()
+    } catch (e: any) { setTplMsg('❌ ' + (e?.message || e)) } finally { setTplBusy(false) }
+  }
 
   async function saveMrc() {
     if (!String(mrcDraft.plan_pattern || '').trim()) { setMsg('Enter a plan name.'); return }
@@ -151,6 +181,58 @@ export default function PayoutSchedulesPage() {
         </p>
       </div>
       {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {msg || 'Run migration 057_multi_month_payout.sql in Supabase to enable this feature.'}</div>}
+
+      {/* import carrier template — clone another org's shareable payout config into this tenant */}
+      {sources.length > 0 && (
+        <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>📥 Import a carrier payout template</div>
+          <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 12px' }}>
+            Copy a shareable carrier&apos;s payout config (the carrier + its multi-month schedules + per-product MRC)
+            into your org. Rows are re-stamped for your tenant with new IDs; anything you already have is{' '}
+            <strong>skipped</strong> (your edits survive). This only <strong>adds config</strong> — no pay changes
+            until you recompute a period.
+          </p>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 10 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Template<br />
+              <div style={{ marginTop: 4 }}>
+                <EntityPicker
+                  options={sources.map(s => ({ id: `${s.source_org_id}|${s.source_carrier_id}`, label: `${s.carrier_name} — ${s.schedule_count} sched · ${s.line_count} lines · ${s.product_mrc_count} MRC${s.is_own ? ' (your org)' : ''}` }))}
+                  value={tplSrc || null} width={380}
+                  onChange={(v: string | null) => { setTplSrc(v || ''); setTplPreview(null); setTplMsg('') }}
+                  placeholder="pick a shared template…" ariaLabel="Carrier template" />
+              </div>
+            </label>
+            <button className="btn btn-secondary" disabled={tplBusy || !tplSrc} onClick={tplPreviewRun}>{tplBusy ? '…' : '🔎 Preview'}</button>
+            {tplPreview?.dry_run && <button className="btn btn-primary" disabled={tplBusy} onClick={tplImport}>⬇ Import into my org</button>}
+          </div>
+          {tplMsg && <div style={{ fontSize: 13, marginBottom: 8 }}>{tplMsg}</div>}
+          {tplPreview && (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, fontSize: 13, background: 'var(--surface2)' }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                {tplPreview.dry_run ? '🔎 Preview' : '✅ Result'} — {tplPreview.carrier?.name}{' '}
+                <span style={{ fontWeight: 400, color: 'var(--text3)' }}>
+                  ({tplPreview.carrier?.action === 'match' ? 'carrier already exists → matched' : 'carrier will be created'})
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                <span>Schedules: <strong>{tplPreview.counts?.schedules_created || 0}</strong> new / {tplPreview.counts?.schedules_skipped || 0} skipped</span>
+                <span>Lines: <strong>{tplPreview.counts?.lines_created || 0}</strong> new</span>
+                <span>Per-product MRC: <strong>{tplPreview.counts?.product_mrc_created || 0}</strong> new / {tplPreview.counts?.product_mrc_skipped || 0} skipped</span>
+              </div>
+              {(tplPreview.schedules?.create || []).length > 0 && (
+                <div style={{ marginTop: 8, color: 'var(--text2)' }}>
+                  New schedules: {(tplPreview.schedules.create as any[]).map(s => `${s.activation_type} (${s.num_months}mo/${s.lines}L)`).join(', ')}
+                </div>
+              )}
+              {(tplPreview.schedules?.skip || []).length > 0 && (
+                <div style={{ marginTop: 4, color: 'var(--text3)' }}>
+                  Skipped (already present): {(tplPreview.schedules.skip as any[]).map(s => s.activation_type).join(', ')}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* editor */}
       <div className="card" style={{ padding: 16, marginBottom: 16 }}>
