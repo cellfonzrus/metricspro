@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api } from '@/lib/client'
-import { computePay, W4 } from '@/lib/payroll-tax'
+import { computePay, TAX_RATES, W4 } from '@/lib/payroll-tax'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
@@ -13,7 +13,14 @@ const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: 
 const cell: React.CSSProperties = { padding: '8px', borderTop: '1px solid var(--border)', fontSize: 13, whiteSpace: 'nowrap' }
 const $ = (n: number) => `$${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-const STATES = ['NY', 'NJ', 'PA', 'DE']
+// RULE TWO (SAP-configurable): was hardcoded to the house's 4 states (NY/NJ/PA/DE) — a tenant whose
+// employees work in any other state couldn't even select it here. Widened to the same 8-state set HR
+// onboarding already seeds PER TENANT (migration 076: NY/NJ/DE/PA/IL/CT/MA/IN — every real W-4/state-
+// withholding form this app already knows about), so this list stays in lockstep with that seed. States
+// outside TAX_RATES.state_sit (payroll-tax.ts) still compute correctly — the engine's own `?? 0`
+// fallback (unchanged) reports $0 state withholding for them rather than crashing; each option below is
+// marked so nobody mistakes that $0 for "this state has no income tax."
+const STATES = ['NY', 'NJ', 'PA', 'DE', 'IL', 'CT', 'MA', 'IN']
 const FILING = ['Single', 'Married', 'HOH']
 
 export default function PayrollTaxPage() {
@@ -89,6 +96,7 @@ export default function PayrollTaxPage() {
     { header: 'State', field: 'state_wh', money: true, get: l => l.pay.state },
     { header: 'Net', field: 'net', money: true, get: l => l.pay.net },
     { header: 'W-4 Filing/State', field: 'w4', get: l => `${l.settings.filing_status} · ${l.settings.state}${l.settings.skipped ? ' · flat' : ''}` },
+    { header: 'Hours Basis', field: 'basis', get: l => l.basis === 'scheduled' ? 'Scheduled (est.)' : 'Clocked' },
   ]
 
   return (
@@ -127,7 +135,10 @@ export default function PayrollTaxPage() {
           <tbody>
             {lines.map(l => (
               <tr key={l.employee_id}>
-                <td style={cell}>{l.name}<div style={{ fontSize: 10, color: 'var(--text3)' }}>{l.store || ''}</div></td>
+                <td style={cell}>{l.name}<div style={{ fontSize: 10, color: 'var(--text3)' }}>
+                  {l.store || ''}
+                  {l.basis === 'scheduled' && <span title="No clock punches this range — estimated from the entered schedule instead." style={{ marginLeft: 6, padding: '0 5px', borderRadius: 999, background: '#fef3c7', color: '#92400e', fontWeight: 600 }}>scheduled est.</span>}
+                </div></td>
                 <td style={cell}>{l.pay.regular_hours}{l.pay.ot_hours > 0 && <span style={{ color: '#b45309' }}> +{l.pay.ot_hours} OT</span>}</td>
                 <td style={cell}>{$(l.pay_rate)}</td>
                 <td style={{ ...cell, fontWeight: 600 }}>{$(l.pay.gross)}</td>
@@ -143,7 +154,7 @@ export default function PayrollTaxPage() {
                 </td>
               </tr>
             ))}
-            {lines.length === 0 && <tr><td colSpan={11} style={{ textAlign: 'center', padding: 36, color: 'var(--text3)' }}>No hours in range. Employees clock in from the /portal; closed punches show here.</td></tr>}
+            {lines.length === 0 && <tr><td colSpan={11} style={{ textAlign: 'center', padding: 36, color: 'var(--text3)' }}>No hours recorded {start} → {end}. This pulls from clock punches (/portal), manual hours, and — when neither exists yet — the entered schedule. Add shifts in Schedule or have employees clock in to populate it.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -166,7 +177,9 @@ function W4Modal({ line, onClose, onSave }: { line: any; onClose: () => void; on
       <div style={{ display: 'grid', gap: 10, fontSize: 13 }}>
         <label>Filing status <select style={sel} value={w4.filing_status} onChange={e => setW4({ ...w4, filing_status: e.target.value })}>{FILING.map(f => <option key={f}>{f}</option>)}</select></label>
         <label>Allowances <input type="number" style={{ ...sel, width: 80 }} value={w4.allowances} onChange={e => setW4({ ...w4, allowances: Number(e.target.value) || 0 })} /></label>
-        <label>State <select style={sel} value={w4.state} onChange={e => setW4({ ...w4, state: e.target.value })}>{STATES.map(s => <option key={s}>{s}</option>)}</select></label>
+        <label>State <select style={sel} value={w4.state} onChange={e => setW4({ ...w4, state: e.target.value })}>
+          {STATES.map(s => <option key={s} value={s}>{s}{TAX_RATES.state_sit[s] == null ? ' (rate not configured — $0 est.)' : ''}</option>)}
+        </select></label>
         <label>Extra withholding / period <input type="number" style={{ ...sel, width: 100 }} value={w4.extra_withholding} onChange={e => setW4({ ...w4, extra_withholding: Number(e.target.value) || 0 })} /></label>
         <label><input type="checkbox" checked={w4.skipped} onChange={e => setW4({ ...w4, skipped: e.target.checked })} /> Use flat 22% federal (skip W-4 table)</label>
       </div>

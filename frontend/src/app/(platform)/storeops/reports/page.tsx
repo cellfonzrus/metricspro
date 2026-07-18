@@ -112,7 +112,7 @@ export default function StoreOpsReportsPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : withMkt.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
-          No hours for {monthName}. Payroll is computed from entered shifts — add shifts in the Schedule for this month.
+          No hours for {monthName}. Payroll is computed from entered shifts and clock-in/out activity — add shifts in the Schedule, or have employees clock in from the /portal, for this month.
         </div>
       ) : (
         <ReportShell

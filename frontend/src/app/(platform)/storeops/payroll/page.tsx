@@ -133,6 +133,14 @@ export default function PayrollPage() {
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
+      ) : rows.length === 0 ? (
+        // Genuinely-missing data (no shifts AND no clock punches this month) vs. a silent blank —
+        // /payroll now also flows in clock-in/out activity that has no matching shift row, so an
+        // empty state here means neither source has anything for this period yet.
+        <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+          No shifts or clock-ins recorded for {monthName}. Add shifts in the Schedule, or have employees
+          clock in from the /portal, to populate payroll for this month.
+        </div>
       ) : (
         <ReportShell title="Payroll Report" subtitle={monthName} filename={`payroll-${month}`} columns={cols} rows={visibleRows} />
       )}
