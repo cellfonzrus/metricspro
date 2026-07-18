@@ -53,7 +53,8 @@ def list_shared_sources(client, target_org_id):
     applied yet — so the feature is simply unavailable, never a leak."""
     try:
         carriers = _rows(
-            client.schema(_SCHEMA).table("carrier").select("*").eq("template_shared", True).execute()
+            client.schema(_SCHEMA).table("carrier").select("id,org_id,name,code")
+            .eq("template_shared", True).execute()
         )
     except Exception:
         return {"sources": [], "ready": False,
@@ -94,7 +95,7 @@ def clone_carrier_template(client, *, target_org_id, source_org_id, source_carri
     # 1) verify the source is an EXPLICITLY shareable template. The .eq('template_shared', True) filter
     #    both ENFORCES the gate and naturally raises when the column is absent (mig 221 not yet run).
     try:
-        shared = _rows(client.schema(_SCHEMA).table("carrier").select("*")
+        shared = _rows(client.schema(_SCHEMA).table("carrier").select("id,org_id,name,code")
                        .eq("org_id", source_org_id).eq("id", source_carrier_id)
                        .eq("template_shared", True).execute())
     except Exception:
@@ -108,7 +109,7 @@ def clone_carrier_template(client, *, target_org_id, source_org_id, source_carri
 
     # 2) resolve the target carrier by NAME within the target org (create-or-match).
     try:
-        existing_carrier = _rows(client.schema(_SCHEMA).table("carrier").select("*")
+        existing_carrier = _rows(client.schema(_SCHEMA).table("carrier").select("id")
                                  .eq("org_id", target_org_id).eq("name", carrier_name).execute())
     except Exception:
         existing_carrier = []
@@ -116,17 +117,20 @@ def clone_carrier_template(client, *, target_org_id, source_org_id, source_carri
     carrier_action = "match" if existing_carrier else "create"
 
     # 3) load the source config for this carrier.
-    src_scheds = _rows(client.schema(_SCHEMA).table("payout_schedule").select("*")
+    src_scheds = _rows(client.schema(_SCHEMA).table("payout_schedule")
+                       .select("id,company_id,activation_type,num_months,gate_signal,bypass_tier,is_active")
                        .eq("org_id", source_org_id).eq("carrier_id", source_carrier_id).execute())
     sid_list = [s.get("id") for s in src_scheds if s.get("id")]
     src_lines = []
     if sid_list:
-        src_lines = _rows(client.schema(_SCHEMA).table("payout_schedule_line").select("*")
+        src_lines = _rows(client.schema(_SCHEMA).table("payout_schedule_line")
+                          .select("schedule_id,month_index,payout_kind,flat_amount,mrc_pct,mrc_basis,requires_paid")
                           .eq("org_id", source_org_id).in_("schedule_id", sid_list).execute())
     lines_by_sched = {}
     for ln in src_lines:
         lines_by_sched.setdefault(ln.get("schedule_id"), []).append(ln)
-    src_mrc = _rows(client.schema(_SCHEMA).table("product_mrc").select("*")
+    src_mrc = _rows(client.schema(_SCHEMA).table("product_mrc")
+                    .select("plan_pattern,match_op,mrc,priority,is_active,note")
                     .eq("org_id", source_org_id).eq("carrier_id", source_carrier_id).execute())
 
     # 4) REAL RUN — create the target carrier NOW if missing (so skip-detection sees a real carrier id).
@@ -145,10 +149,10 @@ def clone_carrier_template(client, *, target_org_id, source_org_id, source_carri
     existing_sched_keys, existing_mrc_keys = set(), set()
     if target_carrier_id:
         try:
-            for s in _rows(client.schema(_SCHEMA).table("payout_schedule").select("*")
+            for s in _rows(client.schema(_SCHEMA).table("payout_schedule").select("company_id,activation_type")
                            .eq("org_id", target_org_id).eq("carrier_id", target_carrier_id).execute()):
                 existing_sched_keys.add(_sched_key(s))
-            for m in _rows(client.schema(_SCHEMA).table("product_mrc").select("*")
+            for m in _rows(client.schema(_SCHEMA).table("product_mrc").select("plan_pattern,match_op")
                            .eq("org_id", target_org_id).eq("carrier_id", target_carrier_id).execute()):
                 existing_mrc_keys.add(_mrc_key(m))
         except Exception:

@@ -43,8 +43,8 @@ class _Exec:
     def __init__(self, data): self.data = data
 
 class _Q:
-    def __init__(self, table): self.t = table; self._op='select'; self._f=[]; self._rows=None; self._upd=None
-    def select(self, cols='*'): self._op='select'; return self
+    def __init__(self, table): self.t = table; self._op='select'; self._f=[]; self._rows=None; self._upd=None; self._cols='*'
+    def select(self, cols='*'): self._op='select'; self._cols=cols; return self
     def insert(self, rows): self._op='insert'; self._rows = rows if isinstance(rows, list) else [rows]; return self
     def update(self, patch): self._op='update'; self._upd=patch; return self
     def delete(self): self._op='delete'; return self
@@ -76,6 +76,14 @@ class _Q:
         if self._op == 'update':
             for r in matched: r.update(self._upd)
             return _Exec(matched)
+        # PG-faithful column projection: a select of specific columns returns ONLY those (and errors on
+        # a non-existent selected column) — so an under-narrowed read is CAUGHT here.
+        if self._cols and self._cols != '*':
+            cols = [x.strip() for x in self._cols.split(',')]
+            for k in cols:
+                if k not in self.t.cols:
+                    raise Exception(f"column {self.t.name}.{k} does not exist")
+            return _Exec([{k: r.get(k) for k in cols} for r in matched])
         return _Exec([dict(r) for r in matched])
 
 class _Tbl:
@@ -257,7 +265,9 @@ print("\nJ. permission gate matrix — real _require_carrier_template_edit → r
 cr.sb = lambda: object()                                   # gate only needs a placeholder client
 core._uid_from_token = lambda auth: ('uid' if auth else None)
 def gate_with(caller):
-    core._resolve_caller = lambda client, uid: caller
+    # stub is 3-ARG (client, uid, active_org) — the real gate now passes the ACTING org (F1). A 2-arg
+    # stub would TypeError → resolution-except → caller=None → wrongly allowed, so this shape is required.
+    core._resolve_caller = lambda client, uid, active_org=None: caller
     return cr._require_carrier_template_edit('Bearer x', LUX)
 def allowed(caller):
     try: gate_with(caller); return True
@@ -270,8 +280,56 @@ check("plain admin role allowed", allowed({'perms': {}, 'role': 'admin'}))
 check("non-admin, no grant → denied", not allowed({'perms': {}, 'role': 'rep'}))
 # degrade-open: unresolved caller (RBAC off / house) → allowed, never locks out the house
 core._uid_from_token = lambda auth: None
-core._resolve_caller = lambda client, uid: {'perms': {}, 'role': 'rep'}   # would deny if consulted
+core._resolve_caller = lambda client, uid, active_org=None: {'perms': {}, 'role': 'rep'}  # would deny if consulted
 check("no-token caller → degrade OPEN (allowed)", cr._require_carrier_template_edit('', LUX) is None)
+
+print("\nK. F1 REGRESSION — caller resolved FOR THE ACTING ORG (org_id passed to _resolve_caller)")
+core._uid_from_token = lambda auth: ('uid' if auth else None)
+# A login that is ADMIN in its DEFAULT org but only a REP in the ACTING org (LUX). The gate must resolve
+# for the ACTING org (LUX) → rep → DENIED. The OLD 2-arg call resolved the default-org (admin) → wrongly
+# allowed, so this case would have FAILED against the pre-rework gate.
+def resolver_admin_default_rep_acting(client, uid, active_org=None):
+    return {'perms': {}, 'role': ('rep' if active_org == LUX else 'admin')}
+core._resolve_caller = resolver_admin_default_rep_acting
+try:
+    cr._require_carrier_template_edit('Bearer x', LUX); _r1 = True
+except HTTPException:
+    _r1 = False
+check("admin-in-default / rep-in-acting-org → DENIED (acting org gates)", _r1 is False)
+# The inverse: REP in default org, ADMIN in the acting org (LUX) → ALLOWED. OLD code wrongly 403'd.
+def resolver_rep_default_admin_acting(client, uid, active_org=None):
+    return {'perms': {}, 'role': ('admin' if active_org == LUX else 'rep')}
+core._resolve_caller = resolver_rep_default_admin_acting
+try:
+    cr._require_carrier_template_edit('Bearer x', LUX); _r2 = True
+except HTTPException:
+    _r2 = False
+check("rep-in-default / admin-in-acting-org → ALLOWED (acting org gates)", _r2 is True)
+# capture the org actually passed to _resolve_caller (proves org_id is threaded, not dropped)
+_seen = {}
+def resolver_capture(client, uid, active_org=None):
+    _seen['org'] = active_org
+    return {'perms': {'scope': 'all'}}
+core._resolve_caller = resolver_capture
+cr._require_carrier_template_edit('Bearer x', LUX)
+check("gate passes the acting org_id to _resolve_caller (3rd arg)", _seen.get('org') == LUX)
+
+print("\nL. F2 REGRESSION — a DECISION-path error does NOT fail open")
+# _can_edit_setting is OUTSIDE the broad except → an error inside the decision propagates (fails closed),
+# it must NOT be swallowed into an allow.
+core._uid_from_token = lambda auth: ('uid' if auth else None)
+core._resolve_caller = lambda client, uid, active_org=None: {'perms': {}, 'role': 'rep'}
+_orig_can = core._can_edit_setting
+core._can_edit_setting = lambda caller, area: (_ for _ in ()).throw(RuntimeError("boom in decision"))
+try:
+    cr._require_carrier_template_edit('Bearer x', LUX)
+    _f2 = 'allowed'
+except HTTPException:
+    _f2 = 'http'
+except RuntimeError:
+    _f2 = 'propagated'
+core._can_edit_setting = _orig_can
+check("decision-path error propagates (not swallowed into allow)", _f2 == 'propagated')
 
 
 print(f"\n{'='*54}\nRESULT: {PASS} passed, {FAIL} failed\n{'='*54}")

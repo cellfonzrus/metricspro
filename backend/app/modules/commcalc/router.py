@@ -6684,22 +6684,24 @@ async def product_mrc_coverage(period: str = "", org_id: str = ORG_ID):
 def _require_carrier_template_edit(authorization, org_id):
     """Importing a carrier template CREATES money-config (carrier + schedules + product_mrc). Gate on the
     existing per-setting 'commission_plans' permission (Commission Plans & Payout Schedules) — admin by
-    default, grantable via Roles. Degrades OPEN when the caller can't be resolved (RBAC off / house admin)
-    so it never locks out the house — mirrors _require_commission_admin's posture."""
+    default, grantable via Roles. Structure mirrors _require_perf_review_edit / _can_edit_classification:
+    the caller is resolved FOR THE ACTING ORG (`_resolve_caller(sb(), uid, org_id)` — NOT the login's
+    default-org membership, so a user who is admin in org A but only a rep in the acting org B is gated by
+    B's role), and ONLY the resolution path degrades on error → caller=None → allowed (RBAC off / house
+    admin, never locks out the house). The DECISION (`_can_edit_setting`) is OUTSIDE the broad except, so an
+    error in the permission check itself propagates (fails closed), never fails open."""
     try:
         from app.modules.core.router import _uid_from_token, _resolve_caller, _can_edit_setting
+    except Exception:
+        return  # core unavailable — same posture as the rest of the module (require_org-only)
+    try:
         uid = _uid_from_token(authorization)
-        caller = _resolve_caller(sb(), uid) if uid else None
-        if caller is None:
-            return  # unresolved (no token / rbac off) — allow, same posture as the rest of the module
-        if _can_edit_setting(caller, "commission_plans"):
-            return
+        caller = _resolve_caller(sb(), uid, org_id) if uid else None
+    except Exception:
+        caller = None  # resolution failure (no token / rbac off) — degrade per house posture
+    if caller is not None and not _can_edit_setting(caller, "commission_plans"):
         raise HTTPException(403, "You need the 'Commission Plans & Payout Schedules' setting permission to "
                                  "import a carrier payout template.")
-    except HTTPException:
-        raise
-    except Exception:
-        return  # never 500 a config action on a resolution error
 
 
 @router.get("/carrier-template/sources")

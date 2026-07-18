@@ -72,7 +72,8 @@ export default function PayoutSchedulesPage() {
   async function tplImport() {
     const s = tplSrcObj(); if (!s) return
     const c = tplPreview?.counts || {}
-    if (!confirm(`Import the "${s.carrier_name}" template into your org?\n\nCreates: ${c.carriers_created || 0} carrier, ${c.schedules_created || 0} schedules, ${c.lines_created || 0} lines, ${c.product_mrc_created || 0} MRC.\nSkips (already present): ${c.schedules_skipped || 0} schedules, ${c.product_mrc_skipped || 0} MRC.\n\nThis only ADDS config — no pay changes until you recompute a period.`)) return
+    const compLine = (c.schedules_company_skipped || 0) > 0 ? `\nNot cloned: ${c.schedules_company_skipped} company-scoped schedule(s) — company structures are org-specific.` : ''
+    if (!confirm(`Import the "${s.carrier_name}" template into your org?\n\nCreates: ${c.carriers_created || 0} carrier, ${c.schedules_created || 0} schedules, ${c.lines_created || 0} lines, ${c.product_mrc_created || 0} MRC.\nSkips (already present): ${c.schedules_skipped || 0} schedules, ${c.product_mrc_skipped || 0} MRC.${compLine}\n\nThis only ADDS config — no pay changes until you recompute a period.`)) return
     setTplBusy(true); setTplMsg('')
     try {
       const r = await api('/api/v1/commcalc/carrier-template/clone', { method: 'POST', body: JSON.stringify({ source_org_id: s.source_org_id, source_carrier_id: s.source_carrier_id, dry_run: false }) })
@@ -229,6 +230,17 @@ export default function PayoutSchedulesPage() {
                   Skipped (already present): {(tplPreview.schedules.skip as any[]).map(s => s.activation_type).join(', ')}
                 </div>
               )}
+              {(tplPreview.schedules?.company_skipped || []).length > 0 && (
+                <div style={{ marginTop: 4, color: 'var(--text3)' }}>
+                  {(tplPreview.schedules.company_skipped as any[]).length} company-scoped schedule(s) not cloned
+                  (company structures are org-specific): {(tplPreview.schedules.company_skipped as any[]).map(s => s.activation_type).join(', ')}
+                </div>
+              )}
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text3)', borderTop: '1px solid var(--border)', paddingTop: 6 }}>
+                Import is schedule-grain: an already-present schedule is skipped as a whole (its lines aren&apos;t
+                re-checked), so a hand-edit survives. To rebuild a schedule that&apos;s missing lines (e.g. one was
+                deleted), <strong>delete that schedule below and re-import</strong> — it re-creates with all its lines.
+              </div>
             </div>
           )}
         </div>
