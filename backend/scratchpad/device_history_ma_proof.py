@@ -76,6 +76,20 @@ check("grand_total does NOT include mrc", approx(mt["grand_total"],
 check("sign_convention documented", "payout" in (mt.get("sign_convention") or ""))
 check("no false $0 — grand_total is the real 607.75", approx(mt["grand_total"], 607.75))
 
+print("── 2b. MRC is a POSITIVE plan price, NOT a payout — un-negated, excluded from grand total ──")
+mrc_fixture = [
+    {"imei": "1", "period": "June 2026", "spiff_m1": -10.0, "mrc_net_discount": 45.0},   # $45 plan
+    {"imei": "1", "period": "June 2026", "rebate": -100.0, "mrc_net_discount": 45.0},     # same plan, 2nd line
+]
+mm = dh.build_ma_money_table(mrc_fixture)
+check("MRC stays POSITIVE (+45 per line, not −45)", approx(mm["periods"][0]["detail"][0]["mrc_net_discount"], 45.0))
+check("MRC aggregates positive (45 + 45 = 90)", approx(mm["periods"][0]["mrc_net_discount"], 90.0))
+check("MRC section subtotal = 90 (positive)", approx(mm["mrc"]["subtotal"], 90.0))
+check("payouts still paid-to-dealer (spiff 10 + rebate 100)",
+      approx(mm["spiff"]["subtotal"], 10.0) and approx(mm["rebate"]["subtotal"], 100.0))
+check("grand_total = 110 — MRC ($90) EXCLUDED", approx(mm["grand_total"], 110.0))
+check("_num0 does NOT negate a positive; blank → 0", approx(dh._num0(45.0), 45.0) and approx(dh._num0(""), 0.0))
+
 print("── 3. line_status = NULL never gates the paid display (amounts are the evidence) ──")
 check("period line_status is None (both rows NULL)", p0["line_status"] is None)
 check("top-level line_status None but money still present", mt["line_status"] is None and mt["grand_total"] > 0)
@@ -126,6 +140,23 @@ q = dh.query_candidates("35-516356-835697-3")
 check("dashed IMEI query matches stored raw_ma_commission.imei", dh.keys_match(q, "355163568356973"))
 check("dashed IMEI query does NOT match a different imei", not dh.keys_match(q, "355163568356900"))
 check("digits-only form is a candidate", "355163568356973" in q)
+
+print("── 8. carrier label passthrough (config-driven — no carrier name in the pure code) ──")
+lbl = dh.build_ma_money_table(REPRO, carrier_label="Total by Verizon")
+check("carrier_label carried through when provided", lbl["carrier_label"] == "Total by Verizon")
+check("carrier_label None → None (UI applies neutral fallback)", dh.build_ma_money_table(REPRO)["carrier_label"] is None)
+check("blank carrier_label → None", dh.build_ma_money_table(REPRO, carrier_label="   ")["carrier_label"] is None)
+
+print("── 9. Boost payload byte-identity: carrier_mode omitted for boost (carrier_response_fields) ──")
+# The pre-carrier-aware device-history response key-set (must stay byte-identical for Boost tenants).
+BOOST_KEYS = {"query", "detected", "org_id", "found", "device", "sold_by_us", "prompt", "tenure",
+              "residual_periods", "aging", "purchase_price", "commission_visible", "money", "money_locked"}
+check("boost → carrier_response_fields is EMPTY", dh.carrier_response_fields("boost") == {})
+check("boost key-set == pre-change shape (no carrier_mode added)",
+      (BOOST_KEYS | set(dh.carrier_response_fields("boost").keys())) == BOOST_KEYS)
+check("plan → adds ONLY carrier_mode", set(dh.carrier_response_fields("plan").keys()) == {"carrier_mode"})
+check("plan carrier_mode value == 'plan'", dh.carrier_response_fields("plan")["carrier_mode"] == "plan")
+check("None mode treated as boost → {}", dh.carrier_response_fields(None) == {})
 
 print(f"\n==== device-history MA proof: {_pass} passed, {_fail} failed ====")
 sys.exit(1 if _fail else 0)

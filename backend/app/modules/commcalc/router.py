@@ -8586,6 +8586,14 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
     except Exception:
         _carriers = []
     carrier_mode = _resolve_carrier_mode(_carriers)
+    # The org's OWN carrier name(s) for the MA money heading (config-driven — no carrier name in code;
+    # neutral fallback lives in the UI). Prefer the default carrier, else the distinct active names.
+    _def_carrier = next((c for c in _carriers if c.get("is_default")), None)
+    if _def_carrier and (_def_carrier.get("name") or "").strip():
+        carrier_label = _def_carrier["name"].strip()
+    else:
+        _names = [n for n in ((c.get("name") or "").strip() for c in _carriers) if n]
+        carrier_label = ", ".join(dict.fromkeys(_names)) or None
 
     def _rows(table, cols, key_cols):
         out = []
@@ -8712,10 +8720,14 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
     ma_price = device_history.pick_ma_marketplace_price(ma_comm_rows, ma_fulfil_rows)
 
     # ── CARRIER-AWARE tenure (config-driven) — MA-fed tenants read raw_ma_* for "residual history" ──
-    # For a non-Boost carrier the recurring/residual history that drives tenure lives in the master-agent
-    # feeds: raw_ma_daily_tx recurring rows (linked to THIS device by its activation order, so it's this
-    # line's history — not the whole store account's airtime feed) UNION the imei-matched raw_ma_commission
-    # periods (the 1st–6th-month schedule). Boost tenants keep the raw_mi tenure computed above, untouched.
+    # Backbone = the imei-matched raw_ma_commission periods (the 1st–6th-month schedule) — always correct
+    # because raw_ma_commission is imei-keyed. AUGMENTED by raw_ma_daily_tx rows linked to THIS device's
+    # activation order(s): every order-linked tx month evidences the line was active that month (we take
+    # ALL order_types deliberately — any activity, not only 'residual', counts as an active recurring
+    # month). GUARD: raw_ma_daily_tx has no imei and no uniqueness on order_number, so if an activation
+    # order maps to MORE THAN ONE imei in raw_ma_commission (a shared/multi-line order), its daily-tx
+    # months belong partly to a sibling line — we SKIP those orders (backbone alone stays correct) and
+    # note the omission. Boost tenants keep the raw_mi tenure computed above, untouched.
     def _ma_row_period(r):
         p = (r.get("period") or "").strip()
         if p:
@@ -8730,17 +8742,44 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
 
     ma_daily_rows = []
     if carrier_mode != "boost":
+        # resolve which activation orders are UNAMBIGUOUS (map to exactly one imei org-wide).
+        shared_order = False
+        safe_orders = list(ord_cands)
         if ord_cands:
+            try:
+                omap = (client.schema("commcalc").table("raw_ma_commission").select("activation_order,imei")
+                        .eq("org_id", org_id).in_("activation_order", ord_cands)
+                        .limit(20000).execute().data) or []
+            except Exception as e:
+                omap = []
+                print(f"WARN device-history raw_ma_commission order-map read failed: {e}")
+            imeis_by_order = {}
+            for r in omap:
+                o = device_history.norm_order(r.get("activation_order"))
+                im = device_history.norm_digits(r.get("imei"))
+                if o and im:
+                    imeis_by_order.setdefault(o, set()).add(im)
+            safe_orders = []
+            for oc in ord_cands:
+                ims = imeis_by_order.get(device_history.norm_order(oc))
+                if ims is not None and len(ims) > 1:
+                    shared_order = True
+                else:
+                    safe_orders.append(oc)
+        if safe_orders:
             try:
                 ma_daily_rows = (client.schema("commcalc").table("raw_ma_daily_tx")
                                  .select("period,period_month,period_year,order_number,order_type,tx_date")
-                                 .eq("org_id", org_id).in_("order_number", ord_cands)
+                                 .eq("org_id", org_id).in_("order_number", safe_orders)
                                  .limit(5000).execute().data) or []
             except Exception as e:
                 print(f"WARN device-history raw_ma_daily_tx read failed: {e}")
         ma_periods = ([_ma_row_period(r) for r in ma_comm_rows]
                       + [_ma_row_period(r) for r in ma_daily_rows])
         tenure = device_history.ma_tenure_from_periods(ma_periods)
+        if shared_order and tenure.get("note"):
+            tenure["note"] += (" (A shared activation order was detected — order-level recurring months "
+                               "were omitted for it; tenure reflects the IMEI-keyed commission periods.)")
 
     # aging: house/VIP asset_ledger when present, else the non-VIP inventory-aging device row.
     if asset_row:
@@ -8795,7 +8834,7 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
     money, money_locked = None, None
     if can_money:
         if carrier_mode != "boost":
-            money = device_history.build_ma_money_table(ma_comm_rows)
+            money = device_history.build_ma_money_table(ma_comm_rows, carrier_label=carrier_label)
         else:
             money = device_history.build_money_table(
                 mi_matches, payment_matches, lambda pt: parse_payment_type(pt)[0])
@@ -8805,9 +8844,10 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
 
     return {
         "query": q, "detected": shape, "org_id": org_id,
-        "carrier_mode": carrier_mode,
-        "found": bool(sale_rows or mi_rows or pay_rows or asset_rows or inv_rows
-                      or ma_comm_rows or ma_daily_rows),
+        # carrier_mode is added ONLY for non-Boost modes → the Boost payload key-set stays byte-identical
+        # to the pre-carrier-aware shape (device_history.carrier_response_fields, proved in the harness).
+        **device_history.carrier_response_fields(carrier_mode),
+        "found": bool(sale_rows or mi_rows or pay_rows or asset_rows or inv_rows or ma_comm_rows),
         "device": device,
         "sold_by_us": sold_by_us,
         "prompt": device_history.prompt_for(sold_by_us, device.get("sold_date") if device else None),

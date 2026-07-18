@@ -52,7 +52,7 @@ function MaMoneySection({ money }: { money: any }) {
   return (
     <div>
       <div style={{ fontSize: 11, color: 'var(--text3)', margin: '2px 0 6px' }}>
-        Master-agent commission (Total / VidaPay) · raw_ma_commission · shown paid-to-dealer
+        Master-agent commission ({money?.carrier_label || 'processor data'}) · raw_ma_commission · shown paid-to-dealer
       </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
@@ -124,8 +124,8 @@ function MaMoneySection({ money }: { money: any }) {
         </tbody>
       </table>
       <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
-        * Plan MRC is the subscriber&rsquo;s plan amount (informational) — not a dealer payout, so it is not in the grand total.
-        Grand total = M1–M6 spiffs + rebate + equipment margin. Amounts follow the carrier&rsquo;s negative-is-payout convention, shown paid-to-dealer.
+        * Plan MRC is the subscriber&rsquo;s monthly plan price (shown positive, informational) — not a dealer payout, so it is not in the grand total.
+        Grand total = M1–M6 spiffs + rebate + equipment margin. Payout columns follow the carrier&rsquo;s negative-is-payout convention, shown paid-to-dealer.
       </div>
     </div>
   )
