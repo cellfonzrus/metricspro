@@ -8575,6 +8575,18 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
     cands = device_history.query_candidates(q)
     shape = device_history.detect_shape(q)
 
+    # CARRIER MODE (config-driven, RULE TWO): 'boost' → the tenure + money section reads raw_mi /
+    # raw_payment_detail (byte-identical to before); any explicitly non-Boost carrier ('plan', e.g.
+    # Total / VidaPay / luxelink) is MA-fed → the tenure + money section reads the raw_ma_* tables. No
+    # hard-coded org/carrier names — resolved from the org's own carrier config via the single-source
+    # _resolve_carrier_mode (same resolver the calc path uses).
+    try:
+        _carriers = (client.schema("commcalc").table("carrier").select("id,name,code,is_default")
+                     .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        _carriers = []
+    carrier_mode = _resolve_carrier_mode(_carriers)
+
     def _rows(table, cols, key_cols):
         out = []
         for kc in key_cols:
@@ -8677,7 +8689,14 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
     inv_row = max(inv_rows, key=lambda r: str(r.get("as_of_date") or "")) if inv_rows else None
 
     # MA marketplace linkage (source ③): imei → raw_ma_commission.activation_order → fulfillment price.
-    ma_comm_rows = [r for r in _rows("raw_ma_commission", "imei,activation_order,sku,tx_date", ("imei",))
+    # The SAME imei-matched fetch also feeds the carrier-aware MA money table + tenure below, so the money
+    # columns (device/consumer margin, rebate, mrc_net_discount, spiff_m1..m6, line_status) + the daily-tx
+    # link keys (activation_order / merchant_account_id) ride along on this one query.
+    ma_comm_cols = ("imei,activation_order,merchant_account_id,ban,sku,tx_date,period,period_month,"
+                    "period_year,activation_type,activation_type2,device_margin,consumer_margin,rebate,"
+                    "mrc_net_discount,spiff_m1,spiff_m2,spiff_m3,spiff_m4,spiff_m5,spiff_m6,line_status,"
+                    "status_change_date")
+    ma_comm_rows = [r for r in _rows("raw_ma_commission", ma_comm_cols, ("imei",))
                     if device_history.keys_match(cands, r.get("imei"))]
     ma_fulfil_rows = []
     ord_cands = device_history.order_candidates(
@@ -8691,6 +8710,37 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
         except Exception as e:
             print(f"WARN device-history raw_ma_fulfillment read failed: {e}")
     ma_price = device_history.pick_ma_marketplace_price(ma_comm_rows, ma_fulfil_rows)
+
+    # ── CARRIER-AWARE tenure (config-driven) — MA-fed tenants read raw_ma_* for "residual history" ──
+    # For a non-Boost carrier the recurring/residual history that drives tenure lives in the master-agent
+    # feeds: raw_ma_daily_tx recurring rows (linked to THIS device by its activation order, so it's this
+    # line's history — not the whole store account's airtime feed) UNION the imei-matched raw_ma_commission
+    # periods (the 1st–6th-month schedule). Boost tenants keep the raw_mi tenure computed above, untouched.
+    def _ma_row_period(r):
+        p = (r.get("period") or "").strip()
+        if p:
+            return p
+        try:
+            mo, yr = int(r.get("period_month") or 0), int(r.get("period_year") or 0)
+            if 1 <= mo <= 12 and yr:
+                return device_history.canon_display_period(f"{yr}-{mo:02d}")
+        except Exception:
+            pass
+        return str(r.get("tx_date"))[:7] if r.get("tx_date") else ""
+
+    ma_daily_rows = []
+    if carrier_mode != "boost":
+        if ord_cands:
+            try:
+                ma_daily_rows = (client.schema("commcalc").table("raw_ma_daily_tx")
+                                 .select("period,period_month,period_year,order_number,order_type,tx_date")
+                                 .eq("org_id", org_id).in_("order_number", ord_cands)
+                                 .limit(5000).execute().data) or []
+            except Exception as e:
+                print(f"WARN device-history raw_ma_daily_tx read failed: {e}")
+        ma_periods = ([_ma_row_period(r) for r in ma_comm_rows]
+                      + [_ma_row_period(r) for r in ma_daily_rows])
+        tenure = device_history.ma_tenure_from_periods(ma_periods)
 
     # aging: house/VIP asset_ledger when present, else the non-VIP inventory-aging device row.
     if asset_row:
@@ -8736,19 +8786,28 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
     purchase_price = device_history.pick_purchase_price(price_candidates)
 
     # ── MONEY TABLE (gated: admin-only by default via the 'device_commission' grant) ───────────────
+    # CARRIER-AWARE (config-driven): Boost → raw_mi residual + raw_payment_detail rebate (byte-identical
+    # to before); MA-fed → the raw_ma_commission per-IMEI section (M1–M6 spiffs / rebate / margins / plan
+    # MRC / line status), paid-to-dealer normalized. Degrades to an explicit "no MA data" note (never a
+    # silent $0, never a crash) when the raw_ma_* tables are absent/empty for the org.
     from app.modules.commcalc.discrepancy_engine import parse_payment_type
     can_money = _can_view_device_commission(authorization, org_id)
     money, money_locked = None, None
     if can_money:
-        money = device_history.build_money_table(
-            mi_matches, payment_matches, lambda pt: parse_payment_type(pt)[0])
+        if carrier_mode != "boost":
+            money = device_history.build_ma_money_table(ma_comm_rows)
+        else:
+            money = device_history.build_money_table(
+                mi_matches, payment_matches, lambda pt: parse_payment_type(pt)[0])
     else:
         money_locked = {"note": "Commission details are restricted — this requires the "
                                 "'device_commission' data grant (admin-only by default)."}
 
     return {
         "query": q, "detected": shape, "org_id": org_id,
-        "found": bool(sale_rows or mi_rows or pay_rows or asset_rows or inv_rows or ma_comm_rows),
+        "carrier_mode": carrier_mode,
+        "found": bool(sale_rows or mi_rows or pay_rows or asset_rows or inv_rows
+                      or ma_comm_rows or ma_daily_rows),
         "device": device,
         "sold_by_us": sold_by_us,
         "prompt": device_history.prompt_for(sold_by_us, device.get("sold_date") if device else None),
