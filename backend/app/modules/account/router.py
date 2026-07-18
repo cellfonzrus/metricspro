@@ -320,9 +320,28 @@ def _read(period, st_type, scope, org_id):
     return rows[0] if rows else None
 
 
+def _filtered_read(period, st_type, scope, stores, markets, org_id):
+    """RULE FIVE (§3d) store/market filter for the AGGREGATED statements: re-attribute the P&L / BS
+    to the selected store(s) by SUMMING the per-store snapshots (read-only; no money recompute). Only
+    reached when a store OR market filter is active — with no filter the caller returns the stored
+    snapshot byte-for-byte (behaviour unchanged). Company-wide lines read $0 here (documented note)."""
+    from app.modules.account import statement_filter
+    base = _read(period, st_type, "consolidated", org_id)   # for staleness + line skeleton
+    stale = autocompute.staleness(sb(), org_id, period,
+                                  computed_at=(base.get("computed_at") if base else None))
+    if not base:
+        return {"period": period, "scope": "filtered", "computed": False, "filtered": True, **stale}
+    f = statement_filter.filtered_statement(sb(), org_id, period, st_type, scope, stores, markets)
+    return {"period": period, "computed": True, "narrative": None, "model": None,
+            "crosscheck_ok": None, **f, **stale}
+
+
 @router.get("/pl/{period}")
-async def get_pl(period: str, scope: str = "consolidated", org_id: str = ORG_ID):
+async def get_pl(period: str, scope: str = "consolidated", stores: str = "", markets: str = "",
+                 org_id: str = ORG_ID):
     require_org(org_id)
+    if (stores or "").strip() or (markets or "").strip():
+        return _filtered_read(period, "pl", scope, stores, markets, org_id)
     row = _read(period, "pl", scope, org_id)
     # Staleness banner: computed_at + the newest relevant ingest so the page can prompt a recompute
     # when a fresh upload has landed since (or the books were never computed). Never changes numbers.
@@ -335,8 +354,11 @@ async def get_pl(period: str, scope: str = "consolidated", org_id: str = ORG_ID)
 
 
 @router.get("/balance-sheet/{period}")
-async def get_bs(period: str, scope: str = "consolidated", org_id: str = ORG_ID):
+async def get_bs(period: str, scope: str = "consolidated", stores: str = "", markets: str = "",
+                 org_id: str = ORG_ID):
     require_org(org_id)
+    if (stores or "").strip() or (markets or "").strip():
+        return _filtered_read(period, "balance_sheet", scope, stores, markets, org_id)
     row = _read(period, "balance_sheet", scope, org_id)
     stale = autocompute.staleness(sb(), org_id, period, computed_at=(row.get("computed_at") if row else None))
     if not row:

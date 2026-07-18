@@ -1,10 +1,13 @@
 'use client'
-import { useState, useEffect, Suspense } from 'react'
+import { useState, useEffect, useMemo, Suspense } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import ReportExportBar from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import type { EntityOption } from '@/components/EntityPicker'
 import type { ExportSheet } from '@/lib/export'
 import { StalenessBanner } from '../_components/StalenessBanner'
 import { statementInfoSheet, statementSubtitle, type StatementMeta } from '../_components/statementExport'
@@ -21,7 +24,17 @@ function BSInner() {
   const [open, setOpen] = useState<Record<string, boolean>>({})
   const [reloadKey, setReloadKey] = useState(0)
   const [inv, setInv] = useState<any[]>([])   // per-store inventory backing the BS inventory line (for the detail sheet)
+  // RULE FIVE (§3d) standard store/market filter — see the P&L page for the full rationale. Period =
+  // section switcher (usePeriod); rep n/a at statement grain; so only stores + markets shown. Filter
+  // active → the read endpoint re-attributes the BS to the selected store(s) (sums per-store snapshots).
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const [fopts, setFopts] = useState<{ stores?: any[]; markets?: string[] }>({})
+  const filterActive = filt.stores.length > 0 || filt.markets.length > 0
+  const filtKey = `${filt.stores.join('|')}|${filt.markets.join('|')}`
 
+  useEffect(() => {
+    api(`/api/v1/core/filter-options?org_id=${ORG_ID}`).then((d: any) => setFopts(d || {})).catch(() => setFopts({}))
+  }, [])
   useEffect(() => {
     api(`/api/v1/account/overview/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
       .then((o: any) => setScopes(o.scopes || [])).catch(() => setScopes([]))
@@ -32,9 +45,22 @@ function BSInner() {
   }, [reloadKey])
   useEffect(() => {
     setLoading(true)
-    api(`/api/v1/account/balance-sheet/${encodeURIComponent(period)}?scope=${encodeURIComponent(scope)}&org_id=${ORG_ID}`)
+    const q = `scope=${encodeURIComponent(scope)}&org_id=${ORG_ID}`
+      + (filterActive ? `&stores=${encodeURIComponent(filt.stores.join('|'))}&markets=${encodeURIComponent(filt.markets.join('|'))}` : '')
+    api(`/api/v1/account/balance-sheet/${encodeURIComponent(period)}?${q}`)
       .then(setData).catch(console.error).finally(() => setLoading(false))
-  }, [period, scope, reloadKey])
+  }, [period, scope, reloadKey, filtKey])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const storeMarket = useMemo(() => {
+    const m: Record<string, string> = {}
+    ;(fopts.stores || []).forEach((s: any) => { if (s.store && s.market) m[s.store] = s.market })
+    return m
+  }, [fopts])
+  const storeOpts: EntityOption[] = useMemo(() =>
+    scopes.filter((s: any) => String(s.scope_key || '').startsWith('store:'))
+      .map((s: any) => { const a = String(s.scope_key).slice('store:'.length); return { id: a, label: a, sublabel: storeMarket[a] || undefined } }),
+    [scopes, storeMarket])
+  const marketOpts: string[] = useMemo(() => fopts.markets || [], [fopts])
 
   const st = data?.statement
   const sec = (t: string) => (st?.sections || []).find((s: any) => s.type === t)
@@ -66,11 +92,13 @@ function BSInner() {
       ] },
     ]
     // Multi-sheet: the per-store inventory backing the BS inventory line (effective = manual override
-    // if set, else swept b2bsoft value). Filtered to the selected store when a store scope is active,
-    // so the export mirrors the on-screen scope. Values as displayed on the Inventory Values page.
-    const invRows = scope.startsWith('store:')
-      ? inv.filter((r: any) => r.store === scope.slice('store:'.length))
-      : inv
+    // if set, else swept b2bsoft value). Narrowed to the selected store(s) — the standard store/market
+    // filter (§3d) when active, else the single store scope — so the export mirrors what's on screen.
+    const invRows = data?.filtered
+      ? inv.filter((r: any) => (data.filtered_stores || []).includes(r.store))
+      : scope.startsWith('store:')
+        ? inv.filter((r: any) => r.store === scope.slice('store:'.length))
+        : inv
     if (invRows.length > 0) {
       sheets.push({ name: 'Inventory detail', rows: invRows, columns: [
         { header: 'Store', get: (r: any) => r.store },
@@ -100,10 +128,20 @@ function BSInner() {
           {st && <ReportExportBar
             title={`Balance Sheet — ${st?.scope_label || scope}`}
             subtitle={statementSubtitle(bsMeta())}
-            filename={`balance-sheet-${scope.replace(/[^a-z0-9]+/gi, '-')}-${period.replace(/\s+/g, '-')}`}
+            filename={`balance-sheet-${(data?.filtered ? 'filtered' : scope).replace(/[^a-z0-9]+/gi, '-')}-${period.replace(/\s+/g, '-')}`}
             sheets={bsSheets()} />}
         </div>
       </div>
+
+      {/* RULE FIVE (§3d) standard filter bar — stores + markets. Period = section switcher; rep n/a. */}
+      <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false, reps: false }}
+        periodMode="none" storeOptions={storeOpts} marketOptions={marketOpts} />
+      {data?.filtered && (
+        <div style={{ fontSize: 12, color: 'var(--text2)', margin: '-6px 0 12px' }}>
+          Filtered to <strong>{data.matched_stores}</strong> store(s){data.filtered_markets?.length ? <> · markets: {data.filtered_markets.join(', ')}</> : null}.
+          Company-wide lines (cash / opening balances / MI/ATU residual) read $0 — see the Consolidated view; a store subset rarely balances on its own.
+        </div>
+      )}
 
       <StalenessBanner period={period} computed={data?.computed} computedAt={data?.computed_at}
         newestIngestAt={data?.newest_ingest_at} stale={data?.stale} onRecomputed={() => setReloadKey(k => k + 1)} />
