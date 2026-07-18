@@ -6,6 +6,7 @@ server-side (report_registry + render) so on-demand and scheduled output match t
 browser export. Scheduling is driven by Supabase pg_cron hitting POST /notify/run-due.
 """
 import base64
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Header, Response
@@ -39,6 +40,11 @@ def _tenant_default_cc(org_id) -> str:
 
 
 # ── no-login download artifacts (owner directive: "send the PDF as is without logging in") ───────────
+# Cap on the raw (pre-base64) file we persist in-row. Report files are small; a runaway export must never
+# be base64'd into a giant TEXT row. Over-cap → skip storage, fall back to the live-report link (no crash).
+MAX_ARTIFACT_BYTES = 8 * 1024 * 1024  # 8 MB
+
+
 def _download_expiry_days(org_id) -> int:
     """Tenant-configurable expiry (days) for no-login download links —
     storeops.tenants.notify_policy.download_link_expiry_days. Default 7, clamped 1..90. Best-effort
@@ -60,17 +66,24 @@ def _store_artifact(org_id, filename, mime, data: bytes, report_key=None, create
     try:
         if not data:
             return None
+        if len(data) > MAX_ARTIFACT_BYTES:
+            return None  # (m1) too large for in-row storage → fall back to the live-report link
         days = _download_expiry_days(org_id)
         expires = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
         row = {"org_id": org_id, "filename": filename or "report",
                "mime": mime or "application/octet-stream",
                "content_b64": base64.b64encode(data).decode(), "size_bytes": len(data),
                "report_key": report_key, "created_by": created_by, "expires_at": expires}
+        # NOTE (B1): if the backend ever ran on the anon key, this insert is DENIED by RLS and raises a
+        # PostgREST APIError (a plain Exception subclass) → caught below → returns None → link fallback.
         res = sb().table("send_artifact").insert(row).execute()
         aid = (res.data or [{}])[0].get("id")
         if not aid:
             return None
-        return settings.API_PUBLIC_URL.rstrip("/") + "/api/v1/notify/dl/" + download_token.sign(aid)
+        tok = download_token.sign(aid)
+        if not tok:  # (M2) no download secret configured → fail closed to the live-report link
+            return None
+        return settings.API_PUBLIC_URL.rstrip("/") + "/api/v1/notify/dl/" + tok
     except Exception:
         return None
 
@@ -393,6 +406,19 @@ async def send_file(body: dict, org_id: str = ORG_ID):
     return {"sent": sent, "failed": failed, "targets": {"emails": emails, "phones": phones}, "channels": channels}
 
 
+def _content_disposition(filename) -> str:
+    """(m2) A Content-Disposition value safe for ANY filename. CR/LF & control chars are stripped
+    (header-injection guard) and non-latin-1 names (CJK/emoji/quotes) can never crash the ASGI header
+    encoder (which encodes headers as latin-1 → a 500 on a VALID token otherwise). Serves an ASCII-only
+    `filename=` fallback for legacy clients PLUS an RFC 5987 `filename*` (UTF-8, percent-encoded) carrying
+    the true name for modern clients."""
+    raw = "".join(c for c in (filename or "report") if ord(c) >= 32 and c != "\x7f")
+    raw = raw.strip() or "report"
+    ascii_name = "".join(c if (32 <= ord(c) < 127 and c not in '"\\') else "_" for c in raw) or "report"
+    star = urllib.parse.quote(raw, safe="")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{star}"
+
+
 # ── PUBLIC no-login download (owner directive: "the PDF should be sent as is without logging in") ─────
 # This route is on the tenant-middleware PUBLIC allowlist (core/tenant_middleware.py `/api/v1/notify/dl`,
 # segment-boundary). The TOKEN is the only auth: an HMAC capability over exactly ONE artifact id. Any
@@ -440,9 +466,8 @@ async def download_artifact(token: str):
             "status": "sent", "triggered_by": "download"}).execute()
     except Exception:
         pass
-    fn = (art.get("filename") or "report").replace('"', "")
     return Response(content=data, media_type=(art.get("mime") or "application/octet-stream"),
-                    headers={"Content-Disposition": f'attachment; filename="{fn}"',
+                    headers={"Content-Disposition": _content_disposition(art.get("filename")),
                              "Cache-Control": "no-store"})
 
 
@@ -453,7 +478,19 @@ async def get_settings(org_id: str = ORG_ID):
 
 
 @router.put("/settings")
-async def put_settings(body: dict, org_id: str = ORG_ID):
+async def put_settings(body: dict, org_id: str = ORG_ID,
+                       authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    # M1 (per-setting edit-permissions doctrine): gate on the 'notify_policy' settings area, resolving the
+    # caller from the auth header (same shape as core's put_tenant_settings). GET stays open to the org.
+    from app.modules.core.router import _uid_from_token, _resolve_caller, _can_edit_setting
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    caller = _resolve_caller(get_supabase(), uid, x_active_org)
+    if not caller:
+        raise HTTPException(403, "no tenant for this login")
+    if not _can_edit_setting(caller, "notify_policy"):
+        raise HTTPException(403, "you don't have permission to edit notify settings")
     try:
         days = max(1, min(int(body.get("download_link_expiry_days")), 90))
     except Exception:
@@ -461,7 +498,13 @@ async def put_settings(body: dict, org_id: str = ORG_ID):
     try:
         st = get_supabase().schema("storeops").table("tenants")
         rows = st.select("notify_policy").eq("org_id", org_id).limit(1).execute().data or []
-        pol = dict(rows[0].get("notify_policy") or {}) if rows else {}
+    except Exception as e:
+        raise HTTPException(500, f"save failed — run migration 713 first: {e}")
+    if not rows:  # (m3) no tenant record → don't silently no-op the update
+        raise HTTPException(404, "no tenant record for this org — complete tenant setup first")
+    try:
+        # (m3) re-read-merge: only touch our key so a concurrent write to another notify_policy key isn't clobbered.
+        pol = dict(rows[0].get("notify_policy") or {})
         pol["download_link_expiry_days"] = days
         st.update({"notify_policy": pol}).eq("org_id", org_id).execute()
     except Exception as e:

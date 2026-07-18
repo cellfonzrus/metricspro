@@ -84,5 +84,33 @@ ok("null expiry treated expired (safe)", SEC.otp_is_expired(now, None) is True)
 verdicts = {DT.verify(v) for v in ("", "junk", f"{body_a}.{flipped_sig}", f"{body_b}.{sig_a}")}
 ok("all failure modes collapse to a single None verdict", verdicts == {None})
 
+# ── M2: FAIL CLOSED when NO secret is configured (no literal fallback) ───────────
+_orig_secret = DT._secret
+DT._secret = lambda: None
+ok("no secret → sign returns None", DT.sign(AID_A) is None)
+ok("no secret → verify(prior token) returns None", DT.verify(tok_a) is None)
+ok("no secret → verify(any string) returns None", DT.verify("anything.here") is None)
+DT._secret = _orig_secret
+ok("secret restored → round-trip works again", DT.verify(DT.sign(AID_A)) == AID_A)
+
+# same, driven through the real config surface (all three secrets empty → _secret() is None)
+from app.core.config import settings as CFG                    # noqa: E402
+_saved_cfg = (CFG.NOTIFY_DOWNLOAD_SECRET, CFG.AUTH_2FA_SECRET, CFG.SUPABASE_SERVICE_KEY)
+try:
+    CFG.NOTIFY_DOWNLOAD_SECRET = CFG.AUTH_2FA_SECRET = CFG.SUPABASE_SERVICE_KEY = ""
+    ok("config: all secrets empty → _secret() is None", DT._secret() is None)
+    ok("config: all secrets empty → sign returns None", DT.sign(AID_A) is None)
+    ok("config: all secrets empty → verify returns None", DT.verify(tok_a) is None)
+finally:
+    CFG.NOTIFY_DOWNLOAD_SECRET, CFG.AUTH_2FA_SECRET, CFG.SUPABASE_SERVICE_KEY = _saved_cfg
+ok("config restored → round-trip works", DT.verify(DT.sign(AID_A)) == AID_A)
+
+# ── domain separation: the HMAC is over 'notify-dl:'+id, never the bare id ───────
+body_a2 = DT.sign(AID_A).split(".")[0]
+sig_bare = _b64u(hmac.new(b"proof-secret-A", AID_A.encode(), hashlib.sha256).digest())
+ok("bare-id signature (missing domain prefix) → None", DT.verify(f"{body_a2}.{sig_bare}") is None)
+sig_prefixed = _b64u(hmac.new(b"proof-secret-A", b"notify-dl:" + AID_A.encode(), hashlib.sha256).digest())
+ok("domain-prefixed signature → verifies to the id", DT.verify(f"{body_a2}.{sig_prefixed}") == AID_A)
+
 print(f"\nprove_download_token: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

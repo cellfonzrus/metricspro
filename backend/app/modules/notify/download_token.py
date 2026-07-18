@@ -19,13 +19,21 @@ import hashlib
 import hmac
 
 
-def _secret() -> bytes:
-    # Dedicated secret when set, else reuse the 2FA HMAC secret, else the service key (already a
-    # high-entropy backend-only secret) — never a trivial constant in prod. Rotating it invalidates
-    # outstanding download links (they 404): safe, they are short-lived (default 7-day expiry).
+# Domain-separation prefix for the signed message: a notify-dl signature can never be mistaken for (or
+# replayed against) any other HMAC in the app that happens to reuse the same fallback secret.
+_MSG_PREFIX = b"notify-dl:"
+
+
+def _secret():
+    # M2 (2026-07-18) FAIL CLOSED: a dedicated secret when set, else the 2FA HMAC secret, else the service
+    # key (all high-entropy, backend-only). With NONE configured we return None — there is NO literal
+    # fallback constant, so tokens can never be forged from a public/guessable secret. In that state
+    # sign()/_store_artifact() return None and the send degrades to the live-report link; verify() always
+    # returns None (the endpoint 404s). Rotating the secret invalidates outstanding links (they 404): safe,
+    # they are short-lived (default 7-day expiry).
     from app.core.config import settings
-    return (settings.NOTIFY_DOWNLOAD_SECRET or settings.AUTH_2FA_SECRET
-            or settings.SUPABASE_SERVICE_KEY or "mp-notify-dl-secret").encode()
+    s = (settings.NOTIFY_DOWNLOAD_SECRET or settings.AUTH_2FA_SECRET or settings.SUPABASE_SERVICE_KEY)
+    return s.encode() if s else None
 
 
 def _b64u(b: bytes) -> str:
@@ -37,29 +45,38 @@ def _b64u_dec(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
-def _sig(artifact_id: str) -> str:
-    return _b64u(hmac.new(_secret(), str(artifact_id or "").encode(), hashlib.sha256).digest())
+def _sig(artifact_id: str, secret: bytes) -> str:
+    msg = _MSG_PREFIX + str(artifact_id or "").encode()
+    return _b64u(hmac.new(secret, msg, hashlib.sha256).digest())
 
 
-def sign(artifact_id: str) -> str:
-    """token = base64url(artifact_id) + '.' + base64url(HMAC(secret, artifact_id)). The id rides in the
-    token (encoded) so the endpoint needs no lookup table; the signature makes it unforgeable."""
+def sign(artifact_id: str):
+    """token = base64url(artifact_id) + '.' + base64url(HMAC(secret, 'notify-dl:'+artifact_id)). The id
+    rides in the token (encoded) so the endpoint needs no lookup table; the signature makes it unforgeable.
+    Returns None when NO secret is configured (fail closed) → the caller falls back to the live-report link."""
+    secret = _secret()
+    if not secret:
+        return None
     aid = str(artifact_id or "")
-    return f"{_b64u(aid.encode())}.{_sig(aid)}"
+    return f"{_b64u(aid.encode())}.{_sig(aid, secret)}"
 
 
 def verify(token: str):
     """Return the artifact id iff `token` is a well-formed, correctly-signed download token, else None.
-    Constant-time on the signature; never raises. Expiry/revocation are checked by the caller against
-    the artifact row (this only proves the token authentically references that one id)."""
+    Constant-time on the signature; never raises. Returns None when NO secret is configured (fail closed).
+    Expiry/revocation are checked by the caller against the artifact row (this only proves the token
+    authentically references that one id)."""
     try:
+        secret = _secret()
+        if not secret:
+            return None
         body, dot, sig = (token or "").partition(".")
         if not body or not dot or not sig:
             return None
         aid = _b64u_dec(body).decode()
         if not aid:
             return None
-        if not hmac.compare_digest(sig, _sig(aid)):
+        if not hmac.compare_digest(sig, _sig(aid, secret)):
             return None
         return aid
     except Exception:
