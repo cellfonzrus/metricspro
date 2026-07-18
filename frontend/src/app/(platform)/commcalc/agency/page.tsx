@@ -61,26 +61,39 @@ export default function AgencyPage() {
 
 // ── Links ─────────────────────────────────────────────────────────────────────────────────────────────
 function LinksTab({ links, selId, setSelId, reload, onErr }: any) {
-  const [tenants, setTenants] = useState<any[]>([])
   const [carriers, setCarriers] = useState<EntityOption[]>([])
   const [kind, setKind] = useState<'tenant' | 'external'>('tenant')
   const [subOrg, setSubOrg] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [taxable, setTaxable] = useState(false)
   const [rate, setRate] = useState('0')
+  // M1 anti-enumeration: NO browse-all list. The operator types the sub tenant's EXACT slug or admin email
+  // and we look up the single match (or nothing) — never a directory of every tenant.
+  const [subQuery, setSubQuery] = useState('')
+  const [subMatch, setSubMatch] = useState<any>(null)
+  const [lookMsg, setLookMsg] = useState('')
 
   useEffect(() => {
-    api('/api/v1/commcalc/agency/sub-candidates').then((d: any) => setTenants(d.tenants || [])).catch(() => {})
     api('/api/v1/commcalc/agency/scope-options').then((d: any) => setCarriers((d.carriers || []).map((c: any) => ({ id: c.id, label: c.name })))).catch(() => {})
   }, [])
-  const tenantOpts: EntityOption[] = tenants.map(t => ({ id: t.org_id, label: t.name, sublabel: t.slug || undefined }))
+
+  const doLookup = async () => {
+    setSubMatch(null); setSubOrg(null); setLookMsg('')
+    const q = subQuery.trim()
+    if (!q) return
+    try {
+      const d = await api(`/api/v1/commcalc/agency/sub-lookup?q=${encodeURIComponent(q)}`)
+      if (d?.tenant) { setSubMatch(d.tenant); setSubOrg(d.tenant.org_id); setLookMsg('') }
+      else setLookMsg('No tenant matches that exact slug or admin email.')
+    } catch (e: any) { setLookMsg(String(e.message || e)) }
+  }
 
   const create = async () => {
     try {
-      const body: any = { sub_kind: kind, sub_name: kind === 'tenant' ? (tenants.find(t => t.org_id === subOrg)?.name || name) : name, taxable, tax_rate: Number(rate) || 0 }
+      const body: any = { sub_kind: kind, sub_name: kind === 'tenant' ? (subMatch?.name || '') : name, taxable, tax_rate: Number(rate) || 0 }
       if (kind === 'tenant') body.sub_org_id = subOrg
       const r = await api('/api/v1/commcalc/agency/links', { method: 'POST', body: JSON.stringify(body) })
-      setName(''); setSubOrg(null)
+      setName(''); setSubOrg(null); setSubMatch(null); setSubQuery('')
       reload()
       if (r?.link?.id) setSelId(r.link.id)
     } catch (e: any) { onErr(String(e.message || e)) }
@@ -96,7 +109,14 @@ function LinksTab({ links, selId, setSelId, reload, onErr }: any) {
             <option value="external">External party</option>
           </select>
           {kind === 'tenant'
-            ? <EntityPicker options={tenantOpts} value={subOrg} onChange={setSubOrg} placeholder="Pick a tenant…" width={240} ariaLabel="Sub tenant" />
+            ? <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                <input style={{ ...inp, width: 220 }} placeholder="Sub tenant exact slug or admin email" value={subQuery}
+                       onChange={e => { setSubQuery(e.target.value); setSubMatch(null); setSubOrg(null) }}
+                       onKeyDown={e => { if (e.key === 'Enter') doLookup() }} />
+                <button style={btn} onClick={doLookup} disabled={!subQuery.trim()}>Look up</button>
+                {subMatch && <span style={{ fontSize: 13, color: 'var(--text2)' }}>✓ <b>{subMatch.name}</b></span>}
+                {lookMsg && <span style={{ fontSize: 12, color: '#b45309' }}>{lookMsg}</span>}
+              </span>
             : <input style={{ ...inp, width: 240 }} placeholder="External party name" value={name} onChange={e => setName(e.target.value)} />}
           <label style={{ fontSize: 13, display: 'inline-flex', gap: 6, alignItems: 'center' }}>
             <input type="checkbox" checked={taxable} onChange={e => setTaxable(e.target.checked)} /> Taxable
@@ -104,7 +124,7 @@ function LinksTab({ links, selId, setSelId, reload, onErr }: any) {
           {taxable && <input style={{ ...inp, width: 90 }} placeholder="rate e.g. 0.06" value={rate} onChange={e => setRate(e.target.value)} />}
           <button style={btnP} onClick={create} disabled={kind === 'tenant' ? !subOrg : !name.trim()}>Create link</button>
         </div>
-        <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 8 }}>Wholesale (unchecked) = no tax. A cycle (the sub is already your master upstream) is refused.</div>
+        <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 8 }}>Wholesale (unchecked) = no tax. A cycle (the sub is already your master upstream) is refused. Tenant subs are matched by EXACT slug/admin email (no tenant directory).</div>
       </div>
 
       <div style={card}>

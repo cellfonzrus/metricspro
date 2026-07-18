@@ -150,6 +150,12 @@ def upsert_link(client, org_id, body, who=None):
     status = (body.get("status") or "draft").strip()
     if status not in LINK_STATUSES:
         raise HTTPException(400, f"status must be one of {sorted(LINK_STATUSES)}")
+    # C7 (M4): only 'period_anchor' is supported in v1 — reject 'split_period' loudly rather than store an
+    # ignored setting. The rate/margin/charge in effect on the period's LAST day governs the whole period.
+    rate_change_mode = (body.get("rate_change_mode") or "period_anchor").strip()
+    if rate_change_mode != "period_anchor":
+        raise HTTPException(400, "rate_change_mode 'split_period' is not supported in v1 — use 'period_anchor' "
+                                 "(the rate in effect on the period's last day governs the whole period)")
 
     # CYCLE GUARD (create, or when sub_org_id changes) — reject A→B→A and deeper chains.
     if sub_kind == "tenant" and sub_org_id:
@@ -166,7 +172,7 @@ def upsert_link(client, org_id, body, who=None):
         "status": status, "taxable": bool(body.get("taxable")), "tax_rate": AB._f(body.get("tax_rate")),
         "default_proration_mode": (body.get("default_proration_mode") or "full"),
         "holdback_visible_to_sub": bool(body.get("holdback_visible_to_sub")),
-        "rate_change_mode": (body.get("rate_change_mode") or "period_anchor"),
+        "rate_change_mode": rate_change_mode,
         "effective_start": body.get("effective_start") or None, "effective_end": body.get("effective_end") or None,
         "is_active": bool(body.get("is_active", True)), "notes": body.get("notes"), "updated_at": _now(),
     }
@@ -186,7 +192,17 @@ def upsert_link(client, org_id, body, who=None):
 
 
 def delete_link(client, org_id, link_id):
+    """M3: REFUSE (409) when the link has ISSUED/PAID invoices — an issued financial document must not
+    hard-delete (void it first). Draft/void invoices cascade-delete freely."""
     _get_link(client, org_id, link_id)
+    try:
+        invs = (_c(client).table("agency_invoice").select("status").eq("org_id", org_id)
+                .eq("link_id", link_id).execute().data) or []
+    except Exception:
+        invs = []
+    if any((i.get("status") in ("issued", "paid")) for i in invs):
+        raise HTTPException(409, "cannot delete a link that has issued invoices — void them first "
+                                 "(draft/void invoices delete with the link)")
     _c(client).table("agency_link").delete().eq("org_id", org_id).eq("id", link_id).execute()
     return {"ok": True}
 
@@ -204,20 +220,49 @@ def set_consent(client, org_id, link_id, status, who=None):
     return {"ok": True, "sub_consent_status": status}
 
 
-def sub_candidates(client, org_id):
-    """Pick-an-existing-tenant options for registering a tenant sub. Reads the storeops.tenants REGISTRY
-    (names only) — the same list /admin/tenants uses. Excludes self + any org that would create a cycle
-    (already a master upstream of this org)."""
+def lookup_sub_tenant(client, org_id, query):
+    """M1 — EXACT-MATCH sub-tenant lookup (anti-enumeration doctrine). A browse-all list of storeops.tenants
+    would enumerate every tenant to any org user (cross-tenant relationship disclosure). Instead the caller
+    types the tenant's EXACT slug OR an exact org-admin email; only an exact match returns that ONE tenant
+    (name + org_id). No listing, and a NON-match / self / cycle all return the SAME empty result (no oracle
+    that a slug/email exists). Gated by _can_edit_agency at the router. Re-enabling browse-all is a Gate-2
+    owner decision."""
+    q = (query or "").strip()
+    if not q:
+        return {"ok": True, "tenant": None}
+    tt = (client or get_supabase()).schema("storeops")
+    match = None
+    # (1) exact slug
     try:
-        tenants = ((client or get_supabase()).schema("storeops").table("tenants").select("org_id,name,slug,is_active")
-                   .execute().data) or []
+        rows = (tt.table("tenants").select("org_id,name,slug,is_active").eq("slug", q).execute().data) or []
+        match = next((t for t in rows if t.get("is_active", True)), None)
     except Exception:
-        tenants = []
+        match = None
+    # (2) exact org-admin email → that admin's org → its tenant
+    if not match and "@" in q:
+        for em in ({q, q.lower()}):
+            try:
+                us = (tt.table("app_users").select("org_id,role,is_active").eq("email", em).execute().data) or []
+            except Exception:
+                us = []
+            admin_orgs = [u.get("org_id") for u in us if u.get("is_active", True)
+                          and (u.get("role") or "").lower() in ("admin", "owner")]
+            for oid in admin_orgs:
+                try:
+                    tr = (tt.table("tenants").select("org_id,name,slug,is_active").eq("org_id", oid).execute().data) or []
+                except Exception:
+                    tr = []
+                match = next((t for t in tr if t.get("is_active", True)), None)
+                if match:
+                    break
+            if match:
+                break
+    if not match:
+        return {"ok": True, "tenant": None}
     anc = {str(a) for a in _ancestor_orgs(client, org_id)}
-    out = [{"org_id": t.get("org_id"), "name": t.get("name"), "slug": t.get("slug")}
-           for t in tenants if str(t.get("org_id")) != str(org_id) and str(t.get("org_id")) not in anc
-           and t.get("is_active", True)]
-    return {"ok": True, "tenants": out}
+    if str(match.get("org_id")) == str(org_id) or str(match.get("org_id")) in anc:
+        return {"ok": True, "tenant": None}   # self / would-be cycle → uniform empty (no enumeration oracle)
+    return {"ok": True, "tenant": {"org_id": match.get("org_id"), "name": match.get("name"), "slug": match.get("slug")}}
 
 
 def set_carriers(client, org_id, link_id, carrier_ids, who=None):
@@ -684,10 +729,21 @@ def generate_invoice(client, org_id, link_id, period, who=None):
         _mig("222", e)
     draft = next((i for i in existing if i.get("status") == "draft"), None)
     if draft is None:
-        nondraft = existing[0] if existing else None
-        if nondraft:
-            return {"ok": True, "immutable": True, "invoice": nondraft,
-                    "notice": f"a {nondraft.get('status')} invoice already exists for this period — void it to re-draft"}
+        # Only an ISSUED/PAID invoice is immutable and blocks a re-draft. A VOID invoice does NOT block
+        # (a re-draft can supersede it) — symmetric with void releasing transfers + one_time (m2).
+        blocking = next((i for i in existing if i.get("status") in ("issued", "paid")), None)
+        if blocking:
+            return {"ok": True, "immutable": True, "invoice": blocking,
+                    "notice": f"a {blocking.get('status')} invoice already exists for this period — void it to re-draft"}
+
+    # m1: before recomputing a draft, RELEASE any transfer stamped to THIS draft (e.g. a crashed prior issue
+    # left partial stamps) so the recompute re-selects it — otherwise those units silently drop (under-bill).
+    if draft is not None:
+        try:
+            _c(client).table("agency_equipment_transfer").update({"billed_invoice_id": None, "updated_at": _now()}
+                                                                 ).eq("org_id", org_id).eq("billed_invoice_id", draft["id"]).execute()
+        except Exception:
+            pass
 
     # config + confirmed unconsumed transfers
     stores = (list_stores(client, org_id, link_id).get("stores")) or []
@@ -700,15 +756,17 @@ def generate_invoice(client, org_id, link_id, period, who=None):
         transfers = []
     transfers = [t for t in transfers if not t.get("billed_invoice_id")]
 
-    # one_time charges: bill only if not already on ANY OTHER invoice for this link (any period, any status) —
-    # so a one_time fee bills exactly once, on the first period generated.
+    # one_time charges: bill only if not already on a NON-VOID other invoice for this link (any period). m2:
+    # a one_time on a VOIDED invoice is excluded from billed_ids → it can bill again (symmetric with the
+    # transfer release on void), so a voided charge is never silently lost.
     onetime = [c for c in charges if (c.get("cadence") == "one_time")]
     if onetime:
         billed_ids = set()
         try:
-            all_inv = (_c(client).table("agency_invoice").select("id").eq("org_id", org_id)
+            all_inv = (_c(client).table("agency_invoice").select("id,status").eq("org_id", org_id)
                        .eq("link_id", link_id).execute().data) or []
-            other_inv = [i.get("id") for i in all_inv if not (draft and i.get("id") == draft.get("id"))]
+            other_inv = [i.get("id") for i in all_inv
+                         if i.get("status") != "void" and not (draft and i.get("id") == draft.get("id"))]
             if other_inv:
                 ls = (_c(client).table("agency_invoice_line").select("source_id,invoice_id").eq("org_id", org_id)
                       .in_("invoice_id", other_inv).execute().data) or []
@@ -764,6 +822,19 @@ def issue_invoice(client, org_id, invoice_id, who=None):
     except Exception:
         lines = []
     tids = [l.get("transfer_id") for l in lines if l.get("source_type") == "equipment_margin" and l.get("transfer_id")]
+    # m4: a transfer on this draft may have been REJECTED/UN-confirmed since the draft was computed. Refuse
+    # to issue a stale bill (409) — the operator must regenerate the draft first (which drops the line).
+    if tids:
+        try:
+            trows = (_c(client).table("agency_equipment_transfer").select("id,confirm_status,billed_invoice_id")
+                     .eq("org_id", org_id).in_("id", tids).execute().data) or []
+        except Exception:
+            trows = []
+        stale = [t for t in trows if t.get("confirm_status") != "confirmed"
+                 or (t.get("billed_invoice_id") and t.get("billed_invoice_id") != invoice_id)]
+        if stale:
+            raise HTTPException(409, "a transfer on this invoice is no longer confirmed (or was billed "
+                                     "elsewhere) — regenerate the draft, then issue")
     for tid in tids:
         _c(client).table("agency_equipment_transfer").update({"billed_invoice_id": invoice_id, "updated_at": _now()}
                                                              ).eq("org_id", org_id).eq("id", tid).execute()

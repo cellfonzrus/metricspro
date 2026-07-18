@@ -24,8 +24,19 @@ from datetime import date as _date
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import app.modules.commcalc.agency as A
 import app.modules.commcalc.agency_billing as AB
+import app.modules.commcalc.router as R
 import app.modules.core.router as CORE
 from fastapi import HTTPException
+
+
+def raises(status, fn, name):
+    try:
+        fn()
+        check(name, False, "expected HTTPException")
+    except HTTPException as e:
+        check(name, e.status_code == status, f"got {e.status_code}, want {status}")
+    except Exception as e:
+        check(name, False, f"wrong exc {type(e).__name__}: {e}")
 
 PASS = 0
 FAIL = 0
@@ -432,6 +443,158 @@ if billed_t:
     raises400(lambda: A.confirm_transfer(c, MASTER, billed_t['id'], 'reject', 'mgr'), "cannot un-confirm a billed transfer")
 else:
     check("cannot un-confirm a billed transfer (setup)", False, "no billed transfer found")
+
+
+# ═══ GATE-1 REWORK — M1 exact-match sub lookup (anti-enumeration) ═════════════════════════════════
+print("\n(R-M1) exact-match sub lookup — no browse-all, no oracle")
+MSTR = 'org-mstr'
+store = {'tenants': [
+    {'org_id': 'sub-1', 'name': 'Luxelink', 'slug': 'luxelink', 'is_active': True},
+    {'org_id': 'sub-2', 'name': 'Bright Wireless', 'slug': 'bright', 'is_active': True},
+    {'org_id': MSTR, 'name': 'Master Co', 'slug': 'master', 'is_active': True},
+], 'app_users': [
+    {'org_id': 'sub-1', 'email': 'admin@luxelink.com', 'role': 'admin', 'is_active': True},
+    {'org_id': 'sub-2', 'email': 'rep@bright.com', 'role': 'rep', 'is_active': True},
+]}
+c = newc(store)
+check("no browse-all endpoint: agency has no sub_candidates", not hasattr(A, 'sub_candidates'))
+check("exact slug → single tenant", A.lookup_sub_tenant(c, MSTR, 'luxelink')['tenant']['org_id'] == 'sub-1')
+check("wrong slug → empty (no oracle)", A.lookup_sub_tenant(c, MSTR, 'luxe')['tenant'] is None)
+check("substring slug → empty (exact only)", A.lookup_sub_tenant(c, MSTR, 'lux')['tenant'] is None)
+check("empty query → empty", A.lookup_sub_tenant(c, MSTR, '')['tenant'] is None)
+check("admin email → that org's tenant", A.lookup_sub_tenant(c, MSTR, 'admin@luxelink.com')['tenant']['org_id'] == 'sub-1')
+check("non-admin email → empty (only org-admin email resolves)", A.lookup_sub_tenant(c, MSTR, 'rep@bright.com')['tenant'] is None)
+check("self slug → empty (no self-link enumeration)", A.lookup_sub_tenant(c, MSTR, 'master')['tenant'] is None)
+# cycle: sub-1 is already master of MSTR → looking up sub-1 returns empty (uniform, no oracle)
+A.upsert_link(c, 'sub-1', {'sub_kind': 'tenant', 'sub_org_id': MSTR, 'sub_name': 'Master'}, who='u')
+check("upstream-master slug → empty (would-be cycle, uniform empty)", A.lookup_sub_tenant(c, MSTR, 'luxelink')['tenant'] is None)
+
+
+# ═══ GATE-1 REWORK — M3 write gate wiring (every write) ════════════════════════════════════════════
+print("\n(R-M3) write endpoints gated by _require_agency_edit")
+# (a) the helper resolves correctly (real core _can_edit_setting over monkeypatched caller-resolution)
+_orig = (CORE._uid_from_token, CORE._resolve_caller, R.sb)
+try:
+    R.sb = lambda: None
+    def _mk(setter):
+        CORE._resolve_caller = lambda *a, **k: setter
+    CORE._uid_from_token = lambda auth: ('uid' if auth else None)
+    _mk({'role': 'rep', 'super_admin': False, 'perms': {}})
+    check("_can_edit_agency: non-admin (unregistered area) → False", R._can_edit_agency('Bearer x', MSTR) is False)
+    _mk({'role': 'admin', 'super_admin': False, 'perms': {}})
+    check("_can_edit_agency: admin default → True", R._can_edit_agency('Bearer x', MSTR) is True)
+    _mk({'role': 'rep', 'super_admin': False, 'perms': {'settings': {'agency': True}}})
+    check("_can_edit_agency: explicit grant → True", R._can_edit_agency('Bearer x', MSTR) is True)
+    _mk({'role': 'admin', 'super_admin': False, 'perms': {'settings': {'agency': False}}})
+    check("_can_edit_agency: explicit deny (even admin) → False", R._can_edit_agency('Bearer x', MSTR) is False)
+    CORE._uid_from_token = lambda auth: None
+    check("_can_edit_agency: unresolved caller → True (require_org posture)", R._can_edit_agency('', MSTR) is True)
+    # _require_agency_edit raises 403 when denied
+    R.sb = lambda: None
+    CORE._uid_from_token = lambda auth: 'uid'
+    _mk({'role': 'rep', 'super_admin': False, 'perms': {}})
+    raises(403, lambda: R._require_agency_edit('Bearer x', MSTR), "_require_agency_edit denies non-admin (403)")
+finally:
+    CORE._uid_from_token, CORE._resolve_caller, R.sb = _orig
+# (b) SOURCE-SCAN: every agency POST/DELETE endpoint body calls _require_agency_edit
+import re as _re
+_rsrc = open(R.__file__).read()
+_region = _rsrc[_rsrc.index('AGENCY MODULE (Phase 1) — Master-Agent'):]
+_chunks = _re.split(r'\n@router\.', _region)
+_writes = [ch for ch in _chunks if _re.match(r'(post|delete)\("/agency', ch)]
+_ungated = [ch.splitlines()[0] for ch in _writes if '_require_agency_edit(authorization, org_id)' not in ch]
+check(f"every agency write is gated ({len(_writes)} POST/DELETE endpoints, 0 ungated)", len(_writes) >= 19 and not _ungated,
+      f"ungated: {_ungated}")
+
+
+# ═══ GATE-1 REWORK — M3 delete_link 409 with issued invoice ═══════════════════════════════════════
+print("\n(R-M3b) delete_link refuses when issued invoices exist")
+c, LID, store = make_link_scenario()
+A.upsert_margin(c, MASTER, LID, {'equip_class_value': 'device', 'method': 'flat', 'value': 5}, who='u')
+A.add_transfer(c, MASTER, LID, {'equip_class_value': 'device', 'qty': 1, 'period': 'June 2026'}, who='u')
+gi = A.generate_invoice(c, MASTER, LID, 'June 2026', who='u')
+# draft only → delete ok
+c2, LID2, _ = make_link_scenario()
+A.generate_invoice(c2, MASTER, LID2, 'June 2026', who='u')  # a draft
+check("delete_link with only a DRAFT invoice → ok", A.delete_link(c2, MASTER, LID2).get('ok') is True)
+# issued → 409
+A.issue_invoice(c, MASTER, gi['invoice_id'], who='u')
+raises(409, lambda: A.delete_link(c, MASTER, LID), "delete_link with ISSUED invoice → 409")
+# void it → delete ok
+A.void_invoice(c, MASTER, gi['invoice_id'], who='u')
+check("delete_link after void → ok", A.delete_link(c, MASTER, LID).get('ok') is True)
+
+
+# ═══ GATE-1 REWORK — M4 C7 period-anchor + split_period reject ════════════════════════════════════
+print("\n(R-M4) C7 period-anchor effectiveness + split_period de-scoped")
+# split_period rejected at link save
+raises(400, lambda: A.upsert_link(newc(), 'o', {'sub_kind': 'external', 'sub_name': 'x', 'rate_change_mode': 'split_period'}),
+       "rate_change_mode='split_period' rejected at save")
+check("rate_change_mode='period_anchor' accepted", A.upsert_link(newc(), 'o', {'sub_kind': 'external', 'sub_name': 'x', 'rate_change_mode': 'period_anchor'})['ok'])
+# holdback: old rule ENDS Jun 15, new STARTS Jun 16 → period_anchor (period_end) picks NEW for June AND July
+old_r = rule('all', method='percent', value=0.05, prio=100, ee='2026-06-15')
+new_r = rule('all', method='percent', value=0.20, prio=100, es='2026-06-16')
+JUN_S, JUN_E = _date(2026, 6, 1), _date(2026, 6, 30)
+JUL_S, JUL_E = _date(2026, 7, 1), _date(2026, 7, 31)
+check("June anchor(Jun30): superseding NEW rule wins (0.20), old excluded",
+      AB.resolve_holdback_rule([old_r, new_r], {}, JUN_S, JUN_E, anchor=JUN_E)['value'] == 0.20)
+check("July anchor(Jul31): NEW rule (0.20), old long gone",
+      AB.resolve_holdback_rule([old_r, new_r], {}, JUL_S, JUL_E, anchor=JUL_E)['value'] == 0.20)
+# a mid-period-superseded margin: the anchor rule (in effect on period_end) governs the whole invoice
+c, LID, store = make_link_scenario()
+A.upsert_margin(c, MASTER, LID, {'equip_class_value': 'device', 'method': 'flat', 'value': 10, 'effective_end': '2026-06-15'}, who='u')
+A.upsert_margin(c, MASTER, LID, {'equip_class_value': 'device', 'method': 'flat', 'value': 25, 'effective_start': '2026-06-16'}, who='u')
+A.add_transfer(c, MASTER, LID, {'equip_class_value': 'device', 'qty': 2, 'period': 'June 2026'}, who='u')
+gc7 = A.generate_invoice(c, MASTER, LID, 'June 2026', who='u')
+check("invoice uses the period-anchor margin (25×2=50, NOT the ended 10)", gc7['totals']['equipment_margin_total'] == 50.0)
+
+
+# ═══ GATE-1 REWORK — m1 regen releases stamps pointing at THIS draft ══════════════════════════════
+print("\n(R-m1) draft regen releases its own stamps (crash-window under-bill fix)")
+c, LID, store = make_link_scenario()
+A.upsert_margin(c, MASTER, LID, {'equip_class_value': 'device', 'method': 'flat', 'value': 7}, who='u')
+A.add_transfer(c, MASTER, LID, {'equip_class_value': 'device', 'qty': 1, 'period': 'June 2026'}, who='u')
+g = A.generate_invoice(c, MASTER, LID, 'June 2026', who='u')
+# simulate a CRASHED issue: stamp the transfer to this draft WITHOUT flipping status to issued
+tstore = c.store['agency_equipment_transfer']
+tstore[0]['billed_invoice_id'] = g['invoice_id']
+# a naive regen would exclude the stamped transfer → under-bill (0); the fix releases it first → 7 again
+g2 = A.generate_invoice(c, MASTER, LID, 'June 2026', who='u')
+check("regen released the self-stamp → transfer re-billed (7, not 0)", g2['totals']['equipment_margin_total'] == 7.0)
+
+
+# ═══ GATE-1 REWORK — m2 one_time re-bills after VOID (symmetric with transfer release) ════════════
+print("\n(R-m2) one_time re-bills after void; void doesn't block re-draft")
+c, LID, store = make_link_scenario()
+A.upsert_charge(c, MASTER, LID, {'label': 'Signage', 'method': 'flat', 'value': 300, 'cadence': 'one_time'}, who='u')
+gj = A.generate_invoice(c, MASTER, LID, 'June 2026', who='u')
+check("June bills one_time 300", gj['totals']['other_charge_total'] == 300.0)
+A.issue_invoice(c, MASTER, gj['invoice_id'], who='u')
+A.void_invoice(c, MASTER, gj['invoice_id'], who='u')
+# same period re-draft is NOT blocked by the void, and the one_time is billable again
+gj2 = A.generate_invoice(c, MASTER, LID, 'June 2026', who='u')
+check("void does NOT block re-draft (not immutable)", gj2.get('immutable') is not True)
+check("one_time re-bills after its invoice was voided (300)", gj2['totals']['other_charge_total'] == 300.0)
+# but a one_time on a LIVE (issued, non-void) invoice does NOT re-bill in the next period
+A.issue_invoice(c, MASTER, gj2['invoice_id'], who='u')
+gjul = A.generate_invoice(c, MASTER, LID, 'July 2026', who='u')
+check("one_time on a live invoice does NOT re-bill next period (0)", gjul['totals']['other_charge_total'] == 0.0)
+
+
+# ═══ GATE-1 REWORK — m4 reject-then-issue refuses a stale bill ════════════════════════════════════
+print("\n(R-m4) issue re-checks confirm_status (reject-then-issue → 409)")
+c, LID, store = make_link_scenario()
+A.upsert_margin(c, MASTER, LID, {'equip_class_value': 'device', 'method': 'flat', 'value': 9}, who='u')
+tr = A.add_transfer(c, MASTER, LID, {'equip_class_value': 'device', 'qty': 1, 'period': 'June 2026'}, who='u')['transfer']
+gm = A.generate_invoice(c, MASTER, LID, 'June 2026', who='u')
+check("draft billed the confirmed transfer (9)", gm['totals']['equipment_margin_total'] == 9.0)
+# reject the transfer AFTER the draft was computed
+A.confirm_transfer(c, MASTER, tr['id'], 'reject', who='mgr')
+raises(409, lambda: A.issue_invoice(c, MASTER, gm['invoice_id'], who='u'), "issue refuses when a billed transfer was rejected (409)")
+# regenerate drops the line, then issue succeeds
+gm2 = A.generate_invoice(c, MASTER, LID, 'June 2026', who='u')
+check("regen drops the rejected transfer's line (margin 0)", gm2['totals']['equipment_margin_total'] == 0.0)
+check("issue now succeeds", A.issue_invoice(c, MASTER, gm['invoice_id'], who='u')['status'] == 'issued')
 
 
 print(f"\n==== agency_phase1_proof: {PASS} passed, {FAIL} failed ====")

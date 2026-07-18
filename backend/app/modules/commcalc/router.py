@@ -14818,6 +14818,8 @@ def custom_report_defs_delete(def_id: str, org_id: str = ORG_ID):
 # (middleware-rewritten query param). Money-touching CONFIG/INVOICES only — never touches rep_commissions /
 # calculator / commission_engine.  Tables: mig 220 (link/carrier/store/holdback/margin/charge), mig 222
 # (invoice/line/transfer).  Design: docs/designs/agency-module-schema.md (REV C).
+# WRITE POSTURE (Gate-1 M3): EVERY write is gated on the 'agency' settings area via _require_agency_edit
+# (core _can_edit_setting; degrades admin-only until the area is registered — NEEDS CORE). Reads = require_org.
 # ════════════════════════════════════════════════════════════════════════════════════════════════════
 from app.modules.commcalc import agency as _agency
 
@@ -14832,10 +14834,11 @@ def _agency_who(authorization: str, org_id: str):
 
 
 def _can_edit_agency(authorization: str, org_id: str) -> bool:
-    """Whether the caller may CONFIRM/REJECT OCR transfer rows (N3). Gated on the 'agency' settings area via
-    core _can_edit_setting — same per-setting pattern + graceful degrade as the classification gate: until the
-    area is registered in core.SETTING_AREAS + the Roles UI (NEEDS CORE) it DEGRADES to admin-only
-    (scope='all'/role='admin'). Unresolved caller / RBAC off → True (module's require_org-only posture)."""
+    """Whether the caller may WRITE agency config / confirm-reject OCR rows (N3 + Gate-1 M1/M2/M3). Gated on
+    the 'agency' settings area via core _can_edit_setting — same per-setting pattern + graceful degrade as the
+    classification gate: until the area is registered in core.SETTING_AREAS + the Roles UI (NEEDS CORE) it
+    DEGRADES to admin-only (scope='all'/role='admin'). Unresolved caller / RBAC off → True (module's
+    require_org-only posture, so the house is never locked out of its own config)."""
     try:
         from app.modules.core.router import _uid_from_token, _resolve_caller, _can_edit_setting
     except Exception:
@@ -14850,6 +14853,12 @@ def _can_edit_agency(authorization: str, org_id: str) -> bool:
     return bool(_can_edit_setting(caller, 'agency'))
 
 
+def _require_agency_edit(authorization: str, org_id: str):
+    """Gate-1 M3: raise 403 unless the caller may edit agency config. Applied to EVERY agency write."""
+    if not _can_edit_agency(authorization, org_id):
+        raise HTTPException(403, "you don't have permission to edit agency configuration (agency setting)")
+
+
 # ── links ────────────────────────────────────────────────────────────────────────────────────────────
 @router.get("/agency/links")
 def agency_list_links(org_id: str = ORG_ID):
@@ -14860,6 +14869,7 @@ def agency_list_links(org_id: str = ORG_ID):
 @router.post("/agency/links")
 def agency_upsert_link(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.upsert_link(sb(), org_id, body, _agency_who(authorization, org_id))
 
 
@@ -14870,27 +14880,32 @@ def agency_get_link(link_id: str, org_id: str = ORG_ID):
 
 
 @router.delete("/agency/links/{link_id}")
-def agency_delete_link(link_id: str, org_id: str = ORG_ID):
+def agency_delete_link(link_id: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.delete_link(sb(), org_id, link_id)
 
 
 @router.post("/agency/links/{link_id}/consent")
 def agency_set_consent(link_id: str, body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)   # M2: master-recorded (offline) consent is admin-gated
     return _agency.set_consent(sb(), org_id, link_id, (body.get("status") or ""), _agency_who(authorization, org_id))
 
 
 @router.post("/agency/links/{link_id}/carriers")
 def agency_set_carriers(link_id: str, body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.set_carriers(sb(), org_id, link_id, (body.get("carrier_ids") or []), _agency_who(authorization, org_id))
 
 
-@router.get("/agency/sub-candidates")
-def agency_sub_candidates(org_id: str = ORG_ID):
+@router.get("/agency/sub-lookup")
+def agency_sub_lookup(q: str = "", org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """M1: EXACT-MATCH tenant lookup (anti-enumeration) — gated; returns one tenant or empty. NO browse-all."""
     require_org(org_id)
-    return _agency.sub_candidates(sb(), org_id)
+    _require_agency_edit(authorization, org_id)
+    return _agency.lookup_sub_tenant(sb(), org_id, q)
 
 
 @router.get("/agency/scope-options")
@@ -14915,12 +14930,14 @@ def agency_store_candidates(link_id: str, org_id: str = ORG_ID):
 @router.post("/agency/links/{link_id}/stores")
 def agency_upsert_store(link_id: str, body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.upsert_store(sb(), org_id, link_id, body, _agency_who(authorization, org_id))
 
 
 @router.delete("/agency/links/{link_id}/stores/{sid}")
-def agency_delete_store(link_id: str, sid: str, org_id: str = ORG_ID):
+def agency_delete_store(link_id: str, sid: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.delete_store(sb(), org_id, link_id, sid)
 
 
@@ -14934,12 +14951,14 @@ def agency_list_holdback(link_id: str, org_id: str = ORG_ID):
 @router.post("/agency/links/{link_id}/holdback-rules")
 def agency_upsert_holdback(link_id: str, body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.upsert_holdback_rule(sb(), org_id, link_id, body, _agency_who(authorization, org_id))
 
 
 @router.delete("/agency/links/{link_id}/holdback-rules/{rid}")
-def agency_delete_holdback(link_id: str, rid: str, org_id: str = ORG_ID):
+def agency_delete_holdback(link_id: str, rid: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.delete_holdback_rule(sb(), org_id, link_id, rid)
 
 
@@ -14953,12 +14972,14 @@ def agency_list_margins(link_id: str, org_id: str = ORG_ID):
 @router.post("/agency/links/{link_id}/equipment-margins")
 def agency_upsert_margin(link_id: str, body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.upsert_margin(sb(), org_id, link_id, body, _agency_who(authorization, org_id))
 
 
 @router.delete("/agency/links/{link_id}/equipment-margins/{mid}")
-def agency_delete_margin(link_id: str, mid: str, org_id: str = ORG_ID):
+def agency_delete_margin(link_id: str, mid: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.delete_margin(sb(), org_id, link_id, mid)
 
 
@@ -14972,12 +14993,14 @@ def agency_list_charges(link_id: str, org_id: str = ORG_ID):
 @router.post("/agency/links/{link_id}/charges")
 def agency_upsert_charge(link_id: str, body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.upsert_charge(sb(), org_id, link_id, body, _agency_who(authorization, org_id))
 
 
 @router.delete("/agency/links/{link_id}/charges/{cid}")
-def agency_delete_charge(link_id: str, cid: str, org_id: str = ORG_ID):
+def agency_delete_charge(link_id: str, cid: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.delete_charge(sb(), org_id, link_id, cid)
 
 
@@ -14990,7 +15013,10 @@ def agency_list_transfers(link_id: str, period: str = "", org_id: str = ORG_ID):
 
 @router.post("/agency/links/{link_id}/transfers")
 def agency_add_transfer(link_id: str, body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    # Gate-1 M3: manual intake is gated; a gated caller's manual row lands confirm_status='confirmed'
+    # deliberately (a human with the agency permission typed it).
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.add_transfer(sb(), org_id, link_id, body, _agency_who(authorization, org_id))
 
 
@@ -14998,6 +15024,8 @@ def agency_add_transfer(link_id: str, body: dict, org_id: str = ORG_ID, authoriz
 async def agency_upload_csv(link_id: str, file: UploadFile = File(...), org_id: str = ORG_ID,
                             authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
+    _agency._get_link(sb(), org_id, link_id)   # m3: validate link/org BEFORE parsing
     data = await file.read()
     try:
         records = _agency.parse_csv_bytes(data)
@@ -15010,6 +15038,8 @@ async def agency_upload_csv(link_id: str, file: UploadFile = File(...), org_id: 
 async def agency_upload_ocr(link_id: str, file: UploadFile = File(...), period: str = Form(""),
                             org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
+    _agency._get_link(sb(), org_id, link_id)   # m3: validate link/org BEFORE the bucket write + Anthropic call
     data = await file.read()
     path, ok, notice = _agency._upload_agency_doc(link_id, file.filename, data, file.content_type)
     rows, model, conf = _agency._ocr_parse_transfer(data, file.filename, file.content_type)
@@ -15026,16 +15056,14 @@ async def agency_upload_ocr(link_id: str, file: UploadFile = File(...), period: 
 @router.post("/agency/transfers/{tid}/confirm")
 def agency_confirm_transfer(tid: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
-    if not _can_edit_agency(authorization, org_id):
-        raise HTTPException(403, "you don't have permission to confirm equipment transfers (agency setting)")
+    _require_agency_edit(authorization, org_id)
     return _agency.confirm_transfer(sb(), org_id, tid, "confirm", _agency_who(authorization, org_id))
 
 
 @router.post("/agency/transfers/{tid}/reject")
 def agency_reject_transfer(tid: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
-    if not _can_edit_agency(authorization, org_id):
-        raise HTTPException(403, "you don't have permission to reject equipment transfers (agency setting)")
+    _require_agency_edit(authorization, org_id)
     return _agency.confirm_transfer(sb(), org_id, tid, "reject", _agency_who(authorization, org_id))
 
 
@@ -15044,6 +15072,7 @@ def agency_reject_transfer(tid: str, org_id: str = ORG_ID, authorization: str = 
 def agency_generate_invoice(link_id: str, body: dict = None, period: str = "", org_id: str = ORG_ID,
                             authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     per = period or ((body or {}).get("period") or "")
     if not per:
         raise HTTPException(400, "period is required")
@@ -15065,10 +15094,12 @@ def agency_get_invoice(invoice_id: str, org_id: str = ORG_ID):
 @router.post("/agency/invoices/{invoice_id}/issue")
 def agency_issue_invoice(invoice_id: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.issue_invoice(sb(), org_id, invoice_id, _agency_who(authorization, org_id))
 
 
 @router.post("/agency/invoices/{invoice_id}/void")
 def agency_void_invoice(invoice_id: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_agency_edit(authorization, org_id)
     return _agency.void_invoice(sb(), org_id, invoice_id, _agency_who(authorization, org_id))

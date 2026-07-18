@@ -61,13 +61,22 @@ def parse_period_bounds(period):
     return (_date(yr, mo, 1), _date(yr, mo, days), days)
 
 
-def is_effective(row, period_start, period_end):
-    """A config row (is_active + effective_start/effective_end) overlaps the period window.
-    NULL start = open-before, NULL end = open-after."""
+def is_effective(row, period_start, period_end, anchor=None):
+    """Whether a config row (is_active + effective_start/effective_end) applies.
+    C7 period_anchor (the ONLY supported mode; `anchor` given = the period's LAST day): the row must be
+    in effect ON the anchor date — so a rule that ENDED before period-end never applies and a superseded
+    rate cannot win. When `anchor` is None a plain window OVERLAP is used (kept for callers that don't
+    resolve rates)."""
     if not row.get("is_active", True):
         return False
     es = _as_date(row.get("effective_start"))
     ee = _as_date(row.get("effective_end"))
+    if anchor is not None:
+        if es is not None and es > anchor:
+            return False
+        if ee is not None and ee < anchor:
+            return False
+        return True
     if period_end is not None and es is not None and es > period_end:
         return False
     if period_start is not None and ee is not None and ee < period_start:
@@ -91,13 +100,13 @@ def _carrier_ok(rule_carrier, ctx_carrier):
     return rule_carrier == ctx_carrier
 
 
-def resolve_holdback_rule(rules, ctx, period_start=None, period_end=None):
+def resolve_holdback_rule(rules, ctx, period_start=None, period_end=None, anchor=None):
     """C1: pick exactly one active/effective/carrier-matching holdback rule for a carrier-receipt line.
     ctx keys: carrier_id, ledger_bucket, commission_component, statement_line_type, product_class.
-    Returns the winning rule dict, or None."""
+    `anchor` (period_end) enforces C7 period-anchor effectiveness. Returns the winning rule dict, or None."""
     cand = []
     for r in rules or []:
-        if not is_effective(r, period_start, period_end):
+        if not is_effective(r, period_start, period_end, anchor):
             continue
         if not _carrier_ok(r.get("carrier_id"), ctx.get("carrier_id")):
             continue
@@ -139,13 +148,14 @@ def holdback_amount(rule, gross, qty=1, activations=1):
 
 
 # ── C2: equipment margin resolution + amount ────────────────────────────────────────────────────────
-def resolve_equipment_margin(margins, transfer, period_start=None, period_end=None):
-    """C2: the active/effective/carrier-matching agency_equipment_margin for a transfer's equip class."""
+def resolve_equipment_margin(margins, transfer, period_start=None, period_end=None, anchor=None):
+    """C2: the active/effective/carrier-matching agency_equipment_margin for a transfer's equip class.
+    `anchor` (period_end) enforces C7 period-anchor effectiveness."""
     ev = transfer.get("equip_class_value") or ""
     tc = transfer.get("carrier_id")
     cand = []
     for m in margins or []:
-        if not is_effective(m, period_start, period_end):
+        if not is_effective(m, period_start, period_end, anchor):
             continue
         if not _carrier_ok(m.get("carrier_id"), tc):
             continue
@@ -212,7 +222,8 @@ def compute_invoice_lines(link, stores, charges, margins, transfers, period):
     invoice_subtotal computes on the base subtotal (equipment + store-fee + flat other) to avoid a
     self-referential basis. Returns the header/line payload dict."""
     ps, pe, pdays = parse_period_bounds(period)
-    active = [c for c in (charges or []) if is_effective(c, ps, pe)]
+    anchor = pe   # C7 period_anchor (only supported mode): the rate in effect on the period's LAST day governs
+    active = [c for c in (charges or []) if is_effective(c, ps, pe, anchor)]
     store_by_id = {s.get("id"): s for s in (stores or [])}
     lines = []
     sort = 0
@@ -221,7 +232,7 @@ def compute_invoice_lines(link, stores, charges, margins, transfers, period):
     eq_total = 0.0
     for t in sorted(transfers or [], key=lambda x: (str(x.get("equip_class_value") or ""),
                                                     str(x.get("created_at") or ""), str(x.get("id") or ""))):
-        m = resolve_equipment_margin(margins, t, ps, pe)
+        m = resolve_equipment_margin(margins, t, ps, pe, anchor)
         if not m:
             continue
         amt = equipment_margin_amount(m, t)
