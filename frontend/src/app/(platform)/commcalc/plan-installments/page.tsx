@@ -33,6 +33,8 @@ const M1_GATES = [
   { v: 'activation_payment', l: 'Paid at activation — customer paid their 1st month at the sale' },
 ]
 const MATCH_FIELDS = ['any', 'contract_type', 'department', 'category', 'product_desc', 'sku', 'trans_type']
+// The line classifications the MRC mapping assigns (shared mig-210 sales vocabulary; product_mrc.classification).
+const CLASSIFICATIONS = ['accessory', 'activation', 'upgrade', 'swap', 'bill_payment', 'rebate', 'misc_other']
 const blankLine = (i: number): Line => ({ month_index: i, payout_kind: 'flat', flat_amount: '', mrc_pct: '', mrc_source: 'product_catalog' })
 const blankSched = (): Sched => ({
   plan_id: '', name: '', num_months: 3, trigger_match_field: 'any', trigger_match_op: 'equals',
@@ -86,6 +88,10 @@ export default function PlanInstallmentsPage() {
   const [matcher, setMatcher] = useState<Matcher | null>(null)
   const [matcherOpts, setMatcherOpts] = useState<{ departments: string[]; categories: string[]; value_fields: string[]; is_default: boolean }>({ departments: [], categories: [], value_fields: ['ext_price', 'gp'], is_default: true })
   const [cands, setCands] = useState<any[]>([])
+  const [candFilter, setCandFilter] = useState('')                 // write-in filter ("rtr")
+  const [pickedCands, setPickedCands] = useState<Set<string>>(new Set())  // selected plan strings (bulk)
+  const [bulkCat, setBulkCat] = useState('')                       // one category → all selected
+  const [conflicts, setConflicts] = useState<any[]>([])            // cross-menu guard result
   const [preview, setPreview] = useState<any>(null)
   const [audit, setAudit] = useState<{ sid: string; rows: any[] } | null>(null)
   const [showAdvMatcher, setShowAdvMatcher] = useState(false)
@@ -195,6 +201,34 @@ export default function PlanInstallmentsPage() {
     try {
       const r = await api(`/api/v1/commcalc/mrc-mapping/confirm?org_id=${ORG_ID}`, { method: 'POST', body: JSON.stringify({ items }) })
       setMsg(`Confirmed ${r?.saved || 0} MRC mapping(s).`); loadCandidates()
+    } catch (e: any) { setMsg(e.message) }
+  }
+
+  // Bulk-assign ONE category to every selected (filtered) plan in a single call. A dry_run pre-flight
+  // fetches the cross-menu conflict list (api() flattens error bodies), then the real write applies —
+  // the backend re-checks the guard and 409s independently, so nothing diverges. product_mrc.classification
+  // is display/config (not a pay input); nothing changes pay until Run Calculation.
+  async function applyBulkClassify() {
+    setMsg(''); setConflicts([])
+    if (pickedCands.size === 0) { setMsg('Select some products first (checkboxes).'); return }
+    if (!bulkCat) { setMsg('Pick a category to assign.'); return }
+    const items = cands.filter(c => pickedCands.has(c.plan)).map(c => ({
+      plan: c.plan,
+      mrc: c.confirmed_mrc != null ? c.confirmed_mrc : c.prefill_mrc,
+      prefill_mrc: c.prefill_mrc,
+    }))
+    try {
+      const chk = await api(`/api/v1/commcalc/mrc-mapping/bulk-classify?org_id=${ORG_ID}`, {
+        method: 'POST', body: JSON.stringify({ items, classification: bulkCat, dry_run: true }) })
+      if (chk?.conflicts?.length) {
+        setConflicts(chk.conflicts)
+        setMsg(`Blocked — ${chk.conflicts.length} product(s) already have a different category on the Item / Model Mapping menu. Nothing saved.`)
+        return
+      }
+      const r = await api(`/api/v1/commcalc/mrc-mapping/bulk-classify?org_id=${ORG_ID}`, {
+        method: 'POST', body: JSON.stringify({ items, classification: bulkCat }) })
+      setMsg(`Assigned "${bulkCat}" to ${r?.applied || 0} mapping(s). Takes effect on the next Run Calculation.`)
+      setPickedCands(new Set()); setBulkCat(''); loadCandidates()
     } catch (e: any) { setMsg(e.message) }
   }
 
@@ -423,43 +457,87 @@ export default function PlanInstallmentsPage() {
         <button className="btn btn-primary" onClick={saveSched}>{draft.id ? 'Update schedule' : 'Save schedule'}</button>
       </div>
 
-      {/* ── MRC mapping (classification-first) ──────────────────────────────────────────── */}
+      {/* ── MRC mapping (classification-first) — write-in filter + bulk assign + cross-menu guard ── */}
       <div className="card" style={{ marginBottom: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
           <div style={{ fontWeight: 600 }}>MRC mapping — {period} (auto-classified + $ prefilled from the description)</div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn" onClick={loadCandidates}>Scan sales</button>
             <button className="btn btn-primary" onClick={confirmMrc} disabled={!cands.length}>Confirm mappings</button>
           </div>
         </div>
-        {cands.length > 0 ? (
-          <div className="table-wrapper" style={{ border: 'none' }}>
-            <table>
-              <thead><tr><th>Plan / product</th><th>Lines</th><th>Classification</th><th>MRC ($)</th><th>Confirmed</th></tr></thead>
-              <tbody>
-                {cands.map((c, i) => (
-                  <tr key={i}>
-                    <td style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.plan}</td>
-                    <td>{c.count}</td>
-                    <td>
-                      <select style={sel} value={c.classification || 'misc_other'}
-                        onChange={e => setCands(cs => cs.map((x, k) => k === i ? { ...x, classification: e.target.value } : x))}>
-                        {['accessory', 'activation', 'upgrade', 'swap', 'bill_payment', 'rebate', 'misc_other'].map(o => <option key={o} value={o}>{o}</option>)}
-                      </select>
-                    </td>
-                    <td>
-                      <input style={{ ...sel, width: 90 }}
-                        value={c.confirmed_mrc != null ? c.confirmed_mrc : (c.prefill_mrc != null ? c.prefill_mrc : '')}
-                        placeholder={c.prefill_mrc != null ? String(c.prefill_mrc) : '—'}
-                        onChange={e => setCands(cs => cs.map((x, k) => k === i ? { ...x, confirmed_mrc: e.target.value === '' ? null : Number(e.target.value) } : x))} />
-                    </td>
-                    <td>{c.confirmed ? <span className="badge badge-green">✓</span> : <span className="badge badge-amber">prefill</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : <div style={{ color: 'var(--text3)', fontSize: 13 }}>Scan a period's sales to classify plan lines and prefill their MRC.</div>}
+        {cands.length > 0 ? (() => {
+          const shown = cands.filter(c => !candFilter.trim() || String(c.plan || '').toLowerCase().includes(candFilter.trim().toLowerCase()))
+          const shownKeys = shown.map(c => c.plan)
+          const allShownPicked = shown.length > 0 && shown.every(c => pickedCands.has(c.plan))
+          const toggleAllShown = () => setPickedCands(p => { const n = new Set(p); if (allShownPicked) shownKeys.forEach(k => n.delete(k)); else shownKeys.forEach(k => n.add(k)); return n })
+          const toggleOne = (k: string) => setPickedCands(p => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n })
+          return (
+          <>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+              <input style={{ ...sel, width: 240 }} placeholder="Filter plans… (e.g. rtr)" value={candFilter}
+                onChange={e => setCandFilter(e.target.value)} aria-label="Filter plans" />
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>{shown.length} of {cands.length} shown · {pickedCands.size} selected</span>
+              {candFilter && <button className="btn" style={{ fontSize: 12 }} onClick={() => setCandFilter('')}>clear</button>}
+            </div>
+            {pickedCands.size > 0 && (
+              <div className="card" style={{ padding: 10, marginBottom: 10, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', borderLeft: '4px solid var(--accent)' }}>
+                <b style={{ fontSize: 13 }}>{pickedCands.size} selected →</b>
+                <span style={{ fontSize: 12 }}>category</span>
+                <select style={sel} value={bulkCat} onChange={e => setBulkCat(e.target.value)} aria-label="Bulk category">
+                  <option value="">— pick —</option>
+                  {CLASSIFICATIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+                <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={applyBulkClassify} disabled={!bulkCat}>Assign to {pickedCands.size}</button>
+                <button className="btn" style={{ fontSize: 13 }} onClick={() => setPickedCands(new Set())}>Clear</button>
+              </div>
+            )}
+            {conflicts.length > 0 && (
+              <div className="card" style={{ padding: 10, marginBottom: 10, borderLeft: '4px solid #dc2626', fontSize: 12 }}>
+                <b>⚠️ Cross-menu conflict — nothing was saved.</b> These products already carry a different category on the{' '}
+                <a href="/commcalc/item-mapping" style={{ color: 'var(--accent)' }}>Item / Model Mapping</a> menu. Resolve the divergence there first, or change your selection.
+                <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                  {conflicts.map((c, i) => (
+                    <li key={i}>&quot;{c.plan}&quot; — assigning <b>{c.assigning}</b>, but it is <b>{c.other_category}</b> on {c.other_menu} ({c.other_key})</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="table-wrapper" style={{ border: 'none' }}>
+              <table>
+                <thead><tr>
+                  <th style={{ width: 28 }}><input type="checkbox" checked={allShownPicked} onChange={toggleAllShown} aria-label="Select all shown" /></th>
+                  <th>Plan / product</th><th>Lines</th><th>Classification</th><th>MRC ($)</th><th>Confirmed</th>
+                </tr></thead>
+                <tbody>
+                  {shown.map((c) => {
+                    const i = cands.indexOf(c)
+                    return (
+                    <tr key={i} style={pickedCands.has(c.plan) ? { background: 'var(--surface2)' } : undefined}>
+                      <td style={{ textAlign: 'center' }}><input type="checkbox" checked={pickedCands.has(c.plan)} onChange={() => toggleOne(c.plan)} aria-label={`Select ${c.plan}`} /></td>
+                      <td style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.plan}</td>
+                      <td>{c.count}</td>
+                      <td>
+                        <select style={sel} value={c.classification || 'misc_other'}
+                          onChange={e => setCands(cs => cs.map((x, k) => k === i ? { ...x, classification: e.target.value } : x))}>
+                          {CLASSIFICATIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                        </select>
+                      </td>
+                      <td>
+                        <input style={{ ...sel, width: 90 }}
+                          value={c.confirmed_mrc != null ? c.confirmed_mrc : (c.prefill_mrc != null ? c.prefill_mrc : '')}
+                          placeholder={c.prefill_mrc != null ? String(c.prefill_mrc) : '—'}
+                          onChange={e => setCands(cs => cs.map((x, k) => k === i ? { ...x, confirmed_mrc: e.target.value === '' ? null : Number(e.target.value) } : x))} />
+                      </td>
+                      <td>{c.confirmed ? <span className="badge badge-green">✓</span> : <span className="badge badge-amber">prefill</span>}</td>
+                    </tr>
+                  )})}
+                </tbody>
+              </table>
+            </div>
+          </>
+          )
+        })() : <div style={{ color: 'var(--text3)', fontSize: 13 }}>Scan a period's sales to classify plan lines and prefill their MRC.</div>}
       </div>
 
       {/* ── Preview ────────────────────────────────────────────────────────────────────── */}
