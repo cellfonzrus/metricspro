@@ -408,6 +408,68 @@ def get_payroll_by_store(month: str = None, authorization: str = Header(default=
     return {"month": month, "stores": sorted(rows, key=lambda x: x["store_code"])}
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# PAYROLL-TIME CHARGEBACKS (2026-07-22, owner-directed, MONEY-ADJACENT — shows/decides deductions on
+# the Payroll Report). `commcalc.ops_chargeback` + `commcalc.ops_chargeback_policy` are OWNED and
+# CREATED by mod-retail-ops in its own migration band; this router only READS rows and UPDATES their
+# status/decision fields — it never inserts a chargeback (detection/creation is
+# closing/ops_chargebacks.py's detect_missed_closings, called from the time-clock punch handlers
+# above). Every lookup degrades to an empty list / a clear 400 if that table isn't there yet, so a
+# pending migration on ANOTHER agent's branch never breaks this page.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+@router.get("/payroll-chargebacks")
+def payroll_chargebacks(month: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """This pay period's commcalc.ops_chargeback rows with applied_to='payroll' (missed-closing
+    chargebacks against an employee's pay) — read-only, org + store-RBAC scoped like /payroll."""
+    lo = hi = None
+    if month:
+        parts = str(month).split("-")
+        y, m = int(parts[0]), int(parts[1])
+        lo, hi = f"{month}-01", (f"{y + 1}-01-01" if m == 12 else f"{y}-{m + 1:02d}-01")
+    try:
+        q = (get_supabase().schema("commcalc").table("ops_chargeback").select("*")
+             .eq("org_id", org_id).eq("applied_to", "payroll"))
+        if lo and hi:
+            q = q.gte("incident_date", lo).lt("incident_date", hi)
+        rows = q.order("incident_date", desc=True).limit(2000).execute().data or []
+    except Exception:
+        return {"items": []}
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
+    for r in rows:
+        r["reason_label"] = _chargeback_reason_label(r.get("reason"))
+    return {"items": rows}
+
+
+@router.post("/payroll-chargebacks/{cb_id}/decision")
+def decide_payroll_chargeback(cb_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """MANAGEMENT-GATED (same _require_manager tier as the shift-extension/DM-approval endpoints
+    above): POST a chargeback (status='posted' — becomes a visible deduction on that employee's
+    payroll row) or WAIVE it (status='waived' — never deducts). Body: {decision: 'post'|'waive',
+    period?}. Only ever UPDATEs an existing, org+applied_to-scoped row — never inserts one."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    decision = (body.get("decision") or "").strip().lower()
+    if decision not in ("post", "waive"):
+        raise HTTPException(400, "decision must be 'post' or 'waive'")
+    try:
+        rows = (get_supabase().schema("commcalc").table("ops_chargeback").select("id")
+                .eq("id", cb_id).eq("org_id", org_id).eq("applied_to", "payroll")
+                .limit(1).execute().data) or []
+    except Exception:
+        raise HTTPException(400, "Chargebacks aren't available yet — pending a migration on another module.")
+    if not rows:
+        raise HTTPException(404, "unknown chargeback")
+    upd = {"status": "posted" if decision == "post" else "waived",
+           "decided_by": mgr.get("email"), "decided_at": datetime.now(timezone.utc).isoformat()}
+    if decision == "post":
+        upd["posted_ref"] = (body.get("period") or "").strip() or None
+    (get_supabase().schema("commcalc").table("ops_chargeback").update(upd)
+     .eq("id", cb_id).eq("org_id", org_id).execute())
+    return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
+
+
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
 EMP_FIELDS = ("name", "home_store", "role", "pay_rate", "is_active", "email",
@@ -1108,8 +1170,12 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
                 "ack_date": work_date, "imei_count": int(body.get("priority_ack_count") or 0)}).execute()
         except Exception:
             pass
-    return {"success": True, "data": {"time": _fmt_time(saved.get("clock_in"), org_id), "entry_id": saved.get("id"),
+    resp = {"success": True, "data": {"time": _fmt_time(saved.get("clock_in"), org_id), "entry_id": saved.get("id"),
                                       "store_code": req_store}}
+    notice = _missed_closing_notice(org_id, employee_id)
+    if notice:
+        resp["missed_closing_notice"] = notice
+    return resp
 
 
 @router.get("/timeclock/allowed-stores")
@@ -1166,13 +1232,44 @@ def clock_in_override(body: dict, authorization: str = Header(default=""), org_i
             "data": {"time": _fmt_time(saved.get("clock_in"), org_id), "entry_id": saved.get("id"), "store_code": store_code}}
 
 
+def _missed_closing_notice(org_id, employee_id):
+    """Best-effort, NON-blocking: surface this employee's OPEN pending missed-closing chargeback
+    items as a punch-time notice (never a block). Built in parallel by mod-retail-ops
+    (closing/ops_chargebacks.py, commcalc.ops_chargeback) — degrade to no notice at all if that
+    module/table isn't there yet (parallel parked branches must stay independently deployable)."""
+    try:
+        from app.modules.closing.ops_chargebacks import detect_missed_closings
+        items = detect_missed_closings(org_id, employee_id=employee_id) or []
+        if not items:
+            return None
+        dates = sorted({str(i.get("incident_date"))[:10] for i in items if i.get("incident_date")})
+        stores = sorted({str(i.get("store_code")) for i in items if i.get("store_code")})
+        when = ", ".join(dates) if dates else "a recent shift"
+        where = f" at {', '.join(stores)}" if stores else ""
+        plural = "s" if len(items) != 1 else ""
+        return {"message": f"⚠ You have {len(items)} missed store closing{plural}{where} "
+                            f"({when}) still to complete.",
+                "items": items}
+    except Exception:
+        return None
+
+
 def _closing_gate_block(org_id, employee_id, store_code, work_date=None):
-    """Return a block message if this employee is the ASSIGNED CLOSER for `store_code`, the tenant's
+    """Return a block message if this employee is the EFFECTIVE CLOSER for `store_code`, the tenant's
     closing gate is ON, and the store's daily closing for today is NOT yet submitted — else None.
     Cross-module: closings live in commcalc.daily_closing. Any lookup gap → no block (never trap a
     rep on a config/migration miss). NEVER gates a stale punch (work_date before today): the gate
     exists to hold the closer until TODAY's closing is in — applying it to an older open punch
-    deadlocks the employee (can't clock out = gated; can't clock in = 409 already-open)."""
+    deadlocks the employee (can't clock out = gated; can't clock in = 409 already-open).
+
+    EFFECTIVE CLOSER (2026-07-22, shared definition with mod-retail-ops' missed-closing detection):
+    workers = employees with a timelog punch at this store today.
+      (a) if the STATIC store_closer is among today's workers → only they are gated (unchanged from
+          the original mig-089 behavior: everyone else clocks out normally).
+      (b) else (the static closer is unconfigured OR simply didn't work here today) → the gate falls
+          to the LAST worker still clocked in at this store (no other employee has an open punch
+          here). Anyone else still clocked in passes — the gate will catch the true last-to-leave
+          when THEY try to clock out."""
     try:
         store = (store_code or "").strip()
         if not store:
@@ -1183,21 +1280,50 @@ def _closing_gate_block(org_id, employee_id, store_code, work_date=None):
         t = (sb().table("tenants").select("closing_gate_enabled").eq("org_id", org_id).limit(1).execute().data) or []
         if not (t and t[0].get("closing_gate_enabled")):
             return None
-        closer = (sb().table("store_closer").select("employee_id")
-                  .eq("org_id", org_id).eq("store_code", store).limit(1).execute().data) or []
-        if not closer:
-            return None
-        ids, _ = _emp_id_variants(org_id, employee_id)
-        if str(closer[0].get("employee_id") or "") not in ids:
-            return None  # not the assigned closer → not gated
         # match the submitted closing by NORMALIZED store code — a spelling variant between the
         # punch's store_code and the closing's must not leave the closer blocked after submitting
         done = (get_supabase().schema("commcalc").table("daily_closing").select("store_code")
                 .eq("org_id", org_id).eq("close_date", today).execute().data) or []
         if any(_norm_store(r.get("store_code")) == _norm_store(store) for r in done):
             return None
+
+        # Today's punches at THIS store (any employee, open or closed) — decides both whether the
+        # static closer worked today and, if not, who's the last one still clocked in.
+        todays_all = (sb().table("timelog").select("employee_id,clock_out,store_code")
+                      .eq("org_id", org_id).eq("work_date", today).execute().data) or []
+        store_punches = [p for p in todays_all if _norm_store(p.get("store_code")) == _norm_store(store)]
+
+        closer_rows = (sb().table("store_closer").select("employee_id")
+                       .eq("org_id", org_id).eq("store_code", store).limit(1).execute().data) or []
+        closer_id = str((closer_rows[0].get("employee_id") if closer_rows else "") or "").strip()
+
+        ids, _ = _emp_id_variants(org_id, employee_id)  # the CALLER's own id variants
+
+        closer_worked_today = False
+        if closer_id:
+            closer_ids, _ = _emp_id_variants(org_id, closer_id)
+            closer_worked_today = any(str(p.get("employee_id")) in closer_ids for p in store_punches)
+
+        if closer_id and closer_id in ids:
+            # (a) caller IS the static closer — gated iff they actually have a punch here today
+            # (they always do at this point: this very entry is one), matching the original rule.
+            if closer_worked_today:
+                return (f"The daily closing for {store} must be submitted before you clock out. "
+                        f"Complete the store closing, then clock out.")
+            return None
+        if closer_worked_today:
+            # the static closer worked here today and isn't this caller — THEY are gated, not this
+            # employee. Not our concern here; pass.
+            return None
+
+        # (b) effective-closer fallback: no static closer worked here today (unconfigured or
+        # absent) — gate only the LAST person still clocked in at this store.
+        others_open = [p for p in store_punches
+                       if p.get("clock_out") is None and str(p.get("employee_id")) not in ids]
+        if others_open:
+            return None  # someone else is still clocked in — they may end up the true last-to-leave
         return (f"The daily closing for {store} must be submitted before you clock out. "
-                f"Complete the store closing, then clock out.")
+                f"As the last one clocked in today, please complete the store closing, then clock out.")
     except Exception:
         return None
 
@@ -1249,8 +1375,12 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
     if note_add:
         upd["notes"] = ((entry.get("notes") or "") + " | " + note_add).strip(" |")
     sb().table("timelog").update(upd).eq("id", entry["id"]).execute()
-    return {"success": True, "data": {"time": _fmt_time(out_at.isoformat(), org_id), "hours": hours,
+    resp = {"success": True, "data": {"time": _fmt_time(out_at.isoformat(), org_id), "hours": hours,
                                       "clock_in": _fmt_time(entry.get("clock_in"), org_id)}}
+    notice = _missed_closing_notice(org_id, employee_id)
+    if notice:
+        resp["missed_closing_notice"] = notice
+    return resp
 
 
 @router.get("/timeclock/list")
@@ -1270,6 +1400,44 @@ def timeclock_list(start: str = "", end: str = "", employee_id: str = "", author
     for e in rows:
         e["selfie_url"] = _signed_selfie(e.get("selfie_path"))
     return rows
+
+
+_CHARGEBACK_REASON_LABELS = {
+    "missed_closing": "Missed store closing",
+    "missed_dm_verify": "Missed DM store-visit verification",
+}
+
+
+def _chargeback_reason_label(reason):
+    return _CHARGEBACK_REASON_LABELS.get(str(reason or ""), str(reason or "Chargeback").replace("_", " ").title())
+
+
+@router.get("/my-chargebacks")
+def my_chargebacks(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The SIGNED-IN employee's own commcalc.ops_chargeback rows — identity comes from the auth
+    token (SAME rule as every other self-view endpoint here: /timeclock/status, /timeclock/face…),
+    NEVER a client-supplied employee_id. Every reason (payroll or commission-side), for the
+    Employee Dashboard's "My Chargebacks" card. Degrades to an empty list if the table isn't there
+    yet (mod-retail-ops' migration, parallel parked branch)."""
+    org_id, employee_id = _caller_identity(authorization)
+    ids, _name = _emp_id_variants(org_id, employee_id)
+    try:
+        rows = (get_supabase().schema("commcalc").table("ops_chargeback").select("*")
+                .eq("org_id", org_id).in_("employee_id", list(ids))
+                .order("incident_date", desc=True).limit(500).execute().data) or []
+    except Exception:
+        return {"items": []}
+    items = [{
+        "id": r.get("id"),
+        "reason": r.get("reason"),
+        "reason_label": _chargeback_reason_label(r.get("reason")),
+        "store_code": r.get("store_code"),
+        "incident_date": r.get("incident_date"),
+        "amount": r.get("amount"),
+        "status": r.get("status"),
+        "applied_to": r.get("applied_to"),
+    } for r in rows]
+    return {"items": items}
 
 
 # ── kiosk clock-in config (configurable face-match sensitivity) ───────────────────────────────

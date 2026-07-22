@@ -4,6 +4,7 @@ import { api, fmt, parseLocalDate } from '@/lib/client'
 import ReportShell from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
 import PtoAccrualPanel from './PtoAccrualPanel'
+import PayrollChargebacksPanel from './PayrollChargebacksPanel'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 
@@ -30,6 +31,9 @@ export default function PayrollPage() {
   // RULE FIVE (§3d): store(s)/rep(s) multi-select, options org-scoped off the loaded roster (pick-don't-
   // type, §3b). Market has no column on this row; derived below via the store→market map.
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  // 2026-07-22, owner-directed, MONEY-ADJACENT: POSTED payroll chargebacks per employee this period
+  // (from PayrollChargebacksPanel — additive display only, never mutates /payroll's own numbers).
+  const [chargebacks, setChargebacks] = useState<Record<string, number>>({})
 
   function load() {
     setLoading(true)
@@ -89,6 +93,11 @@ export default function PayrollPage() {
     { header: 'Variance', field: 'variance', type: 'number', get: r => (r.actual_hours - r.scheduled_hours).toFixed(1) },
     { header: 'Scheduled Pay', field: 'scheduled_pay', money: true, get: r => r.scheduled_pay },
     { header: 'Actual Pay', field: 'actual_pay', money: true, get: r => r.actual_pay },
+    // Additive-only (2026-07-22): a POSTED payroll chargeback shown as a visible deduction + the
+    // resulting net — pending/waived chargebacks never deduct, so this is $0 for the common case
+    // (no chargebacks this period) and byte-identical to Actual Pay when nothing's posted.
+    { header: 'Chargebacks', field: 'chargeback_deduction', money: true, get: r => chargebacks[r.employee_id] || 0 },
+    { header: 'Net Pay', field: 'net_pay', money: true, get: r => Math.max(0, r.actual_pay - (chargebacks[r.employee_id] || 0)) },
   ]
 
   return (
@@ -130,6 +139,7 @@ export default function PayrollPage() {
       </div>
 
       <PtoAccrualPanel month={month} />
+      <PayrollChargebacksPanel month={month} onDeductions={setChargebacks} />
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>

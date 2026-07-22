@@ -9,6 +9,7 @@ import TeamSnapshot from '@/components/TeamSnapshot'
 import PortalReports from '@/components/PortalReports'
 import PortalHelpdesk from '@/components/PortalHelpdesk'
 import PortalOnboarding from '@/components/PortalOnboarding'
+import MyChargebacks from '@/components/MyChargebacks'
 
 // Employee kiosk (Part B / B4 + B2): mobile-first, standalone (no platform chrome). Now GUARDED by a
 // real login — an employee signs in with their email + password, so a punch is locked to the
@@ -53,6 +54,7 @@ export default function PortalPage() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [now, setNow] = useState<string>('')
+  const [missedClosing, setMissedClosing] = useState<{ message: string; items: any[] } | null>(null)   // ⚠ non-blocking notice from clock-in/out
 
   // their dashboard widgets
   const [dash, setDash] = useState<any>(null)
@@ -304,6 +306,7 @@ export default function PortalPage() {
         setMsg(res.message || 'Acknowledge the priority phones to clock in.')
       } else {
         setMsg(`✅ Clocked in at ${res?.data?.time || ''}${res?.data?.store_code ? ` · ${res.data.store_code}` : ''}.`)
+        setMissedClosing(res?.missed_closing_notice || null)
       }
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     finally { setBusy(false); closeCamera(); refreshStatus() }
@@ -318,6 +321,7 @@ export default function PortalPage() {
         gps_lat: prio.g?.lat, gps_lng: prio.g?.lng, gps_accuracy_m: prio.g?.acc,
         priority_ack: true, priority_ack_count: (prio.priority || []).length }) })
       setMsg(`✅ Clocked in at ${res?.data?.time || ''}${res?.data?.store_code ? ` · ${res.data.store_code}` : ''}.`)
+      setMissedClosing(res?.missed_closing_notice || null)
       setPrio(null)
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     finally { setBusy(false); refreshStatus() }
@@ -332,6 +336,7 @@ export default function PortalPage() {
         setMsg('⛔ ' + (res?.message || 'Clock-out blocked — you are still clocked in.'))
       } else {
         setMsg(`✅ Clocked out at ${res?.data?.time || ''} — ${res?.data?.hours ?? '?'} hrs.`)
+        setMissedClosing(res?.missed_closing_notice || null)
       }
     }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
@@ -464,6 +469,22 @@ export default function PortalPage() {
         )}
 
         {msg && <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: msg.startsWith('✅') ? '#e7f6ec' : '#fdeaea', fontSize: 14, textAlign: 'center' }}>{msg}</div>}
+
+        {/* ⚠ non-blocking notice: open pending missed-closing items for this employee (never blocks
+            the punch that just succeeded — informational only, so they know to go complete it). */}
+        {missedClosing && (
+          <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: '#fff7e6', border: '1px solid #f5a623' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>{missedClosing.message}</div>
+            {(missedClosing.items || []).length > 0 && (
+              <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: '#78350f' }}>
+                {missedClosing.items.slice(0, 5).map((it: any, i: number) => (
+                  <li key={it.id || i}>{it.store_code || 'store'} — {it.incident_date || ''}</li>
+                ))}
+              </ul>
+            )}
+            <div style={{ fontSize: 11, color: '#92400e', marginTop: 6 }}>Complete the store closing for these dates to clear this.</div>
+          </div>
+        )}
         <div style={{ marginTop: 16, fontSize: 12, color: '#999', textAlign: 'center' }}>
           {gpsRef.current.lat ? 'GPS ✓' : 'GPS off'} · {modelsReady ? 'face ✓' : faceError ? 'face ✗' : 'face …'}
         </div>
@@ -529,7 +550,10 @@ export default function PortalPage() {
       </div>
 
       {tab === 'dashboard' && (dash
-        ? <EmployeeWidgets data={dash} coach={coach} repTargets={repTargets} />
+        ? <>
+            <EmployeeWidgets data={dash} coach={coach} repTargets={repTargets} />
+            <MyChargebacks token={token} />
+          </>
         : dashErr
           ? <div className="card" style={{ padding: 18, color: 'var(--text2)', fontSize: 14 }}>{dashErr}</div>
           : <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><div className="spinner" /></div>)}

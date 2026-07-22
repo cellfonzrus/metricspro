@@ -4,6 +4,7 @@ import { api, ORG_ID, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import EmployeeWidgets from '@/components/EmployeeWidgets'
 import PortalReports from '@/components/PortalReports'
+import MyChargebacks from '@/components/MyChargebacks'
 
 const sel: React.CSSProperties = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, background: 'var(--surface)' }
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -78,7 +79,13 @@ export default function EmployeeDashboardPage() {
       {loading || !data ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (
-        <EmployeeWidgets data={data} coach={coach} repTargets={repTargets} />
+        <>
+          <EmployeeWidgets data={data} coach={coach} repTargets={repTargets} />
+          {/* "My Chargebacks" is always the SIGNED-IN caller's own list (identity from token, never
+              the picker's selection) — only render it while the picker is on the caller's own
+              record, so it never reads like it belongs to whichever employee is being viewed. */}
+          {eid && eid === (user?.employee_id || '') && <MyChargebacks />}
+        </>
       )}
 
       <div style={{ marginTop: 18 }}>
