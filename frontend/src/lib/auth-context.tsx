@@ -1,6 +1,6 @@
 'use client'
 import { createContext, useContext, useEffect, useState, useCallback } from 'react'
-import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken } from './client'
+import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken, get2faToken } from './client'
 import type { Permissions, CarrierRef } from './rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -61,6 +61,9 @@ type AuthState = {
   // Two-factor authentication (auth-hardening):
   twofa: TwoFactorState                                         // required/verified for the active tenant
   needs2fa: boolean                                            // required && !verified ⇒ OTP screen
+  // rbac_enabled when the ONE-call /core/bootstrap supplied it; null ⇒ unknown (older backend /
+  // waterfall path) → the Guard keeps its own direct /core/auth-config fetch as the fallback.
+  rbacEnabled: boolean | null
   passwordPolicy: PasswordPolicy | null                        // active tenant policy (client-side hints)
   defaultCc: string                                            // tenant default phone country code ('+1')
   startTwoFactor: (channel?: string) => Promise<any>           // request an OTP over a channel
@@ -74,7 +77,7 @@ const Ctx = createContext<AuthState>({
   active: false, tenant: null, token: null, tenants: [], activeOrg: null, needsTenantChoice: false,
   switchTenant: async () => {}, pendingConnections: [], connectTenant: async () => {},
   disableAndSwitch: async () => ({}), dismissPending: () => {},
-  twofa: { required: false, verified: true }, needs2fa: false, passwordPolicy: null, defaultCc: '+1',
+  twofa: { required: false, verified: true }, needs2fa: false, rbacEnabled: null, passwordPolicy: null, defaultCc: '+1',
   startTwoFactor: async () => ({}), verifyTwoFactor: async () => {},
   signOut: async () => {}, refresh: async () => {},
 })
@@ -98,12 +101,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [twofa, setTwofa] = useState<TwoFactorState>({ required: false, verified: true })
   const [passwordPolicy, setPasswordPolicy] = useState<PasswordPolicy | null>(null)
   const [defaultCc, setDefaultCc] = useState('+1')
+  const [rbacEnabled, setRbacEnabled] = useState<boolean | null>(null)
 
   const resetProfile = useCallback(() => {
     setUser(null); setPermissions({}); setProvisioned(false); setActive(false)
     setTenant(null); setCarriers([]); setSessionOrgId(null)
     setTwofa({ required: false, verified: true }); setPasswordPolicy(null); setDefaultCc('+1')
   }, [])
+
+  // Apply a /core/me-shaped payload to the profile state. Shared by loadMe (the direct fetch) and
+  // the ONE-call bootstrap path, so both populate EXACTLY the same state the same way.
+  const applyMe = useCallback((d: any) => {
+    if (!d) { resetProfile(); return }
+    setUser(d.user || null)
+    setSessionOrgId(d.user?.org_id)
+    setPermissions(d.permissions || {})
+    setProvisioned(!!d.provisioned)
+    setActive(d.active !== false)
+    setTenant(d.tenant || null)
+    setCarriers(d.carriers || [])
+    setTwofa(d.twofa || { required: false, verified: true })
+    setPasswordPolicy(d.password_policy || null)
+    setDefaultCc(d.default_cc || '+1')
+  }, [resetProfile])
 
   // Fetch /core/me for the given active tenant and populate the profile state.
   const loadMe = useCallback(async (token: string, orgId: string | null) => {
@@ -112,21 +132,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (orgId) headers['x-active-org'] = orgId
       const res = await fetch(`${API_URL}/api/v1/core/me`, { headers })
       if (!res.ok) throw new Error(String(res.status))
-      const d = await res.json()
-      setUser(d.user || null)
-      setSessionOrgId(d.user?.org_id)
-      setPermissions(d.permissions || {})
-      setProvisioned(!!d.provisioned)
-      setActive(d.active !== false)
-      setTenant(d.tenant || null)
-      setCarriers(d.carriers || [])
-      setTwofa(d.twofa || { required: false, verified: true })
-      setPasswordPolicy(d.password_policy || null)
-      setDefaultCc(d.default_cc || '+1')
+      applyMe(await res.json())
     } catch {
       resetProfile()
     }
-  }, [resetProfile])
+  }, [applyMe, resetProfile])
+
+  // ONE-call login bootstrap: GET /api/v1/core/bootstrap returns auth-config + my-tenants +
+  // pending-connections + me in a single round trip (the old path paid 3 sequential calls here plus
+  // the Guard's auth-config = 4 blocking round trips before first paint). Returns true when it fully
+  // populated the state; false ⇒ the caller runs the legacy waterfall UNCHANGED (deploy-order safety:
+  // Vercel and Railway deploy independently, so an older backend without /bootstrap must keep
+  // working). The >1-membership picker decision below mirrors the waterfall path byte-for-byte.
+  const tryBootstrap = useCallback(async (token: string): Promise<boolean> => {
+    try {
+      const stored = getActiveOrg()
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
+      if (stored) headers['x-active-org'] = stored
+      const t2fa = get2faToken()
+      if (t2fa) headers['x-2fa-token'] = t2fa
+      const res = await fetch(`${API_URL}/api/v1/core/bootstrap`, { headers })
+      if (!res.ok) return false            // 404 = older backend; any error → waterfall decides
+      const d = await res.json()
+      if (typeof d?.rbac_enabled === 'boolean') setRbacEnabled(d.rbac_enabled)
+      const mems: TenantMembership[] = d?.tenants?.tenants || []
+      setTenants(mems)
+      setPendingConnections(d?.pending?.pending || [])
+      if (mems.length > 1) {
+        const valid = mems.find(t => t.org_id === stored)
+        if (!valid) {
+          // Belongs to several tenants but hasn't chosen one → show the picker; don't load a profile yet.
+          setNeedsTenantChoice(true); setActiveOrgState(null); resetProfile()
+          return true
+        }
+        setNeedsTenantChoice(false); setActiveOrg(valid.org_id); setActiveOrgState(valid.org_id)
+        if (d.me) applyMe(d.me)
+        else await loadMe(token, valid.org_id)   // defensive — backend sends me for a valid choice
+        return true
+      }
+      // 0 or 1 membership → no picker. 1 ⇒ that org; 0 ⇒ unprovisioned (me reports it).
+      setNeedsTenantChoice(false)
+      const only = mems.length === 1 ? mems[0].org_id : null
+      setActiveOrg(only); setActiveOrgState(only)
+      if (d.me) applyMe(d.me)
+      else await loadMe(token, only)             // defensive — backend always sends me here
+      return true
+    } catch { return false }
+  }, [applyMe, loadMe, resetProfile])
 
   // Load the login's tenant memberships, resolve the active tenant (persisted choice → single →
   // picker), then load the profile for that tenant. A single-membership login (the norm, and every
@@ -138,6 +190,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return
     }
     const token = sess.access_token
+    // Fast path first: ONE bootstrap round trip. On any failure (older backend, network) fall
+    // through to the legacy sequential waterfall below — that path is byte-for-byte unchanged.
+    if (await tryBootstrap(token)) return
     let mems: TenantMembership[] = []
     try {
       const res = await fetch(`${API_URL}/api/v1/core/my-tenants`, { headers: { Authorization: `Bearer ${token}` } })
@@ -170,7 +225,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const only = mems.length === 1 ? mems[0].org_id : null
     setActiveOrg(only); setActiveOrgState(only)
     await loadMe(token, only)
-  }, [loadMe, resetProfile])
+  }, [loadMe, resetProfile, tryBootstrap])
 
   // Switch the acting tenant (top-bar switcher / post-login picker). Persists the choice, then reloads
   // the profile for the new tenant. The server re-verifies membership from the x-active-org header, so a
@@ -275,7 +330,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       loading, session, user, permissions, carriers, provisioned, active, tenant,
       token: session?.access_token || null, tenants, activeOrg, needsTenantChoice,
       switchTenant, pendingConnections: visiblePending, connectTenant, disableAndSwitch,
-      dismissPending, twofa, needs2fa, passwordPolicy, defaultCc, startTwoFactor, verifyTwoFactor,
+      dismissPending, twofa, needs2fa, rbacEnabled, passwordPolicy, defaultCc, startTwoFactor, verifyTwoFactor,
       signOut, refresh,
     }}>
       {children}

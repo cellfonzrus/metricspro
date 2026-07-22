@@ -239,92 +239,179 @@ def reconcile_timeoff_duplicates(org_id: str = ORG_ID):
     return {"ok": True, "reconciled": len(fixed), "ids": fixed}
     return r.data[0] if r.data else updates
 
+# ── P0 payroll performance (mig 407, 2026-07-22): Postgres-side month aggregation ───────────────
+# /payroll + /payroll-by-store used to pull EVERY month shift row (select *) plus up to 20,000
+# timelog rows over PostgREST into Python and aggregate there — seconds of transfer for kiosk-heavy
+# tenants (luxelink: kiosk punches with no formal schedule ride the timelog-fallback path).
+# storeops.payroll_month_rows() (migration 407) computes per-(employee_id, store_code) aggregates
+# in Postgres with the exact row-level semantics of the legacy loops (actual==0 → scheduled
+# fallback, closed-punch-only timelog, the no-double-count shift-day rule), so the handlers merge
+# a handful of group rows instead. If the RPC is missing (mig 407 not yet run) or fails in ANY
+# way, both handlers fall back to the legacy Python aggregation unchanged — an un-run migration
+# never breaks payroll (AGENT_CONTRACT §5). Equivalence proof (money-adjacent):
+# backend/harness_payroll_rpc_equivalence.py asserts BYTE-IDENTICAL output between the two paths.
+def _payroll_month_groups(org_id, lo, hi):
+    """(shift_groups, timelog_groups) from storeops.payroll_month_rows (mig 407), each sorted by
+    first_ord (min shifts.id / epoch of min timelog.created_at) so the callers rebuild the SAME
+    first-seen insertion order the legacy row loops had — first-row-wins name resolution,
+    dominant-store tie-breaks, and stable same-name sort order all reproduce exactly.
+    Returns None when the range is open (no month given) or the RPC isn't available — callers
+    must then use the legacy full-row Python path."""
+    if not (lo and hi):
+        return None
+    try:
+        data = (sb().rpc("payroll_month_rows", {"p_org_id": org_id, "p_lo": lo, "p_hi": hi})
+                .execute().data) or []
+
+        def _ord(g):
+            v = g.get("first_ord")
+            return (v is None, v if v is not None else 0.0)
+        shift_groups = sorted((g for g in data if g.get("kind") == "shift"), key=_ord)
+        tl_groups = sorted((g for g in data if g.get("kind") == "timelog"), key=_ord)
+        return shift_groups, tl_groups
+    except Exception:
+        return None   # RPC missing/unreachable -> degrade gracefully to the legacy Python path
+
+
 @router.get("/payroll")
 def get_payroll(month: str = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Returns scheduled vs actual hours per employee for payroll"""
     lo = hi = None
-    q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
     if month:
         # Exclusive upper bound = first day of the next month. (The old "{month}-32"
         # hack 500s on a DATE column because 2026-06-32 isn't a valid date.)
         parts = str(month).split("-")
         y, m = int(parts[0]), int(parts[1])
         lo, hi = f"{month}-01", (f"{y + 1}-01-01" if m == 12 else f"{y}-{m + 1:02d}-01")
-        q = q.gte("shift_date", lo).lt("shift_date", hi)
-    shifts = q.execute().data or []
     employees = sb().table("employees").select("id,name,employee_id,pay_rate,home_store").eq("org_id", org_id).eq("is_active", True).execute().data or []
-    
+
     emp_map = {e["employee_id"]: e for e in employees}
     summary = {}
     # employee_id -> {store_code: hours-weight}. RULE FIVE (§3d) store filter: a floater's row must
     # attribute to the store they actually WORKED THE MOST this month, not just whichever shift the
     # DB happened to return first (the old behavior) or their static home_store.
     store_hours: dict = {}
-    # employee_id -> {shift_date already represented by a shift row}, so the timelog fallback below
-    # never double-counts a day that's already schedule-tracked.
-    shift_days: dict = {}
-    for s in shifts:
-        eid = s.get("employee_id")
-        emp = emp_map.get(eid, {})
-        if eid not in summary:
-            summary[eid] = {
-                "employee_id": eid,
-                "name": s.get("employee_name") or emp.get("name", ""),
-                "store": "",  # filled below from store_hours (dominant store), home_store fallback
-                "pay_rate": float(emp.get("pay_rate") or 0),
-                "scheduled_hours": 0,
-                "actual_hours": 0,
-                "shifts": 0,
-            }
-        sched = float(s.get("scheduled_hours") or 0)
-        act = float(s.get("actual_hours") or 0)
-        if act == 0:
-            act = sched  # actual not recorded yet -> fall back to scheduled hours
-        summary[eid]["scheduled_hours"] += sched
-        summary[eid]["actual_hours"]    += act
-        summary[eid]["shifts"] += 1
-        st = (s.get("store_code") or "").strip()
-        if st:
-            sh = store_hours.setdefault(eid, {})
-            sh[st] = sh.get(st, 0.0) + sched + act
-        if eid:
-            shift_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
 
-    # UNIVERSAL FALLBACK (2026-07-18, payroll data-flow audit — luxelink showed employees+shifts+rates
-    # but an empty Payroll Report for periods where reps clock in via the kiosk without a formal
-    # schedule entered): a real clock-in/out is "existing platform data" this report was silently
-    # dropping whenever no shifts row existed for that employee/day. ADDITIVE ONLY — a day already
-    # covered by a shift row is untouched (byte-identical for any tenant whose hours are already
-    # schedule-tracked, which is the house/Boost pattern today); only days with a clock punch and NO
-    # matching shift gain a row, using clocked hours as actual (no schedule existed, so
-    # scheduled_hours/scheduled_pay correctly stay 0 for that portion).
-    if lo and hi:
-        tl = (sb().table("timelog").select("employee_id,employee_name,hours,clock_out,work_date,store_code")
-              .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
-        for t in tl:
-            if not (t.get("clock_out") and t.get("hours") is not None):
-                continue   # only CLOSED punches count (matches /payroll-raw's own rule)
-            eid = t.get("employee_id")
-            wd = str(t.get("work_date") or "")[:10]
-            if not eid or not wd or wd in shift_days.get(eid, set()):
-                continue   # already represented by a shift that day -> never double-count
+    groups = _payroll_month_groups(org_id, lo, hi)
+    if groups is not None:
+        # FAST PATH (mig 407): merge Postgres-side per-(employee, store) aggregates. actual_eff_sum
+        # already carries the per-ROW actual==0->scheduled fallback; timelog groups already exclude
+        # open punches and shift-covered days (no-double-count). Group order = first-row order.
+        shift_groups, tl_groups = groups
+        for g in shift_groups:
+            eid = g.get("employee_id")
             emp = emp_map.get(eid, {})
             if eid not in summary:
                 summary[eid] = {
                     "employee_id": eid,
-                    "name": t.get("employee_name") or emp.get("name", ""),
+                    "name": g.get("employee_name") or emp.get("name", ""),
+                    "store": "",  # filled below from store_hours (dominant store), home_store fallback
+                    "pay_rate": float(emp.get("pay_rate") or 0),
+                    "scheduled_hours": 0,
+                    "actual_hours": 0,
+                    "shifts": 0,
+                }
+            sched = float(g.get("scheduled_sum") or 0)
+            act = float(g.get("actual_eff_sum") or 0)
+            summary[eid]["scheduled_hours"] += sched
+            summary[eid]["actual_hours"]    += act
+            summary[eid]["shifts"] += int(g.get("shift_count") or 0)
+            st = (g.get("store_code") or "").strip()
+            if st:
+                sh = store_hours.setdefault(eid, {})
+                sh[st] = sh.get(st, 0.0) + sched + act
+        for g in tl_groups:
+            eid = g.get("employee_id")
+            if not eid:
+                continue
+            emp = emp_map.get(eid, {})
+            if eid not in summary:
+                summary[eid] = {
+                    "employee_id": eid,
+                    "name": g.get("employee_name") or emp.get("name", ""),
                     "store": "",
                     "pay_rate": float(emp.get("pay_rate") or 0),
                     "scheduled_hours": 0,
                     "actual_hours": 0,
                     "shifts": 0,
                 }
-            hrs = float(t.get("hours") or 0)
+            hrs = float(g.get("timelog_hours_sum") or 0)
             summary[eid]["actual_hours"] += hrs
-            st = (t.get("store_code") or "").strip()
+            st = (g.get("store_code") or "").strip()
             if st:
                 sh = store_hours.setdefault(eid, {})
                 sh[st] = sh.get(st, 0.0) + hrs
+    else:
+        # LEGACY PATH (pre-mig-407 fallback): full row fetch + Python aggregation — UNCHANGED.
+        q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
+        if lo and hi:
+            q = q.gte("shift_date", lo).lt("shift_date", hi)
+        shifts = q.execute().data or []
+        # employee_id -> {shift_date already represented by a shift row}, so the timelog fallback
+        # below never double-counts a day that's already schedule-tracked.
+        shift_days: dict = {}
+        for s in shifts:
+            eid = s.get("employee_id")
+            emp = emp_map.get(eid, {})
+            if eid not in summary:
+                summary[eid] = {
+                    "employee_id": eid,
+                    "name": s.get("employee_name") or emp.get("name", ""),
+                    "store": "",  # filled below from store_hours (dominant store), home_store fallback
+                    "pay_rate": float(emp.get("pay_rate") or 0),
+                    "scheduled_hours": 0,
+                    "actual_hours": 0,
+                    "shifts": 0,
+                }
+            sched = float(s.get("scheduled_hours") or 0)
+            act = float(s.get("actual_hours") or 0)
+            if act == 0:
+                act = sched  # actual not recorded yet -> fall back to scheduled hours
+            summary[eid]["scheduled_hours"] += sched
+            summary[eid]["actual_hours"]    += act
+            summary[eid]["shifts"] += 1
+            st = (s.get("store_code") or "").strip()
+            if st:
+                sh = store_hours.setdefault(eid, {})
+                sh[st] = sh.get(st, 0.0) + sched + act
+            if eid:
+                shift_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
+
+        # UNIVERSAL FALLBACK (2026-07-18, payroll data-flow audit — luxelink showed employees+shifts+rates
+        # but an empty Payroll Report for periods where reps clock in via the kiosk without a formal
+        # schedule entered): a real clock-in/out is "existing platform data" this report was silently
+        # dropping whenever no shifts row existed for that employee/day. ADDITIVE ONLY — a day already
+        # covered by a shift row is untouched (byte-identical for any tenant whose hours are already
+        # schedule-tracked, which is the house/Boost pattern today); only days with a clock punch and NO
+        # matching shift gain a row, using clocked hours as actual (no schedule existed, so
+        # scheduled_hours/scheduled_pay correctly stay 0 for that portion).
+        if lo and hi:
+            tl = (sb().table("timelog").select("employee_id,employee_name,hours,clock_out,work_date,store_code")
+                  .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
+            for t in tl:
+                if not (t.get("clock_out") and t.get("hours") is not None):
+                    continue   # only CLOSED punches count (matches /payroll-raw's own rule)
+                eid = t.get("employee_id")
+                wd = str(t.get("work_date") or "")[:10]
+                if not eid or not wd or wd in shift_days.get(eid, set()):
+                    continue   # already represented by a shift that day -> never double-count
+                emp = emp_map.get(eid, {})
+                if eid not in summary:
+                    summary[eid] = {
+                        "employee_id": eid,
+                        "name": t.get("employee_name") or emp.get("name", ""),
+                        "store": "",
+                        "pay_rate": float(emp.get("pay_rate") or 0),
+                        "scheduled_hours": 0,
+                        "actual_hours": 0,
+                        "shifts": 0,
+                    }
+                hrs = float(t.get("hours") or 0)
+                summary[eid]["actual_hours"] += hrs
+                st = (t.get("store_code") or "").strip()
+                if st:
+                    sh = store_hours.setdefault(eid, {})
+                    sh[st] = sh.get(st, 0.0) + hrs
 
     rows = list(summary.values())
     for r in rows:
@@ -349,54 +436,81 @@ def get_payroll_by_store(month: str = None, authorization: str = Header(default=
     shift's own store_code (a floater's hours land at the store they worked). Returns one row per store:
     {store_code, hours, amount}."""
     lo = hi = None
-    q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
     if month:
         # Exclusive upper bound = first day of next month (avoids the invalid "{month}-32" DATE cast).
         parts = str(month).split("-")
         y, m = int(parts[0]), int(parts[1])
         lo, hi = f"{month}-01", (f"{y + 1}-01-01" if m == 12 else f"{y}-{m + 1:02d}-01")
-        q = q.gte("shift_date", lo).lt("shift_date", hi)
-    shifts = q.execute().data or []
     # All employees (active OR not) — a terminated rep who worked this month still earns; rate=0 if unknown.
     employees = sb().table("employees").select("employee_id,pay_rate").eq("org_id", org_id).execute().data or []
     rate_map = {e.get("employee_id"): float(e.get("pay_rate") or 0) for e in employees}
 
     by_store = {}
-    shift_days: dict = {}   # employee_id -> {shift_date} already represented by a shift row
-    for s in shifts:
-        store = (s.get("store_code") or "").strip()
-        eid = s.get("employee_id")
-        if eid:
-            shift_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
-        if not store:
-            continue
-        sched = float(s.get("scheduled_hours") or 0)
-        act = float(s.get("actual_hours") or 0)
-        hrs = act if act > 0 else sched
-        rate = rate_map.get(eid, 0.0)
-        d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
-        d["hours"] += hrs
-        d["amount"] += hrs * rate
-
-    # UNIVERSAL FALLBACK (2026-07-18, same audit as /payroll) — a clock punch with no matching shift
-    # row is real existing platform data this store auto-fill was dropping. ADDITIVE ONLY: a day
-    # already covered by a shift is skipped (byte-identical for a schedule-tracked tenant).
-    if lo and hi:
-        tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
-              .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
-        for t in tl:
-            if not (t.get("clock_out") and t.get("hours") is not None):
+    groups = _payroll_month_groups(org_id, lo, hi)
+    if groups is not None:
+        # FAST PATH (mig 407): hours_eff_sum already carries the per-ROW hrs = actual if >0 else
+        # scheduled basis; timelog groups already exclude open punches + shift-covered days.
+        shift_groups, tl_groups = groups
+        for g in shift_groups:
+            store = (g.get("store_code") or "").strip()
+            if not store:
                 continue
-            eid = t.get("employee_id")
-            wd = str(t.get("work_date") or "")[:10]
-            store = (t.get("store_code") or "").strip()
-            if not eid or not wd or not store or wd in shift_days.get(eid, set()):
+            hrs = float(g.get("hours_eff_sum") or 0)
+            rate = rate_map.get(g.get("employee_id"), 0.0)
+            d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
+            d["hours"] += hrs
+            d["amount"] += hrs * rate
+        for g in tl_groups:
+            eid = g.get("employee_id")
+            store = (g.get("store_code") or "").strip()
+            if not eid or not store:
                 continue
-            hrs = float(t.get("hours") or 0)
+            hrs = float(g.get("timelog_hours_sum") or 0)
             rate = rate_map.get(eid, 0.0)
             d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
             d["hours"] += hrs
             d["amount"] += hrs * rate
+    else:
+        # LEGACY PATH (pre-mig-407 fallback): full row fetch + Python aggregation — UNCHANGED.
+        q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
+        if lo and hi:
+            q = q.gte("shift_date", lo).lt("shift_date", hi)
+        shifts = q.execute().data or []
+        shift_days: dict = {}   # employee_id -> {shift_date} already represented by a shift row
+        for s in shifts:
+            store = (s.get("store_code") or "").strip()
+            eid = s.get("employee_id")
+            if eid:
+                shift_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
+            if not store:
+                continue
+            sched = float(s.get("scheduled_hours") or 0)
+            act = float(s.get("actual_hours") or 0)
+            hrs = act if act > 0 else sched
+            rate = rate_map.get(eid, 0.0)
+            d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
+            d["hours"] += hrs
+            d["amount"] += hrs * rate
+
+        # UNIVERSAL FALLBACK (2026-07-18, same audit as /payroll) — a clock punch with no matching shift
+        # row is real existing platform data this store auto-fill was dropping. ADDITIVE ONLY: a day
+        # already covered by a shift is skipped (byte-identical for a schedule-tracked tenant).
+        if lo and hi:
+            tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
+                  .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
+            for t in tl:
+                if not (t.get("clock_out") and t.get("hours") is not None):
+                    continue
+                eid = t.get("employee_id")
+                wd = str(t.get("work_date") or "")[:10]
+                store = (t.get("store_code") or "").strip()
+                if not eid or not wd or not store or wd in shift_days.get(eid, set()):
+                    continue
+                hrs = float(t.get("hours") or 0)
+                rate = rate_map.get(eid, 0.0)
+                d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
+                d["hours"] += hrs
+                d["amount"] += hrs * rate
 
     rows = list(by_store.values())
     for r in rows:

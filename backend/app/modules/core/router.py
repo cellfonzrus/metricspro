@@ -12,6 +12,7 @@ with no anon policy; the service role bypasses RLS).
 import os
 import re
 import secrets
+import time
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -42,17 +43,23 @@ def sb():
 
 
 # ── App config: the master "enforce login" switch ─────────────────────────────────────
+def _rbac_enabled_flag() -> bool:
+    """The master enforce-login switch (shared by /auth-config and /bootstrap — ONE source).
+    False if migration 015 hasn't run yet (table missing) — never raises."""
+    try:
+        rows = sb().schema("storeops").table("app_config").select("rbac_enabled") \
+            .eq("id", 1).limit(1).execute().data or []
+        return bool(rows[0]["rbac_enabled"]) if rows else False
+    except Exception:
+        return False
+
+
 @router.get("/auth-config")
 async def get_auth_config():
     """PUBLIC: tells the frontend whether to enforce login. Default false (app open) so the
     deploy never locks anyone out; the admin flips it on once everyone is provisioned.
     Returns false if migration 015 hasn't run yet (table missing)."""
-    try:
-        rows = sb().schema("storeops").table("app_config").select("rbac_enabled") \
-            .eq("id", 1).limit(1).execute().data or []
-        return {"rbac_enabled": bool(rows[0]["rbac_enabled"]) if rows else False}
-    except Exception:
-        return {"rbac_enabled": False}
+    return {"rbac_enabled": _rbac_enabled_flag()}
 
 
 @router.put("/auth-config")
@@ -98,19 +105,46 @@ async def set_portal_report(body: dict, org_id: str = ORG_ID):
 
 
 # ── Identity (token-verified "who am I") ───────────────────────────────────────────────
+# token → (uid, expiry): POSITIVE results only, 60s TTL — mirrors tenant_middleware._cache (which
+# serves only the middleware; this one serves this router + every importer, e.g. storeops'
+# caller_scope, so the SAME token stops being network-re-verified several times per page load).
+# Negative results are NOT cached, so a transient Supabase hiccup or an expired token never pins a
+# user out for the TTL. Bounded: expired entries are evicted opportunistically on insert; if the cap
+# is still exceeded the cache is cleared outright (cheap + safe — worst case one extra verification
+# per live token). Do NOT cache failures here; do NOT touch tenant_middleware's own cache.
+_uid_cache: dict = {}
+_UID_TTL = 60.0
+_UID_CACHE_MAX = 1024
+
+
 def _uid_from_token(authorization: str):
-    """Validate the Supabase Auth JWT (server-side) and return its auth user id, or None."""
+    """Validate the Supabase Auth JWT (server-side) and return its auth user id, or None.
+    Verified results are cached 60s per token (positive only) — /me, /my-tenants, /bootstrap and
+    storeops' caller_scope all verify the SAME token within one page load; without the cache each
+    call paid a full network auth.get_user round trip."""
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
     token = authorization.split(" ", 1)[1].strip()
     if not token:
         return None
+    now = time.time()
+    hit = _uid_cache.get(token)
+    if hit and hit[1] > now:
+        return hit[0]
     try:
         resp = get_supabase_admin().auth.get_user(token)
         user = getattr(resp, "user", None) or resp
-        return getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else None)
+        uid = getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else None)
     except Exception:
         return None
+    if uid:
+        if len(_uid_cache) >= _UID_CACHE_MAX:
+            for k in [k for k, v in _uid_cache.items() if v[1] <= now]:
+                _uid_cache.pop(k, None)
+            if len(_uid_cache) >= _UID_CACHE_MAX:
+                _uid_cache.clear()
+        _uid_cache[token] = (uid, now + _UID_TTL)
+    return uid
 
 
 # ── Multi-tenant membership (platform-core-9) ──────────────────────────────────────────
@@ -131,8 +165,15 @@ async def my_tenants(authorization: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
-    client = sb()
-    rows = _memberships(client, uid)
+    return _my_tenants_payload(sb(), uid)
+
+
+def _my_tenants_payload(client, uid, rows=None):
+    """Body of GET /my-tenants, shared with /bootstrap (ONE source — never duplicate this logic).
+    `rows` lets a caller that already fetched the membership rows (bootstrap) share them; when None
+    they are fetched here exactly as the endpoint always did."""
+    if rows is None:
+        rows = _memberships(client, uid)
     if not rows:
         return {"tenants": [], "count": 0}
     # tenant display names + per-membership role display (roles are per-org)
@@ -185,8 +226,15 @@ async def whoami(authorization: str = Header(default=""), x_active_org: str = He
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
-    client = sb()
-    rows = _memberships(client, uid)
+    return _me_payload(sb(), uid, x_active_org, x_2fa_token)
+
+
+def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None):
+    """Body of GET /me, shared with /bootstrap (ONE source — never duplicate this logic). `rows`
+    lets a caller that already fetched the membership rows (bootstrap) share them; semantics are
+    otherwise byte-identical to calling /me with the same headers."""
+    if rows is None:
+        rows = _memberships(client, uid)
     u = _pick_membership(rows, (x_active_org or "").strip() or None)
     if not u:
         return {"provisioned": False, "user": None, "permissions": {}}
@@ -246,6 +294,40 @@ async def whoami(authorization: str = Header(default=""), x_active_org: str = He
             "active": bool(u.get("is_active", True)), "tenant": tenant, "carriers": carriers,
             "password_policy": pw_policy, "twofa": twofa,
             "default_cc": tw_policy.get("default_cc", _sec.DEFAULT_COUNTRY_CODE)}
+
+
+@router.get("/bootstrap")
+async def bootstrap(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                    x_2fa_token: str = Header(default="")):
+    """ONE post-sign-in call that replaces the frontend's sequential login waterfall (auth-config →
+    my-tenants → pending-connections → me = 4 blocking round trips before first paint). Returns
+    {rbac_enabled, tenants: <the /my-tenants payload>, pending: <the /pending-connections payload>,
+    me: <the full /core/me payload or null>, active_org}. Token-verified exactly like /me (self-gates
+    on Authorization; allowlisted in tenant_middleware with the same rationale as /core/me, incl.
+    reachability BEFORE 2FA verification so the OTP flow can start). Every payload comes from the
+    SAME shared helper as its original endpoint — the old endpoints stay fully intact and there is
+    exactly one copy of each membership/fallback rule.
+
+    Picker parity: when the login belongs to >1 tenant and x-active-org does not name one of them,
+    `me` is null (the frontend shows the tenant picker, exactly mirroring today's flow — it never
+    called /me in that state either). A single-membership or unprovisioned login always gets `me`
+    resolved — x-active-org honored-iff-member, else default membership — byte-identical to /me."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    rows = _memberships(client, uid)   # fetched ONCE; shared into both payload helpers below
+    tenants = _my_tenants_payload(client, uid, rows=rows)
+    pending = _pending_connections_payload(client, uid)
+    requested = (x_active_org or "").strip()
+    member_orgs = [r.get("org_id") for r in rows if r.get("org_id")]
+    if len(member_orgs) > 1 and requested not in member_orgs:
+        me = None                      # >1 membership, no valid choice yet → frontend shows the picker
+    else:
+        me = _me_payload(client, uid, requested, x_2fa_token, rows=rows)
+    active_org = ((me.get("user") or {}).get("org_id")) if me else None
+    return {"rbac_enabled": _rbac_enabled_flag(), "tenants": tenants, "pending": pending,
+            "me": me, "active_org": active_org}
 
 
 @router.post("/me/password-changed")
@@ -1796,7 +1878,11 @@ async def pending_connections(authorization: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
-    client = sb()
+    return _pending_connections_payload(sb(), uid)
+
+
+def _pending_connections_payload(client, uid):
+    """Body of GET /pending-connections, shared with /bootstrap (ONE source — never duplicate)."""
     email = _email_for_uid(client, uid)
     if not email:
         return {"pending": []}

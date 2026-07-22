@@ -54,6 +54,12 @@ _PUBLIC_EXACT = frozenset({
     "/api/v1/core/password-policy/public",  # PUBLIC: owner DEFAULT policy for pre-login strength hints
     "/api/v1/core/auth/forgot-password",  # PUBLIC self-serve reset request (anti-enumeration; anonymous)
     "/api/v1/core/auth/reset-password",   # PUBLIC self-serve reset completion (code-gated; anonymous)
+    "/api/v1/core/bootstrap",             # ONE-call login bootstrap (auth-config + my-tenants +
+                                          # pending-connections + me). Same rationale as the
+                                          # /api/v1/core/me prefix below: it SELF-GATES on the bearer
+                                          # token inside the handler (401 without a valid one), and it
+                                          # must be reachable BEFORE the 2FA marker exists so a
+                                          # 2FA-required login can learn it needs the OTP step.
 })
 
 # Public path PREFIXES, matched at a SEGMENT BOUNDARY only (path == p or path.startswith(p + "/")),

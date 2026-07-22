@@ -242,7 +242,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
 }
 
 function Guard({ children }: { children: React.ReactNode }) {
-  const { loading, session, user, permissions, provisioned, active, signOut, needsTenantChoice } = useAuth()
+  const { loading, session, user, permissions, provisioned, active, signOut, needsTenantChoice, rbacEnabled } = useAuth()
   const pathname = usePathname()
   const router = useRouter()
   // Master switch: until the admin turns enforcement ON, the app stays fully open (today's
@@ -250,12 +250,17 @@ function Guard({ children }: { children: React.ReactNode }) {
   const [enforce, setEnforce] = useState<boolean | null>(null)
 
   useEffect(() => {
+    // Fast path: the ONE-call /api/v1/core/bootstrap (auth-context) already carried rbac_enabled —
+    // use it and skip the extra round trip. rbacEnabled === null ⇒ bootstrap didn't run/supply it
+    // (older backend, waterfall path, signed-out) → keep the direct auth-config fetch as before so
+    // nothing regresses. Explicit /api/v1 path — bare paths 404 silently in the UI.
+    if (rbacEnabled !== null) { setEnforce(rbacEnabled); return }
     let on = true
     fetch(`${API_URL}/api/v1/core/auth-config`)
       .then(r => r.json()).then(d => { if (on) setEnforce(!!d.rbac_enabled) })
       .catch(() => { if (on) setEnforce(false) })
     return () => { on = false }
-  }, [])
+  }, [rbacEnabled])
 
   useEffect(() => {
     if (enforce !== true || loading) return
