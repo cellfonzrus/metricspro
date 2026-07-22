@@ -325,7 +325,15 @@ export default function PortalPage() {
 
   async function clockOut() {
     setBusy(true)
-    try { const res: any = await authed('/api/v1/storeops/timeclock/clock-out', { method: 'POST', body: JSON.stringify({}) }); setMsg(`✅ Clocked out at ${res?.data?.time || ''} — ${res?.data?.hours ?? '?'} hrs.`) }
+    try {
+      const res: any = await authed('/api/v1/storeops/timeclock/clock-out', { method: 'POST', body: JSON.stringify({}) })
+      if (res?.success === false || res?.needs_closing) {
+        // blocked (e.g. closing gate) — the punch is still OPEN; never show a fake "clocked out"
+        setMsg('⛔ ' + (res?.message || 'Clock-out blocked — you are still clocked in.'))
+      } else {
+        setMsg(`✅ Clocked out at ${res?.data?.time || ''} — ${res?.data?.hours ?? '?'} hrs.`)
+      }
+    }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     finally { setBusy(false); refreshStatus() }
   }

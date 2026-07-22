@@ -1166,15 +1166,20 @@ def clock_in_override(body: dict, authorization: str = Header(default=""), org_i
             "data": {"time": _fmt_time(saved.get("clock_in"), org_id), "entry_id": saved.get("id"), "store_code": store_code}}
 
 
-def _closing_gate_block(org_id, employee_id, store_code):
+def _closing_gate_block(org_id, employee_id, store_code, work_date=None):
     """Return a block message if this employee is the ASSIGNED CLOSER for `store_code`, the tenant's
     closing gate is ON, and the store's daily closing for today is NOT yet submitted — else None.
     Cross-module: closings live in commcalc.daily_closing. Any lookup gap → no block (never trap a
-    rep on a config/migration miss)."""
+    rep on a config/migration miss). NEVER gates a stale punch (work_date before today): the gate
+    exists to hold the closer until TODAY's closing is in — applying it to an older open punch
+    deadlocks the employee (can't clock out = gated; can't clock in = 409 already-open)."""
     try:
         store = (store_code or "").strip()
         if not store:
             return None
+        today = datetime.now(timezone.utc).astimezone(_biz_tz_for(org_id)).date().isoformat()
+        if work_date and str(work_date)[:10] != today:
+            return None  # stale punch from a previous business day — always closable
         t = (sb().table("tenants").select("closing_gate_enabled").eq("org_id", org_id).limit(1).execute().data) or []
         if not (t and t[0].get("closing_gate_enabled")):
             return None
@@ -1185,10 +1190,11 @@ def _closing_gate_block(org_id, employee_id, store_code):
         ids, _ = _emp_id_variants(org_id, employee_id)
         if str(closer[0].get("employee_id") or "") not in ids:
             return None  # not the assigned closer → not gated
-        today = datetime.now(timezone.utc).astimezone(_biz_tz_for(org_id)).date().isoformat()
-        done = (get_supabase().schema("commcalc").table("daily_closing").select("id")
-                .eq("org_id", org_id).eq("store_code", store).eq("close_date", today).limit(1).execute().data) or []
-        if done:
+        # match the submitted closing by NORMALIZED store code — a spelling variant between the
+        # punch's store_code and the closing's must not leave the closer blocked after submitting
+        done = (get_supabase().schema("commcalc").table("daily_closing").select("store_code")
+                .eq("org_id", org_id).eq("close_date", today).execute().data) or []
+        if any(_norm_store(r.get("store_code")) == _norm_store(store) for r in done):
             return None
         return (f"The daily closing for {store} must be submitted before you clock out. "
                 f"Complete the store closing, then clock out.")
@@ -1213,17 +1219,37 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
     # Closing gate (mig 089): the store's ASSIGNED CLOSER can't clock out until the store's daily
     # closing is submitted. Only the assigned closer is gated (per the product decision); other reps
     # clock out normally. Returns needs_closing (no punch change) rather than closing the entry.
-    block = _closing_gate_block(org_id, employee_id, entry.get("store_code"))
+    block = _closing_gate_block(org_id, employee_id, entry.get("store_code"), entry.get("work_date"))
     if block and not body.get("override"):
         return {"success": False, "needs_closing": True, "message": block}
     now = datetime.now(timezone.utc)
+    out_at = now
+    note_add = None
+    # Stale punch (opened on a previous business day, e.g. the force-clockout sweep had no scheduled
+    # shift to close it against): stamp the clock-out at the SCHEDULED shift end when one exists —
+    # the same paid-=-scheduled semantics as _do_force_clockout — instead of inflating hours to
+    # now-minus-clock-in across days.
+    today = now.astimezone(_biz_tz_for(org_id)).date().isoformat()
+    wdate = str(entry.get("work_date") or "")[:10]
+    if wdate and wdate != today:
+        end_dt = _scheduled_end_for_punch(org_id, entry)
+        if end_dt and end_dt < now:
+            out_at = end_dt
+            note_add = "auto clock-out at scheduled end (stale punch closed from kiosk)"
+        else:
+            note_add = f"stale punch (opened {wdate}) closed from kiosk — review hours"
     try:
         ci = datetime.fromisoformat(str(entry["clock_in"]).replace("Z", "+00:00"))
-        hours = round((now - ci).total_seconds() / 3600.0, 2)
+        hours = round((out_at - ci).total_seconds() / 3600.0, 2)
+        if hours < 0:
+            hours = 0.0
     except Exception:
         hours = None
-    sb().table("timelog").update({"clock_out": now.isoformat(), "hours": hours}).eq("id", entry["id"]).execute()
-    return {"success": True, "data": {"time": _fmt_time(now.isoformat(), org_id), "hours": hours,
+    upd = {"clock_out": out_at.isoformat(), "hours": hours}
+    if note_add:
+        upd["notes"] = ((entry.get("notes") or "") + " | " + note_add).strip(" |")
+    sb().table("timelog").update(upd).eq("id", entry["id"]).execute()
+    return {"success": True, "data": {"time": _fmt_time(out_at.isoformat(), org_id), "hours": hours,
                                       "clock_in": _fmt_time(entry.get("clock_in"), org_id)}}
 
 
