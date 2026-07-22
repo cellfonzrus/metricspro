@@ -5858,6 +5858,16 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
         except Exception as e:
             save_errors.append(f'chargebacks: {e}')
 
+        # ── Commission-first settlement of POSTED ops chargebacks (owner directive 2026-07-22) ──
+        # Absorbs each posted ops chargeback from the person's commission up to their payout basis;
+        # any remainder overflows to payroll or the next commission cycle per policy. Runs AFTER
+        # rep_commissions + chargeback_items are written (both are the basis). No-op (zero writes)
+        # when nothing is posted or the v2 columns aren't in place yet. Never raises into the calc.
+        try:
+            _settle_ops_chargebacks(client, org_id, period)
+        except Exception as e:
+            save_errors.append(f'ops_chargeback_settle: {e}')
+
         # Update calc status — keyed on the canonical 'Month YYYY' spelling (see /calculate) so a month
         # has exactly ONE status row regardless of which spelling triggered the calc.
         client.schema('commcalc').table('calc_status').upsert({
@@ -5935,8 +5945,9 @@ def _caller_rep_keys(authorization: str, org_id: str):
 # Management-created chargebacks for missed daily closings / missed DM verifications. ONLY rows with
 # status='posted' AND applied_to='commission' AND posted_ref == this commission period ever deduct
 # (pending/waived never do). The table is OWNED by mod-retail-ops (its own migration band) — this module
-# creates NOTHING and only READS it, degrading to a no-op if the table doesn't exist yet. Carrier/tenant-
-# agnostic: no Boost branch; a tenant with zero posted rows sees pay byte-identical to before.
+# creates NOTHING; it READS it (degrading to a no-op if the table/columns don't exist yet) and, at the
+# owner's 2026-07-22 direction, SETTLES it (stamps covered_amount + writes overflow children). Carrier/
+# tenant-agnostic: no Boost branch; a tenant with zero posted rows sees pay byte-identical to before.
 _OPS_CB_REASON_LABELS = {
     "missed_dm_verify": "missed DM verification",
     "missed_closing": "missed daily closing",
@@ -5945,38 +5956,113 @@ _OPS_CB_REASON_LABELS = {
 
 def _ops_cb_reason_label(reason):
     """Human label for an ops-chargeback reason code (config-extensible; an unknown/new retail-ops code
-    humanizes its snake_case token so it still renders sensibly with no code change here)."""
+    humanizes its snake_case token so it still renders sensibly with no code change here). The org's
+    ops_chargeback_policy.label overrides this when set — see _ops_policy_map."""
     r = str(reason or "").strip()
     return _OPS_CB_REASON_LABELS.get(r, r.replace("_", " ").strip() or "ops chargeback")
 
 
+def _canon_ym(period):
+    """'YYYY-MM' spelling of a month-period (the posted_ref contract form). Passes non-month input
+    through unchanged."""
+    mo, yr = _month_year(period)
+    return f"{yr}-{mo:02d}" if (1 <= mo <= 12 and yr) else str(period or "").strip()
+
+
+def _next_month(period):
+    """(month, year) of the month AFTER `period`. (0,0) if `period` isn't a month-period."""
+    mo, yr = _month_year(period)
+    if not (1 <= mo <= 12 and yr):
+        return (0, 0)
+    return (1, yr + 1) if mo == 12 else (mo + 1, yr)
+
+
+def _ops_policy_map(client, org_id):
+    """(overflow_by_reason, label_by_reason, default_overflow, default_label) from the org's
+    commcalc.ops_chargeback_policy (retail-ops-owned; OPTIONAL). A row with a blank/absent `reason`
+    acts as the org default. Degrades to ({}, {}, 'payroll', '') when the table is absent — so pay and
+    labels are unaffected before retail-ops seeds any policy."""
+    ov, lbl, dov, dlbl = {}, {}, "payroll", ""
+    try:
+        rows = (client.schema("commcalc").table("ops_chargeback_policy").select("*")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        return ov, lbl, dov, dlbl
+    for r in rows:
+        rk = str(r.get("reason") or "").strip()
+        ovf = str(r.get("overflow") or "").strip().lower()
+        lb = str(r.get("label") or "").strip()
+        if rk:
+            if ovf in ("payroll", "next_cycle"):
+                ov[rk] = ovf
+            if lb:
+                lbl[rk] = lb
+        else:
+            if ovf in ("payroll", "next_cycle"):
+                dov = ovf
+            if lb:
+                dlbl = lb
+    return ov, lbl, dov, dlbl
+
+
 def _ops_chargeback_deductions(client, org_id, period):
     """POSTED, commission-applied ops chargebacks for `period`, grouped by the person they hit.
-    Returns lines_by_key: {UPPER(employee_name or employee_id): [ {label, amount, reason,
-    incident_date, store, status} ]}. Each line's label is the statement text
-    'Ops chargeback - <reason> (YYYY-MM-DD @ <store>)'. Matched against posted_ref via _pvariants so
-    either the 'YYYY-MM' (contract) or 'Month YYYY' spelling resolves. Org-scoped. Degrades to {} when
-    the table doesn't exist yet OR the tenant has no posted commission chargebacks -> callers add
-    nothing and pay is unchanged (the zero-rows -> unchanged-pay invariant)."""
-    try:
-        rows = (client.schema("commcalc").table("ops_chargeback")
-                .select("employee_id,employee_name,store_code,reason,incident_date,amount,status,applied_to,posted_ref")
-                .eq("org_id", org_id).eq("applied_to", "commission").eq("status", "posted")
-                .in_("posted_ref", _pvariants(period)).execute().data) or []
-    except Exception:
+    Returns lines_by_key: {UPPER(employee_name or employee_id): [line]} where each line carries
+    label/amount/gross_amount/covered_amount/remainder/overflow/overflow_period/reason/incident_date/
+    store/status. `amount` is the ACTUAL commission deduction for the row this period = covered_amount
+    when settlement has stamped it, else the full amount (fallback / next-cycle child). A partially-
+    covered PARENT's label gets a 'remainder $X -> payroll/next cycle (YYYY-MM)' suffix. Matched against
+    posted_ref via _pvariants (spelling-agnostic). Org-scoped. Tries the v2 column set first, falls back
+    to the v1 set (pre-schema-v2), then to {} (table absent) -> callers add nothing (zero-rows invariant)."""
+    _v2 = "employee_id,employee_name,store_code,reason,incident_date,amount,status,applied_to,posted_ref,parent_id,covered_amount"
+    _v1 = "employee_id,employee_name,store_code,reason,incident_date,amount,status,applied_to,posted_ref"
+    rows, has_v2 = None, False
+    for cols, v2 in ((_v2, True), (_v1, False)):
+        try:
+            rows = (client.schema("commcalc").table("ops_chargeback").select(cols)
+                    .eq("org_id", org_id).eq("applied_to", "commission").eq("status", "posted")
+                    .in_("posted_ref", _pvariants(period)).execute().data) or []
+            has_v2 = v2
+            break
+        except Exception:
+            rows = None
+    if rows is None:
         return {}
+    ov_by_reason, lbl_by_reason, ov_default, lbl_default = _ops_policy_map(client, org_id)
+    nmo, nyr = _next_month(period)
+    next_ym = f"{nyr}-{nmo:02d}" if (1 <= nmo <= 12 and nyr) else _canon_ym(period)
     lines_by = {}
     for r in rows:
-        amt = safe_float(r.get("amount"))
-        if amt <= 0:
+        gross = round(safe_float(r.get("amount")), 2)
+        if gross <= 0:
             continue
         inc = str(r.get("incident_date") or "")[:10]
         store = str(r.get("store_code") or "").strip()
         loc = f" @ {store}" if store else ""
+        reason = r.get("reason")
+        rkey = str(reason or "").strip()
+        reason_label = lbl_by_reason.get(rkey) or lbl_default or _ops_cb_reason_label(reason)
+        is_parent = (r.get("parent_id") is None) if has_v2 else True
+        cov = r.get("covered_amount") if has_v2 else None
+        covered = round(safe_float(cov), 2) if cov is not None else None
+        deduction = covered if covered is not None else gross
+        remainder = round(gross - (covered if covered is not None else 0.0), 2)
+        overflow, overflow_period, suffix = None, None, ""
+        if has_v2 and is_parent and covered is not None and remainder > 0:
+            overflow = ov_by_reason.get(rkey) or ov_default or "payroll"
+            if overflow == "next_cycle":
+                overflow_period = next_ym
+                suffix = f" · remainder ${remainder:.2f} → next cycle ({next_ym})"
+            else:
+                overflow = "payroll"
+                overflow_period = _canon_ym(period)
+                suffix = f" · remainder ${remainder:.2f} → payroll"
         line = {
-            "label": f"Ops chargeback - {_ops_cb_reason_label(r.get('reason'))} ({inc}{loc})",
-            "amount": round(amt, 2), "reason": r.get("reason"),
-            "incident_date": inc, "store": store, "status": "posted",
+            "label": f"Ops chargeback - {reason_label} ({inc}{loc}){suffix}",
+            "amount": round(deduction, 2), "gross_amount": gross,
+            "covered_amount": covered, "remainder": remainder,
+            "overflow": overflow, "overflow_period": overflow_period,
+            "reason": reason, "incident_date": inc, "store": store, "status": "posted",
         }
         # rep_commissions has no employee_id column, so employee_NAME (== storeops_name, both "First Last")
         # is the real join; id is a fallback only when name is blank. One key per row -> no double-keying.
@@ -5989,17 +6075,183 @@ def _ops_chargeback_deductions(client, org_id, period):
 
 def _ops_cb_for_rep(lines_by_key, keys):
     """Union the POSTED ops-chargeback lines matching any of a rep's identity keys (UPPER name/login),
-    deduped by (reason, incident_date, store, amount) so the same row can't count twice. Returns
-    (total_deducted, [lines]). No match / empty map -> (0.0, [])."""
+    deduped by (reason, incident_date, store, gross_amount) so the same underlying row can't count twice.
+    Returns (total_deducted, [lines]) where total sums each line's ACTUAL deduction ('amount'). No match
+    / empty map -> (0.0, [])."""
     seen, out = set(), []
     for k in keys:
         for ln in lines_by_key.get(k, []):
-            sig = (ln["reason"], ln["incident_date"], ln["store"], ln["amount"])
+            sig = (ln.get("reason"), ln.get("incident_date"), ln.get("store"),
+                   ln.get("gross_amount", ln.get("amount")))
             if sig in seen:
                 continue
             seen.add(sig)
             out.append(ln)
     return round(sum(l["amount"] for l in out), 2), out
+
+
+def _settle_ops_chargebacks(client, org_id, period):
+    """Commission-first settlement of POSTED ops chargebacks for `period` (owner directive 2026-07-22).
+    Each person's commission absorbs their posted commission-applied chargebacks up to their payout
+    BASIS (rep_commissions.total_payout - legacy chargeback_items deduction, floor 0), consumed
+    cumulatively per person in (incident_date, id) order. `covered_amount` is stamped on each PARENT row;
+    any uncovered remainder overflows per the reason's policy (ops_chargeback_policy.overflow, default
+    'payroll') into a child row: applied_to='payroll' THIS period, or applied_to='commission' the NEXT
+    period for 'next_cycle'. A person with no rep_commissions row has basis 0 -> their whole amount
+    overflows.
+
+    Idempotent: a re-run converges to the same rows and performs ZERO writes once settled (covered_amount
+    unchanged + the single child already matches). A recalc that RAISES a person's pay so remainder
+    returns to 0 RETRACTS (deletes) that parent's children. NO-OP (returns early, zero writes) when there
+    are no posted parent rows OR the v2 columns/table don't exist yet (retail-ops owns the schema).
+    org_id is stamped on every child insert and filters every read/write."""
+    result = {"parents": 0, "covered": 0.0, "overflow": 0.0, "children": 0, "writes": 0}
+    def _oc():
+        return client.schema("commcalc").table("ops_chargeback")   # fresh builder per op
+    try:
+        parents = (_oc().select("id,employee_id,employee_name,store_code,reason,incident_date,amount,covered_amount")
+                   .eq("org_id", org_id).eq("applied_to", "commission").eq("status", "posted")
+                   .is_("parent_id", "null").in_("posted_ref", _pvariants(period)).execute().data) or []
+    except Exception:
+        return result   # v2 columns/table absent -> settlement is a no-op
+    if not parents:
+        return result   # nothing posted -> zero writes
+    result["parents"] = len(parents)
+
+    # payout BASIS per canonical person (identical to the read-side 'available'): total_payout - the
+    # legacy chargeback_items deduction (deduct=true), floored at 0.
+    comms = (client.schema("commcalc").table("rep_commissions")
+             .select("epay_salesperson,storeops_name,total_payout").eq("org_id", org_id)
+             .in_("period", _pvariants(period)).execute().data) or []
+    cbrows = (client.schema("commcalc").table("chargeback_items")
+              .select("epay_salesperson,amount,deduct").eq("org_id", org_id)
+              .in_("period", _pvariants(period)).execute().data) or []
+    cb_ded = {}
+    for it in cbrows:
+        if it.get("deduct"):
+            rk = it.get("epay_salesperson") or ""
+            cb_ded[rk] = cb_ded.get(rk, 0.0) + safe_float(it.get("amount"))
+    remaining, canon_of = {}, {}
+    for cr in comms:
+        rep = str(cr.get("epay_salesperson") or "").strip()
+        nm = str(cr.get("storeops_name") or "").strip()
+        canon = (rep or nm).upper()
+        if not canon:
+            continue
+        basis = max(0.0, safe_float(cr.get("total_payout")) - safe_float(cb_ded.get(rep, 0.0)))
+        remaining[canon] = round(remaining.get(canon, 0.0) + basis, 2)
+        for k in {rep.upper(), nm.upper()} - {""}:
+            canon_of[k] = canon
+
+    ov_by_reason, _lbl, ov_default, _ldef = _ops_policy_map(client, org_id)
+    period_ym = _canon_ym(period)
+    nmo, nyr = _next_month(period)
+    next_ym = f"{nyr}-{nmo:02d}" if (1 <= nmo <= 12 and nyr) else period_ym
+
+    pids = [p["id"] for p in parents]
+    try:
+        kids = (_oc().select("id,parent_id,applied_to,posted_ref,amount,status,decided_by")
+                .eq("org_id", org_id).in_("parent_id", pids).execute().data) or []
+    except Exception:
+        kids = []
+    kids_by_parent = {}
+    for k in kids:
+        kids_by_parent.setdefault(k.get("parent_id"), []).append(k)
+
+    def _mine(k):   # a child THIS engine still owns and may modify (never a waived or foreign one)
+        return k.get("status") == "posted" and k.get("decided_by") == "settlement"
+    parents.sort(key=lambda p: (str(p.get("incident_date") or ""), str(p.get("id") or "")))
+    for p in parents:
+        pid = p["id"]
+        amt = round(safe_float(p.get("amount")), 2)
+        cand = {str(p.get("employee_name") or "").strip().upper(),
+                str(p.get("employee_id") or "").strip().upper()} - {""}
+        matched = next((c for c in cand if c in canon_of), None)
+        canon = canon_of.get(matched) if matched else None   # map identity key -> canonical rep
+        rem_avail = remaining.get(canon, 0.0) if canon else 0.0
+        covered = round(min(rem_avail, amt), 2) if amt > 0 else 0.0
+        if canon:
+            remaining[canon] = round(rem_avail - covered, 2)
+        remainder = round(amt - covered, 2)
+        result["covered"] = round(result["covered"] + covered, 2)
+        result["overflow"] = round(result["overflow"] + remainder, 2)
+
+        # 1) stamp covered_amount on the parent — only when it actually changes (keeps re-runs write-free)
+        prev = p.get("covered_amount")
+        if prev is None or round(safe_float(prev), 2) != covered:
+            try:
+                _oc().update({"covered_amount": covered}).eq("org_id", org_id).eq("id", pid).execute()
+                result["writes"] += 1
+            except Exception:
+                pass
+
+        # 2) reconcile the overflow child. WAIVED WINS (operator 2026-07-22): a child management has
+        # waived is NEVER resurrected, replaced, or re-posted — the engine only ever touches a child it
+        # still OWNS (status='posted' AND decided_by='settlement').
+        existing = kids_by_parent.get(pid, [])
+        if remainder > 0:
+            overflow = ov_by_reason.get(str(p.get("reason") or "").strip()) or ov_default or "payroll"
+            if overflow == "next_cycle":
+                want_applied, want_ref = "commission", next_ym
+            else:
+                want_applied, want_ref = "payroll", period_ym
+            target = next((k for k in existing
+                           if k.get("applied_to") == want_applied and str(k.get("posted_ref")) == want_ref), None)
+            if target is not None and target.get("status") == "waived":
+                pass   # management forgave THIS overflow — leave it untouched, never resurrect
+            else:
+                # retract only MY posted children sitting on OTHER keys (e.g. a policy flip
+                # payroll<->next_cycle); a waived or foreign child is never touched.
+                for k in existing:
+                    if _mine(k) and not (k.get("applied_to") == want_applied and str(k.get("posted_ref")) == want_ref):
+                        try:
+                            _oc().delete().eq("org_id", org_id).eq("id", k["id"]).execute()
+                            result["writes"] += 1
+                        except Exception:
+                            pass
+                if target is None:
+                    try:
+                        _oc().insert({
+                            "org_id": org_id, "parent_id": pid,
+                            "employee_id": p.get("employee_id"), "employee_name": p.get("employee_name"),
+                            "store_code": p.get("store_code"), "reason": p.get("reason"),
+                            "incident_date": p.get("incident_date"), "amount": remainder,
+                            "status": "posted", "decided_by": "settlement",
+                            "decided_at": _datetime.now(_timezone.utc).isoformat(),
+                            "applied_to": want_applied, "posted_ref": want_ref,
+                        }).execute()
+                        result["writes"] += 1
+                        result["children"] += 1
+                    except Exception:
+                        pass
+                elif _mine(target) and round(safe_float(target.get("amount")), 2) != remainder:
+                    # my own posted child, remainder changed -> update amount in place (unique key unchanged)
+                    try:
+                        _oc().update({"amount": remainder}).eq("org_id", org_id).eq("id", target["id"]).execute()
+                        result["writes"] += 1
+                    except Exception:
+                        pass
+                # else: target is mine and already == remainder (converged), or a foreign posted child -> leave
+        else:
+            # fully covered on (re-)settle -> retract MY posted overflow children; PRESERVE waived ones
+            # (management's record stands; a waived child never deducts on the read-side regardless).
+            for k in existing:
+                if _mine(k):
+                    try:
+                        _oc().delete().eq("org_id", org_id).eq("id", k["id"]).execute()
+                        result["writes"] += 1
+                    except Exception:
+                        pass
+    return result
+
+
+@router.post("/ops-chargebacks/settle/{period}")
+def settle_ops_chargebacks(period: str, org_id: str = ORG_ID):
+    """On-demand commission-first settlement of POSTED ops chargebacks for the period (also runs
+    automatically at the end of each Calculate). Idempotent; a no-op when nothing is posted or the v2
+    schema isn't in place yet. Org-scoped."""
+    require_org(org_id)
+    return _settle_ops_chargebacks(sb(), org_id, period)
 
 
 @router.get("/commissions/{period}")
@@ -6032,7 +6284,10 @@ async def get_commissions(period: str, authorization: str = Header(default=""), 
         d = ded_by_rep.get(rep, 0)
         cr['chargeback_deduction'] = d
         _ops_keys = {str(cr.get('storeops_name') or '').strip().upper(), str(rep).strip().upper()} - {''}
-        od, olines = _ops_cb_for_rep(ops_lines_by, _ops_keys)
+        od_raw, olines = _ops_cb_for_rep(ops_lines_by, _ops_keys)
+        # Cap the applied deduction at the person's basis so final_payout never floors below 0 in the
+        # pre-settlement (covered_amount NULL) case; once settled, sum(covered) <= basis so it's a no-op.
+        od = min(od_raw, max(0.0, safe_float(cr.get('total_payout')) - safe_float(d))) if od_raw > 0 else od_raw
         cr['ops_chargeback_deduction'] = od
         cr['ops_chargeback_lines'] = olines
         cr['final_payout'] = safe_float(cr.get('total_payout')) - safe_float(d) - safe_float(od)
@@ -11048,8 +11303,10 @@ def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", 
                 for n in y['notes']:
                     if n not in fld['notes'] and len(fld['notes']) < 3:
                         fld['notes'].append(n)
-        ops_amt, ops_lines = _ops_cb_for_rep(ops_lines_by, keys)
         total_payout = round(safe_float(cr.get('total_payout')), 2)
+        ops_amt_raw, ops_lines = _ops_cb_for_rep(ops_lines_by, keys)
+        # cap at basis (total_payout - legacy chargeback_items deduction) so final never floors below 0
+        ops_amt = min(ops_amt_raw, max(0.0, total_payout - cbd['deducted'])) if ops_amt_raw > 0 else ops_amt_raw
         fp = cr.get('final_payout')
         final_payout = round((safe_float(fp) if fp is not None else total_payout - cbd['deducted']) - ops_amt, 2)
         reps.append({

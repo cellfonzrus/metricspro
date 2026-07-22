@@ -33,8 +33,12 @@ interface Rep {
   plan_name?: string
   final_payout?: number                 // total_payout − chargeback_items deducted − ops chargebacks (backend)
   chargeback_deduction?: number
-  ops_chargeback_deduction?: number     // POSTED ops-accountability chargebacks (retail-ops), commission-applied
-  ops_chargeback_lines?: { label: string; amount: number; reason: string; incident_date: string; store: string; status: string }[]
+  ops_chargeback_deduction?: number     // POSTED ops-accountability chargebacks (retail-ops), commission-applied (net of overflow)
+  ops_chargeback_lines?: {
+    label: string; amount: number; reason: string; incident_date: string; store: string; status: string
+    gross_amount?: number; covered_amount?: number | null; remainder?: number
+    overflow?: 'payroll' | 'next_cycle' | null; overflow_period?: string | null
+  }[]
 }
 
 const TABS = [
