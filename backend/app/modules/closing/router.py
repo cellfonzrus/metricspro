@@ -14,6 +14,7 @@ import pandas as pd
 import io
 import base64
 from . import gsheet
+from . import ops_chargebacks
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -2153,6 +2154,78 @@ def delete_alert_recipient(rid: str, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+# ── Ops-accountability chargebacks (OWNER DIRECTIVE 2026-07-22, mig 504) ───────────────────────
+# Two reasons: missed_closing (charged to the effective closer, decided at payroll — mod-people
+# owns that decide UI, writing straight to commcalc.ops_chargeback per the shared contract) and
+# missed_dm_verify (charged to the store's DM's commission, decided right here on the DM Verify
+# page). Everything below degrades to an honest empty/no-op state if migration 504 hasn't run.
+@router.get("/ops-chargebacks/policy")
+def get_ops_chargeback_policy(org_id: str = ORG_ID):
+    """Per-reason chargeback amount + enabled toggle. Always returns one row per known reason
+    (registry defaults when unsaved), so the admin UI renders a full form even at zero DB rows."""
+    require_org(org_id)
+    return {"policy": ops_chargebacks.get_policy(sb(), org_id)}
+
+
+@router.put("/ops-chargebacks/policy")
+def put_ops_chargeback_policy(payload: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Save {policy:[{reason, amount, enabled}, ...]}. Gated the same way as this module's other
+    money-config surfaces (an explicit settings.closing role grant/deny wins; else the management-
+    review gate — company-wide/super-admin, DMs excluded)."""
+    require_org(org_id)
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Editing ops-chargeback amounts is permission-restricted.")
+    rows = ops_chargebacks.put_policy(client, org_id, payload.get("policy") or [])
+    return {"policy": rows}
+
+
+@router.get("/ops-chargebacks/dm-verify")
+def get_missed_dm_verifies(lookback_days: int = 14, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Runs the missed-DM-verification sweep, then returns every missed_dm_verify chargeback
+    (pending/posted/waived) scoped to the caller's store span, plus cumulative totals. Powers the
+    'Missed verifications & chargebacks' panel at the top of the DM Verify page."""
+    require_org(org_id)
+    client = sb()
+    rows = ops_chargebacks.detect_missed_dm_verifies(org_id, lookback_days=lookback_days)
+    # PARENT rows only — a settlement-created overflow child (mod-commission's cascade-deduction
+    # engine, parent_id set) is bookkeeping for how an already-decided chargeback was allocated
+    # across commission cycles, not a second missed-verification incident; counting both would
+    # double the totals on this per-incident panel.
+    rows = [r for r in rows if not r.get("parent_id")]
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
+    return {"rows": rows, "totals": ops_chargebacks.totals(rows),
+            "can_decide": _can_mgmt_review(_caller_perms(client, authorization))}
+
+
+@router.post("/ops-chargebacks/decide")
+def decide_missed_dm_verify(payload: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Post (deduct from the DM's commission) or waive one pending missed_dm_verify chargeback.
+    Body: {id, decision: 'posted'|'waived', notes?}. Management-review gated — same as this
+    module's other override actions (release, duplicates); DMs cannot decide their own chargeback."""
+    require_org(org_id)
+    client = sb()
+    perms = _caller_perms(client, authorization)
+    if not _can_mgmt_review(perms):
+        raise HTTPException(403, "Deciding a chargeback is permission-restricted (not available to DMs).")
+    cb_id = (payload.get("id") or "").strip()
+    decision = (payload.get("decision") or "").strip()
+    if not cb_id:
+        raise HTTPException(400, "id required")
+    try:
+        row = ops_chargebacks.decide_chargeback(
+            client, org_id, cb_id, decision, decided_by=_caller_email(client, authorization),
+            notes=payload.get("notes"), reason_filter="missed_dm_verify")
+    except LookupError:
+        raise HTTPException(404, "chargeback not found")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "chargeback": row}
+
+
 # ── Alert crons (pg_cron → run-due, NOTIFY_RUN_SECRET-guarded) ──────────────────────────────────
 def _biz_today_iso():
     from datetime import datetime as _dt, timezone as _tz
@@ -3094,6 +3167,35 @@ def _can_mgmt_review(perms: dict) -> bool:
     if isinstance(ov, bool):
         return ov
     return (perms.get("scope") or "all") == "all"
+
+
+def _caller_email(client, authorization: str) -> str | None:
+    """The logged-in caller's email (storeops.app_users), for audit fields like decided_by. None
+    when the token doesn't resolve (never raises — audit fields are best-effort)."""
+    try:
+        from app.modules.core.router import _uid_from_token
+        uid = _uid_from_token(authorization)
+        if not uid:
+            return None
+        rows = (client.schema("storeops").table("app_users").select("email")
+                .eq("auth_id", uid).limit(1).execute().data) or []
+        return rows[0].get("email") if rows else None
+    except Exception:
+        return None
+
+
+def _can_edit_closing_setting(perms: dict) -> bool:
+    """Per-setting rights for closing money-config (ops-chargeback amounts): an explicit
+    settings.closing grant/deny on the caller's role wins (same key core's SETTING_AREAS registry
+    uses for 'Daily Closing / Tender Fields' — read locally off the already-fetched `perms` dict so
+    this doesn't need core's x-active-org multi-tenant membership resolution), else fall back to
+    the existing management-review gate."""
+    if perms.get("__super_admin"):
+        return True
+    s = perms.get("settings") or {}
+    if "closing" in s:
+        return bool(s["closing"])
+    return _can_mgmt_review(perms)
 
 
 def _num_key(s: str) -> str:
