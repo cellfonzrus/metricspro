@@ -56,6 +56,7 @@ export default function RepCoachingPage() {
     { header: 'KPIs met', field: 'kpis', get: (r: any) => `${r.kpis_met}/${r.total_kpis}` },
     { header: 'At risk', field: 'at_risk', money: true, get: (r: any) => r.at_risk || 0 },
     { header: 'Chargebacks', field: 'chargeback_deducted', money: true, get: (r: any) => r.chargeback_deducted || 0 },
+    { header: 'Ops chargebacks', field: 'ops_chargeback_deduction', money: true, get: (r: any) => r.ops_chargeback_deduction || 0 },
     { header: 'Flags', field: 'flag_count', get: (r: any) => r.flag_count || 0 },
     { header: 'On the table', field: 'money_on_table', money: true, get: (r: any) => r.money_on_table || 0 },
   ]
@@ -162,6 +163,18 @@ export default function RepCoachingPage() {
                             )}
                             {r.chargeback_deducted > 0 && (
                               <div style={{ fontSize: 13, color: '#b42318', marginTop: 4 }}>🔻 {fmt(r.chargeback_deducted)} chargebacks deducted ({r.chargeback_count}).</div>
+                            )}
+                            {/* Ops-accountability chargebacks (retail-ops, POSTED) deducted from this person's
+                                commission — read-only; posted/waived on the DM Verify page. */}
+                            {(r.ops_chargeback_deduction || 0) > 0 && (
+                              <div style={{ fontSize: 13, color: '#b42318', marginTop: 4 }}>
+                                🔻 {fmt(r.ops_chargeback_deduction)} ops chargebacks deducted:
+                                <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 12 }}>
+                                  {(r.ops_chargeback_lines || []).map((l: any, i: number) => (
+                                    <li key={i}>{l.label} — −{fmt(l.amount)} <span style={{ color: 'var(--text3)', textTransform: 'uppercase' }}>({l.status || 'posted'})</span></li>
+                                  ))}
+                                </ul>
+                              </div>
                             )}
                             {(r.coaching_notes || []).length > 0 && (
                               <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: 'var(--text3)' }}>

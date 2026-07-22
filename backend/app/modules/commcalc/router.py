@@ -5931,6 +5931,77 @@ def _caller_rep_keys(authorization: str, org_id: str):
         return None
 
 
+# ── Ops-accountability chargebacks (retail-ops' commcalc.ops_chargeback) ───────────────────────────
+# Management-created chargebacks for missed daily closings / missed DM verifications. ONLY rows with
+# status='posted' AND applied_to='commission' AND posted_ref == this commission period ever deduct
+# (pending/waived never do). The table is OWNED by mod-retail-ops (its own migration band) — this module
+# creates NOTHING and only READS it, degrading to a no-op if the table doesn't exist yet. Carrier/tenant-
+# agnostic: no Boost branch; a tenant with zero posted rows sees pay byte-identical to before.
+_OPS_CB_REASON_LABELS = {
+    "missed_dm_verify": "missed DM verification",
+    "missed_closing": "missed daily closing",
+}
+
+
+def _ops_cb_reason_label(reason):
+    """Human label for an ops-chargeback reason code (config-extensible; an unknown/new retail-ops code
+    humanizes its snake_case token so it still renders sensibly with no code change here)."""
+    r = str(reason or "").strip()
+    return _OPS_CB_REASON_LABELS.get(r, r.replace("_", " ").strip() or "ops chargeback")
+
+
+def _ops_chargeback_deductions(client, org_id, period):
+    """POSTED, commission-applied ops chargebacks for `period`, grouped by the person they hit.
+    Returns lines_by_key: {UPPER(employee_name or employee_id): [ {label, amount, reason,
+    incident_date, store, status} ]}. Each line's label is the statement text
+    'Ops chargeback - <reason> (YYYY-MM-DD @ <store>)'. Matched against posted_ref via _pvariants so
+    either the 'YYYY-MM' (contract) or 'Month YYYY' spelling resolves. Org-scoped. Degrades to {} when
+    the table doesn't exist yet OR the tenant has no posted commission chargebacks -> callers add
+    nothing and pay is unchanged (the zero-rows -> unchanged-pay invariant)."""
+    try:
+        rows = (client.schema("commcalc").table("ops_chargeback")
+                .select("employee_id,employee_name,store_code,reason,incident_date,amount,status,applied_to,posted_ref")
+                .eq("org_id", org_id).eq("applied_to", "commission").eq("status", "posted")
+                .in_("posted_ref", _pvariants(period)).execute().data) or []
+    except Exception:
+        return {}
+    lines_by = {}
+    for r in rows:
+        amt = safe_float(r.get("amount"))
+        if amt <= 0:
+            continue
+        inc = str(r.get("incident_date") or "")[:10]
+        store = str(r.get("store_code") or "").strip()
+        loc = f" @ {store}" if store else ""
+        line = {
+            "label": f"Ops chargeback - {_ops_cb_reason_label(r.get('reason'))} ({inc}{loc})",
+            "amount": round(amt, 2), "reason": r.get("reason"),
+            "incident_date": inc, "store": store, "status": "posted",
+        }
+        # rep_commissions has no employee_id column, so employee_NAME (== storeops_name, both "First Last")
+        # is the real join; id is a fallback only when name is blank. One key per row -> no double-keying.
+        key = str(r.get("employee_name") or "").strip().upper() or str(r.get("employee_id") or "").strip().upper()
+        if not key:
+            continue
+        lines_by.setdefault(key, []).append(line)
+    return lines_by
+
+
+def _ops_cb_for_rep(lines_by_key, keys):
+    """Union the POSTED ops-chargeback lines matching any of a rep's identity keys (UPPER name/login),
+    deduped by (reason, incident_date, store, amount) so the same row can't count twice. Returns
+    (total_deducted, [lines]). No match / empty map -> (0.0, [])."""
+    seen, out = set(), []
+    for k in keys:
+        for ln in lines_by_key.get(k, []):
+            sig = (ln["reason"], ln["incident_date"], ln["store"], ln["amount"])
+            if sig in seen:
+                continue
+            seen.add(sig)
+            out.append(ln)
+    return round(sum(l["amount"] for l in out), 2), out
+
+
 @router.get("/commissions/{period}")
 async def get_commissions(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
@@ -5951,11 +6022,20 @@ async def get_commissions(period: str, authorization: str = Header(default=""), 
             # safe_float: a manually-assigned chargeback can store amount as a string
             # ("25.00"), and 0 + "25.00" raised TypeError → the whole endpoint 500'd for that rep.
             ded_by_rep[rep] = ded_by_rep.get(rep, 0) + safe_float(item.get('amount'))
+    # Ops-accountability chargebacks (retail-ops' commcalc.ops_chargeback): POSTED, commission-applied
+    # rows deduct from the person's commission this period (e.g. a DM foregoing an amount for a missed
+    # DM verification). Pure READ-SIDE aggregation off the posted rows -> a recalc can't delete/dup it.
+    # No rows (or table absent) -> {} -> the two new fields are 0/[] and final_payout is byte-identical.
+    ops_lines_by = _ops_chargeback_deductions(client, org_id, period)
     for cr in comms:
         rep = cr.get('epay_salesperson') or ''
         d = ded_by_rep.get(rep, 0)
         cr['chargeback_deduction'] = d
-        cr['final_payout'] = safe_float(cr.get('total_payout')) - safe_float(d)
+        _ops_keys = {str(cr.get('storeops_name') or '').strip().upper(), str(rep).strip().upper()} - {''}
+        od, olines = _ops_cb_for_rep(ops_lines_by, _ops_keys)
+        cr['ops_chargeback_deduction'] = od
+        cr['ops_chargeback_lines'] = olines
+        cr['final_payout'] = safe_float(cr.get('total_payout')) - safe_float(d) - safe_float(od)
     from app.modules.storeops.router import scope_keyset, in_keyset
     # SELF scope (B2): an employee sees ONLY their OWN rep row(s) — their own KPIs/commission, never a
     # coworker's pay. scope_keyset returns an empty set for a self rep (would hide everything); instead we
@@ -10899,6 +10979,7 @@ def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", 
     comms = (client.schema('commcalc').table('rep_commissions').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
     cb = (client.schema('commcalc').table('chargeback_items')
           .select('epay_salesperson,amount,deduct').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
+    ops_lines_by = _ops_chargeback_deductions(client, org_id, period)
     flags = (client.schema('commcalc').table('flags')
              .select('epay_salesperson,severity,description,coaching_note').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
     stores = (client.schema('storeops').table('stores').select('store_code,address,market').eq('org_id', org_id).execute().data) or []
@@ -10967,9 +11048,10 @@ def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", 
                 for n in y['notes']:
                     if n not in fld['notes'] and len(fld['notes']) < 3:
                         fld['notes'].append(n)
+        ops_amt, ops_lines = _ops_cb_for_rep(ops_lines_by, keys)
         total_payout = round(safe_float(cr.get('total_payout')), 2)
         fp = cr.get('final_payout')
-        final_payout = round(safe_float(fp) if fp is not None else total_payout - cbd['deducted'], 2)
+        final_payout = round((safe_float(fp) if fp is not None else total_payout - cbd['deducted']) - ops_amt, 2)
         reps.append({
             'rep': name, 'store': st, 'market': mk, 'tier': tier,
             'kpis_met': kpis_met, 'total_kpis': cr.get('total_kpis') or 7,
@@ -10978,7 +11060,8 @@ def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", 
             'need_for_full': max(0, t100 - kpis_met),
             'chargeback_total': round(cbd['total'], 2), 'chargeback_deducted': round(cbd['deducted'], 2),
             'chargeback_count': cbd['count'], 'flag_count': fld['count'], 'flag_high': fld['high'],
-            'coaching_notes': fld['notes'], 'money_on_table': round(at_risk + cbd['deducted'], 2),
+            'ops_chargeback_deduction': round(ops_amt, 2), 'ops_chargeback_lines': ops_lines,
+            'coaching_notes': fld['notes'], 'money_on_table': round(at_risk + cbd['deducted'] + ops_amt, 2),
         })
     reps.sort(key=lambda r: -r['money_on_table'])
     from app.modules.storeops.router import scope_keyset, in_keyset
@@ -10988,6 +11071,7 @@ def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", 
     summary = {'reps': len(reps),
                'total_at_risk': round(sum(r['at_risk'] for r in reps), 2),
                'total_chargebacks': round(sum(r['chargeback_deducted'] for r in reps), 2),
+               'total_ops_chargebacks': round(sum(r.get('ops_chargeback_deduction', 0) for r in reps), 2),
                'total_money_on_table': round(sum(r['money_on_table'] for r in reps), 2),
                'below_tier': sum(1 for r in reps if r['tier'] < 1.0)}
     return {"period": period, "reps": reps, "summary": summary}

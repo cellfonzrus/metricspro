@@ -31,6 +31,10 @@ interface Rep {
   carrier_statement_comm?: number
   plan_comm?: number                    // configurable Commission Plan pay (non-Boost carriers, mig 059)
   plan_name?: string
+  final_payout?: number                 // total_payout − chargeback_items deducted − ops chargebacks (backend)
+  chargeback_deduction?: number
+  ops_chargeback_deduction?: number     // POSTED ops-accountability chargebacks (retail-ops), commission-applied
+  ops_chargeback_lines?: { label: string; amount: number; reason: string; incident_date: string; store: string; status: string }[]
 }
 
 const TABS = [
@@ -413,12 +417,62 @@ export default function ReportsPage() {
                           <td></td>
                         </tr>
                         <tr style={{ fontWeight: 700 }}>
-                          <td colSpan={3}>Final Payout (after chargebacks)</td>
-                          <td style={{ textAlign: 'right', color: 'var(--accent)' }}>{fmt((currentRep.total_payout || 0) - deducted)}</td>
+                          <td colSpan={3}>Final Payout (after all deductions)</td>
+                          <td style={{ textAlign: 'right', color: 'var(--accent)' }}>{fmt((currentRep.total_payout || 0) - deducted - (currentRep.ops_chargeback_deduction || 0))}</td>
                           <td></td>
                         </tr>
                       </tbody>
                     </table>
+                  </div>
+                )
+              })()}
+
+              {/* Ops-accountability chargebacks (POSTED, read-only) — retail-ops' commcalc.ops_chargeback,
+                  commission-applied. Deducted from this person's commission for the period. Posting/waiving
+                  happens on the DM Verify page (retail-ops), NOT here — this is a read-only statement line. */}
+              {(() => {
+                const lines = currentRep.ops_chargeback_lines || []
+                if (!lines.length) return null
+                const opsTotal = currentRep.ops_chargeback_deduction ?? lines.reduce((s, l) => s + (l.amount || 0), 0)
+                const hasCbItems = chargebacks.some(cb => cb.epay_salesperson === currentRep.epay_salesperson)
+                return (
+                  <div className="card" style={{ padding: 0, marginTop: 20, border: '1px solid #fca5a5' }}>
+                    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600, background: '#fef2f2', color: '#991b1b' }}>
+                      🔻 Ops Accountability Chargebacks — {lines.length} POSTED · deducted from commission
+                    </div>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: 'left' }}>Ops chargeback</th>
+                          <th style={{ textAlign: 'center' }}>Status</th>
+                          <th style={{ textAlign: 'right' }}>Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lines.map((l, i) => (
+                          <tr key={i}>
+                            <td style={{ fontSize: 12 }}>{l.label}</td>
+                            <td style={{ textAlign: 'center' }}>
+                              <span className="badge badge-red" style={{ textTransform: 'uppercase', fontSize: 10 }}>{l.status || 'posted'}</span>
+                            </td>
+                            <td style={{ textAlign: 'right', fontWeight: 600 }}>−{fmt(l.amount)}</td>
+                          </tr>
+                        ))}
+                        <tr style={{ fontWeight: 700, background: 'var(--surface2)' }}>
+                          <td colSpan={2}>Total ops chargebacks deducted</td>
+                          <td style={{ textAlign: 'right', color: 'var(--red)' }}>−{fmt(opsTotal)}</td>
+                        </tr>
+                        {!hasCbItems && (
+                          <tr style={{ fontWeight: 700 }}>
+                            <td colSpan={2}>Final Payout (after ops chargebacks)</td>
+                            <td style={{ textAlign: 'right', color: 'var(--accent)' }}>{fmt(currentRep.final_payout ?? ((currentRep.total_payout || 0) - opsTotal))}</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                    <div style={{ padding: '8px 16px', fontSize: 11, color: 'var(--text3)' }}>
+                      Posted or waived by management on the DM Verify page — read-only here.
+                    </div>
                   </div>
                 )
               })()}
