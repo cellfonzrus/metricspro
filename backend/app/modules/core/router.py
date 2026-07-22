@@ -3277,3 +3277,16 @@ async def support_docs_import(body: dict, authorization: str = Header(default=""
     except Exception as e:
         raise HTTPException(500, f"import failed — run migration 715 first: {e}")
     return {"ok": True, "imported": len(rows), "skipped": skipped, "domain": body.get("domain")}
+
+
+@router.post("/support-docs/seed-bundled")
+async def support_docs_seed_bundled(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Re-run the BUNDLED help-doc seed (app/data/support_docs_seed.json) into the HOUSE org on demand
+    (support-gated). This is the same never-clobber load that runs automatically on the house org's
+    sync_tenant pass — a human-edited row (updated_by not NULL/'seed') is never overwritten. Zero manual
+    steps are needed after mig 715 + deploy; this endpoint just lets support re-seed after editing the
+    bundle. Returns {inserted, updated, skipped, ok}."""
+    if not _support_gate(authorization, x_active_org):
+        raise HTTPException(403, "Seeding help docs is restricted to house support staff.")
+    from app.modules.core.support_seed import seed_support_docs
+    return seed_support_docs(sb(), ORG_ID)

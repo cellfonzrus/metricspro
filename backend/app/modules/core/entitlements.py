@@ -168,6 +168,16 @@ def sync_tenant(client, org_id: str) -> dict:
         seeded = True
     except Exception:
         pass  # seed fn (mig 076) not run yet — non-fatal; retried on the next sync
+    # HOUSE org only: load the bundled tech-support help-doc packs (mig 715). Zero manual import — they
+    # land on the house org's sync pass (triggered by the SEED_VERSION 6 bump). NEVER clobbers a
+    # human-edited row (only inserts missing page_keys / refreshes rows whose updated_by is NULL or 'seed').
+    # Best-effort: an un-run mig 715 (support_doc absent) or a missing bundle file is a silent no-op.
+    if org_id == ORG_ID:
+        try:
+            from app.modules.core.support_seed import seed_support_docs
+            seed_support_docs(client, org_id)
+        except Exception:
+            pass
     if seeded:
         try:
             client.schema("storeops").table("tenants").update(

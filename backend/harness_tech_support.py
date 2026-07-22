@@ -315,6 +315,119 @@ check("15. due = created + response_hours",
 check("16. no policy row → None (no hard-coded hours)",
       hd._sla_due_at(policy, "low", "2026-07-22T00:00:00+00:00") is None)
 
+# ── 17-20: BUNDLED SEED (never-clobber, missing-table no-op, real file loads) ───────────────────
+import app.modules.core.support_seed as seed   # noqa: E402
+
+st = fresh_store()
+f = wire(st)
+pages = [{"page_key": "/a", "title": "A", "user_md": "ua", "support_md": "sa", "common_issues": []},
+         {"page_key": "/b", "title": "B", "user_md": "ub"},
+         {"page_key": "  ", "title": "no key → skip"}]
+res = seed.seed_support_docs(f, HOUSE, pages=pages)
+check("17. seed inserts valid pages, skips blank page_key, stamps updated_by='seed'",
+      res["inserted"] == 2 and res["skipped"] == 1 and res["ok"]
+      and len(st["support_doc"]) == 2 and all(r.get("updated_by") == "seed" for r in st["support_doc"]))
+
+st = fresh_store()
+st["support_doc"] = [
+    {"id": "d1", "org_id": HOUSE, "page_key": "/a", "updated_by": "admin@house.com", "title": "HUMAN"},
+    {"id": "d2", "org_id": HOUSE, "page_key": "/b", "updated_by": "seed", "title": "old-seed"},
+]
+f = wire(st)
+res = seed.seed_support_docs(f, HOUSE, pages=[
+    {"page_key": "/a", "title": "SEED-A"}, {"page_key": "/b", "title": "SEED-B"}, {"page_key": "/c", "title": "SEED-C"}])
+a = next(r for r in st["support_doc"] if r["page_key"] == "/a")
+b = next(r for r in st["support_doc"] if r["page_key"] == "/b")
+check("18a. human-edited row survives a re-seed (never clobbered)",
+      a["title"] == "HUMAN" and a["updated_by"] == "admin@house.com" and res["skipped"] >= 1)
+check("18b. a prior seed-owned row IS refreshed", b["title"] == "SEED-B" and b["updated_by"] == "seed" and res["updated"] == 1)
+check("18c. a missing page_key is inserted", any(r["page_key"] == "/c" for r in st["support_doc"]) and res["inserted"] == 1)
+check("18d. re-seed does not duplicate rows", len(st["support_doc"]) == 3)
+
+
+class _RaisingClient:
+    def schema(self, _n): return self
+    def table(self, _n): return self
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+    def execute(self): raise RuntimeError("relation core.support_doc does not exist")
+
+
+res = seed.seed_support_docs(_RaisingClient(), HOUSE, pages=[{"page_key": "/a", "title": "A"}])
+check("19. un-run mig 715 (missing table) → silent no-op (ok False, no crash)",
+      res["ok"] is False and res["inserted"] == 0)
+
+loaded = seed.load_seed_pages()
+check("20. bundled seed file ships + parses (>=150 pages, contract shape)",
+      isinstance(loaded, list) and len(loaded) >= 150 and all(isinstance(p, dict) for p in loaded[:5]))
+
+# ── 21: OFFLINE SQL SANITY — the mig 715 exemplar INSERT has matching column/value arity per row ──
+# (This is the class of bug Gate-1 caught: 9 columns declared, some rows supplied only 8 values.)
+def _split_top_level(inner):
+    """Split one VALUES tuple's inner text on TOP-LEVEL commas, respecting '…'/E'…' string literals
+    ('' escape) and (…)/[…] nesting (parens/brackets inside string literals are ignored)."""
+    vals, cur, depth, in_str, i = [], [], 0, False, 0
+    while i < len(inner):
+        ch = inner[i]
+        if in_str:
+            if ch == "'":
+                if i + 1 < len(inner) and inner[i + 1] == "'":
+                    cur.append("''"); i += 2; continue
+                in_str = False
+            cur.append(ch); i += 1; continue
+        if ch == "'":
+            in_str = True; cur.append(ch); i += 1; continue
+        if ch in "([":
+            depth += 1; cur.append(ch); i += 1; continue
+        if ch in ")]":
+            depth -= 1; cur.append(ch); i += 1; continue
+        if ch == "," and depth == 0:
+            vals.append("".join(cur).strip()); cur = []; i += 1; continue
+        cur.append(ch); i += 1
+    if "".join(cur).strip():
+        vals.append("".join(cur).strip())
+    return vals
+
+
+def _parse_tuples(region):
+    """Extract each top-level (…) tuple's inner text from a VALUES region (string-literal aware)."""
+    tuples, cur, depth, in_str, i = [], [], 0, False, 0
+    while i < len(region):
+        ch = region[i]
+        if in_str:
+            if ch == "'":
+                if i + 1 < len(region) and region[i + 1] == "'":
+                    cur.append("''"); i += 2; continue
+                in_str = False
+            cur.append(ch); i += 1; continue
+        if ch == "'":
+            in_str = True; cur.append(ch); i += 1; continue
+        if ch == "(":
+            depth += 1
+            if depth == 1: cur = []; i += 1; continue
+            cur.append(ch); i += 1; continue
+        if ch == ")":
+            depth -= 1
+            if depth == 0: tuples.append("".join(cur)); cur = []; i += 1; continue
+            cur.append(ch); i += 1; continue
+        cur.append(ch); i += 1
+    return tuples
+
+
+import re as _re   # noqa: E402
+_mig = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "database", "migrations", "715_tech_support.sql")
+with open(_mig, encoding="utf-8") as _fh:
+    _sql = _fh.read()
+_m = _re.search(r"INSERT INTO core\.support_doc\s*\((.*?)\)\s*VALUES(.*?)ON CONFLICT", _sql, _re.S)
+check("21a. found the core.support_doc exemplar INSERT block", bool(_m))
+if _m:
+    _cols = [c.strip() for c in _m.group(1).split(",") if c.strip()]
+    _tuples = _parse_tuples(_m.group(2))
+    _arities = [len(_split_top_level(t)) for t in _tuples]
+    check(f"21b. every exemplar VALUES row has {len(_cols)} values (== column count)",
+          bool(_tuples) and all(x == len(_cols) for x in _arities),
+          f"cols={len(_cols)} rows={len(_tuples)} arities={_arities}")
+
 # ── summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} passed")
 if FAIL:
