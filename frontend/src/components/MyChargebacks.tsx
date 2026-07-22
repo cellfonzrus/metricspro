@@ -11,10 +11,16 @@ import { useAuth } from '@/lib/auth-context'
 // admin Employee Dashboard (self-view only there — see employee/page.tsx's guard) without prop
 // plumbing. Renders nothing (not even an empty card) once loaded with zero items, so a tenant/
 // employee that has never had one sees no new UI at all.
+//
+// 2026-07-22 owner follow-up (CASCADE settlement): a chargeback commission can't fully cover spills
+// an OVERFLOW child row into payroll (parent_id set on the child; covered_amount stamped on the row
+// that shows what commission already absorbed). Both fields are simply absent pre-migration/pre-
+// settlement — every line below degrades to the plain reason/store/date/amount/status it always was.
 
 interface ChargebackItem {
   id: string; reason: string; reason_label: string; store_code?: string
   incident_date?: string; amount?: number; status?: string
+  parent_id?: string | null; covered_amount?: number | null
 }
 
 const STATUS_STYLE: Record<string, { bg: string; fg: string; label: string }> = {
@@ -47,9 +53,23 @@ export default function MyChargebacks({ token }: { token?: string | null }) {
         <tbody>
           {items.map(it => {
             const s = STATUS_STYLE[String(it.status || '').toLowerCase()] || { bg: '#f1f5f9', fg: '#475569', label: (it.status || '—').toUpperCase() }
+            const isOverflowChild = !!it.parent_id
+            const hasCoveredContext = it.covered_amount != null
             return (
               <tr key={it.id}>
-                <td>{it.reason_label || it.reason}</td>
+                <td>
+                  {it.reason_label || it.reason}
+                  {isOverflowChild && (
+                    <div style={{ fontSize: 10, color: '#b45309', marginTop: 2 }}>
+                      carried from {it.incident_date || 'commission'} — overflow
+                    </div>
+                  )}
+                  {hasCoveredContext && (
+                    <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>
+                      {fmt(Number(it.covered_amount || 0))} from commission of {fmt(Number(it.amount || 0) + Number(it.covered_amount || 0))}
+                    </div>
+                  )}
+                </td>
                 <td>{it.store_code || '—'}</td>
                 <td>{it.incident_date || '—'}</td>
                 <td>{it.amount != null ? fmt(Number(it.amount)) : '—'}</td>

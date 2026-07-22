@@ -417,10 +417,26 @@ def get_payroll_by_store(month: str = None, authorization: str = Header(default=
 # above). Every lookup degrades to an empty list / a clear 400 if that table isn't there yet, so a
 # pending migration on ANOTHER agent's branch never breaks this page.
 # ════════════════════════════════════════════════════════════════════════════════════════════════
+def _chargeback_policy_labels(org_id):
+    """org-scoped {reason: label} override map from commcalc.ops_chargeback_policy.label (retail-ops
+    schema v2, 2026-07-22 owner follow-up) — ONE lookup per request, never per-row. A blank/absent
+    label for a reason falls through to the code default. Degrades to {} if the table/column isn't
+    there yet (pre-migration on retail-ops' branch)."""
+    try:
+        rows = (get_supabase().schema("commcalc").table("ops_chargeback_policy").select("reason,label")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        return {}
+    return {r.get("reason"): (r.get("label") or "").strip() for r in rows if (r.get("label") or "").strip()}
+
+
 @router.get("/payroll-chargebacks")
 def payroll_chargebacks(month: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     """This pay period's commcalc.ops_chargeback rows with applied_to='payroll' (missed-closing
-    chargebacks against an employee's pay) — read-only, org + store-RBAC scoped like /payroll."""
+    chargebacks against an employee's pay, PLUS any commission-settlement OVERFLOW child rows the
+    settlement engine upserts with parent_id set — those arrive already status='posted') —
+    read-only, org + store-RBAC scoped like /payroll. `select("*")` so parent_id/covered_amount
+    pass through automatically once retail-ops' v2 columns exist; absent otherwise (degrade-safe)."""
     lo = hi = None
     if month:
         parts = str(month).split("-")
@@ -437,8 +453,9 @@ def payroll_chargebacks(month: str = "", authorization: str = Header(default="")
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
+    policy_labels = _chargeback_policy_labels(org_id)
     for r in rows:
-        r["reason_label"] = _chargeback_reason_label(r.get("reason"))
+        r["reason_label"] = _chargeback_reason_label(r.get("reason"), policy_labels)
     return {"items": rows}
 
 
@@ -447,20 +464,36 @@ def decide_payroll_chargeback(cb_id: str, body: dict, authorization: str = Heade
     """MANAGEMENT-GATED (same _require_manager tier as the shift-extension/DM-approval endpoints
     above): POST a chargeback (status='posted' — becomes a visible deduction on that employee's
     payroll row) or WAIVE it (status='waived' — never deducts). Body: {decision: 'post'|'waive',
-    period?}. Only ever UPDATEs an existing, org+applied_to-scoped row — never inserts one."""
+    period?}. Only ever UPDATEs an existing, org+applied_to-scoped row — never inserts one.
+
+    2026-07-22 owner follow-up rule (CASCADE settlement overflow): a commission-settlement engine
+    (mod-commission) may UPSERT overflow CHILD rows here (parent_id set, applied_to='payroll',
+    status already 'posted', decided_by='settlement') — the remainder a person's commission couldn't
+    fully absorb. Owner default: POST is only ever valid on a row still 'pending' (a settlement
+    child never is — it arrives already posted, so this also structurally blocks re-posting one);
+    WAIVE is allowed on ANY row regardless of status/parent_id — management can still cancel/reverse
+    a posted row, including a settlement-created overflow child, at any time."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
     decision = (body.get("decision") or "").strip().lower()
     if decision not in ("post", "waive"):
         raise HTTPException(400, "decision must be 'post' or 'waive'")
     try:
-        rows = (get_supabase().schema("commcalc").table("ops_chargeback").select("id")
+        rows = (get_supabase().schema("commcalc").table("ops_chargeback").select("*")
                 .eq("id", cb_id).eq("org_id", org_id).eq("applied_to", "payroll")
                 .limit(1).execute().data) or []
     except Exception:
         raise HTTPException(400, "Chargebacks aren't available yet — pending a migration on another module.")
     if not rows:
         raise HTTPException(404, "unknown chargeback")
+    row = rows[0]
+    if decision == "post":
+        if str(row.get("status") or "").lower() != "pending":
+            raise HTTPException(409, f"Already {row.get('status')} — cannot post again.")
+        if row.get("parent_id"):
+            raise HTTPException(409, "This is a commission-settlement overflow row — it arrives "
+                                      "already posted and can only be waived, never posted.")
+    # decision == "waive": no restriction (any status, any parent_id) — see owner-rule docstring above.
     upd = {"status": "posted" if decision == "post" else "waived",
            "decided_by": mgr.get("email"), "decided_at": datetime.now(timezone.utc).isoformat()}
     if decision == "post":
@@ -1408,7 +1441,13 @@ _CHARGEBACK_REASON_LABELS = {
 }
 
 
-def _chargeback_reason_label(reason):
+def _chargeback_reason_label(reason, policy_labels=None):
+    """Plain-language label for a chargeback reason. Prefers a management-set
+    commcalc.ops_chargeback_policy.label override for the org (2026-07-22 owner follow-up — pass the
+    ONE-per-request map from _chargeback_policy_labels, never re-fetched per row), falling back to
+    the code default map when no override is configured for that reason."""
+    if policy_labels and policy_labels.get(reason):
+        return policy_labels[reason]
     return _CHARGEBACK_REASON_LABELS.get(str(reason or ""), str(reason or "Chargeback").replace("_", " ").title())
 
 
@@ -1418,7 +1457,9 @@ def my_chargebacks(authorization: str = Header(default=""), org_id: str = ORG_ID
     token (SAME rule as every other self-view endpoint here: /timeclock/status, /timeclock/face…),
     NEVER a client-supplied employee_id. Every reason (payroll or commission-side), for the
     Employee Dashboard's "My Chargebacks" card. Degrades to an empty list if the table isn't there
-    yet (mod-retail-ops' migration, parallel parked branch)."""
+    yet (mod-retail-ops' migration, parallel parked branch). Passes through the CASCADE-settlement
+    fields (parent_id, covered_amount — retail-ops schema v2, 2026-07-22) when present so the card
+    can show "$X from commission" / overflow-origin context; both are simply absent pre-migration."""
     org_id, employee_id = _caller_identity(authorization)
     ids, _name = _emp_id_variants(org_id, employee_id)
     try:
@@ -1427,15 +1468,18 @@ def my_chargebacks(authorization: str = Header(default=""), org_id: str = ORG_ID
                 .order("incident_date", desc=True).limit(500).execute().data) or []
     except Exception:
         return {"items": []}
+    policy_labels = _chargeback_policy_labels(org_id)
     items = [{
         "id": r.get("id"),
         "reason": r.get("reason"),
-        "reason_label": _chargeback_reason_label(r.get("reason")),
+        "reason_label": _chargeback_reason_label(r.get("reason"), policy_labels),
         "store_code": r.get("store_code"),
         "incident_date": r.get("incident_date"),
         "amount": r.get("amount"),
         "status": r.get("status"),
         "applied_to": r.get("applied_to"),
+        "parent_id": r.get("parent_id"),
+        "covered_amount": r.get("covered_amount"),
     } for r in rows]
     return {"items": items}
 

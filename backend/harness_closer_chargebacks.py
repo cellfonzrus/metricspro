@@ -6,6 +6,12 @@
   4. `GET /storeops/payroll-chargebacks` + `POST /storeops/payroll-chargebacks/{id}/decision`:
      degrade-gracefully when commcalc.ops_chargeback doesn't exist yet, manager gating on the write,
      and that POST/WAIVE only ever UPDATEs (never inserts) an existing org+applied_to-scoped row.
+  5. 2026-07-22 FOLLOW-UP (CASCADE settlement): `_chargeback_policy_labels` / `_chargeback_reason_label`
+     preferring an org's `ops_chargeback_policy.label` override over the code default, on both
+     /payroll-chargebacks and /my-chargebacks; the decide-endpoint's new owner-default rule (POST only
+     ever valid on a 'pending' row, explicitly rejected on a parent_id-set row even if hypothetically
+     pending; WAIVE allowed on ANY status/parent_id, including an already-'posted' settlement-created
+     overflow child); and /my-chargebacks passing through parent_id/covered_amount untouched.
 
 Runs the REAL functions from app.modules.storeops.router against an in-memory fake Supabase client
 (same convention as harness_pto_router_integration.py). Run: `python3 harness_closer_chargebacks.py`
@@ -274,6 +280,49 @@ check("3d different token identity -> different (still self-scoped) result",
       len(resp2["items"]) == 1 and resp2["items"][0]["id"] == "cb2", resp2)
 R._caller_identity = old_caller_identity
 
+# 3e. Policy label override (ops_chargeback_policy.label, retail-ops v2) takes priority over the code
+#     default map, on a SINGLE per-request lookup (not one query per row) — proven by seeding just one
+#     org row and confirming it's used for every 'missed_closing' row without extra fake-store queries
+#     blowing up the (deliberately simple) fake client.
+reset()
+fake.seed("commcalc", "ops_chargeback_policy", [
+    {"org_id": ORG, "reason": "missed_closing", "label": "Missed EOD Close-Out"},
+    {"org_id": ORG, "reason": "missed_dm_verify", "label": ""},   # blank override -> falls through to code default
+])
+fake.seed("commcalc", "ops_chargeback", [
+    {"id": "cb4", "org_id": ORG, "employee_id": "E1", "employee_name": "Alice", "store_code": "S1",
+     "reason": "missed_closing", "incident_date": "2026-07-12", "amount": 20, "status": "pending",
+     "applied_to": "payroll"},
+    {"id": "cb5", "org_id": ORG, "employee_id": "E1", "employee_name": "Alice", "store_code": "S1",
+     "reason": "missed_dm_verify", "incident_date": "2026-07-12", "amount": 12, "status": "pending",
+     "applied_to": "payroll"},
+])
+R._caller_identity = lambda auth: (ORG, "E1")
+resp = R.my_chargebacks(authorization="whatever", org_id=ORG)
+labels = {i["id"]: i["reason_label"] for i in resp["items"]}
+check("3e policy label override used when set", labels.get("cb4") == "Missed EOD Close-Out", labels)
+check("3e blank override falls through to code default", labels.get("cb5") == "Missed DM store-visit verification", labels)
+R._caller_identity = old_caller_identity
+
+# 3f. parent_id / covered_amount pass through untouched on /my-chargebacks (CASCADE settlement
+#     fields, retail-ops v2) — absent -> None, present -> echoed as-is.
+reset()
+fake.seed("commcalc", "ops_chargeback", [
+    {"id": "cb6", "org_id": ORG, "employee_id": "E1", "employee_name": "Alice", "store_code": "S1",
+     "reason": "missed_closing", "incident_date": "2026-07-05", "amount": 10, "status": "pending",
+     "applied_to": "commission", "covered_amount": 15},   # parent, no parent_id -- covered stamped
+    {"id": "cb7", "org_id": ORG, "employee_id": "E1", "employee_name": "Alice", "store_code": "S1",
+     "reason": "missed_closing", "incident_date": "2026-07-05", "amount": 10, "status": "posted",
+     "applied_to": "payroll", "parent_id": "cb6", "decided_by": "settlement"},   # overflow child
+])
+R._caller_identity = lambda auth: (ORG, "E1")
+resp = R.my_chargebacks(authorization="whatever", org_id=ORG)
+byid = {i["id"]: i for i in resp["items"]}
+check("3f covered_amount passes through on the parent row", byid["cb6"]["covered_amount"] == 15, byid["cb6"])
+check("3f parent_id is None on a row that has none", byid["cb6"]["parent_id"] is None, byid["cb6"])
+check("3f parent_id passes through on the overflow child", byid["cb7"]["parent_id"] == "cb6", byid["cb7"])
+R._caller_identity = old_caller_identity
+
 
 # ═══ 4. Payroll chargebacks: degrade gracefully, manager gating, UPDATE-only (never insert) ══════
 # 4a. Table doesn't exist yet -> empty list, never a 500.
@@ -304,6 +353,13 @@ fake.seed("commcalc", "ops_chargeback", [
 resp = R.payroll_chargebacks(month="2026-07", authorization="", org_id=ORG)
 ids = sorted(i["id"] for i in resp["items"])
 check("4b only payroll-applied, in-month rows returned", ids == ["cb1"], ids)
+
+# 4b2. Same policy-label override, exercised through /payroll-chargebacks this time (not just
+#      /my-chargebacks) — proves BOTH endpoints share the same preference rule.
+fake.seed("commcalc", "ops_chargeback_policy", [{"org_id": ORG, "reason": "missed_closing", "label": "Missed EOD Close-Out"}])
+resp = R.payroll_chargebacks(month="2026-07", authorization="", org_id=ORG)
+cb1_row = next(i for i in resp["items"] if i["id"] == "cb1")
+check("4b2 payroll-chargebacks also honors the policy label override", cb1_row["reason_label"] == "Missed EOD Close-Out", cb1_row)
 
 # 4c. decision() requires a manager — a non-manager caller is rejected (403), row untouched.
 def fake_require_manager_reject(*_a, **_k):
@@ -349,6 +405,53 @@ except Exception as e:
 check("4g cross-tenant decision id 404s, no leak", raised404)
 row1_again = next(r for r in fake.store[("commcalc", "ops_chargeback")] if r["id"] == "cb1")
 check("4g cb1 (org ORG) untouched by the ORG2 attempt", row1_again["status"] == "posted", row1_again)
+
+# ═══ 5. CASCADE settlement decide-endpoint rules (2026-07-22 owner follow-up) ════════════════════
+# 5a. POST is rejected on a row that's already 'posted' (not 'pending') -- re-posting cb1 (posted in
+#     4d above) must 409, not silently succeed again.
+R._require_manager = lambda *_a, **_k: {"org_id": ORG, "email": "manager2@example.com"}
+raised409 = False
+try:
+    R.decide_payroll_chargeback("cb1", {"decision": "post", "period": "2026-08"}, authorization="", org_id=ORG)
+except Exception as e:
+    raised409 = getattr(e, "status_code", None) == 409
+check("5a POST rejected on an already-posted row", raised409)
+row1 = next(r for r in fake.store[("commcalc", "ops_chargeback")] if r["id"] == "cb1")
+check("5a cb1 untouched by the rejected re-post (still the ORIGINAL manager's decision)",
+      row1["decided_by"] == "manager@example.com" and row1["posted_ref"] == "2026-07", row1)
+
+# 5b. A settlement-created overflow CHILD row (parent_id set, arrives already 'posted',
+#     decided_by='settlement') -- POST is rejected even in a hypothetical case where it's still
+#     'pending' (defensive belt-and-suspenders per the owner's explicit parent_id callout), and WAIVE
+#     is ALLOWED on it despite being 'posted' (the owner's default: management can always cancel a
+#     posted row, including a settlement child).
+reset()
+fake.seed("commcalc", "ops_chargeback", [
+    {"id": "child-pending-defensive", "org_id": ORG, "employee_id": "E1", "employee_name": "Alice",
+     "store_code": "S1", "reason": "missed_dm_verify", "incident_date": "2026-07-14", "amount": 8,
+     "status": "pending", "applied_to": "payroll", "parent_id": "parent-1"},
+    {"id": "child-posted", "org_id": ORG, "employee_id": "E2", "employee_name": "Bob", "store_code": "S1",
+     "reason": "missed_dm_verify", "incident_date": "2026-07-14", "amount": 8, "status": "posted",
+     "applied_to": "payroll", "parent_id": "parent-2", "decided_by": "settlement",
+     "decided_at": "2026-07-14T10:00:00+00:00"},
+])
+R._require_manager = lambda *_a, **_k: {"org_id": ORG, "email": "manager3@example.com"}
+raised_child_post = False
+try:
+    R.decide_payroll_chargeback("child-pending-defensive", {"decision": "post", "period": "2026-07"}, authorization="", org_id=ORG)
+except Exception as e:
+    raised_child_post = getattr(e, "status_code", None) == 409
+check("5b POST rejected on a parent_id-set row even if (defensively) 'pending'", raised_child_post)
+
+out = R.decide_payroll_chargeback("child-posted", {"decision": "waive"}, authorization="", org_id=ORG)
+child_row = next(r for r in fake.store[("commcalc", "ops_chargeback")] if r["id"] == "child-posted")
+check("5c WAIVE succeeds on an already-posted settlement overflow child",
+      child_row["status"] == "waived" and child_row["decided_by"] == "manager3@example.com", child_row)
+check("5c response echoes 'waived'", out["status"] == "waived", out)
+
+# 5d. Normal WAIVE-on-pending still works after all the above (no regression from the new rule).
+out = R.decide_payroll_chargeback("child-pending-defensive", {"decision": "waive"}, authorization="", org_id=ORG)
+check("5d WAIVE still works on an ordinary pending row", out["status"] == "waived", out)
 
 R._require_manager = old_require_manager
 

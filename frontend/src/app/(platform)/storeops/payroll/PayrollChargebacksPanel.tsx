@@ -3,18 +3,23 @@ import { useState, useEffect, useMemo } from 'react'
 import { api, fmt } from '@/lib/client'
 
 // Payroll-time chargebacks (2026-07-22, owner-directed, MONEY-ADJACENT). Shows this period's
-// commcalc.ops_chargeback rows with applied_to='payroll' (missed-closing chargebacks) and lets a
-// manager POST (becomes a real payroll deduction) or WAIVE (never deducts) each one. Backend:
-// GET /storeops/payroll-chargebacks, POST /storeops/payroll-chargebacks/{id}/decision — both
+// commcalc.ops_chargeback rows with applied_to='payroll' (missed-closing chargebacks, PLUS any
+// commission-settlement OVERFLOW child rows mod-commission upserts with parent_id set — those arrive
+// already status='posted', decided_by='settlement') and lets a manager POST (becomes a real payroll
+// deduction — pending rows only) or WAIVE (never deducts — any row, including an already-posted
+// settlement child, per the 2026-07-22 owner default that management can always cancel a posted row).
+// Backend: GET /storeops/payroll-chargebacks, POST /storeops/payroll-chargebacks/{id}/decision — both
 // degrade gracefully (empty list / a clear error) if mod-retail-ops' table hasn't been migrated in
 // yet. `onDeductions` lifts the map of POSTED amounts per employee up to the parent Payroll Report
 // so it can show a Chargebacks/Net Pay column WITHOUT this component ever touching the `/payroll`
-// endpoint's own numbers (purely additive, client-side only).
+// endpoint's own numbers (purely additive, client-side only). A settlement child's amount is a
+// POSTED row like any other, so it's picked up by that same deduction map automatically.
 
 interface ChargebackRow {
   id: string; employee_id?: string; employee_name?: string; store_code?: string
   reason?: string; reason_label?: string; incident_date?: string; amount?: number; status?: string
   posted_ref?: string; decided_by?: string; decided_at?: string
+  parent_id?: string | null; covered_amount?: number | null   // CASCADE settlement fields (retail-ops v2, may be absent pre-migration)
 }
 
 const STATUS_STYLE: Record<string, { bg: string; fg: string }> = {
@@ -40,7 +45,8 @@ export default function PayrollChargebacksPanel({ month, onDeductions }:
   }
 
   // POSTED-only deduction per employee, lifted to the parent regardless of whether the panel is
-  // expanded — the payroll table's Net Pay column shouldn't depend on this card being open.
+  // expanded — the payroll table's Net Pay column shouldn't depend on this card being open. Includes
+  // settlement-created overflow children (parent_id set) automatically — they're 'posted' too.
   useEffect(() => {
     if (!onDeductions) return
     const m: Record<string, number> = {}
@@ -84,9 +90,10 @@ export default function PayrollChargebacksPanel({ month, onDeductions }:
       {open && (
         <div style={{ marginTop: 14 }}>
           <p style={{ fontSize: 12, color: 'var(--text2)', marginTop: 0 }}>
-            Missed-closing chargebacks flagged against payroll for {month}. POST to deduct from the
-            employee's net pay this period, or WAIVE to clear it with no deduction. Never auto-applied —
-            a management decision is required either way.
+            Missed-closing chargebacks flagged against payroll for {month}, including any overflow
+            commission couldn't fully cover. POST to deduct a pending item from the employee's net pay
+            this period, or WAIVE at any time (even an already-posted item) to cancel the deduction.
+            Never auto-applied — a management decision is required either way.
           </p>
           {msg && <div style={{ fontSize: 12, marginBottom: 10 }}>{msg}</div>}
           {loading ? (
@@ -104,10 +111,24 @@ export default function PayrollChargebacksPanel({ month, onDeductions }:
                 {rows.map(r => {
                   const status = String(r.status || 'pending').toLowerCase()
                   const s = STATUS_STYLE[status] || STATUS_STYLE.pending
+                  const isOverflowChild = !!r.parent_id
+                  const hasCoveredContext = r.covered_amount != null
                   return (
                     <tr key={r.id}>
                       <td>{r.employee_name || r.employee_id || '—'}</td>
-                      <td>{r.reason_label || r.reason}</td>
+                      <td>
+                        {r.reason_label || r.reason}
+                        {isOverflowChild && (
+                          <div style={{ fontSize: 10, color: '#b45309', marginTop: 2 }}>
+                            ↳ overflow from commission{r.posted_ref ? ` — ${r.posted_ref}` : ''}
+                          </div>
+                        )}
+                        {hasCoveredContext && (
+                          <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>
+                            commission covered {fmt(Number(r.covered_amount || 0))} of {fmt(Number(r.amount || 0) + Number(r.covered_amount || 0))}
+                          </div>
+                        )}
+                      </td>
                       <td>{r.store_code || '—'}</td>
                       <td>{r.incident_date || '—'}</td>
                       <td>{fmt(Number(r.amount || 0))}</td>
@@ -117,20 +138,28 @@ export default function PayrollChargebacksPanel({ month, onDeductions }:
                         </span>
                       </td>
                       <td>
-                        {status === 'pending' ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
                           <div style={{ display: 'flex', gap: 6 }}>
-                            <button className="btn btn-secondary" disabled={busyId === r.id}
-                                    onClick={() => decide(r.id, 'post')} style={{ padding: '3px 8px', fontSize: 11 }}>
-                              Post
-                            </button>
-                            <button className="btn btn-secondary" disabled={busyId === r.id}
-                                    onClick={() => decide(r.id, 'waive')} style={{ padding: '3px 8px', fontSize: 11 }}>
-                              Waive
-                            </button>
+                            {status === 'pending' && (
+                              <button className="btn btn-secondary" disabled={busyId === r.id}
+                                      onClick={() => decide(r.id, 'post')} style={{ padding: '3px 8px', fontSize: 11 }}>
+                                Post
+                              </button>
+                            )}
+                            {/* Owner default (2026-07-22): management can WAIVE any pending OR posted
+                                row (including an already-posted settlement overflow child) — waive is
+                                the one action that's never restricted by status/parent_id. */}
+                            {(status === 'pending' || status === 'posted') && (
+                              <button className="btn btn-secondary" disabled={busyId === r.id}
+                                      onClick={() => decide(r.id, 'waive')} style={{ padding: '3px 8px', fontSize: 11 }}>
+                                Waive
+                              </button>
+                            )}
                           </div>
-                        ) : (
-                          <span style={{ color: 'var(--text3)' }}>{r.decided_by || '—'}</span>
-                        )}
+                          {r.decided_by && status !== 'pending' && (
+                            <span style={{ color: 'var(--text3)', fontSize: 10 }}>by {r.decided_by}</span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   )
