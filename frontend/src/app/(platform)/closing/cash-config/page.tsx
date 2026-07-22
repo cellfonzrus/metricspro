@@ -27,6 +27,9 @@ export default function CashConfigPage() {
   const [msg, setMsg] = useState('')
   const [depCfg, setDepCfg] = useState<any>(null)
   const [depMsg, setDepMsg] = useState('')
+  const [cbPolicy, setCbPolicy] = useState<any[]>([])
+  const [cbMsg, setCbMsg] = useState('')
+  const [cbForbidden, setCbForbidden] = useState(false)
 
   const load = useCallback(() => {
     api('/api/v1/closing/cash-config').then(setCfg).catch((e: any) => setMsg('❌ ' + (e?.message || e)))
@@ -34,17 +37,36 @@ export default function CashConfigPage() {
   const loadDepCfg = useCallback(() => {
     api('/api/v1/closing/deposit-config').then(setDepCfg).catch(() => {})
   }, [])
+  const loadCbPolicy = useCallback(() => {
+    api('/api/v1/closing/ops-chargebacks/policy').then((r: any) => setCbPolicy(r?.policy || [])).catch(() => {})
+  }, [])
   useEffect(() => {
     load()
     loadDepCfg()
+    loadCbPolicy()
     api('/api/v1/storeops/employees').then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
     api('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : (r?.stores || []))).catch(() => {})
-  }, [load, loadDepCfg])
+  }, [load, loadDepCfg, loadCbPolicy])
 
   async function saveDepCfg(match_target: string) {
     setDepMsg('')
     try { const r: any = await api('/api/v1/closing/deposit-config', { method: 'PUT', body: JSON.stringify({ match_target }) }); setDepCfg(r); setDepMsg('✅ Saved.') }
     catch (e: any) { setDepMsg('❌ ' + (e?.message || e)) }
+  }
+
+  function patchCbPolicy(reason: string, patch: any) {
+    setCbPolicy(rows => rows.map(r => r.reason === reason ? { ...r, ...patch } : r))
+  }
+  async function saveCbPolicy() {
+    setCbMsg(''); setCbForbidden(false)
+    try {
+      const r: any = await api('/api/v1/closing/ops-chargebacks/policy', { method: 'PUT', body: JSON.stringify({ policy: cbPolicy }) })
+      setCbPolicy(r?.policy || cbPolicy); setCbMsg('✅ Saved.')
+    } catch (e: any) {
+      const s = e?.message || String(e)
+      if (/permission|403|restricted/i.test(s)) setCbForbidden(true)
+      setCbMsg('❌ ' + s)
+    }
   }
 
   async function saveCfg(patch: any) {
@@ -178,6 +200,57 @@ export default function CashConfigPage() {
           </>
         )}
         {!depCfg && <div style={{ fontSize: 12, color: 'var(--text3)' }}>Loading…</div>}
+      </div>
+
+      <div className="card" style={card}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>🧾 Ops chargeback amounts</div>
+        <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 10px' }}>
+          A missed daily closing charges the store&apos;s effective closer (decided at payroll); a missed DM
+          verification charges the store&apos;s District Manager&apos;s commission (deducted from commission
+          FIRST — any uncovered remainder falls to payroll or forwards to the next commission cycle, per the
+          &quot;if unpaid&quot; setting below). Disabled (default) means nothing is ever charged for that reason.
+          The list below is every reason this system knows about <i>plus</i> every reason that has actually
+          occurred — pick from it, you can&apos;t type a new one here.
+        </p>
+        {cbForbidden && <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8 }}>🔒 Editing these amounts is limited to company-wide leadership.</div>}
+        {cbPolicy.length === 0 ? (
+          <div style={{ fontSize: 12, color: 'var(--text3)' }}>Loading…</div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {cbPolicy.map((p: any) => (
+                <div key={p.reason} style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', borderBottom: '1px solid var(--border)', paddingBottom: 10 }}>
+                  <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, minWidth: 130 }}>
+                    <input type="checkbox" checked={!!p.enabled} onChange={e => patchCbPolicy(p.reason, { enabled: e.target.checked })} />
+                    <span>
+                      {p.reason}
+                      {!p.known && <span className="badge" style={{ fontSize: 10, marginLeft: 6, padding: '1px 6px', background: 'var(--surface2)', color: 'var(--text3)' }}>custom</span>}
+                    </span>
+                  </label>
+                  <label style={{ fontSize: 12, color: 'var(--text3)', flex: '1 1 220px' }}>Display message<br />
+                    <input style={{ ...inp, marginTop: 4, width: '100%' }} value={p.label || ''} placeholder={p.reason}
+                      onChange={e => patchCbPolicy(p.reason, { label: e.target.value })} /></label>
+                  <label style={{ fontSize: 12, color: 'var(--text3)' }}>Amount ($)<br />
+                    <input type="number" step="0.01" style={{ ...inp, marginTop: 4, width: 110 }} value={p.amount ?? 0}
+                      onChange={e => patchCbPolicy(p.reason, { amount: e.target.value })} /></label>
+                  {p.applied_to === 'commission' && (
+                    <label style={{ fontSize: 12, color: 'var(--text3)' }}>If commission can&apos;t cover it<br />
+                      <select style={{ ...inp, marginTop: 4 }} value={p.overflow || 'payroll'}
+                        onChange={e => patchCbPolicy(p.reason, { overflow: e.target.value })}>
+                        <option value="payroll">Remainder goes to payroll</option>
+                        <option value="next_cycle">Forward remainder to next commission cycle</option>
+                      </select></label>
+                  )}
+                  <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+                    {p.applied_to === 'commission' ? 'commission-first' : p.applied_to === 'payroll' ? 'decided at payroll' : '—'}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <button className="btn btn-primary" style={{ fontSize: 12, marginTop: 10 }} onClick={saveCbPolicy}>Save</button>
+            {cbMsg && <span style={{ fontSize: 12, marginLeft: 10 }}>{cbMsg}</span>}
+          </>
+        )}
       </div>
     </div>
   )

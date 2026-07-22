@@ -20,6 +20,105 @@ function countVal(r: any, key: string) {
   return key in r ? r[key] : (r.counts?.[key] ?? 0)
 }
 
+// ── Missed verifications & chargebacks (OWNER DIRECTIVE 2026-07-22) ──────────────────────────
+// A daily_closing that exists but was never DM-verified creates a pending chargeback against the
+// DM's COMMISSION (GET/POST /closing/ops-chargebacks/*). Shown at the top of this page — daily
+// list + cumulative pending/posted total + Post/Waive (management-gated, backend-enforced; this
+// panel only shows the buttons when the server says `can_decide`).
+const badgeStyle: Record<string, React.CSSProperties> = {
+  pending: { background: '#fef3e2', color: '#b45309' },
+  posted: { background: '#fbe4e4', color: '#b42318' },
+  waived: { background: 'var(--surface2)', color: 'var(--text3)' },
+}
+
+function MissedChargebacksPanel() {
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState<Record<string, boolean>>({})
+  const [msg, setMsg] = useState<Record<string, string>>({})
+  const [open, setOpen] = useState(true)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    api('/api/v1/closing/ops-chargebacks/dm-verify')
+      .then(setData)
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [])
+  useEffect(() => { load() }, [load])
+
+  async function decide(id: string, decision: 'posted' | 'waived') {
+    if (decision === 'waived' && !window.confirm('Waive this chargeback? It will NOT be deducted from the DM\'s commission.')) return
+    if (decision === 'posted' && !window.confirm('Post this chargeback? It will be deducted from the DM\'s commission for that period.')) return
+    setBusy(b => ({ ...b, [id]: true })); setMsg(m => ({ ...m, [id]: '' }))
+    try {
+      await api('/api/v1/closing/ops-chargebacks/decide', { method: 'POST', body: JSON.stringify({ id, decision }) })
+      load()
+    } catch (e: any) { setMsg(m => ({ ...m, [id]: '❌ ' + (e?.message || e) })) }
+    finally { setBusy(b => ({ ...b, [id]: false })) }
+  }
+
+  if (loading && !data) return null   // don't flash an empty banner while the very first load runs
+  const rows: any[] = data?.rows || []
+  const totals = data?.totals || { pending: 0, posted: 0, waived: 0, to_be_foregone: 0 }
+  if (rows.length === 0) return null  // no missed verifications ever recorded -> no banner at all
+
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 16, border: totals.pending > 0 ? '1px solid #f3b4b4' : undefined }}>
+      <div role="button" tabIndex={0} onClick={() => setOpen(o => !o)} onKeyDown={e => { if (e.key === 'Enter') setOpen(o => !o) }}
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', cursor: 'pointer' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 14, fontWeight: 700 }}>⚠️ Missed verifications & chargebacks</span>
+          <span style={{ fontSize: 12, color: 'var(--text3)' }}>{rows.length} missed DM verification{rows.length === 1 ? '' : 's'}</span>
+        </div>
+        <div style={{ display: 'flex', gap: 14, alignItems: 'center', fontSize: 12 }}>
+          <span>Pending: <b style={{ color: '#b45309' }}>{fmt(totals.pending)}</b></span>
+          <span>Posted: <b style={{ color: '#b42318' }}>{fmt(totals.posted)}</b></span>
+          <span>To be foregone from commission: <b>{fmt(totals.to_be_foregone)}</b></span>
+          <span style={{ color: 'var(--text3)' }}>{open ? '▲' : '▼'}</span>
+        </div>
+      </div>
+      {open && (
+        <div className="table-wrapper" style={{ marginTop: 10 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr style={{ background: 'var(--surface2)' }}>
+              {['Store', 'Date', 'District Manager', 'Amount', 'Status', ''].map(h =>
+                <th key={h} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {rows.map((r: any) => (
+                <tr key={r.id}>
+                  <td style={cell}>{r.store_code}</td>
+                  <td style={cell}>{r.incident_date}</td>
+                  <td style={cell}>{r.employee_name || '—'}</td>
+                  <td style={cell}>{fmt(r.amount)}</td>
+                  <td style={cell}>
+                    <span className="badge" style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, ...badgeStyle[r.status] }}>
+                      {r.status === 'posted' ? `POSTED${r.posted_ref ? ` · ${r.posted_ref}` : ''}` : r.status.toUpperCase()}
+                    </span>
+                    {r.status !== 'pending' && r.decided_by && <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6 }}>by {r.decided_by}</span>}
+                  </td>
+                  <td style={cell}>
+                    {r.status === 'pending' && data?.can_decide && (
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }} disabled={busy[r.id]}
+                          onClick={() => decide(r.id, 'posted')}>{busy[r.id] ? '⏳' : 'Post'}</button>
+                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }} disabled={busy[r.id]}
+                          onClick={() => decide(r.id, 'waived')}>{busy[r.id] ? '⏳' : 'Waive'}</button>
+                      </div>
+                    )}
+                    {msg[r.id] && <div style={{ fontSize: 11, color: '#b91c1c' }}>{msg[r.id]}</div>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function DailyClosingVerify() {
   const { user, permissions } = useAuth()
   const [date, setDate] = useState(localToday())
@@ -118,6 +217,8 @@ export default function DailyClosingVerify() {
           Verify every evening that each store's closing sheet was submitted, confirm the totals, and reconcile against B2B actual sales.
         </p>
       </div>
+
+      <MissedChargebacksPanel />
 
       {/* Upload */}
       <div className="card" style={{ padding: 14, marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
