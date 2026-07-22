@@ -27,7 +27,7 @@ const bigBtn: React.CSSProperties = { width: '100%', padding: '18px', fontSize: 
 const inp: React.CSSProperties = { width: '100%', marginTop: 5, padding: '11px 12px', borderRadius: 9, border: '1px solid #cbd5e1', fontSize: 15, boxSizing: 'border-box' }
 
 export default function PortalPage() {
-  const { loading: authLoading, session, user, token, signOut } = useAuth()
+  const { loading: authLoading, session, user, token, signOut, refresh } = useAuth()
   const empId = user?.employee_id || ''
   const empName = user?.full_name || ''
 
@@ -55,6 +55,9 @@ export default function PortalPage() {
   const [msg, setMsg] = useState('')
   const [now, setNow] = useState<string>('')
   const [missedClosing, setMissedClosing] = useState<{ message: string; items: any[] } | null>(null)   // ⚠ non-blocking notice from clock-in/out
+  const [slowAuth, setSlowAuth] = useState(false)   // sign-in/profile load stuck >10s (busy server)
+  const [connErr, setConnErr] = useState('')        // backend unreachable from the kiosk (status fetch failed)
+  const [apiDown, setApiDown] = useState<boolean | null>(null)  // probe: server unreachable vs profile missing
 
   // their dashboard widgets
   const [dash, setDash] = useState<any>(null)
@@ -109,16 +112,47 @@ export default function PortalPage() {
 
   const refreshStatus = useCallback(() => {
     if (!empId || !token) { setStatus(null); setRegistered(null); return }
-    authed('/api/v1/storeops/timeclock/status').then(setStatus).catch(() => setStatus(null))
-    authed('/api/v1/storeops/timeclock/face').then((r: any) => setRegistered(!!r?.registered)).catch(() => setRegistered(null))
-    authed('/api/v1/storeops/timeclock/config').then((r: any) => { const t = Number(r?.face_match_threshold); if (t) thresholdRef.current = t }).catch(() => {})
+    authed('/api/v1/storeops/timeclock/status', { signal: tsig(30000) })
+      .then((s: any) => { setStatus(s); setConnErr('') })
+      .catch(() => {
+        setStatus(null)
+        setConnErr("Can't reach the server right now — it may be busy. Your clock status may be out of date; this screen retries by itself.")
+      })
+    authed('/api/v1/storeops/timeclock/face', { signal: tsig(30000) }).then((r: any) => setRegistered(!!r?.registered)).catch(() => setRegistered(null))
+    authed('/api/v1/storeops/timeclock/config', { signal: tsig(30000) }).then((r: any) => { const t = Number(r?.face_match_threshold); if (t) thresholdRef.current = t }).catch(() => {})
   }, [empId, token, authed])
   useEffect(() => { refreshStatus() }, [refreshStatus])
+
+  // Self-heal while the backend is unreachable — keep re-checking instead of sitting on a dead screen.
+  useEffect(() => {
+    if (!connErr) return
+    const t = setInterval(() => refreshStatus(), 15000)
+    return () => clearInterval(t)
+  }, [connErr, refreshStatus])
+
+  // Explain a slow sign-in (auth/profile still loading after 10s) instead of a bare spinner.
+  useEffect(() => {
+    if (!authLoading) { setSlowAuth(false); return }
+    const t = setTimeout(() => setSlowAuth(true), 10000)
+    return () => clearTimeout(t)
+  }, [authLoading])
+
+  // Signed in but no profile (the /core/me fetch failed, or the login has no app_user row): probe the
+  // API once to tell "server busy/down" apart from "account not set up", and keep retrying the profile.
+  useEffect(() => {
+    if (authLoading || !session || user) { setApiDown(null); return }
+    let alive = true
+    fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/`, { signal: tsig(6000) })
+      .then(() => { if (alive) setApiDown(false) })
+      .catch(() => { if (alive) setApiDown(true) })
+    const t = setInterval(() => refresh().catch(() => {}), 12000)
+    return () => { alive = false; clearInterval(t) }
+  }, [authLoading, session, user, refresh])
 
   // which stores can this employee clock in at today (home + scheduled + floater)?
   useEffect(() => {
     if (!empId || !token) { setStores([]); return }
-    authed('/api/v1/storeops/timeclock/allowed-stores').then((r: any) => {
+    authed('/api/v1/storeops/timeclock/allowed-stores', { signal: tsig(30000) }).then((r: any) => {
       const list: string[] = r?.stores || []
       setStores(list)
       setSelStore(prev => prev || (r?.home_store ? String(r.home_store).toUpperCase() : '') || list[0] || '')
@@ -247,7 +281,7 @@ export default function PortalPage() {
         caps.push(d); await wait(400)
       }
       const avg = caps[0].map((_, j) => (caps[0][j] + caps[1][j] + caps[2][j]) / 3)
-      await authed('/api/v1/storeops/timeclock/face', { method: 'POST', body: JSON.stringify({ descriptor: avg }) })
+      await authed('/api/v1/storeops/timeclock/face', { method: 'POST', signal: tsig(30000), body: JSON.stringify({ descriptor: avg }) })
       setRegistered(true); setPhase('Registered! Clocking you in…')
       await finalizeClockIn(100)
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)); setBusy(false) }
@@ -258,7 +292,7 @@ export default function PortalPage() {
     try {
       setPhase('Verifying your face…')
       const faceapi = (window as any).faceapi
-      const saved = await authed(`/api/v1/storeops/timeclock/face?action=descriptor`)
+      const saved = await authed(`/api/v1/storeops/timeclock/face?action=descriptor`, { signal: tsig(30000) })
       const ref = new Float32Array(saved?.descriptor || [])
       const thr = thresholdRef.current
       let best = 1, live: number[] | null = null
@@ -292,7 +326,7 @@ export default function PortalPage() {
     try {
       const selfie = captureSelfie()
       const g = gpsRef.current
-      const res: any = await authed('/api/v1/storeops/timeclock/clock-in', { method: 'POST', body: JSON.stringify({
+      const res: any = await authed('/api/v1/storeops/timeclock/clock-in', { method: 'POST', signal: tsig(45000), body: JSON.stringify({
         selfie, device: 'kiosk', face_match_pct: matchPct, store_code: selStore || undefined,
         gps_lat: g.lat, gps_lng: g.lng, gps_accuracy_m: g.acc }) })
       if (res?.needs_override) {
@@ -308,7 +342,7 @@ export default function PortalPage() {
         setMsg(`✅ Clocked in at ${res?.data?.time || ''}${res?.data?.store_code ? ` · ${res.data.store_code}` : ''}.`)
         setMissedClosing(res?.missed_closing_notice || null)
       }
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    } catch (e: any) { setMsg(punchErr(e, 'clock-in')) }
     finally { setBusy(false); closeCamera(); refreshStatus() }
   }
 
@@ -316,21 +350,21 @@ export default function PortalPage() {
     if (!prio || !prioChecked) return
     setBusy(true)
     try {
-      const res: any = await authed('/api/v1/storeops/timeclock/clock-in', { method: 'POST', body: JSON.stringify({
+      const res: any = await authed('/api/v1/storeops/timeclock/clock-in', { method: 'POST', signal: tsig(45000), body: JSON.stringify({
         selfie: prio.selfie, device: 'kiosk', face_match_pct: prio.matchPct, store_code: prio.store_code || undefined,
         gps_lat: prio.g?.lat, gps_lng: prio.g?.lng, gps_accuracy_m: prio.g?.acc,
         priority_ack: true, priority_ack_count: (prio.priority || []).length }) })
       setMsg(`✅ Clocked in at ${res?.data?.time || ''}${res?.data?.store_code ? ` · ${res.data.store_code}` : ''}.`)
       setMissedClosing(res?.missed_closing_notice || null)
       setPrio(null)
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    } catch (e: any) { setMsg(punchErr(e, 'clock-in')) }
     finally { setBusy(false); refreshStatus() }
   }
 
   async function clockOut() {
     setBusy(true)
     try {
-      const res: any = await authed('/api/v1/storeops/timeclock/clock-out', { method: 'POST', body: JSON.stringify({}) })
+      const res: any = await authed('/api/v1/storeops/timeclock/clock-out', { method: 'POST', signal: tsig(45000), body: JSON.stringify({}) })
       if (res?.success === false || res?.needs_closing) {
         // blocked (e.g. closing gate) — the punch is still OPEN; never show a fake "clocked out"
         setMsg('⛔ ' + (res?.message || 'Clock-out blocked — you are still clocked in.'))
@@ -339,7 +373,7 @@ export default function PortalPage() {
         setMissedClosing(res?.missed_closing_notice || null)
       }
     }
-    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    catch (e: any) { setMsg(punchErr(e, 'clock-out')) }
     finally { setBusy(false); refreshStatus() }
   }
 
@@ -363,7 +397,20 @@ export default function PortalPage() {
 
   // ── render branches ───────────────────────────────────────────────────────────────────────────
   if (authLoading) {
-    return <div style={{ ...shell, textAlign: 'center', paddingTop: 80 }}><div className="spinner" /></div>
+    return (
+      <div style={{ ...shell, textAlign: 'center', paddingTop: 80 }}>
+        <div className="spinner" style={{ margin: '0 auto' }} />
+        {slowAuth && (
+          <div style={{ marginTop: 18, fontSize: 14, color: '#64748b' }}>
+            Still connecting to the server — it may be busy right now.<br />
+            This screen loads by itself as soon as it responds.
+            <div style={{ marginTop: 12 }}>
+              <button className="btn btn-secondary" onClick={() => window.location.reload()}>Reload</button>
+            </div>
+          </div>
+        )}
+      </div>
+    )
   }
 
   // not signed in → login
@@ -388,6 +435,41 @@ export default function PortalPage() {
             </button>
           </form>
           <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', marginTop: 16 }}>Trouble signing in? Contact your administrator.</div>
+        </div>
+      </div>
+    )
+  }
+
+  // signed in but the profile never loaded — server busy/unreachable, or the login isn't provisioned.
+  // Without this branch a failed /core/me fell through to the "not linked" card (wrong message) or a
+  // near-blank screen; both were reported as "blank screen, no error" during busy nightly windows.
+  if (!user) {
+    return (
+      <div style={shell}>
+        <div style={{ ...box }} className="card">
+          {apiDown !== false ? (
+            <>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Can&apos;t reach the MetricsPro server</div>
+              <div style={{ fontSize: 14, color: 'var(--text2)', marginBottom: 16 }}>
+                You&apos;re signed in as <b>{session?.user?.email || ''}</b>, but the server isn&apos;t responding —
+                it&apos;s probably busy or restarting. This screen retries automatically; you can punch as soon
+                as it reconnects.
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Couldn&apos;t load your account</div>
+              <div style={{ fontSize: 14, color: 'var(--text2)', marginBottom: 16 }}>
+                You&apos;re signed in as <b>{session?.user?.email || ''}</b>, but your account profile didn&apos;t load.
+                Retrying automatically — if this doesn&apos;t clear in a minute, ask an admin to check your login
+                in <b>Roles &amp; Access</b>.
+              </div>
+            </>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-primary" onClick={() => refresh().catch(() => {})}>Retry now</button>
+            <button className="btn btn-secondary" onClick={logout}>Log out</button>
+          </div>
         </div>
       </div>
     )
@@ -421,6 +503,13 @@ export default function PortalPage() {
           <button className="btn btn-secondary" style={{ fontSize: 13, marginTop: 4 }} onClick={logout}>Log out</button>
         </div>
       </div>
+
+      {connErr && (
+        <div style={{ ...box, marginBottom: 12, padding: '10px 14px', borderRadius: 10, background: '#fef3c7',
+          border: '1px solid #f59e0b', color: '#92400e', fontSize: 13 }}>
+          ⚠️ {connErr}
+        </div>
+      )}
 
       <div className="card" style={{ ...box, marginBottom: 18 }}>
         {mode === 'camera' && (
@@ -587,3 +676,18 @@ function TabBtn({ k, label, tab, setTab, badge }:
 }
 
 function wait(ms: number) { return new Promise(r => setTimeout(r, ms)) }
+
+// Abort a kiosk API call instead of letting it hang forever — a saturated backend otherwise leaves
+// the screen frozen/blank with no message (the nightly "blank screen" reports).
+function tsig(ms: number): AbortSignal | undefined {
+  try { return (AbortSignal as any).timeout?.(ms) } catch { return undefined }
+}
+
+// Punch-failure message: a timeout/network drop means the punch MAY have landed server-side, so the
+// user must re-check status rather than blind-retry (a blind retry can 409 on an already-open punch).
+function punchErr(e: any, what: string): string {
+  const m = String(e?.message || e || '')
+  if (e?.name === 'TimeoutError' || e?.name === 'AbortError' || /failed to fetch|network|load failed/i.test(m))
+    return `⚠️ The server didn't respond — your ${what} may NOT have gone through. Wait for your status above to refresh before trying again.`
+  return '❌ ' + (m || `${what} failed`)
+}
