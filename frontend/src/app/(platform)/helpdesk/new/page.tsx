@@ -29,6 +29,17 @@ export default function NewTicket() {
     }).catch(e => setErr(e?.message || 'Failed to load form'))
   }, [])
 
+  // Prefill from the "?" help panel's "Contact support" deep-link (?subject=&page=) — page context so
+  // support knows where the user was. Read from location (no useSearchParams → no Suspense concern).
+  useEffect(() => {
+    try {
+      const sp = new URLSearchParams(window.location.search)
+      const s = sp.get('subject'); const pg = sp.get('page')
+      if (s) setSubject(prev => prev || s)
+      if (pg) setDescription(prev => prev || `Page: ${pg}\n\n`)
+    } catch { /* ignore */ }
+  }, [])
+
   useEffect(() => {
     api(`/api/v1/storeops/stores`).then((rows: any) => {
       const opts = ((rows || []) as any[])

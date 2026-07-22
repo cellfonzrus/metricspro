@@ -11,9 +11,9 @@ frontend from the logged-in user — the same loose-identity pattern the other m
 hardening to server-verified identity plugs into the RBAC-enforcement work later.
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Header
 
 from app.core.config import settings
 from app.core.database import get_supabase
@@ -337,7 +337,13 @@ def list_tickets(org_id: str = ORG_ID, agent: bool = False, requester: str = "",
         query = query.ilike("subject", f"%{q}%")
 
     rows = query.order("created_at", desc=True).limit(500).execute().data or []
-    return [_decorate(t, st, pr, ca, te) for t in rows]
+    esc = _escalated_ticket_ids(org_id, [t.get("id") for t in rows])
+    out = []
+    for t in rows:
+        d = _decorate(t, st, pr, ca, te)
+        d["escalated"] = t.get("id") in esc
+        out.append(d)
+    return out
 
 
 @router.get("/tickets/{tid}")
@@ -357,7 +363,8 @@ def ticket_detail(tid: str, org_id: str = ORG_ID, agent: bool = False):
               .order("created_at").execute().data or [])
     atts = (db("ticket_attachments").select("*").eq("org_id", org_id).eq("ticket_id", tid)
             .order("created_at").execute().data or [])
-    return {"ticket": ticket, "comments": comments, "events": events, "attachments": atts}
+    return {"ticket": ticket, "comments": comments, "events": events, "attachments": atts,
+            "support_case": _ticket_support_case(org_id, tid)}
 
 
 @router.patch("/tickets/{tid}")
@@ -649,3 +656,523 @@ async def _notify_new_ticket(org_id: str, ticket: dict, requester: str):
                 pass
     except Exception:
         pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# TECH-SUPPORT PLATFORM (mig 715) — cross-tenant support console + ticket escalation.
+#
+# The HOUSE org's tech-support staff handle escalated tickets from EVERY tenant in ONE console. The
+# console endpoints below are CROSS-TENANT BY DESIGN (they read support_case rows across all org_ids and
+# show each tenant's name) — this is the ONE sanctioned cross-tenant read surface in the app, and it is
+# SERVER-GATED by `_require_support`: only a super_admin, or a HOUSE-org membership whose role grants the
+# `support` module (or is scope-all / admin), passes. A tenant user has NO house membership, so nothing
+# here is reachable by tenant users (anti-enumeration). The gate resolves identity from the JWT
+# (Authorization header) via the existing core helpers — NOT from any org_id query param — so the
+# tenant-middleware org_id rewrite never narrows a cross-tenant read.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
+_SUPPORT_STATUSES = ("new", "in_progress", "waiting_user", "resolved", "closed")
+_SUPPORT_PRIORITIES = ("low", "normal", "high", "urgent")
+
+
+def _support_ctx(authorization: str, x_active_org: str = ""):
+    """Resolve the caller and decide if they may use the cross-tenant support console. Returns
+    {"email", "super_admin", "org_id"} when ALLOWED, else None. ALLOWED = super_admin (login-level
+    bypass) OR a HOUSE-org membership whose role grants modules.support (or scope 'all' / role 'admin').
+    Reuses core.router._uid_from_token (60s token-verify cache) + core.membership primitives — lazy
+    imports to avoid any import cycle (core never imports helpdesk)."""
+    from app.modules.core.router import _uid_from_token
+    from app.modules.core.membership import list_memberships, pick_membership
+    uid = _uid_from_token(authorization or "")
+    if not uid:
+        return None
+    client = get_supabase()
+    rows = list_memberships(client, uid)
+    if not rows:
+        return None
+    if any(r.get("super_admin") for r in rows):
+        active = pick_membership(rows, (x_active_org or "").strip() or None) or rows[0]
+        return {"email": active.get("email"), "super_admin": True, "org_id": active.get("org_id")}
+    house = next((r for r in rows if r.get("org_id") == HOUSE_ORG), None)
+    if not house:
+        return None
+    role = house.get("role")
+    perms = {}
+    if role:
+        try:
+            rr = (client.schema("storeops").table("roles").select("permissions")
+                  .eq("org_id", HOUSE_ORG).eq("name", role).limit(1).execute().data) or []
+            if rr:
+                perms = rr[0].get("permissions") or {}
+        except Exception:
+            perms = {}
+    mods = perms.get("modules") or {}
+    if mods.get("support") or perms.get("scope") == "all" or (role or "").lower() == "admin":
+        return {"email": house.get("email"), "super_admin": False, "org_id": HOUSE_ORG}
+    return None
+
+
+def _require_support(authorization: str, x_active_org: str = ""):
+    ctx = _support_ctx(authorization, x_active_org)
+    if not ctx:
+        raise HTTPException(403, "The tech-support console is restricted to house support staff.")
+    return ctx
+
+
+# ── Pure helpers (unit-proven in harness_tech_support.py) ───────────────────────────────────────
+def _sla_due_at(policy_rows, priority, created_iso):
+    """created_at + response_hours from the SLA policy row matching `priority`. Returns an ISO string,
+    or None when no policy row exists for that priority (NO hard-coded hours — values live in rows)."""
+    hours = None
+    for r in (policy_rows or []):
+        if str(r.get("priority", "")).strip().lower() == str(priority or "").strip().lower():
+            hours = r.get("response_hours")
+            break
+    if hours is None:
+        return None
+    try:
+        base = datetime.fromisoformat(str(created_iso).replace("Z", "+00:00"))
+    except Exception:
+        base = datetime.now(timezone.utc)
+    return (base + timedelta(hours=int(hours))).isoformat()
+
+
+def _support_priority_from_ticket(priority_label_or_key):
+    """Map a helpdesk priority (key or label, e.g. 'urgent'/'High') to a support priority. Defaults to
+    'normal' when unknown, so an escalation always gets a valid SLA-eligible priority."""
+    p = str(priority_label_or_key or "").strip().lower()
+    for cand in _SUPPORT_PRIORITIES:
+        if cand in p:
+            return cand
+    return "normal"
+
+
+# ── support_case DB helpers (storeops schema; org-scoped where tenant-facing) ───────────────────
+def _house_sla_policy():
+    try:
+        return db("support_sla_policy").select("*").eq("org_id", HOUSE_ORG).execute().data or []
+    except Exception:
+        return []
+
+
+def _escalated_ticket_ids(org_id: str, ticket_ids):
+    """Set of ticket ids (from `ticket_ids`) that have an open/any support_case for this tenant.
+    Best-effort — returns an empty set if mig 715 is un-run (never breaks the ticket list)."""
+    ids = [t for t in (ticket_ids or []) if t]
+    if not ids:
+        return set()
+    try:
+        rows = (db("support_case").select("ticket_id").eq("org_id", org_id)
+                .in_("ticket_id", ids).execute().data) or []
+        return {r.get("ticket_id") for r in rows if r.get("ticket_id")}
+    except Exception:
+        return set()
+
+
+def _ticket_support_case(org_id: str, tid: str):
+    """The support_case (status/priority) for a tenant ticket, or None. Best-effort (mig un-run → None)."""
+    try:
+        rows = (db("support_case").select("id,status,priority,sla_due_at,created_at,assignee_email")
+                .eq("org_id", org_id).eq("ticket_id", tid).limit(1).execute().data) or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def _case_event(org_id, case_id, kind, body=None, author_email=None, visible_to_user=False):
+    try:
+        db("support_case_event").insert({
+            "org_id": org_id, "case_id": case_id, "kind": kind, "body": body,
+            "author_email": author_email, "visible_to_user": bool(visible_to_user)}).execute()
+    except Exception:
+        pass
+
+
+# ── Escalation (TENANT-facing: a helpdesk agent escalates one of THEIR tickets) ─────────────────
+@router.post("/tickets/{tid}/escalate")
+async def escalate_ticket(tid: str, body: dict = None, org_id: str = ORG_ID, actor: str = ""):
+    """Escalate a tenant helpdesk ticket to the house tech-support console. Idempotent per ticket
+    (UNIQUE org_id,ticket_id): a second call returns the existing case. Stamps sla_due_at from the HOUSE
+    SLA policy for the ticket's priority, records a VISIBLE event on the tenant ticket ('Escalated to
+    tech support' — so the requester sees it in their existing helpdesk thread) and best-effort emails
+    the tenant's helpdesk notify list. org_id is the (middleware-rewritten) tenant query param."""
+    _require_module(org_id)
+    body = body or {}
+    rows = db("tickets").select("*").eq("org_id", org_id).eq("id", tid).limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(404, "ticket not found")
+    ticket = rows[0]
+    # already escalated? (idempotent)
+    existing = _ticket_support_case(org_id, tid)
+    if existing:
+        return {"ok": True, "already_escalated": True, "case": existing}
+    # priority from the ticket's priority row (fall back to 'normal')
+    plabel = ""
+    if ticket.get("priority_id"):
+        pr = (db("ticket_priorities").select("key,label").eq("org_id", org_id)
+              .eq("id", ticket["priority_id"]).limit(1).execute().data or [{}])[0]
+        plabel = f"{pr.get('key') or ''} {pr.get('label') or ''}"
+    priority = _support_priority_from_ticket(plabel)
+    now = _now()
+    sla = _sla_due_at(_house_sla_policy(), priority, now)
+    row = {"org_id": org_id, "ticket_id": tid, "page_key": (body.get("page_key") or None),
+           "status": "new", "priority": priority, "sla_due_at": sla,
+           "created_at": now, "updated_at": now}
+    try:
+        case = (db("support_case").insert(row).execute().data or [{}])[0]
+    except Exception as e:
+        # unique-violation race → return the now-existing case; other errors → surface
+        again = _ticket_support_case(org_id, tid)
+        if again:
+            return {"ok": True, "already_escalated": True, "case": again}
+        raise HTTPException(500, f"could not escalate (run migration 715?): {e}")
+    # Visible marker on the tenant ticket thread (the requester sees this in their helpdesk UI).
+    try:
+        db("ticket_comments").insert({
+            "org_id": org_id, "ticket_id": tid, "author": actor or "support",
+            "author_name": actor or "Tech Support",
+            "body": "Escalated to tech support — a specialist will follow up here.",
+            "is_internal": False}).execute()
+    except Exception:
+        pass
+    try:
+        db("ticket_events").insert({
+            "org_id": org_id, "ticket_id": tid, "actor": actor or "agent",
+            "event_type": "escalated", "detail": {"priority": priority}}).execute()
+    except Exception:
+        pass
+    _case_event(org_id, case.get("id"), "status", body="Escalated to tech support",
+                author_email=actor or None, visible_to_user=True)
+    await _notify_escalation(org_id, ticket, actor)
+    return {"ok": True, "already_escalated": False, "case": case}
+
+
+async def _notify_escalation(org_id: str, ticket: dict, actor: str):
+    """Best-effort email to the tenant's helpdesk notify list (never blocks the escalation)."""
+    try:
+        s = db("ticket_settings").select("notify_emails").eq("org_id", org_id).limit(1).execute().data or []
+        emails = (s[0].get("notify_emails") if s else None) or []
+        if not emails:
+            return
+        from app.modules.notify.channels import email_resend
+        if not email_resend.is_configured():
+            return
+        num = f"TKT-{ticket.get('ticket_number')}"
+        subject = f"[Tech Support] {num} escalated: {ticket.get('subject')}"
+        html = (f"<p>Ticket <b>{num}</b> — {ticket.get('subject')} — was escalated to tech support"
+                f"{(' by ' + actor) if actor else ''}.</p>"
+                f"<p>Track it in the support console.</p>")
+        for addr in emails:
+            try:
+                await email_resend.send_email(addr, subject, html, [])
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+# ── Support console (CROSS-TENANT, house-gated) ─────────────────────────────────────────────────
+def _tenant_names(org_ids):
+    out = {}
+    ids = [o for o in set(org_ids) if o]
+    if not ids:
+        return out
+    try:
+        rows = db("tenants").select("org_id,name").in_("org_id", ids).execute().data or []
+        out = {r["org_id"]: r.get("name") for r in rows if r.get("org_id")}
+    except Exception:
+        pass
+    return out
+
+
+@router.get("/support/cases")
+async def support_cases(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                        status: str = "", priority: str = "", org: str = "", assignee: str = "",
+                        page_key: str = "", limit: int = 300):
+    """CROSS-TENANT queue: every escalated case across all tenants (house-gated). Filters: status,
+    priority, org (tenant), assignee, page_key. Each row carries its tenant name + ticket subject/number.
+    RULE FIVE core-set applies where meaningful (period is created_at-ordered; store/market/rep are not
+    dimensions of a support case)."""
+    _require_support(authorization, x_active_org)
+    q = db("support_case").select("*")            # NO org filter — cross-tenant by design (house-gated)
+    if status:
+        q = q.eq("status", status)
+    if priority:
+        q = q.eq("priority", priority)
+    if org:
+        q = q.eq("org_id", org)
+    if assignee:
+        q = q.eq("assignee_email", assignee)
+    if page_key:
+        q = q.eq("page_key", page_key)
+    try:
+        cases = q.order("created_at", desc=True).limit(min(max(limit, 1), 1000)).execute().data or []
+    except Exception as e:
+        raise HTTPException(500, f"support cases unavailable (run migration 715?): {e}")
+    names = _tenant_names([c.get("org_id") for c in cases])
+    # ticket subjects/numbers (grouped by org so we never cross tenants in the lookup)
+    tmap = {}
+    by_org: dict = {}
+    for c in cases:
+        if c.get("ticket_id"):
+            by_org.setdefault(c["org_id"], []).append(c["ticket_id"])
+    for oid, tids in by_org.items():
+        try:
+            trows = (db("tickets").select("id,subject,ticket_number,status_id,requester_name,requester_email")
+                     .eq("org_id", oid).in_("id", tids).execute().data) or []
+            for t in trows:
+                tmap[(oid, t["id"])] = t
+        except Exception:
+            pass
+    out = []
+    for c in cases:
+        t = tmap.get((c.get("org_id"), c.get("ticket_id"))) or {}
+        out.append({**c, "tenant_name": names.get(c.get("org_id")) or "Tenant",
+                    "ticket_subject": t.get("subject"),
+                    "ticket_number": (f"TKT-{t.get('ticket_number')}" if t.get("ticket_number") else None),
+                    "requester": t.get("requester_name") or t.get("requester_email")})
+    return {"cases": out, "count": len(out),
+            "statuses": list(_SUPPORT_STATUSES), "priorities": list(_SUPPORT_PRIORITIES)}
+
+
+def _load_case(cid: str):
+    rows = db("support_case").select("*").eq("id", cid).limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(404, "case not found")
+    return rows[0]
+
+
+@router.get("/support/cases/{cid}")
+async def support_case_detail(cid: str, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Case detail: the case + its timeline + the origin ticket (subject/description/thread) + the tenant
+    name + recent core.failure_log rows for the case's org within ±24h of ticket creation. House-gated."""
+    _require_support(authorization, x_active_org)
+    case = _load_case(cid)
+    org_id = case.get("org_id")
+    events = (db("support_case_event").select("*").eq("org_id", org_id).eq("case_id", cid)
+              .order("created_at").execute().data or [])
+    ticket, comments = None, []
+    if case.get("ticket_id"):
+        trows = db("tickets").select("*").eq("org_id", org_id).eq("id", case["ticket_id"]).limit(1).execute().data or []
+        if trows:
+            ticket = trows[0]
+            ticket["display_number"] = f"TKT-{ticket.get('ticket_number')}" if ticket.get("ticket_number") else None
+            comments = (db("ticket_comments").select("*").eq("org_id", org_id)
+                        .eq("ticket_id", case["ticket_id"]).order("created_at").execute().data or [])
+    names = _tenant_names([org_id])
+    return {"case": {**case, "tenant_name": names.get(org_id) or "Tenant"},
+            "events": events, "ticket": ticket, "ticket_comments": comments,
+            "failures": _case_failures(org_id, (ticket or {}).get("created_at")),
+            "statuses": list(_SUPPORT_STATUSES), "priorities": list(_SUPPORT_PRIORITIES)}
+
+
+def _case_failures(org_id, ticket_created_at):
+    """Recent core.failure_log rows for this tenant within ±24h of the ticket's creation (best-effort)."""
+    if not org_id:
+        return []
+    try:
+        base = datetime.fromisoformat(str(ticket_created_at).replace("Z", "+00:00")) if ticket_created_at \
+            else datetime.now(timezone.utc)
+    except Exception:
+        base = datetime.now(timezone.utc)
+    lo = (base - timedelta(hours=24)).isoformat()
+    hi = (base + timedelta(hours=24)).isoformat()
+    try:
+        return (get_supabase().schema("core").table("failure_log").select("*")
+                .eq("org_id", org_id).gte("created_at", lo).lte("created_at", hi)
+                .order("created_at", desc=True).limit(50).execute().data) or []
+    except Exception:
+        return []
+
+
+def _touch_case(cid, patch):
+    patch = {**patch, "updated_at": _now()}
+    db("support_case").update(patch).eq("id", cid).execute()
+
+
+@router.post("/support/cases/{cid}/reply")
+async def support_case_reply(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Post a reply visible to the tenant user. Records a case event (kind='reply', visible_to_user=true)
+    AND fans the reply into the tenant's helpdesk ticket thread (storeops.ticket_comments + a ticket_event)
+    so the user sees it in their existing helpdesk UI, plus a best-effort notify email. House-gated."""
+    ctx = _require_support(authorization, x_active_org)
+    text = (body.get("body") or "").strip()
+    if not text:
+        raise HTTPException(422, "reply body required")
+    case = _load_case(cid)
+    org_id = case.get("org_id")
+    author = ctx.get("email") or "support"
+    _case_event(org_id, cid, "reply", body=text, author_email=author, visible_to_user=True)
+    # Fan-out into the tenant ticket thread (visible to the requester).
+    if case.get("ticket_id"):
+        try:
+            db("ticket_comments").insert({
+                "org_id": org_id, "ticket_id": case["ticket_id"], "author": author,
+                "author_name": "Tech Support", "body": text, "is_internal": False}).execute()
+            db("tickets").update({"updated_at": _now()}).eq("id", case["ticket_id"]).execute()
+            db("ticket_events").insert({
+                "org_id": org_id, "ticket_id": case["ticket_id"], "actor": author,
+                "event_type": "support_reply"}).execute()
+        except Exception:
+            pass
+        await _notify_ticket_reply(org_id, case["ticket_id"])
+    _touch_case(cid, {})
+    return {"ok": True}
+
+
+async def _notify_ticket_reply(org_id, ticket_id):
+    try:
+        trows = db("tickets").select("subject,ticket_number,requester_email").eq("org_id", org_id).eq("id", ticket_id).limit(1).execute().data or []
+        if not trows:
+            return
+        t = trows[0]
+        addr = t.get("requester_email")
+        if not addr:
+            return
+        from app.modules.notify.channels import email_resend
+        if not email_resend.is_configured():
+            return
+        num = f"TKT-{t.get('ticket_number')}"
+        subject = f"[Support] Update on {num}: {t.get('subject')}"
+        html = f"<p>Tech support replied to your ticket <b>{num}</b>. Open the helpdesk to view the reply.</p>"
+        try:
+            await email_resend.send_email(addr, subject, html, [])
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+@router.post("/support/cases/{cid}/note")
+async def support_case_note(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Internal note — NEVER fanned to the tenant (visible_to_user=false). House-gated."""
+    ctx = _require_support(authorization, x_active_org)
+    text = (body.get("body") or "").strip()
+    if not text:
+        raise HTTPException(422, "note body required")
+    case = _load_case(cid)
+    _case_event(case.get("org_id"), cid, "internal_note", body=text,
+                author_email=ctx.get("email"), visible_to_user=False)
+    _touch_case(cid, {})
+    return {"ok": True}
+
+
+@router.post("/support/cases/{cid}/assign")
+async def support_case_assign(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Assign the case to a support agent (assignee_email). House-gated."""
+    ctx = _require_support(authorization, x_active_org)
+    assignee = (body.get("assignee_email") or "").strip() or None
+    case = _load_case(cid)
+    _touch_case(cid, {"assignee_email": assignee})
+    _case_event(case.get("org_id"), cid, "assign",
+                body=(f"Assigned to {assignee}" if assignee else "Unassigned"),
+                author_email=ctx.get("email"), visible_to_user=False)
+    return {"ok": True, "assignee_email": assignee}
+
+
+@router.post("/support/cases/{cid}/status")
+async def support_case_status(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Change case status/priority. Resolving (status='resolved') REQUIRES resolution text. House-gated."""
+    ctx = _require_support(authorization, x_active_org)
+    case = _load_case(cid)
+    patch = {}
+    new_status = (body.get("status") or "").strip().lower()
+    if new_status:
+        if new_status not in _SUPPORT_STATUSES:
+            raise HTTPException(400, f"invalid status; use one of {list(_SUPPORT_STATUSES)}")
+        resolution = (body.get("resolution") or "").strip()
+        if new_status == "resolved" and not resolution and not (case.get("resolution") or "").strip():
+            raise HTTPException(422, "a resolution note is required to resolve a case")
+        patch["status"] = new_status
+        if resolution:
+            patch["resolution"] = resolution
+    new_priority = (body.get("priority") or "").strip().lower()
+    if new_priority:
+        if new_priority not in _SUPPORT_PRIORITIES:
+            raise HTTPException(400, f"invalid priority; use one of {list(_SUPPORT_PRIORITIES)}")
+        patch["priority"] = new_priority
+    if not patch:
+        raise HTTPException(400, "nothing to update")
+    _touch_case(cid, patch)
+    _case_event(case.get("org_id"), cid, "status",
+                body=" · ".join(f"{k}={v}" for k, v in patch.items()),
+                author_email=ctx.get("email"), visible_to_user=False)
+    return {"ok": True, **patch}
+
+
+# ── Support config: canned responses + SLA policy (HOUSE-org config, per-setting gated) ─────────
+# Read = any support agent; WRITE = _can_edit_setting(caller, 'support_config') (registered in core
+# SETTING_AREAS). This is the established per-setting-edit pattern.
+def _support_can_edit(authorization: str, x_active_org: str = "") -> bool:
+    from app.modules.core.router import _uid_from_token, _resolve_caller, _can_edit_setting
+    uid = _uid_from_token(authorization or "")
+    if not uid:
+        return False
+    caller = _resolve_caller(get_supabase(), uid, x_active_org)
+    return _can_edit_setting(caller, "support_config")
+
+
+@router.get("/support/canned-responses")
+async def canned_list(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    _require_support(authorization, x_active_org)
+    try:
+        rows = (db("support_canned_response").select("*").eq("org_id", HOUSE_ORG)
+                .order("category").order("title").execute().data) or []
+    except Exception:
+        rows = []
+    return {"canned": rows, "can_edit": _support_can_edit(authorization, x_active_org)}
+
+
+@router.post("/support/canned-responses")
+async def canned_create(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    _require_support(authorization, x_active_org)
+    if not _support_can_edit(authorization, x_active_org):
+        raise HTTPException(403, "you don't have permission to edit support canned responses")
+    title = (body.get("title") or "").strip()
+    text = (body.get("body") or "").strip()
+    if not title or not text:
+        raise HTTPException(422, "title and body are required")
+    row = {"org_id": HOUSE_ORG, "title": title, "body": text,
+           "category": (body.get("category") or None), "updated_at": _now()}
+    if body.get("id"):
+        db("support_canned_response").update(row).eq("id", body["id"]).eq("org_id", HOUSE_ORG).execute()
+        return {"ok": True, "id": body["id"]}
+    r = (db("support_canned_response").insert(row).execute().data or [{}])[0]
+    return {"ok": True, "id": r.get("id")}
+
+
+@router.delete("/support/canned-responses/{rid}")
+async def canned_delete(rid: str, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    _require_support(authorization, x_active_org)
+    if not _support_can_edit(authorization, x_active_org):
+        raise HTTPException(403, "you don't have permission to edit support canned responses")
+    db("support_canned_response").delete().eq("id", rid).eq("org_id", HOUSE_ORG).execute()
+    return {"deleted": True}
+
+
+@router.get("/support/sla-policy")
+async def sla_get(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    _require_support(authorization, x_active_org)
+    return {"policy": _house_sla_policy(), "priorities": list(_SUPPORT_PRIORITIES),
+            "can_edit": _support_can_edit(authorization, x_active_org)}
+
+
+@router.put("/support/sla-policy")
+async def sla_put(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Upsert one priority's SLA (body: {priority, response_hours, resolve_hours}). House config."""
+    _require_support(authorization, x_active_org)
+    if not _support_can_edit(authorization, x_active_org):
+        raise HTTPException(403, "you don't have permission to edit the support SLA policy")
+    priority = (body.get("priority") or "").strip().lower()
+    if priority not in _SUPPORT_PRIORITIES:
+        raise HTTPException(400, f"invalid priority; use one of {list(_SUPPORT_PRIORITIES)}")
+    def _int(v):
+        try:
+            return max(0, int(v))
+        except (TypeError, ValueError):
+            return None
+    row = {"org_id": HOUSE_ORG, "priority": priority,
+           "response_hours": _int(body.get("response_hours")),
+           "resolve_hours": _int(body.get("resolve_hours")), "updated_at": _now()}
+    db("support_sla_policy").upsert(row, on_conflict="org_id,priority").execute()
+    return {"ok": True, **row}

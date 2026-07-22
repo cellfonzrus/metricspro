@@ -257,6 +257,14 @@ export const NAV: NavGroup[] = [
     { href: '/helpdesk/settings', label: 'Settings', icon: '⚙️', module: 'helpdesk', scopes: ['all'] },
     { href: '/remediation', label: 'Auto-Remediation', icon: '🤖', module: 'helpdesk', scopes: ['all', 'market'] },
   ]},
+  // Tech Support (mig 715) — the HOUSE support team's cross-tenant console + per-page help docs. Gated on
+  // module 'support' (NOT 'admin'): support agents need not be admins. The console's backend endpoints are
+  // additionally house-gated + super-admin-only cross-tenant, so a tenant user granted the module still
+  // can't read another tenant's cases.
+  { group: 'Support', module: 'support', items: [
+    { href: '/admin/support', label: 'Support Console', icon: '🎧', module: 'support', scopes: ['all', 'market'] },
+    { href: '/admin/support/docs', label: 'Help Docs', icon: '📚', module: 'support', scopes: ['all'] },
+  ]},
   { group: 'Configuration', module: 'admin', items: [
     { href: '/configurations', label: 'All Settings', icon: '⚙️', module: 'admin' },
     { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin' },
@@ -410,6 +418,7 @@ export function applyNavLayout(groups: NavGroup[], layout?: NavLayout): NavGroup
 
 export function moduleForPath(path: string): string {
   if (path.startsWith('/reports')) return 'targets'
+  if (path.startsWith('/admin/support')) return 'support'   // tech-support console (mig 715), gated on 'support' not 'admin'
   if (path.startsWith('/admin')) return 'admin'
   if (path.startsWith('/configurations')) return 'admin'
   if (path.startsWith('/employee')) return 'targets'

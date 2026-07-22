@@ -55,6 +55,14 @@ export default function TicketDetail() {
     try { await api(`/api/v1/helpdesk/tickets/${id}?org_id=${ORG_ID}&actor=${enc(actor)}`, { method: 'PATCH', body: JSON.stringify(body) }); await load() }
     catch (e: any) { setErr(e?.message || 'Update failed') } finally { setBusy(false) }
   }
+  async function escalate() {
+    setBusy(true)
+    try {
+      await api(`/api/v1/helpdesk/tickets/${id}/escalate?org_id=${ORG_ID}&actor=${enc(actor)}`, {
+        method: 'POST', body: JSON.stringify({}) })
+      await load()
+    } catch (e: any) { setErr(e?.message || 'Escalation failed') } finally { setBusy(false) }
+  }
   async function postComment() {
     if (!comment.trim()) return
     setBusy(true)
@@ -94,6 +102,11 @@ export default function TicketDetail() {
         <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{t.subject}</h1>
         <Badge label={t.status?.label} color={t.status?.color} />
         <Badge label={t.priority?.label} color={t.priority?.color} />
+        {data.support_case && <Badge label={`🎧 Escalated to tech support · ${data.support_case.status}`} color="#7c3aed" />}
+        {isAgent && !data.support_case && (
+          <button className="btn btn-sm" disabled={busy} onClick={escalate} style={{ marginLeft: 'auto' }}
+            title="Send this ticket to the house tech-support team">🎧 Escalate to tech support</button>
+        )}
       </div>
       <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
         Raised by {t.requester_name || t.requester_email || '—'} · {String(t.created_at).slice(0, 16).replace('T', ' ')}

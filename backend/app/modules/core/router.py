@@ -819,6 +819,7 @@ SETTING_AREAS = [
     {"key": "menu",              "label": "Menu Layout"},
     {"key": "failures",          "label": "Failure Logs (clock-in sensitivity, logged categories)"},
     {"key": "security",          "label": "Security (password policy · 2FA · admin-set passwords)"},
+    {"key": "support_config",    "label": "Tech Support (SLA policy · canned responses · help docs)"},
 ]
 
 
@@ -3114,3 +3115,165 @@ async def set_employee_widget_overrides(body: dict, org_id: str = ORG_ID):
         .eq("id", rows[0]["id"]).execute()
     return {"ok": True, "employee_id": eid or None, "email": email or None, "widget_overrides": ovr}
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# SUPPORT DOCS (mig 715) — per-page help registry with TWO views: a trimmed user-facing `user_md`
+# (the "?" panel, readable by any signed-in user) and the full `support_md` playbook (support staff
+# only). Docs live in `core.support_doc` (core schema, exposed). Resolution: page_key/pathname →
+# longest-prefix matching PUBLISHED doc; a TENANT-org override beats the HOUSE (global) row at equal
+# specificity. Author/list/import/delete are gated by the SAME cross-tenant support gate as the console
+# (lazy-imported from the helpdesk router — one gate implementation, no duplication, no import cycle).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+def _support_gate(authorization, x_active_org=""):
+    """True if the caller may see full support content / edit docs. Delegates to the single support
+    gate defined in the helpdesk router (super_admin OR house-org membership w/ modules.support)."""
+    try:
+        from app.modules.helpdesk.router import _support_ctx
+        return _support_ctx(authorization or "", x_active_org or "") is not None
+    except Exception:
+        return False
+
+
+def _resolve_support_doc(docs, path, tenant_org, house_org=ORG_ID):
+    """PURE longest-prefix resolver (unit-proven). From `docs` (published rows for the tenant ∪ house),
+    return the row whose page_key is the longest boundary-prefix of `path`; a tenant-org row beats the
+    house row at EQUAL page_key length. Returns None when nothing matches."""
+    p = (str(path or "").split("?")[0].split("#")[0]).rstrip("/") or "/"
+    best, best_rank = None, (-1, -1)
+    for d in (docs or []):
+        if not d.get("is_published", True):
+            continue
+        pk = (str(d.get("page_key") or "").rstrip("/")) or "/"
+        matched = (p == pk) or (pk != "/" and p.startswith(pk + "/")) or (pk == "/")
+        if not matched:
+            continue
+        is_tenant = 1 if (d.get("org_id") == tenant_org and tenant_org != house_org) else 0
+        rank = (len(pk), is_tenant)
+        if rank > best_rank:
+            best_rank, best = rank, d
+    return best
+
+
+_DOC_FIELDS = ("page_key", "title", "module", "user_md", "support_md", "common_issues",
+               "permissions_needed", "related_settings", "is_published")
+
+
+@router.get("/support-doc/resolve")
+async def support_doc_resolve(path: str = "", authorization: str = Header(default=""),
+                              x_active_org: str = Header(default="")):
+    """Resolve the help doc for a pathname (the "?" panel calls this for the CURRENT page). Returns the
+    trimmed `user_md` view for a normal user; the FULL row when the caller passes the support gate.
+    FAIL-SILENT: any error → {found: false} so the panel never breaks a page. The caller's tenant (for a
+    tenant override) is derived from the token; unauthenticated → house docs only."""
+    client = sb()
+    tenant_org = ORG_ID
+    try:
+        uid = _uid_from_token(authorization)
+        if uid:
+            caller = _resolve_caller(client, uid, x_active_org)
+            if caller and caller.get("org_id"):
+                tenant_org = caller["org_id"]
+    except Exception:
+        tenant_org = ORG_ID
+    orgs = list({tenant_org, ORG_ID})
+    try:
+        docs = (client.schema("core").table("support_doc").select("*")
+                .in_("org_id", orgs).eq("is_published", True).execute().data) or []
+    except Exception:
+        return {"found": False, "path": path}
+    doc = _resolve_support_doc(docs, path, tenant_org)
+    if not doc:
+        return {"found": False, "path": path}
+    if _support_gate(authorization, x_active_org):
+        return {"found": True, "path": path, "doc": doc, "full": True}
+    # Trimmed user-facing view only.
+    return {"found": True, "path": path, "full": False,
+            "doc": {"page_key": doc.get("page_key"), "title": doc.get("title"),
+                    "module": doc.get("module"), "user_md": doc.get("user_md")}}
+
+
+@router.get("/support-docs")
+async def support_docs_list(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                            org: str = ""):
+    """List help docs for the coverage/editor view (support-gated). Defaults to HOUSE (global) docs; pass
+    ?org=<tenant> to view a tenant's overrides."""
+    if not _support_gate(authorization, x_active_org):
+        raise HTTPException(403, "The support docs editor is restricted to house support staff.")
+    target = (org or "").strip() or ORG_ID
+    try:
+        docs = (sb().schema("core").table("support_doc").select("*")
+                .eq("org_id", target).order("page_key").execute().data) or []
+    except Exception as e:
+        raise HTTPException(500, f"support_doc unavailable (run migration 715?): {e}")
+    return {"docs": docs, "org_id": target}
+
+
+def _clean_doc(body: dict) -> dict:
+    return {k: body[k] for k in _DOC_FIELDS if k in body}
+
+
+@router.post("/support-docs")
+async def support_docs_upsert(body: dict, authorization: str = Header(default=""),
+                              x_active_org: str = Header(default="")):
+    """Create/update one help doc (support-gated). Keyed by (org_id, page_key); defaults to the HOUSE
+    (global) org unless an explicit org_id is supplied (a per-tenant override)."""
+    if not _support_gate(authorization, x_active_org):
+        raise HTTPException(403, "Editing help docs is restricted to house support staff.")
+    page_key = (body.get("page_key") or "").strip()
+    if not page_key:
+        raise HTTPException(422, "page_key is required")
+    org_id = (body.get("org_id") or "").strip() or ORG_ID
+    row = {**_clean_doc(body), "page_key": page_key, "org_id": org_id,
+           "updated_by": (body.get("updated_by") or None),
+           "updated_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        sb().schema("core").table("support_doc").upsert(row, on_conflict="org_id,page_key").execute()
+    except Exception as e:
+        raise HTTPException(500, f"save failed — run migration 715 first: {e}")
+    return {"ok": True, "org_id": org_id, "page_key": page_key}
+
+
+@router.delete("/support-docs/{did}")
+async def support_docs_delete(did: str, authorization: str = Header(default=""),
+                              x_active_org: str = Header(default="")):
+    if not _support_gate(authorization, x_active_org):
+        raise HTTPException(403, "Editing help docs is restricted to house support staff.")
+    sb().schema("core").table("support_doc").delete().eq("id", did).execute()
+    return {"deleted": True}
+
+
+@router.post("/support-docs/import")
+async def support_docs_import(body: dict, authorization: str = Header(default=""),
+                              x_active_org: str = Header(default="")):
+    """Bulk-import a domain content pack (support-gated). Contract:
+        {"domain": str, "pages": [{"page_key","title","module","user_md","support_md",
+          "common_issues":[{"symptom","diagnosis","fix","escalate_when"}],
+          "permissions_needed","related_settings"}]}
+    Upserts each page as a HOUSE (global) doc keyed by page_key. This is how the six domain packs land."""
+    if not _support_gate(authorization, x_active_org):
+        raise HTTPException(403, "Importing help docs is restricted to house support staff.")
+    org_id = (body.get("org_id") or "").strip() or ORG_ID
+    pages = body.get("pages") or []
+    if not isinstance(pages, list) or not pages:
+        raise HTTPException(422, "pages[] required")
+    now = datetime.now(timezone.utc).isoformat()
+    rows, skipped = [], 0
+    for p in pages:
+        if not isinstance(p, dict):
+            skipped += 1
+            continue
+        pk = (p.get("page_key") or "").strip()
+        if not pk:
+            skipped += 1
+            continue
+        rows.append({**_clean_doc(p), "page_key": pk, "org_id": org_id,
+                     "is_published": bool(p.get("is_published", True)),
+                     "updated_by": f"import:{(body.get('domain') or 'pack')}"[:200], "updated_at": now})
+    if not rows:
+        raise HTTPException(422, "no valid pages (each needs a page_key)")
+    try:
+        sb().schema("core").table("support_doc").upsert(rows, on_conflict="org_id,page_key").execute()
+    except Exception as e:
+        raise HTTPException(500, f"import failed — run migration 715 first: {e}")
+    return {"ok": True, "imported": len(rows), "skipped": skipped, "domain": body.get("domain")}

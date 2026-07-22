@@ -27,7 +27,11 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"   # house org (middleware rewrit
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
 # folded the configurable HR intake-capture form into seed_tenant_defaults(); 3 = mig 079 expanded
 # seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
-SEED_VERSION = 5   # bumped: 5 = mig 708 folded the carrier-neutral remediation playbook catalog into
+SEED_VERSION = 6   # bumped: 6 = mig 715 registered the "support" (Tech Support) module, so every existing
+                   #             tenant self-provisions a support tenant_modules entitlement row on its next
+                   #             login (the cross-tenant console is HOUSE-gated regardless; this is billing
+                   #             hygiene so the module isn't "missing" for any tenant).
+                   #         5 = mig 708 folded the carrier-neutral remediation playbook catalog into
                    #             seed_tenant_defaults(), so every tenant (not just the house org) gets the
                    #             Auto-Remediation starter catalog on its next login.
                    #         4 = added "ai_assistant" capability (auto-provisions to every tenant on next login)
@@ -50,6 +54,7 @@ MODULE_CATALOG = {
     "hr": "HR / People",
     "account": "Accounting",
     "ai_assistant": "AI Assistant",
+    "support": "Tech Support",
 }
 ALL_MODULES = list(MODULE_CATALOG.keys())
 

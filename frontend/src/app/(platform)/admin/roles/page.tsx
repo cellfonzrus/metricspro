@@ -24,6 +24,7 @@ const MODULES: { key: string; label: string }[] = [
   { key: 'hr', label: 'HR (salary + comp)' },
   { key: 'notify', label: 'Notify' },
   { key: 'helpdesk', label: 'Helpdesk' },
+  { key: 'support', label: 'Tech Support (cross-tenant console)' },
   { key: 'admin', label: 'Admin (role mgmt)' },
 ]
 const SCOPES = [

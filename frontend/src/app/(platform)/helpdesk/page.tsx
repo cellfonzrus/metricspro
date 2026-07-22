@@ -12,7 +12,7 @@ import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterVa
 const enc = encodeURIComponent
 type Ticket = {
   id: string; display_number: string; subject: string; created_at: string
-  requester_name: string | null; requester_email: string | null; assignee: string | null
+  requester_name: string | null; requester_email: string | null; assignee: string | null; escalated?: boolean
   status: { label: string; color: string; stage: string }
   priority: { label: string; color: string }; category: { name: string | null }
 }
@@ -131,6 +131,7 @@ export default function HelpdeskInbox() {
               <Badge label={t.category?.name || undefined} color="#64748b" />
               <Badge label={t.priority?.label} color={t.priority?.color} />
               <Badge label={t.status?.label} color={t.status?.color} />
+              {t.escalated && <Badge label="🎧 Escalated" color="#7c3aed" />}
               {isAgent && <span style={{ fontSize: 12, color: 'var(--text3)', width: 130, textAlign: 'right' }}>
                 {t.assignee ? `→ ${t.assignee}` : (t.requester_name || t.requester_email || '')}</span>}
               <span style={{ fontSize: 12, color: 'var(--text3)', width: 86, textAlign: 'right' }}>{String(t.created_at).slice(0, 10)}</span>

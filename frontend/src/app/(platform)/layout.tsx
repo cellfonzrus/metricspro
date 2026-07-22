@@ -6,6 +6,7 @@ import { PeriodProvider, usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
 import { api, setActiveOrg } from '@/lib/client'
 import { NAV, canSeeItem, canAccessPath, carrierOK, safeHomeFor, applyNavLayout, type NavItem, type NavLayout } from '@/lib/rbac'
+import HelpPanel from '@/components/HelpPanel'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -185,6 +186,8 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
               style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', textDecoration: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '5px 10px' }}>
               🕐 Clock in
             </Link>
+            {/* Per-page help "?" panel (mig 715 tech-support) — fail-silent, never breaks the page. */}
+            <HelpPanel />
             {(permissions?.modules?.admin || permissions?.scope === 'all') && (
               <Link href="/configurations" title="All settings & configuration in one place"
                 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', textDecoration: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '5px 10px' }}>
