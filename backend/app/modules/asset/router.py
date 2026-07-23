@@ -2524,3 +2524,11 @@ async def get_marketplace_purchases_filter_options(org_id: str = ORG_ID):
             order_types.add(r["order_type"])
     return {"available": True, "businesses": sorted(businesses),
             "statuses": sorted(statuses), "order_types": sorted(order_types)}
+
+
+# ── Purchase Orders (asset-11, mig 301) — proposed PO / receiving / sold-tally / aging ────────────
+# Own file (purchase_orders.py, same package) so this router.py diff stays a 2-line mount; every PO
+# endpoint lands under the SAME /api/v1/asset prefix main.py already registers — no main.py change.
+from app.modules.asset.purchase_orders import router as _po_router  # noqa: E402
+router.include_router(_po_router)
+

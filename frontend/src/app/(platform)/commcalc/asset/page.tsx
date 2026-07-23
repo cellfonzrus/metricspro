@@ -249,6 +249,7 @@ export default function AssetPage() {
           <a className="btn" href="/commcalc/asset/inventory-recon" style={{ textDecoration: 'none' }}>📦 Inventory Recon</a>
           <a className="btn" href="/commcalc/asset/hotsheet-recon" style={{ textDecoration: 'none' }}>🏷️ Hotsheet Recon</a>
           <a className="btn" href="/commcalc/asset/marketplace-purchases" style={{ textDecoration: 'none' }}>🛒 Marketplace Purchases</a>
+          <a className="btn" href="/commcalc/asset/purchase-orders" style={{ textDecoration: 'none' }}>📑 Purchase Orders</a>
           <button className="btn" onClick={handleRefreshPrices} disabled={uploading} title="Re-pull selling prices from sales and re-sync undercharge flags">
             🔄 Refresh prices &amp; flags
           </button>
