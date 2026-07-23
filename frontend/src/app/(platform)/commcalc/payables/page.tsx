@@ -1,7 +1,9 @@
 'use client'
-import { useState, useEffect } from 'react'
-import { api, fmt, ORG_ID } from '@/lib/client'
+import { useState, useEffect, useMemo } from 'react'
+import { api, fmt } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 
 // Device Forecasting & Vendor Payables (module 095). Reads the config-driven ledger built by
 // POST /api/v1/payables/rebuild. Forecasting is phones-only; payables + due are per-IMEI.
@@ -55,7 +57,6 @@ export default function PayablesPage() {
   const [carriersList, setCarriersList] = useState<any[]>([])
   // payables
   const [status, setStatus] = useState('')
-  const [store, setStore] = useState('')
   const [pRows, setPRows] = useState<any[]>([])
   const [drill, setDrill] = useState<any | null>(null)
   // owed-by-date
@@ -63,18 +64,24 @@ export default function PayablesPage() {
   const [loading, setLoading] = useState(false)
   const [settings, setSettings] = useState<any>({ priority_ack_enabled: false, priority_window_pct: 25 })
   const [showSettings, setShowSettings] = useState(false)
+  // RULE FIVE — shared standardized store/market filter (pick-don't-type, org-scoped options). Drives the
+  // forecast + payables tabs CLIENT-SIDE (their rows carry `store`). The Daily-Owed tab is a server-side
+  // date-aggregate with no store dimension, so it honors a SINGLE selected store server-side (0 or >1
+  // selected → all stores). org_id is injected by the shared client from the caller's JWT — never hardcoded.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const owedStore = filt.stores.length === 1 ? filt.stores[0] : ''
 
-  useEffect(() => { api(`/api/v1/payables/settings?org_id=${ORG_ID}`).then(setSettings).catch(() => {}) }, [])
+  useEffect(() => { api(`/api/v1/payables/settings`).then(setSettings).catch(() => {}) }, [])
   useEffect(() => { const t = new URLSearchParams(window.location.search).get('tab'); if (t && ['payables', 'forecast', 'owed', 'map'].includes(t)) setTab(t as Tab) }, [])
-  useEffect(() => { if (tab === 'forecast') loadForecast() }, [tab, lookback, horizon, store])
-  useEffect(() => { if (tab === 'payables') loadPayables() }, [tab, status, store])
-  useEffect(() => { if (tab === 'owed') loadOwed() }, [tab, store])
+  useEffect(() => { if (tab === 'forecast') loadForecast() }, [tab, lookback, horizon])
+  useEffect(() => { if (tab === 'payables') loadPayables() }, [tab, status])
+  useEffect(() => { if (tab === 'owed') loadOwed() }, [tab, owedStore])
   useEffect(() => { if (tab === 'map') loadMap() }, [tab])
 
   async function rebuild() {
     setBusy(true); setMsg('Rebuilding ledger… (may take a minute for a full Boost rebuild)')
     try {
-      const r = await api(`/api/v1/payables/rebuild?org_id=${ORG_ID}`, { method: 'POST' })
+      const r = await api(`/api/v1/payables/rebuild`, { method: 'POST' })
       const sc = r.status_counts || {}
       setMsg(`Rebuilt ${r.written} devices across ${r.carriers} carrier(s): ` +
         Object.entries(sc).map(([k, v]) => `${v} ${k}`).join(', ') +
@@ -87,8 +94,7 @@ export default function PayablesPage() {
   async function loadForecast() {
     setLoading(true)
     try {
-      const qs = new URLSearchParams({ org_id: ORG_ID, lookback: String(lookback), horizon: String(horizon) })
-      if (store) qs.set('store', store)
+      const qs = new URLSearchParams({ lookback: String(lookback), horizon: String(horizon) })
       const d = await api(`/api/v1/payables/forecast?${qs}`); setFRows(d.rows || []); setFMeta(d)
     } catch (e) { console.error(e) }
     setLoading(false)
@@ -97,49 +103,56 @@ export default function PayablesPage() {
     setLoading(true)
     try {
       const [c, m] = await Promise.all([
-        api(`/api/v1/payables/phone-map/candidates?org_id=${ORG_ID}`),
-        api(`/api/v1/payables/phone-map?org_id=${ORG_ID}`),
+        api(`/api/v1/payables/phone-map/candidates`),
+        api(`/api/v1/payables/phone-map`),
       ])
       setCandidates(c.rows || []); setCarriersList(c.carriers || m.carriers || []); setMappings(m.rows || [])
     } catch (e) { console.error(e) }
     setLoading(false)
   }
   async function saveMapping(raw: string, canonical: string, cid: string, side: string) {
-    await api(`/api/v1/payables/phone-map?org_id=${ORG_ID}`, { method: 'POST', body: JSON.stringify({ raw_model: raw, canonical_model: canonical, carrier_id: cid || null, side }) })
+    await api(`/api/v1/payables/phone-map`, { method: 'POST', body: JSON.stringify({ raw_model: raw, canonical_model: canonical, carrier_id: cid || null, side }) })
     setCandidates(prev => prev.filter(c => c.raw_model !== raw))    // drop the mapped one locally (candidates rescan is heavy)
-    api(`/api/v1/payables/phone-map?org_id=${ORG_ID}`).then((m: any) => setMappings(m.rows || [])).catch(() => {})
+    api(`/api/v1/payables/phone-map`).then((m: any) => setMappings(m.rows || [])).catch(() => {})
   }
   async function deleteMapping(id: string) {
-    try { await api(`/api/v1/payables/phone-map/${id}?org_id=${ORG_ID}`, { method: 'DELETE' }); loadMap() }
+    try { await api(`/api/v1/payables/phone-map/${id}`, { method: 'DELETE' }); loadMap() }
     catch (e: any) { setMsg(e.message) }
   }
   async function loadPayables() {
     setLoading(true)
     try {
-      const qs = new URLSearchParams({ org_id: ORG_ID })
-      if (status) qs.set('status', status); if (store) qs.set('store', store)
-      const d = await api(`/api/v1/payables/payables?${qs}`); setPRows(d.rows || [])
+      const qs = new URLSearchParams()
+      if (status) qs.set('status', status)
+      const d = await api(`/api/v1/payables/payables${qs.toString() ? `?${qs}` : ''}`); setPRows(d.rows || [])
     } catch (e) { console.error(e) }
     setLoading(false)
   }
   async function loadOwed() {
     setLoading(true)
     try {
-      const qs = new URLSearchParams({ org_id: ORG_ID })
-      if (store) qs.set('store', store)
-      const d = await api(`/api/v1/payables/owed-by-date?${qs}`); setORows(d.rows || [])
+      const qs = new URLSearchParams()
+      if (owedStore) qs.set('store', owedStore)   // date-aggregate has no store dim → single-store server filter
+      const d = await api(`/api/v1/payables/owed-by-date${qs.toString() ? `?${qs}` : ''}`); setORows(d.rows || [])
     } catch (e) { console.error(e) }
     setLoading(false)
   }
   async function openDrill(imei: string) {
-    try { setDrill(await api(`/api/v1/payables/offsets/${encodeURIComponent(imei)}?org_id=${ORG_ID}`)) }
+    try { setDrill(await api(`/api/v1/payables/offsets/${encodeURIComponent(imei)}`)) }
     catch (e: any) { setMsg(e.message) }
   }
   async function saveSettings(patch: any) {
     const next = { ...settings, ...patch }; setSettings(next)
-    try { await api(`/api/v1/payables/settings?org_id=${ORG_ID}`, { method: 'PUT', body: JSON.stringify(patch) }) }
+    try { await api(`/api/v1/payables/settings`, { method: 'PUT', body: JSON.stringify(patch) }) }
     catch (e: any) { setMsg(e.message) }
   }
+
+  // Pick-don't-type filter options from the ALREADY-org-scoped rows the page loaded (forecast ∪ payables
+  // carry `store`; `market` shows only if the ledger has it → the market picker self-hides when absent).
+  const facc = { store: (r: any) => r.store, market: (r: any) => r.market }
+  const filterOpts = useMemo(() => optionsFromRows([...fRows, ...pRows], facc), [fRows, pRows])   // eslint-disable-line react-hooks/exhaustive-deps
+  const fRowsF = useMemo(() => filterRows(fRows, filt, facc), [fRows, filt])   // eslint-disable-line react-hooks/exhaustive-deps
+  const pRowsF = useMemo(() => filterRows(pRows, filt, facc), [pRows, filt])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const th = { textAlign: 'left' as const, padding: '8px 10px', borderBottom: '2px solid var(--border)', fontSize: 12, color: 'var(--muted)' }
   const td = { padding: '7px 10px', borderBottom: '1px solid var(--border)', fontSize: 13 }
@@ -148,7 +161,7 @@ export default function PayablesPage() {
   // config surface (mapping input), so it is exempt (no export bar there).
   const exportSpec = (): { title: string; filename: string; columns: ExportColumn[]; rows: any[] } | null => {
     if (tab === 'forecast') return {
-      title: 'Device Forecast', filename: 'device_forecast', rows: fRows,
+      title: 'Device Forecast', filename: 'device_forecast', rows: fRowsF,
       columns: [
         { header: 'Carrier', field: 'carrier', get: (r: any) => r.carrier },
         { header: 'Store', field: 'store', role: 'store', get: (r: any) => r.store || '' },
@@ -161,7 +174,7 @@ export default function PayablesPage() {
       ],
     }
     if (tab === 'payables') return {
-      title: 'Vendor Payables (per IMEI)', filename: 'vendor_payables', rows: pRows,
+      title: 'Vendor Payables (per IMEI)', filename: 'vendor_payables', rows: pRowsF,
       columns: [
         { header: 'IMEI', field: 'imei', get: (r: any) => r.imei },
         { header: 'Store', field: 'store', role: 'store', get: (r: any) => r.store },
@@ -228,7 +241,6 @@ export default function PayablesPage() {
             {t === 'payables' ? 'Payables (per IMEI)' : t === 'forecast' ? 'Forecast (phones)' : t === 'owed' ? 'Daily Owed' : 'Phone Mapping'}
           </button>
         ))}
-        {tab !== 'map' && <input placeholder="Store filter…" value={store} onChange={e => setStore(e.target.value)} style={{ ...sel, minWidth: 160 }} />}
         {tab === 'forecast' && (
           <>
             <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -256,6 +268,11 @@ export default function PayablesPage() {
         )}
       </div>
 
+      {tab !== 'map' && (filterOpts.stores.length > 0 || filterOpts.markets.length > 0) && (
+        <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false, reps: false }}
+          storeOptions={filterOpts.stores} marketOptions={filterOpts.markets} />
+      )}
+
       {loading && <div style={{ color: 'var(--muted)', fontSize: 13 }}>Loading…</div>}
 
       {tab === 'forecast' && !loading && (
@@ -266,7 +283,7 @@ export default function PayablesPage() {
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr><th style={th}>Carrier</th><th style={th}>Store</th><th style={th}>Model</th><th style={th}>Sold ({fMeta.lookback ?? lookback}d)</th><th style={th}>Velocity/day</th><th style={th}>Projected ({fMeta.horizon ?? horizon}d)</th><th style={th}>On hand</th><th style={th}>Order</th></tr></thead>
-            <tbody>{fRows.map((r, i) => (
+            <tbody>{fRowsF.map((r, i) => (
               <tr key={i}><td style={td}>{r.carrier}{!r.mapped && <span title="unmapped model — map it on the Phone Mapping tab" style={{ color: '#d97706' }}> •</span>}</td><td style={td}>{r.store || '—'}</td><td style={td}>{r.device_model}</td><td style={td}>{r.units}</td><td style={td}>{r.avg_daily_velocity}</td><td style={td}>{r.projected_demand}</td><td style={td}>{r.on_hand}</td>
                 <td style={{ ...td, fontWeight: r.recommend_order > 0 ? 700 : 400, color: r.recommend_order > 0 ? '#d97706' : 'inherit' }}>{r.recommend_order}</td></tr>
             ))}</tbody>
@@ -277,7 +294,7 @@ export default function PayablesPage() {
       {tab === 'payables' && !loading && (
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr><th style={th}>IMEI</th><th style={th}>Store</th><th style={th}>Model</th><th style={th}>Owed</th><th style={th}>Rebate</th><th style={th}>Net owed</th><th style={th}>Due</th><th style={th}>Status</th></tr></thead>
-          <tbody>{pRows.map((r, i) => (
+          <tbody>{pRowsF.map((r, i) => (
             <tr key={i} onClick={() => openDrill(r.imei)} style={{ cursor: 'pointer' }}>
               <td style={td}>{r.imei}</td><td style={td}>{r.store}</td><td style={td}>{r.device_model}</td>
               <td style={td}>{r.owed == null ? '—' : fmt(r.owed)}</td>

@@ -3799,7 +3799,7 @@ def chargeback_review_assign(cb_id: str, payload: dict, org_id: str = ORG_ID):
            'reason': reason or None, 'amount': amount, 'chargeback_item_ref': ref, 'updated_at': _cb_now()}
     if cb.get('needs_review'):
         upd.update({'review': 'disapproved', 'reviewed_by': by, 'reviewed_at': _cb_now()})
-    client.schema('commcalc').table('chargeback_review').update(upd).eq('id', cb_id).execute()
+    client.schema('commcalc').table('chargeback_review').update(upd).eq('org_id', org_id).eq('id', cb_id).execute()
     return {"ok": True, "period": period, "rep": rep, "amount": amount}
 
 
@@ -3815,7 +3815,7 @@ def chargeback_review_dismiss(cb_id: str, payload: dict = {}, org_id: str = ORG_
             'chargeback_item_ref': None, 'reason': (payload or {}).get('reason') or None, 'updated_at': _cb_now()}
     if cur and cur[0].get('needs_review'):
         body.update({'review': 'approved', 'reviewed_by': (payload or {}).get('reviewed_by') or 'admin', 'reviewed_at': _cb_now()})
-    client.schema('commcalc').table('chargeback_review').update(body).eq('id', cb_id).execute()
+    client.schema('commcalc').table('chargeback_review').update(body).eq('org_id', org_id).eq('id', cb_id).execute()
     return {"ok": True}
 
 
@@ -3827,7 +3827,7 @@ def chargeback_review_reopen(cb_id: str, org_id: str = ORG_ID):
     client.schema('commcalc').table('chargeback_items').delete().eq('org_id', org_id).eq('source', 'chargeback_review').eq('source_ref', ref).execute()
     client.schema('commcalc').table('chargeback_review').update({
         'status': 'open', 'assigned_rep': None, 'assigned_at': None, 'review': None,
-        'chargeback_item_ref': None, 'updated_at': _cb_now()}).eq('id', cb_id).execute()
+        'chargeback_item_ref': None, 'updated_at': _cb_now()}).eq('org_id', org_id).eq('id', cb_id).execute()
     return {"ok": True}
 
 
@@ -4808,7 +4808,7 @@ def accessory_flags_push(body: dict, org_id: str = ORG_ID):
             client.schema("commcalc").table("chargeback_items").insert(item).execute()
             if cb_id:
                 client.schema("commcalc").table("chargeback_review").update(
-                    {"chargeback_item_ref": ref, "updated_at": _cb_now()}).eq("id", cb_id).execute()
+                    {"chargeback_item_ref": ref, "updated_at": _cb_now()}).eq("org_id", org_id).eq("id", cb_id).execute()
             pushed += 1
         except Exception as e:
             errors.append({"dedupe_key": dk, "error": str(e)[:200]})
@@ -7827,7 +7827,7 @@ async def update_store(store_id: str, body: dict, org_id: str = "00000000-0000-0
     allowed = {k: v for k, v in body.items() if k in ['market', 'store_code', 'store_address', 'is_active', 'salesforce_id']}
     if not allowed:
         raise HTTPException(400, "No valid fields to update")
-    r = client.schema('commcalc').table('store_mapping').update(allowed).eq('id', store_id).execute()
+    r = client.schema('commcalc').table('store_mapping').update(allowed).eq('org_id', org_id).eq('id', store_id).execute()
     return r.data[0] if r.data else {}
 
 
