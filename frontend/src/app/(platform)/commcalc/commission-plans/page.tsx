@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api, fmt } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
@@ -18,6 +18,11 @@ type Tier = { id?: string; metric?: string; min_count: number; multiplier: numbe
 type Assign = { id?: string; scope: string; scope_value?: string | null; priority?: number }
 type Plan = { id?: string; name: string; carrier_id?: string | null; base_tier_metric?: string | null
   is_active: boolean; notes?: string | null; rules?: Rule[]; tiers?: Tier[]; assignments?: Assign[] }
+// bulk-assignment roster (people-centric surface)
+type CurPlan = { plan_id: string; plan_name: string }
+type Person = { id?: string; name: string; value: string; role: string; market: string; email: string
+  home_store: string; epay_salesperson: string; is_active: boolean; current_plans: CurPlan[] }
+type Roster = { people: Person[]; roles: string[]; markets: string[]; ready: boolean }
 
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const lbl: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, fontWeight: 600, color: 'var(--text2)' }
@@ -80,6 +85,25 @@ export default function CommissionPlansPage() {
   const [period, setPeriod] = useState('June 2026')
   const [preview, setPreview] = useState<any>(null)
   const [previewBusy, setPreviewBusy] = useState(false)
+  // ── people-centric BULK assignment (owner directive 2026-07-23) ──
+  const [tab, setTab] = useState<'plans' | 'bulk'>('plans')
+  const [roster, setRoster] = useState<Roster>({ people: [], roles: [], markets: [], ready: true })
+  const [fMarkets, setFMarkets] = useState<string[]>([])
+  const [fRoles, setFRoles] = useState<string[]>([])
+  const [nameQuery, setNameQuery] = useState('')
+  const [showInactive, setShowInactive] = useState(false)
+  const [checked, setChecked] = useState<Set<string>>(new Set())
+  const [bulkPlanId, setBulkPlanId] = useState<string | null>(null)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkResult, setBulkResult] = useState<any>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+
+  async function loadRoster() {
+    try {
+      const r = await api('/api/v1/commcalc/commission-plans/roster')
+      setRoster({ people: r.people || [], roles: r.roles || [], markets: r.markets || [], ready: r.ready !== false })
+    } catch { setRoster({ people: [], roles: [], markets: [], ready: true }) }
+  }
 
   async function load() {
     try {
@@ -100,10 +124,69 @@ export default function CommissionPlansPage() {
       })
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => { load(); loadRoster() }, [])
 
   const markets = Array.from(new Set(stores.map(s => (s.market || '').trim()).filter(Boolean))).sort()
   const carrierName = (id?: string | null) => carriers.find(c => c.id === id)?.name || ''
+
+  // ── bulk-assign derived state ──
+  const nameCounts = useMemo(() => {
+    const m: Record<string, number> = {}
+    roster.people.forEach(p => { const k = p.name.trim().toLowerCase(); m[k] = (m[k] || 0) + 1 })
+    return m
+  }, [roster.people])
+  const filteredPeople = useMemo(() => {
+    const mset = new Set(fMarkets), rset = new Set(fRoles), q = nameQuery.trim().toLowerCase()
+    return roster.people.filter(p => {
+      if (!showInactive && !p.is_active) return false
+      if (mset.size && !mset.has(p.market)) return false
+      if (rset.size && !rset.has(p.role)) return false
+      if (q && !`${p.name} ${p.email} ${p.value}`.toLowerCase().includes(q)) return false
+      return true
+    })
+  }, [roster.people, fMarkets, fRoles, nameQuery, showInactive])
+  const filteredValues = useMemo(() => filteredPeople.map(p => p.value), [filteredPeople])
+  const allFilteredChecked = filteredValues.length > 0 && filteredValues.every(v => checked.has(v))
+  const someFilteredChecked = filteredValues.some(v => checked.has(v))
+  const selectedPeople = useMemo(() => roster.people.filter(p => checked.has(p.value)), [roster.people, checked])
+  const bulkPreview = useMemo(() => {
+    let newCount = 0, alreadyCount = 0, replacePeople = 0, replaceRows = 0
+    selectedPeople.forEach(p => {
+      if (p.current_plans.some(c => c.plan_id === bulkPlanId)) alreadyCount++
+      else if (p.current_plans.length) { replacePeople++; replaceRows += p.current_plans.length }
+      else newCount++
+    })
+    return { newCount, alreadyCount, replacePeople, replaceRows }
+  }, [selectedPeople, bulkPlanId])
+  const planOptions = useMemo(() => plans.map(p => ({
+    id: p.id!, label: p.name,
+    sublabel: `${p.rules?.length || 0} rules · ${p.assignments?.length || 0} assignments${p.is_active ? '' : ' · inactive'}`,
+  })), [plans])
+  const bulkPlanName = plans.find(p => p.id === bulkPlanId)?.name || ''
+
+  function toggleAll() {
+    setChecked(prev => {
+      const next = new Set(prev)
+      if (allFilteredChecked) filteredValues.forEach(v => next.delete(v))
+      else filteredValues.forEach(v => next.add(v))
+      return next
+    })
+  }
+  function toggleOne(v: string) {
+    setChecked(prev => { const n = new Set(prev); n.has(v) ? n.delete(v) : n.add(v); return n })
+  }
+  async function applyBulk(replace: boolean) {
+    if (!bulkPlanId || selectedPeople.length === 0) return
+    setBulkBusy(true); setBulkResult(null)
+    try {
+      const r = await api('/api/v1/commcalc/commission-plans/bulk-assign', {
+        method: 'POST',
+        body: JSON.stringify({ plan_id: bulkPlanId, replace_existing: replace, people: selectedPeople.map(p => p.value) }),
+      })
+      setBulkResult(r); setConfirmOpen(false); setChecked(new Set())
+      await Promise.all([loadRoster(), load()])   // refresh current-plan badges + plan assignment counts
+    } catch (e: any) { setBulkResult({ error: e?.message || String(e) }) } finally { setBulkBusy(false) }
+  }
 
   // EMPLOYEE picker (pick-don't-type, §3b). scope_value = epay_salesperson || name — the rep's EXPLICIT
   // ePay/POS name when set (the escape hatch for POS strings that differ beyond word order — initials,
@@ -202,6 +285,18 @@ export default function CommissionPlansPage() {
       </div>
       {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {msg || 'Run migration 059_commission_plans.sql in Supabase to enable.'}</div>}
 
+      {/* tab bar — plan-centric editor  vs  people-centric bulk assign */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid var(--border)' }}>
+        {([['plans', '🧮 Plans'], ['bulk', '👥 Assign to people']] as const).map(([t, label]) => (
+          <button key={t} onClick={() => setTab(t)} style={{
+            border: 'none', background: 'none', cursor: 'pointer', padding: '8px 14px', fontSize: 13,
+            fontWeight: tab === t ? 700 : 500, color: tab === t ? 'var(--text)' : 'var(--text2)',
+            borderBottom: tab === t ? '2px solid var(--primary, #2563eb)' : '2px solid transparent', marginBottom: -1,
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {tab === 'plans' && (<>
       {/* list + new */}
       {!draft && (
         <div className="card" style={{ padding: 0, marginBottom: 16 }}>
@@ -428,6 +523,155 @@ export default function CommissionPlansPage() {
         )}
         {!preview && <div style={{ fontSize: 13, color: 'var(--text3)' }}>Enter a period and Preview to see what a plan would pay.</div>}
       </div>
+      </>)}
+
+      {tab === 'bulk' && (
+        <div>
+          <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>👥 Assign a plan to many people at once</div>
+            <div style={{ fontSize: 12.5, color: 'var(--text2)' }}>
+              Filter by market / role / name, tick the people (or <strong>select-all</strong> the filtered set),
+              pick a plan, and apply it to everyone checked in one action. Each person shows their
+              <strong> role</strong>, <strong>market</strong> and <strong>current plan</strong> so you can see who
+              already has what before overwriting. This only sets WHO is on WHICH plan — no pay is recomputed until
+              you run <em>Calculate</em>.
+            </div>
+          </div>
+
+          {/* standardized filter bar (RULE FIVE) — market · role · name, pick-don't-type (§3b) */}
+          <div className="card" style={{ padding: 12, marginBottom: 12, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <label style={lbl}>Market
+              <EntityPicker multi width={230} placeholder="All markets…" clearable
+                options={roster.markets.map(m => ({ id: m, label: m }))}
+                value={fMarkets} onChange={setFMarkets} ariaLabel="Filter by market" />
+            </label>
+            <label style={lbl}>Role
+              <EntityPicker multi width={230} placeholder="All roles…" clearable
+                options={roster.roles.map(r => ({ id: r, label: r }))}
+                value={fRoles} onChange={setFRoles} ariaLabel="Filter by role" />
+            </label>
+            <label style={lbl}>Name / email
+              <input style={{ ...sel, width: 200 }} placeholder="type to filter…" value={nameQuery}
+                onChange={e => setNameQuery(e.target.value)} aria-label="Filter by name or email" />
+            </label>
+            <label style={{ ...lbl, flexDirection: 'row', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+              <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} /> Show inactive
+            </label>
+            {(fMarkets.length > 0 || fRoles.length > 0 || nameQuery) && (
+              <button className="btn btn-secondary" style={{ fontSize: 12 }}
+                onClick={() => { setFMarkets([]); setFRoles([]); setNameQuery('') }}>Clear filters</button>
+            )}
+          </div>
+
+          {/* apply bar — pick plan + apply to checked */}
+          <div className="card" style={{ padding: 12, marginBottom: 12, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', background: checked.size ? '#eff6ff' : 'var(--surface)' }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>{checked.size} selected</div>
+            <span style={{ color: 'var(--text3)' }}>→</span>
+            <EntityPicker width={280} placeholder="Pick a plan to assign…" options={planOptions}
+              value={bulkPlanId} onChange={setBulkPlanId} ariaLabel="Plan to assign" />
+            <button className="btn btn-primary" disabled={!bulkPlanId || checked.size === 0 || bulkBusy}
+              onClick={() => { setBulkResult(null); setConfirmOpen(true) }}>
+              {bulkBusy ? '…' : `Assign to ${checked.size} ${checked.size === 1 ? 'person' : 'people'}`}
+            </button>
+            {checked.size > 0 && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setChecked(new Set())}>Clear selection</button>}
+          </div>
+
+          {bulkResult && !bulkResult.error && (
+            <div className="card" style={{ padding: 12, marginBottom: 12, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 13 }}>
+              ✅ <strong>{bulkResult.plan_name}</strong> — {bulkResult.summary?.assigned || 0} newly assigned ·
+              {' '}{bulkResult.summary?.replaced || 0} replaced ({bulkResult.summary?.rows_deleted || 0} old removed) ·
+              {' '}{bulkResult.summary?.already || 0} already had it{bulkResult.summary?.skipped ? ` · ${bulkResult.summary.skipped} skipped (kept their other plan)` : ''}.
+            </div>
+          )}
+          {bulkResult?.error && <div className="card" style={{ padding: 12, marginBottom: 12, background: '#fef2f2', border: '1px solid #fecaca', fontSize: 13 }}>❌ {bulkResult.error}</div>}
+
+          {/* people table */}
+          {!roster.ready && <div className="card" style={{ padding: 14, marginBottom: 12, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ Run migration 059 to enable plan assignments.</div>}
+          <div className="card" style={{ padding: 0 }}>
+            <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text2)' }}>
+              {filteredPeople.length} of {roster.people.length} people{fMarkets.length || fRoles.length || nameQuery ? ' (filtered)' : ''}
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...th, width: 34 }}>
+                      <input type="checkbox" aria-label="Select all filtered"
+                        checked={allFilteredChecked}
+                        ref={el => { if (el) el.indeterminate = !allFilteredChecked && someFilteredChecked }}
+                        onChange={toggleAll} disabled={filteredValues.length === 0} />
+                    </th>
+                    {['Name', 'Role', 'Market', 'Current plan(s)'].map(h => <th key={h} style={th}>{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredPeople.map(p => {
+                    const dup = (nameCounts[p.name.trim().toLowerCase()] || 0) > 1
+                    const isChecked = checked.has(p.value)
+                    return (
+                      <tr key={p.value} style={{ borderTop: '1px solid var(--border)', background: isChecked ? '#eff6ff' : undefined, cursor: 'pointer' }}
+                        onClick={() => toggleOne(p.value)}>
+                        <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                          <input type="checkbox" checked={isChecked} onChange={() => toggleOne(p.value)} aria-label={`Select ${p.name}`} />
+                        </td>
+                        <td style={td}>
+                          <span style={{ fontWeight: 600 }}>{p.name}</span>
+                          {dup && p.email && <span style={{ color: 'var(--text3)', fontSize: 11 }}> — {p.email}</span>}
+                          {!p.is_active && <span style={{ fontSize: 10, marginLeft: 6, color: '#b45309' }}>inactive</span>}
+                        </td>
+                        <td style={td}>{p.role ? <span style={{ fontSize: 11, fontWeight: 700, padding: '1px 6px', borderRadius: 8, background: '#dbeafe', color: '#1e40af' }}>{p.role}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
+                        <td style={td}>{p.market || <span style={{ color: 'var(--text3)' }}>—</span>}</td>
+                        <td style={td}>
+                          {p.current_plans.length === 0 ? <span style={{ color: 'var(--text3)' }}>none</span> :
+                            p.current_plans.map(c => (
+                              <span key={c.plan_id} style={{ fontSize: 11, fontWeight: 600, padding: '1px 7px', borderRadius: 8, marginRight: 4, background: c.plan_id === bulkPlanId ? '#dcfce7' : '#f1f5f9', color: c.plan_id === bulkPlanId ? '#166534' : '#475569' }}>{c.plan_name}</span>
+                            ))}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {filteredPeople.length === 0 && <tr><td colSpan={5} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No people match the current filters.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* confirm modal */}
+          {confirmOpen && (
+            <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
+              onClick={() => !bulkBusy && setConfirmOpen(false)}>
+              <div className="card" style={{ padding: 20, maxWidth: 480, width: '90%' }} onClick={e => e.stopPropagation()}>
+                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 10 }}>Assign “{bulkPlanName}” to {selectedPeople.length} {selectedPeople.length === 1 ? 'person' : 'people'}?</div>
+                <ul style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 14px', paddingLeft: 18, lineHeight: 1.7 }}>
+                  <li><strong>{bulkPreview.newCount}</strong> will be newly assigned</li>
+                  <li><strong>{bulkPreview.alreadyCount}</strong> already have this plan (skipped)</li>
+                  {bulkPreview.replacePeople > 0 && (
+                    <li style={{ color: '#b45309' }}>
+                      <strong>{bulkPreview.replacePeople}</strong> currently have a DIFFERENT plan — replacing removes
+                      {' '}<strong>{bulkPreview.replaceRows}</strong> existing assignment{bulkPreview.replaceRows === 1 ? '' : 's'}
+                    </li>
+                  )}
+                </ul>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                  <button className="btn btn-secondary" disabled={bulkBusy} onClick={() => setConfirmOpen(false)}>Cancel</button>
+                  {bulkPreview.replacePeople > 0 && (
+                    <button className="btn btn-secondary" disabled={bulkBusy} onClick={() => applyBulk(false)}
+                      title="Assign only people who have no plan yet; leave the others on their current plan">
+                      Assign new only ({bulkPreview.newCount})
+                    </button>
+                  )}
+                  <button className="btn btn-primary" disabled={bulkBusy || (bulkPreview.newCount === 0 && bulkPreview.replacePeople === 0)}
+                    onClick={() => applyBulk(bulkPreview.replacePeople > 0)}>
+                    {bulkBusy ? '…' : bulkPreview.replacePeople > 0
+                      ? `Replace & assign (${bulkPreview.replaceRows} overwritten)`
+                      : `Assign ${bulkPreview.newCount}`}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

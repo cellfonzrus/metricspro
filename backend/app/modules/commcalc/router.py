@@ -7637,6 +7637,184 @@ async def preview_commission_plan(period: str, plan_id: str = "", org_id: str = 
     return commission_engine.preview(client, org_id, period, plan_id=plan_id or None)
 
 
+# ── Commission-plan ASSIGNMENT roster + BULK assign (owner directive 2026-07-23) ──────────────────
+# The plan editor assigns ONE person at a time and shows only a name. These two endpoints back the
+# people-centric bulk surface: a filterable roster (role + market next to each name — RULE FIVE
+# filters, RULE THREE pick-don't-type) and a one-action bulk assign of a single plan to many checked
+# people. NO payout math changes here — an assignment only decides WHICH plan a rep's existing sales
+# pay under; the next POST /calculate applies it. Bulk writes the SAME employee-scope rows single-
+# assign writes (see save_commission_plan): {org_id, plan_id, scope:'employee', scope_value, priority}.
+def _norm_assign(v):
+    """Case/space-insensitive key for comparing an employee-scope scope_value to a roster person's
+    value — matches how commission_engine._resolve_plan_for compares employee scope (.strip().lower())
+    so 'already has this plan' agrees with what the engine will actually pay."""
+    return (v or "").strip().lower()
+
+
+@router.get("/commission-plans/roster")
+async def commission_plan_roster(org_id: str = ORG_ID, include_inactive: bool = True):
+    """People roster for the bulk plan-assignment surface. Returns every org employee with the fields
+    the UI needs: display name, ROLE + MARKET (for role-next-to-name + the role/market filter facets),
+    the disambiguation email, and the assignment VALUE (epay_salesperson || name) that IS the
+    employee-scope scope_value written by BOTH single- and bulk-assign (identical rows). Each person
+    also carries their CURRENT direct (employee-scope) plan assignments so the owner can see who
+    already has what before overwriting. Read-only; org-scoped on every query. Degrades to whatever it
+    can read (empty roster / no plans) rather than erroring, so the page never hard-fails."""
+    client = sb()
+    # 1. roster from storeops.employees (org-scoped). Include inactive by default: a mid-month
+    #    terminated rep still has period sale lines that pay under their plan (the engine matches
+    #    inactive reps too), so hiding them here would silently make them un-assignable.
+    try:
+        q = (client.schema("storeops").table("employees")
+             .select("id,name,role,email,home_store,epay_salesperson,is_active").eq("org_id", org_id))
+        if not include_inactive:
+            q = q.eq("is_active", True)
+        emps = q.order("name").execute().data or []
+    except Exception:
+        emps = []
+    # 2. home_store -> market via storeops.stores (keyed by BOTH store_code and address — home_store
+    #    may hold either form).
+    mkt_by_store = {}
+    try:
+        stores = (client.schema("storeops").table("stores")
+                  .select("store_code,address,market").eq("org_id", org_id).execute().data) or []
+        for s in stores:
+            mk = (s.get("market") or "").strip()
+            for k in (s.get("store_code"), s.get("address")):
+                if k:
+                    mkt_by_store[str(k).strip()] = mk
+    except Exception:
+        pass
+    # 3. current EMPLOYEE-scope assignments -> plan names (org-scoped). ready=False lets the UI show
+    #    the "run migration 059" hint instead of a broken page.
+    plan_name, assigns_by_val, ready = {}, {}, True
+    try:
+        plans = (client.schema("commcalc").table("commission_plan")
+                 .select("id,name").eq("org_id", org_id).execute().data) or []
+        plan_name = {p["id"]: p.get("name") for p in plans}
+        arows = (client.schema("commcalc").table("commission_plan_assignment")
+                 .select("plan_id,scope_value").eq("org_id", org_id).eq("scope", "employee")
+                 .execute().data) or []
+        for a in arows:
+            assigns_by_val.setdefault(_norm_assign(a.get("scope_value")), []).append(a.get("plan_id"))
+    except Exception:
+        ready = False
+    people, roles_set, markets_set = [], set(), set()
+    for e in emps:
+        val = (e.get("epay_salesperson") or e.get("name") or "").strip()
+        if not val:
+            continue
+        name = (e.get("name") or "").strip() or val
+        role = (e.get("role") or "").strip()
+        market = mkt_by_store.get((e.get("home_store") or "").strip(), "")
+        cur_ids = assigns_by_val.get(_norm_assign(val), [])
+        cur = [{"plan_id": pid, "plan_name": plan_name.get(pid, "(unknown plan)")} for pid in cur_ids]
+        if role:
+            roles_set.add(role)
+        if market:
+            markets_set.add(market)
+        people.append({
+            "id": e.get("id"), "name": name, "value": val, "role": role, "market": market,
+            "email": (e.get("email") or "").strip(),
+            "home_store": (e.get("home_store") or "").strip(),
+            "epay_salesperson": (e.get("epay_salesperson") or "").strip(),
+            "is_active": bool(e.get("is_active", True)),
+            "current_plans": cur,
+        })
+    return {"ready": ready, "people": people,
+            "roles": sorted(roles_set), "markets": sorted(markets_set)}
+
+
+@router.post("/commission-plans/bulk-assign")
+async def bulk_assign_commission_plan(body: dict, org_id: str = ORG_ID):
+    """Assign ONE commission plan to MANY employees in a single action (owner directive 2026-07-23).
+
+    Body: {plan_id, people:[<scope_value> | {value}...], replace_existing?:bool}. Additive to single-
+    assign; writes the SAME row shape ({org_id, plan_id, scope:'employee', scope_value, priority:0}).
+    NO payout-math change — assignments only decide which plan a rep's sales pay under; the next
+    POST /calculate applies it. org_id stamped on every inserted row; org-scoped on every read/delete.
+
+    Per-person status:
+      • already_assigned  — an employee-scope row for this person→this plan already exists (no-op)
+      • assigned          — person had NO direct plan; new row inserted
+      • replaced          — person had a DIFFERENT direct plan; replace_existing=true → old direct
+                            rows deleted + new row inserted ('replaced' = # rows removed for them)
+      • skipped_has_other — person had a different direct plan and replace_existing=false (needs confirm)
+    """
+    plan_id = (body.get("plan_id") or "").strip()
+    if not plan_id:
+        raise HTTPException(400, "plan_id required")
+    # normalize + dedupe the selection (accept plain strings or {value} objects), first-seen order
+    seen, values = set(), []
+    for p in (body.get("people") or []):
+        v = str((p.get("value") if isinstance(p, dict) else p) or "").strip()
+        k = _norm_assign(v)
+        if not v or k in seen:
+            continue
+        seen.add(k)
+        values.append(v)
+    if not values:
+        raise HTTPException(400, "no people selected")
+    replace_existing = bool(body.get("replace_existing"))
+    client = sb()
+    # plan must exist for THIS org (guards a stale / cross-tenant plan_id)
+    try:
+        prow = (client.schema("commcalc").table("commission_plan").select("id,name")
+                .eq("org_id", org_id).eq("id", plan_id).limit(1).execute().data) or []
+    except Exception as ex:
+        raise HTTPException(500, f"bulk-assign failed (is migration 059 applied?): {ex}")
+    if not prow:
+        raise HTTPException(404, "plan not found for this org")
+    plan_nm = prow[0].get("name")
+    # existing employee-scope assignments for the org → {norm(scope_value): [{id, plan_id}]}
+    existing = {}
+    arows = (client.schema("commcalc").table("commission_plan_assignment")
+             .select("id,plan_id,scope_value").eq("org_id", org_id).eq("scope", "employee")
+             .execute().data) or []
+    for a in arows:
+        existing.setdefault(_norm_assign(a.get("scope_value")), []).append(a)
+    results, to_insert, to_delete_ids = [], [], []
+    for v in values:
+        cur = existing.get(_norm_assign(v), [])
+        same = [a for a in cur if a.get("plan_id") == plan_id]
+        other = [a for a in cur if a.get("plan_id") != plan_id]
+        if same:
+            results.append({"value": v, "status": "already_assigned"})
+        elif other and not replace_existing:
+            results.append({"value": v, "status": "skipped_has_other",
+                            "existing_plan_ids": [a.get("plan_id") for a in other]})
+        elif other:  # replace_existing
+            to_delete_ids.extend([a["id"] for a in other if a.get("id")])
+            to_insert.append({"org_id": org_id, "plan_id": plan_id, "scope": "employee",
+                              "scope_value": v, "priority": 0})
+            results.append({"value": v, "status": "replaced", "replaced": len(other)})
+        else:
+            to_insert.append({"org_id": org_id, "plan_id": plan_id, "scope": "employee",
+                              "scope_value": v, "priority": 0})
+            results.append({"value": v, "status": "assigned"})
+    # WRITE order = INSERT then DELETE. An extra, soon-deleted config row is harmless; a LOST
+    # assignment is money-adjacent — so the replacement always lands before the old row is removed.
+    # Both are single batched calls (delete-then-insert is the plan-children convention; inverted
+    # here only to protect against a mid-op failure dropping pay).
+    inserted = deleted = 0
+    if to_insert:
+        client.schema("commcalc").table("commission_plan_assignment").insert(to_insert).execute()
+        inserted = len(to_insert)
+    if to_delete_ids:
+        (client.schema("commcalc").table("commission_plan_assignment").delete()
+         .eq("org_id", org_id).in_("id", to_delete_ids).execute())
+        deleted = len(to_delete_ids)
+    summary = {
+        "assigned": sum(1 for r in results if r["status"] == "assigned"),
+        "already": sum(1 for r in results if r["status"] == "already_assigned"),
+        "replaced": sum(1 for r in results if r["status"] == "replaced"),
+        "skipped": sum(1 for r in results if r["status"] == "skipped_has_other"),
+        "rows_inserted": inserted, "rows_deleted": deleted,
+    }
+    return {"ok": True, "plan_id": plan_id, "plan_name": plan_nm,
+            "replace_existing": replace_existing, "results": results, "summary": summary}
+
+
 @router.get("/stores")
 async def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
