@@ -1125,20 +1125,41 @@ def fix_status_change(current, target, is_super_admin):
     return (True, "")
 
 
+# Statuses a NON-super-admin caller may set at CREATION time. Approval states are gated to super_admins
+# here too (mirroring fix_status_change) so a house support agent can't POST status='approved' straight
+# into the automation queue and bypass the transition-side approval gate.
+FIX_SAFE_INITIAL_STATUSES = ("new", "pending_approval")
+
+
 def _new_fix_request_row(body, *, org_id, created_by, sample_ids, affected_orgs, failure_count,
-                         status="pending_approval"):
-    """Build a support_fix_request insert row (shared by the tenant /core and house /support create paths)."""
+                         status="pending_approval", is_super_admin=False):
+    """Build a support_fix_request insert row (shared by the tenant /core and house /support create paths).
+
+    APPROVAL GATE AT CREATION: only a super_admin may create a request already in an approval state
+    ('approved'/'rejected'). For every other caller the initial status is clamped to a safe pre-approval
+    state (FIX_SAFE_INITIAL_STATUSES) — default-DENY — so the transition-side super_admin gate can't be
+    bypassed by POSTing status='approved' at creation. A super_admin who does create an approval-state row
+    is stamped approved_by/approved_at for audit parity with the /status transition path."""
     now = datetime.now(timezone.utc).isoformat()
-    return {
+    req = str(status or "").strip().lower()
+    if req not in FIX_STATUSES:
+        req = "pending_approval"
+    if not is_super_admin and req not in FIX_SAFE_INITIAL_STATUSES:
+        req = "pending_approval"                    # non-super may never enter an approval (or other non-safe) state
+    row = {
         "org_id": org_id, "kind": (body.get("kind") or None), "module": (body.get("module") or None),
         "title": (str(body.get("title") or body.get("kind") or "Fix request"))[:300],
         "summary": (body.get("summary") or None), "proposed_action": (body.get("proposed_action") or None),
         "code_hint": (body.get("code_hint") or None),
         "sample_failure_ids": list(sample_ids or []), "affected_orgs": list(affected_orgs or []),
         "failure_count": int(failure_count or 0),
-        "status": (status if status in FIX_STATUSES else "pending_approval"),
+        "status": req,
         "created_by": created_by, "created_at": now, "updated_at": now,
     }
+    if req in FIX_APPROVAL_TARGETS:                  # only reachable for a super_admin — stamp the audit trail
+        row["approved_by"] = created_by
+        row["approved_at"] = now
+    return row
 
 
 def _fetch_failures(client, *, org_id=None, reviewed="", category=None, ids=None,

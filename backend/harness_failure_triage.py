@@ -26,6 +26,10 @@ Proves:
    13. fix-request lifecycle: create (HOUSE-owned, affected_orgs kept) → approve DENIED to non-super →
        approve OK for super_admin (approved_by stamped) → reject path → resolve+mark_reviewed clears the
        clubbed failures.
+  APPROVAL GATE AT CREATION (Gate-1 follow-up — bfe85d1 rework):
+   15. a NON-super support agent POSTing status='approved'/'rejected' is CLAMPED to pending_approval and
+       never lands in the approved automation queue; a super_admin MAY create a pre-approved request and
+       gets approved_by/approved_at stamped (audit parity with the /status path).
   SQL sanity:
    14. mig 716 failure_kind_doc INSERT has matching column/value arity per row.
 """
@@ -360,6 +364,46 @@ cr2 = run(hd.support_create_fix_request({"kind": "system_error", "title": "noise
 run(hd.support_fix_request_status(cr2["id"], {"status": "rejected"}, authorization="Bearer good", x_active_org=""))
 rej = next(r for r in st["support_fix_request"] if r["id"] == cr2["id"])
 check("13h. reject path → rejected + approved_by stamped", rej["status"] == "rejected" and rej["approved_by"] == "owner@house.com")
+
+# ── 15: APPROVAL GATE AT CREATION (Gate-1 follow-up) — non-super cannot POST straight to 'approved' ──
+st = support_store()
+st["app_users"] = [membership(HOUSE, "support_agent", email="agent@house.com")]     # NON-super house support
+st["roles"] = [role_row(HOUSE, "support_agent", {"modules": {"support": True}, "scope": "store"})]
+wire(st)
+core._uid_from_token = lambda auth: ("uid-1" if auth == "Bearer good" else None)
+
+# (a) non-super POST status='approved' → clamped to pending_approval, NOT in the approved queue
+ca = run(hd.support_create_fix_request({"kind": "face_mismatch", "title": "sneak approve", "status": "approved"},
+                                       authorization="Bearer good", x_active_org=""))
+rowa = next(r for r in st["support_fix_request"] if r["id"] == ca["id"])
+check("15a. non-super create status='approved' → clamped to pending_approval",
+      ca["status"] == "pending_approval" and rowa["status"] == "pending_approval")
+check("15a2. clamped row carries NO approval stamp", not rowa.get("approved_by") and not rowa.get("approved_at"))
+qa = run(hd.support_list_fix_requests(authorization="Bearer good", x_active_org="", status="approved"))
+check("15a3. approved automation queue does NOT contain the sneaked request",
+      all(x["id"] != ca["id"] for x in qa["fix_requests"]))
+
+# (b) non-super POST status='rejected' → clamped to pending_approval too
+cb = run(hd.support_create_fix_request({"kind": "system_error", "title": "sneak reject", "status": "rejected"},
+                                       authorization="Bearer good", x_active_org=""))
+rowb = next(r for r in st["support_fix_request"] if r["id"] == cb["id"])
+check("15b. non-super create status='rejected' → clamped to pending_approval",
+      cb["status"] == "pending_approval" and rowb["status"] == "pending_approval")
+
+# (c) super_admin MAY create directly-approved → allowed + approved_by/approved_at stamped
+st["app_users"] = [membership(HOUSE, "admin", super_admin=True, email="owner@house.com")]
+wire(st)
+core._uid_from_token = lambda auth: ("uid-1" if auth == "Bearer good" else None)
+cc = run(hd.support_create_fix_request({"kind": "face_mismatch", "title": "owner pre-approved", "status": "approved"},
+                                       authorization="Bearer good", x_active_org=""))
+rowc = next(r for r in st["support_fix_request"] if r["id"] == cc["id"])
+check("15c. super_admin create status='approved' → allowed",
+      cc["status"] == "approved" and rowc["status"] == "approved")
+check("15c2. super_admin pre-approve-at-create stamps approved_by/approved_at",
+      rowc.get("approved_by") == "owner@house.com" and bool(rowc.get("approved_at")))
+qc = run(hd.support_list_fix_requests(authorization="Bearer good", x_active_org="", status="approved"))
+check("15c3. super_admin's pre-approved request IS in the automation queue",
+      any(x["id"] == cc["id"] for x in qc["fix_requests"]))
 
 # ── 14: SQL sanity — mig 716 failure_kind_doc INSERT arity ────────────────────────────────────────
 def _split_top_level(inner):

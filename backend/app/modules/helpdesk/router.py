@@ -1271,8 +1271,11 @@ def _decorate_fix_request(fr, names):
 async def support_create_fix_request(body: dict, authorization: str = Header(default=""),
                                      x_active_org: str = Header(default="")):
     """Club a group of similar failures (across one or more tenants) into ONE house-owned fix request.
-    House-gated. Enters at 'pending_approval'. `affected_orgs` = [{org_id, count}] built by the console from
-    the clubbed group; `sample_failure_ids` references the clubbed rows. NEVER edits code or data."""
+    House-gated. Enters at 'pending_approval' — a non-super support agent CANNOT create it directly in an
+    approval state (the initial status is clamped in `_new_fix_request_row`); only a super_admin may
+    create a pre-approved/rejected request (stamped approved_by/approved_at). `affected_orgs` =
+    [{org_id, count}] built by the console from the clubbed group; `sample_failure_ids` references the
+    clubbed rows. NEVER edits code or data."""
     ctx = _require_support(authorization, x_active_org)
     t = _core_triage()
     ids = [str(i) for i in (body.get("sample_failure_ids") or []) if i]
@@ -1280,7 +1283,8 @@ async def support_create_fix_request(body: dict, authorization: str = Header(def
     fc = int(body.get("failure_count") or sum(int(a.get("count") or 0) for a in affected) or len(ids))
     row = t.new_fix_row(body, org_id=HOUSE_ORG, created_by=(ctx.get("email") or "support"),
                         sample_ids=ids, affected_orgs=affected, failure_count=fc,
-                        status=(body.get("status") or "pending_approval"))
+                        status=(body.get("status") or "pending_approval"),
+                        is_super_admin=bool(ctx.get("super_admin")))
     try:
         r = db("support_fix_request").insert(row).execute()
         return {"ok": True, "id": (r.data[0]["id"] if r.data else None), "status": row["status"]}
