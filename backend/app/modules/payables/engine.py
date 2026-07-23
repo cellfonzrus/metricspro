@@ -112,7 +112,7 @@ def _reimb_types(client, org_id):
     out = set()
     try:
         for r in (client.schema("commcalc").table("payment_categories")
-                  .select("payment_type,category").execute().data or []):
+                  .select("payment_type,category").eq("org_id", org_id).execute().data or []):
             cat = (r.get("category") or "").lower()
             if "imb" in cat:  # Re-imbursement
                 out.add((r.get("payment_type") or "").strip().lower())
