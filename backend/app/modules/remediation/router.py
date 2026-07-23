@@ -314,6 +314,24 @@ def _text_decision(text):
 def _digits(s):
     return "".join(c for c in str(s or "") if c.isdigit())
 
+def _orgs_for_sender(client, digits):
+    """Distinct org_ids whose notify registry (notify.recipients) has this sender's phone number.
+    Used to attribute a free-text WhatsApp approval to the sender's OWN tenant(s), so a number shared
+    across tenants can't approve another tenant's remediation. Best-effort → empty set on any error."""
+    if not digits:
+        return set()
+    orgs = set()
+    try:
+        rows = (client.schema("notify").table("recipients")
+                .select("org_id, phone").ilike("phone", f"%{digits[-7:]}%")
+                .limit(200).execute().data) or []
+        for r in rows:
+            if _digits(r.get("phone")) == digits:
+                orgs.add(r.get("org_id") or ORG_ID)
+    except Exception:
+        pass
+    return orgs
+
 
 # ── WhatsApp delivery-status ingestion (owner incident 2026-07-18: silent drops made VISIBLE) ────────
 # Meta delivers message STATUS events on the SAME webhook subscription:
@@ -429,18 +447,43 @@ async def _handle_inbound(client, frm, payload, text):
                     .eq("id", parts[1]).limit(1).execute().data) or []
             if rows and rows[0].get("approval_token") and rows[0]["approval_token"] == parts[2]:
                 req = rows[0]
-    if req is None and text:  # free-text YES/NO fallback → most recent pending for this sender number
+    if req is None and text:  # free-text YES/NO fallback → pending for THIS SENDER'S OWN tenant(s)
         d = _text_decision(text)
-        if d:
-            decision = d
-            digits = _digits(frm)
+        digits = _digits(frm)
+        if d and digits:
+            # A phone number can belong to more than one tenant. Scanning awaiting_approval requests
+            # across ALL orgs and matching only by sender digits (the old behavior) let a shared
+            # number approve ANOTHER tenant's remediation. Resolve which org(s) this sender is
+            # registered to — from the notify module's per-org recipient registry (notify.recipients)
+            # AND from the awaiting requests' own approver contact (assignee_contact.whatsapp) — then:
+            #   • exactly one org  → act on that org's matching request (single-tenant case unchanged);
+            #   • two or more orgs → AMBIGUOUS: refuse the free-text decision and ask the approver to
+            #     use the tokenized button/link (the token path above binds a decision to one request);
+            #   • zero orgs        → nothing registered → no-op.
             rows = (client.schema("commcalc").table("remediation_request").select("*")
                     .eq("status", "awaiting_approval").order("created_at", desc=True)
                     .limit(50).execute().data) or []
-            for r in rows:
-                if _digits((r.get("assignee_contact") or {}).get("whatsapp")) == digits and digits:
-                    req = r
-                    break
+            matches = [r for r in rows
+                       if _digits((r.get("assignee_contact") or {}).get("whatsapp")) == digits]
+            owner_orgs = _orgs_for_sender(client, digits) | {
+                (r.get("org_id") or ORG_ID) for r in matches}
+            if len(owner_orgs) >= 2:
+                try:
+                    from app.modules.notify.channels import whatsapp_meta
+                    await whatsapp_meta.send_text(frm,
+                        "This number is linked to more than one account, so I can't tell which "
+                        "approval you mean. Please tap the Approve/Reject button in the message "
+                        "(or open the approval link) instead of replying.")
+                except Exception:
+                    pass
+                return
+            if len(owner_orgs) == 1:
+                only = next(iter(owner_orgs))
+                for r in matches:
+                    if (r.get("org_id") or ORG_ID) == only:
+                        decision = d
+                        req = r
+                        break
     if req is None or decision is None:
         return
     out = _apply_decision(client, req.get("org_id") or ORG_ID, req, decision,

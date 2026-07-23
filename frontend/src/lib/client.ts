@@ -72,24 +72,41 @@ export function twofaHeader(): Record<string, string> {
   return t ? { 'x-2fa-token': t } : {}
 }
 
-// ── org_id APPEND (super-admin house-default hole — NEEDS CORE from mod-commission, 2026-07-14) ────
-// The tenant middleware does NOT rewrite org_id for a super-admin (their client-supplied org_id is
-// honored — that is what makes cross-tenant admin work). But ~17 commcalc/report READ pages call api()
-// with NO org_id in the URL, so for a super-admin those fall through to the backend's `org_id = ORG_ID`
-// default = the HOUSE org → a super-admin "acting as" a tenant via the switcher sees HOUSE data
-// mislabeled (or empty-looking pages once client-side store filters apply). scopeOrg() only SUBSTITUTES
-// an org_id already present — it never APPENDS one, so it can't fix an org-less URL.
+// ── org_id SCOPING: substitute the house constant + append when absent (cross-tenant leak class) ────
+// The tenant middleware does NOT rewrite org_id for a super-admin — their client-supplied org_id is
+// honored, which is exactly what makes cross-tenant "acting as a tenant" admin work (see
+// tenant_middleware.py: super_admin ⇒ no rewrite). Two consequences the client must handle so a
+// super-admin acting as another tenant via the switcher never reads/writes the HOUSE org by mistake:
 //
-// Fix: when a request carries NO org_id AND an active tenant is known (`mp_active_org`, maintained by
-// the switcher / auth-context after /core/me resolves), APPEND `org_id=<active>` to the query string.
+//   1) APPEND (org-less URLs): many report/read pages call api() with NO org_id, so a super-admin acting
+//      as a tenant falls through to the backend's `org_id = ORG_ID` default = the HOUSE org and sees
+//      HOUSE data mislabeled. Fix: when a URL carries NO org_id and an active tenant is known, APPEND
+//      `org_id=<active>` (appendActiveOrg).
+//   2) SUBSTITUTE (the leak CLASS — many pages hardcode `org_id=${ORG_ID}`): those pages pin the LITERAL
+//      house org_id into the query, so appendActiveOrg's "already scoped → leave it" guard would keep a
+//      super-admin acting as another tenant reading/writing HOUSE data (the "Cellfonz stores under
+//      LuxeLink" forecasting leak). Fix: when a URL carries `org_id=<the house constant>` and an active
+//      tenant that is NOT house is known, SUBSTITUTE the active org for the house constant
+//      (substituteHouseOrg). This makes the remaining per-page `org_id=${ORG_ID}` removals hygiene, not
+//      leak fixes — module agents can deduplicate that effort.
+//
+// In both cases:
 //   • Normal user  → HARMLESS: the middleware overrides org_id with their VERIFIED membership regardless
-//                     of what the client sends, so the appended value is discarded server-side.
+//                     of what the client sends, so the client value is discarded server-side.
 //   • Super-admin   → CLOSES the hole: their bypass trusts the client org_id, so the switcher's active
-//                     org now drives org-less reads (the intended "acting as tenant" behavior).
-//   • URL already carries org_id (e.g. /admin/billing?org_id=<specific tenant>, or a page that hardcodes
-//     org_id=ORG_ID) → LEFT UNTOUCHED: append never double-adds and never overrides a deliberate
-//     cross-tenant admin query. Those keep scopeOrg's existing substitute behavior.
-//   • Before /core/me resolves (no active org known yet) → getActiveOrg() is null → append nothing.
+//                     org now drives both org-less AND house-pinned reads/writes ("acting as tenant").
+//   • House session → active org IS the house constant ⇒ SUBSTITUTE is a no-op and APPEND re-adds house
+//                     (== the page's own default): byte-equivalent to today for every house-org user.
+//   • Deliberate cross-tenant admin query (`?org_id=<a SPECIFIC non-house tenant>`) → LEFT UNTOUCHED:
+//     substituteHouseOrg only rewrites the house LITERAL, never a specific tenant id; append never fires
+//     when org_id is present. So an intentional foreign-tenant query always wins.
+//   • Before /core/me resolves (no active org yet) → getActiveOrg() is null ⇒ both are no-ops.
+//
+// LIMITATION (documented, not a leak): only the QUERY STRING is rewritten here. A POST/PUT/PATCH BODY
+// that hardcodes ORG_ID is NOT rewritten — but the middleware still rewrites the org_id QUERY PARAM for
+// every NORMAL user, and org_id must be a query param (AGENT_CONTRACT §2), so a contract-compliant write
+// routes correctly. Any handler still reading org from a request body is a mis-file bug to fix at the
+// module, not here.
 // A fragment (rare for API paths) is carried through so org_id lands in the query, not the hash.
 function appendActiveOrg(path: string): string {
   const active = getActiveOrg()
@@ -101,11 +118,24 @@ function appendActiveOrg(path: string): string {
   const sep = base.includes('?') ? '&' : '?'
   return `${base}${sep}org_id=${encodeURIComponent(active)}${frag}`
 }
-// Compose substitute-then-append: scopeOrg rewrites an existing org_id (legacy P2, gated), appendActiveOrg
-// adds one when absent. They are mutually exclusive by construction (one acts iff org_id present, the other
-// iff absent), so they never conflict.
+// Substitute the LITERAL house org_id in the query string with the active tenant. Only the house constant
+// is rewritten; a specific non-house org_id (a deliberate cross-tenant admin query) is never touched. No-op
+// when no active org is known or the active org IS the house org. `active` is a PARAMETER (not read from
+// storage) so the rule is a pure, testable function; substituteHouseOrg is the thin storage-backed wrapper.
+function subHouseOrgWith(path: string, active: string | null): string {
+  if (!active || active === ORG_ID) return path
+  return path.replace(/([?&]org_id=)([^&#]*)/, (full, pfx, val) =>
+    decodeURIComponent(val) === ORG_ID ? `${pfx}${encodeURIComponent(active)}` : full)
+}
+function substituteHouseOrg(path: string): string {
+  return subHouseOrgWith(path, getActiveOrg())
+}
+// Compose scope → substitute-house → append. scopeOrg rewrites an existing org_id (legacy P2, gated OFF);
+// substituteHouseOrg swaps the house LITERAL for the active tenant; appendActiveOrg adds one when absent.
+// substituteHouseOrg (acts iff org_id present) and appendActiveOrg (acts iff org_id absent) are mutually
+// exclusive by construction, so they never conflict or double-add.
 function withOrgScope(path: string): string {
-  return appendActiveOrg(scopeOrg(path))
+  return appendActiveOrg(substituteHouseOrg(scopeOrg(path)))
 }
 
 // Render a FastAPI error body as a readable string. `detail` may be a string, an ARRAY of

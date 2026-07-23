@@ -31,7 +31,14 @@ function appendActiveOrg(path) {
   const sep = base.includes('?') ? '&' : '?'
   return `${base}${sep}org_id=${encodeURIComponent(active)}${frag}`
 }
-function withOrgScope(path) { return appendActiveOrg(scopeOrg(path)) }
+// substitute the LITERAL house org_id with the active tenant — verbatim from client.ts (leak-CLASS fix)
+function subHouseOrgWith(path, active) {
+  if (!active || active === ORG_ID) return path
+  return path.replace(/([?&]org_id=)([^&#]*)/, (full, pfx, val) =>
+    decodeURIComponent(val) === ORG_ID ? `${pfx}${encodeURIComponent(active)}` : full)
+}
+function substituteHouseOrg(path) { return subHouseOrgWith(path, getActiveOrg()) }
+function withOrgScope(path) { return appendActiveOrg(substituteHouseOrg(scopeOrg(path))) }
 
 // ── cases ─────────────────────────────────────────────────────────────────────────────────────────
 let pass = 0, fail = 0
@@ -61,9 +68,29 @@ check('has org_id (specific) + active → untouched (no double, no override)',
   withOrgScope(`/api/v1/billing/invoices?org_id=bbbbbbbb-9999-0000-0000-otherorgxx`),
   `/api/v1/billing/invoices?org_id=bbbbbbbb-9999-0000-0000-otherorgxx`)
 
-// 2b. has org_id=ORG_ID (hardcoded house constant page) → untouched (left to substitute path)
+// 2b. has org_id=ORG_ID (hardcoded house constant page) + active=T (super-admin acting-as T) →
+//     SUBSTITUTE the house literal for T. This is the leak-CLASS fix: it USED to be left untouched
+//     (super-admin acting as a tenant read/wrote HOUSE data — the "Cellfonz under LuxeLink" leak).
 reset(); ACTIVE = T
-check('has org_id=ORG_ID (hardcoded) + active → untouched (append never overrides)',
+check('has org_id=ORG_ID (hardcoded) + active=T → SUBSTITUTED to T (leak-class fix)',
+  withOrgScope(`/api/v1/commcalc/gp/2026-07?org_id=${ORG_ID}`),
+  `/api/v1/commcalc/gp/2026-07?org_id=${T}`)
+
+// 2b-i. house-const MID-query → substitute, other params intact
+reset(); ACTIVE = T
+check('house-const mid-query + active=T → substitute, rest intact',
+  withOrgScope(`/api/v1/commcalc/forecast?org_id=${ORG_ID}&period=2026-07&store=5`),
+  `/api/v1/commcalc/forecast?org_id=${T}&period=2026-07&store=5`)
+
+// 2b-ii. SPECIFIC foreign org_id (deliberate cross-tenant query) → UNTOUCHED (only the house literal is rewritten)
+reset(); ACTIVE = T
+check('specific foreign org_id + active=T → untouched (deliberate query wins)',
+  withOrgScope('/api/v1/admin/billing?org_id=bbbbbbbb-9999-0000-0000-otherorgxx'),
+  '/api/v1/admin/billing?org_id=bbbbbbbb-9999-0000-0000-otherorgxx')
+
+// 2b-iii. HOUSE session (active === house) + house-const → no-op (byte-identical to today for house users)
+reset(); ACTIVE = ORG_ID
+check('house session (active=house) + house-const → no-op',
   withOrgScope(`/api/v1/commcalc/gp/2026-07?org_id=${ORG_ID}`),
   `/api/v1/commcalc/gp/2026-07?org_id=${ORG_ID}`)
 
@@ -124,8 +151,10 @@ const need = [
   'function appendActiveOrg(path: string): string {',
   "if (/[?&]org_id=/.test(base)) return path",
   'return `${base}${sep}org_id=${encodeURIComponent(active)}${frag}`',
+  'function subHouseOrgWith(path: string, active: string | null): string {',
+  'decodeURIComponent(val) === ORG_ID ? `${pfx}${encodeURIComponent(active)}` : full)',
   'function withOrgScope(path: string): string {',
-  'return appendActiveOrg(scopeOrg(path))',
+  'return appendActiveOrg(substituteHouseOrg(scopeOrg(path)))',
 ]
 for (const s of need) {
   const ok = src.includes(s)
