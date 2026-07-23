@@ -263,6 +263,8 @@ export const NAV: NavGroup[] = [
   // can't read another tenant's cases.
   { group: 'Support', module: 'support', items: [
     { href: '/admin/support', label: 'Support Console', icon: '🎧', module: 'support', scopes: ['all', 'market'] },
+    { href: '/admin/support/failures', label: 'Fleet Failure Triage', icon: '🩺', module: 'support', scopes: ['all', 'market'] },
+    { href: '/admin/support/fix-requests', label: 'Fix Requests', icon: '🛠️', module: 'support', scopes: ['all', 'market'] },
     { href: '/admin/support/docs', label: 'Help Docs', icon: '📚', module: 'support', scopes: ['all'] },
   ]},
   { group: 'Configuration', module: 'admin', items: [

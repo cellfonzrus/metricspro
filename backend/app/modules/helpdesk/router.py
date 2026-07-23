@@ -12,6 +12,7 @@ hardening to server-verified identity plugs into the RBAC-enforcement work later
 """
 import uuid
 from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Header
 
@@ -1176,3 +1177,192 @@ async def sla_put(body: dict, authorization: str = Header(default=""), x_active_
            "resolve_hours": _int(body.get("resolve_hours")), "updated_at": _now()}
     db("support_sla_policy").upsert(row, on_conflict="org_id,priority").execute()
     return {"ok": True, **row}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# FLEET-WIDE FAILURE TRIAGE + FIX-REQUEST PIPELINE (mig 716) — CROSS-TENANT, house-gated.
+#
+# House tech-support staff triage EVERY tenant's failure logs in one place, club similar failures into a
+# fix request, and (super_admin only) approve those requests into an automation queue the operator/agent
+# fleet picks up. Same _require_support gate + super_admin primitive as the console; a tenant user is 403.
+# The plain-English grouping + fix-request pure logic lives ONCE in core.router (lazy-imported here).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+def _core_triage():
+    """Lazy handle to the shared triage helpers in core.router (avoids any import cycle)."""
+    from app.modules.core.router import (
+        _fetch_failures, _merge_kind_docs, _build_failure_groups, _house_kind_docs,
+        _new_fix_request_row, fix_status_change, FIX_STATUSES)
+    return SimpleNamespace(
+        fetch_failures=_fetch_failures, merge_kind_docs=_merge_kind_docs,
+        build_groups=_build_failure_groups, house_kind_docs=_house_kind_docs,
+        new_fix_row=_new_fix_request_row, status_change=fix_status_change, statuses=FIX_STATUSES)
+
+
+@router.get("/support/failures")
+async def support_failures(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                           org: str = "", module: str = "", kind: str = "", reviewed: str = "false",
+                           date_from: str = "", date_to: str = "", limit: int = 1500):
+    """CROSS-TENANT failure triage (house-gated): every tenant's core.failure_log, grouped by kind with the
+    plain-English doc, filterable by tenant(org) / module / kind / reviewed / date. `reviewed` defaults to
+    'false' (the unreviewed queue). Returns groups (with affected_orgs + tenant names) AND the flat rows
+    (tenant-named) for the detail table + export."""
+    _require_support(authorization, x_active_org)
+    t = _core_triage()
+    client = get_supabase()
+    rows = t.fetch_failures(client, org_id=(org or None), reviewed=reviewed, category=(kind or None),
+                            date_from=(date_from or None), date_to=(date_to or None), limit=limit)
+    kind_meta = t.merge_kind_docs(t.house_kind_docs(client))
+    if module:
+        rows = [r for r in rows
+                if (kind_meta.get(r.get("category")) or {"module": "admin"}).get("module") == module]
+    groups = t.build_groups(rows, kind_meta)
+    # decorate affected_orgs + flat rows with tenant names
+    all_orgs = [o["org_id"] for g in groups for o in g.get("affected_orgs", [])] + [r.get("org_id") for r in rows]
+    names = _tenant_names(all_orgs)
+    for g in groups:
+        for o in g.get("affected_orgs", []):
+            o["org_name"] = names.get(o["org_id"]) or "Tenant"
+    flat = [{**r, "tenant_name": names.get(r.get("org_id")) or "Tenant"} for r in rows]
+    # STABLE facets (registry + all tenants) so a filter dropdown never self-collapses when it's active.
+    row_kinds = {r.get("category") for r in rows if r.get("category")}
+    kinds_facet = sorted(({"kind": k, "label": (kind_meta.get(k, {}).get("label") or k)}
+                          for k in (set(kind_meta.keys()) | row_kinds)), key=lambda x: x["label"])
+    modules_facet = sorted({(m.get("module") or "admin") for m in kind_meta.values()})
+    try:
+        all_tenants = client.schema("storeops").table("tenants").select("org_id,name").execute().data or []
+    except Exception:
+        all_tenants = []
+    return {"groups": groups, "rows": flat, "total": len(rows),
+            "unreviewed_total": sum(g["unreviewed_count"] for g in groups),
+            "modules": modules_facet, "kinds": kinds_facet,
+            "tenants": [{"org_id": x["org_id"], "name": x.get("name")} for x in all_tenants if x.get("org_id")]}
+
+
+@router.post("/support/failures/bulk-review")
+async def support_failures_bulk_review(body: dict, authorization: str = Header(default=""),
+                                       x_active_org: str = Header(default="")):
+    """CROSS-TENANT clear: mark the given failure rows reviewed/un-reviewed BY ID (house-gated — the failure
+    ids carry their own org_id, so no org filter is applied; this is the sanctioned cross-tenant write)."""
+    ctx = _require_support(authorization, x_active_org)
+    ids = [str(i) for i in (body.get("ids") or []) if i]
+    if not ids:
+        raise HTTPException(422, "ids[] required")
+    reviewed = bool(body.get("reviewed", True))
+    patch = {"reviewed": reviewed,
+             "reviewed_by": ((ctx.get("email") or "support") if reviewed else None),
+             "reviewed_at": (_now() if reviewed else None)}
+    try:
+        get_supabase().schema("core").table("failure_log").update(patch).in_("id", ids).execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not update (run migration 716?): {e}")
+    return {"ok": True, "count": len(ids), "reviewed": reviewed}
+
+
+# ── Fix requests (CROSS-TENANT, house-gated; approve/reject = super_admin ONLY) ──────────────────
+def _decorate_fix_request(fr, names):
+    orgs = fr.get("affected_orgs") or []
+    for o in orgs:
+        if isinstance(o, dict) and o.get("org_id"):
+            o["org_name"] = names.get(o["org_id"]) or "Tenant"
+    return {**fr, "owner_name": names.get(fr.get("org_id")) or "Tenant", "affected_orgs": orgs}
+
+
+@router.post("/support/fix-requests")
+async def support_create_fix_request(body: dict, authorization: str = Header(default=""),
+                                     x_active_org: str = Header(default="")):
+    """Club a group of similar failures (across one or more tenants) into ONE house-owned fix request.
+    House-gated. Enters at 'pending_approval'. `affected_orgs` = [{org_id, count}] built by the console from
+    the clubbed group; `sample_failure_ids` references the clubbed rows. NEVER edits code or data."""
+    ctx = _require_support(authorization, x_active_org)
+    t = _core_triage()
+    ids = [str(i) for i in (body.get("sample_failure_ids") or []) if i]
+    affected = [a for a in (body.get("affected_orgs") or []) if isinstance(a, dict) and a.get("org_id")]
+    fc = int(body.get("failure_count") or sum(int(a.get("count") or 0) for a in affected) or len(ids))
+    row = t.new_fix_row(body, org_id=HOUSE_ORG, created_by=(ctx.get("email") or "support"),
+                        sample_ids=ids, affected_orgs=affected, failure_count=fc,
+                        status=(body.get("status") or "pending_approval"))
+    try:
+        r = db("support_fix_request").insert(row).execute()
+        return {"ok": True, "id": (r.data[0]["id"] if r.data else None), "status": row["status"]}
+    except Exception as e:
+        raise HTTPException(500, f"could not create fix request (run migration 716?): {e}")
+
+
+@router.get("/support/fix-requests")
+async def support_list_fix_requests(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                                    status: str = "", org: str = "", kind: str = "", limit: int = 500):
+    """CROSS-TENANT list of fix requests (house-gated). Filter by status / owner org / kind. Pass
+    status='approved' to read the AUTOMATION QUEUE the fleet picks up. `can_approve` = caller is a
+    super_admin (the approval gate)."""
+    ctx = _require_support(authorization, x_active_org)
+    q = db("support_fix_request").select("*")            # NO org filter — cross-tenant by design
+    if status:
+        q = q.eq("status", status)
+    if org:
+        q = q.eq("org_id", org)
+    if kind:
+        q = q.eq("kind", kind)
+    try:
+        rows = q.order("created_at", desc=True).limit(min(max(limit, 1), 1000)).execute().data or []
+    except Exception as e:
+        raise HTTPException(500, f"fix requests unavailable (run migration 716?): {e}")
+    ids = [r.get("org_id") for r in rows] + [o.get("org_id") for r in rows for o in (r.get("affected_orgs") or []) if isinstance(o, dict)]
+    names = _tenant_names(ids)
+    out = [_decorate_fix_request(r, names) for r in rows]
+    return {"fix_requests": out, "count": len(out), "statuses": list(_core_triage().statuses),
+            "can_approve": bool(ctx.get("super_admin"))}
+
+
+@router.get("/support/fix-requests/{fid}")
+async def support_fix_request_detail(fid: str, authorization: str = Header(default=""),
+                                     x_active_org: str = Header(default="")):
+    """One fix request + its clubbed failure rows (tenant-named). House-gated."""
+    ctx = _require_support(authorization, x_active_org)
+    rows = db("support_fix_request").select("*").eq("id", fid).limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(404, "fix request not found")
+    fr = rows[0]
+    t = _core_triage()
+    ids = [str(i) for i in (fr.get("sample_failure_ids") or []) if i]
+    failures = t.fetch_failures(get_supabase(), ids=ids, limit=500) if ids else []
+    org_ids = [fr.get("org_id")] + [o.get("org_id") for o in (fr.get("affected_orgs") or []) if isinstance(o, dict)] + [f.get("org_id") for f in failures]
+    names = _tenant_names(org_ids)
+    failures = [{**f, "tenant_name": names.get(f.get("org_id")) or "Tenant"} for f in failures]
+    return {"fix_request": _decorate_fix_request(fr, names), "failures": failures,
+            "statuses": list(t.statuses), "can_approve": bool(ctx.get("super_admin"))}
+
+
+@router.post("/support/fix-requests/{fid}/status")
+async def support_fix_request_status(fid: str, body: dict, authorization: str = Header(default=""),
+                                     x_active_org: str = Header(default="")):
+    """Move a fix request through the pipeline. approve/reject REQUIRE a super_admin (the approval gate);
+    other transitions are open to any support agent. Resolving with mark_reviewed=true bulk-marks the
+    clubbed failure rows reviewed. House-gated. Approving does NOT run anything — it just enters the queue."""
+    ctx = _require_support(authorization, x_active_org)
+    rows = db("support_fix_request").select("*").eq("id", fid).limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(404, "fix request not found")
+    fr = rows[0]
+    target = str(body.get("status") or "").strip().lower()
+    ok, reason = _core_triage().status_change(fr.get("status"), target, bool(ctx.get("super_admin")))
+    if not ok:
+        raise HTTPException(403 if "super-admin" in reason else 400, reason)
+    patch = {"status": target, "updated_at": _now()}
+    if target in ("approved", "rejected"):
+        patch["approved_by"] = ctx.get("email")
+        patch["approved_at"] = _now()
+    if target == "resolved":
+        res = (body.get("resolution") or "").strip()
+        patch["resolution"] = res or fr.get("resolution")
+        patch["resolved_at"] = _now()
+        if body.get("mark_reviewed"):
+            ids = [str(i) for i in (fr.get("sample_failure_ids") or []) if i]
+            if ids:
+                try:
+                    get_supabase().schema("core").table("failure_log").update({
+                        "reviewed": True, "reviewed_by": (ctx.get("email") or "support"),
+                        "reviewed_at": _now()}).in_("id", ids).execute()
+                except Exception:
+                    pass
+    db("support_fix_request").update(patch).eq("id", fid).execute()
+    return {"ok": True, "status": target, "approved_by": patch.get("approved_by")}

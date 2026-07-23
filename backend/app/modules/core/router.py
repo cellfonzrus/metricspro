@@ -924,6 +924,261 @@ FAILURE_TYPES = {
               "remediation": "Review the detail and resolve manually."},
 }
 
+# ── Plain-English failure registry (config-as-data, mig 716) ──────────────────────────────────
+# Owner directive 2026-07-23: error codes mean nothing to an admin. Every failure KIND emitted in the
+# codebase gets a layman "what this means" + "how to fix it" + "escalate when" + a code-area hint. This
+# in-code dict is the FALLBACK; the EDITABLE source of truth is core.failure_kind_doc (seeded IDENTICALLY
+# by mig 716 — keep the text in sync — and edited from the support docs editor). An unknown/unseeded kind
+# degrades to a graceful "Unrecognized error — escalate to tech support" (owner item 3). Every kind here
+# corresponds to a real failure_log.category emitted somewhere: face_mismatch/clock_in_location (storeops
+# kiosk), upload_rejected (commcalc parsers), sweep_error/tenant_guard/money_write_refused (run_for_tenant),
+# system_error (main.py hardening + core _masked_500), asset_upload_degraded_mode (asset upload), other.
+FAILURE_KIND_META = {
+    "face_mismatch": {
+        "label": "Clock-in face did not match", "module": "storeops", "severity": "warning",
+        "layman_meaning": ("A rep tried to clock in at the kiosk, but the live camera face did not match "
+                           "the face saved on their profile closely enough, so the punch was refused."),
+        "layman_fix": ("Ask the rep to tap \"Re-register my face\" at the kiosk in good, even light. If it "
+                       "keeps happening to many reps, raise the Clock-in Face Sensitivity on the Failure "
+                       "Logs page toward 0.65 (looser). A manager can approve the punch right away with a "
+                       "kiosk override."),
+        "escalate_when": "The same rep keeps getting rejected right after a fresh re-registration in good lighting.",
+        "code_hint": "frontend portal kiosk clock-in + storeops face enrollment; threshold = storeops.tenants.face_match_threshold",
+    },
+    "clock_in_location": {
+        "label": "Clock-in blocked by location or schedule", "module": "storeops", "severity": "info",
+        "layman_meaning": ("A rep tried to clock in at a store that is not their home store, is not on their "
+                           "schedule, and where they are not marked a floater, so the system blocked it."),
+        "layman_fix": ("Add the shift for that store, mark the rep a floater for it, or have a manager "
+                       "approve the punch with an override."),
+        "escalate_when": "The rep is correctly scheduled or a floater for that store but is still blocked.",
+        "code_hint": "storeops time-clock home/scheduled/floater gate + manager override",
+    },
+    "upload_rejected": {
+        "label": "Data upload rejected", "module": "commissions", "severity": "error",
+        "layman_meaning": ("A file that was uploaded could not be read because it had the wrong layout or "
+                           "was missing required columns, so nothing was imported."),
+        "layman_fix": ("Confirm the file has all required columns and re-upload. For the daily sales feed "
+                       "the report must include Ext Price and GP; for commissions use the full 78-column "
+                       "Sales Transaction Details export."),
+        "escalate_when": "The file clearly has the required columns but is still rejected.",
+        "code_hint": "commcalc upload parsers (sales / commissions); daily feed must carry Ext Price + GP",
+    },
+    "sweep_error": {
+        "label": "Automated import or job failed", "module": "admin", "severity": "error",
+        "layman_meaning": ("A scheduled background job (an email or portal import, or a nightly sweep) hit "
+                           "an error and could not finish. Existing data was left as-is."),
+        "layman_fix": ("Check the connection at Data Imports (last status + Test connection) and confirm the "
+                       "mailbox or portal credentials and the file-name patterns. The sweep retries on its "
+                       "next run once the cause is fixed."),
+        "escalate_when": "Credentials and settings are confirmed correct but the job keeps failing.",
+        "code_hint": "core.run_for_tenant guarded jobs; commcalc email-imports connectors",
+    },
+    "tenant_guard": {
+        "label": "Background job refused — bad or inactive company", "module": "admin", "severity": "error",
+        "layman_meaning": ("A background job fired for a company (tenant) that has no record, or one that is "
+                           "switched off, so it was refused to avoid writing data to the wrong place."),
+        "layman_fix": ("Make sure the connector, subscription, or plan is filed under a real, active company "
+                       "at Companies (Tenants). Reactivate the company if it was switched off by mistake, or "
+                       "remove the stale setup."),
+        "escalate_when": "The company exists and is active but its jobs are still refused.",
+        "code_hint": "core.run_for_tenant tenant-misfiling guard; storeops.tenants.is_active",
+    },
+    "money_write_refused": {
+        "label": "Money update blocked (safety guard)", "module": "admin", "severity": "error",
+        "layman_meaning": ("A background job tried to replace a whole company worth of money figures with "
+                           "numbers that looked wrong (all zero, or wiping out an existing balance), so the "
+                           "safety guard blocked it and left the data unchanged."),
+        "layman_fix": ("A zero result is almost always missing input (no plan assigned, or an empty source "
+                       "file), not a real zero — fix the input, then re-run. If the zero is genuinely "
+                       "correct, adjust the money guard for that company."),
+        "escalate_when": "The input is confirmed correct and the write is legitimately zero but keeps getting blocked.",
+        "code_hint": "core.run_for_tenant money guard; storeops.tenants.money_guard_config",
+    },
+    "system_error": {
+        "label": "Unexpected system error", "module": "admin", "severity": "error",
+        "layman_meaning": ("Something in the app crashed unexpectedly. The user saw a generic message with a "
+                           "reference code; the full technical detail is saved here under that code."),
+        "layman_fix": ("Note the reference code shown to the user and open the matching entry here to read "
+                       "the detail. This usually needs a developer or tech support to fix the underlying "
+                       "cause."),
+        "escalate_when": "Always escalate a repeating system error to tech support, with the reference code.",
+        "code_hint": "app.main HardeningMiddleware + core _masked_500; search failure_log detail by ref",
+    },
+    "asset_upload_degraded_mode": {
+        "label": "Asset upload used the older (non-atomic) path", "module": "asset", "severity": "warning",
+        "layman_meaning": ("An asset ledger upload worked, but used an older import method because a database "
+                           "upgrade has not been applied. If an upload were interrupted midway it could leave "
+                           "a partial ledger."),
+        "layman_fix": ("Run migration 300 (asset ledger staging-swap) in the Supabase SQL editor to enable "
+                       "the safer atomic upload. Until then, uploads still work but are not interruption-safe."),
+        "escalate_when": "Migration 300 has been run but this warning still appears on every upload.",
+        "code_hint": "asset/router _stage_and_swap_ledger; migration 300_asset_ledger_staging_swap.sql",
+    },
+    "other": {
+        "label": "Other", "module": "admin", "severity": "warning",
+        "layman_meaning": "A failure that does not fit a known category. The details describe what happened.",
+        "layman_fix": "Review the detail on the entry and resolve it manually. If it is unclear, escalate to tech support.",
+        "escalate_when": "The cause is unclear from the detail.",
+        "code_hint": "generic fallback category",
+    },
+}
+
+_KIND_DOC_FIELDS = ("label", "module", "severity", "layman_meaning", "layman_fix", "escalate_when", "code_hint")
+
+
+def _kind_fallback(kind):
+    """The plain-English meta for `kind` from the in-code registry, or a graceful UNRECOGNISED fallback
+    (owner item 3: unknown code → "escalate to tech support"). Pure."""
+    m = FAILURE_KIND_META.get(kind)
+    if m:
+        return {"kind": kind, "known": True, "source": "code", **m}
+    return {
+        "kind": kind, "known": False, "source": "fallback",
+        "label": (str(kind or "unknown").replace("_", " ").strip().title() or "Unrecognized error"),
+        "module": "admin", "severity": "warning",
+        "layman_meaning": ("This error code is not in the plain-English registry yet, so there is no guided "
+                           "explanation for it."),
+        "layman_fix": ("Escalate to tech support — they can add a plain-English entry for this code and advise "
+                       "a fix."),
+        "escalate_when": "Right away — this is an unrecognized error.",
+        "code_hint": "",
+    }
+
+
+def _merge_kind_docs(db_rows):
+    """Merge the EDITABLE DB registry (core.failure_kind_doc, HOUSE rows) OVER the in-code fallback. Returns
+    {kind: meta} for every kind known to EITHER source (a DB row wins field-by-field where non-null). Pure —
+    unit-proven in the harness."""
+    out = {}
+    for k, m in FAILURE_KIND_META.items():
+        out[k] = {"kind": k, "known": True, "source": "code", **m}
+    for r in (db_rows or []):
+        k = (r.get("kind") or "").strip()
+        if not k:
+            continue
+        base = out.get(k) or {"kind": k, "known": True}
+        overlay = {f: r[f] for f in _KIND_DOC_FIELDS if r.get(f) is not None}
+        out[k] = {**base, **overlay, "kind": k, "source": "db", "known": True}
+    return out
+
+
+def _build_failure_groups(rows, kind_meta):
+    """PURE. Group failure rows by KIND (the natural 'similar-nature' key; the module is a property of the
+    kind). Each group carries count / unreviewed_count / reviewed_count / latest_at / max severity / sample
+    ids / affected_orgs + the plain-English doc + an `all_reviewed` flag (drives collapsed-by-default
+    rendering: a fully-reviewed group is collapsed). Sorted most-unreviewed first, then most recent."""
+    sev_rank = {"error": 3, "warning": 2, "info": 1}
+    groups = {}
+    for r in (rows or []):
+        kind = r.get("category") or "other"
+        g = groups.get(kind)
+        if g is None:
+            meta = (kind_meta or {}).get(kind) or _kind_fallback(kind)
+            g = groups[kind] = {
+                "kind": kind, "label": meta.get("label") or kind,
+                "module": meta.get("module") or "admin", "known": bool(meta.get("known", True)),
+                "doc": {"layman_meaning": meta.get("layman_meaning"), "layman_fix": meta.get("layman_fix"),
+                        "escalate_when": meta.get("escalate_when"), "code_hint": meta.get("code_hint")},
+                "count": 0, "unreviewed_count": 0, "reviewed_count": 0,
+                "latest_at": None, "severity": "info", "sample_ids": [], "_orgs": {},
+            }
+        g["count"] += 1
+        if r.get("reviewed"):
+            g["reviewed_count"] += 1
+        else:
+            g["unreviewed_count"] += 1
+        ca = r.get("created_at")
+        if ca and (g["latest_at"] is None or str(ca) > str(g["latest_at"])):
+            g["latest_at"] = ca
+        if sev_rank.get(r.get("severity"), 0) > sev_rank.get(g["severity"], 0):
+            g["severity"] = r.get("severity") or g["severity"]
+        if r.get("id"):
+            g["sample_ids"].append(r["id"])
+        oid = r.get("org_id")
+        if oid:
+            g["_orgs"][oid] = g["_orgs"].get(oid, 0) + 1
+    out = []
+    for g in groups.values():
+        g["all_reviewed"] = g["count"] > 0 and g["unreviewed_count"] == 0
+        g["sample_ids"] = g["sample_ids"][:500]
+        g["affected_orgs"] = [{"org_id": o, "count": c} for o, c in g.pop("_orgs").items()]
+        out.append(g)
+    out.sort(key=lambda x: (x["unreviewed_count"], str(x["latest_at"] or "")), reverse=True)
+    return out
+
+
+# ── Fix-request pipeline (mig 716) — pure decisions ───────────────────────────────────────────
+FIX_STATUSES = ("new", "pending_approval", "approved", "in_progress", "resolved", "rejected")
+FIX_APPROVAL_TARGETS = ("approved", "rejected")   # the approval gate — super_admin ONLY
+
+
+def fix_status_change(current, target, is_super_admin):
+    """PURE decision for a support_fix_request status transition. Returns (ok, reason). Only a super_admin
+    may set 'approved' or 'rejected' (the approval gate); any support agent may move a request through the
+    working states (new/pending_approval/in_progress/resolved). Unknown target → rejected. Unit-proven."""
+    t = str(target or "").strip().lower()
+    if t not in FIX_STATUSES:
+        return (False, "invalid status")
+    if t in FIX_APPROVAL_TARGETS and not is_super_admin:
+        return (False, "only a super-admin can approve or reject a fix request")
+    return (True, "")
+
+
+def _new_fix_request_row(body, *, org_id, created_by, sample_ids, affected_orgs, failure_count,
+                         status="pending_approval"):
+    """Build a support_fix_request insert row (shared by the tenant /core and house /support create paths)."""
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "org_id": org_id, "kind": (body.get("kind") or None), "module": (body.get("module") or None),
+        "title": (str(body.get("title") or body.get("kind") or "Fix request"))[:300],
+        "summary": (body.get("summary") or None), "proposed_action": (body.get("proposed_action") or None),
+        "code_hint": (body.get("code_hint") or None),
+        "sample_failure_ids": list(sample_ids or []), "affected_orgs": list(affected_orgs or []),
+        "failure_count": int(failure_count or 0),
+        "status": (status if status in FIX_STATUSES else "pending_approval"),
+        "created_by": created_by, "created_at": now, "updated_at": now,
+    }
+
+
+def _fetch_failures(client, *, org_id=None, reviewed="", category=None, ids=None,
+                    date_from=None, date_to=None, limit=1000):
+    """Fetch core.failure_log rows with GRACEFUL degradation if the mig-716 `reviewed` column is absent
+    (retries without the reviewed filter and filters in Python). org_id=None → CROSS-TENANT (the caller MUST
+    be house-gated — used only by the support console). Shared by /core and /support."""
+    def build(with_reviewed):
+        q = client.schema("core").table("failure_log").select("*")
+        if org_id:
+            q = q.eq("org_id", org_id)
+        if category:
+            q = q.eq("category", category)
+        if ids:
+            q = q.in_("id", list(ids))
+        if date_from:
+            q = q.gte("created_at", date_from)
+        if date_to:
+            q = q.lte("created_at", date_to)
+        if with_reviewed and reviewed in ("true", "false"):
+            q = q.eq("reviewed", reviewed == "true")
+        return q.order("created_at", desc=True).limit(min(max(int(limit or 1), 1), 3000))
+    try:
+        return build(True).execute().data or []
+    except Exception:
+        rows = build(False).execute().data or []   # mig 716 un-run → no `reviewed` column; filter in Python
+        if reviewed in ("true", "false"):
+            want = (reviewed == "true")
+            rows = [r for r in rows if bool(r.get("reviewed", False)) == want]
+        return rows
+
+
+def _house_kind_docs(client):
+    """The HOUSE (global) failure_kind_doc rows, best-effort (mig un-run → [])."""
+    try:
+        return (client.schema("core").table("failure_kind_doc").select("*")
+                .eq("org_id", ORG_ID).execute().data) or []
+    except Exception:
+        return []
+
 
 def _can_view_failures(caller):
     """Admin-only by default. A role can be GRANTED the module via the /failures page override (RBAC)."""
@@ -982,7 +1237,10 @@ async def record_failure(body: dict, authorization: str = Header(default=""), x_
 
 
 @router.get("/failures")
-async def list_failures(authorization: str = Header(default=""), x_active_org: str = Header(default=""), status: str = "", category: str = "", limit: int = 300):
+async def list_failures(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                        status: str = "", category: str = "", reviewed: str = "", limit: int = 300):
+    """Flat list (drives the export + detail table). `reviewed` = '' (all) | 'false' (unreviewed — the
+    default triage view) | 'true'. Degrades gracefully if mig 716's `reviewed` column is un-run."""
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
@@ -990,17 +1248,17 @@ async def list_failures(authorization: str = Header(default=""), x_active_org: s
     caller = _resolve_caller(client, uid, x_active_org)
     if not _can_view_failures(caller):
         raise HTTPException(403, "Failure Logs are admin-only. Grant the /failures page to a role to share it.")
-    q = client.schema("core").table("failure_log").select("*").eq("org_id", caller["org_id"])
-    if status:
-        q = q.eq("status", status)
-    if category:
-        q = q.eq("category", category)
     try:
-        rows = q.order("created_at", desc=True).limit(min(max(limit, 1), 1000)).execute().data or []
+        rows = _fetch_failures(client, org_id=caller["org_id"], reviewed=reviewed,
+                               category=(category or None), limit=min(max(limit, 1), 1000))
     except Exception as e:
         raise HTTPException(500, f"failure_log unavailable (run migration 112?): {e}")
+    if status:
+        rows = [r for r in rows if r.get("status") == status]
     open_n = sum(1 for r in rows if r.get("status") == "open")
-    return {"failures": rows, "open_count": open_n, "can_configure": _can_edit_setting(caller, "failures")}
+    unreviewed_n = sum(1 for r in rows if not r.get("reviewed"))
+    return {"failures": rows, "open_count": open_n, "unreviewed_count": unreviewed_n,
+            "can_configure": _can_edit_setting(caller, "failures")}
 
 
 @router.patch("/failures/{fid}")
@@ -1067,6 +1325,138 @@ async def put_failures_config(body: dict, authorization: str = Header(default=""
         raise HTTPException(400, "nothing to update")
     client.schema("storeops").table("tenants").update(patch).eq("org_id", caller["org_id"]).execute()
     return {"ok": True, **patch}
+
+
+# ── Failure TRIAGE (mig 716): plain-English registry · grouped view · bulk-review · fix requests ──
+@router.get("/failure-kind-docs")
+async def failure_kind_docs(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """The MERGED plain-English how-to-fix registry (editable DB rows over the in-code fallback). Readable
+    by any signed-in user (the /failures + support pages render "what this means" + "how to fix it" from
+    it). `can_edit` is true only for house support staff (they edit the GLOBAL registry)."""
+    client = sb()
+    rows = [r for r in _house_kind_docs(client) if r.get("is_active", True)]
+    merged = _merge_kind_docs(rows)
+    return {"kinds": list(merged.values()), "can_edit": _support_gate(authorization, x_active_org)}
+
+
+@router.post("/failure-kind-docs")
+async def upsert_failure_kind_doc(body: dict, authorization: str = Header(default=""),
+                                  x_active_org: str = Header(default="")):
+    """Create/update one plain-English kind doc in the HOUSE global registry. Support-gated (the SAME gate
+    as the support docs editor). Keyed by (org_id, kind)."""
+    if not _support_gate(authorization, x_active_org):
+        raise HTTPException(403, "Editing the plain-English error registry is restricted to house support staff.")
+    kind = (body.get("kind") or "").strip().lower()
+    if not kind:
+        raise HTTPException(422, "kind is required")
+    row = {"org_id": ORG_ID, "kind": kind, "updated_by": (body.get("updated_by") or None),
+           "updated_at": datetime.now(timezone.utc).isoformat()}
+    for f in (*_KIND_DOC_FIELDS, "is_active"):
+        if f in body:
+            row[f] = body[f]
+    try:
+        sb().schema("core").table("failure_kind_doc").upsert(row, on_conflict="org_id,kind").execute()
+    except Exception as e:
+        raise HTTPException(500, f"save failed — run migration 716 first: {e}")
+    return {"ok": True, "kind": kind}
+
+
+@router.get("/failures/grouped")
+async def failures_grouped(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                           reviewed: str = "false", category: str = "", limit: int = 1500):
+    """Grouped TRIAGE view for THIS tenant (admin-gated, org-scoped). Groups similar failures by kind with
+    count / latest / unreviewed_count + the plain-English doc, so the UI renders collapsible groups and
+    clears a whole group at once. `reviewed` defaults to 'false' (the unreviewed queue)."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    caller = _resolve_caller(client, uid, x_active_org)
+    if not _can_view_failures(caller):
+        raise HTTPException(403, "Failure Logs are admin-only. Grant the /failures page to a role to share it.")
+    try:
+        rows = _fetch_failures(client, org_id=caller["org_id"], reviewed=reviewed,
+                               category=(category or None), limit=limit)
+    except Exception as e:
+        raise HTTPException(500, f"failure_log unavailable (run migration 112/716?): {e}")
+    kind_meta = _merge_kind_docs(_house_kind_docs(client))
+    groups = _build_failure_groups(rows, kind_meta)
+    return {"groups": groups, "total": len(rows),
+            "unreviewed_total": sum(g["unreviewed_count"] for g in groups),
+            "can_configure": _can_edit_setting(caller, "failures")}
+
+
+@router.post("/failures/bulk-review")
+async def failures_bulk_review(body: dict, authorization: str = Header(default=""),
+                               x_active_org: str = Header(default="")):
+    """The CLEAR action: mark selected failure rows reviewed (or un-reviewed) — keeps the rows for the audit
+    trail, org-scoped to the caller's tenant. body: {ids:[...], reviewed:true|false}."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    caller = _resolve_caller(client, uid, x_active_org)
+    if not _can_view_failures(caller):
+        raise HTTPException(403, "Failure Logs are admin-only.")
+    ids = [str(i) for i in (body.get("ids") or []) if i]
+    if not ids:
+        raise HTTPException(422, "ids[] required")
+    reviewed = bool(body.get("reviewed", True))
+    patch = {"reviewed": reviewed,
+             "reviewed_by": ((caller.get("role") or "admin") if reviewed else None),
+             "reviewed_at": (datetime.now(timezone.utc).isoformat() if reviewed else None)}
+    try:
+        (client.schema("core").table("failure_log").update(patch)
+         .eq("org_id", caller["org_id"]).in_("id", ids).execute())
+    except Exception as e:
+        raise HTTPException(500, f"could not update (run migration 716?): {e}")
+    return {"ok": True, "reviewed": reviewed, "count": len(ids)}
+
+
+@router.post("/fix-requests")
+async def create_fix_request(body: dict, authorization: str = Header(default=""),
+                             x_active_org: str = Header(default="")):
+    """Club a group of similar failures (from /failures) into ONE fix request for THIS tenant. Admin-gated,
+    org-scoped. Enters the pipeline at 'pending_approval' → a super-admin approves it in the support console.
+    Does NOT touch any failure row (the club is a reference by id) and NEVER edits code or data."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    caller = _resolve_caller(client, uid, x_active_org)
+    if not _can_view_failures(caller):
+        raise HTTPException(403, "Failure Logs are admin-only.")
+    org_id = caller["org_id"]
+    ids = [str(i) for i in (body.get("sample_failure_ids") or []) if i]
+    row = _new_fix_request_row(body, org_id=org_id, created_by=(caller.get("role") or "admin"),
+                               sample_ids=ids, affected_orgs=[{"org_id": org_id, "count": len(ids)}],
+                               failure_count=int(body.get("failure_count") or len(ids)))
+    try:
+        r = client.schema("storeops").table("support_fix_request").insert(row).execute()
+        return {"ok": True, "id": (r.data[0]["id"] if r.data else None), "status": row["status"]}
+    except Exception as e:
+        raise HTTPException(500, f"could not create fix request (run migration 716?): {e}")
+
+
+@router.get("/fix-requests")
+async def list_fix_requests(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                            status: str = ""):
+    """This tenant's fix requests (admin-gated, org-scoped)."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    client = sb()
+    caller = _resolve_caller(client, uid, x_active_org)
+    if not _can_view_failures(caller):
+        raise HTTPException(403, "Failure Logs are admin-only.")
+    q = client.schema("storeops").table("support_fix_request").select("*").eq("org_id", caller["org_id"])
+    if status:
+        q = q.eq("status", status)
+    try:
+        rows = q.order("created_at", desc=True).limit(500).execute().data or []
+    except Exception:
+        rows = []
+    return {"fix_requests": rows, "statuses": list(FIX_STATUSES)}
 
 
 @router.get("/tenant-settings")
