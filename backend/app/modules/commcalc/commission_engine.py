@@ -20,7 +20,12 @@ from app.modules.commcalc.calculator import safe_float
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
 MATCH_FIELDS = {"contract_type", "tender_type", "department", "category",
-                "product_desc", "sku", "trans_type", "any"}
+                "product_desc", "sku", "trans_type", "any",
+                # SYNTHETIC (migs 230/231): 'accessory' resolves to 'yes'/'no' per line via the shared
+                # AccessoryClassifier (dept/category/keyword OR catalog category). Lets a Commission Plan
+                # rule PAY on the accessory classification through the EXISTING engine (owner 2026-07-24).
+                # Stamped in preview() ONLY when a rule actually uses it → inert + byte-identical otherwise.
+                "accessory"}
 PAYOUT_KINDS = {"flat_per_unit", "pct_mrc", "pct_gp", "pct_price_over_cost", "flat"}
 
 
@@ -442,6 +447,24 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None):
     valid = [r for r in sales
              if str(r.get("voided", "") or "").upper().strip() != "YES"
              and str(r.get("trans_type", "") or "").strip() != "Return"]
+
+    # SYNTHETIC 'accessory' match_field (migs 230/231): stamp each line 'yes'/'no' via the shared
+    # AccessoryClassifier so a rule with match_field='accessory' pays on the accessory classification
+    # (dept/category/keyword OR the catalog category). Built + stamped ONLY when at least one rule across
+    # the loaded plans actually uses it — so for EVERY existing plan (none reference 'accessory') this is a
+    # complete no-op (byte-identical, zero cost). MONEY-ADJACENT: pay moves only after an owner creates such
+    # a rule AND runs a recalc.
+    _uses_acc = any((rule.get("match_field") or "").strip().lower() == "accessory"
+                    for p in plans for rule in (p.get("rules") or []))
+    if _uses_acc:
+        try:
+            from app.modules.commcalc import accessory_catalog as _accat
+            _clf = _accat.build(client, org_id)
+        except Exception:
+            _clf = None
+        if _clf is not None:
+            for r in valid:
+                r["accessory"] = "yes" if _clf.is_accessory_row(r) else "no"
 
     mrc_by_mdn, mrc_by_sub = _read_mi_mrc(client, org_id, period)
     cost_by_pid = _read_catalog_cost(client, org_id)

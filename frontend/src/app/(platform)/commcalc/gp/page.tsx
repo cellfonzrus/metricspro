@@ -58,6 +58,7 @@ export default function GPReportPage() {
   const [loading, setLoading] = useState(true)
   const [markets, setMarkets] = useState<string[]>([])
   const [gpTrend, setGpTrend] = useState<any>(null)   // month-over-month net-profit chart on top
+  const [showComp, setShowComp] = useState(false)     // expand the 'Other' GP bucket department breakdown
   const cw = useColumnResize()                          // auto-fit + user-resizable columns
 
   useEffect(() => {
@@ -194,6 +195,50 @@ export default function GPReportPage() {
           </div>
         ))}
       </div>
+
+      {/* GP bucket transparency (owner 2026-07-24: "'Other' does not detail any information"). Shows the
+          departments currently landing in the 'Other' bucket — how many lines + $ — with a link to map
+          them into the right GP bucket. Fed by the /gp response's unmapped_departments. */}
+      {!loading && (data.unmapped_departments?.length > 0) && (
+        <div className="card" style={{ padding: '12px 14px', marginBottom: 20, border: '1px solid #fde047', background: '#fffbeb' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>
+              🗂️ &ldquo;Other&rdquo; GP breakdown — {data.unmapped_departments.length} department(s) are unclassified
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <a href="/commcalc/gp-category-map" style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>Map them → (GP Category Map)</a>
+              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '2px 10px' }} onClick={() => setShowComp(s => !s)}>{showComp ? 'Hide' : 'Show'} detail</button>
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: '#92400e', marginTop: 4 }}>
+            These departments&apos; sales roll into the single &ldquo;Other&rdquo; column. Assign each to Accessory / Device / Plan (or exclude) on the GP Category Map so the report details them properly.
+          </div>
+          {showComp && (
+            <div className="table-wrapper" style={{ marginTop: 10 }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                <thead>
+                  <tr style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'left' }}>
+                    <th style={{ padding: '3px 8px' }}>Department</th>
+                    <th style={{ padding: '3px 8px', textAlign: 'right' }}>Lines</th>
+                    <th style={{ padding: '3px 8px', textAlign: 'right' }}>Ext Price</th>
+                    <th style={{ padding: '3px 8px', textAlign: 'right' }}>GP</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.unmapped_departments.map((d: any) => (
+                    <tr key={d.department} style={{ fontSize: 12, borderTop: '1px solid var(--border)' }}>
+                      <td style={{ padding: '3px 8px' }}>{d.department}</td>
+                      <td style={{ padding: '3px 8px', textAlign: 'right' }}>{d.lines}</td>
+                      <td style={{ padding: '3px 8px', textAlign: 'right' }}>{fmt(d.ext_price || 0)}</td>
+                      <td style={{ padding: '3px 8px', textAlign: 'right' }}>{fmt(d.gp || 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Net-profit trend on top */}
       {gpTrendData.length > 1 && (

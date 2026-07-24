@@ -62,12 +62,63 @@ def calc_gp_report(
     house (store_mapping populated) is byte-identical. None = disabled (pre-existing behavior).
     """
     classify = _dept_classifier(gp_category_map)
-    # ── Catalog cost map ──────────────────────────────────────────
+    # ── Catalog cost map (product cost lookup) ────────────────────
+    # Keyed by product_id (HOUSE format — byte-identical) PLUS, ADDITIVELY, UPC / SKU / normalized
+    # product_desc so the TOTAL/luxelink UPC-keyed catalog (NO Product ID; migs 230/231) also yields a cost.
+    # Additive keys only — the product_id path is untouched, so the house Phone-Cost lookup never changes.
+    import re as _re_gp
+    def _nd(s):
+        return _re_gp.sub(r'\s+', ' ', str(s or '').strip().lower())
+    def _ck(v):
+        # Trailing-'.0' only (Excel numeric-cell artifact) — NOT every '.0' (preserves 'V2.0-CASE').
+        s = str(v or '').strip()
+        if s.endswith('.0'):
+            s = s[:-2]
+        return s.strip().lower()
     cat_cost: dict[str, float] = {}
+    cat_cost_upc: dict[str, float] = {}
+    cat_cost_sku: dict[str, float] = {}
+    cat_cost_desc: dict[str, float] = {}
     for c in catalog:
+        cost = safe_float(c.get('cost'))
         pid = c.get('product_id')
         if pid:
-            cat_cost[str(int(float(pid)))] = safe_float(c.get('cost'))
+            try:
+                cat_cost[str(int(float(pid)))] = cost
+            except (TypeError, ValueError):
+                pass
+        u = _ck(c.get('upc'))
+        if u:
+            cat_cost_upc[u] = cost
+        s = _ck(c.get('sku'))
+        if s:
+            cat_cost_sku[s] = cost
+        d = _nd(c.get('product_desc'))
+        if d:
+            cat_cost_desc.setdefault(d, cost)
+
+    def _catalog_cost_for(row):
+        """Product cost from the catalog for a sale line: product_id → UPC → SKU → normalized desc.
+        0.0 when unknown. Additive helper (currently exposed for the config-gated accessory-GP source /
+        a future Phone-Cost wiring — house net_phone_cost formula unchanged)."""
+        pid = row.get('product_id')
+        if pid:
+            try:
+                k = str(int(float(pid)))
+                if k in cat_cost:
+                    return cat_cost[k]
+            except (TypeError, ValueError):
+                pass
+        u = _ck(row.get('upc'))
+        if u and u in cat_cost_upc:
+            return cat_cost_upc[u]
+        s = _ck(row.get('sku'))
+        if s and s in cat_cost_sku:
+            return cat_cost_sku[s]
+        d = _nd(row.get('product_desc'))
+        if d and d in cat_cost_desc:
+            return cat_cost_desc[d]
+        return 0.0
 
     # ── MI/ATU by salesforce_id ───────────────────────────────────
     mi_by_sfid: dict[str, dict] = {}
@@ -259,4 +310,27 @@ def calc_gp_report(
         'net_excl_mdf': sum(r['net_excl_mdf'] for r in store_rows),
     }
 
-    return {'store_rows': store_rows, 'rep_rows': rep_rows, 'totals': totals, 'period': period}
+    # ── GP bucket TRANSPARENCY (owner 2026-07-24: "'Other' does not detail any information") ──────────
+    # Per-GP-bucket DEPARTMENT composition over ALL sale lines — so the GP page can show WHAT is inside
+    # 'Other' (and every bucket): which departments landed there, how many lines, and their ext_price / gp $.
+    # This is the map for the owner to send unmapped departments to gp_category_map. Pure display; no number
+    # moves. `unmapped_departments` = the 'other'-bucket departments ranked by $ (the "map them →" banner).
+    comp: dict[str, dict[str, dict]] = {}
+    for r in sales:
+        cat = classify(r.get('department'))
+        dept = str(r.get('department') or '').strip() or '(blank)'
+        d = comp.setdefault(cat, {}).setdefault(dept, {'department': dept, 'lines': 0, 'ext_price': 0.0, 'gp': 0.0})
+        d['lines'] += 1
+        d['ext_price'] += safe_float(r.get('ext_price'))
+        d['gp'] += safe_float(r.get('gp'))
+    bucket_composition = {}
+    for cat, depts in comp.items():
+        rows_c = sorted(depts.values(), key=lambda x: -abs(x['gp']) if x['gp'] else -x['ext_price'])
+        for x in rows_c:
+            x['ext_price'] = round(x['ext_price'], 2)
+            x['gp'] = round(x['gp'], 2)
+        bucket_composition[cat] = rows_c
+    unmapped_departments = bucket_composition.get('other', [])
+
+    return {'store_rows': store_rows, 'rep_rows': rep_rows, 'totals': totals, 'period': period,
+            'bucket_composition': bucket_composition, 'unmapped_departments': unmapped_departments}

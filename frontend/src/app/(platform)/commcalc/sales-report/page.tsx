@@ -61,6 +61,10 @@ export default function SalesReportPage() {
   const [setupInput, setSetupInput] = useState('')
   const [ctMap, setCtMap] = useState<Record<string, string>>({})   // contract_type -> activation bucket (mig 213); keyed lowercased (f3)
   const [accCanEdit, setAccCanEdit] = useState(true)               // caller may edit Classification settings ('classification' perm)
+  const [boxBuckets, setBoxBuckets] = useState<string[]>([])       // box_count_buckets (mig 231); UI toggles only 'byod', other members preserved
+  const [catOn, setCatOn] = useState(false)                        // catalog-driven accessory classification (mig 231)
+  const [catCats, setCatCats] = useState<string[]>([])             // which catalog categories = accessory
+  const [catOpts, setCatOpts] = useState<string[]>([])             // distinct catalog categories (pick-don't-type)
   const [selMarkets, setSelMarkets] = useState<string[]>([])   // multi-select market filter
   const [selStores, setSelStores] = useState<string[]>([])     // multi-select store filter
   const [selReps, setSelReps] = useState<string[]>([])         // RULE FIVE rep(s) multi (pick-don't-type)
@@ -79,6 +83,10 @@ export default function SalesReportPage() {
         a: f.acima_tenders || [], box: f.box_departments || [], setup: f.setup_fee_keywords || [], billpay: f.billpay_products || [] })
       setCtMap(normalizeCtMap(f.contract_type_map || {}))
       setAccCanEdit(f.can_edit !== false)
+      setBoxBuckets(Array.isArray(f.box_count_buckets) ? f.box_count_buckets : [])
+      setCatOn(!!f.catalog_classify_enabled)
+      setCatCats(f.catalog_accessory_categories || [])
+      setCatOpts(f.catalog_categories || [])
     }).catch(e => setAccMsg('❌ ' + (e?.message || e)))
   }
   async function saveAccCfg() {
@@ -92,7 +100,9 @@ export default function SalesReportPage() {
       await api('/api/v1/commcalc/accessory-config', { method: 'PUT', body: JSON.stringify({
         departments: accSel.d, categories: accSel.c, product_keywords: kws, acima_tenders: accSel.a,
         box_departments: accSel.box, setup_fee_keywords: setupKws, contract_type_map: ctMap,
-        billpay_products: accSel.billpay }) })
+        billpay_products: accSel.billpay,
+        box_count_buckets: boxBuckets,
+        catalog_classify_enabled: catOn, catalog_accessory_categories: catCats }) })
       setAccMsg('✅ Saved.'); setAccOpen(false); load()
     } catch (e: any) { setAccMsg('❌ ' + (e?.message || e)) }
   }
@@ -599,6 +609,47 @@ export default function SalesReportPage() {
                           <span key={p} style={{ cursor: 'pointer', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '2px 7px', fontSize: 11 }}
                             onClick={() => setAccSel(s => ({ ...s, setup: s.setup.includes(p) ? s.setup : [...s.setup, p] }))}>{p}</span>
                         ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {/* BYOD → total boxes (mig 231). Owner 2026-07-24: the customer-phone / BYOD activation must
+                    count toward "total boxes sold". Adds each BYOD transaction to the box count across the
+                    Sales-Report box count, Daily-Targets conversion + attainment, and Productivity/Review. */}
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                  <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, fontWeight: 700 }}>
+                    <input type="checkbox" checked={boxBuckets.includes('byod')}
+                      onChange={() => setBoxBuckets(b => b.includes('byod') ? b.filter(x => x !== 'byod') : [...b, 'byod'])} />
+                    Count BYOD / customer-phone toward total boxes sold
+                  </label>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
+                    A BYOD activation (customer brings their own phone) has no device box, so it isn&apos;t counted as a &ldquo;box&rdquo; by default. Tick this to count each BYOD activation as one box — it flows to the box count everywhere (Daily Targets, Productivity, stack ranking). Requires BYOD to be classified (Contract-type &rarr; activation bucket, or blank-CT activation rules). <b>Money-adjacent</b> only if a plan pays on box targets — re-run Calculate to apply.
+                  </div>
+                </div>
+                {/* CATALOG-driven accessory classification (migs 230/231). A product-catalog upload's category
+                    labels a product as an accessory even when the sales line's own department/category are
+                    blank. Additive — never removes a legacy accessory. */}
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                  <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, fontWeight: 700 }}>
+                    <input type="checkbox" checked={catOn} onChange={e => setCatOn(e.target.checked)} />
+                    Use the product catalog to classify accessories
+                  </label>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', margin: '4px 0 8px' }}>
+                    When on, a sale line whose product matches a catalog row carrying an accessory category counts as accessory sales (in addition to the department/category/keyword rules above). Upload the catalog under <a href="/commcalc/upload" style={{ color: 'var(--accent)' }}>Data Imports → Product Catalog</a>; recategorize items at <a href="/commcalc/catalog" style={{ color: 'var(--accent)' }}>Catalog Categories</a>. <b>Money-adjacent</b>: widens accessory revenue/target and (via a Commission Plan rule keyed on <code>accessory</code>) accessory pay — re-run Calculate to apply.
+                  </div>
+                  {catOn && (
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Catalog categories that count as accessory <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(default: <code>Accessories</code>)</span></div>
+                      <div style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
+                        {(Array.from(new Set([...(catOpts || []), ...catCats]))).length === 0
+                          ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>no catalog uploaded yet — upload one first</div>
+                          : Array.from(new Set([...(catOpts || []), ...catCats])).sort().map((v: string) => (
+                            <label key={v} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, padding: '2px 0' }}>
+                              <input type="checkbox" checked={catCats.includes(v)}
+                                onChange={() => setCatCats(cs => cs.includes(v) ? cs.filter(x => x !== v) : [...cs, v])} />
+                              {v}
+                            </label>
+                          ))}
                       </div>
                     </div>
                   )}

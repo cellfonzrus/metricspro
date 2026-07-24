@@ -12,7 +12,7 @@ const FILE_TYPES = [
   { id: 'dlar_rep',       label: 'Metrics — Rep Report',  icon: '📊', required: true,  desc: 'Rep KPI report (per-carrier portal)' },
   { id: 'dlar_store',     label: 'Metrics — Store Report', icon: '🏪', required: false, desc: 'Store-level KPI data (per-carrier portal)' },
   { id: 'mi_report',      label: 'MI & ATU Report',       icon: '💰', required: false, desc: 'Monthly Incentive + ATU Payout' },
-  { id: 'catalog',        label: 'Product Catalog',       icon: '📱', required: false, desc: 'Device catalog + cost (the B2B "Product Update" report)' },
+  { id: 'catalog',        label: 'Product Catalog',       icon: '📱', required: false, desc: 'Product catalog + cost/category — the B2B "Product Update" (Product-ID) OR the TOTAL/UPC "Product Catalog Update" variant' },
   { id: 'master_cats',    label: 'Payment Categories',    icon: '🗂️', required: false, desc: 'Payment type → category mapping' },
   { id: 'comp_report',    label: 'Comprehensive Comp Report', icon: '🏦', required: false, desc: 'Carrier store-level rebates & MDF' },
   { id: 'inventory_aging', label: 'Inventory Aging (POS)',  icon: '📦', required: false, desc: 'b2bsoft / any POS inventory aging — per-store value snapshot' },

@@ -29,7 +29,7 @@ const lbl: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap
 const th: React.CSSProperties = { textAlign: 'left', padding: '5px 8px', fontSize: 11, color: 'var(--text2)' }
 const td: React.CSSProperties = { padding: '4px 8px', fontSize: 12, borderTop: '1px solid var(--border)' }
 
-const MATCH_FIELDS = ['any', 'contract_type', 'tender_type', 'department', 'category', 'product_desc', 'sku', 'trans_type']
+const MATCH_FIELDS = ['any', 'contract_type', 'tender_type', 'department', 'category', 'product_desc', 'sku', 'trans_type', 'accessory']
 const MATCH_OPS = ['equals', 'contains', 'in']
 const PAYOUT_KINDS = [
   { v: 'flat_per_unit', l: 'Flat $ per unit', use: 'amount' },
@@ -49,6 +49,7 @@ const FIELD_HELP: Record<string, string> = {
   product_desc: 'e.g. Device Setup Charge (use "contains")',
   sku: 'exact SKU (use "in" for a comma list)',
   trans_type: 'e.g. Sale, Return',
+  accessory: 'catalog/dept/category-classified accessory — value "yes" (needs a catalog + classification on)',
   any: 'matches every line (a blanket rule)',
 }
 
@@ -121,6 +122,8 @@ export default function CommissionPlansPage() {
         contract_type: sf.contract_types || [], tender_type: sf.tenders || [],
         department: sf.departments || [], category: sf.categories || [],
         product_desc: sf.products || [], trans_type: sf.trans_types || [], sku: [],
+        // synthetic accessory field (migs 230/231): a line is stamped 'yes'/'no' by the classifier
+        accessory: ['yes', 'no'],
       })
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
   }

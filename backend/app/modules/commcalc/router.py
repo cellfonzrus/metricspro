@@ -463,15 +463,29 @@ async def _upload_file_impl(
         'ma_fulfillment': ['TSPID', 'Tracking Number'],
     }
     cols = set(str(col).strip() for col in df.columns)
-    expected = SIGNATURES.get(file_type, [])
-    missing = [col for col in expected if col not in cols]
-    if missing:
-        raise HTTPException(
-            400,
-            f"This doesn't look like the right file for '{file_type}'. "
-            f"Missing expected column(s): {', '.join(missing)}. "
-            f"Found columns: {', '.join(sorted(cols))[:200]}"
-        )
+    if file_type == 'catalog':
+        # TWO accepted catalog variants (owner 2026-07-24 deliverable 2):
+        #   • HOUSE  — the b2bsoft "Product Update" report: Product-ID-keyed (needs 'Product ID' + 'Cost').
+        #   • TOTAL  — the luxelink/Total "Product Catalog Update": UPC-keyed, NO 'Product ID' (needs 'Cost'
+        #     + at least one product key among UPC / SKU / Product Desc). Both land in raw_catalog per-org.
+        _has_cost = 'Cost' in cols
+        _has_key = bool(cols & {'Product ID', 'UPC', 'SKU', 'Product Desc'})
+        if not (_has_cost and _has_key):
+            raise HTTPException(
+                400,
+                "This doesn't look like a product catalog. Expected the b2bsoft 'Product Update' export "
+                "(needs 'Cost' plus a product key — 'Product ID', or the TOTAL variant's 'UPC'/'SKU'/"
+                f"'Product Desc'). Found columns: {', '.join(sorted(cols))[:220]}")
+    else:
+        expected = SIGNATURES.get(file_type, [])
+        missing = [col for col in expected if col not in cols]
+        if missing:
+            raise HTTPException(
+                400,
+                f"This doesn't look like the right file for '{file_type}'. "
+                f"Missing expected column(s): {', '.join(missing)}. "
+                f"Found columns: {', '.join(sorted(cols))[:200]}"
+            )
 
     rows = df.to_dict('records')
 
@@ -826,11 +840,34 @@ async def _upload_file_impl(
                 'avg_first_mrc': safe_float(r.get('Avg First MRC')),
             }
         elif file_type == "catalog":
+            # Accept BOTH the house (Product-ID-keyed) and TOTAL (UPC-keyed) variants. The TOTAL-only columns
+            # (upc/department/category/retail_price/primary_vendor/active/in_stock) are stripped later if
+            # mig 230 hasn't added them yet (probe-and-strip below) so the house upload still works pre-230.
+            def _active_bool(v):
+                s = str(v or '').strip().lower()
+                if s in ('true', 'yes', 'y', '1', 'active'):
+                    return True
+                if s in ('false', 'no', 'n', '0', 'inactive'):
+                    return False
+                return None
+            def _dot0(v):
+                # Strip only a TRAILING '.0' (Excel numeric-cell artifact) — NOT every '.0', so a real
+                # SKU like 'V2.0-CASE' is preserved verbatim at ingest. Whitespace stripped FIRST so the
+                # trailing check is against the true end of the token. Mirrors accessory_catalog.clean_key.
+                s = str(v or '').strip()
+                return s[:-2] if s.endswith('.0') else s
             row = {**base,
                 'product_id': safe_float(r.get('Product ID')) or None,
-                'product_desc': r.get('Product Desc',''),
+                'product_desc': r.get('Product Desc', '') or r.get('Product Description', ''),
                 'cost': safe_float(r.get('Cost')),
-                'sku': r.get('SKU',''),
+                'sku': _dot0(r.get('SKU')),
+                'upc': _dot0(r.get('UPC')) or None,
+                'department': (r.get('Department', '') or '').strip() or None,
+                'category': (r.get('Category', '') or '').strip() or None,
+                'retail_price': safe_float(r.get('Retail Price')) or None,
+                'primary_vendor': (r.get('Primary Vendor', '') or '').strip() or None,
+                'active': _active_bool(r.get('Active')),
+                'in_stock': safe_float(r.get('In Stock')) if str(r.get('In Stock', '')).strip() != '' else None,
             }
         elif file_type in ("ma_commission", "ma_daily_tx", "ma_fulfillment"):
             # Total / VidaPay Master-Agent exports. Date-grain reports: derive period per ROW (like
@@ -951,6 +988,22 @@ async def _upload_file_impl(
             return _ccache[nl]
         for m in mapped:
             m['carrier_id'] = _carrier_for(m.get('carrier_name'))
+
+    # CATALOG graceful-degrade (mig 230 pending?): the TOTAL-variant columns (upc/department/category/
+    # retail_price/primary_vendor/active/in_stock) don't exist on raw_catalog until mig 230 runs — an insert
+    # carrying them would 500. Probe once with a limited select; if the columns aren't there yet, strip them
+    # from every mapped row so the HOUSE (Product-ID) fields still ingest (byte-identical to pre-230). The
+    # catalog classifier then simply finds no TOTAL columns until the migration + a re-upload.
+    if file_type == 'catalog' and mapped:
+        _extra_cols = ['upc', 'department', 'category', 'retail_price', 'primary_vendor', 'active', 'in_stock']
+        try:
+            client.schema('commcalc').table('raw_catalog').select(','.join(_extra_cols)).limit(1).execute()
+        except Exception as _probe_e:
+            print(f'WARN raw_catalog TOTAL-variant columns absent (run migration 230) — ingesting legacy '
+                  f'catalog columns only: {_probe_e}')
+            for _m in mapped:
+                for _k in _extra_cols:
+                    _m.pop(_k, None)
 
     # GUARD: only NOW (rows successfully mapped) do we clear the existing data, and only if the
     # upload actually produced rows — so a file that parsed to nothing can never wipe a populated
@@ -4151,6 +4204,48 @@ def _accessory_config(client, org_id):
             billpay_products = [str(p).strip() for p in (prows[0].get("billpay_products") or []) if str(p).strip()]
     except Exception:
         billpay_products = []
+    # BOX-COUNT contribution buckets (mig 231; per-org, admin-editable) — which activation buckets
+    # ('byod'/'upgrade'/'premium') add their DISTINCT-transaction count to the "total boxes sold" metric
+    # (box_count). OWNER 2026-07-24: "customer phone = BYOD" must count toward total boxes. Fetched in its
+    # OWN defensive query; missing column / empty (pre-231, or the house default) → NO extra boxes → box
+    # counting stays BYTE-IDENTICAL (device-line boxes only). Applied at the END of _sales_cell_agg.
+    box_count_buckets = []
+    try:
+        bcrows = (client.schema("commcalc").table("accessory_config")
+                  .select("box_count_buckets").eq("org_id", org_id).limit(1).execute().data) or []
+        if bcrows and isinstance(bcrows[0].get("box_count_buckets"), list):
+            box_count_buckets = [str(b).strip().lower() for b in (bcrows[0].get("box_count_buckets") or [])
+                                 if str(b).strip().lower() in ("byod", "upgrade", "premium")]
+    except Exception:
+        box_count_buckets = []
+    # CATALOG-DRIVEN accessory classification (migs 230/231; mig 224 doctrine — additive, config-gated).
+    # `catalog_classify_enabled` (default false → Boost/house byte-identical) turns on an ADDITIVE catalog
+    # layer: a line whose product (by normalized product_desc, else sku/upc/product_id where present) carries
+    # an accessory category classifies as accessory. `catalog_classifier` is built ONLY when enabled (so a
+    # disabled tenant pays ZERO cost) and embedded here so _is_accessory / _sales_cell_agg consume it without
+    # a signature change. Built in its OWN try/except so a catalog-read failure NEVER breaks classification.
+    catalog_classify_enabled = False
+    catalog_accessory_categories = []
+    try:
+        ccrows = (client.schema("commcalc").table("accessory_config")
+                  .select("catalog_classify_enabled,catalog_accessory_categories")
+                  .eq("org_id", org_id).limit(1).execute().data) or []
+        if ccrows:
+            catalog_classify_enabled = bool(ccrows[0].get("catalog_classify_enabled"))
+            catalog_accessory_categories = [str(c).strip() for c in (ccrows[0].get("catalog_accessory_categories") or []) if str(c).strip()]
+    except Exception:
+        catalog_classify_enabled = False
+    catalog_classifier = None
+    if catalog_classify_enabled:
+        try:
+            from app.modules.commcalc import accessory_catalog as _accat
+            _acd, _acs, _acu, _acp, _en = _accat.build_catalog_sets(client, org_id)
+            catalog_classifier = _accat.AccessoryClassifier(
+                {d.strip().lower() for d in depts}, {c.strip().lower() for c in cats},
+                {k.strip().lower() for k in kws}, _acd, _acs, _acu, _acp)
+        except Exception as _cce:
+            print(f"WARN catalog accessory classifier skipped (mig 230/231 pending?): {_cce}")
+            catalog_classifier = None
     return {"departments": {d.strip().lower() for d in depts},
             "categories": {c.strip().lower() for c in cats},
             "products": {k.strip().lower() for k in kws},
@@ -4163,12 +4258,20 @@ def _accessory_config(client, org_id):
             "billpay_products": {p.strip().lower() for p in billpay_products},
             "billpay_products_list": billpay_products,
             "contract_type_map": ct_map, "contract_type_map_raw": ct_map_raw,
-            "activation_rules": activation_rules}
+            "activation_rules": activation_rules,
+            "box_count_buckets": set(box_count_buckets),
+            "box_count_buckets_list": box_count_buckets,
+            "catalog_classify_enabled": catalog_classify_enabled,
+            "catalog_accessory_categories_list": catalog_accessory_categories,
+            "catalog_classifier": catalog_classifier}
 
 
 def _is_accessory(dept, category, product, acfg):
     """A sale line is an accessory if its department OR category is in the configured lists, OR its
-    product description contains a configured keyword (for POS feeds that carry no dept/category)."""
+    product description contains a configured keyword (for POS feeds that carry no dept/category), OR —
+    when the tenant has enabled catalog-driven classification (migs 230/231) — its product matches a
+    catalog row carrying an accessory category. The catalog layer is ADDITIVE (it can only ADD an
+    accessory, never remove one) and gated on `catalog_classify_enabled` (default off → byte-identical)."""
     d = (dept or "").strip().lower()
     c = (category or "").strip().lower()
     if d in acfg["departments"]:
@@ -4179,6 +4282,11 @@ def _is_accessory(dept, category, product, acfg):
         p = (product or "").strip().lower()
         if p and any(k in p for k in acfg["products"]):
             return True
+    # Catalog-driven layer (mig 231) — only when the tenant enabled it; keyed on normalized product_desc
+    # (the field the shared display aggregation carries). None/disabled → no-op (Boost byte-identical).
+    _cc = acfg.get("catalog_classifier")
+    if _cc is not None and _cc.is_catalog_accessory_desc(product):
+        return True
     return False
 
 
@@ -7976,12 +8084,18 @@ def _compute_gp(client, org_id, period, market=""):
     use it. Returns the full result; pass `market` to filter store_rows. Same narrowed selects as before."""
     pv = _pvariants(period)
     sc = client.schema('commcalc')
-    sales      = sc.table('raw_sales').select('store,department,gp,product_desc,ext_price,salesperson').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
+    sales      = sc.table('raw_sales').select('store,department,gp,product_desc,ext_price,salesperson,product_id,sku').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
     pay_detail = sc.table('raw_payment_detail').select('business_address,amount,payment_type').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
     mi_rows    = sc.table('raw_mi').select('salesforce_id,actual_mi_payout,actual_atu_payout').eq('org_id', org_id).in_('period', pv).execute().data or []
     rep_comms  = sc.table('rep_commissions').select('store,total_payout,epay_salesperson,storeops_name').eq('org_id', org_id).in_('period', pv).execute().data or []
     expenses   = sc.table('store_expenses').select('store_code,amount').eq('org_id', org_id).in_('period', pv).execute().data or []
-    catalog    = sc.table('raw_catalog').select('product_id,cost').eq('org_id', org_id).execute().data or []
+    # Wide select so the cost map can key on the TOTAL variant's UPC/SKU/desc (migs 230/231); high limit so
+    # a multi-thousand-row catalog isn't truncated at the PostgREST default. Falls back to the legacy
+    # product_id,cost select when the TOTAL columns don't exist yet (pre-230) → house byte-identical.
+    try:
+        catalog    = sc.table('raw_catalog').select('product_id,cost,upc,sku,product_desc').eq('org_id', org_id).limit(100000).execute().data or []
+    except Exception:
+        catalog    = sc.table('raw_catalog').select('product_id,cost').eq('org_id', org_id).limit(100000).execute().data or []
     store_map  = sc.table('store_mapping').select('store_address,salesforce_id,market,store_code,is_active').eq('org_id', org_id).execute().data or []
     pay_cats   = sc.table('payment_categories').select('description,category').eq('org_id', org_id).execute().data or []
     comp_rows  = sc.table('raw_comp_report').select('business_address,compensation_type,payment_amount').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
@@ -8688,7 +8802,10 @@ def get_accessory_config(org_id: str = ORG_ID):
             "setup_fee_keywords": c["setup_fee_keywords_list"],
             "billpay_products": c["billpay_products_list"],
             "contract_type_map": c["contract_type_map_raw"],
-            "activation_rules": c["activation_rules"]}
+            "activation_rules": c["activation_rules"],
+            "box_count_buckets": c["box_count_buckets_list"],
+            "catalog_classify_enabled": c["catalog_classify_enabled"],
+            "catalog_accessory_categories": c["catalog_accessory_categories_list"]}
 
 
 @router.put("/accessory-config")
@@ -8786,14 +8903,32 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
         row["activation_rules"] = _rules
     else:
         row["activation_rules"] = cur["activation_rules"]
-    # Persist defensively: pre-mig-214/213/217/218 those columns don't exist, so a save carrying them 500s —
-    # retry progressively dropping the NEWEST columns first (billpay_products is the newest, mig 214) so
+    # BOX-COUNT buckets (mig 231) — which activation buckets add to "total boxes sold". Sanitized to the
+    # known bucket vocabulary. Empty = device-line boxes only (byte-identical).
+    if "box_count_buckets" in body:
+        row["box_count_buckets"] = [str(b).strip().lower() for b in (body.get("box_count_buckets") or [])
+                                    if str(b).strip().lower() in ("byod", "upgrade", "premium")]
+    else:
+        row["box_count_buckets"] = cur["box_count_buckets_list"]
+    # CATALOG-driven accessory classification toggle + accessory categories (mig 231).
+    if "catalog_classify_enabled" in body:
+        row["catalog_classify_enabled"] = bool(body.get("catalog_classify_enabled"))
+    else:
+        row["catalog_classify_enabled"] = cur["catalog_classify_enabled"]
+    if "catalog_accessory_categories" in body:
+        row["catalog_accessory_categories"] = [str(x).strip() for x in (body.get("catalog_accessory_categories") or []) if str(x).strip()]
+    else:
+        row["catalog_accessory_categories"] = cur["catalog_accessory_categories_list"]
+    # Persist defensively: pre-mig-214/213/217/218/231 those columns don't exist, so a save carrying them
+    # 500s — retry progressively dropping the NEWEST columns first (mig-231 columns are the newest) so
     # editing the accessory lists never breaks before the migrations run (billpay → Boost-token fallback,
-    # contract-type map → empty/classifier, box → _BOX_DEPTS, set-up fee → 'Device Setup Charge').
-    _drop_final = ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords", "box_departments"]
-    for _drop in ([], ["activation_rules"], ["activation_rules", "billpay_products"],
-                  ["activation_rules", "billpay_products", "contract_type_map"],
-                  ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords"], _drop_final):
+    # contract-type map → empty/classifier, box → _BOX_DEPTS, set-up fee → 'Device Setup Charge', catalog →
+    # disabled/legacy classification).
+    _new231 = ["box_count_buckets", "catalog_classify_enabled", "catalog_accessory_categories"]
+    _drop_final = _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords", "box_departments"]
+    for _drop in ([], _new231, _new231 + ["activation_rules"], _new231 + ["activation_rules", "billpay_products"],
+                  _new231 + ["activation_rules", "billpay_products", "contract_type_map"],
+                  _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords"], _drop_final):
         attempt = dict(row)
         for k in _drop:
             attempt.pop(k, None)
@@ -8865,9 +9000,103 @@ def sales_fields(period: str = "", org_id: str = ORG_ID, authorization: str = He
             # Contract-type -> activation-bucket map (mig 213) + its pick-don't-type options (`contract_types`
             # above): the Classification-settings "Contract type -> activation bucket" editor.
             "contract_type_map": cur["contract_type_map_raw"],
+            # BOX-COUNT buckets + catalog-driven accessory classification (migs 230/231) — the current config
+            # and the catalog Category options (pick-don't-type) for the Classification-settings toggles.
+            "box_count_buckets": cur["box_count_buckets_list"],
+            "catalog_classify_enabled": cur["catalog_classify_enabled"],
+            "catalog_accessory_categories": cur["catalog_accessory_categories_list"],
+            "catalog_categories": _catalog_categories_safe(client, org_id),
             # Whether THIS caller may edit Classification settings (owner directive 2026-07-18) — the modal
             # renders read-only + a permission note when False. Reads stay open; only the PUT is gated.
             "can_edit": _can_edit_classification(authorization, org_id)}
+
+
+def _catalog_categories_safe(client, org_id):
+    """Distinct catalog categories for the org (for pick-don't-type). Never raises → [] if unavailable."""
+    try:
+        from app.modules.commcalc import accessory_catalog as _accat
+        return _accat.catalog_categories(client, org_id)
+    except Exception:
+        return []
+
+
+@router.get("/catalog")
+def catalog_list(category: str = "", search: str = "", only_overridden: bool = False,
+                 limit: int = 500, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """The org's product catalog with each row's FILE category, EFFECTIVE category (mig 230 override applied)
+    and an `is_accessory` flag — powers the Catalog-categories admin page (deliverable 3). Read-only +
+    org-scoped. Degrades gracefully (empty list) until migs 230/231 run. `can_edit` mirrors the Classification
+    permission so the page renders read-only for a caller without it."""
+    require_org(org_id)
+    client = sb()
+    try:
+        from app.modules.commcalc import accessory_catalog as _accat
+        rows = _accat.list_catalog(client, org_id, category=category or None, search=search or None,
+                                   only_overridden=only_overridden, limit=limit)
+        cats = _accat.catalog_categories(client, org_id)
+    except Exception as e:
+        return {"ok": False, "org_id": org_id, "rows": [], "categories": [],
+                "hint": f"catalog unavailable — run migrations 230/231 first ({e})."}
+    acfg = _accessory_config(client, org_id)
+    return {"ok": True, "org_id": org_id, "rows": rows, "categories": cats,
+            "accessory_categories": acfg["catalog_accessory_categories_list"],
+            "catalog_classify_enabled": acfg["catalog_classify_enabled"],
+            "can_edit": _can_edit_classification(authorization, org_id)}
+
+
+@router.get("/catalog/overrides")
+def catalog_overrides(org_id: str = ORG_ID):
+    """The org's catalog category OVERRIDES (mig 230). Read-only + org-scoped."""
+    require_org(org_id)
+    try:
+        rows = (sb().schema("commcalc").table("catalog_category_override")
+                .select("match_type,match_value,category,updated_at")
+                .eq("org_id", org_id).order("updated_at", desc=True).limit(100000).execute().data) or []
+    except Exception as e:
+        return {"ok": False, "org_id": org_id, "overrides": [],
+                "hint": f"overrides unavailable — run migration 230 first ({e})."}
+    return {"ok": True, "org_id": org_id, "overrides": rows}
+
+
+@router.put("/catalog/override")
+def put_catalog_override(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Set (or CLEAR) a category override for one catalog product — the user-editable, NON-destructive layer
+    on top of the loaded catalog file (deliverable 3). Body:
+      {match_type:'upc'|'sku'|'product_id'|'product_desc', match_value:str, category:str}
+    An empty/absent `category` CLEARS the override (the file's category is restored). match_value is
+    normalized (lowercased/trimmed; product_desc whitespace-collapsed) so it matches the classifier's keys.
+    GATED on the 'classification' settings permission (per-setting pattern); org-scoped; stamps org_id on
+    the insert. Degrades with a clear 500 hint until mig 230 runs."""
+    require_org(org_id)
+    if not _can_edit_classification(authorization, org_id):
+        raise HTTPException(403, "You don't have permission to edit Classification settings.")
+    from app.modules.commcalc import accessory_catalog as _accat
+    mt = str(body.get("match_type") or "").strip().lower()
+    if mt not in ("upc", "sku", "product_id", "product_desc"):
+        raise HTTPException(400, "match_type must be one of upc / sku / product_id / product_desc.")
+    raw_val = body.get("match_value")
+    if mt == "product_desc":
+        mv = _accat.norm_desc(raw_val)
+    elif mt == "product_id":
+        mv = _accat.pid_key(raw_val)
+    else:
+        mv = _accat.clean_key(raw_val)
+    if not mv:
+        raise HTTPException(400, "match_value is required.")
+    cat = str(body.get("category") or "").strip()
+    client = sb()
+    try:
+        if not cat:
+            # CLEAR — restore the file default for this product.
+            client.schema("commcalc").table("catalog_category_override").delete()\
+                .eq("org_id", org_id).eq("match_type", mt).eq("match_value", mv).execute()
+        else:
+            client.schema("commcalc").table("catalog_category_override").upsert(
+                {"org_id": org_id, "match_type": mt, "match_value": mv, "category": cat,
+                 "updated_at": _cb_now()}, on_conflict="org_id,match_type,match_value").execute()
+    except Exception as e:
+        raise HTTPException(500, f"save failed — run migration 230_commission_catalog_total_variant.sql first: {e}")
+    return {"ok": True, "org_id": org_id, "match_type": mt, "match_value": mv, "category": cat or None}
 
 
 @router.get("/commission-drill")
@@ -10457,6 +10686,23 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None):
                 a['activation_fee'] += ext
             if _exec_line_match(exec_cfg['protect']['rules'], _d, _c, _pl):
                 a['protect'] += 1
+    # "Total boxes sold" contribution from activation buckets (mig 231; owner 2026-07-24 — count the
+    # customer-phone / BYOD activation as a box). box_count is otherwise a DEVICE-LINE tally; here we add
+    # the DISTINCT-transaction count of each configured bucket (byod/upgrade/premium) so the metric tallies
+    # to the owner's expectation across EVERY surface that reads box_count (Sales-Report box count, Daily-
+    # Targets conversion + attainment, Productivity / Stack-Ranking / Review). A BYOD transaction carries NO
+    # device-department line, so this never double-counts an existing box. Empty set (house/Boost default,
+    # or pre-231) → no-op → BYTE-IDENTICAL. Exec MTD's "trending box" already = total activations (incl.
+    # BYOD) and does not read box_count, so this ALIGNS the box-count surfaces with Exec MTD.
+    _bcb = (acfg.get('box_count_buckets') if acfg else None) or set()
+    if _bcb:
+        for a in agg.values():
+            if 'byod' in _bcb:
+                a['box_count'] += len(a['_byod'])
+            if 'upgrade' in _bcb:
+                a['box_count'] += len(a['_upg'])
+            if 'premium' in _bcb:
+                a['box_count'] += len(a['_prem'])
     return agg
 
 
