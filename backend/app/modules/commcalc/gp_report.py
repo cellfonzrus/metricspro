@@ -395,9 +395,11 @@ def calc_gp_report(
     # $10,000 zero-GP department outranked a $5-GP one purely because it fell into the other mode. Now:
     # |GP| (the P&L magnitude the bucket is about) → |Ext Price| (what actually separates rows whose GP is
     # 0 because the POS carries cost == price) → department name, so ordering is total, stable and
-    # reproducible across requests regardless of dict insertion order.
+    # reproducible across requests regardless of dict insertion order. The RAW name is folded in after the
+    # case-folded one (Gate-1 rework nit) so two departments differing only in case — 'ACC' vs 'Acc', which
+    # ARE distinct rows here since the key is the raw string — can't fall back to dict insertion order.
     def _comp_sort_key(x):
-        return (-abs(x['gp']), -abs(x['ext_price']), x['department'].lower())
+        return (-abs(x['gp']), -abs(x['ext_price']), x['department'].lower(), x['department'])
 
     bucket_composition = {}
     for cat, depts in comp.items():

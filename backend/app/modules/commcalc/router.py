@@ -1152,7 +1152,7 @@ async def _upload_file_impl(
     print(f'DEBUG upload complete: file_type={file_type} saved={saved} mapped={len(mapped)} period={period!r}')
 
     # A catalog re-upload replaces raw_catalog for this org, so every memoized catalog/classifier value is
-    # stale — drop them immediately rather than serving up-to-TTL-old categories (Gate-1 ②).
+    # stale — drop it now rather than serving up-to-TTL-old categories (Gate-1 ②).
     if file_type in ('catalog', 'master_cats'):
         _invalidate_accessory_config(org_id)
 
@@ -4078,24 +4078,31 @@ def _accessory_config(client, org_id):
     (GET /catalog calls it alongside list_catalog + catalog_categories; the Sales Report / Targets /
     Exec MTD paths call it once each per sub-computation) and every query pays a fresh-client round trip.
 
-    SAFETY: by DEFAULT the memo is REQUEST-SCOPED — keyed on (this client object, org_id) — so it only
-    de-duplicates the repeats inside ONE handler (which threads a single `sb()` client through) and cannot
-    survive into another request, let alone another tenant. The key ALWAYS includes org_id; a blank org_id
-    is never cached. A cross-request TTL layer exists but is OPT-IN (COMMCALC_CFG_CACHE_TTL, default 0/off).
-    Every write that could change the answer (PUT /accessory-config, PUT /catalog/override, a catalog
-    upload, the GP category map, flag rules) calls accessory_catalog.invalidate(org_id) anyway. The returned
-    dict is shallow-copied so a caller can't poison the entry; its sets/lists are read-only by contract.
-    A cache-module import failure degrades to the uncached path."""
+    LIFECYCLE (corrected at Gate-1 rework — the first draft of this docstring was WRONG): `get_supabase()`
+    is a process-wide SINGLETON (core/database.py:76-84), so every request threads the SAME client and this
+    memo is NOT request-scoped — it lives as long as the worker process. What bounds it is a hard per-entry
+    **TTL** (COMMCALC_CFG_CACHE_TTL, default 45s, 0 = off), which is the safety net for the SQL-Editor
+    workflow: the owner runs config SQL by hand, that fires no endpoint and no invalidate, so without a TTL
+    it would be invisible for the life of the process. App writes (PUT /accessory-config, PUT
+    /catalog/override, a catalog upload, the GP category map, flag rules) still invalidate explicitly so a
+    UI edit is live on the very NEXT read. The MONEY paths never depend on any of it: `_run_calculation`
+    and `commission_engine.preview` invalidate at entry and therefore always resolve from a fresh read.
+
+    SAFETY: the key ALWAYS includes org_id (a blank org_id is never cached); the generation snapshot taken
+    before the read makes a read that raced an invalidate discard its own write instead of resurrecting
+    stale config; and the value is deep-copied on the way out so a caller that mutates it cannot poison the
+    cached master. A cache-module import failure degrades to the uncached path."""
     try:
         from app.modules.commcalc import accessory_catalog as _accat
     except Exception:
         return _accessory_config_uncached(client, org_id)
     _c = _accat.cache_get("acfg", org_id, client)
     if _c is not None:
-        return dict(_c)
+        return _accat._copy_out(_c)
+    _gen = _accat.cache_generation()
     _v = _accessory_config_uncached(client, org_id)
-    _accat.cache_put("acfg", org_id, _v, client)
-    return dict(_v)
+    _accat.cache_put("acfg", org_id, _v, client, _gen)
+    return _accat._copy_out(_v)
 
 
 def _invalidate_accessory_config(org_id):
@@ -5758,6 +5765,12 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost'):
 async def _run_calculation(period: str, org_id: str, force: bool = False):
     """Background calculation task. force=True bypasses the zero-wipe guard."""
     client = sb()
+    # MONEY-PATH FRESHNESS (Gate-1 rework finding 1b): the accessory/classification memo is bounded by a
+    # TTL, not by a request boundary (get_supabase() is a process-wide singleton), and the owner edits
+    # config by hand in the SQL Editor — which fires no invalidate. A recalc decides what people are PAID,
+    # so it must never run on an up-to-TTL-old classifier: drop this org's memo at ENTRY so every config
+    # read below (including commission_engine's) comes from the database.
+    _invalidate_accessory_config(org_id)
     save_errors = []
     
     try:
@@ -8468,7 +8481,8 @@ async def set_gp_category_map(body: dict, org_id: str = ORG_ID):
             sb().schema('commcalc').table('gp_category_map').delete() \
                 .eq('org_id', org_id).eq('department', dept).execute()
             # The map feeds _accessory_config's accessory DEPARTMENTS — drop the memoized config AFTER the
-            # write so a concurrent read can never re-cache the pre-write answer (Gate-1 ②).
+            # write; the generation bump inside invalidate() also makes a read that raced us discard its
+            # own cache_put instead of resurrecting the pre-write answer (Gate-1 ② + rework finding 2).
             _invalidate_accessory_config(org_id)
             return {"ok": True, "removed": dept}
         sb().schema('commcalc').table('gp_category_map').upsert(
@@ -9264,7 +9278,7 @@ def put_catalog_override(body: dict, org_id: str = ORG_ID, authorization: str = 
     except Exception as e:
         raise HTTPException(500, f"save failed — run migration 230_commission_catalog_total_variant.sql first: {e}")
     # The override layer feeds the cached catalog sets + the catalog page's category list — drop them now
-    # so the edit is visible on the very next read instead of after the TTL (②).
+    # so the edit is visible on the very next read instead of up to a TTL later (②).
     _invalidate_accessory_config(org_id)
     return {"ok": True, "org_id": org_id, "match_type": mt, "match_value": mv, "category": cat or None}
 

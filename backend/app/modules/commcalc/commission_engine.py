@@ -599,6 +599,16 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     "tiered", a contract_type-keyed rule on a tenant whose lines have blank Contract Type). It NEVER
     changes by_rep/totals — the money output with coverage=False is byte-identical.
     """
+    # MONEY-PATH FRESHNESS (Gate-1 rework finding 1b): preview() is what a plan-driven payout is computed
+    # from, and the shared accessory/classification memo is bounded only by a TTL — `get_supabase()` is a
+    # process-wide singleton, so there is no request boundary to expire it, and a hand-run SQL-Editor edit
+    # fires no invalidate at all. Drop this org's memo at ENTRY so the classifier below is built from a
+    # FRESH read every time. Cheap (a dict pop) and it runs once per preview, not per line.
+    try:
+        from app.modules.commcalc import accessory_catalog as _accat_fresh
+        _accat_fresh.invalidate(org_id)
+    except Exception as _cfe:
+        print(f"WARN preview could not refresh accessory config cache: {_cfe}")
     plans, ready = _load_plans(client, org_id)
     if not ready:
         return {"ready": False, "period": period, "by_rep": [], "totals": {},

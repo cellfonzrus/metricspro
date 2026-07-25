@@ -2,27 +2,30 @@
 shipped catalog-accessory-byod wave (origin/main dc01434). NON-MONEY, display/perf only.
 
 WHAT THIS PROVES
-  ②  ORG-SCOPED CONFIG CACHE (accessory_catalog.cache_*). L1 = REQUEST-SCOPED (default, keyed on the
-     client object + org_id) so ONE request stops re-reading the same tables; L2 = a cross-request TTL
-     layer that is OPT-IN (COMMCALC_CFG_CACHE_TTL, default 0/off).
-       A0  the cross-request layer really is off by default
-       A1  _accessory_config: 1st call reads, a repeat on the SAME client issues ZERO queries and returns
-           the same value; a DIFFERENT client (= another request) is a clean MISS, so a config change made
-           outside any endpoint is still picked up on the next request
-       A2  the key includes org_id — org B never sees org A's config (different departments)
-       A3  the returned dict is COPY-protected: mutating it can't poison the entry
-       A4  with the TTL opted in, a new client hits it and it expires; back at the default it never does
-       A5  a BLANK org_id is never cached (no tenant-less key can ever be created)
-       A6  GET /commcalc/catalog (the real endpoint, one fresh client per request like get_supabase):
-           the catalog tables go from 6 reads to 2 and the request from 17 queries to 12, with a
-           BYTE-IDENTICAL payload; a second request pays the same 12 (nothing leaks between requests)
-       A7  commission_engine's classifier path (accessory_catalog.build / build_catalog_sets) is cached;
-           an EXPLICIT acc_cats argument is never cached (caller-specific)
-       INVALIDATION — every write that can change the answer drops the org's entries IMMEDIATELY:
-       A8  PUT /accessory-config          A9  PUT /catalog/override (set AND clear)
-       A10 POST /gp-category-map (upsert AND delete)     A11 PUT /flag-rules
-       A12 a catalog upload (_upload_file_impl wiring asserted on the real source; all 6 sites counted)
-       A13 invalidation is ORG-SCOPED: invalidating org A leaves org B's cache intact
+  ②  ORG-SCOPED, TTL-BOUNDED CONFIG CACHE (accessory_catalog.cache_*). REWORKED at Gate-1: the first
+     draft claimed the client-object key made it request-scoped — FALSE, get_supabase() is a process-wide
+     singleton (core/database.py:76-84), so the memo lives for the worker process and only the TTL bounds
+     it. ONE layer now (the opt-in second layer is gone), hard TTL default 45s.
+       A0  the singleton premise; the TTL default is NONZERO; there is exactly one layer
+       A1  1st call reads, a repeat is free; (i) an out-of-band SQL-Editor edit with NO invalidate is
+           served stale WITHIN the TTL and picked up AFTER it; a second request on the same singleton
+           client hits (stated honestly); a genuinely different client never reuses the memo
+       A2  the key includes org_id — org B never sees org A's config
+       A3  finding 3: the returned dict AND its sets/lists/nested dicts are copies — a hostile caller
+           cannot poison the master; (iii) finding 2: a cache_put racing an invalidate is DISCARDED via
+           the generation counter, leaving the cache empty rather than resurrecting stale config
+       A4  TTL=0 disables it; an unset or malformed env falls back to 45s (never 0/unbounded)
+       A5  a BLANK org_id — or no client — is never cached
+       A6  (v) GET /commcalc/catalog with the TTL enabled and a SINGLETON client provider: catalog-table
+           reads 6 -> 2, request 17 -> 12, payload byte-identical, second request free
+       A7  the engine's classifier path is cached; an EXPLICIT acc_cats is never cached
+       A8  (ii) MONEY-PATH FRESHNESS: commission_engine.preview AND _run_calculation invalidate at ENTRY,
+           proven behaviourally (an out-of-band edit is used) and on the real source
+       INVALIDATION — every app write drops the org's entries IMMEDIATELY:
+       A9  PUT /accessory-config     A10 PUT /catalog/override (set AND clear)
+       A11 POST /gp-category-map (upsert AND delete)     A12 PUT /flag-rules
+       A13 a catalog upload (_upload_file_impl wiring on the real source; all 7 sites counted)
+       A14 invalidation is ORG-SCOPED: invalidating org A leaves org B's cache intact
 
   ③  Catalog category options de-duped case-insensitively (backend half — accessory_catalog.
      catalog_categories): 'Accessories' (file) + 'accessories' (override) = ONE option, FILE spelling shown.
@@ -56,11 +59,18 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-os.environ['COMMCALC_CFG_CACHE_TTL'] = '0'    # default: request-scoped only
+os.environ.pop('COMMCALC_CFG_CACHE_TTL', None)   # exercise the shipped 45s default
 
 import app.modules.commcalc.router as R                       # noqa: E402
 import app.modules.commcalc.accessory_catalog as AC           # noqa: E402
 import app.modules.commcalc.gp_report as GP                   # noqa: E402
+import asyncio                                                # noqa: E402
+import inspect                                                # noqa: E402
+
+
+def inspect_src_db():
+    import app.core.database as _db
+    return inspect.getsource(_db)
 
 PASS = 0
 FAIL = 0
@@ -247,12 +257,20 @@ R._can_edit_classification = lambda *a, **k: True     # rbac is proven elsewhere
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-print("\n② ORG-SCOPED CONFIG CACHE — L1 request-scoped (default) + L2 opt-in TTL")
+print("\n② ORG-SCOPED, TTL-BOUNDED CONFIG CACHE (Gate-1 rework: findings 1, 2, 3)")
 
-# L1 = keyed on the CLIENT OBJECT + org_id: it de-duplicates the repeats INSIDE one handler (which threads
-# a single sb() client through) and cannot survive into another request. L2 (cross-request TTL) is OFF
-# unless COMMCALC_CFG_CACHE_TTL is set.
-check("A0 the cross-request TTL layer is OFF by default", AC.cache_ttl() == 0.0, str(AC.cache_ttl()))
+# THE REAL LIFECYCLE: core.database.get_supabase() is a process-wide SINGLETON, so every request threads
+# the SAME client — the memo is NOT request-scoped, it lives for the process and the TTL is the only thing
+# that bounds it. These tests are written against that reality.
+import app.core.database as CORE_DB  # noqa: E402
+check("A0a get_supabase IS a process-wide singleton (the premise these tests assume)",
+      CORE_DB.get_supabase.__code__.co_names.count('_client') >= 1
+      and 'double-checked' in inspect_src_db(), "see core/database.py:76-84")
+check("A0b the TTL default is NONZERO — an out-of-band SQL edit can never be invisible forever",
+      AC.CACHE_TTL_SECONDS >= 30 and AC.cache_ttl() == AC.CACHE_TTL_SECONDS,
+      f"{AC.CACHE_TTL_SECONDS} / {AC.cache_ttl()}")
+check("A0c there is now ONE cache layer, not two (the opt-in L2 concept is gone)",
+      not hasattr(AC, '_cache') and hasattr(AC, '_client_cache'))
 
 c = fresh()
 cfg1 = R._accessory_config(c, ORG_A)
@@ -261,7 +279,7 @@ c.reset()
 cfg2 = R._accessory_config(c, ORG_A)
 n2 = c.reads()
 check("A1a first _accessory_config actually reads the DB (>=10 queries)", n1 >= 10, f"n1={n1}")
-check("A1b a repeat on the SAME client issues ZERO queries", n2 == 0, f"n2={n2}")
+check("A1b a repeat issues ZERO queries", n2 == 0, f"n2={n2}")
 check("A1c cached value equals the uncached value",
       cfg1['departments'] == cfg2['departments'] and cfg1['categories'] == cfg2['categories']
       and cfg1['catalog_classify_enabled'] == cfg2['catalog_classify_enabled'],
@@ -271,16 +289,35 @@ check("A1d cached == a forced uncached resolution (same keys + same values)",
       set(un) == set(cfg2) and un['departments'] == cfg2['departments']
       and un['catalog_accessory_categories_list'] == cfg2['catalog_accessory_categories_list'])
 
-# THE safety property: a DIFFERENT client (= a different request) never reuses the memo by default.
+# (i) REQUIRED PROOF — TTL expiry with NO invalidate: the SQL-Editor scenario.
+os.environ['COMMCALC_CFG_CACHE_TTL'] = '0.4'
+c = fresh()
+R._accessory_config(c, ORG_A)
+c.store['accessory_config'][0]['departments'] = ['EditedInTheSqlEditor']   # no endpoint, no invalidate
+c.reset()
+during = R._accessory_config(c, ORG_A)['departments']
+check("A1e-i within the TTL the stale value is still served (the bounded window, stated honestly)",
+      during == {'ondigo a'} and c.reads() == 0, f"{during} reads={c.reads()}")
+time.sleep(0.55)
+c.reset()
+after_ttl = R._accessory_config(c, ORG_A)['departments']
+check("A1f-i AFTER the TTL an out-of-band SQL edit IS picked up, with NO invalidate call",
+      after_ttl == {'editedinthesqleditor'} and c.reads() >= 10, f"{after_ttl} reads={c.reads()}")
+check("A1g-i …and the entry really expired rather than being evicted",
+      AC.cache_snapshot()[1]['expired'] >= 1, str(AC.cache_snapshot()[1]))
+os.environ.pop('COMMCALC_CFG_CACHE_TTL', None)
+
+# a SECOND simulated request (same singleton client) is a HIT — the honest statement of what this is
+c = fresh()
+R._accessory_config(c, ORG_A)
+c.reset()
+R._accessory_config(c, ORG_A)      # "another request" — same singleton client object
+check("A1h a second request on the SAME singleton client hits the memo (process-lifetime, TTL-bounded)",
+      c.reads() == 0, f"{c.reads()}")
 other = FakeClient(base_store())
 R._accessory_config(other, ORG_A)
-check("A1e a DIFFERENT client is a clean MISS — nothing survives the request", other.reads() >= 10,
+check("A1i a genuinely DIFFERENT client never reuses another client's memo", other.reads() >= 10,
       f"{other.reads()}")
-other.store['accessory_config'][0]['departments'] = ['ChangedOutsideAnEndpoint']
-c3 = FakeClient(other.store)
-check("A1f …so a config change made outside any endpoint is picked up on the next request",
-      R._accessory_config(c3, ORG_A)['departments'] == {'changedoutsideanendpoint'},
-      str(R._accessory_config(c3, ORG_A)['departments']))
 
 c.reset()
 cfgB = R._accessory_config(c, ORG_B)
@@ -291,98 +328,114 @@ check("A2b org B gets ITS OWN departments, never org A's",
       f"B={cfgB['departments']} A={cfg2['departments']}")
 check("A2c org B's catalog toggle is its own (False vs A's True)",
       cfgB['catalog_classify_enabled'] is False and cfg2['catalog_classify_enabled'] is True)
-_ttl_keys, _stats, _req_keys = AC.cache_snapshot()
-check("A2d every request-scoped key carries an org_id",
-      _req_keys and all(len(k) == 2 and k[1] in (ORG_A, ORG_B) for k in _req_keys), str(_req_keys))
-check("A2e nothing landed in the cross-request layer (it is off)", _ttl_keys == [], str(_ttl_keys))
+_keys, _stats, _gen = AC.cache_snapshot()
+check("A2d every cache key carries an org_id",
+      _keys and all(len(k) == 2 and k[1] in (ORG_A, ORG_B) for k in _keys), str(_keys))
 
+# (Finding 3) mutation hardening — the cached master must survive a hostile caller
+c = fresh()
 poison = R._accessory_config(c, ORG_A)
 poison['departments_list'] = ['HACKED']
 poison['injected'] = True
+poison['departments'].add('hacked-dept')
+poison['categories'].add('hacked-cat')
+poison['box_departments'].add('HackedBox')
+poison['contract_type_map']['x'] = 'byod'
+poison['activation_rules'].append({'bucket': 'byod'})
 after = R._accessory_config(c, ORG_A)
-check("A3 mutating the returned dict cannot poison the cache",
+check("A3a mutating the returned dict cannot poison the cache",
       after.get('departments_list') == ['Ondigo A'] and 'injected' not in after,
       str(after.get('departments_list')))
+check("A3b …nor its SETS", after['departments'] == {'ondigo a'} and 'hacked-cat' not in after['categories']
+      and 'HackedBox' not in after['box_departments'], str(after['departments']))
+check("A3c …nor its nested dict/list", after['contract_type_map'] == {} and after['activation_rules'] == [],
+      f"{after['contract_type_map']} {after['activation_rules']}")
+sets_a = AC.build_catalog_sets(c, ORG_A)
+sets_a[0].add('poisoned-desc')
+check("A3d build_catalog_sets hands back COPIES too",
+      'poisoned-desc' not in AC.build_catalog_sets(c, ORG_A)[0])
 
-# L2 — the opt-in cross-request layer
-os.environ['COMMCALC_CFG_CACHE_TTL'] = '0.4'
+# (iii) REQUIRED PROOF — the invalidate/re-cache race (Finding 2)
+c = fresh()
 AC.invalidate()
-c = FakeClient(base_store())
-R.sb = lambda: c
+gen0 = AC.cache_generation()
+_stale = R._accessory_config_uncached(c, ORG_A)          # a read that started BEFORE the write
+AC.invalidate(ORG_A)                                      # …the write lands and invalidates…
+AC.cache_put("acfg", ORG_A, _stale, c, gen0)              # …and only NOW does the read try to cache
+check("A3e-iii a cache_put racing an invalidate is DISCARDED (generation moved)",
+      AC.cache_get("acfg", ORG_A, c) is None, "stale value was resurrected")
+check("A3f-iii …and the drop is counted", AC.cache_snapshot()[1]['stale_put_dropped'] >= 1)
+check("A3g-iii invalidate bumps the generation", AC.cache_generation() > gen0)
+gen1 = AC.cache_generation()
+AC.cache_put("acfg", ORG_A, {'departments': {'fresh'}}, c, gen1)
+check("A3h-iii a put with the CURRENT generation is kept",
+      AC.cache_get("acfg", ORG_A, c) == {'departments': {'fresh'}})
+AC.invalidate()
+
+check("A4a TTL=0 disables the cache entirely",
+      (os.environ.__setitem__('COMMCALC_CFG_CACHE_TTL', '0'), AC.cache_ttl())[1] == 0.0)
+c = fresh()
 R._accessory_config(c, ORG_A)
-c4 = FakeClient(base_store())
-R._accessory_config(c4, ORG_A)
-check("A4a with the TTL set, a DIFFERENT client hits the cross-request layer", c4.reads() == 0,
-      f"{c4.reads()}")
-check("A4b …and it is recorded in the TTL layer", [k for k in AC.cache_snapshot()[0] if k[1] == ORG_A])
-time.sleep(0.55)
-c5 = FakeClient(base_store())
-R._accessory_config(c5, ORG_A)
-check("A4c after the TTL expires the DB is read again", c5.reads() >= 10, f"{c5.reads()}")
-os.environ['COMMCALC_CFG_CACHE_TTL'] = '0'
-AC.invalidate()
-c6 = FakeClient(base_store())
-R._accessory_config(c6, ORG_A)
-c7 = FakeClient(base_store())
-R._accessory_config(c7, ORG_A)
-check("A4d back at the default, a new client always reads", c7.reads() >= 10, f"{c7.reads()}")
-check("A4e …and the cross-request layer stays empty", AC.cache_snapshot()[0] == [],
-      str(AC.cache_snapshot()[0]))
+c.reset()
+R._accessory_config(c, ORG_A)
+check("A4b …every call then reads", c.reads() >= 10, f"{c.reads()}")
+check("A4c …and nothing is stored", AC.cache_snapshot()[0] == [], str(AC.cache_snapshot()[0]))
+os.environ.pop('COMMCALC_CFG_CACHE_TTL', None)
+check("A4d an unset/blank env falls back to the 45s default", AC.cache_ttl() == 45.0, str(AC.cache_ttl()))
+os.environ['COMMCALC_CFG_CACHE_TTL'] = 'nonsense'
+check("A4e a malformed env value falls back to the default too (never 0/unbounded)",
+      AC.cache_ttl() == 45.0, str(AC.cache_ttl()))
+os.environ.pop('COMMCALC_CFG_CACHE_TTL', None)
 
 c = fresh()
 R._accessory_config(c, '')
-_t, _s2, _r = AC.cache_snapshot()
-check("A5a a BLANK org_id is never cached", _t == [] and _r == [], f"{_t} {_r}")
+_k, _st, _g = AC.cache_snapshot()
+check("A5a a BLANK org_id is never cached", _k == [], str(_k))
 check("A5b cache_get on a blank org always misses", AC.cache_get('acfg', '', c) is None)
 check("A5c cache_put on a blank org stores nothing",
-      (AC.cache_put('acfg', None, {'x': 1}, c), AC.cache_snapshot()[2])[1] == [])
+      (AC.cache_put('acfg', None, {'x': 1}, c), AC.cache_snapshot()[0])[1] == [])
+check("A5d no client → no caching (a caller that can't be keyed is never served)",
+      AC.cache_get('acfg', ORG_A, None) is None
+      and (AC.cache_put('acfg', ORG_A, {'y': 1}, None), AC.cache_snapshot()[0])[1] == [])
 
-# A6 — the REAL GET /commcalc/catalog endpoint (one request = one client, the production shape)
-class OneClientPerRequest:
-    """R.sb() hands out a NEW client each call, like get_supabase() does in production."""
+# (v) REQUIRED PROOF — the 6→2 / 17→12 reduction still holds WITH the TTL enabled
+class SingletonProvider:
+    """R.sb() hands back the SAME client every call — exactly what get_supabase() does in production."""
     def __init__(self, store):
-        self.store = store
-        self.clients = []
+        self.client = FakeClient(store)
     def __call__(self):
-        c = FakeClient(self.store)
-        self.clients.append(c)
-        return c
-    def reads(self):
-        return sum(x.reads() for x in self.clients)
-    def reads_t(self, t):
-        return sum(x.reads(t) for x in self.clients)
+        return self.client
 
 AC.invalidate()
-os.environ['COMMCALC_CFG_CACHE_TTL'] = '0'
-prov_pre = OneClientPerRequest(base_store())
+prov_pre = SingletonProvider(base_store())
 R.sb = prov_pre
-# simulate "no cache at all" by clearing the request memo between the endpoint's internal calls
 _real_get = AC.cache_get
-AC.cache_get = lambda *a, **k: None
+AC.cache_get = lambda *a, **k: None            # simulate "no cache at all"
 pre_fix = R.catalog_list(org_id=ORG_A)
-pre_total = prov_pre.reads()
-pre_cat = prov_pre.reads_t('raw_catalog') + prov_pre.reads_t('catalog_category_override')
+pre_total = prov_pre.client.reads()
+pre_cat = prov_pre.client.reads('raw_catalog') + prov_pre.client.reads('catalog_category_override')
 AC.cache_get = _real_get
 
-prov = OneClientPerRequest(base_store())
+AC.invalidate()
+prov = SingletonProvider(base_store())
 R.sb = prov
 out1 = R.catalog_list(org_id=ORG_A)
-reads_cold = prov.reads()
-cat_reads_cold = prov.reads_t('raw_catalog') + prov.reads_t('catalog_category_override')
-prov2 = OneClientPerRequest(base_store())
-R.sb = prov2
+reads_cold = prov.client.reads()
+cat_reads_cold = prov.client.reads('raw_catalog') + prov.client.reads('catalog_category_override')
+prov.client.reset()
 out2 = R.catalog_list(org_id=ORG_A)
-check("A6a0 WITHOUT the cache ONE /catalog request re-read the catalog tables 6x", pre_cat == 6,
+reads_warm = prov.client.reads()
+check("A6a0-v WITHOUT the cache ONE /catalog request re-read the catalog tables 6x", pre_cat == 6,
       f"{pre_cat}")
-check("A6a WITH it those 6 collapse to 2 (one read per table)", cat_reads_cold == 2, f"{cat_reads_cold}")
-check("A6a2 one /catalog request drops from 17 queries to 12", pre_total == 17 and reads_cold == 12,
+check("A6a-v WITH it those 6 collapse to 2 (one read per table)", cat_reads_cold == 2,
+      f"{cat_reads_cold}")
+check("A6a2-v one COLD /catalog request drops from 17 queries to 12", pre_total == 17 and reads_cold == 12,
       f"now={reads_cold} pre={pre_total}")
 # NOTE (deliberate non-change): the 12 that remain are _accessory_config's per-COLUMN single-row probes.
 # Each lives in its OWN try/except precisely so a pre-migration missing column cannot disturb the others
-# (migs 213/214/217/218/224/231 all degrade that way) — collapsing them into one select would break that
-# graceful degradation, so they were left alone.
-check("A6b a SECOND request pays the same 12 (nothing leaks between requests by default)",
-      prov2.reads() == 12, f"{prov2.reads()}")
+# (migs 213/214/217/218/224/231 all degrade that way) — collapsing them into one select would break that.
+check("A6b-v a second request within the TTL costs 0 (process-lifetime memo, honestly stated)",
+      reads_warm == 0, f"{reads_warm}")
 check("A6c payload identical across requests",
       json.dumps(out1, sort_keys=True, default=str) == json.dumps(out2, sort_keys=True, default=str))
 check("A6d cache-free payload is byte-identical to the cached one (no behaviour change)",
@@ -393,7 +446,7 @@ c = fresh()
 s1 = AC.build_catalog_sets(c, ORG_A)
 c.reset()
 s2 = AC.build_catalog_sets(c, ORG_A)
-check("A7a build_catalog_sets repeat on the same client: ZERO queries", c.reads() == 0, f"{c.reads()}")
+check("A7a build_catalog_sets repeat: ZERO queries", c.reads() == 0, f"{c.reads()}")
 check("A7b same sets returned", s1[0] == s2[0] and s1[1] == s2[1] and s1[2] == s2[2] and s1[3] == s2[3])
 cx = fresh()
 s3 = AC.build_catalog_sets(cx, ORG_A, acc_cats=['Handsets'])
@@ -410,13 +463,43 @@ check("A7e build() still yields a working classifier",
       clf.is_catalog_accessory_desc('Clear Case iPhone 15')
       and not clf.is_catalog_accessory_desc('Some Unlisted Product'))
 
-# A8..A11 — invalidation: a WRITE followed by a READ inside the SAME request must not serve the memo
+# (ii) REQUIRED PROOF — the MONEY paths always start from a FRESH config read
+prov = SingletonProvider(base_store())
+R.sb = prov
+mclient = prov.client
+AC.invalidate()
+R._accessory_config(mclient, ORG_A)                       # warm the memo
+mclient.store['accessory_config'][0]['catalog_accessory_categories'] = ['Handsets']   # out-of-band edit
+mclient.reset()
+CE_src = None
+import app.modules.commcalc.commission_engine as CE       # noqa: E402
+CE.preview(mclient, ORG_A, 'July 2026')
+check("A8a-ii commission_engine.preview refreshes the config memo at ENTRY",
+      AC.cache_get('acfg', ORG_A, mclient) is None
+      or R._accessory_config(mclient, ORG_A)['catalog_accessory_categories_list'] == ['Handsets'],
+      "preview served a stale classifier")
+check("A8b-ii …proven on the real source, not just behaviourally",
+      '_accat_fresh.invalidate(org_id)' in inspect.getsource(CE.preview))
+AC.invalidate()
+R._accessory_config(mclient, ORG_A)
+mclient.store['accessory_config'][0]['departments'] = ['RecalcMustSeeThis']
+_before_gen = AC.cache_generation()
+asyncio.run(R._run_calculation('July 2026', ORG_A))
+check("A8c-ii _run_calculation drops the memo at ENTRY (generation moved)",
+      AC.cache_generation() > _before_gen)
+check("A8d-ii …so the recalc's config read is fresh",
+      R._accessory_config(mclient, ORG_A)['departments'] == {'recalcmustseethis'},
+      str(R._accessory_config(mclient, ORG_A)['departments']))
+check("A8e-ii …proven on the real source too",
+      '_invalidate_accessory_config(org_id)' in inspect.getsource(R._run_calculation))
+
+# A9..A12 — invalidation on every app write
 c = fresh()
 before = R._accessory_config(c, ORG_A)['departments']
 R.put_accessory_config({'departments': ['NewDept'], 'categories': [], 'product_keywords': []},
                        org_id=ORG_A, authorization='')
 after = R._accessory_config(c, ORG_A)['departments']
-check("A8 PUT /accessory-config invalidates immediately",
+check("A9 PUT /accessory-config invalidates immediately",
       before == {'ondigo a'} and after == {'newdept'}, f"{before} -> {after}")
 
 c = fresh()
@@ -424,28 +507,27 @@ pre = R.catalog_list(org_id=ORG_A)
 pre_eff = {r['product_desc']: r['effective_category'] for r in pre['rows']}
 R.put_catalog_override({'match_type': 'upc', 'match_value': '0004445556', 'category': 'Accessories'},
                        org_id=ORG_A, authorization='')
-post = R.catalog_list(org_id=ORG_A)
-post_eff = {r['product_desc']: r['effective_category'] for r in post['rows']}
-check("A9a the pre-write read reflected the file/sku state", pre_eff['Clear Case iPhone 15'] == 'accessories')
-check("A9b PUT /catalog/override is reflected in the very next read",
-      post_eff['Moto G Play'] == 'accessories' and post['rows'])
+post_eff = {r['product_desc']: r['effective_category'] for r in R.catalog_list(org_id=ORG_A)['rows']}
+check("A10a the pre-write read reflected the file/sku state",
+      pre_eff['Clear Case iPhone 15'] == 'accessories')
+check("A10b PUT /catalog/override is reflected in the very next read",
+      post_eff['Moto G Play'] == 'accessories')
 R.put_catalog_override({'match_type': 'sku', 'match_value': 'PH-1', 'category': ''},
                        org_id=ORG_A, authorization='')
 R.put_catalog_override({'match_type': 'upc', 'match_value': '0004445556', 'category': ''},
                        org_id=ORG_A, authorization='')
 cleared = {r['product_desc']: r['effective_category'] for r in R.catalog_list(org_id=ORG_A)['rows']}
-check("A9c CLEARING an override also invalidates (file category restored)",
+check("A10c CLEARING an override also invalidates (file category restored)",
       cleared['Moto G Play'] == 'handsets', str(cleared))
 
-import asyncio  # noqa: E402
 c = fresh()
 R._accessory_config(c, ORG_A)
 asyncio.run(R.set_gp_category_map({'department': 'GPACC', 'category': 'accessory'}, org_id=ORG_A))
-check("A10a POST /gp-category-map (upsert) invalidates → the new dept appears",
+check("A11a POST /gp-category-map (upsert) invalidates → the new dept appears",
       'gpacc' in R._accessory_config(c, ORG_A)['departments'],
       str(R._accessory_config(c, ORG_A)['departments']))
 asyncio.run(R.set_gp_category_map({'department': 'GPACC', 'category': ''}, org_id=ORG_A))
-check("A10b …and the DELETE branch invalidates too → the dept is gone",
+check("A11b …and the DELETE branch invalidates too → the dept is gone",
       'gpacc' not in R._accessory_config(c, ORG_A)['departments'],
       str(R._accessory_config(c, ORG_A)['departments']))
 
@@ -455,34 +537,30 @@ c.store['flag_rules'] = [{'id': 1, 'org_id': ORG_A, 'accessory_departments': ['L
                           'acima_tenders': []}]
 legacy = R._accessory_config(c, ORG_A)['departments']
 R.put_flag_rules({'accessory_threshold': 40}, org_id=ORG_A)
-check("A11a pre-mig-208 fallback still resolves via flag_rules", legacy == {'legacydept'}, str(legacy))
-check("A11b PUT /flag-rules invalidates the org's cache",
-      not [k for k in AC.cache_snapshot()[2] if k[1] == ORG_A], str(AC.cache_snapshot()[2]))
+check("A12a pre-mig-208 fallback still resolves via flag_rules", legacy == {'legacydept'}, str(legacy))
+check("A12b PUT /flag-rules invalidates the org's cache",
+      not [k for k in AC.cache_snapshot()[0] if k[1] == ORG_A], str(AC.cache_snapshot()[0]))
 
-import inspect  # noqa: E402
 up_src = inspect.getsource(R._upload_file_impl)     # upload_file is the thin mig-202 trace wrapper
-check("A12 the catalog upload invalidates after the ingest",
+check("A13 the catalog upload invalidates after the ingest",
       "if file_type in ('catalog', 'master_cats'):" in up_src
       and "_invalidate_accessory_config(org_id)" in up_src)
 inv_sites = inspect.getsource(R).count('_invalidate_accessory_config(org_id)') - 1   # minus the def line
-check("A12b all six write paths are wired (accessory-config, override, upload, gp-map x2, flag-rules)",
-      inv_sites == 6, f"{inv_sites}")
+check("A13b all SEVEN wiring points (6 config writes + recalc entry)", inv_sites == 7, f"{inv_sites}")
 
-os.environ['COMMCALC_CFG_CACHE_TTL'] = '30'          # exercise ORG-SCOPED invalidation on the TTL layer
 AC.invalidate()
 ca, cb = FakeClient(base_store()), FakeClient(base_store())
 R._accessory_config(ca, ORG_A)
 R._accessory_config(cb, ORG_B)
 AC.invalidate(ORG_A)
-check("A13a invalidate(orgA) drops ONLY org A", all(k[1] == ORG_B for k in AC.cache_snapshot()[0]),
-      str(AC.cache_snapshot()[0]))
-cc = FakeClient(base_store())
-R._accessory_config(cc, ORG_B)
-check("A13b org B is still served", cc.reads() == 0, f"{cc.reads()}")
-cd = FakeClient(base_store())
-R._accessory_config(cd, ORG_A)
-check("A13c org A has to read again", cd.reads() >= 10, f"{cd.reads()}")
-os.environ['COMMCALC_CFG_CACHE_TTL'] = '0'
+check("A14a invalidate(orgA) drops ONLY org A",
+      all(k[1] == ORG_B for k in AC.cache_snapshot()[0]), str(AC.cache_snapshot()[0]))
+cb.reset()
+R._accessory_config(cb, ORG_B)
+check("A14b org B is still served", cb.reads() == 0, f"{cb.reads()}")
+ca.reset()
+R._accessory_config(ca, ORG_A)
+check("A14c org A has to read again", ca.reads() >= 10, f"{ca.reads()}")
 AC.invalidate()
 
 
@@ -537,6 +615,14 @@ check("C4 exact ties break by department name (total, stable ordering)", tied ==
       str(tied))
 check("C5 ties are reproducible under shuffling",
       [r['department'] for r in run_gp(list(reversed(tie)))['bucket_composition']['other']] == tied)
+# Gate-1 rework nit: two departments differing ONLY in case are distinct rows (the key is the raw string),
+# so an identical |gp|+|ext| pair used to fall through to dict insertion order. The raw name is now folded
+# into the key after the case-folded one.
+cvar = [sale('Acc', 5.0, 1.0), sale('ACC', 5.0, 1.0), sale('acc', 5.0, 1.0)]
+cv1 = [r['department'] for r in run_gp(cvar)['bucket_composition']['other']]
+cv2 = [r['department'] for r in run_gp(list(reversed(cvar)))['bucket_composition']['other']]
+check("C5b case-variant same-name departments have a TOTAL order (no insertion-order fallback)",
+      cv1 == cv2 and cv1 == sorted(cv1), f"{cv1} vs {cv2}")
 neg = run_gp([sale('CREDIT', -500.0, -120.0), sale('TINY', 5.0, 1.0)])['bucket_composition']['other']
 check("C6 a negative-GP department still ranks by MAGNITUDE",
       [r['department'] for r in neg] == ['CREDIT', 'TINY'], str([r['department'] for r in neg]))
@@ -690,7 +776,6 @@ check("R11 a tenant with the toggle OFF builds NO classifier (zero cost, byte-id
 check("R12 …and its accessory classification is unchanged",
       R._is_accessory('Ondigo B', '', '', acfgB) and not R._is_accessory('ACC', '', 'Clear Case iPhone 15', acfgB))
 
-import app.modules.commcalc.commission_engine as CE  # noqa: E402
 check("R13 the synthetic 'accessory' match_field is registered", 'accessory' in CE.MATCH_FIELDS)
 eng_src = inspect.getsource(CE)
 check("R14 the engine builds the classifier ONLY when a rule uses match_field='accessory'",
