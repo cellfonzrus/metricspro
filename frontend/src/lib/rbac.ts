@@ -251,6 +251,13 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/target-fields', label: 'Custom Target Fields', icon: '🧱', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/gp-category-map', label: 'GP Category Map', icon: '💰', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/item-mapping', label: 'Item / Model Mapping', icon: '🧩', module: 'commissions', scopes: ['all'] },
+    // Catalog Categories (migs 230/231) — the per-tenant category-override layer on top of the uploaded
+    // product catalog; feeds catalog-driven accessory classification. Nav entry per mod-commission
+    // NEEDS CORE (catalog-accessory-byod). Filed under Mapping, not Commissions: it is a mapping/config
+    // surface like GP Category Map / Item Mapping, so it is also intentionally NOT in REPORT_DIRECTORY
+    // (config pages are excluded) and has no report-area gate. Carrier-NEUTRAL — the page accepts BOTH
+    // the house (product-ID) and TOTAL (UPC) catalog files, so it must NOT go in NAV_CARRIERS.
+    { href: '/commcalc/catalog', label: 'Catalog Categories', icon: '🏷️', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/rep-aliases', label: 'Rep Aliases', icon: '🔗', module: 'commissions', scopes: ['all'] },
   ]},
   { group: 'Notify', module: 'notify', items: [
