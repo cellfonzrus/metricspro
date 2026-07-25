@@ -47,6 +47,19 @@ const TABS = [
   { id: 'compensation', label: '💰 Compensation by Line' },
 ]
 
+// ── PLAN-MODE (non-Boost) drill labels — mirrored from commission-explain/page.tsx so the same
+// installment status/basis reads identically on both surfaces. Display only.
+const PLAN_BASIS: Record<string, string> = {
+  flat_per_unit: '$/unit', pct_gp: '% GP', pct_mrc: '% MRC',
+  pct_price_over_cost: '% (price−cost)', flat: 'flat bonus',
+}
+const INST_REASON_LABEL: Record<string, string> = {
+  paid: 'Paid', no_mi_match: 'Held — dealer not paid (no raw_mi row)',
+  line_inactive: 'Held — line inactive', residual_not_received: 'Held — residual not received',
+  activation_payment_missing: 'Held — no first-month payment', withheld: 'Held',
+  held_stored: 'Held — stored row (see rep explain)',
+}
+
 export default function ReportsPage() {
   const { period } = usePeriod()
   const { carriers } = useAuth()
@@ -64,6 +77,14 @@ export default function ReportsPage() {
   const [drillComp, setDrillComp] = useState<string | null>(null)   // clicked commission component
   const [drillData, setDrillData] = useState<any>(null)
   const [drillBusy, setDrillBusy] = useState(false)
+  // PLAN-MODE drill (non-Boost carriers). The Boost rows below drill through /commission-drill, which
+  // replays raw_sales through the BOOST component classification — for a plan-mode rep those component
+  // columns are zeroed by calculator.py, so that endpoint would show real transactions next to
+  // misleading $0. Plan-mode therefore drills through /commission-explain, which IS carrier-mode aware
+  // and is the same source the 🔬 "How was this calculated?" page already uses.
+  const [planDrill, setPlanDrill] = useState<null | 'plan' | 'multimonth'>(null)
+  const [explain, setExplain] = useState<any>(null)
+  const [explainBusy, setExplainBusy] = useState(false)
 
   useEffect(() => {
     api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
@@ -113,6 +134,48 @@ export default function ReportsPage() {
       .finally(() => setDrillBusy(false))
   }
   const drillStyle = { cursor: 'pointer' } as React.CSSProperties
+
+  // ── PLAN-MODE drill (display-only; no calc, no writes) ───────────────────────────────────────────
+  // org_id is NOT pinned here: client.ts appends the ACTING org as a query param (contract §2), so a
+  // super-admin acting as a tenant drills that tenant's data, never the house org's.
+  function openPlanDrill(which: 'plan' | 'multimonth') {
+    setPlanDrill(which)
+    const rep = currentRep?.storeops_name || currentRep?.epay_salesperson || ''
+    if (!rep) return
+    // cache per rep+period — but NEVER cache a failure, so a retry actually re-fetches
+    if (explain && !explain.error && explain._rep === rep && explain._period === period) return
+    setExplain(null); setExplainBusy(true)
+    api(`/api/v1/commcalc/commission-explain?period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
+      .then((d: any) => setExplain({ ...d, _rep: rep, _period: period }))
+      .catch(e => setExplain({ error: String(e?.message || e), _rep: rep, _period: period }))
+      .finally(() => setExplainBusy(false))
+  }
+  const explainOk  = explain && !explain.error ? explain : null
+  const explainPc  = explainOk?.plan_component || null
+  const explainMm  = explainOk?.multimonth_component || null
+  const explainRec = explainOk?.reconciliation || null
+  // per-rule matched sale lines (same shape commission-explain/page.tsx maps into planRows)
+  const planLineRows = useMemo(() => {
+    const out: any[] = []
+    for (const r of (explainPc?.rules || [])) for (const l of (r.lines || []))
+      out.push({ rule: r.label, basis: PLAN_BASIS[r.payout_kind] || r.payout_kind, date: l.date,
+        trans_id: l.trans_id, product: l.product, contract_type: l.contract_type,
+        ext_price: l.ext_price, gp: l.gp, amount: l.flat_once ? null : l.amount })
+    return out
+  }, [explainPc])
+  // rules that matched NOTHING — the honest "why is this $0" answer for a plan-mode rep
+  const planDeadRules = useMemo(
+    () => (explainPc?.rules || []).filter((r: any) => !(r.matched_lines || 0)), [explainPc])
+  // per-device installments with month / status / hold reason
+  const instLineRows = useMemo(() => {
+    const out: any[] = []
+    for (const d of (explainMm?.devices || [])) for (const i of (d.installments || []))
+      out.push({ imei: d.imei, mdn: d.mdn, product: d.product, month_index: i.month_index,
+        pay_period: i.pay_period, status_label: INST_REASON_LABEL[i.hold_reason] || i.status,
+        hold_detail: i.hold_detail, amount: i.amount, withheld_amount: i.withheld_amount,
+        mrc_at_pay: i.mrc_at_pay, ma_says_paid: d.ma_says_paid, paid: i.status === 'paid' })
+    return out
+  }, [explainMm])
 
   function TierBadge({ tier }: { tier: number }) {
     const pct = Math.round((tier || 0) * 100)
@@ -293,10 +356,21 @@ export default function ReportsPage() {
                   <table>
                     <tbody>
                       <tr><td>Commission Plan</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{currentRep.plan_name || '— none assigned —'}</td></tr>
-                      <tr><td>Plan commission</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.plan_comm ?? 0)}</td></tr>
-                      {(currentRep.residual_installment_comm || 0) > 0 && (
-                        <tr><td>Multi‑month installments</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.residual_installment_comm || 0)}</td></tr>
-                      )}
+                      {/* Clickable: same affordance as the Boost line items (🔍 + rs-clickable + pointer).
+                          Amounts shown are UNCHANGED — the click only opens a read-only breakdown. */}
+                      <tr className="rs-clickable" style={drillStyle} onClick={() => openPlanDrill('plan')}
+                        title="Show the per-rule sale lines this Commission Plan paid on">
+                        <td>🔍 Plan commission</td>
+                        <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.plan_comm ?? 0)}</td>
+                      </tr>
+                      {/* Always rendered (was: only when > 0) so there is ALWAYS a click path to the
+                          per-device installment ledger — a $0 here is exactly the case an operator needs
+                          explained (every month held / no schedule / not calculated yet). */}
+                      <tr className="rs-clickable" style={drillStyle} onClick={() => openPlanDrill('multimonth')}
+                        title="Show each device's M1–M6 installments with gate status and hold reason">
+                        <td>🔍 Multi‑month installments</td>
+                        <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.residual_installment_comm || 0)}</td>
+                      </tr>
                       <tr style={{ fontWeight: 700 }}><td>Total Payout</td><td style={{ textAlign: 'right', color: 'var(--accent)' }}>{fmt(currentRep.total_payout)}</td></tr>
                     </tbody>
                   </table>
@@ -570,6 +644,202 @@ export default function ReportsPage() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* PLAN-MODE drill-down (non-Boost carriers) — DISPLAY ONLY: reads /commission-explain, writes
+          nothing, changes no payout number. Deliberately a SEPARATE modal from the Boost one above so
+          the Boost path stays byte-identical. */}
+      {planDrill && (() => {
+        const rep = currentRep?.storeops_name || currentRep?.epay_salesperson || ''
+        const isPlanTab = planDrill === 'plan'
+        const liveTotal = explainPc ? (explainPc.total_payout ?? 0) : null
+        const storedPlan = explainRec ? (explainRec.plan_comm ?? 0) : null
+        const drifted = storedPlan !== null && liveTotal !== null && Math.abs(storedPlan - liveTotal) >= 0.01
+        const mmTotals = explainMm?.totals || {}
+        return (
+          <div onClick={() => setPlanDrill(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: 'var(--surface)', borderRadius: 12, padding: 20, width: 'min(1000px,97vw)', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 700 }}>
+                    {isPlanTab ? 'Plan commission' : 'Multi‑month installments'} · {rep || '— no rep selected —'}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                    {period}
+                    {isPlanTab
+                      ? (explainPc?.plan_name ? ` · plan: ${explainPc.plan_name} · ${planLineRows.length} matched line${planLineRows.length === 1 ? '' : 's'}` : '')
+                      : (explainMm ? ` · ${mmTotals.paid ?? 0} paid · ${mmTotals.withheld ?? 0} held` : '')}
+                  </div>
+                </div>
+                <button className="btn btn-secondary" style={{ padding: '2px 10px' }} onClick={() => setPlanDrill(null)}>✕</button>
+              </div>
+
+              {!rep ? (
+                <div style={{ padding: 20, color: 'var(--text3)', fontSize: 13 }}>Select a rep first.</div>
+              ) : explainBusy ? (
+                <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>Loading breakdown…</div>
+              ) : explain?.error ? (
+                <div style={{ padding: 20, color: '#dc2626', fontSize: 13 }}>
+                  ❌ {explain.error}
+                  <div style={{ marginTop: 10 }}>
+                    <button className="btn btn-secondary" style={{ padding: '2px 10px' }}
+                      onClick={() => openPlanDrill(planDrill)}>Retry</button>
+                  </div>
+                </div>
+              ) : !explainOk ? (
+                <div style={{ padding: 20, color: 'var(--text3)', fontSize: 13 }}>No breakdown returned for this rep.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {explainOk.note && (
+                    <div style={{ fontSize: 12, color: '#b45309' }}>{explainOk.note}</div>
+                  )}
+
+                  {isPlanTab ? (
+                    <>
+                      {explainPc?.plan_name ? (
+                        <div style={{ fontSize: 13, color: 'var(--text2)' }}>
+                          Plan <b style={{ color: 'var(--text)' }}>{explainPc.plan_name}</b>
+                          {explainPc.assignment ? <> attached via the <b>{explainPc.assignment.scope}</b> assignment
+                            {explainPc.assignment.scope_value ? <> = <b>“{explainPc.assignment.scope_value}”</b></> : null}</> : null}.
+                          {' '}Subtotal {fmt((explainPc.base_payout || 0) + (explainPc.tiered_payout || 0))} × tier{' '}
+                          {explainPc.tier_multiplier ?? 1} = <b style={{ color: 'var(--accent)' }}>{fmt(explainPc.total_payout || 0)}</b>
+                          {explainPc.qualifying_units != null ? ` · ${explainPc.qualifying_units} qualifying unit(s)` : ''}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 13, color: '#dc2626' }}>
+                          No Commission Plan attached to this rep → $0 on the plan component. Assign one on{' '}
+                          <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}>Commission Plans</a>.
+                        </div>
+                      )}
+
+                      {(explainOk.zero_explanation?.length > 0) && (
+                        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--text2)', lineHeight: 1.7 }}>
+                          {explainOk.zero_explanation.map((z: string, i: number) => <li key={i}>{z}</li>)}
+                        </ul>
+                      )}
+
+                      {planLineRows.length > 0 ? (
+                        <div style={{ overflowX: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                            <thead><tr style={{ background: 'var(--surface2)' }}>
+                              {['Rule', 'Date', 'Trans ID', 'Product', 'Contract', 'Basis', 'Price', 'GP', 'Line $'].map(h =>
+                                <th key={h} style={{ textAlign: ['Price', 'GP', 'Line $'].includes(h) ? 'right' : 'left', padding: '5px 8px', fontSize: 10, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{h}</th>)}
+                            </tr></thead>
+                            <tbody>
+                              {planLineRows.map((l: any, i: number) => (
+                                <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                                  <td style={{ padding: '5px 8px' }}>{l.rule || '—'}</td>
+                                  <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>{l.date || '—'}</td>
+                                  <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{l.trans_id || '—'}</td>
+                                  <td style={{ padding: '5px 8px' }}>{l.product || '—'}</td>
+                                  <td style={{ padding: '5px 8px' }}>{l.contract_type || '—'}</td>
+                                  <td style={{ padding: '5px 8px', color: 'var(--text3)' }}>{l.basis || '—'}</td>
+                                  <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(l.ext_price)}</td>
+                                  <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(l.gp)}</td>
+                                  <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 600 }}>
+                                    {l.amount == null ? 'flat (once)' : fmt(l.amount)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 13, color: 'var(--text3)' }}>
+                          {explainPc?.plan_name
+                            ? `Plan attached, but no rule matched a sale line in ${period}.`
+                            : `No plan-mode line detail for ${rep} in ${period}.`}
+                        </div>
+                      )}
+
+                      {planDeadRules.length > 0 && (
+                        <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+                          <div style={{ fontWeight: 600, marginBottom: 4 }}>Rules that matched nothing</div>
+                          <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
+                            {planDeadRules.map((r: any, i: number) => (
+                              <li key={i}>
+                                <b>{r.label || '(unnamed rule)'}</b> — expects {r.match_field || 'any'} {r.match_op || 'equals'}
+                                {' '}“{r.match_value ?? ''}” ({PLAN_BASIS[r.payout_kind] || r.payout_kind})
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {explainMm?.note && <div style={{ fontSize: 12, color: 'var(--text3)' }}>{explainMm.note}</div>}
+                      {instLineRows.length > 0 ? (
+                        <div style={{ overflowX: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                            <thead><tr style={{ background: 'var(--surface2)' }}>
+                              {['IMEI', 'Product', 'Month', 'Pay period', 'Status / hold reason', 'MA says paid', 'Paid $', 'Held $', 'MRC'].map(h =>
+                                <th key={h} style={{ textAlign: ['Paid $', 'Held $', 'MRC'].includes(h) ? 'right' : 'left', padding: '5px 8px', fontSize: 10, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{h}</th>)}
+                            </tr></thead>
+                            <tbody>
+                              {instLineRows.map((r: any, i: number) => (
+                                <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                                  <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{r.imei || r.mdn || '—'}</td>
+                                  <td style={{ padding: '5px 8px' }}>{r.product || '—'}</td>
+                                  <td style={{ padding: '5px 8px' }}>M{r.month_index}</td>
+                                  <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>{r.pay_period || '—'}</td>
+                                  <td style={{ padding: '5px 8px', color: r.paid ? 'var(--green)' : 'var(--red)' }}>
+                                    {r.status_label}{r.hold_detail ? ` · ${r.hold_detail}` : ''}
+                                  </td>
+                                  <td style={{ padding: '5px 8px' }}>{r.ma_says_paid ? 'yes' : 'no'}</td>
+                                  <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 600 }}>{fmt(r.amount)}</td>
+                                  <td style={{ padding: '5px 8px', textAlign: 'right' }}>{r.withheld_amount == null ? '—' : fmt(r.withheld_amount)}</td>
+                                  <td style={{ padding: '5px 8px', textAlign: 'right' }}>{r.mrc_at_pay == null ? '—' : fmt(r.mrc_at_pay)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 13, color: 'var(--text3)' }}>
+                          No sale-triggered multi‑month installments for {rep} in {period}
+                          {explainMm && !explainMm.schedules ? ' — no active installment schedule is configured for this org.' : '.'}
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* Stored-vs-live honesty strip: /commission-explain computes LIVE from the current
+                      config, while the card above shows what the last Calculate STORED. */}
+                  <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, fontSize: 12, color: 'var(--text2)' }}>
+                    {explainRec ? (
+                      <>
+                        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+                          <span>Stored by last Calculate — Plan: <b>{fmt(explainRec.plan_comm)}</b></span>
+                          <span>Sale installments: <b>{fmt(explainRec.installment_comm_sale)}</b></span>
+                          <span>Residual (raw_mi): <b>{fmt(explainRec.residual_installment_comm)}</b></span>
+                          <span>Total: <b style={{ color: 'var(--accent)' }}>{fmt(explainRec.total_payout)}</b></span>
+                        </div>
+                        {drifted && (
+                          <div style={{ color: '#b45309', marginTop: 6 }}>
+                            ⚠ The breakdown above is computed live from the CURRENT configuration ({fmt(liveTotal || 0)}),
+                            which differs from the stored {fmt(storedPlan || 0)} written by the last Calculate.
+                            Run Calculate for {period} to store the new numbers.
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div style={{ color: '#b45309' }}>
+                        No plan-mode calculation stored for {period} — the breakdown above is computed live
+                        from the current configuration. Run Calculate after the config is in place to store it.
+                      </div>
+                    )}
+                    <div style={{ marginTop: 6 }}>
+                      <a href={`/commcalc/commission-explain?rep=${encodeURIComponent(rep)}`} style={{ color: 'var(--accent)' }}>
+                        🔬 Open the full explain page (assignment trace, MA cross-reference, Excel/PDF export) →
+                      </a>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
