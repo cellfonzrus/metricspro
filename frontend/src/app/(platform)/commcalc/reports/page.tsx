@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
@@ -85,6 +85,7 @@ export default function ReportsPage() {
   const [planDrill, setPlanDrill] = useState<null | 'plan' | 'multimonth'>(null)
   const [explain, setExplain] = useState<any>(null)
   const [explainBusy, setExplainBusy] = useState(false)
+  const explainReq = useRef('')   // latest in-flight `${rep}|${period}` — late replies are dropped
 
   useEffect(() => {
     api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
@@ -138,19 +139,30 @@ export default function ReportsPage() {
   // ── PLAN-MODE drill (display-only; no calc, no writes) ───────────────────────────────────────────
   // org_id is NOT pinned here: client.ts appends the ACTING org as a query param (contract §2), so a
   // super-admin acting as a tenant drills that tenant's data, never the house org's.
+  // the rep the drill is about — ALSO the freshness key for the async response (see MINOR-1 below)
+  const drillRep = currentRep?.storeops_name || currentRep?.epay_salesperson || ''
   function openPlanDrill(which: 'plan' | 'multimonth') {
     setPlanDrill(which)
-    const rep = currentRep?.storeops_name || currentRep?.epay_salesperson || ''
+    const rep = drillRep
     if (!rep) return
     // cache per rep+period — but NEVER cache a failure, so a retry actually re-fetches
     if (explain && !explain.error && explain._rep === rep && explain._period === period) return
+    const key = `${rep}|${period}`
+    explainReq.current = key                       // only the LATEST request may land
     setExplain(null); setExplainBusy(true)
     api(`/api/v1/commcalc/commission-explain?period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
-      .then((d: any) => setExplain({ ...d, _rep: rep, _period: period }))
-      .catch(e => setExplain({ error: String(e?.message || e), _rep: rep, _period: period }))
-      .finally(() => setExplainBusy(false))
+      .then((d: any) => { if (explainReq.current === key) setExplain({ ...d, _rep: rep, _period: period }) })
+      .catch(e => { if (explainReq.current === key) setExplain({ error: String(e?.message || e), _rep: rep, _period: period }) })
+      .finally(() => { if (explainReq.current === key) setExplainBusy(false) })
   }
-  const explainOk  = explain && !explain.error ? explain : null
+  // Gate-1 MINOR-1 — stale-response race: open rep A, close mid-flight, open rep B; a late reply for A
+  // must NEVER render under B's header. Every render path reads the response only when it is TAGGED for
+  // the CURRENT rep+period. The error path uses the same gate, so an error for the current rep still
+  // shows (with Retry) while a stale one cannot. explainReq drops the late reply at the source too, so
+  // the modal keeps showing "Loading…" instead of flashing an empty state while the fresh call is in
+  // flight.
+  const explainFresh = explain && explain._rep === drillRep && explain._period === period ? explain : null
+  const explainOk  = explainFresh && !explainFresh.error ? explainFresh : null
   const explainPc  = explainOk?.plan_component || null
   const explainMm  = explainOk?.multimonth_component || null
   const explainRec = explainOk?.reconciliation || null
@@ -655,7 +667,7 @@ export default function ReportsPage() {
           nothing, changes no payout number. Deliberately a SEPARATE modal from the Boost one above so
           the Boost path stays byte-identical. */}
       {planDrill && (() => {
-        const rep = currentRep?.storeops_name || currentRep?.epay_salesperson || ''
+        const rep = drillRep
         const isPlanTab = planDrill === 'plan'
         const liveTotal = explainPc ? (explainPc.total_payout ?? 0) : null
         const storedPlan = explainRec ? (explainRec.plan_comm ?? 0) : null
@@ -683,9 +695,9 @@ export default function ReportsPage() {
                 <div style={{ padding: 20, color: 'var(--text3)', fontSize: 13 }}>Select a rep first.</div>
               ) : explainBusy ? (
                 <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>Loading breakdown…</div>
-              ) : explain?.error ? (
+              ) : explainFresh?.error ? (
                 <div style={{ padding: 20, color: '#dc2626', fontSize: 13 }}>
-                  ❌ {explain.error}
+                  ❌ {explainFresh.error}
                   <div style={{ marginTop: 10 }}>
                     <button className="btn btn-secondary" style={{ padding: '2px 10px' }}
                       onClick={() => openPlanDrill(planDrill)}>Retry</button>
