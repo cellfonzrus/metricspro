@@ -675,11 +675,13 @@ export default function EmailImportsPage() {
                 <td style={{ ...cell, fontSize: 12 }}>{p.upload_type}</td>
                 <td style={cell}>{
                   p.status === 'ok'
-                    // A price-guard PARTIAL ingest is recorded status='ok' (rows WERE saved) but carries a
-                    // `detail` reason — flag it amber so a "kept existing data for some days" ingest isn't
-                    // shown as a clean green ✓ (a clean ok has no detail).
+                    // An ok row that carries a `detail` is a REAL ingest with a caveat — flag it amber so
+                    // it isn't shown as a clean green ✓ (a clean ok has no detail). Show the recorded
+                    // `detail` VERBATIM: two different outcomes land here — a price-guard PARTIAL ingest
+                    // and a device-only Inventory Aging ingest (0 stores, N device rows) — so the old
+                    // hard-coded price-guard sentence mislabelled the latter.
                     ? (p.detail
-                        ? <span style={{ color: '#b45309' }} title={p.detail}>⚠ {p.rows_saved} rows — ingested fresh day(s); kept existing data for degraded day(s) (price guard)</span>
+                        ? <span style={{ color: '#b45309' }} title={p.detail}>⚠ {p.rows_saved} rows — {p.detail}</span>
                         : <span style={{ color: '#16794a' }}>✓ {p.rows_saved} rows</span>)
                     : p.status === 'skipped'
                       // Show the honest per-file reason (`detail`) directly — a price-guard refusal AND an

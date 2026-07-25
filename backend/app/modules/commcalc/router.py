@@ -85,11 +85,17 @@ def _write_upload_trace(org_id, *, source="manual", filename=None, upload_type=N
         rows_saved = res.get("saved")
         if rows_saved is None:
             rows_saved = res.get("tenants", res.get("stores", res.get("rows")))
+        # DEVICE-ONLY inventory aging: 0 stores ('saved' keeps its store-count meaning) but N per-device
+        # rows really were written — report the real count. Guarded by the marker so no other path moves.
+        if not rows_saved and res.get("skipped") == "inventory_devices_only":
+            rows_saved = res.get("devices")
         skipped = res.get("skipped") or (None if res.get("success", True) else res.get("skipped"))
         if status is None:
             if error:
                 status = "error"
-            elif res.get("skipped") == "price_guard_partial":
+            elif res.get("skipped") in ("price_guard_partial", "inventory_devices_only"):
+                # Both are REAL ingests carrying a caveat (some days kept / stores not parsed) — 'partial',
+                # never 'skipped', which would claim nothing was written.
                 status = "partial"
             elif res.get("skipped") or res.get("success") is False:
                 status = "skipped"
@@ -527,6 +533,25 @@ async def _upload_file_impl(
             return {'success': False, 'file_type': 'inventory_aging', 'stores': 0, 'saved': 0,
                     'devices': 0, 'skipped': 'inventory_no_stores', 'as_of': as_of,
                     'rows_read': len(rows), 'note': note}
+        # DEVICE-ONLY OUTCOME (luxelink, 2026-07-25): a SERIALIZED-device export (Bin / Qty / Cost /
+        # Serial 1 / Product ID / Age in Store / Age in Company / Product Desc Full) has NO store column,
+        # so the per-STORE roll-up is legitimately {} while the per-DEVICE rows DO save. That used to fall
+        # through to the plain success payload below with saved=0 → the email sweep recorded a silent
+        # "ok · 0 rows · (no detail)" that looks broken and tells nobody devices landed, AND — because the
+        # sweep's dedup only marks a message done when rows_saved > 0 — it re-pulled and re-ingested the
+        # SAME attachment every hour (15x on 2026-07-24). Name the outcome explicitly, in the same shape as
+        # the 'inventory_no_stores' contract, so every surface can tell the truth.
+        # `saved` / `stores` KEEP their store-count semantics (unchanged for every existing consumer:
+        # upload_log, the FTP sweep, readUploadOutcome); the device count rides on `devices`.
+        if not saved and devices_saved:
+            dnote = (f"0 stores (no store column found — this is a per-DEVICE export, not per-store) "
+                     f"· {devices_saved} device row(s) saved from {len(rows)} row(s). Per-device cost "
+                     f"and aging ARE ingested (device-history purchase price); the Balance-Sheet inventory "
+                     f"VALUE line stays as-is until the export carries a store column (Store / Store Name "
+                     f"/ Location / Site / Branch) or a grouped 'Store:' header.")
+            return {'success': True, 'file_type': 'inventory_aging', 'stores': 0, 'saved': 0,
+                    'devices': devices_saved, 'skipped': 'inventory_devices_only', 'as_of': as_of,
+                    'rows_read': len(rows), 'note': dnote}
         return {'success': True, 'file_type': 'inventory_aging', 'stores': saved, 'saved': saved,
                 'devices': devices_saved, 'as_of': as_of, 'rows_read': len(rows)}
 
@@ -13624,6 +13649,18 @@ async def _run_email_sweep(org_id, account='default'):
                 # matches or the source report is corrected. Not a money path (no daily_sales promote/recalc).
                 status = 'skipped'
                 detail = (str((res or {}).get('note') or 'Inventory Aging parsed 0 stores'))[:300]
+            elif (res or {}).get('skipped') == 'inventory_devices_only':
+                # DEVICE-ONLY Inventory Aging (luxelink 2026-07-25): the export has no store column, so 0
+                # per-store values were written, but N per-DEVICE rows DID save. It IS a real ingest →
+                # status stays 'ok'. Two honest corrections: (a) rows_saved comes from res['devices']
+                # (`saved` keeps its store-count meaning) so this row stops reading "ok · 0 rows" AND the
+                # dedup at the top of this sweep finally marks the message done — before this, every sweep
+                # re-pulled and re-ingested the same attachment forever (15x on 2026-07-24); (b) `detail`
+                # carries the parser's note so the history says what actually happened. NOT a money path
+                # (inventory aging feeds the Balance-Sheet inventory line + device-cost lookup, never pay).
+                rows_saved = int((res or {}).get('devices') or 0)
+                detail = (str((res or {}).get('note')
+                              or f"0 stores (no store column) · {rows_saved} device row(s) saved"))[:300]
         except HTTPException as he:
             status, detail = "error", str(he.detail)[:300]
         except Exception as e:

@@ -192,15 +192,26 @@ DEFAULT_SERIAL_FIELDS = ("serial", "Serial", "Serial 1", "Serial Number", "Seria
 DEFAULT_SKU_FIELDS = ("sku", "SKU", "Sku", "Item Number", "ItemNumber", "Item #", "Model Number",
                       "ModelNumber", "Part Number", "Part #", "UPC", "Product ID", "ProductId")
 DEFAULT_ITEM_FIELDS = ("item", "Item", "Item Name", "ItemName", "Description", "Product", "Product Name",
-                       "ProductName", "Product Desc", "Model", "Device", "Device Model", "device_model")
+                       "ProductName", "Product Desc", "Model", "Device", "Device Model", "device_model",
+                       # b2bsoft serialized-device export (luxelink, 2026-07-25) spells the description
+                       # 'Product Desc Full' — appended LAST so an exact 'Item'/'Description' column still
+                       # wins. Purely additive: these rows stored item=NULL before (blank device model on
+                       # the device-history page).
+                       "Product Desc Full", "Product Description", "Item Description")
 DEFAULT_DEVICE_COST_FIELDS = ("Unit Cost", "UnitCost", "unit_cost", "Cost", "cost", "Item Cost",
                               "ItemCost", "Device Cost", "DeviceCost", "Our Cost", "Dealer Cost",
                               "Purchase Price", "Acquisition Cost", "Ext Cost", "Extended Cost")
 DEFAULT_RECEIVED_FIELDS = ("Received Date", "ReceivedDate", "received_date", "Date Received",
                            "Received", "Acquired Date", "Acquired", "Date Added", "DateAdded",
                            "Add Date", "In Date", "Stock Date", "Created Date")
+# 'Age in Company' (b2bsoft serialized-device export, luxelink 2026-07-25) = TOTAL age of the unit in the
+# company — the aging number a device-history reader means. Deliberately NOT mapping 'Age in Store': that is
+# the age at its CURRENT location and resets on a transfer, so it would understate a transferred device's
+# age; it stays available verbatim in inventory_aging_device.raw_row. Appended LAST so a file carrying a
+# real 'Days In Stock' column still wins.
 DEFAULT_DAYS_FIELDS = ("Days In Stock", "DaysInStock", "days_in_stock", "Days on Hand", "Days On Hand",
-                       "Aging Days", "AgingDays", "Age", "Days", "Days in Inventory", "Age (days)")
+                       "Aging Days", "AgingDays", "Age", "Days", "Days in Inventory", "Age (days)",
+                       "Age in Company", "Age In Company")
 
 
 def _to_int(v):

@@ -53,6 +53,20 @@ export function readUploadOutcome(r: any, unit = 'row(s)'): UploadOutcome {
       'value column (Cost / Ext Cost / Total Value). Nothing was written (existing data kept).'
     return { tone: 'guard', reason, saved: 0, text: 'Inventory Aging parsed 0 stores. ' + reason }
   }
+  if (r?.skipped === 'inventory_devices_only') {
+    // DEVICE-ONLY Inventory Aging: the export is per-DEVICE (no store column), so 0 per-store values were
+    // written while N per-device rows DID save. A real ingest with a caveat → 'warn', never a green
+    // "Saved 0 rows" (which reads as broken) and never a hard refusal (rows WERE written). The device
+    // count lives on `devices`; `saved` keeps its store-count meaning.
+    const devices = Number(r?.devices ?? 0) || 0
+    const reason = (r?.note as string) ||
+      'This Inventory Aging export has no store column, so no per-store inventory value was written. ' +
+      'The per-device rows (cost + aging) were saved.'
+    return {
+      tone: 'warn', reason, saved: devices,
+      text: `Saved ${devices.toLocaleString()} device row(s); 0 stores. ${reason}`,
+    }
+  }
   if (shrink.length) {
     const s = shrink[0]
     const reason = (s?.reason as string) ||
