@@ -2,7 +2,7 @@
 import base64
 import os
 import requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date as _date
 from fastapi import APIRouter, HTTPException, Header
 from app.core.database import get_supabase
 from app.core.config import settings
@@ -250,6 +250,39 @@ def reconcile_timeoff_duplicates(org_id: str = ORG_ID):
 # way, both handlers fall back to the legacy Python aggregation unchanged — an un-run migration
 # never breaks payroll (AGENT_CONTRACT §5). Equivalence proof (money-adjacent):
 # backend/harness_payroll_rpc_equivalence.py asserts BYTE-IDENTICAL output between the two paths.
+# ── Arbitrary pay-period ranges (2026-07-25, owner: "need time range to create payroll for the
+# employees universally") ───────────────────────────────────────────────────────────────────────
+# /payroll + /payroll-by-store originally only understood `month` ('YYYY-MM'). Real payroll runs on
+# biweekly/semimonthly/custom periods that don't line up with calendar months. storeops.payroll_month_rows
+# (mig 407) already takes arbitrary (p_lo, p_hi) dates with no month assumption baked into its SQL — it
+# was named for its ORIGINAL caller, not its actual bound semantics — so an explicit start/end range reuses
+# the SAME RPC/legacy paths with NO new migration. `month` stays supported byte-identically (still the
+# only param the harness's month-mode assertions ever pass); start/end are additive and take precedence
+# when both are given, so a caller can never end up with an ambiguous half-range.
+def _resolve_range(month, start, end):
+    """(lo, hi) exclusive-upper-bound date strings for payroll aggregation. Precedence: explicit
+    start/end (INCLUSIVE on both ends, per RULE ONE-style caller ergonomics — a "Jan 1 to Jan 31" range
+    should include the 31st) > legacy `month` ('YYYY-MM', exclusive-next-month-1st, unchanged) > open
+    range (None, None — the original no-filter behavior). Raises HTTPException(400) on a malformed date
+    or start > end so a bad picker/URL never silently returns the wrong period's money."""
+    if start or end:
+        if not (start and end):
+            raise HTTPException(400, "start and end must both be provided together")
+        try:
+            d_start = _date.fromisoformat(str(start)[:10])
+            d_end = _date.fromisoformat(str(end)[:10])
+        except ValueError:
+            raise HTTPException(400, "start/end must be ISO dates (YYYY-MM-DD)")
+        if d_start > d_end:
+            raise HTTPException(400, "start must be on or before end")
+        return d_start.isoformat(), (d_end + timedelta(days=1)).isoformat()
+    if month:
+        parts = str(month).split("-")
+        y, m = int(parts[0]), int(parts[1])
+        return f"{month}-01", (f"{y + 1}-01-01" if m == 12 else f"{y}-{m + 1:02d}-01")
+    return None, None
+
+
 def _payroll_month_groups(org_id, lo, hi):
     """(shift_groups, timelog_groups) from storeops.payroll_month_rows (mig 407), each sorted by
     first_ord (min shifts.id / epoch of min timelog.created_at) so the callers rebuild the SAME
@@ -274,15 +307,14 @@ def _payroll_month_groups(org_id, lo, hi):
 
 
 @router.get("/payroll")
-def get_payroll(month: str = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Returns scheduled vs actual hours per employee for payroll"""
-    lo = hi = None
-    if month:
-        # Exclusive upper bound = first day of the next month. (The old "{month}-32"
-        # hack 500s on a DATE column because 2026-06-32 isn't a valid date.)
-        parts = str(month).split("-")
-        y, m = int(parts[0]), int(parts[1])
-        lo, hi = f"{month}-01", (f"{y + 1}-01-01" if m == 12 else f"{y}-{m + 1:02d}-01")
+def get_payroll(month: str = None, start: str = None, end: str = None,
+                 authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Returns scheduled vs actual hours per employee for payroll.
+
+    Accepts EITHER the legacy `month` ('YYYY-MM', unchanged, still byte-identical) OR an explicit
+    `start`/`end` ISO date range (both inclusive) for an arbitrary pay period — biweekly, semimonthly,
+    custom — for ANY tenant (org_id stays the query-param scope, RULE ONE). start/end win if both given."""
+    lo, hi = _resolve_range(month, start, end)
     employees = sb().table("employees").select("id,name,employee_id,pay_rate,home_store").eq("org_id", org_id).eq("is_active", True).execute().data or []
 
     emp_map = {e["employee_id"]: e for e in employees}
@@ -428,19 +460,16 @@ def get_payroll(month: str = None, authorization: str = Header(default=""), org_
 
 
 @router.get("/payroll-by-store")
-def get_payroll_by_store(month: str = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Per-STORE payroll for a month, for the Store Expenses 'Employee Salaries' auto-fill.
+def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
+                          authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Per-STORE payroll for a month OR an arbitrary start/end range (same precedence as /payroll —
+    see _resolve_range), for the Store Expenses 'Employee Salaries' auto-fill.
 
-    For each shift in the month, hours = actual_hours where clocked else scheduled_hours (SAME basis
+    For each shift in range, hours = actual_hours where clocked else scheduled_hours (SAME basis
     as /payroll, so the numbers reconcile), pay = hours * the employee's pay_rate, attributed to the
     shift's own store_code (a floater's hours land at the store they worked). Returns one row per store:
     {store_code, hours, amount}."""
-    lo = hi = None
-    if month:
-        # Exclusive upper bound = first day of next month (avoids the invalid "{month}-32" DATE cast).
-        parts = str(month).split("-")
-        y, m = int(parts[0]), int(parts[1])
-        lo, hi = f"{month}-01", (f"{y + 1}-01-01" if m == 12 else f"{y}-{m + 1:02d}-01")
+    lo, hi = _resolve_range(month, start, end)
     # All employees (active OR not) — a terminated rep who worked this month still earns; rate=0 if unknown.
     employees = sb().table("employees").select("employee_id,pay_rate").eq("org_id", org_id).execute().data or []
     rate_map = {e.get("employee_id"): float(e.get("pay_rate") or 0) for e in employees}

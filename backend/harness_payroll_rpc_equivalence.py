@@ -20,10 +20,15 @@ Covered semantics (each present in the fixture):
   * scope_keyset filtering applied identically on both paths
   * empty month; month=None (fast path must NOT engage — legacy semantics preserved)
   * org isolation (second tenant)
+  * 2026-07-25 (arbitrary pay-period ranges): start/end == an exact calendar month is
+    byte-identical to the legacy month= path (both fast + legacy); malformed range rejected
+    (400); a non-month-aligned multi-week range is hand-computed + fast==legacy; org isolation
+    holds in range mode too
 """
 import json
 import sys
 from datetime import datetime
+from fastapi import HTTPException
 
 sys.path.insert(0, ".")
 
@@ -284,6 +289,20 @@ def run_both(month, org):
     return outs
 
 
+def run_both_kw(org, **kwargs):
+    """Same as run_both() but accepts arbitrary get_payroll/get_payroll_by_store kwargs (start=/end=
+    instead of month=) — used by the 2026-07-25 range-vs-month differential + multi-week checks."""
+    outs = {}
+    for mode in ("legacy", "fast"):
+        FAKE_CLIENT.rpc_enabled = (mode == "fast")
+        FAKE_CLIENT.rpc_calls = 0
+        p = router_mod.get_payroll(org_id=org, **kwargs)
+        b = router_mod.get_payroll_by_store(org_id=org, **kwargs)
+        outs[mode] = (json.dumps(p), json.dumps(b), FAKE_CLIENT.rpc_calls)
+    FAKE_CLIENT.rpc_enabled = False
+    return outs
+
+
 # ══ 1-2: full-fixture byte-identical equivalence ═════════════════════════════════════════════════
 outs = run_both("2026-07", ORG)
 check("1: /payroll byte-identical legacy vs RPC fast path",
@@ -385,6 +404,71 @@ check("17: ORG2 sees ONLY its own data (X1/OStore: 8+3=11h), no ORG1 leakage eit
       and [s["store_code"] for s in obys] == ["OStore"]
       and "X1" not in {r["employee_id"] for r in json.loads(outs["fast"][0])},
       (opay, obys))
+
+# ══ 18-19: RANGE-VS-MONTH DIFFERENTIAL (2026-07-25, owner: arbitrary time-range payroll) ═══════════
+# A start/end range set to EXACTLY a calendar month must be byte-identical to the legacy `month=`
+# path, on BOTH the fast RPC path and the legacy Python path — proves _resolve_range()'s date math
+# reproduces month math exactly, and that start/end reuse the identical aggregation as month= (no
+# parallel/divergent code path was introduced).
+month_outs = run_both("2026-07", ORG)
+range_outs = run_both_kw(ORG, start="2026-07-01", end="2026-07-31")
+# /payroll (index 0) is byte-identical outright. /payroll-by-store (index 1) echoes its OWN `month`
+# input verbatim (None for a start/end call vs "2026-07" for a month= call — a legitimate, expected
+# difference in what was actually passed in, not a data divergence), so compare the `stores` payload
+# specifically — the numbers a range-mode caller and a month-mode caller actually see must match.
+def _stores(js):
+    return json.loads(js)["stores"]
+check("18: start=07-01/end=07-31 byte-identical /payroll, same `stores` payload on /payroll-by-store, "
+      "vs month=2026-07 (FAST path)",
+      range_outs["fast"][0] == month_outs["fast"][0] and _stores(range_outs["fast"][1]) == _stores(month_outs["fast"][1]),
+      (range_outs["fast"], month_outs["fast"]))
+check("19: same range-vs-month equivalence on the LEGACY path too",
+      range_outs["legacy"][0] == month_outs["legacy"][0] and _stores(range_outs["legacy"][1]) == _stores(month_outs["legacy"][1]),
+      (range_outs["legacy"], month_outs["legacy"]))
+
+# ══ 20-21: malformed range rejected with 400 (never silently misinterpreted) ═════════════════════
+try:
+    router_mod.get_payroll(start="2026-07-10", end="2026-07-01", org_id=ORG)
+    check("20: start>end raises HTTPException(400)", False, "no exception raised")
+except HTTPException as e:
+    check("20: start>end raises HTTPException(400)", e.status_code == 400, e.detail)
+try:
+    router_mod.get_payroll(start="2026-07-10", org_id=ORG)   # end missing -> half a range, must reject
+    check("21: start without end raises HTTPException(400)", False, "no exception raised")
+except HTTPException as e:
+    check("21: start without end raises HTTPException(400)", e.status_code == 400, e.detail)
+
+# ══ 22-25: MULTI-WEEK RANGE SANITY (2026-07-10..2026-07-16 — NOT a month, NOT a week-aligned month
+# boundary) — hand-computed against the exact fixture above. Narrower than the full month: excludes
+# Ghost Temp's 07-08 NULL-employee shift and E12's 07-18 post-soft-delete punch, both outside the window.
+wk_outs = run_both_kw(ORG, start="2026-07-10", end="2026-07-16")
+check("22: multi-week range byte-identical FAST vs LEGACY (arbitrary non-month bound honored by BOTH paths)",
+      wk_outs["fast"][0] == wk_outs["legacy"][0] and wk_outs["fast"][1] == wk_outs["legacy"][1], wk_outs)
+wk_pay = {r["employee_id"]: r for r in router_mod.get_payroll(start="2026-07-10", end="2026-07-16", org_id=ORG)}
+wk_bys = {r["store_code"]: r for r in router_mod.get_payroll_by_store(start="2026-07-10", end="2026-07-16", org_id=ORG)["stores"]}
+check("23: multi-week /payroll narrows to exactly 7 employees (vs 9 for the full month) — Ghost Temp "
+      "(07-08) and E12 (07-18) correctly fall outside the window",
+      set(wk_pay.keys()) == {"E1", "E2", "E4", "E6", "E9", "E10", "E11"}, sorted([str(k) for k in wk_pay.keys()]))
+check("24: multi-week per-employee hand-computed hours/store (E1 sched0/act3, E6 sched8/act7.5 Store1, "
+      "E9 sched6/act6 Store2 rate$0 inactive, E4 kiosk-only act9 Store2)",
+      wk_pay["E1"]["scheduled_hours"] == 0 and wk_pay["E1"]["actual_hours"] == 3
+      and wk_pay["E6"]["scheduled_hours"] == 8 and wk_pay["E6"]["actual_hours"] == 7.5 and wk_pay["E6"]["store"] == "Store1"
+      and wk_pay["E9"]["actual_hours"] == 6 and wk_pay["E9"]["store"] == "Store2" and wk_pay["E9"]["pay_rate"] == 0.0
+      and wk_pay["E4"]["actual_hours"] == 9 and wk_pay["E4"]["store"] == "Store2",
+      wk_pay)
+check("25: multi-week /payroll-by-store hand-computed (Store1 14.5h/$257.50, Store2 19h/$332.00 — "
+      "E2's blank-store shift on 07-13 correctly contributes to NEITHER store)",
+      wk_bys["Store1"]["hours"] == 14.5 and wk_bys["Store1"]["amount"] == 257.5
+      and wk_bys["Store2"]["hours"] == 19 and wk_bys["Store2"]["amount"] == 332.0,
+      wk_bys)
+
+# ══ 26: org isolation holds in range mode too (the required multi-tenant proof for a new param) ═══
+wk_outs2 = run_both_kw(ORG2, start="2026-07-01", end="2026-07-10")
+wk_pay2 = json.loads(wk_outs2["fast"][0])
+check("26: range-mode org isolation — ORG2's range call sees only its own X1/OStore row (8+3=11h), "
+      "no ORG1 leak, byte-identical fast vs legacy",
+      [r["employee_id"] for r in wk_pay2] == ["X1"] and wk_pay2[0]["actual_hours"] == 11
+      and wk_outs2["fast"][0] == wk_outs2["legacy"][0], wk_pay2)
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

@@ -7,6 +7,7 @@ import PtoAccrualPanel from './PtoAccrualPanel'
 import PayrollChargebacksPanel from './PayrollChargebacksPanel'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
+import { currentPeriodFromSettingsResponse, monthRange, rangeLabel, stepPeriod, type PayPeriodSettings } from '../lib/pay-period'
 
 interface PayrollRow {
   employee_id: string; name: string; store: string; pay_rate: number
@@ -15,33 +16,56 @@ interface PayrollRow {
 }
 interface StoreRow { store_code: string; address?: string; market?: string }
 
-// Current month 'YYYY-MM', local-safe (not a stale hardcoded month — this used to default to
-// '2026-04' regardless of today, silently landing every tenant, Boost included, on the wrong month).
-function currentMonth() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-}
+const chip: React.CSSProperties = { padding: '5px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)', cursor: 'pointer' }
 
 export default function PayrollPage() {
-  const [month, setMonth] = useState(() => currentMonth())
+  // RULE FIVE (§3d) period filter: an arbitrary date RANGE (owner 2026-07-25: "need time range to
+  // create payroll for the employees universally" — biweekly/semimonthly/custom periods), defaulted
+  // to the tenant's OWN configured pay period (owner follow-up: "the date range by default should be
+  // as defined in the payroll time period" — migration 085 config, resolved server-side, never
+  // re-derived here; see ../lib/pay-period.ts). Falls back to the current calendar month pre-migration.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const [rangeReady, setRangeReady] = useState(false)
+  const [ppSettings, setPpSettings] = useState<PayPeriodSettings | null>(null)
   const [rows, setRows] = useState<PayrollRow[]>([])
   const [loading, setLoading] = useState(true)
   const [stores, setStores] = useState<StoreRow[]>([])
   const [empEmail, setEmpEmail] = useState<Record<string, string>>({})
-  // RULE FIVE (§3d): store(s)/rep(s) multi-select, options org-scoped off the loaded roster (pick-don't-
-  // type, §3b). Market has no column on this row; derived below via the store→market map.
-  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   // 2026-07-22, owner-directed, MONEY-ADJACENT: POSTED payroll chargebacks per employee this period
   // (from PayrollChargebacksPanel — additive display only, never mutates /payroll's own numbers).
   const [chargebacks, setChargebacks] = useState<Record<string, number>>({})
 
-  function load() {
+  useEffect(() => {
+    let cancelled = false
+    api('/api/v1/core/tenant-settings').then((r: any) => {
+      if (cancelled) return
+      const cur = currentPeriodFromSettingsResponse(r)
+      if (cur) {
+        setPpSettings(cur.settings)
+        setFilt(f => ({ ...f, period: cur.period.start, periodTo: cur.period.end }))
+      } else {
+        const mr = monthRange(0)
+        setFilt(f => ({ ...f, period: mr.start, periodTo: mr.end }))
+      }
+    }).catch(() => {
+      const mr = monthRange(0)
+      if (!cancelled) setFilt(f => ({ ...f, period: mr.start, periodTo: mr.end }))
+    }).finally(() => { if (!cancelled) setRangeReady(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  function load(start: string, end: string) {
     setLoading(true)
-    api(`/api/v1/storeops/payroll?month=${month}`)
+    api(`/api/v1/storeops/payroll?start=${start}&end=${end}`)
       .then(setRows).catch(console.error).finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [month])
+  useEffect(() => {
+    if (!rangeReady || !filt.period || !filt.periodTo) return
+    load(filt.period, filt.periodTo)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeReady, filt.period, filt.periodTo])
+
   useEffect(() => {
     api('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
     api('/api/v1/storeops/employees').then((r: any) => {
@@ -79,7 +103,17 @@ export default function PayrollPage() {
   const totalPayScheduled = visibleRows.reduce((s, r) => s + r.scheduled_pay, 0)
   const totalPayActual    = visibleRows.reduce((s, r) => s + r.actual_pay, 0)
 
-  const monthName = parseLocalDate(month + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  const periodName = rangeLabel(filt.period || '', filt.periodTo || '')
+
+  // Chargebacks + PTO accrual are MONEY (posted deductions / accrued balances) and are keyed by
+  // calendar MONTH on the backend (GET /payroll-chargebacks?month=, the PTO ledger) — owner guidance
+  // 2026-07-25: don't invent proration/double-counting risk by trying to make them span-aware for an
+  // arbitrary range. They stay keyed to the calendar month containing the range's START date, with an
+  // explicit note below so a biweekly period straddling two months is never silently mis-attributed.
+  const panelMonth = (filt.period || '').slice(0, 7) || monthRange(0).start.slice(0, 7)
+  const panelMonthName = panelMonth
+    ? parseLocalDate(panelMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+    : ''
 
   // RULE FOUR (§3c): full export set (Excel/PDF/Print/Send) via ReportShell — replaces the old
   // CSV-only button. No PII here (name/store/pay/hours), nothing to mask.
@@ -100,24 +134,53 @@ export default function PayrollPage() {
     { header: 'Net Pay', field: 'net_pay', money: true, get: r => Math.max(0, r.actual_pay - (chargebacks[r.employee_id] || 0)) },
   ]
 
+  function setRange(start: string, end: string) {
+    setFilt(f => ({ ...f, period: start, periodTo: end }))
+  }
+  // StandardFilterBar's generic "Clear filters" also blanks period/periodTo in range mode — fine for
+  // most reports, but this one always needs SOME range to fetch data. Re-pin the range to whatever's
+  // currently active instead of letting it go blank (store/market/rep filters still clear normally).
+  function onFilterChange(v: StandardFilterValue) {
+    setFilt(v.period || v.periodTo ? v : { ...v, period: filt.period, periodTo: filt.periodTo })
+  }
+  function step(dir: 1 | -1) {
+    if (!filt.period || !filt.periodTo) return
+    const next = stepPeriod({ start: filt.period, end: filt.periodTo }, ppSettings, dir)
+    setRange(next.start, next.end)
+  }
+  function useThisPayPeriod() {
+    api('/api/v1/core/tenant-settings').then((r: any) => {
+      const cur = currentPeriodFromSettingsResponse(r)
+      if (cur) { setPpSettings(cur.settings); setRange(cur.period.start, cur.period.end) }
+    }).catch(() => {})
+  }
+
+  // Export filename reflects the ACTIVE range (RULE FOUR: what you see is what exports).
+  const filename = `payroll-${filt.period || 'range'}_to_${filt.periodTo || 'range'}`
+
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Payroll Report</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            {monthName} · {visibleRows.length} employees{visibleRows.length !== rows.length ? ` (of ${rows.length})` : ''}
-          </p>
-        </div>
-        <input className="input" type="month" value={month} onChange={e => setMonth(e.target.value)} style={{ width: 160 }} />
+      <div style={{ marginBottom: 20 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Payroll Report</h1>
+        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          {periodName} · {visibleRows.length} employees{visibleRows.length !== rows.length ? ` (of ${rows.length})` : ''}
+        </p>
       </div>
 
       <StandardFilterBar
-        value={filt} onChange={setFilt}
-        show={{ period: false }}
-        periodMode="none"
+        value={filt} onChange={onFilterChange}
+        periodMode="range"
         storeOptions={storeOptions} marketOptions={marketOptions} repOptions={repOptions}
         storeLabel="Stores…" repLabel="Employees…"
+        right={
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button style={chip} onClick={() => step(-1)} title="Previous pay period">‹ Prev period</button>
+            <button style={chip} onClick={() => step(1)} title="Next pay period">Next period ›</button>
+            <button style={chip} onClick={useThisPayPeriod}>This pay period</button>
+            <button style={chip} onClick={() => { const r = monthRange(0); setRange(r.start, r.end) }}>This month</button>
+            <button style={chip} onClick={() => { const r = monthRange(-1); setRange(r.start, r.end) }}>Last month</button>
+          </div>
+        }
       />
 
       {/* Summary */}
@@ -138,21 +201,32 @@ export default function PayrollPage() {
         ))}
       </div>
 
-      <PtoAccrualPanel month={month} />
-      <PayrollChargebacksPanel month={month} onDeductions={setChargebacks} />
+      {/* 2026-07-25 owner guidance: chargebacks/PTO stay calendar-month-keyed, not range-prorated —
+          say so plainly whenever the selected range isn't that exact month, so a biweekly period
+          straddling two months is never mistaken for "this covers my whole selected range". */}
+      {panelMonth !== (filt.period || '').slice(0, 7) || panelMonth !== (filt.periodTo || '').slice(0, 7) ? (
+        <div className="card" style={{ marginBottom: 12, padding: '10px 14px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
+          ℹ️ Chargebacks and PTO accrual below are tracked by calendar month ({panelMonthName}) — they
+          don't yet prorate across a custom pay-period range, so they may not cover your full selected
+          period ({periodName}) if it spans more than one month.
+        </div>
+      ) : null}
+
+      <PtoAccrualPanel month={panelMonth} />
+      <PayrollChargebacksPanel month={panelMonth} onDeductions={setChargebacks} />
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : rows.length === 0 ? (
-        // Genuinely-missing data (no shifts AND no clock punches this month) vs. a silent blank —
+        // Genuinely-missing data (no shifts AND no clock punches this period) vs. a silent blank —
         // /payroll now also flows in clock-in/out activity that has no matching shift row, so an
         // empty state here means neither source has anything for this period yet.
         <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
-          No shifts or clock-ins recorded for {monthName}. Add shifts in the Schedule, or have employees
-          clock in from the /portal, to populate payroll for this month.
+          No shifts or clock-ins recorded for {periodName}. Add shifts in the Schedule, or have employees
+          clock in from the /portal, to populate payroll for this period.
         </div>
       ) : (
-        <ReportShell title="Payroll Report" subtitle={monthName} filename={`payroll-${month}`} columns={cols} rows={visibleRows} />
+        <ReportShell title="Payroll Report" subtitle={periodName} filename={filename} columns={cols} rows={visibleRows} />
       )}
     </div>
   )
