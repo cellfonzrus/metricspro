@@ -1151,6 +1151,11 @@ async def _upload_file_impl(
     
     print(f'DEBUG upload complete: file_type={file_type} saved={saved} mapped={len(mapped)} period={period!r}')
 
+    # A catalog re-upload replaces raw_catalog for this org, so every memoized catalog/classifier value is
+    # stale — drop them immediately rather than serving up-to-TTL-old categories (Gate-1 ②).
+    if file_type in ('catalog', 'master_cats'):
+        _invalidate_accessory_config(org_id)
+
     # Record this upload so the UI can show what's already been uploaded (and
     # when), surviving page reloads. daily_sales derives its period per-row, so
     # log the distinct period(s) actually touched. Best-effort: a logging
@@ -4064,6 +4069,46 @@ def _flag_rules(client, org_id):
 
 
 def _accessory_config(client, org_id):
+    """Configurable accessory classification for one org — a thin MEMOIZING wrapper over
+    _accessory_config_uncached (Gate-1 follow-up ②, 2026-07-25).
+
+    WHY: the uncached resolution issues ~11 queries (NINE separate single-row reads of accessory_config,
+    one flag_rules, one gp_category_map) and, when catalog classification is enabled, ALSO builds the
+    catalog classifier (both catalog tables). Several endpoints call it more than once per request
+    (GET /catalog calls it alongside list_catalog + catalog_categories; the Sales Report / Targets /
+    Exec MTD paths call it once each per sub-computation) and every query pays a fresh-client round trip.
+
+    SAFETY: by DEFAULT the memo is REQUEST-SCOPED — keyed on (this client object, org_id) — so it only
+    de-duplicates the repeats inside ONE handler (which threads a single `sb()` client through) and cannot
+    survive into another request, let alone another tenant. The key ALWAYS includes org_id; a blank org_id
+    is never cached. A cross-request TTL layer exists but is OPT-IN (COMMCALC_CFG_CACHE_TTL, default 0/off).
+    Every write that could change the answer (PUT /accessory-config, PUT /catalog/override, a catalog
+    upload, the GP category map, flag rules) calls accessory_catalog.invalidate(org_id) anyway. The returned
+    dict is shallow-copied so a caller can't poison the entry; its sets/lists are read-only by contract.
+    A cache-module import failure degrades to the uncached path."""
+    try:
+        from app.modules.commcalc import accessory_catalog as _accat
+    except Exception:
+        return _accessory_config_uncached(client, org_id)
+    _c = _accat.cache_get("acfg", org_id, client)
+    if _c is not None:
+        return dict(_c)
+    _v = _accessory_config_uncached(client, org_id)
+    _accat.cache_put("acfg", org_id, _v, client)
+    return dict(_v)
+
+
+def _invalidate_accessory_config(org_id):
+    """Drop this org's cached accessory/catalog config after a write. Best-effort — never raises."""
+    try:
+        from app.modules.commcalc import accessory_catalog as _accat
+        return _accat.invalidate(org_id)
+    except Exception as _ce:
+        print(f"WARN accessory-config cache invalidate skipped: {_ce}")
+        return 0
+
+
+def _accessory_config_uncached(client, org_id):
     """Configurable accessory classification, resolved PER-ORG (mig 208 commcalc.accessory_config, keyed on
     org_id — REPLACES the flag_rules singleton, which could physically hold only ONE org's config because
     of its id=1 PK + CHECK(id=1), so _accessory_config(<non-house org>) fell through to the house default
@@ -4331,6 +4376,7 @@ def put_flag_rules(body: dict, org_id: str = ORG_ID):
         row["accessory_min_threshold"] = safe_float(body.get("accessory_min_threshold"))
     try:
         sb().schema("commcalc").table("flag_rules").upsert(row, on_conflict="id").execute()
+        _invalidate_accessory_config(org_id)   # legacy fallback source for _accessory_config (②)
     except Exception as e:
         raise HTTPException(500, f"save failed — run migrations 041 + 051 first: {e}")
     return _flag_rules(sb(), org_id)
@@ -8190,7 +8236,17 @@ def _compute_gp(client, org_id, period, market=""):
     use it. Returns the full result; pass `market` to filter store_rows. Same narrowed selects as before."""
     pv = _pvariants(period)
     sc = client.schema('commcalc')
-    sales      = sc.table('raw_sales').select('store,department,gp,product_desc,ext_price,salesperson,product_id,sku').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
+    # `voided` + `trans_type` are selected ONLY so the GP bucket-composition transparency map can apply the
+    # canonical skip rules (Gate-1 follow-up ⑦). The money columns (acc_gp / phone_sales / plan_gp / other_gp
+    # / net_profit) do NOT read them and are byte-identical. Defensive fallback to the pre-⑦ select so a
+    # tenant/table without those columns can never break the GP page (composition then counts every line,
+    # exactly as it did before).
+    _sales_cols = 'store,department,gp,product_desc,ext_price,salesperson,product_id,sku,voided,trans_type'
+    try:
+        sales  = sc.table('raw_sales').select(_sales_cols).eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
+    except Exception as _sce:
+        print(f'WARN gp sales select fell back (no voided/trans_type columns?): {_sce}')
+        sales  = sc.table('raw_sales').select('store,department,gp,product_desc,ext_price,salesperson,product_id,sku').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
     pay_detail = sc.table('raw_payment_detail').select('business_address,amount,payment_type').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
     mi_rows    = sc.table('raw_mi').select('salesforce_id,actual_mi_payout,actual_atu_payout').eq('org_id', org_id).in_('period', pv).execute().data or []
     rep_comms  = sc.table('rep_commissions').select('store,total_payout,epay_salesperson,storeops_name').eq('org_id', org_id).in_('period', pv).execute().data or []
@@ -8411,11 +8467,15 @@ async def set_gp_category_map(body: dict, org_id: str = ORG_ID):
         if not cat:
             sb().schema('commcalc').table('gp_category_map').delete() \
                 .eq('org_id', org_id).eq('department', dept).execute()
+            # The map feeds _accessory_config's accessory DEPARTMENTS — drop the memoized config AFTER the
+            # write so a concurrent read can never re-cache the pre-write answer (Gate-1 ②).
+            _invalidate_accessory_config(org_id)
             return {"ok": True, "removed": dept}
         sb().schema('commcalc').table('gp_category_map').upsert(
             {"org_id": org_id, "department": dept, "category": cat,
              "updated_at": _datetime.now(_timezone.utc).isoformat()},
             on_conflict="org_id,department").execute()
+        _invalidate_accessory_config(org_id)
     except Exception as e:
         raise HTTPException(400, f"Could not save — run migration 069_gp_category_map.sql first. [{e}]")
     return {"ok": True, "department": dept, "category": cat}
@@ -9040,6 +9100,7 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
             attempt.pop(k, None)
         try:
             client.schema("commcalc").table("accessory_config").upsert(attempt, on_conflict="org_id").execute()
+            _invalidate_accessory_config(org_id)   # cached config is stale the instant this saves (②)
             break
         except Exception as e2:
             if _drop == _drop_final:
@@ -9202,6 +9263,9 @@ def put_catalog_override(body: dict, org_id: str = ORG_ID, authorization: str = 
                  "updated_at": _cb_now()}, on_conflict="org_id,match_type,match_value").execute()
     except Exception as e:
         raise HTTPException(500, f"save failed — run migration 230_commission_catalog_total_variant.sql first: {e}")
+    # The override layer feeds the cached catalog sets + the catalog page's category list — drop them now
+    # so the edit is visible on the very next read instead of after the TTL (②).
+    _invalidate_accessory_config(org_id)
     return {"ok": True, "org_id": org_id, "match_type": mt, "match_value": mv, "category": cat or None}
 
 
@@ -10406,8 +10470,11 @@ _ACTUALS_COLS = ("trans_id,trans_date,store,salesperson,user_login,contract_type
 # phones / bill-payment / activation-fee / protect — b2bsoft per-line columns the Sales Report doesn't
 # show; Targets box / bill-payment) are computed in the SAME pass so there is never a divergent second
 # scan. Pure — no I/O, never raises. DISPLAY ONLY: the commission CALC path is deliberately NOT wired here.
-# The Sales Report's set, now SHARED with the pay path (owner 2026-07-25) — see gp_report.VOID_TOKENS.
-# Aliased (not re-declared) so display and pay can never drift apart again.
+# The Sales Report's set, now SHARED with the pay path (owner 2026-07-25) — gp_report.VOID_TOKENS
+# HOLDS the single source of truth; _VOID_TOKENS is aliased (not re-declared) from the top-of-module
+# import so the display aggregation below, the GP report's transparency map, and the pay path can
+# never drift apart (Gate-1 follow-up ⑦, 2026-07-25). Value unchanged:
+#   ('true', 'yes', '1', 'voided', 'void')
 _VOID_TOKENS = _GP_VOID_TOKENS
 # Default bill-payment product tokens (the historical hard-coded Boost/Xfinity walk-in-recharge tokens),
 # matched by lower-cased CONTAINMENT on product_desc. Used ONLY when the org has no billpay_products config

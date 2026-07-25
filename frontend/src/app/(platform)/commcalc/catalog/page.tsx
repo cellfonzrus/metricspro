@@ -11,6 +11,27 @@ import { api } from '@/lib/client'
 
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
+// ③ (Gate-1 follow-up 2026-07-25) — DE-DUPE case-variant category options.
+// Effective/override categories are stored LOWERCASED while the catalog file's Category keeps its own
+// casing, so 'Accessories' (file) and 'accessories' (override) used to render as two separate options in
+// the same <select> — they look like different categories but classify identically. One option per
+// case-folded category; the display spelling prefers `prefer` (the row's FILE spelling — the one the
+// tenant recognizes), then any mixed-case spelling over an all-lowercase one.
+function dedupeCats(values: (string | null | undefined)[], prefer?: string): string[] {
+  const out = new Map<string, string>()
+  const preferred = (prefer || '').trim()
+  for (const raw of values) {
+    const v = (raw || '').trim()
+    if (!v) continue
+    const k = v.toLowerCase()
+    const cur = out.get(k)
+    if (cur === undefined) { out.set(k, v); continue }
+    if (preferred && v === preferred) out.set(k, v)
+    else if (cur === cur.toLowerCase() && v !== v.toLowerCase() && cur !== preferred) out.set(k, v)
+  }
+  return Array.from(out.values()).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+}
+
 type Row = {
   product_id: number | null; product_desc: string; sku: string; upc: string; department: string
   file_category: string; effective_category: string; overridden: boolean; is_accessory: boolean
@@ -28,29 +49,38 @@ export default function CatalogCategoriesPage() {
   const [hint, setHint] = useState('')
   // filters (RULE FIVE — the ones that apply to a catalog: category + free-text + only-overridden)
   const [fCat, setFCat] = useState('')
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState('')        // what the user is typing
+  const [searchQ, setSearchQ] = useState('')      // ③ debounced value — the only one that triggers a fetch
   const [onlyOv, setOnlyOv] = useState(false)
   // per-row "create new category" text
   const [newCat, setNewCat] = useState<Record<string, string>>({})
+
+  // ③ (Gate-1 follow-up 2026-07-25) — DEBOUNCE the search box. `search` was a direct dependency of the
+  // loader, so every keystroke fired a full /commcalc/catalog?limit=1000 request (a multi-thousand-row
+  // catalog scan, server-side filtered). 350ms of quiet before we query.
+  useEffect(() => {
+    const t = setTimeout(() => setSearchQ(search.trim()), 350)
+    return () => clearTimeout(t)
+  }, [search])
 
   const load = useCallback(async () => {
     setLoading(true); setMsg('')
     try {
       const qs = new URLSearchParams()
       if (fCat) qs.set('category', fCat)
-      if (search) qs.set('search', search)
+      if (searchQ) qs.set('search', searchQ)
       if (onlyOv) qs.set('only_overridden', 'true')
       qs.set('limit', '1000')
       const d = await api(`/api/v1/commcalc/catalog?${qs.toString()}`)
       if (d?.ok === false) { setHint(d?.hint || 'Catalog unavailable.'); setRows([]) }
       else {
-        setRows(d?.rows || []); setCats(d?.categories || [])
+        setRows(d?.rows || []); setCats(dedupeCats(d?.categories || []))
         setAccCats(d?.accessory_categories || []); setEnabled(!!d?.catalog_classify_enabled)
         setCanEdit(d?.can_edit !== false); setHint('')
       }
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     setLoading(false)
-  }, [fCat, search, onlyOv])
+  }, [fCat, searchQ, onlyOv])
   useEffect(() => { load() }, [load])
 
   // rowKey — UPC preferred, else SKU, else product_id, else product_desc (matches the override precedence)
@@ -106,7 +136,7 @@ export default function CatalogCategoriesPage() {
         <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}>
           <input type="checkbox" checked={onlyOv} onChange={e => setOnlyOv(e.target.checked)} /> Only recategorized
         </label>
-        <span style={{ fontSize: 12, color: msg.startsWith('❌') ? '#dc2626' : 'var(--text3)' }}>{msg}</span>
+        <span style={{ fontSize: 12, color: msg.startsWith('❌') ? '#dc2626' : 'var(--text3)' }}>{msg || (search.trim() !== searchQ ? 'typing…' : '')}</span>
       </div>
 
       {loading ? <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>Loading…</div> : (
@@ -125,10 +155,14 @@ export default function CatalogCategoriesPage() {
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={7} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>No catalog rows{search || fCat || onlyOv ? ' match the filter' : ' — upload a product catalog first'}.</td></tr>
+                <tr><td colSpan={7} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>No catalog rows{searchQ || fCat || onlyOv ? ' match the filter' : ' — upload a product catalog first'}.</td></tr>
               ) : rows.map(r => {
                 const k = idKey(r)
-                const opts = Array.from(new Set([...cats, r.file_category, r.effective_category].filter(Boolean)))
+                // ③ case-insensitive de-dupe: `cats` + the row's own file/effective category used to be
+                // Set-de-duped by EXACT string, so a row whose file category is 'Accessories' and whose
+                // (lowercased) effective category is 'accessories' offered both.
+                const opts = dedupeCats([...cats, r.file_category, r.effective_category], r.file_category)
+                const curOpt = opts.find(c => c.toLowerCase() === (r.effective_category || '').trim().toLowerCase()) || ''
                 return (
                   <tr key={k} style={{ fontSize: 12, borderTop: '1px solid var(--border)' }}>
                     <td style={{ padding: '5px 8px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.product_desc}>{r.product_desc || '—'}</td>
@@ -137,9 +171,9 @@ export default function CatalogCategoriesPage() {
                     <td style={{ padding: '5px 8px', color: 'var(--text3)' }}>{r.file_category || '—'}</td>
                     <td style={{ padding: '5px 8px' }}>
                       <select style={{ ...sel, minWidth: 150 }} disabled={!canEdit}
-                        value={opts.includes(r.effective_category) ? r.effective_category : ''}
+                        value={curOpt}
                         onChange={e => { if (e.target.value === '__new__') return; setCategory(r, e.target.value) }}>
-                        {opts.map(c => <option key={c} value={c}>{c}{c === r.file_category ? ' (file)' : ''}</option>)}
+                        {opts.map(c => <option key={c} value={c}>{c}{c.toLowerCase() === (r.file_category || '').trim().toLowerCase() ? ' (file)' : ''}</option>)}
                         <option value="__new__">➕ Create new…</option>
                       </select>
                       {r.overridden && <span style={{ marginLeft: 6, fontSize: 10, color: '#2563eb', fontWeight: 700 }} title={`file: ${r.file_category || '—'}`}>overridden</span>}

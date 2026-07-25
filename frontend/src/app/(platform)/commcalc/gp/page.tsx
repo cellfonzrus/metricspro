@@ -213,6 +213,20 @@ export default function GPReportPage() {
           <div style={{ fontSize: 11, color: '#92400e', marginTop: 4 }}>
             These departments&apos; sales roll into the single &ldquo;Other&rdquo; column. Assign each to Accessory / Device / Plan (or exclude) on the GP Category Map so the report details them properly.
           </div>
+          {/* ⑦ (Gate-1 follow-up 2026-07-25): this breakdown counts only COUNTABLE sale lines — the same
+              voided / Return / unattributed skip rules the shared sales aggregation uses — so its $ ties out
+              to the Sales Report instead of quietly including voided + returned lines. What was skipped is
+              stated here rather than hidden; the GP money columns above still count every line. */}
+          {(data.bucket_composition_excluded?.total?.lines > 0) && (
+            <div style={{ fontSize: 11, color: '#92400e', marginTop: 4, opacity: 0.9 }}>
+              Counts exclude {data.bucket_composition_excluded.total.lines} non-countable line(s) —{' '}
+              {data.bucket_composition_excluded.voided?.lines || 0} voided ·{' '}
+              {data.bucket_composition_excluded.return?.lines || 0} return ·{' '}
+              {data.bucket_composition_excluded.unattributed?.lines || 0} unattributed (no rep/admin) —
+              worth {fmt(data.bucket_composition_excluded.total.ext_price || 0)} ext price /{' '}
+              {fmt(data.bucket_composition_excluded.total.gp || 0)} GP. The GP columns above still include them.
+            </div>
+          )}
           {showComp && (
             <div className="table-wrapper" style={{ marginTop: 10 }}>
               <table style={{ borderCollapse: 'collapse', width: '100%' }}>
@@ -222,6 +236,7 @@ export default function GPReportPage() {
                     <th style={{ padding: '3px 8px', textAlign: 'right' }}>Lines</th>
                     <th style={{ padding: '3px 8px', textAlign: 'right' }}>Ext Price</th>
                     <th style={{ padding: '3px 8px', textAlign: 'right' }}>GP</th>
+                    <th style={{ padding: '3px 8px', textAlign: 'right' }} title="Voided / Return / unattributed lines — excluded from the counts on the left, shown so nothing is hidden">Excluded</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -231,6 +246,9 @@ export default function GPReportPage() {
                       <td style={{ padding: '3px 8px', textAlign: 'right' }}>{d.lines}</td>
                       <td style={{ padding: '3px 8px', textAlign: 'right' }}>{fmt(d.ext_price || 0)}</td>
                       <td style={{ padding: '3px 8px', textAlign: 'right' }}>{fmt(d.gp || 0)}</td>
+                      <td style={{ padding: '3px 8px', textAlign: 'right', color: 'var(--text3)' }}>
+                        {d.excluded_lines ? `${d.excluded_lines} · ${fmt(d.excluded_ext_price || 0)}` : '—'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

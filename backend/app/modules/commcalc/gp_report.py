@@ -54,6 +54,29 @@ def safe_float(v) -> float:
     try: return float(v or 0)
     except: return 0.0
 
+# ── THE canonical "is this a countable sale line?" rules ────────────────────────────────────────────
+# The void-token SINGLE source of truth is the VOID_TOKENS definition above (with is_voided): router.py
+# imports it from here (it used to hold its own literal copy next to _sales_cell_agg) so the display
+# aggregation and the GP transparency map can never drift apart. Values are byte-identical to the
+# shipped router literal. (Merge dedupe 2026-07-25: this section's re-declaration was removed.)
+
+
+def countable_sale_skip_reason(row) -> str:
+    """'' when the line is a countable sale; otherwise WHY it isn't — the EXACT three skip rules
+    router._sales_cell_agg applies (voided / trans_type == 'Return' / no attributable rep):
+      'voided'       — voided flag in VOID_TOKENS
+      'return'       — trans_type == 'Return'
+      'unattributed' — blank salesperson, or the 'admin' pseudo-rep
+    Rows that simply do not CARRY the column (a narrowed select) are countable, exactly as before."""
+    if str(row.get('voided') or '').strip().lower() in VOID_TOKENS:
+        return 'voided'
+    if str(row.get('trans_type') or '').strip() == 'Return':
+        return 'return'
+    rep = str(row.get('salesperson') or '').strip()
+    if not rep or rep.lower() == 'admin':
+        return 'unattributed'
+    return ''
+
 def street_num(addr: str) -> str:
     """Extract street number from address for matching."""
     return str(addr or '').strip().split(' ')[0]
@@ -334,22 +357,67 @@ def calc_gp_report(
     # 'Other' (and every bucket): which departments landed there, how many lines, and their ext_price / gp $.
     # This is the map for the owner to send unmapped departments to gp_category_map. Pure display; no number
     # moves. `unmapped_departments` = the 'other'-bucket departments ranked by $ (the "map them →" banner).
+    # ⑦ (Gate-1 follow-up 2026-07-25): the transparency map counts ONLY countable sale lines — the SAME
+    # three skip rules the shared display aggregation applies (router._sales_cell_agg: voided / Return /
+    # unattributed), so `lines`/`ext_price`/`gp` here tie out to the agg path instead of silently including
+    # voided + returned + admin lines. Nothing is HIDDEN: what a rule skipped is still tallied per department
+    # in `excluded_*` (and org-wide, by reason, in `bucket_composition_excluded`), and a department whose
+    # lines were ALL skipped still gets a row (lines=0) so it can never disappear from the "map them" banner.
+    # DISPLAY/TRANSPARENCY ONLY — the store_rows / rep_rows / totals money columns above are untouched and
+    # still count every line, so their $ can legitimately exceed the composition $ by `excluded_*`.
     comp: dict[str, dict[str, dict]] = {}
+    excluded = {k: {'lines': 0, 'ext_price': 0.0, 'gp': 0.0}
+                for k in ('voided', 'return', 'unattributed')}
     for r in sales:
         cat = classify(r.get('department'))
         dept = str(r.get('department') or '').strip() or '(blank)'
-        d = comp.setdefault(cat, {}).setdefault(dept, {'department': dept, 'lines': 0, 'ext_price': 0.0, 'gp': 0.0})
+        d = comp.setdefault(cat, {}).setdefault(dept, {'department': dept, 'lines': 0, 'ext_price': 0.0,
+                                                       'gp': 0.0, 'excluded_lines': 0,
+                                                       'excluded_ext_price': 0.0, 'excluded_gp': 0.0})
+        ext = safe_float(r.get('ext_price'))
+        gp = safe_float(r.get('gp'))
+        skip = countable_sale_skip_reason(r)
+        if skip:
+            d['excluded_lines'] += 1
+            d['excluded_ext_price'] += ext
+            d['excluded_gp'] += gp
+            e = excluded[skip]
+            e['lines'] += 1
+            e['ext_price'] += ext
+            e['gp'] += gp
+            continue
         d['lines'] += 1
-        d['ext_price'] += safe_float(r.get('ext_price'))
-        d['gp'] += safe_float(r.get('gp'))
+        d['ext_price'] += ext
+        d['gp'] += gp
+
+    # ⑥ (Gate-1 follow-up 2026-07-25): ONE deterministic sort key for every row. The shipped key was
+    # `-abs(gp) if gp else -ext_price`, which compared two DIFFERENT magnitudes in the same ordering — a
+    # $10,000 zero-GP department outranked a $5-GP one purely because it fell into the other mode. Now:
+    # |GP| (the P&L magnitude the bucket is about) → |Ext Price| (what actually separates rows whose GP is
+    # 0 because the POS carries cost == price) → department name, so ordering is total, stable and
+    # reproducible across requests regardless of dict insertion order.
+    def _comp_sort_key(x):
+        return (-abs(x['gp']), -abs(x['ext_price']), x['department'].lower())
+
     bucket_composition = {}
     for cat, depts in comp.items():
-        rows_c = sorted(depts.values(), key=lambda x: -abs(x['gp']) if x['gp'] else -x['ext_price'])
+        rows_c = sorted(depts.values(), key=_comp_sort_key)
         for x in rows_c:
             x['ext_price'] = round(x['ext_price'], 2)
             x['gp'] = round(x['gp'], 2)
+            x['excluded_ext_price'] = round(x['excluded_ext_price'], 2)
+            x['excluded_gp'] = round(x['excluded_gp'], 2)
         bucket_composition[cat] = rows_c
     unmapped_departments = bucket_composition.get('other', [])
+    for e in excluded.values():
+        e['ext_price'] = round(e['ext_price'], 2)
+        e['gp'] = round(e['gp'], 2)
+    excluded['total'] = {'lines': sum(e['lines'] for e in excluded.values()),
+                         'ext_price': round(sum(e['ext_price'] for e in excluded.values()), 2),
+                         'gp': round(sum(e['gp'] for e in excluded.values()), 2)}
 
     return {'store_rows': store_rows, 'rep_rows': rep_rows, 'totals': totals, 'period': period,
-            'bucket_composition': bucket_composition, 'unmapped_departments': unmapped_departments}
+            'bucket_composition': bucket_composition, 'unmapped_departments': unmapped_departments,
+            'bucket_composition_excluded': excluded,
+            'bucket_composition_basis': 'countable sale lines (voided / Return / unattributed excluded — '
+                                        'the shared _sales_cell_agg skip rules)'}
