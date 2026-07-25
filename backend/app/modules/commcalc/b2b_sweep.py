@@ -74,7 +74,18 @@ def fetch_inventory_aging(session, **kwargs):
 DEFAULT_STORE_FIELDS = ("store", "Store", "Store Name", "StoreName", "Store #", "Store No",
                         "Store Number", "Store Code", "location", "Location", "Location Name",
                         "store_name", "Site", "Site Name", "Branch", "Branch Name", "Dealer",
-                        "Outlet", "Shop", "Store Address", "Billing Address 1")
+                        "Outlet", "Shop", "Store Address", "Billing Address 1",
+                        # SPECULATIVE (2026-07-25): the owner re-scheduled luxelink's b2bsoft
+                        # "Inventory Aging" export (every 6h) to CARRY a store-location column, but the
+                        # exact header b2bsoft emits is unconfirmed. "Store Location" normalizes to
+                        # 'storelocation', which matches NOTHING above (_norm_key strips spaces, so
+                        # 'Store Name'->'storename' but 'Store Location'->'storelocation'), so the
+                        # store-level roll-up would still parse 0 stores and only the device-only path
+                        # would save. Appended LAST so an exact 'Store'/'Location'/'Store Name' column
+                        # keeps winning the exact-match pass in _first_field. Purely additive coverage:
+                        # no existing export has any of these headers.
+                        "Store Location", "StoreLocation", "Store Loc", "Location Desc",
+                        "Location Description")
 DEFAULT_VALUE_FIELDS = ("inventory_value", "InventoryValue", "Inventory Value", "value", "Value",
                         "cost", "Cost", "Unit Cost", "UnitCost", "ext_cost", "ExtCost", "Ext Cost",
                         "Extended Cost", "total_cost", "TotalCost", "Total Cost", "Total Value",
