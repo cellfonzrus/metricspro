@@ -1416,7 +1416,13 @@ def _closing_gate_block(org_id, employee_id, store_code, work_date=None):
       (b) else (the static closer is unconfigured OR simply didn't work here today) → the gate falls
           to the LAST worker still clocked in at this store (no other employee has an open punch
           here). Anyone else still clocked in passes — the gate will catch the true last-to-leave
-          when THEY try to clock out."""
+          when THEY try to clock out.
+
+    2026-07-25 UNIVERSAL FIX (multi-session days): (a)/(b) above only ever fire from this employee's
+    TRUE final clock-out of the day, never a mid-day break. Scheduled shift today -> gate only once its
+    end has passed (precise). No schedule at all (pure-kiosk, e.g. luxelink) -> gate only from this
+    employee's SECOND clock-out of the day at this store onward (their first gets the benefit of the
+    doubt as a likely break) — see the sched_end / had_prior_close_here checks below."""
     try:
         store = (store_code or "").strip()
         if not store:
@@ -1433,6 +1439,39 @@ def _closing_gate_block(org_id, employee_id, store_code, work_date=None):
                 .eq("org_id", org_id).eq("close_date", today).execute().data) or []
         if any(_norm_store(r.get("store_code")) == _norm_store(store) for r in done):
             return None
+
+        # 2026-07-25 UNIVERSAL FIX (luxelink: "clocks in the morning, leaves for lunch, comes back and
+        # clock-in errors" — root cause traced to THIS gate, not clock-in itself): multiple CLOSED
+        # punch sessions per business day are legal (owner rule) — a lunch-break clock-out is NOT the
+        # closer's final departure, so it must never be gated; only their TRUE end-of-day clock-out
+        # should be held for the closing. Two signals, in priority order:
+        #  1. A scheduled shift today (reusing the SAME helper the force-clockout sweep uses, honoring
+        #     an approved shift_extension too — no duplicated logic): still before its end -> DEFINITELY
+        #     mid-shift, never gate, however many sessions/breaks they take. At/after its end -> fall
+        #     through to the existing closer logic below exactly as before (precise, no regression).
+        #  2. No schedule at all for this employee (pure-kiosk tenant/employee, the luxelink case) ->
+        #     no precise "shift over" signal exists, so use the best available proxy: THIS EMPLOYEE'S
+        #     OWN clock-out history at this store today. Their FIRST clock-out of the day gets the
+        #     benefit of the doubt (most likely a break) and is never gated; from their SECOND clock-out
+        #     of the day onward, gate exactly as before — still holds a genuinely-departing closer
+        #     accountable, just no longer deadlocks them on an ordinary lunch break.
+        sched_end = _scheduled_end_for_punch(
+            org_id, {"employee_id": employee_id, "work_date": work_date or today, "store_code": store})
+        if sched_end is not None:
+            if datetime.now(timezone.utc) < sched_end:
+                return None   # scheduled and still mid-shift
+        else:
+            try:
+                todays_own = (sb().table("timelog").select("store_code,clock_out")
+                              .eq("org_id", org_id).eq("employee_id", employee_id)
+                              .eq("work_date", work_date or today).execute().data) or []
+            except Exception:
+                todays_own = []
+            had_prior_close_here = any(p.get("clock_out") is not None
+                                        and _norm_store(p.get("store_code")) == _norm_store(store)
+                                        for p in todays_own)
+            if not had_prior_close_here:
+                return None   # first clock-out of the day here, no schedule signal -> benefit of the doubt
 
         # Today's punches at THIS store (any employee, open or closed) — decides both whether the
         # static closer worked today and, if not, who's the last one still clocked in.

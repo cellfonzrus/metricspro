@@ -168,12 +168,28 @@ fake.seed("storeops", "store_closer", [{"org_id": ORG, "store_code": "S1", "empl
 fake.seed("storeops", "timelog", [{"org_id": ORG, "employee_id": "E1", "work_date": TODAY, "store_code": "S1", "clock_out": None}])
 check("1a submitted-closing never gates", R._closing_gate_block(ORG, "E1", "S1", TODAY) is None)
 
-# 1b. Static closer worked today (case a) -> the closer IS gated.
+# 1b. Static closer worked today (case a) -> the closer IS gated ON THEIR SECOND clock-out of the day
+#     (2026-07-25: a prior CLOSED session earlier today, e.g. a lunch break, is seeded so this
+#     represents their real end-of-day departure, not a mid-day break — see 1b2 below for the break).
+reset()
+fake.seed("storeops", "store_closer", [{"org_id": ORG, "store_code": "S1", "employee_id": "E1"}])
+fake.seed("storeops", "timelog", [
+    {"org_id": ORG, "employee_id": "E1", "work_date": TODAY, "store_code": "S1", "clock_out": "2026-01-01T13:00:00+00:00"},
+    {"org_id": ORG, "employee_id": "E1", "work_date": TODAY, "store_code": "S1", "clock_out": None},
+])
+b = R._closing_gate_block(ORG, "E1", "S1", TODAY)
+check("1b static closer worked today -> gated on their 2nd clock-out", b is not None, b)
+
+# 1b2. 2026-07-25 UNIVERSAL FIX: the SAME static closer's FIRST clock-out of the day (no prior closed
+#      session at this store yet, no schedule) is NEVER gated — this is the luxelink lunch-break bug
+#      ("clocks in the morning, leaves for lunch... gives an error about the second clock-in") — the
+#      real root cause was THIS gate blocking the lunch clock-out, leaving the punch open so the
+#      afternoon clock-in correctly-but-confusingly 409'd "already clocked in".
 reset()
 fake.seed("storeops", "store_closer", [{"org_id": ORG, "store_code": "S1", "employee_id": "E1"}])
 fake.seed("storeops", "timelog", [{"org_id": ORG, "employee_id": "E1", "work_date": TODAY, "store_code": "S1", "clock_out": None}])
-b = R._closing_gate_block(ORG, "E1", "S1", TODAY)
-check("1b static closer worked today -> gated", b is not None, b)
+check("1b2 static closer's FIRST clock-out of the day (no schedule) is NEVER gated (lunch-break fix)",
+      R._closing_gate_block(ORG, "E1", "S1", TODAY) is None)
 
 # 1c. Static closer worked today -> a DIFFERENT employee (not the closer) passes, even though they're
 #     also still clocked in (the closer, not them, is on the hook).
@@ -197,23 +213,69 @@ fake.seed("storeops", "timelog", [
 check("1d closer absent + someone else still clocked in -> caller passes",
       R._closing_gate_block(ORG, "E2", "S1", TODAY) is None)
 
-# 1e. Same setup, but now E2 is the LAST one still clocked in (E3 already clocked out) -> E2 IS gated.
+# 1e. Same setup, but now E2 is the LAST one still clocked in (E3 already clocked out) -> E2 IS gated
+#     ON THEIR SECOND clock-out of the day (2026-07-25: prior closed session seeded, same reasoning as 1b).
+reset()
+fake.seed("storeops", "store_closer", [{"org_id": ORG, "store_code": "S1", "employee_id": "E1"}])
+fake.seed("storeops", "timelog", [
+    {"org_id": ORG, "employee_id": "E2", "work_date": TODAY, "store_code": "S1", "clock_out": "2026-01-01T13:00:00+00:00"},
+    {"org_id": ORG, "employee_id": "E2", "work_date": TODAY, "store_code": "S1", "clock_out": None},
+    {"org_id": ORG, "employee_id": "E3", "work_date": TODAY, "store_code": "S1", "clock_out": "2026-01-01T19:00:00+00:00"},
+])
+b = R._closing_gate_block(ORG, "E2", "S1", TODAY)
+check("1e last-one-clocked-in IS gated on their 2nd clock-out when the static closer never worked", b is not None, b)
+
+# 1e2. 2026-07-25 UNIVERSAL FIX: same setup as 1e but E2's FIRST clock-out of the day -> never gated.
 reset()
 fake.seed("storeops", "store_closer", [{"org_id": ORG, "store_code": "S1", "employee_id": "E1"}])
 fake.seed("storeops", "timelog", [
     {"org_id": ORG, "employee_id": "E2", "work_date": TODAY, "store_code": "S1", "clock_out": None},
     {"org_id": ORG, "employee_id": "E3", "work_date": TODAY, "store_code": "S1", "clock_out": "2026-01-01T19:00:00+00:00"},
 ])
-b = R._closing_gate_block(ORG, "E2", "S1", TODAY)
-check("1e last-one-clocked-in IS gated when the static closer never worked", b is not None, b)
+check("1e2 last-one-clocked-in's FIRST clock-out of the day is NEVER gated (lunch-break fix)",
+      R._closing_gate_block(ORG, "E2", "S1", TODAY) is None)
 
-# 1f. No store_closer row configured at ALL -> same effective-closer fallback applies (last one out).
+# 1f. No store_closer row configured at ALL -> same effective-closer fallback applies (last one out),
+#     ON THEIR SECOND clock-out of the day (prior closed session seeded, same reasoning as 1b/1e).
+reset()
+fake.seed("storeops", "timelog", [
+    {"org_id": ORG, "employee_id": "E2", "work_date": TODAY, "store_code": "S1", "clock_out": "2026-01-01T13:00:00+00:00"},
+    {"org_id": ORG, "employee_id": "E2", "work_date": TODAY, "store_code": "S1", "clock_out": None},
+])
+b = R._closing_gate_block(ORG, "E2", "S1", TODAY)
+check("1f unconfigured closer -> sole worker is the effective (last) closer -> gated on 2nd clock-out", b is not None, b)
+
+# 1f2. 2026-07-25 UNIVERSAL FIX: same setup as 1f but the sole worker's FIRST clock-out -> never gated.
 reset()
 fake.seed("storeops", "timelog", [
     {"org_id": ORG, "employee_id": "E2", "work_date": TODAY, "store_code": "S1", "clock_out": None},
 ])
-b = R._closing_gate_block(ORG, "E2", "S1", TODAY)
-check("1f unconfigured closer -> sole worker is the effective (last) closer -> gated", b is not None, b)
+check("1f2 unconfigured closer, sole worker's FIRST clock-out is NEVER gated (lunch-break fix)",
+      R._closing_gate_block(ORG, "E2", "S1", TODAY) is None)
+
+# 1k. SCHEDULED employee: mid-shift clock-out (lunch break) is NEVER gated even on a 2nd/3rd session,
+#     however many breaks they take, as long as `now` is still before their shift's scheduled end.
+reset()
+fake.seed("storeops", "store_closer", [{"org_id": ORG, "store_code": "S1", "employee_id": "E1"}])
+fake.seed("storeops", "timelog", [
+    {"org_id": ORG, "employee_id": "E1", "work_date": TODAY, "store_code": "S1", "clock_out": "2026-01-01T13:00:00+00:00"},
+    {"org_id": ORG, "employee_id": "E1", "work_date": TODAY, "store_code": "S1", "clock_out": None},
+])
+fake.seed("storeops", "shifts", [{"org_id": ORG, "employee_id": "101", "employee_name": "Alice",
+                                  "store_code": "S1", "shift_date": TODAY, "end_time": "23:59", "is_deleted": False}])
+check("1k SCHEDULED employee mid-shift (end 23:59, far in the future) is NEVER gated regardless of session count",
+      R._closing_gate_block(ORG, "E1", "S1", TODAY) is None)
+
+# 1l. SCHEDULED employee: past their shift's scheduled end -> gated exactly as before (precise signal,
+#     no regression) even on their FIRST clock-out of the day.
+reset()
+fake.seed("storeops", "store_closer", [{"org_id": ORG, "store_code": "S1", "employee_id": "E1"}])
+fake.seed("storeops", "timelog", [{"org_id": ORG, "employee_id": "E1", "work_date": TODAY, "store_code": "S1", "clock_out": None}])
+fake.seed("storeops", "shifts", [{"org_id": ORG, "employee_id": "101", "employee_name": "Alice",
+                                  "store_code": "S1", "shift_date": TODAY, "end_time": "00:01", "is_deleted": False}])
+b = R._closing_gate_block(ORG, "E1", "S1", TODAY)
+check("1l SCHEDULED employee past shift end (00:01, already passed) IS gated on their FIRST clock-out too",
+      b is not None, b)
 
 # 1g. Stale punch (work_date != today) is NEVER gated, regardless of closer/last-out status
 #     (this is the d0adba0 behavior this package is required to preserve).
