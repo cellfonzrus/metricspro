@@ -1021,6 +1021,25 @@ for sd in range(60):
         _vd += 1
 check("I11 60-seed fuzz with YES/blank voided values: still byte-identical", _vd == 0, f"{_vd} drifts")
 
+# I12/I13 — the two ROUTER money-path sites the Gate-1 reviewer pinned (the live-calc pre-filter that
+# feeds calc_flags, and /commission-drill which exists to REPLAY what the calculator counted).
+import inspect as _insp
+_src_calc = _insp.getsource(RT._run_calculation)
+_src_drill = _insp.getsource(RT.commission_drill)
+check("I12 _run_calculation's pre-filter uses the shared predicate, not upper()=='YES'",
+      "_gp_is_voided(r.get('voided'))" in _src_calc and "upper().strip() != 'YES'" not in _src_calc)
+check("I13 /commission-drill replays the SAME skip rule",
+      '_gp_is_voided(r.get("voided"))' in _src_drill and 'upper() == "YES"' not in _src_drill)
+check("I14 router shares the predicate OBJECT with gp_report (not a copy)",
+      RT._gp_is_voided is GP.is_voided)
+# and no narrow check survives anywhere in the money path
+import pathlib as _pl
+_narrow = [p.name for p in _pl.Path("app/modules/commcalc").glob("*.py")
+           if "upper().strip() != 'YES'" in p.read_text()
+           or 'upper().strip() != "YES"' in p.read_text()
+           or 'upper() == "YES"' in p.read_text()]
+check("I15 no narrow upper()=='YES' voided check remains in commcalc", _narrow == [], str(_narrow))
+
 
 print(f"\n{'=' * 70}\nPASS {PASS}   FAIL {FAIL}\n{'=' * 70}")
 sys.exit(1 if FAIL else 0)

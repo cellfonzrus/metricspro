@@ -8,7 +8,8 @@ import re
 from app.core.database import get_supabase
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
 from app.modules.commcalc import whatif
-from app.modules.commcalc.gp_report import calc_gp_report, VOID_TOKENS as _GP_VOID_TOKENS
+from app.modules.commcalc.gp_report import (calc_gp_report, VOID_TOKENS as _GP_VOID_TOKENS,
+                                             is_voided as _gp_is_voided)
 from app.modules.commcalc.flags import calc_flags
 from app.modules.commcalc.portout_flags import calc_portout_flags
 from app.modules.commcalc.hotsheet_parser import parse_hotsheet
@@ -5783,7 +5784,10 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
             pt = str(r.get('payment_type','')).strip()
             r['category'] = cat_map.get(pt, 'Unknown')
         
-        valid = [r for r in sales if str(r.get('voided','')).upper().strip() != 'YES' and str(r.get('trans_type','')).strip() != 'Return']
+        # VOIDED: the SHARED token set (owner 2026-07-25, gp_report.VOID_TOKENS) — identical to 'YES' for
+        # a feed that only ever writes YES/blank, and it stops a 'true'/'1'/'void' line from reaching the
+        # flags pass when every display surface already excluded it.
+        valid = [r for r in sales if not _gp_is_voided(r.get('voided')) and str(r.get('trans_type','')).strip() != 'Return']
         # (sales guard moved below the carrier gate — a plan-driven tenant may have no raw_sales)
         
         # Carrier gate: Boost tenants run the legacy verified engine; a tenant whose CHOSEN carrier
@@ -9250,7 +9254,9 @@ def commission_drill(period: str, rep: str = "", org_id: str = ORG_ID):
     prem, byod, upg, acima = {}, {}, {}, {}
     acc, setup = [], []
     for r in rows:
-        if str(r.get("voided") or "").strip().upper() == "YES":
+        # SHARED voided token set (owner 2026-07-25) — this endpoint exists to REPLAY what the calculator
+        # counted, so its skip rule must be the calculator's skip rule exactly.
+        if _gp_is_voided(r.get("voided")):
             continue
         if str(r.get("trans_type") or "").strip() == "Return":
             continue
