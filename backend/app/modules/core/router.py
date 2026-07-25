@@ -814,6 +814,7 @@ SETTING_AREAS = [
     {"key": "notify_policy",     "label": "Notify (report-delivery policy · download-link expiry)"},
     {"key": "classification",    "label": "Sales Classification settings (accessory / box / bill-payment / set-up-fee / contract-type map)"},
     {"key": "agency",            "label": "Agency (Master/Sub-Agent) — transfer confirm & config"},
+    {"key": "asset_purchase_orders", "label": "Purchase Orders (vendors · aging threshold)"},
     {"key": "expenses",          "label": "Store Expenses"},
     {"key": "labels",            "label": "Display Labels"},
     {"key": "menu",              "label": "Menu Layout"},

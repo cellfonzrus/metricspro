@@ -178,6 +178,13 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/asset/lending', label: 'Asset Lending (PayGo)', icon: '📲', module: 'asset', scopes: ['all', 'market'], cap: 'asset_lending' },
     { href: '/commcalc/asset/charges/rma', label: 'RMA', icon: '↩️', module: 'asset', scopes: ['all', 'market'] },
     { href: '/commcalc/asset/inventory-recon', label: 'Inventory Recon', icon: '🔎', module: 'asset', scopes: ['all', 'market'] },
+    // Purchase Orders (mig 301) — proposed PO → receiving → sold tally → unsold aging. First-class nav
+    // entry per mod-asset NEEDS CORE [asset-11] (was reachable only via a button on /commcalc/asset).
+    // Carrier-NEUTRAL by design (buying/receiving is universal) → deliberately NOT in NAV_CARRIERS.
+    // scopes ['all','market'] mirrors every sibling asset item: the PO endpoints are ORG-scoped, not
+    // store-scoped, so a store-scoped user would see other stores' POs. If store-level receiving is
+    // wanted, mod-asset should store-scope the reads first and then file for the scope widening.
+    { href: '/commcalc/asset/purchase-orders', label: 'Purchase Orders', icon: '📦', module: 'asset', scopes: ['all', 'market'] },
     { href: '/commcalc/asset/hotsheet-recon', label: 'Pricing Hotsheet', icon: '🏷️', module: 'commissions', scopes: ['all', 'market'] },
   ]},
   { group: 'Distributors', module: 'vip', items: [
