@@ -37,6 +37,8 @@ import calendar
 from datetime import date
 
 from app.modules.commcalc.calculator import parse_period, safe_float
+# ONE shared voided token set for pay + display (owner 2026-07-25) — see gp_report.VOID_TOKENS.
+from app.modules.commcalc.gp_report import is_voided as _is_voided, VOID_TOKENS as _VOID_TOKENS
 from app.modules.commcalc.installment_engine import (
     _pvariants, _period_index, _shift_period, _load_product_mrc, _catalog_mrc, _read_mi,
 )
@@ -346,14 +348,34 @@ _GATE_CFG_DEFAULTS = {
     "boost": {"gate_source": "boost_mi", "ma_device_fields": ["imei", "sim"],
               "ma_month_field_prefix": "spiff_m", "ma_max_month": 6,
               "ma_month1_extra_fields": ["rebate", "device_margin"], "ma_min_amount": 0.01,
-              "ma_payout_sign": -1},
+              "ma_payout_sign": -1, "ma_lookup_periods": "sale"},
     "plan":  {"gate_source": "ma_commission", "ma_device_fields": ["imei", "sim"],
               "ma_month_field_prefix": "spiff_m", "ma_max_month": 6,
               "ma_month1_extra_fields": ["rebate", "device_margin"], "ma_min_amount": 0.01,
-              "ma_payout_sign": -1},
+              "ma_payout_sign": -1, "ma_lookup_periods": "sale"},
 }
 _GATE_CFG_KEYS = ("gate_source", "ma_device_fields", "ma_month_field_prefix", "ma_max_month",
-                  "ma_month1_extra_fields", "ma_min_amount", "ma_payout_sign")
+                  "ma_month1_extra_fields", "ma_min_amount", "ma_payout_sign",
+                  # mig 232: WHICH statement period(s) prove month N was actually received —
+                  # 'sale' (default, byte-identical) | 'pay' | 'both'.
+                  "ma_lookup_periods")
+
+
+def _ma_lookup_periods(cfg, sale_period, pay_period):
+    """The raw_ma_commission period(s) the paid gate reads as month-N evidence (mig 232). PURE.
+
+    'sale' (DEFAULT, byte-identical to pre-mig-232): the activation month's row — it carries the device's
+      forward M1-M6 schedule and is refreshed cumulatively as payouts post.
+    'pay' : the paying month's statement (a carrier that posts month N in month N's own file).
+    'both': BOTH, de-duplicated and NETTED together — the rows are fed into ONE index, so base +
+      adjustment rows across both periods sum exactly like today's multi-row netting and a clawback still
+      cannot read as paid. Unknown/blank values fall back to 'sale'."""
+    mode = str(cfg.get("ma_lookup_periods") or "sale").strip().lower()
+    if mode == "pay":
+        return (pay_period,)
+    if mode == "both":
+        return (sale_period,) if sale_period == pay_period else (sale_period, pay_period)
+    return (sale_period,)
 
 # L2 KILL SWITCH (reversal layer, owner-mandated 2026-07-18): when env INSTALLMENT_GATE_LEGACY is truthy,
 # compute_sale_installments forces the vendored LEGACY raw_mi gate for ALL orgs/modes — instant Railway env
@@ -704,10 +726,19 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             _gate_cfg_cache[ck] = cfg
         return _gate_cfg_cache[ck]
 
-    def _ma_index_for(period):
-        if period not in _ma_index_cache:
-            _ma_index_cache[period] = _ma_gate_index(_read_ma_commission(client, org_id, period))
-        return _ma_index_cache[period]
+    def _ma_index_for(periods):
+        """MA evidence index for ONE or MORE statement periods (mig 232). A single-period tuple is the
+        pre-mig-232 behaviour byte-for-byte; multiple periods are read into the SAME index so their rows
+        NET together (a clawback in either period still cancels a payout in the other)."""
+        if isinstance(periods, str):
+            periods = (periods,)
+        key = tuple(periods)
+        if key not in _ma_index_cache:
+            rows = []
+            for p in key:
+                rows.extend(_read_ma_commission(client, org_id, p))
+            _ma_index_cache[key] = _ma_gate_index(rows)
+        return _ma_index_cache[key]
 
     pay_idx = _period_index(pay_period)
     if pay_idx is None:
@@ -727,6 +758,13 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
     # in — so a schedule that doesn't opt in is byte-identical to pre-mig-210 (no extra reads, no new
     # ledger fields). act_matcher is normalized (sets); trans_index is built per sale_period on demand.
     any_activation = any((str(s.get("m1_gate") or "inherit").strip().lower()) == "activation_payment" for s in scheds)
+    # SYNTHETIC 'activation_bucket' TRIGGER (mig 232): a schedule may trigger on the resolved activation
+    # bucket instead of a raw contract_type, so a tenant whose POS leaves Contract Type BLANK can still
+    # start a multi-month installment on the ACTIVATION (once per activation transaction — the resolver
+    # stamps one representative line per rescued transaction). Stamped ONLY when a schedule actually uses
+    # it, so every existing schedule keeps its exact line set and outcome.
+    _uses_bucket_trigger = any(
+        (str(s.get("trigger_match_field") or "").strip().lower()) == "activation_bucket" for s in scheds)
     act_matcher = _load_activation_matcher(client, org_id) if any_activation else None
     # DUAL-CATEGORY item mapping (mig 210): when the org has mapped any item to the activation-payment
     # category, the mapping is AUTHORITATIVE; else the seeded heuristic matcher is the fallback.
@@ -752,9 +790,18 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
         # month_index 1 <=> sale_period == pay_period (k=0), so the activation-payment gate only ever
         # needs the trans index for that period. Built from the FULL read (payment/System lines included).
         trans_index = _build_trans_index(sales) if (any_activation and sale_period == pay_period) else None
+        # VOIDED: SHARED token set (owner 2026-07-25) — a voided line must not generate installments
+        # under any spelling the POS feed uses.
         valid = [r for r in sales
-                 if str(r.get("voided", "") or "").upper().strip() != "YES"
+                 if not _is_voided(r.get("voided"))
                  and str(r.get("trans_type", "") or "").strip() != "Return"]
+        if _uses_bucket_trigger:
+            try:
+                from app.modules.commcalc.commission_engine import _activation_buckets
+                for _r, _b in zip(valid, _activation_buckets(client, org_id, valid)):
+                    _r["activation_bucket"] = _b or ""
+            except Exception:
+                pass
         for line in valid:
             rep = str(line.get("salesperson", "") or "").strip()
             if not rep or rep.lower() == "admin":
@@ -806,7 +853,11 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                     # spiff_m1 and spiff_m2). This branch is NEVER reached for a Boost carrier.
                     gated = month_index >= gate_from and gate_mode != "none"
                     if gated:
-                        gate_met, ma_ev = _gate_met_ma(line, _ma_index_for(sale_period), month_index, gate_cfg)
+                        _ma_periods = _ma_lookup_periods(gate_cfg, sale_period, pay_period)
+                        gate_met, ma_ev = _gate_met_ma(line, _ma_index_for(_ma_periods),
+                                                       month_index, gate_cfg)
+                        if ma_ev is not None:
+                            ma_ev = {**ma_ev, "lookup_periods": list(_ma_periods)}
                     else:
                         gate_met = True
                     gate_kind = "ma_residual"
@@ -904,6 +955,9 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                     ledger_row["ma_matched"] = bool((ma_ev or {}).get("matched"))
                     ledger_row["ma_evidence"] = (ma_ev or {}).get("evidence")
                     ledger_row["ma_reason"] = (ma_ev or {}).get("reason")
+                    # mig 232: WHICH statement period(s) the evidence was read from (default ['<sale>'],
+                    # i.e. pre-mig-232). In-memory only — _persist writes a fixed column list.
+                    ledger_row["ma_lookup_periods"] = (ma_ev or {}).get("lookup_periods")
                 ledger.append(ledger_row)
 
     if persist:

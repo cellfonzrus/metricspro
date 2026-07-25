@@ -271,6 +271,22 @@ export default function PlanInstallmentsPage() {
             <option value="permissioned">Restricted — require the carrier_residual permission</option>
           </select>
         </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6 }}>
+          Contract-type matching in Commission Plans:
+          <select style={sel} value={settings.plan_ct_resolution || 'raw'}
+            onChange={e => setSettings({ ...settings, plan_ct_resolution: e.target.value })}>
+            <option value="raw">Raw Contract Type only (default)</option>
+            <option value="mapped">Raw value OR the mapped activation bucket</option>
+          </select>
+        </label>
+        <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 12px', maxWidth: 760 }}>
+          A plan rule keyed on <b>Contract type</b> compares the raw POS value. If your POS leaves Contract
+          Type <b>blank</b> (or uses carrier-specific labels), those lines can never match and pay $0. Set
+          this to <b>mapped</b> and the same rule will ALSO match the line's resolved activation bucket
+          (premium / upgrade / BYOD) from this tenant's own classification settings.
+          <b> This can increase pay</b> — it takes effect on the next Run Calculation. Check
+          <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}> Commission Plans → Plan coverage</a> first.
+        </p>
         <button className="btn btn-primary" onClick={saveSettings}>Save pay settings</button>
       </div>
 

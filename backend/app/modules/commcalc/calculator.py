@@ -5,6 +5,9 @@ All business logic in Python - verified formulas
 from typing import Any
 import re
 
+# ONE shared voided token set for pay + display (owner 2026-07-25) — see gp_report.VOID_TOKENS.
+from app.modules.commcalc.gp_report import is_voided as _is_voided, VOID_TOKENS as _VOID_TOKENS
+
 DEVICE_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
 # BYOD: any contract type containing 'BYOD'
 BYOD_ACT = {
@@ -159,9 +162,12 @@ def calc_rep_commissions(
             cat_cost[float(pid)] = float(cost)
     
     # ── Filter valid sales ────────────────────────────────────
+    # VOIDED (owner 2026-07-25): the SHARED token set — 'YES' plus the 'true'/'1'/'void'/'voided'
+    # variants every display surface already excluded. A feed emitting a variant used to be PAID here
+    # while being excluded from the Sales Report it reconciles against.
     valid = [
         r for r in sales
-        if str(r.get('voided','')).upper().strip() != 'YES'
+        if not _is_voided(r.get('voided'))
         and str(r.get('trans_type','')).strip() != 'Return'
     ]
     

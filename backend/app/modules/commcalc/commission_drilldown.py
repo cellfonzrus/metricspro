@@ -23,6 +23,8 @@ to safe empties on any missing table / unapplied migration — never raises.
 import re
 
 from app.modules.commcalc.calculator import safe_float
+# ONE shared voided token set for pay + display (owner 2026-07-25) — see gp_report.VOID_TOKENS.
+from app.modules.commcalc.gp_report import is_voided as _is_voided
 from app.modules.commcalc.commission_engine import _norm_mdn, _canon_person
 
 
@@ -206,7 +208,8 @@ def _sale_lines_by_imei(client, org_id, imei):
             "department": r.get("department"), "category": r.get("category"),
             "ext_price": round(safe_float(r.get("ext_price")), 2), "gp": round(safe_float(r.get("gp")), 2),
             "mdn": r.get("mdn"), "imei": r.get("serial_1"),
-            "voided": str(r.get("voided") or "").strip().upper() == "YES",
+            # SHARED token set (owner 2026-07-25) — the label must agree with what the engine skipped.
+            "voided": _is_voided(r.get("voided")),
             "returned": str(r.get("trans_type") or "").strip() == "Return",
         })
     return out

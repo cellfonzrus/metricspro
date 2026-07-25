@@ -17,7 +17,11 @@ type Rule = { id?: string; label?: string; match_field: string; match_op: string
 type Tier = { id?: string; metric?: string; min_count: number; multiplier: number }
 type Assign = { id?: string; scope: string; scope_value?: string | null; priority?: number }
 type Plan = { id?: string; name: string; carrier_id?: string | null; base_tier_metric?: string | null
-  is_active: boolean; notes?: string | null; rules?: Rule[]; tiers?: Tier[]; assignments?: Assign[] }
+  is_active: boolean; notes?: string | null; rules?: Rule[]; tiers?: Tier[]; assignments?: Assign[]
+  // mig 232 — how the tier metric is COUNTED. Null/'rule_units' = the legacy count (every qualifying
+  // rule-matched LINE, summed across rules). 'transactions' counts DISTINCT matched trans_ids.
+  tier_count_basis?: string | null; tier_match_field?: string | null; tier_match_op?: string | null
+  tier_match_value?: string | null; tier_below_min_multiplier?: number | string | null }
 // bulk-assignment roster (people-centric surface)
 type CurPlan = { plan_id: string; plan_name: string }
 type Person = { id?: string; name: string; value: string; role: string; market: string; email: string
@@ -29,7 +33,12 @@ const lbl: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap
 const th: React.CSSProperties = { textAlign: 'left', padding: '5px 8px', fontSize: 11, color: 'var(--text2)' }
 const td: React.CSSProperties = { padding: '4px 8px', fontSize: 12, borderTop: '1px solid var(--border)' }
 
-const MATCH_FIELDS = ['any', 'contract_type', 'tender_type', 'department', 'category', 'product_desc', 'sku', 'trans_type', 'accessory']
+const MATCH_FIELDS = ['any', 'contract_type', 'tender_type', 'department', 'category', 'product_desc', 'sku', 'trans_type', 'accessory', 'activation_bucket']
+const TIER_BASES = [
+  { v: '', l: 'Legacy — every qualifying matched line (default)' },
+  { v: 'transactions', l: 'Distinct transactions matching the tier rule' },
+  { v: 'lines', l: 'Lines matching the tier rule' },
+]
 const MATCH_OPS = ['equals', 'contains', 'in']
 const PAYOUT_KINDS = [
   { v: 'flat_per_unit', l: 'Flat $ per unit', use: 'amount' },
@@ -50,6 +59,7 @@ const FIELD_HELP: Record<string, string> = {
   sku: 'exact SKU (use "in" for a comma list)',
   trans_type: 'e.g. Sale, Return',
   accessory: 'catalog/dept/category-classified accessory — value "yes" (needs a catalog + classification on)',
+  activation_bucket: 'premium / upgrade / byod — resolved from this tenant’s classification settings, so BLANK Contract Type still counts',
   any: 'matches every line (a blanket rule)',
 }
 
@@ -86,6 +96,9 @@ export default function CommissionPlansPage() {
   const [period, setPeriod] = useState('June 2026')
   const [preview, setPreview] = useState<any>(null)
   const [previewBusy, setPreviewBusy] = useState(false)
+  // plan-coverage diagnostic (mig 232): uncovered sellers · unmatched lines · tier/CT warnings · stale snapshot
+  const [cov, setCov] = useState<any>(null)
+  const [covBusy, setCovBusy] = useState(false)
   // ── people-centric BULK assignment (owner directive 2026-07-23) ──
   const [tab, setTab] = useState<'plans' | 'bulk'>('plans')
   const [roster, setRoster] = useState<Roster>({ people: [], roles: [], markets: [], ready: true })
@@ -124,6 +137,9 @@ export default function CommissionPlansPage() {
         product_desc: sf.products || [], trans_type: sf.trans_types || [], sku: [],
         // synthetic accessory field (migs 230/231): a line is stamped 'yes'/'no' by the classifier
         accessory: ['yes', 'no'],
+        // synthetic activation_bucket field (mig 232): resolved per line/transaction from this tenant's
+        // contract-type map + blank-contract-type activation rules (the SAME resolver the Sales Report uses)
+        activation_bucket: ['premium', 'upgrade', 'byod'],
       })
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
   }
@@ -238,6 +254,13 @@ export default function CommissionPlansPage() {
       const body = {
         ...draft, carrier_id: draft.carrier_id || null,
         base_tier_metric: draft.base_tier_metric === 'none' ? null : draft.base_tier_metric,
+        // mig 232 tier-attainment config — always sent so clearing a value persists as NULL (the backend
+        // ignores these keys entirely when the migration hasn't run).
+        tier_count_basis: draft.tier_count_basis || '',
+        tier_match_field: draft.tier_count_basis ? (draft.tier_match_field || 'any') : '',
+        tier_match_op: draft.tier_count_basis ? (draft.tier_match_op || 'equals') : '',
+        tier_match_value: draft.tier_count_basis ? (draft.tier_match_value || '') : '',
+        tier_below_min_multiplier: (draft.tier_below_min_multiplier === null || draft.tier_below_min_multiplier === undefined || draft.tier_below_min_multiplier === '') ? '' : Number(draft.tier_below_min_multiplier),
         rules: (draft.rules || []).map((r, i) => ({ ...r, amount: Number(r.amount) || 0, pct: Number(r.pct) || 0, sort: i })),
         tiers: (draft.tiers || []).map((t, i) => ({ ...t, min_count: Number(t.min_count) || 0, multiplier: Number(t.multiplier) || 1, sort: i })),
         assignments: (draft.assignments || []).map(a => ({ ...a, priority: Number(a.priority) || 0 })),
@@ -250,6 +273,37 @@ export default function CommissionPlansPage() {
     if (!id || !confirm('Delete this plan and all its rules/tiers/assignments?')) return
     try { await api(`/api/v1/commcalc/commission-plans/${id}`, { method: 'DELETE' }); load() } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
+  async function runCoverage() {
+    setCovBusy(true); setCov(null)
+    try {
+      setCov(await api(`/api/v1/commcalc/commission-plans/coverage?period=${encodeURIComponent(period)}`))
+    } catch (e: any) { setMsg('❌ Coverage: ' + (e?.message || e)) } finally { setCovBusy(false) }
+  }
+
+  function coveragePayload(): ExportPayload {
+    const c = cov?.coverage || {}
+    return {
+      title: 'Commission Plan Coverage', subtitle: `${cov?.period || period} — read-only diagnostic`,
+      filename: `commission-coverage-${String(cov?.period || period).replace(/\s+/g, '-')}`,
+      sheets: [
+        { name: 'Uncovered sellers', rows: c.unassigned_reps || [], columns: [
+          { header: 'Rep', get: (r: any) => r.rep }, { header: 'Store', get: (r: any) => r.store },
+          { header: 'Market', get: (r: any) => r.market }, { header: 'Role', get: (r: any) => r.role },
+          { header: 'Transactions', get: (r: any) => r.transactions }, { header: 'Lines', get: (r: any) => r.lines },
+          { header: 'Sales $', get: (r: any) => r.ext_price }] },
+        { name: 'Covered reps', rows: cov?.by_rep || [], columns: [
+          { header: 'Rep', get: (r: any) => r.rep }, { header: 'Plan', get: (r: any) => r.plan_name },
+          { header: 'Tier count', get: (r: any) => r.tier_units }, { header: 'Basis', get: (r: any) => r.tier_basis },
+          { header: 'Tier x', get: (r: any) => r.tier_multiplier }, { header: 'Total', get: (r: any) => r.total_payout },
+          { header: 'Unmatched lines', get: (r: any) => r.unmatched_lines },
+          { header: 'Unmatched $', get: (r: any) => r.unmatched_ext_price }] },
+        { name: 'Warnings', rows: c.plan_warnings || [], columns: [
+          { header: 'Plan', get: (r: any) => r.plan }, { header: 'Severity', get: (r: any) => r.severity },
+          { header: 'Code', get: (r: any) => r.code }, { header: 'Message', get: (r: any) => r.message }] },
+      ],
+    }
+  }
+
   async function runPreview(planId?: string) {
     setPreviewBusy(true); setPreview(null)
     try {
@@ -419,6 +473,58 @@ export default function CommissionPlansPage() {
             “Tiered” rules are scaled by the plan’s tier multiplier; “qualifies” lines count toward the tier metric.
           </div>
 
+          {/* TIER ATTAINMENT (mig 232) — HOW the tier count is measured */}
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Tier attainment — what counts toward the tier</div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 6 }}>
+            <label style={lbl}>Count basis
+              <select style={{ ...sel, minWidth: 300 }} value={draft.tier_count_basis || ''}
+                onChange={e => upd({ tier_count_basis: e.target.value || null })}>
+                {TIER_BASES.map(b => <option key={b.v} value={b.v}>{b.l}</option>)}
+              </select>
+            </label>
+            {!!draft.tier_count_basis && <>
+              <label style={lbl}>Tier rule — field
+                <select style={{ ...sel, width: 150 }} value={draft.tier_match_field || 'any'}
+                  onChange={e => upd({ tier_match_field: e.target.value })}>
+                  {MATCH_FIELDS.map(f => <option key={f} value={f}>{f}</option>)}
+                </select>
+              </label>
+              <label style={lbl}>Op
+                <select style={{ ...sel, width: 90 }} value={draft.tier_match_op || 'equals'}
+                  disabled={(draft.tier_match_field || 'any') === 'any'}
+                  onChange={e => upd({ tier_match_op: e.target.value })}>
+                  {MATCH_OPS.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </label>
+              <label style={lbl}>Value
+                {(() => {
+                  const f = draft.tier_match_field || 'any'
+                  const opts = (observed[f] || []).map(v => ({ id: v, label: v }))
+                  if (draft.tier_match_value && !opts.some(o => o.id === draft.tier_match_value)) opts.unshift({ id: draft.tier_match_value, label: draft.tier_match_value })
+                  return <EntityPicker options={opts} value={draft.tier_match_value || null} allowCreate width={200}
+                    disabled={f === 'any'} onChange={v => upd({ tier_match_value: v || '' })}
+                    onCreate={v => upd({ tier_match_value: v })}
+                    createLabel={v => `Use “${v}” (${draft.tier_match_op === 'in' ? 'comma list' : draft.tier_match_op === 'contains' ? 'pattern' : 'exact'})`}
+                    placeholder={f === 'any' ? '(every line)' : FIELD_HELP[f] || 'pick or type…'} ariaLabel="Tier match value" />
+                })()}
+              </label>
+            </>}
+            <label style={lbl}>Below lowest tier ×
+              <input style={{ ...sel, width: 110 }} type="number" step="0.01" placeholder="1.0 (default)"
+                value={draft.tier_below_min_multiplier ?? ''}
+                onChange={e => upd({ tier_below_min_multiplier: e.target.value === '' ? null : Number(e.target.value) })} />
+            </label>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 16, maxWidth: 900 }}>
+            <b>Count basis</b> decides what the tier counts. The legacy default counts every qualifying
+            rule-matched <b>line</b>, summed across rules — one activation that rings a device + a plan + a
+            SIM counts as 3, and a line matched by two rules counts twice. Pick
+            <b> distinct transactions</b> with a tier rule (e.g. <code>activation_bucket in premium,byod</code>)
+            to make “30 activations” mean 30 activations. <b>Below lowest tier ×</b> is what a rep who reaches
+            NO tier gets — blank keeps the historic behaviour of full (1.0×) pay.
+            Changes take effect on the next Run Calculation.
+          </div>
+
           {/* TIERS */}
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Tiers — qualifying-unit count → multiplier {draft.base_tier_metric === 'none' && <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(set a tier metric above to use)</span>}</div>
           <div style={{ overflowX: 'auto', marginBottom: 8 }}>
@@ -525,6 +631,75 @@ export default function CommissionPlansPage() {
           )
         )}
         {!preview && <div style={{ fontSize: 13, color: 'var(--text3)' }}>Enter a period and Preview to see what a plan would pay.</div>}
+      </div>
+
+      {/* PLAN COVERAGE — why isn't the plan paying what I configured? (read-only diagnostic, mig 232) */}
+      <div className="card" style={{ padding: 16, marginTop: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>🩺 Plan coverage <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text3)' }}>(read-only — who is uncovered, which lines no rule matched, why a tier didn’t move pay)</span></div>
+          <span style={{ flex: 1 }} />
+          <button className="btn btn-secondary" disabled={covBusy} onClick={runCoverage}>{covBusy ? '…' : `Check ${period}`}</button>
+          {cov?.coverage && <><ExportButtons payload={coveragePayload} /><SendReportButton exportPayload={coveragePayload} compact /></>}
+        </div>
+        {!cov && <div style={{ fontSize: 13, color: 'var(--text3)' }}>Uses the period above. Nothing is written and no calculation is triggered.</div>}
+        {cov && (<>
+          {cov.snapshot?.stale && (
+            <div style={{ background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 8, padding: '8px 10px', fontSize: 12.5, marginBottom: 10 }}>
+              ⚠️ <b>Stored snapshot is stale.</b> The plans compute {fmt(cov.snapshot.engine_total)} for {cov.period} but
+              the saved commission rows total {fmt(cov.snapshot.stored_total)} across {cov.snapshot.stored_rows} rows.
+              The commission pages show the SAVED numbers — run <b>Calculate</b> for this period to apply the current configuration.
+            </div>
+          )}
+          {(cov.coverage?.plan_warnings || []).length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              {cov.coverage.plan_warnings.map((w: any, i: number) => (
+                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5, padding: '5px 0', borderTop: i ? '1px solid var(--border)' : undefined }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap', background: w.severity === 'high' ? '#fee2e2' : '#fef3c7', color: w.severity === 'high' ? '#991b1b' : '#92400e' }}>{w.severity}</span>
+                  <span>{w.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 12.5, marginBottom: 10 }}>
+            <span>carrier mode: <b>{cov.carrier_mode}</b></span>
+            <span>reps paid: <b>{cov.totals?.reps ?? 0}</b></span>
+            <span>sellers with NO plan: <b style={{ color: (cov.coverage?.unassigned_count || 0) ? '#b91c1c' : undefined }}>{cov.coverage?.unassigned_count ?? 0}</b> ({fmt(cov.coverage?.unassigned_ext_price || 0)} of sales)</span>
+            <span>lines no rule matched: <b>{cov.coverage?.unmatched?.total_lines ?? 0}</b></span>
+            <span>blank Contract Type: <b>{cov.coverage?.contract_type?.blank ?? 0}</b> / {cov.coverage?.contract_type?.sale_lines ?? 0} ({cov.coverage?.contract_type?.blank_pct ?? 0}%)</span>
+          </div>
+          {(cov.coverage?.unassigned_reps || []).length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Sellers with sales but NO plan attached — these reps pay $0</div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr>{['Rep', 'Store', 'Market', 'Role', 'Txns', 'Lines', 'Sales $'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                  <tbody>{cov.coverage.unassigned_reps.map((u: any, i: number) => (
+                    <tr key={i}><td style={td}>{u.rep}</td><td style={td}>{u.store}</td><td style={td}>{u.market}</td>
+                      <td style={td}>{u.role || '—'}</td><td style={td}>{u.transactions}</td><td style={td}>{u.lines}</td>
+                      <td style={td}>{fmt(u.ext_price)}</td></tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {(cov.by_rep || []).length > 0 && (
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Covered reps — tier attainment + unmatched lines</div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr>{['Rep', 'Plan', 'Tier count', 'Basis', 'Tier ×', 'Total', 'Lines no rule matched', '$ unmatched'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                  <tbody>{cov.by_rep.map((r: any, i: number) => (
+                    <tr key={i}><td style={td}>{r.rep}</td><td style={td}>{r.plan_name}</td>
+                      <td style={td}>{r.tier_units}</td><td style={td}>{r.tier_basis}</td>
+                      <td style={td}>{r.tier_multiplier}×</td><td style={td}>{fmt(r.total_payout)}</td>
+                      <td style={{ ...td, color: (r.unmatched_lines || 0) ? '#b45309' : undefined }}>{r.unmatched_lines}</td>
+                      <td style={td}>{fmt(r.unmatched_ext_price || 0)}</td></tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>)}
       </div>
       </>)}
 

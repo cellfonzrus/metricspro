@@ -8,7 +8,7 @@ import re
 from app.core.database import get_supabase
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
 from app.modules.commcalc import whatif
-from app.modules.commcalc.gp_report import calc_gp_report
+from app.modules.commcalc.gp_report import calc_gp_report, VOID_TOKENS as _GP_VOID_TOKENS
 from app.modules.commcalc.flags import calc_flags
 from app.modules.commcalc.portout_flags import calc_portout_flags
 from app.modules.commcalc.hotsheet_parser import parse_hotsheet
@@ -5446,9 +5446,10 @@ def _resolve_carrier_mode(carriers):
 
 
 def _commission_org_config(client, org_id):
-    """Per-tenant commission posture (mig 201, commission-0 §7b). Degrades to safe defaults if the table
-    is absent (pre-mig-201): {'pay_disabled': False, 'residual_visibility': 'all'}."""
-    default = {"pay_disabled": False, "residual_visibility": "all"}
+    """Per-tenant commission posture (mig 201, commission-0 §7b; + mig 232 plan_ct_resolution). Degrades to
+    safe defaults if the table/column is absent: pay_disabled False, residual_visibility 'all',
+    plan_ct_resolution 'raw' (= today's raw contract_type matching, byte-identical)."""
+    default = {"pay_disabled": False, "residual_visibility": "all", "plan_ct_resolution": "raw"}
     try:
         rows = (client.schema('commcalc').table('commission_org_config').select('*')
                 .eq('org_id', org_id).limit(1).execute().data) or []
@@ -5457,8 +5458,10 @@ def _commission_org_config(client, org_id):
     if not rows:
         return default
     r = rows[0]
+    _ctr = str(r.get("plan_ct_resolution") or "raw").strip().lower()
     return {"pay_disabled": bool(r.get("pay_disabled")),
-            "residual_visibility": (r.get("residual_visibility") or "all").strip().lower()}
+            "residual_visibility": (r.get("residual_visibility") or "all").strip().lower(),
+            "plan_ct_resolution": _ctr if _ctr in ("raw", "mapped") else "raw"}
 
 
 def _can_view_carrier_residual(authorization, org_id):
@@ -6535,6 +6538,13 @@ async def put_commission_settings(body: dict, authorization: str = Header(defaul
     if "residual_visibility" in body:
         rv = (body.get("residual_visibility") or "all").strip().lower()
         row["residual_visibility"] = rv if rv in ("all", "permissioned") else "all"
+    # mig 232 — MONEY-ADJACENT: 'mapped' lets a contract_type-keyed Commission Plan rule ALSO match the
+    # line's resolved activation bucket (the tenant's own mig-213 map + mig-224 activation rules), so
+    # blank / carrier-specific Contract Type lines can start paying. Strictly a superset => pay can go UP
+    # on the NEXT Calculate (this write alone moves nothing). Same admin gate as the rest of this endpoint.
+    if "plan_ct_resolution" in body:
+        cr = (body.get("plan_ct_resolution") or "raw").strip().lower()
+        row["plan_ct_resolution"] = cr if cr in ("raw", "mapped") else "raw"
     try:
         client = sb()
         client.schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
@@ -7679,6 +7689,24 @@ async def save_commission_plan(body: dict, org_id: str = ORG_ID):
         "is_active": bool(body.get("is_active", True)),
         "notes": body.get("notes") or None,
     }
+    # TIER ATTAINMENT CONFIG (mig 232) — only written when the caller sent the field AND the column exists,
+    # so a pre-migration database saves exactly as before instead of 500-ing on an unknown column.
+    if _plan_tier_cols_present(client):
+        if "tier_count_basis" in body:
+            _b = (body.get("tier_count_basis") or "").strip().lower()
+            plan_row["tier_count_basis"] = _b if _b in ("lines", "transactions") else None
+        for _k in ("tier_match_field", "tier_match_op", "tier_match_value"):
+            if _k in body:
+                _v = str(body.get(_k) or "").strip()
+                if _k == "tier_match_field" and _v and _v not in commission_engine.MATCH_FIELDS:
+                    _v = "any"
+                if _k == "tier_match_op" and _v and _v not in ("equals", "contains", "in"):
+                    _v = "equals"
+                plan_row[_k] = _v or None
+        if "tier_below_min_multiplier" in body:
+            _m = body.get("tier_below_min_multiplier")
+            plan_row["tier_below_min_multiplier"] = (
+                None if _m is None or str(_m).strip() == "" else safe_float(_m))
     try:
         if body.get("id"):
             r = client.schema('commcalc').table('commission_plan').update(plan_row).eq('id', body['id']).eq('org_id', org_id).execute()
@@ -7757,6 +7785,80 @@ async def delete_commission_plan(plan_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema('commcalc').table('commission_plan').delete().eq('org_id', org_id).eq('id', plan_id).execute()
     return {"deleted": plan_id}
+
+
+_PLAN_TIER_COLS_OK = {}
+
+
+def _plan_tier_cols_present(client):
+    """True when commcalc.commission_plan carries the mig-232 tier columns. Probed ONCE per process (the
+    schema cannot change under us mid-run) so a pre-migration deployment keeps saving plans exactly as
+    before instead of failing on an unknown column."""
+    if "ok" not in _PLAN_TIER_COLS_OK:
+        try:
+            (client.schema('commcalc').table('commission_plan')
+             .select('tier_count_basis,tier_match_field,tier_match_op,tier_match_value,'
+                     'tier_below_min_multiplier').limit(1).execute())
+            _PLAN_TIER_COLS_OK["ok"] = True
+        except Exception:
+            _PLAN_TIER_COLS_OK["ok"] = False
+    return _PLAN_TIER_COLS_OK["ok"]
+
+
+@router.get("/commission-plans/coverage")
+async def commission_plan_coverage(period: str, org_id: str = ORG_ID):
+    """READ-ONLY "is my plan actually paying what I configured?" diagnostic for one period. Writes nothing,
+    never triggers a calc, and returns the SAME per-rep numbers the money path computes.
+
+    Answers the three questions a $0 / wrong-number complaint always reduces to:
+      - WHO sold but has no plan attached (carrier_mode='plan' => they legitimately pay $0 — but silently);
+      - WHICH sale lines a covered rep's plan matched with NO rule (the money that fell through);
+      - WHY a tier didn't move pay (metric 'none', no rule marked Tiered, legacy line-based attainment,
+        Contract-Type rules against blank Contract Type).
+    Also reports the stored rep_commissions total for the period so a STALE SNAPSHOT is obvious: if the
+    engine total and the stored total disagree, the page is showing pre-recalculation numbers."""
+    if not period:
+        raise HTTPException(400, "period required")
+    require_org(org_id)
+    client = sb()
+    prev = commission_engine.preview(client, org_id, period, coverage=True)
+    cov = prev.get("coverage") or {}
+    try:
+        carriers = (client.schema('commcalc').table('carrier').select('*')
+                    .eq('org_id', org_id).execute().data) or []
+        mode = _resolve_carrier_mode(carriers)
+    except Exception:
+        mode = 'boost'
+    stored_total, stored_rows = 0.0, 0
+    try:
+        rows = (client.schema('commcalc').table('rep_commissions').select('total_payout')
+                .eq('org_id', org_id).in_('period', _pvariants(period)).limit(5000).execute().data) or []
+        stored_rows = len(rows)
+        stored_total = round(sum(safe_float(r.get('total_payout')) for r in rows), 2)
+    except Exception:
+        pass
+    engine_total = round(safe_float((prev.get("totals") or {}).get("payout")), 2)
+    _stale = bool(stored_rows and abs(stored_total - engine_total) > 0.01)
+    return {
+        "period": period, "carrier_mode": mode, "ready": prev.get("ready"),
+        "note": prev.get("note"),
+        "totals": prev.get("totals"),
+        "by_rep": [{"rep": r.get("rep"), "store": r.get("store"), "plan_name": r.get("plan_name"),
+                    "qualifying_units": r.get("qualifying_units"), "tier_units": r.get("tier_units"),
+                    "tier_basis": r.get("tier_basis"), "tier_multiplier": r.get("tier_multiplier"),
+                    "total_payout": r.get("total_payout"),
+                    "unmatched_lines": r.get("unmatched_lines"),
+                    "unmatched_ext_price": r.get("unmatched_ext_price")}
+                   for r in (prev.get("by_rep") or [])],
+        "coverage": cov,
+        "snapshot": {
+            "stored_rows": stored_rows, "stored_total": stored_total, "engine_total": engine_total,
+            "stale": _stale,
+            "note": ("The stored commission snapshot does NOT match what the plans compute today — the "
+                     "page is showing pre-recalculation numbers. Run Calculate for this period to apply "
+                     "the current configuration.") if _stale else None,
+        },
+    }
 
 
 @router.get("/commission-plans/preview")
@@ -10298,7 +10400,9 @@ _ACTUALS_COLS = ("trans_id,trans_date,store,salesperson,user_login,contract_type
 # phones / bill-payment / activation-fee / protect — b2bsoft per-line columns the Sales Report doesn't
 # show; Targets box / bill-payment) are computed in the SAME pass so there is never a divergent second
 # scan. Pure — no I/O, never raises. DISPLAY ONLY: the commission CALC path is deliberately NOT wired here.
-_VOID_TOKENS = ('true', 'yes', '1', 'voided', 'void')   # the Sales Report's set = the source of truth
+# The Sales Report's set, now SHARED with the pay path (owner 2026-07-25) — see gp_report.VOID_TOKENS.
+# Aliased (not re-declared) so display and pay can never drift apart again.
+_VOID_TOKENS = _GP_VOID_TOKENS
 # Default bill-payment product tokens (the historical hard-coded Boost/Xfinity walk-in-recharge tokens),
 # matched by lower-cased CONTAINMENT on product_desc. Used ONLY when the org has no billpay_products config
 # (mig 214) — an empty per-org list falls back to these so the house/Boost conversion stays byte-identical.

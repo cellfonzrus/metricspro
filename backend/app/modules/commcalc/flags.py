@@ -47,9 +47,11 @@ def calc_flags(
     asset_by_imei = asset_by_imei or {}
     base = {'period': period, 'period_month': period_month, 'period_year': period_year}
 
+    # VOIDED: SHARED token set (owner 2026-07-25) so flags see exactly the lines that pay.
+    from app.modules.commcalc.gp_report import is_voided as _is_voided
     valid_sales = [
         r for r in sales
-        if str(r.get('voided', '')).upper().strip() != 'YES'
+        if not _is_voided(r.get('voided'))
         and str(r.get('trans_type', '')).strip() != 'Return'
     ]
 

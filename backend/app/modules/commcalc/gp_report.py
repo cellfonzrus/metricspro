@@ -31,6 +31,25 @@ def _dept_classifier(gp_category_map):
         return 'other'
     return classify
 
+# ── VOIDED: the ONE token set shared by the pay path and every display surface ────────────────────
+# Owner-approved 2026-07-25. The money path used to skip a line only when voided == 'YES' (upper/strip),
+# while every display surface (Sales Report / GP / the shared aggregation / sales-recon / what-if) already
+# treated 'true' / '1' / 'void' / 'voided' as voided too. A POS feed writing any of those variants produced
+# a line that was PAID but excluded from the reports it should reconcile against. One constant, one
+# predicate, imported by both sides so they can never drift again.
+#   NOTE FOR THE MERGE: agent/commission/catalog-followups also lands `gp_report.VOID_TOKENS` with this
+#   exact name + value; router.py aliases it as `_VOID_TOKENS` so every pre-existing display call site is
+#   untouched. If both branches merge, keep ONE definition here.
+VOID_TOKENS = ('true', 'yes', '1', 'voided', 'void')
+
+
+def is_voided(v) -> bool:
+    """True when a raw_sales/daily_sales_feed `voided` cell means VOIDED. Case/space-insensitive over
+    VOID_TOKENS. Blank / None / any other value is NOT voided (so an un-populated column never hides a
+    sale). PURE."""
+    return str(v or "").strip().lower() in VOID_TOKENS
+
+
 def safe_float(v) -> float:
     try: return float(v or 0)
     except: return 0.0

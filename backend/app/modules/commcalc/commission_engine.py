@@ -16,6 +16,8 @@ Degrades to an empty/ready:false result if migration 059 isn't applied yet (tabl
 import re
 
 from app.modules.commcalc.calculator import safe_float
+# ONE shared voided token set for pay + display (owner 2026-07-25) — see gp_report.VOID_TOKENS.
+from app.modules.commcalc.gp_report import is_voided as _is_voided, VOID_TOKENS as _VOID_TOKENS
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -25,7 +27,16 @@ MATCH_FIELDS = {"contract_type", "tender_type", "department", "category",
                 # AccessoryClassifier (dept/category/keyword OR catalog category). Lets a Commission Plan
                 # rule PAY on the accessory classification through the EXISTING engine (owner 2026-07-24).
                 # Stamped in preview() ONLY when a rule actually uses it → inert + byte-identical otherwise.
-                "accessory"}
+                "accessory",
+                # SYNTHETIC (mig 232): 'activation_bucket' resolves each line to 'premium'/'upgrade'/'byod'
+                # (or '') using the TENANT'S OWN existing display config — accessory_config.contract_type_map
+                # (mig 213) + accessory_config.activation_rules (mig 224) — so a plan can pay/tier on
+                # activations even when raw_sales.contract_type is BLANK (~77% of luxelink's July lines) or
+                # carries a carrier-specific label the hard-coded classifier never saw. NOT a new classifier:
+                # it calls the SAME resolver the Sales Report / Exec MTD / Daily Targets already use.
+                # Stamped in preview() ONLY when a rule/tier actually uses it → inert + byte-identical
+                # otherwise. MONEY-ADJACENT: pay moves only after an owner writes such a rule AND recalcs.
+                "activation_bucket"}
 PAYOUT_KINDS = {"flat_per_unit", "pct_mrc", "pct_gp", "pct_price_over_cost", "flat"}
 
 
@@ -42,20 +53,35 @@ def _line_value(row, field):
 
 
 def _rule_matches(row, rule):
-    """True if this sale line matches the rule's field/op/value."""
+    """True if this sale line matches the rule's field/op/value.
+
+    CONTRACT-TYPE RESOLUTION (mig 232, opt-in): when the row carries a `_ct_resolved` stamp — which
+    preview() writes ONLY for a tenant whose commission_org_config.plan_ct_resolution == 'mapped' — a
+    match_field='contract_type' rule matches the RAW value OR that resolved activation bucket
+    ('premium'/'upgrade'/'byod'). Without the stamp (every tenant by default, and every non-preview caller
+    such as the installment engine's trigger matcher) this is BYTE-IDENTICAL to before."""
     field = (rule.get("match_field") or "any").strip().lower()
     if field == "any":
         return True
     op = (rule.get("match_op") or "equals").strip().lower()
     want = (rule.get("match_value") or "").strip().lower()
     have = _line_value(row, field)
-    if op == "contains":
-        return want != "" and want in have
-    if op == "in":
-        opts = [x.strip() for x in want.split(",") if x.strip()]
-        return have in opts
-    # equals (default)
-    return have == want
+    candidates = [have]
+    if field == "contract_type" and "_ct_resolved" in row:
+        alt = str(row.get("_ct_resolved") or "").strip().lower()
+        if alt and alt != have:
+            candidates.append(alt)
+    for have in candidates:
+        if op == "contains":
+            if want != "" and want in have:
+                return True
+        elif op == "in":
+            opts = [x.strip() for x in want.split(",") if x.strip()]
+            if have in opts:
+                return True
+        elif have == want:      # equals (default)
+            return True
+    return False
 
 
 # ── config loading ────────────────────────────────────────────────────────────────────────────────
@@ -369,6 +395,106 @@ def _read_store_market(client, org_id):
     return out
 
 
+def _plan_pay_config(client, org_id):
+    """Per-tenant PAY-path options (mig 232). Today: plan_ct_resolution 'raw' (default, byte-identical) |
+    'mapped'. Degrades to the defaults when the column/table/row is absent — never raises."""
+    out = {"plan_ct_resolution": "raw"}
+    try:
+        rows = (client.schema("commcalc").table("commission_org_config")
+                .select("plan_ct_resolution").eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        return out
+    if rows:
+        v = str(rows[0].get("plan_ct_resolution") or "raw").strip().lower()
+        out["plan_ct_resolution"] = v if v in ("raw", "mapped") else "raw"
+    return out
+
+
+def _read_ct_classification_config(client, org_id):
+    """(contract_type_map, activation_rules) — the tenant's EXISTING display-classification config
+    (accessory_config, migs 213 + 224). Read in its OWN defensive query so a missing column/table degrades
+    to ({}, []) = the hard-coded classifier only. Never raises."""
+    ct_map, rules = {}, []
+    for cols in ("contract_type_map,activation_rules", "contract_type_map"):
+        try:
+            rows = (client.schema("commcalc").table("accessory_config").select(cols)
+                    .eq("org_id", org_id).limit(1).execute().data) or []
+        except Exception:
+            continue
+        if rows:
+            cm = rows[0].get("contract_type_map")
+            if isinstance(cm, dict):
+                ct_map = {str(k).strip().lower(): str(v).strip().lower() for k, v in cm.items()}
+            ar = rows[0].get("activation_rules")
+            if isinstance(ar, list):
+                rules = [r for r in ar if isinstance(r, dict)]
+        break
+    return ct_map, rules
+
+
+def _activation_buckets(client, org_id, rows):
+    """[bucket|None] parallel to `rows` — each sale line's activation bucket ('premium'|'upgrade'|'byod').
+
+    Reuses the SHARED display resolver (router._resolve_ct_bucket honours the tenant's mig-213
+    contract_type_map; router._blank_ct_bucket_map applies the tenant's mig-224 transaction-level
+    activation_rules to BLANK-contract_type transactions). This is deliberately NOT a sixth classifier —
+    it is the same one the Sales Report / Executive MTD / Daily Targets already use, so what a tenant sees
+    as an activation and what a plan can pay on cannot disagree. Lazy import (router imports this module);
+    on any import failure it falls back to the code classifier alone. Never raises."""
+    ct_map, rules = _read_ct_classification_config(client, org_id)
+    try:
+        from app.modules.commcalc.router import _resolve_ct_bucket, _blank_ct_bucket_map
+    except Exception:
+        from app.modules.commcalc.calculator import classify_contract_type as _cc
+
+        def _resolve_ct_bucket(ct, cm=None):
+            if cm:
+                b = cm.get(str(ct or "").strip().lower())
+                if b:
+                    return None if b == "none" else b
+            return _cc(ct)
+
+        def _blank_ct_bucket_map(_rows, _cm, _rules):
+            return {}
+    try:
+        by_tid = _blank_ct_bucket_map(rows, ct_map, rules) if rules else {}
+    except Exception:
+        by_tid = {}
+    # ONE LINE PER RESCUED TRANSACTION. The blank-contract_type rescue (mig 224) classifies a whole
+    # TRANSACTION from several lines (device line + rate-plan line + SIM line), so stamping every line of
+    # it would make a flat-per-unit rule pay 2-3x for ONE activation. A labelled contract_type behaves
+    # per-line exactly as it always has (the POS stamps the label on the line it belongs to); only the
+    # RESCUE is collapsed to a single representative line, chosen by a VALUE-BASED key (highest ext_price,
+    # then product/sku/serial/mdn) so the same file always picks the same line regardless of row order.
+    # Consequence to know when configuring: a per-unit rule on activation_bucket pays ONCE per rescued
+    # activation; a %-of-GP style rule would read only that representative line's GP, so % rules should
+    # keep keying on department/category/product, not on the bucket.
+    rescue_rep = {}
+    if by_tid:
+        best = {}
+        for i, r in enumerate(rows):
+            t = str(r.get("trans_id") or "").strip()
+            if not t or t not in by_tid:
+                continue
+            key = (-safe_float(r.get("ext_price")), str(r.get("product_desc") or ""),
+                   str(r.get("sku") or ""), str(r.get("serial_1") or ""), str(r.get("mdn") or ""))
+            if t not in best or key < best[t][0]:
+                best[t] = (key, i)
+        rescue_rep = {t: v[1] for t, v in best.items()}
+    out = []
+    for i, r in enumerate(rows):
+        try:
+            b = _resolve_ct_bucket(str(r.get("contract_type") or ""), ct_map)
+        except Exception:
+            b = None
+        if not b:
+            t = str(r.get("trans_id") or "").strip()
+            if t and rescue_rep.get(t) == i:
+                b = by_tid.get(t)
+        out.append(b or None)
+    return out
+
+
 # ── per-line payout ─────────────────────────────────────────────────────────────────────────────
 def _line_payout(row, rule, mrc_by_mdn, mrc_by_sub, cost_by_pid):
     """Dollar payout this rule produces for ONE matching qualifying line (before tier multiplier).
@@ -398,8 +524,43 @@ def _line_payout(row, rule, mrc_by_mdn, mrc_by_sub, cost_by_pid):
     return 0.0
 
 
+def _tier_basis(plan):
+    """The plan's tier COUNT BASIS (mig 232). 'rule_units' (NULL/unknown/pre-migration) = the legacy count
+    (matched qualifying rule LINES summed across rules). 'lines' / 'transactions' = count the lines the
+    plan's own tier matcher selects. PURE."""
+    b = str(plan.get("tier_count_basis") or "").strip().lower()
+    return b if b in ("lines", "transactions") else "rule_units"
+
+
+def _tier_metric_count(plan, lines):
+    """(count, basis) for the plan's TIER METRIC over one rep's sale lines (mig 232).
+
+    Legacy basis ('rule_units') returns (None, 'rule_units') — the caller keeps using its own
+    qualifying-unit total, so a plan without the new columns is BYTE-IDENTICAL.
+
+    'lines' / 'transactions': the plan's tier_match_field/op/value select which lines count (same matcher
+    vocabulary as a commission_rule, including the synthetic 'accessory' / 'activation_bucket' fields), and
+    'transactions' de-duplicates by trans_id — so "30 activations" means 30 ACTIVATIONS, not 30 line items
+    on three sales. PURE."""
+    basis = _tier_basis(plan)
+    if basis == "rule_units":
+        return None, basis
+    matcher = {"match_field": plan.get("tier_match_field") or "any",
+               "match_op": plan.get("tier_match_op") or "equals",
+               "match_value": plan.get("tier_match_value")}
+    hits = [r for r in lines if _rule_matches(r, matcher)]
+    if basis == "transactions":
+        return len({str(r.get("trans_id") or "").strip() for r in hits
+                    if str(r.get("trans_id") or "").strip()}), basis
+    return len(hits), basis
+
+
 def _tier_multiplier(plan, qualifying_units):
-    """Highest min_count ≤ qualifying_units wins → its multiplier (1.0 if no tiers / no metric)."""
+    """Highest min_count ≤ qualifying_units wins → its multiplier (1.0 if no tiers / no metric).
+
+    BELOW-LOWEST-TIER (mig 232): when the rep reaches NO tier, the historic result is 1.0 — a plan whose
+    lowest tier is "30 units → 0.5×" silently pays FULL to a rep who sold 5. `tier_below_min_multiplier`
+    makes that floor explicit; NULL/absent keeps the historic 1.0 (byte-identical)."""
     metric = (plan.get("base_tier_metric") or "none").strip().lower()
     tiers = plan.get("tiers") or []
     if metric in ("", "none") or not tiers:
@@ -409,11 +570,15 @@ def _tier_multiplier(plan, qualifying_units):
         mc = int(t.get("min_count") or 0)
         if qualifying_units >= mc and mc >= best_min:
             best_min, best_mult = mc, safe_float(t.get("multiplier")) or 1.0
+    if best_min < 0:
+        below = plan.get("tier_below_min_multiplier")
+        if below is not None and str(below).strip() != "":
+            return safe_float(below)
     return best_mult
 
 
 # ── preview ────────────────────────────────────────────────────────────────────────────────────
-def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None):
+def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, coverage=False):
     """READ-ONLY: apply plan rules to a period's raw_sales. Writes nothing.
 
     Returns {ready, period, by_rep:[...], totals, plans, note}. If plan_id is given, that plan is applied
@@ -426,6 +591,13 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None):
     imei / mdn / product / contract_type / ext_price / gp / per-line amount) — including rules that
     matched 0 lines, so "plan attached but nothing paid" is explainable. only_rep restricts the rep
     grouping (canon or token-subset match) so a single-rep drill is cheap.
+
+    coverage=True (diagnostics only; mig 232) additionally returns a top-level "coverage" block: every
+    seller with sales but NO plan attached (today they are silently skipped → a legit-looking $0), the
+    lines a covered rep's plan matched with NO rule, blank/unrecognised Contract Type counts, and
+    plain-language PLAN WARNINGS (tiers configured with metric 'none', tiers with no rule marked
+    "tiered", a contract_type-keyed rule on a tenant whose lines have blank Contract Type). It NEVER
+    changes by_rep/totals — the money output with coverage=False is byte-identical.
     """
     plans, ready = _load_plans(client, org_id)
     if not ready:
@@ -443,9 +615,11 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None):
                     "note": "plan_id not found."}
 
     sales = _read_sales(client, org_id, period)
-    # only un-voided, non-return lines qualify (same gate as the live calculator)
+    # only un-voided, non-return lines qualify (same gate as the live calculator). VOIDED uses the
+    # SHARED token set (owner 2026-07-25) so a 'true'/'1'/'void' line can never be paid while the Sales
+    # Report excludes it.
     valid = [r for r in sales
-             if str(r.get("voided", "") or "").upper().strip() != "YES"
+             if not _is_voided(r.get("voided"))
              and str(r.get("trans_type", "") or "").strip() != "Return"]
 
     # SYNTHETIC 'accessory' match_field (migs 230/231): stamp each line 'yes'/'no' via the shared
@@ -465,6 +639,29 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None):
         if _clf is not None:
             for r in valid:
                 r["accessory"] = "yes" if _clf.is_accessory_row(r) else "no"
+
+    # SYNTHETIC 'activation_bucket' + optional 'mapped' contract-type resolution (mig 232). Both reuse the
+    # tenant's EXISTING display classification config (contract_type_map mig 213 + activation_rules mig 224)
+    # via the SHARED resolver — no new classifier. Built ONLY when a rule/tier actually references
+    # 'activation_bucket' OR the tenant set plan_ct_resolution='mapped'; otherwise this whole block is a
+    # no-op (no extra reads, no stamps → _rule_matches is byte-identical). MONEY-ADJACENT: nothing moves
+    # until an owner writes such a rule / flips the setting AND runs a recalc.
+    _pay_cfg = _plan_pay_config(client, org_id)
+    _ct_mapped = (_pay_cfg.get("plan_ct_resolution") == "mapped")
+    _uses_bucket = any(
+        (rule.get("match_field") or "").strip().lower() == "activation_bucket"
+        for p in plans for rule in (p.get("rules") or [])) or any(
+        (p.get("tier_match_field") or "").strip().lower() == "activation_bucket" for p in plans)
+    _bucket_lines = 0
+    if _uses_bucket or _ct_mapped:
+        _buckets = _activation_buckets(client, org_id, valid)
+        for r, b in zip(valid, _buckets):
+            if b:
+                _bucket_lines += 1
+            if _uses_bucket:
+                r["activation_bucket"] = b or ""
+            if _ct_mapped and b:
+                r["_ct_resolved"] = b
 
     mrc_by_mdn, mrc_by_sub = _read_mi_mrc(client, org_id, period)
     cost_by_pid = _read_catalog_cost(client, org_id)
@@ -497,6 +694,7 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None):
         reps = {k: e for k, e in reps.items() if _rep_pick(e["name"])}
 
     out_rows, grand = [], 0.0
+    unassigned = []
     for key, e in reps.items():
         store = e["store"]
         market = store_market.get(store.lower()) or store_market.get(store.split(" ")[0].lower(), "")
@@ -511,10 +709,24 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None):
             # incl. the case where a non-numeric assignment field would make the resolver raise).
             plan = forced_plan or _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role)
         if not plan:
+            # COVERAGE (mig 232): a seller with real sales and NO plan attached is skipped here — which is
+            # exactly how a carrier_mode='plan' tenant ends up with a legitimate-looking $0 for that rep.
+            # Record them so the gap is VISIBLE instead of silent. No effect on by_rep/totals.
+            if coverage:
+                unassigned.append({
+                    "rep": e["name"], "store": store, "market": market,
+                    "role": rep_role or None, "lines": len(e["lines"]),
+                    "transactions": len({str(r.get("trans_id") or "").strip() for r in e["lines"]
+                                         if str(r.get("trans_id") or "").strip()}),
+                    "ext_price": round(sum(safe_float(r.get("ext_price")) for r in e["lines"]), 2),
+                    "reason": ("no commission-plan assignment matched this rep "
+                               "(employee > role > store > market > default all missed)"),
+                })
             continue
         rules = plan.get("rules") or []
 
         rule_breakdown = {}   # rule_id -> {label, kind, matched, qualifying, payout, tiered}
+        matched_ids = set() if coverage else None   # coverage: which lines ANY rule matched
         qualifying_units = 0
         flat_pending = {}     # rule_id -> amount (flat bonus, paid once if any qualifying match)
         base_total = 0.0      # payout that is NOT tiered
@@ -539,6 +751,8 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None):
                 if not _rule_matches(row, rule):
                     continue
                 rb["matched_lines"] += 1
+                if matched_ids is not None:
+                    matched_ids.add(id(row))
                 ldet = None
                 if detail:
                     ldet = {"date": str(row.get("trans_date") or "")[:10],
@@ -579,7 +793,12 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None):
                 else:
                     base_total += amt
 
-        mult = _tier_multiplier(plan, qualifying_units)
+        # TIER ATTAINMENT (mig 232): a plan may DEFINE what its tier counts (distinct activation
+        # transactions, matched lines, …). Legacy plans return (None, 'rule_units') → the historic
+        # qualifying-unit total is used, byte-identical.
+        _tier_n, _tier_basis_used = _tier_metric_count(plan, e["lines"])
+        tier_units = qualifying_units if _tier_n is None else _tier_n
+        mult = _tier_multiplier(plan, tier_units)
         total = round(base_total + tiered_total * mult, 2)
         grand += total
         out_rows.append({
@@ -593,6 +812,19 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None):
             "rules": sorted([rb for rb in rule_breakdown.values() if (detail or rb["matched_lines"])],
                             key=lambda x: -(x.get("payout") or 0)),
         })
+        if coverage:
+            _un = [r for r in e["lines"] if id(r) not in matched_ids]
+            out_rows[-1]["tier_units"] = tier_units
+            out_rows[-1]["tier_basis"] = _tier_basis_used
+            out_rows[-1]["unmatched_lines"] = len(_un)
+            out_rows[-1]["unmatched_ext_price"] = round(
+                sum(safe_float(r.get("ext_price")) for r in _un), 2)
+            out_rows[-1]["unmatched_sample"] = [
+                {"trans_id": str(r.get("trans_id") or "").strip(),
+                 "date": str(r.get("trans_date") or "")[:10],
+                 "department": r.get("department"), "category": r.get("category"),
+                 "contract_type": r.get("contract_type"), "product": r.get("product_desc"),
+                 "ext_price": round(safe_float(r.get("ext_price")), 2)} for r in _un[:5]]
         if detail:
             out_rows[-1]["assignment"] = (resolution or {}).get("winner")
             out_rows[-1]["considered"] = (resolution or {}).get("considered")
@@ -602,7 +834,91 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None):
                                      for t in (plan.get("tiers") or [])]
 
     out_rows.sort(key=lambda x: -(x.get("total_payout") or 0))
-    return {"ready": True, "period": period, "by_rep": out_rows,
-            "totals": {"payout": round(grand, 2), "reps": len(out_rows),
-                       "sale_lines": len(valid), "plans": len(plans)},
-            "note": None}
+    out = {"ready": True, "period": period, "by_rep": out_rows,
+           "totals": {"payout": round(grand, 2), "reps": len(out_rows),
+                      "sale_lines": len(valid), "plans": len(plans)},
+           "note": None}
+    if coverage:
+        unassigned.sort(key=lambda x: -(x.get("ext_price") or 0))
+        out["coverage"] = _coverage_block(plans, valid, out_rows, unassigned, _pay_cfg,
+                                          _uses_bucket or _ct_mapped, _bucket_lines)
+    return out
+
+
+def _coverage_block(plans, valid, out_rows, unassigned, pay_cfg, bucket_built, bucket_lines):
+    """Diagnostics for "why doesn't my plan pay what I configured?" — PURE (everything passed in) and
+    money-free: it reads the already-computed rows and never changes a payout. Returns
+    {unassigned_reps, unmatched, contract_type, plan_warnings, settings}."""
+    blank_ct = sum(1 for r in valid if not str(r.get("contract_type") or "").strip())
+    ct_values = {}
+    for r in valid:
+        c = str(r.get("contract_type") or "").strip()
+        if c:
+            ct_values[c] = ct_values.get(c, 0) + 1
+    warnings = []
+    for p in plans:
+        if not p.get("is_active", True):
+            continue
+        nm = p.get("name")
+        tiers = p.get("tiers") or []
+        rules = p.get("rules") or []
+        metric = (p.get("base_tier_metric") or "none").strip().lower()
+        if tiers and metric in ("", "none"):
+            warnings.append({
+                "plan": nm, "severity": "high", "code": "tiers_without_metric",
+                "message": (f"'{nm}' has {len(tiers)} tier(s) but its Tier metric is 'none' — the tier "
+                            f"multiplier is FORCED to 1.0, so the tiers never change anyone's pay. Set the "
+                            f"plan's Tier metric.")})
+        if tiers and metric not in ("", "none") and not any(bool(r.get("tiered")) for r in rules):
+            warnings.append({
+                "plan": nm, "severity": "high", "code": "tiers_without_tiered_rule",
+                "message": (f"'{nm}' has {len(tiers)} tier(s) and a tier metric, but NO rule is marked "
+                            f"'Tiered' — the multiplier scales nothing. Tick 'Tiered' on the rules the "
+                            f"tier should scale.")})
+        if tiers and _tier_basis(p) == "rule_units":
+            warnings.append({
+                "plan": nm, "severity": "medium", "code": "tier_basis_legacy",
+                "message": (f"'{nm}' counts tier attainment the legacy way: every qualifying rule-matched "
+                            f"LINE, summed across rules (one activation that rings 3 lines counts 3; a line "
+                            f"matched by two rules counts twice). Set the plan's Tier count basis to "
+                            f"'transactions' with a tier matcher to count real activations.")})
+        ct_rules = [r for r in rules
+                    if (r.get("match_field") or "").strip().lower() == "contract_type"]
+        if ct_rules and blank_ct and pay_cfg.get("plan_ct_resolution") != "mapped":
+            warnings.append({
+                "plan": nm, "severity": "high", "code": "ct_rules_vs_blank_ct",
+                "message": (f"'{nm}' has {len(ct_rules)} rule(s) keyed on Contract Type, but {blank_ct} of "
+                            f"{len(valid)} sale lines this period have a BLANK Contract Type — those lines "
+                            f"can never match, so they pay $0. Either key the rules on 'activation_bucket', "
+                            f"or set Contract-type resolution to 'mapped' (Commission settings) after "
+                            f"configuring the tenant's activation rules.")})
+        if not rules:
+            warnings.append({"plan": nm, "severity": "high", "code": "plan_without_rules",
+                             "message": f"'{nm}' has no rules — every rep it covers pays $0."})
+        if not (p.get("assignments") or []):
+            warnings.append({"plan": nm, "severity": "medium", "code": "plan_without_assignment",
+                             "message": f"'{nm}' has no assignments — it covers nobody."})
+    return {
+        "unassigned_reps": unassigned,
+        "unassigned_count": len(unassigned),
+        "unassigned_ext_price": round(sum(x.get("ext_price") or 0 for x in unassigned), 2),
+        "unmatched": {
+            "reps": [{"rep": r.get("rep"), "plan_name": r.get("plan_name"),
+                      "unmatched_lines": r.get("unmatched_lines"),
+                      "unmatched_ext_price": r.get("unmatched_ext_price"),
+                      "sample": r.get("unmatched_sample")}
+                     for r in out_rows if (r.get("unmatched_lines") or 0) > 0],
+            "total_lines": sum((r.get("unmatched_lines") or 0) for r in out_rows),
+        },
+        "contract_type": {
+            "sale_lines": len(valid), "blank": blank_ct,
+            "blank_pct": round((blank_ct / len(valid) * 100.0), 1) if valid else 0.0,
+            "values": sorted(({"value": k, "lines": v} for k, v in ct_values.items()),
+                             key=lambda x: -x["lines"])[:25],
+            "resolution": pay_cfg.get("plan_ct_resolution"),
+            "bucket_resolver_ran": bool(bucket_built),
+            "bucket_classified_lines": bucket_lines,
+        },
+        "plan_warnings": warnings,
+        "settings": dict(pay_cfg),
+    }
