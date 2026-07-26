@@ -507,7 +507,42 @@ export default function EmployeeOnboardingPage() {
             ))}
           </div>
         )}
+
+        {/* HR Letters — sent-letters log for this employee (owner directive 2026-07-26 #8: "visible on
+            the employee's HR record"). Self-contained (own fetch/state) so it can't disturb the rest of
+            this already-large page's logic. */}
+        <EmployeeLettersPanel employeeId={employeeId} />
       </>}
+    </div>
+  )
+}
+
+// HR Letters sent-letters mini-log for this one employee — a tiny local component (own fetch/state)
+// so it never interferes with the parent page's onboarding-checklist logic above.
+function EmployeeLettersPanel({ employeeId }: { employeeId: string }) {
+  const [letters, setLetters] = useState<any[] | null>(null)
+  useEffect(() => {
+    if (!employeeId) return
+    api(`/api/v1/hr/letters/sent?employee_id=${encodeURIComponent(employeeId)}&limit=25`)
+      .then(d => setLetters(d?.letters || []))
+      .catch(() => setLetters([]))
+  }, [employeeId])
+  if (!letters || letters.length === 0) return null
+  const STATUS: Record<string, string> = { sent: '✅ Sent', approved_sent: '✅ Sent', queued_approval: '📥 Queued',
+    rejected: '⛔ Rejected', failed: '⚠️ Failed' }
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 10, marginTop: 10 }}>
+      <div style={{ padding: '10px 14px', fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>
+        HR Letters ({letters.length})
+      </div>
+      {letters.map((l, i) => (
+        <div key={l.id || i} style={{ padding: '8px 14px', borderTop: '1px solid var(--border)', fontSize: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ color: 'var(--text3)', minWidth: 128 }}>{String(l.created_at || '').replace('T', ' ').slice(0, 16)}</span>
+          <b>{l.subject}</b>
+          <span style={{ color: 'var(--text3)' }}>{l.category}{l.escalation_tier ? ` · tier ${l.escalation_tier}` : ''}</span>
+          <span>{STATUS[l.status] || l.status}</span>
+        </div>
+      ))}
     </div>
   )
 }

@@ -2844,3 +2844,11 @@ def onboarding_compliance_export(org_id: str = ORG_ID, employee_id: str = ""):
     fname = f"onboarding-documents-{employee_id or 'all'}.zip"
     return StreamingResponse(buf, media_type="application/zip",
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+# ── HR Letters / Template-Library (migration 408) — mounted last so every name above (ORG_ID,
+# _pvariants, _so, _cc, etc.) is already defined on this module before letters.py's lazy/no imports
+# of it would matter; letters.py itself never imports FROM this file (avoids any load-order coupling
+# at all — see the comment on its own _require_hr_or_admin duplicate). ────────────────────────────
+from app.modules.hr import letters as _letters  # noqa: E402
+router.include_router(_letters.router)
