@@ -70,14 +70,26 @@ export function monthRange(offsetMonths = 0): { start: string; end: string } {
   return { start: fmt(first), end: fmt(last) }
 }
 
+/** True iff {start,end} is EXACTLY one calendar month (day 1 through that month's last day, same
+ *  month/year on both ends). Shared by rangeLabel() (collapses to "July 2026") and any caller that
+ *  needs to know whether a range is narrower/wider than a full month — e.g. the Payroll Report's
+ *  month-keyed-chargebacks/PTO note (Gate-1 MINOR-A1, 2026-07-26): that note must fire whenever the
+ *  selected range ISN'T exactly a full month, not only when it happens to straddle two different
+ *  months — a default WEEKLY period entirely inside one month is just as much "not the whole month"
+ *  as a range spanning two. */
+export function isFullCalendarMonth(start: string, end: string): boolean {
+  if (!start || !end) return false
+  const s = new Date(start + 'T00:00:00'), e = new Date(end + 'T00:00:00')
+  return s.getDate() === 1 && s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()
+    && e.getDate() === new Date(e.getFullYear(), e.getMonth() + 1, 0).getDate()
+}
+
 /** Human label for a {start,end} range, e.g. "Jul 10 – Jul 23, 2026" or "July 2026" when it happens
  *  to be exactly a calendar month (so the common case still reads the way the old month picker did). */
 export function rangeLabel(start: string, end: string): string {
   if (!start || !end) return ''
   const s = new Date(start + 'T00:00:00'), e = new Date(end + 'T00:00:00')
-  const isFullMonth = s.getDate() === 1 && s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()
-    && e.getDate() === new Date(e.getFullYear(), e.getMonth() + 1, 0).getDate()
-  if (isFullMonth) return s.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  if (isFullCalendarMonth(start, end)) return s.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
   const sameYear = s.getFullYear() === e.getFullYear()
   const left = s.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: sameYear ? undefined : 'numeric' })
   const right = e.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })

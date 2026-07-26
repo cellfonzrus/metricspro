@@ -38,6 +38,37 @@ for (const [label, path] of Object.entries(PAGES)) {
     /<ReportShell[\s\S]{0,400}?rows=\{(view === 'employee' \? visibleRows : \(byStore as any\[\]\)|visibleRows)\}/.test(src))
 }
 
+// ── Gate-1 MINOR-A1 (2026-07-26): the Payroll Report's month-keyed chargebacks/PTO note must fire
+// whenever the range ISN'T exactly a full calendar month — not only when it straddles two months —
+// so the DEFAULT weekly-inside-one-month case (panels cover the whole month, Net Pay deducts a full
+// month's chargebacks from one week's pay) is never silently un-noted.
+{
+  const src = readFileSync('src/app/(platform)/storeops/payroll/page.tsx', 'utf8')
+  ok('payroll page: chargebacks/PTO note condition uses isFullCalendarMonth (not a two-month-straddle-only check)',
+    /!isFullCalendarMonth\(filt\.period \|\| '', filt\.periodTo \|\| ''\)/.test(src))
+  ok('payroll page: isFullCalendarMonth is imported from the shared pay-period lib (one source of truth, shared with rangeLabel)',
+    /import \{[^}]*isFullCalendarMonth[^}]*\} from '\.\.\/lib\/pay-period'/.test(src))
+  ok('payroll page: no leftover slice(0,7)-based month-straddle check for the note',
+    !/panelMonth !== \(filt\.period \|\| ''\)\.slice\(0, 7\)/.test(src))
+}
+
+// ── Functional verbatim re-impl of isFullCalendarMonth (same convention as prove_standard_filters.mjs)
+// — proves the fixed LOGIC itself, not just that the page calls some function by that name.
+function isFullCalendarMonth(start, end) {
+  if (!start || !end) return false
+  const s = new Date(start + 'T00:00:00'), e = new Date(end + 'T00:00:00')
+  return s.getDate() === 1 && s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()
+    && e.getDate() === new Date(e.getFullYear(), e.getMonth() + 1, 0).getDate()
+}
+ok('isFullCalendarMonth: a full month (07-01..07-31) is true', isFullCalendarMonth('2026-07-01', '2026-07-31'))
+ok('isFullCalendarMonth: a full 28-day Feb is true', isFullCalendarMonth('2026-02-01', '2026-02-28'))
+ok('isFullCalendarMonth: the DEFAULT WEEKLY period entirely inside one month is FALSE (the exact bug '
+  + 'reported — the note must fire here, unlike the old two-month-straddle-only check)',
+  !isFullCalendarMonth('2026-07-06', '2026-07-12'))
+ok('isFullCalendarMonth: a range spanning two months is FALSE', !isFullCalendarMonth('2026-07-20', '2026-08-05'))
+ok('isFullCalendarMonth: a month missing its last day (07-01..07-30) is FALSE', !isFullCalendarMonth('2026-07-01', '2026-07-30'))
+ok('isFullCalendarMonth: a month starting on the 2nd is FALSE', !isFullCalendarMonth('2026-07-02', '2026-07-31'))
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)
 console.log('ALL GREEN')

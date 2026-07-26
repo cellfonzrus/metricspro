@@ -7,7 +7,7 @@ import PtoAccrualPanel from './PtoAccrualPanel'
 import PayrollChargebacksPanel from './PayrollChargebacksPanel'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
-import { currentPeriodFromSettingsResponse, monthRange, rangeLabel, stepPeriod, type PayPeriodSettings } from '../lib/pay-period'
+import { currentPeriodFromSettingsResponse, isFullCalendarMonth, monthRange, rangeLabel, stepPeriod, type PayPeriodSettings } from '../lib/pay-period'
 
 interface PayrollRow {
   employee_id: string; name: string; store: string; pay_rate: number
@@ -202,13 +202,17 @@ export default function PayrollPage() {
       </div>
 
       {/* 2026-07-25 owner guidance: chargebacks/PTO stay calendar-month-keyed, not range-prorated —
-          say so plainly whenever the selected range isn't that exact month, so a biweekly period
-          straddling two months is never mistaken for "this covers my whole selected range". */}
-      {panelMonth !== (filt.period || '').slice(0, 7) || panelMonth !== (filt.periodTo || '').slice(0, 7) ? (
+          say so plainly whenever the selected range ISN'T EXACTLY that one calendar month (Gate-1
+          MINOR-A1, 2026-07-26: this must fire for a range NARROWER than a month too, not only one
+          that straddles two — the DEFAULT weekly period sits entirely inside one month, yet the
+          panels below still cover that WHOLE month and Net Pay deducts a full month's posted
+          chargebacks from just one week's pay; reuses the same isFullCalendarMonth test rangeLabel
+          uses, so "is this exactly a month" is decided in exactly one place). */}
+      {!isFullCalendarMonth(filt.period || '', filt.periodTo || '') ? (
         <div className="card" style={{ marginBottom: 12, padding: '10px 14px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
           ℹ️ Chargebacks and PTO accrual below are tracked by calendar month ({panelMonthName}) — they
-          don't yet prorate across a custom pay-period range, so they may not cover your full selected
-          period ({periodName}) if it spans more than one month.
+          don't yet prorate across a custom pay-period range, so they cover the WHOLE month, not just
+          your selected period ({periodName}).
         </div>
       ) : null}
 
