@@ -56,6 +56,9 @@ class FakeQuery:
     def eq(self, k, v):
         self.filters.append(("eq", k, v)); return self
 
+    def in_(self, k, vals):
+        self.filters.append(("in", k, set(str(x) for x in vals))); return self
+
     def gte(self, k, v):
         self.filters.append(("gte", k, v)); return self
 
@@ -69,6 +72,8 @@ class FakeQuery:
         for op, k, v in self.filters:
             rv = row.get(k)
             if op == "eq" and rv != v:
+                return False
+            if op == "in" and str(rv) not in v:
                 return False
             if op == "gte" and not (rv is not None and str(rv) >= str(v)):
                 return False
@@ -212,13 +217,19 @@ STORE["employees"] = [
     {"id": 3, "employee_id": "E4", "org_id": ORG, "name": "Dana Kiosk", "home_store": "Store2", "pay_rate": 22.0, "is_active": True},
     {"id": 4, "employee_id": "E6", "org_id": ORG, "name": "Fay BothSources", "home_store": "Store1", "pay_rate": 21.0, "is_active": True},
     {"id": 5, "employee_id": "E8", "org_id": ORG, "name": "Hana Idle", "home_store": "Store9", "pay_rate": 30.0, "is_active": True},
-    # INACTIVE employee: excluded from /payroll's active-only emp_map (rate shows 0 there) but
-    # present in /payroll-by-store's all-employees rate_map (terminated rep who worked still earns).
+    # INACTIVE employee with REAL activity this period (act=6>0 on their one shift, id6 below):
+    # 2026-07-25 fix — appears in /payroll AND /payroll-by-store paid at their REAL rate (15/hr),
+    # not the old $0-in-/payroll (active-only emp_map) behavior — "must still appear and be paid".
     {"id": 6, "employee_id": "E9", "org_id": ORG, "name": "Ivan Old", "home_store": "Store2", "pay_rate": 15.0, "is_active": False},
     {"id": 7, "employee_id": "E10", "org_id": ORG, "name": "Zed Same", "home_store": "Store1", "pay_rate": 10.0, "is_active": True},
     {"id": 8, "employee_id": "E11", "org_id": ORG, "name": "Zed Same", "home_store": "Store1", "pay_rate": 11.0, "is_active": True},
     {"id": 9, "employee_id": "E12", "org_id": ORG, "name": "Nia Deleted", "home_store": "Store1", "pay_rate": 12.0, "is_active": True},
     {"id": 10, "employee_id": "X1", "org_id": ORG2, "name": "Other Org", "home_store": "OStore", "pay_rate": 9.0, "is_active": True},
+    # INACTIVE employee with ONLY a schedule-only PHANTOM shift (id13 below, actual_hours=0, never
+    # actually worked, left over from before they were deactivated) — 2026-07-25 fix: must NOT
+    # appear anywhere, at all, in EITHER endpoint (the money-adjacent "phantom rows drop" half of
+    # the rule) — see checks 27-29.
+    {"id": 11, "employee_id": "E13", "org_id": ORG, "name": "Zara Ghost", "home_store": "Store1", "pay_rate": 18.0, "is_active": False},
 ]
 STORE["shifts"] = [   # list order == id order (bigserial insert order, what PostgREST returns)
     {"id": 1, "org_id": ORG, "employee_id": "E1", "employee_name": "Alice Rep", "store_code": "Store1",
@@ -249,6 +260,10 @@ STORE["shifts"] = [   # list order == id order (bigserial insert order, what Pos
      "shift_date": "2026-07-16", "scheduled_hours": 4, "actual_hours": 4, "is_deleted": False},
     {"id": 12, "org_id": ORG2, "employee_id": "X1", "employee_name": "Other Org", "store_code": "OStore",
      "shift_date": "2026-07-05", "scheduled_hours": 8, "actual_hours": 0, "is_deleted": False},
+    # PHANTOM: INACTIVE E13's only shift this month, never worked (actual_hours=0) — 07-20 is
+    # deliberately OUTSIDE the 07-10..07-16 multi-week sub-range so it never touches those checks.
+    {"id": 13, "org_id": ORG, "employee_id": "E13", "employee_name": "Zara Ghost", "store_code": "Store1",
+     "shift_date": "2026-07-20", "scheduled_hours": 5, "actual_hours": 0, "is_deleted": False},
 ]
 STORE["timelog"] = [
     # E4 kiosk-only: two closed punches, zero shift rows this month
@@ -336,9 +351,10 @@ check("8: NULL-employee_id shift survives: own bucket, name 'Ghost Temp', store 
       pay.get(None, {}).get("name") == "Ghost Temp" and pay.get(None, {}).get("store") == "Store3"
       and pay.get(None, {}).get("scheduled_hours") == 5 and pay.get(None, {}).get("actual_hours") == 5
       and pay.get(None, {}).get("pay_rate") == 0.0, pay.get(None))
-check("9: INACTIVE E9 appears in /payroll with rate 0 (active-only emp_map) but by-store pays "
-      "their real 15/hr (6h*15=90 inside Store2)",
-      pay["E9"]["pay_rate"] == 0.0 and pay["E9"]["actual_pay"] == 0.0
+check("9: INACTIVE E9 (REAL activity, act=6>0) appears in /payroll AND /payroll-by-store paid at "
+      "their REAL 15/hr rate (2026-07-25 money-adjacent fix: 'must still appear and be paid', "
+      "reversing the old $0-in-/payroll behavior for an inactive employee with genuine worked hours)",
+      pay["E9"]["pay_rate"] == 15.0 and pay["E9"]["actual_pay"] == 90.0
       and bys["Store2"]["hours"] == 23 and bys["Store2"]["amount"] == 432.0,
       (pay.get("E9"), bys.get("Store2")))
 check("10: E12's punch on the soft-DELETED shift's day COUNTS (deleted shift blocks nothing)",
@@ -450,10 +466,11 @@ check("23: multi-week /payroll narrows to exactly 7 employees (vs 9 for the full
       "(07-08) and E12 (07-18) correctly fall outside the window",
       set(wk_pay.keys()) == {"E1", "E2", "E4", "E6", "E9", "E10", "E11"}, sorted([str(k) for k in wk_pay.keys()]))
 check("24: multi-week per-employee hand-computed hours/store (E1 sched0/act3, E6 sched8/act7.5 Store1, "
-      "E9 sched6/act6 Store2 rate$0 inactive, E4 kiosk-only act9 Store2)",
+      "E9 sched6/act6 Store2 REAL 15/hr rate (2026-07-25 fix — inactive but genuinely worked), "
+      "E4 kiosk-only act9 Store2)",
       wk_pay["E1"]["scheduled_hours"] == 0 and wk_pay["E1"]["actual_hours"] == 3
       and wk_pay["E6"]["scheduled_hours"] == 8 and wk_pay["E6"]["actual_hours"] == 7.5 and wk_pay["E6"]["store"] == "Store1"
-      and wk_pay["E9"]["actual_hours"] == 6 and wk_pay["E9"]["store"] == "Store2" and wk_pay["E9"]["pay_rate"] == 0.0
+      and wk_pay["E9"]["actual_hours"] == 6 and wk_pay["E9"]["store"] == "Store2" and wk_pay["E9"]["pay_rate"] == 15.0
       and wk_pay["E4"]["actual_hours"] == 9 and wk_pay["E4"]["store"] == "Store2",
       wk_pay)
 check("25: multi-week /payroll-by-store hand-computed (Store1 14.5h/$257.50, Store2 19h/$332.00 — "
@@ -469,6 +486,39 @@ check("26: range-mode org isolation — ORG2's range call sees only its own X1/O
       "no ORG1 leak, byte-identical fast vs legacy",
       [r["employee_id"] for r in wk_pay2] == ["X1"] and wk_pay2[0]["actual_hours"] == 11
       and wk_outs2["fast"][0] == wk_outs2["legacy"][0], wk_pay2)
+
+# ══ 27-29: PHANTOM-SCHEDULE MONEY DIFFERENTIAL (2026-07-25 owner fix) ═══════════════════════════
+# E13 (inactive, id 11) has ONLY a schedule-only phantom shift (id 13, actual_hours=0, 07-20) —
+# never actually worked, left over from before deactivation. Money-adjacent rule: this must drop
+# EVERYWHERE, on both endpoints, on both fast and legacy paths — proven explicitly here (rather than
+# only implicitly via checks 1/2/11's unchanged totals).
+full_outs = run_both("2026-07", ORG)
+full_pay_fast = json.loads(full_outs["fast"][0])
+full_bys_fast = json.loads(full_outs["fast"][1])["stores"]
+check("27: phantom-only INACTIVE E13 (schedule-only, never worked) does NOT appear in /payroll at "
+      "all, on EITHER path", "E13" not in {r["employee_id"] for r in full_pay_fast}
+      and "E13" not in {r["employee_id"] for r in json.loads(full_outs["legacy"][0])},
+      [r["employee_id"] for r in full_pay_fast])
+store1_fast = next(s for s in full_bys_fast if s["store_code"] == "Store1")
+check("28: E13's phantom 5h never lands on Store1's /payroll-by-store total — UNCHANGED at "
+      "30.5h/$565.50 (identical to check 11's pre-E13 numbers) despite E13 now being in the fixture, "
+      "on EITHER path", store1_fast["hours"] == 30.5 and store1_fast["amount"] == 565.5
+      and full_outs["fast"][1] == full_outs["legacy"][1], store1_fast)
+check("29: the whole full-month output (incl. the phantom-employee fixture) is STILL byte-identical "
+      "fast vs legacy — the money differential is proven, not just asserted",
+      full_outs["fast"][0] == full_outs["legacy"][0], full_outs)
+
+# ══ 30: a tenant with ZERO inactive employees is COMPLETELY untouched by this fix — byte-identical ══
+# ORG2 has only X1 (is_active=True) — _inactive_ids_from(...) is empty, so _inactive_activity_rows
+# short-circuits to ([], []) without even querying, and neither endpoint's aggregation loop skips
+# anything. Locks in the exact expected JSON so a future regression here is caught immediately.
+o2_outs = run_both("2026-07", ORG2)
+check("30: ORG2 (no inactive employees at all) full-month /payroll output is the EXACT expected "
+      "JSON — completely unaffected by the phantom-schedule fix",
+      o2_outs["fast"][0] == o2_outs["legacy"][0]
+      == '[{"employee_id": "X1", "name": "Other Org", "store": "OStore", "pay_rate": 9.0, '
+         '"scheduled_hours": 8.0, "actual_hours": 11.0, "shifts": 1, "scheduled_pay": 72.0, "actual_pay": 99.0}]',
+      o2_outs["fast"][0])
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

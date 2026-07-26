@@ -306,6 +306,113 @@ def _payroll_month_groups(org_id, lo, hi):
         return None   # RPC missing/unreachable -> degrade gracefully to the legacy Python path
 
 
+# ── Inactive-employee phantom-schedule fix (2026-07-25, owner: "the employees assigned to [inactive
+# stores] are inactive but they still appear in the payroll and the storeops report") ──────────────
+# Money-adjacent rule (owner-confirmed): an employee row must appear iff they have REAL activity in
+# the range (a closed timelog punch, or a shift with GENUINELY recorded actual_hours) — a
+# terminated-mid-period employee with real worked hours must still appear AND be paid their real rate
+# (never blanket-filtered by is_active). What must drop is a schedule-only PHANTOM shift for an
+# INACTIVE employee (actual_hours==0, so the normal actual==0->scheduled fallback would otherwise
+# fabricate paid hours for a shift that was never actually worked, left over from before they were
+# deactivated). Applied IDENTICALLY to both /payroll and /payroll-by-store, and to BOTH the mig-407
+# RPC fast path and the legacy Python path, via ONE shared code path below (not reimplemented per
+# path) — an inactive employee's contribution is ALWAYS computed here, never through the RPC groups
+# (which can't be phantom-filtered after their SQL-side aggregation) or the legacy per-row loops
+# (which are told to skip inactive employees entirely and let this path handle them).
+def _inactive_ids_from(employees_rows):
+    return {e.get("employee_id") for e in employees_rows
+            if e.get("employee_id") and not e.get("is_active")}
+
+
+def _inactive_activity_rows(org_id, lo, hi, inactive_ids):
+    """(real_shifts, timelog_rows) for INACTIVE employees only. real_shifts = storeops.shifts rows
+    (is_deleted=false, in [lo,hi) when given) with actual_hours GENUINELY > 0 — a schedule-only row
+    (actual_hours 0/blank) is dropped right here, at the source, for every caller. timelog_rows =
+    CLOSED punches only (never phantom by definition, always real activity)."""
+    if not inactive_ids:
+        return [], []
+    try:
+        q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
+        if lo and hi:
+            q = q.gte("shift_date", lo).lt("shift_date", hi)
+        shifts = q.in_("employee_id", list(inactive_ids)).execute().data or []
+    except Exception:
+        shifts = []
+    real_shifts = [s for s in shifts if float(s.get("actual_hours") or 0) > 0]
+    try:
+        q2 = (sb().table("timelog").select("employee_id,employee_name,hours,clock_out,work_date,store_code")
+              .eq("org_id", org_id))
+        if lo and hi:
+            q2 = q2.gte("work_date", lo).lt("work_date", hi)
+        tl = q2.in_("employee_id", list(inactive_ids)).limit(20000).execute().data or []
+    except Exception:
+        tl = []
+    timelog_rows = [t for t in tl if t.get("clock_out") and t.get("hours") is not None]
+    return real_shifts, timelog_rows
+
+
+def _merge_inactive_into_payroll(summary, store_hours, emp_map, real_shifts, timelog_rows):
+    """Fold an INACTIVE employee's real-activity-only rows into /payroll's summary + store_hours —
+    real_shifts already guarantee actual_hours>0, so the act==0->scheduled fallback never applies."""
+    for s in real_shifts:
+        eid = s.get("employee_id")
+        emp = emp_map.get(eid, {})
+        if eid not in summary:
+            summary[eid] = {"employee_id": eid, "name": s.get("employee_name") or emp.get("name", ""),
+                             "store": "", "pay_rate": float(emp.get("pay_rate") or 0),
+                             "scheduled_hours": 0, "actual_hours": 0, "shifts": 0}
+        sched = float(s.get("scheduled_hours") or 0)
+        act = float(s.get("actual_hours") or 0)
+        summary[eid]["scheduled_hours"] += sched
+        summary[eid]["actual_hours"] += act
+        summary[eid]["shifts"] += 1
+        st = (s.get("store_code") or "").strip()
+        if st:
+            sh = store_hours.setdefault(eid, {})
+            sh[st] = sh.get(st, 0.0) + sched + act
+    for t in timelog_rows:
+        eid = t.get("employee_id")
+        if not eid:
+            continue
+        emp = emp_map.get(eid, {})
+        if eid not in summary:
+            summary[eid] = {"employee_id": eid, "name": t.get("employee_name") or emp.get("name", ""),
+                             "store": "", "pay_rate": float(emp.get("pay_rate") or 0),
+                             "scheduled_hours": 0, "actual_hours": 0, "shifts": 0}
+        hrs = float(t.get("hours") or 0)
+        summary[eid]["actual_hours"] += hrs
+        st = (t.get("store_code") or "").strip()
+        if st:
+            sh = store_hours.setdefault(eid, {})
+            sh[st] = sh.get(st, 0.0) + hrs
+
+
+def _merge_inactive_into_by_store(by_store, rate_map, real_shifts, timelog_rows):
+    """Fold an INACTIVE employee's real-activity-only rows into /payroll-by-store's by_store map."""
+    for s in real_shifts:
+        store = (s.get("store_code") or "").strip()
+        if not store:
+            continue
+        eid = s.get("employee_id")
+        sched = float(s.get("scheduled_hours") or 0)
+        act = float(s.get("actual_hours") or 0)
+        hrs = act if act > 0 else sched   # act is always >0 here (real_shifts is pre-filtered)
+        rate = rate_map.get(eid, 0.0)
+        d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
+        d["hours"] += hrs
+        d["amount"] += hrs * rate
+    for t in timelog_rows:
+        eid = t.get("employee_id")
+        store = (t.get("store_code") or "").strip()
+        if not eid or not store:
+            continue
+        hrs = float(t.get("hours") or 0)
+        rate = rate_map.get(eid, 0.0)
+        d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
+        d["hours"] += hrs
+        d["amount"] += hrs * rate
+
+
 @router.get("/payroll")
 def get_payroll(month: str = None, start: str = None, end: str = None,
                  authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -315,9 +422,14 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
     `start`/`end` ISO date range (both inclusive) for an arbitrary pay period — biweekly, semimonthly,
     custom — for ANY tenant (org_id stays the query-param scope, RULE ONE). start/end win if both given."""
     lo, hi = _resolve_range(month, start, end)
-    employees = sb().table("employees").select("id,name,employee_id,pay_rate,home_store").eq("org_id", org_id).eq("is_active", True).execute().data or []
+    # ALL employees (active OR not), not active-only: a terminated employee with REAL worked hours
+    # must still be paid their real rate (2026-07-25 fix) — matches /payroll-by-store's existing
+    # all-employees rate_map. Row EXISTENCE for an inactive employee is still gated on real activity
+    # below (_inactive_activity_rows), so this alone does not resurrect a schedule-only phantom.
+    employees = sb().table("employees").select("id,name,employee_id,pay_rate,home_store,is_active").eq("org_id", org_id).execute().data or []
 
     emp_map = {e["employee_id"]: e for e in employees}
+    inactive_ids = _inactive_ids_from(employees)
     summary = {}
     # employee_id -> {store_code: hours-weight}. RULE FIVE (§3d) store filter: a floater's row must
     # attribute to the store they actually WORKED THE MOST this month, not just whichever shift the
@@ -330,6 +442,12 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
         # already carries the per-ROW actual==0->scheduled fallback; timelog groups already exclude
         # open punches and shift-covered days (no-double-count). Group order = first-row order.
         shift_groups, tl_groups = groups
+        # Inactive employees' RPC groups can't be phantom-filtered post-aggregation (no per-row
+        # granularity survives the SQL GROUP BY) — excluded here and recomputed below via
+        # _inactive_activity_rows, the SAME shared path the legacy branch also uses.
+        if inactive_ids:
+            shift_groups = [g for g in shift_groups if g.get("employee_id") not in inactive_ids]
+            tl_groups = [g for g in tl_groups if g.get("employee_id") not in inactive_ids]
         for g in shift_groups:
             eid = g.get("employee_id")
             emp = emp_map.get(eid, {})
@@ -374,7 +492,9 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
                 sh = store_hours.setdefault(eid, {})
                 sh[st] = sh.get(st, 0.0) + hrs
     else:
-        # LEGACY PATH (pre-mig-407 fallback): full row fetch + Python aggregation — UNCHANGED.
+        # LEGACY PATH (pre-mig-407 fallback): full row fetch + Python aggregation — UNCHANGED for
+        # active/unknown employees. Inactive employees are excluded from this loop (below) and
+        # recomputed via the SAME shared _inactive_activity_rows path the fast branch uses.
         q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
         if lo and hi:
             q = q.gte("shift_date", lo).lt("shift_date", hi)
@@ -384,6 +504,8 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
         shift_days: dict = {}
         for s in shifts:
             eid = s.get("employee_id")
+            if eid in inactive_ids:
+                continue   # handled by _inactive_activity_rows below (phantom-schedule-only excluded there)
             emp = emp_map.get(eid, {})
             if eid not in summary:
                 summary[eid] = {
@@ -424,6 +546,8 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
                 if not (t.get("clock_out") and t.get("hours") is not None):
                     continue   # only CLOSED punches count (matches /payroll-raw's own rule)
                 eid = t.get("employee_id")
+                if eid in inactive_ids:
+                    continue   # handled by _inactive_activity_rows below (always real activity, no fallback needed)
                 wd = str(t.get("work_date") or "")[:10]
                 if not eid or not wd or wd in shift_days.get(eid, set()):
                     continue   # already represented by a shift that day -> never double-count
@@ -444,6 +568,13 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
                 if st:
                     sh = store_hours.setdefault(eid, {})
                     sh[st] = sh.get(st, 0.0) + hrs
+
+    # Inactive employees: ALWAYS computed via this ONE shared, phantom-aware path (never via the fast
+    # RPC groups or the legacy per-row loops above, which both explicitly skip them) — money-adjacent
+    # rule: real activity (a genuinely-clocked/worked hour) still appears and is paid at their real
+    # rate; a leftover schedule-only shift for someone since deactivated does not.
+    real_shifts, tl_rows = _inactive_activity_rows(org_id, lo, hi, inactive_ids)
+    _merge_inactive_into_payroll(summary, store_hours, emp_map, real_shifts, tl_rows)
 
     rows = list(summary.values())
     for r in rows:
@@ -471,15 +602,21 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     {store_code, hours, amount}."""
     lo, hi = _resolve_range(month, start, end)
     # All employees (active OR not) — a terminated rep who worked this month still earns; rate=0 if unknown.
-    employees = sb().table("employees").select("employee_id,pay_rate").eq("org_id", org_id).execute().data or []
+    employees = sb().table("employees").select("employee_id,pay_rate,is_active").eq("org_id", org_id).execute().data or []
     rate_map = {e.get("employee_id"): float(e.get("pay_rate") or 0) for e in employees}
+    inactive_ids = _inactive_ids_from(employees)
 
     by_store = {}
     groups = _payroll_month_groups(org_id, lo, hi)
     if groups is not None:
         # FAST PATH (mig 407): hours_eff_sum already carries the per-ROW hrs = actual if >0 else
         # scheduled basis; timelog groups already exclude open punches + shift-covered days.
+        # Inactive employees' groups are excluded here (2026-07-25) — recomputed below via
+        # _inactive_activity_rows, the SAME shared path the legacy branch also uses.
         shift_groups, tl_groups = groups
+        if inactive_ids:
+            shift_groups = [g for g in shift_groups if g.get("employee_id") not in inactive_ids]
+            tl_groups = [g for g in tl_groups if g.get("employee_id") not in inactive_ids]
         for g in shift_groups:
             store = (g.get("store_code") or "").strip()
             if not store:
@@ -507,8 +644,10 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
         shifts = q.execute().data or []
         shift_days: dict = {}   # employee_id -> {shift_date} already represented by a shift row
         for s in shifts:
-            store = (s.get("store_code") or "").strip()
             eid = s.get("employee_id")
+            if eid in inactive_ids:
+                continue   # handled by _inactive_activity_rows below (phantom-schedule-only excluded there)
+            store = (s.get("store_code") or "").strip()
             if eid:
                 shift_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
             if not store:
@@ -531,6 +670,8 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
                 if not (t.get("clock_out") and t.get("hours") is not None):
                     continue
                 eid = t.get("employee_id")
+                if eid in inactive_ids:
+                    continue   # handled by _inactive_activity_rows below (always real activity, no fallback needed)
                 wd = str(t.get("work_date") or "")[:10]
                 store = (t.get("store_code") or "").strip()
                 if not eid or not wd or not store or wd in shift_days.get(eid, set()):
@@ -540,6 +681,12 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
                 d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
                 d["hours"] += hrs
                 d["amount"] += hrs * rate
+
+    # Inactive employees: ALWAYS computed via this ONE shared, phantom-aware path (2026-07-25) — same
+    # function /payroll uses, so both endpoints agree byte-for-byte on which of an inactive employee's
+    # hours are "real" vs a leftover schedule-only phantom.
+    real_shifts, tl_rows = _inactive_activity_rows(org_id, lo, hi, inactive_ids)
+    _merge_inactive_into_by_store(by_store, rate_map, real_shifts, tl_rows)
 
     rows = list(by_store.values())
     for r in rows:
@@ -912,6 +1059,37 @@ def create_store(store: dict, org_id: str = ORG_ID):
     return r.data[0] if r.data else row
 
 
+def _sync_store_mapping_update(org_id, store_code, patch):
+    """Propagate an EXISTING store's is_active/address/market change into commcalc.store_mapping —
+    UPDATE only (creation-time propagation stays _sync_store_mapping's job, insert-if-absent).
+
+    2026-07-25 fix: `commcalc.store_mapping` has its OWN `is_active` column, and migration 003
+    defines a `storeops.sync_to_commcalc()` trigger FUNCTION meant to keep it in sync — but that
+    function is never actually ATTACHED to storeops.stores anywhere in the migration history (no
+    `CREATE TRIGGER ... ON storeops.stores` exists for it), and the app-side `_sync_store_mapping`
+    only INSERTS a mapping row for a brand-new store, never updates an existing one. So toggling a
+    store inactive in StoreOps Admin correctly saved `storeops.stores.is_active` but never reached
+    `commcalc.store_mapping.is_active` at all — plausibly part of "stores not going inactive"
+    wherever a downstream surface reads store_mapping's own flag instead of storeops.stores'. This
+    closes that gap going forward from the PATCH path (the toggle's actual write path) without
+    touching the dormant SQL trigger. Best-effort: a sync failure must never break the store update
+    itself (same posture as _sync_store_mapping)."""
+    upd = {}
+    if "is_active" in patch:
+        upd["is_active"] = bool(patch["is_active"])
+    if "address" in patch:
+        upd["store_address"] = patch["address"]
+    if "market" in patch:
+        upd["market"] = patch["market"]
+    if not upd or not store_code:
+        return
+    try:
+        (get_supabase().schema("commcalc").table("store_mapping").update(upd)
+         .eq("org_id", org_id).eq("store_code", store_code).execute())
+    except Exception as e:
+        print(f"WARN store_mapping update-sync failed: {e}")
+
+
 @router.patch("/stores/{store_id}")
 def update_store(store_id: int, updates: dict, org_id: str = ORG_ID):
     """Update a store (StoreOps Admin). org_id-scoped so a foreign (guessable BIGSERIAL) store_id
@@ -922,6 +1100,7 @@ def update_store(store_id: int, updates: dict, org_id: str = ORG_ID):
     r = sb().table("stores").update(row).eq("id", store_id).eq("org_id", org_id).execute()
     if not r.data:
         raise HTTPException(404, "store not found")
+    _sync_store_mapping_update(org_id, r.data[0].get("store_code"), row)
     return r.data[0]
 
 

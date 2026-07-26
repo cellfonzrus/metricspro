@@ -99,7 +99,8 @@ export default function ShiftExtensionsPage() {
           <label><span style={lbl}>Store</span>
             <select style={inp} value={form.store_code} onChange={e => setForm({ ...form, store_code: e.target.value })}>
               <option value="">—</option>
-              {stores.map(s => <option key={s.store_code} value={s.store_code}>{s.store_code}{s.address ? ` — ${s.address}` : ''}</option>)}
+              {/* 2026-07-25 fix: only ACTIVE stores are pickable for a new extension request */}
+              {stores.filter((s: any) => s.store_code && s.is_active !== false).map(s => <option key={s.store_code} value={s.store_code}>{s.store_code}{s.address ? ` — ${s.address}` : ''}</option>)}
             </select></label>
           <label><span style={lbl}>Date</span>
             <input type="date" style={inp} value={form.shift_date} onChange={e => setForm({ ...form, shift_date: e.target.value })} /></label>

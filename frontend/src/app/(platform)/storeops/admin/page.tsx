@@ -5,10 +5,27 @@ import { api } from '@/lib/client'
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderBottom: '1px solid var(--border)' }
 
+// 2026-07-25 owner directive: the Active toggle (and other edits) should AUTO-SAVE on change
+// (optimistic, visible success/error, rollback on failure) AND a Save button must still exist to
+// save a single row OR many at once (bulk). Both mechanisms coexist. `origEmps`/`origStores` are
+// last-KNOWN-SAVED snapshots (populated on load and after every successful save) — comparing the
+// live row against its snapshot is what drives the "N unsaved changes" bulk-save button/count.
+const EMP_EDIT_FIELDS = ['name', 'employee_id', 'home_store', 'email', 'phone', 'is_active']
+const STORE_EDIT_FIELDS = ['store_code', 'address', 'market', 'monthly_target', 'is_active', 'phone']
+function isDirty(row: any, orig: any, fields: string[]) {
+  if (!orig) return false
+  return fields.some(f => String(row[f] ?? '') !== String(orig[f] ?? ''))
+}
+
 export default function StoreOpsAdminPage() {
   const [tab, setTab] = useState<'employees' | 'stores'>('employees')
   const [emps, setEmps] = useState<any[]>([])
   const [stores, setStores] = useState<any[]>([])
+  const [origEmps, setOrigEmps] = useState<Record<string, any>>({})
+  const [origStores, setOrigStores] = useState<Record<string, any>>({})
+  const [rowBusy, setRowBusy] = useState<Record<string, boolean>>({})
+  const [rowMsg, setRowMsg] = useState<Record<string, string>>({})
+  const [bulkBusy, setBulkBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
   const [search, setSearch] = useState('')
@@ -24,8 +41,13 @@ export default function StoreOpsAdminPage() {
         api('/api/v1/storeops/employees?include_inactive=true').catch(() => []),
         api('/api/v1/storeops/stores').catch(() => []),
       ])
-      setEmps((e || []).map((x: any) => ({ ...x })))
-      setStores((s || []).map((x: any) => ({ ...x })))
+      const eList = (e || []).map((x: any) => ({ ...x }))
+      const sList = (s || []).map((x: any) => ({ ...x }))
+      setEmps(eList)
+      setStores(sList)
+      setOrigEmps(Object.fromEntries(eList.map((x: any) => [x.id, { ...x }])))
+      setOrigStores(Object.fromEntries(sList.map((x: any) => [x.id, { ...x }])))
+      setRowMsg({})
     } catch (err: any) { setMsg('Load failed: ' + (err?.message || err)) }
     setLoading(false)
   }
@@ -46,18 +68,67 @@ export default function StoreOpsAdminPage() {
   const setEmp = (id: any, patch: any) => setEmps(es => es.map(e => e.id === id ? { ...e, ...patch } : e))
   const setStore = (id: any, patch: any) => setStores(ss => ss.map(s => s.id === id ? { ...s, ...patch } : s))
 
+  function flashRow(key: string, text: string, ms = 2500) {
+    setRowMsg(m => ({ ...m, [key]: text }))
+    if (ms) setTimeout(() => setRowMsg(m => (m[key] === text ? { ...m, [key]: '' } : m)), ms)
+  }
+
   async function saveEmp(e: any) {
     setMsg('')
     const ph = cleanPhone(e.phone)
     if (ph === null) { alert(PHONE_EG); return }
+    const key = `emp-${e.id}`
+    setRowBusy(b => ({ ...b, [key]: true }))
     try {
       await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify({
         name: e.name, employee_id: e.employee_id, home_store: e.home_store,
         is_active: !!e.is_active, email: e.email, phone: ph,   // pay + role are set in HR / Roles & Access
       }) })
+      setOrigEmps(o => ({ ...o, [e.id]: { ...e, phone: ph } }))
       setMsg(`Saved ${e.name}`)
-    } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)) }
+      flashRow(key, '✓ saved')
+    } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)); flashRow(key, '✗ failed') }
+    finally { setRowBusy(b => ({ ...b, [key]: false })) }
   }
+
+  // AUTO-SAVE: the Active checkbox saves itself immediately (optimistic; rolls back on failure).
+  async function toggleEmpActive(e: any, checked: boolean) {
+    const prevVal = !!e.is_active
+    const key = `emp-${e.id}`
+    setEmp(e.id, { is_active: checked })
+    setRowBusy(b => ({ ...b, [key]: true }))
+    try {
+      await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify({ is_active: checked }) })
+      setOrigEmps(o => ({ ...o, [e.id]: { ...(o[e.id] || e), is_active: checked } }))
+      flashRow(key, checked ? '✓ activated' : '✓ deactivated')
+    } catch (err: any) {
+      setEmp(e.id, { is_active: prevVal })   // rollback — never show a fake success
+      flashRow(key, '✗ ' + (err?.message || 'save failed'), 5000)
+    } finally { setRowBusy(b => ({ ...b, [key]: false })) }
+  }
+
+  async function saveAllEmps() {
+    const dirty = emps.filter(e => isDirty(e, origEmps[e.id], EMP_EDIT_FIELDS))
+    if (!dirty.length) return
+    setBulkBusy(true); setMsg('')
+    let ok = 0, fail = 0
+    for (const e of dirty) {
+      const ph = cleanPhone(e.phone)
+      if (ph === null) { fail++; flashRow(`emp-${e.id}`, '✗ invalid phone', 5000); continue }
+      try {
+        await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify({
+          name: e.name, employee_id: e.employee_id, home_store: e.home_store,
+          is_active: !!e.is_active, email: e.email, phone: ph,
+        }) })
+        setOrigEmps(o => ({ ...o, [e.id]: { ...e, phone: ph } }))
+        flashRow(`emp-${e.id}`, '✓ saved')
+        ok++
+      } catch (err: any) { flashRow(`emp-${e.id}`, '✗ failed', 5000); fail++ }
+    }
+    setMsg(`Saved ${ok} employee(s)${fail ? ` · ${fail} failed (see row)` : ''}.`)
+    setBulkBusy(false)
+  }
+
   async function addEmp() {
     if (!newEmp.name.trim()) { setMsg('Employee name is required.'); return }
     const ph = cleanPhone(newEmp.phone)
@@ -83,14 +154,56 @@ export default function StoreOpsAdminPage() {
 
   async function saveStore(s: any) {
     setMsg('')
+    const key = `store-${s.id}`
+    setRowBusy(b => ({ ...b, [key]: true }))
     try {
       await api(`/api/v1/storeops/stores/${s.id}`, { method: 'PATCH', body: JSON.stringify({
         store_code: s.store_code, address: s.address, market: s.market,
         monthly_target: Number(s.monthly_target) || 0, is_active: !!s.is_active, phone: s.phone,
       }) })
+      setOrigStores(o => ({ ...o, [s.id]: { ...s } }))
       setMsg(`Saved ${s.store_code}`)
-    } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)) }
+      flashRow(key, '✓ saved')
+    } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)); flashRow(key, '✗ failed') }
+    finally { setRowBusy(b => ({ ...b, [key]: false })) }
   }
+
+  // AUTO-SAVE: same pattern as toggleEmpActive — a store's Active checkbox saves itself immediately.
+  async function toggleStoreActive(s: any, checked: boolean) {
+    const prevVal = !!s.is_active
+    const key = `store-${s.id}`
+    setStore(s.id, { is_active: checked })
+    setRowBusy(b => ({ ...b, [key]: true }))
+    try {
+      await api(`/api/v1/storeops/stores/${s.id}`, { method: 'PATCH', body: JSON.stringify({ is_active: checked }) })
+      setOrigStores(o => ({ ...o, [s.id]: { ...(o[s.id] || s), is_active: checked } }))
+      flashRow(key, checked ? '✓ activated' : '✓ deactivated')
+    } catch (err: any) {
+      setStore(s.id, { is_active: prevVal })   // rollback — never show a fake success
+      flashRow(key, '✗ ' + (err?.message || 'save failed'), 5000)
+    } finally { setRowBusy(b => ({ ...b, [key]: false })) }
+  }
+
+  async function saveAllStores() {
+    const dirty = stores.filter(s => isDirty(s, origStores[s.id], STORE_EDIT_FIELDS))
+    if (!dirty.length) return
+    setBulkBusy(true); setMsg('')
+    let ok = 0, fail = 0
+    for (const s of dirty) {
+      try {
+        await api(`/api/v1/storeops/stores/${s.id}`, { method: 'PATCH', body: JSON.stringify({
+          store_code: s.store_code, address: s.address, market: s.market,
+          monthly_target: Number(s.monthly_target) || 0, is_active: !!s.is_active, phone: s.phone,
+        }) })
+        setOrigStores(o => ({ ...o, [s.id]: { ...s } }))
+        flashRow(`store-${s.id}`, '✓ saved')
+        ok++
+      } catch (err: any) { flashRow(`store-${s.id}`, '✗ failed', 5000); fail++ }
+    }
+    setMsg(`Saved ${ok} store(s)${fail ? ` · ${fail} failed (see row)` : ''}.`)
+    setBulkBusy(false)
+  }
+
   async function addStore() {
     if (!newStore.store_code.trim()) { setMsg('Store code is required.'); return }
     setMsg('')
@@ -168,6 +281,8 @@ export default function StoreOpsAdminPage() {
 
   const filtered = emps.filter(e => (showInactive || e.is_active) &&
     (!search || `${e.name} ${e.home_store || ''} ${e.role || ''} ${e.email || ''}`.toLowerCase().includes(search.toLowerCase())))
+  const dirtyEmpCount = emps.filter(e => isDirty(e, origEmps[e.id], EMP_EDIT_FIELDS)).length
+  const dirtyStoreCount = stores.filter(s => isDirty(s, origStores[s.id], STORE_EDIT_FIELDS)).length
 
   return (
     <div>
@@ -207,6 +322,11 @@ export default function StoreOpsAdminPage() {
               <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} /> show inactive
             </label>
             <span style={{ fontSize: 13, color: 'var(--text3)' }}>{filtered.length} shown</span>
+            {/* Active toggle auto-saves per row (below); this covers any OTHER edited field (name/ID/
+                store/email/phone) across multiple rows at once. */}
+            <button className="btn btn-primary" disabled={!dirtyEmpCount || bulkBusy} onClick={saveAllEmps} title="Save every changed employee row in one action">
+              {bulkBusy ? '⏳ Saving…' : `💾 Save All Changed${dirtyEmpCount ? ` (${dirtyEmpCount})` : ''}`}
+            </button>
             <div style={{ flex: 1 }} />
             <span style={{ fontSize: 13, fontWeight: 600 }}>Bulk add employees:</span>
             <button className="btn" onClick={downloadEmpTemplate}>⬇️ Template</button>
@@ -225,20 +345,29 @@ export default function StoreOpsAdminPage() {
                   <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
               </tr></thead>
               <tbody>
-                {filtered.map(e => (
+                {filtered.map(e => {
+                  const key = `emp-${e.id}`
+                  const dirty = isDirty(e, origEmps[e.id], EMP_EDIT_FIELDS)
+                  return (
                   <tr key={e.id} style={{ opacity: e.is_active ? 1 : 0.5 }}>
                     <td style={cell}><input style={{ ...sel, width: 150 }} value={e.name || ''} onChange={ev => setEmp(e.id, { name: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 100 }} value={e.employee_id || ''} onChange={ev => setEmp(e.id, { employee_id: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 100 }} value={e.home_store || ''} onChange={ev => setEmp(e.id, { home_store: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 160 }} value={e.email || ''} onChange={ev => setEmp(e.id, { email: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 130 }} placeholder="5162330422" title={PHONE_EG} value={e.phone || ''} onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></td>
-                    <td style={cell}><input type="checkbox" checked={!!e.is_active} onChange={ev => setEmp(e.id, { is_active: ev.target.checked })} /></td>
                     <td style={cell}>
-                      <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => saveEmp(e)}>💾</button>
+                      <input type="checkbox" checked={!!e.is_active} disabled={!!rowBusy[key]}
+                        onChange={ev => toggleEmpActive(e, ev.target.checked)} title="Auto-saves immediately" />
+                    </td>
+                    <td style={cell}>
+                      <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }} disabled={!!rowBusy[key]} onClick={() => saveEmp(e)}>💾</button>
                       <button className="btn" style={{ fontSize: 12, padding: '4px 10px', marginLeft: 6, color: '#b91c1c' }} onClick={() => delEmp(e)}>🗑️</button>
+                      {dirty && !rowMsg[key] && <span style={{ fontSize: 11, color: '#b45309', marginLeft: 6 }}>● unsaved</span>}
+                      {rowMsg[key] && <span style={{ fontSize: 11, marginLeft: 6, color: rowMsg[key].startsWith('✗') ? '#b91c1c' : '#166534' }}>{rowMsg[key]}</span>}
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -260,6 +389,9 @@ export default function StoreOpsAdminPage() {
           {/* Bulk store setup */}
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 13, color: 'var(--text3)' }}>{stores.length} stores</span>
+            <button className="btn btn-primary" disabled={!dirtyStoreCount || bulkBusy} onClick={saveAllStores} title="Save every changed store row in one action">
+              {bulkBusy ? '⏳ Saving…' : `💾 Save All Changed${dirtyStoreCount ? ` (${dirtyStoreCount})` : ''}`}
+            </button>
             <div style={{ flex: 1 }} />
             <span style={{ fontSize: 13, fontWeight: 600 }}>Bulk add stores:</span>
             <button className="btn" onClick={downloadStoreTemplate}>⬇️ Template</button>
@@ -277,16 +409,27 @@ export default function StoreOpsAdminPage() {
                   <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
               </tr></thead>
               <tbody>
-                {stores.map(s => (
+                {stores.map(s => {
+                  const key = `store-${s.id}`
+                  const dirty = isDirty(s, origStores[s.id], STORE_EDIT_FIELDS)
+                  return (
                   <tr key={s.id} style={{ opacity: s.is_active ? 1 : 0.5 }}>
                     <td style={cell}><input style={{ ...sel, width: 110 }} value={s.store_code || ''} onChange={ev => setStore(s.id, { store_code: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 220 }} value={s.address || ''} onChange={ev => setStore(s.id, { address: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 110 }} value={s.market || ''} onChange={ev => setStore(s.id, { market: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 110 }} type="number" value={s.monthly_target ?? ''} onChange={ev => setStore(s.id, { monthly_target: ev.target.value })} /></td>
-                    <td style={cell}><input type="checkbox" checked={!!s.is_active} onChange={ev => setStore(s.id, { is_active: ev.target.checked })} /></td>
-                    <td style={cell}><button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => saveStore(s)}>💾</button></td>
+                    <td style={cell}>
+                      <input type="checkbox" checked={!!s.is_active} disabled={!!rowBusy[key]}
+                        onChange={ev => toggleStoreActive(s, ev.target.checked)} title="Auto-saves immediately" />
+                    </td>
+                    <td style={cell}>
+                      <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }} disabled={!!rowBusy[key]} onClick={() => saveStore(s)}>💾</button>
+                      {dirty && !rowMsg[key] && <span style={{ fontSize: 11, color: '#b45309', marginLeft: 6 }}>● unsaved</span>}
+                      {rowMsg[key] && <span style={{ fontSize: 11, marginLeft: 6, color: rowMsg[key].startsWith('✗') ? '#b91c1c' : '#166534' }}>{rowMsg[key]}</span>}
+                    </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>

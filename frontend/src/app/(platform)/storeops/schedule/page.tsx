@@ -17,7 +17,7 @@ interface Shift {
 }
 
 interface Employee { id: number; name: string; home_store: string; role: string }
-interface Store { id: number; store_code: string; address: string; market: string }
+interface Store { id: number; store_code: string; address: string; market: string; is_active?: boolean }
 
 // Local-safe day-of-week + m/d label (never the old DAYS[i] index — that was the
 // off-by-one: an array index can't know the real weekday after a UTC date shift).
@@ -515,7 +515,11 @@ export default function SchedulePage() {
                 <select className="select" style={{ width: '100%', marginTop: 4 }} value={newShift.store_code}
                   onChange={e => setNewShift(s => ({ ...s, store_code: e.target.value }))}>
                   <option value="">Select store…</option>
-                  {stores.filter(s => s.store_code).map(s => <option key={s.store_code} value={s.store_code}>{s.store_code} — {s.address?.substring(0, 24)}</option>)}
+                  {/* 2026-07-25 fix: a NEW shift can only be assigned to an ACTIVE store — a closed
+                      store (is_active=false) should stop generating new shifts/hours entirely. The
+                      view-filter dropdown above intentionally still lists every store (incl. closed
+                      ones), so historical schedule data stays viewable. */}
+                  {stores.filter(s => s.store_code && s.is_active !== false).map(s => <option key={s.store_code} value={s.store_code}>{s.store_code} — {s.address?.substring(0, 24)}</option>)}
                 </select>
               )}
             </div>

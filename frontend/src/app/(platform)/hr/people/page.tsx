@@ -33,7 +33,9 @@ export default function HRPeoplePage() {
   async function loadAll() {
     try {
       const r = await api('/api/v1/core/roles'); setRoles(r.roles || [])
-      const st = await api('/api/v1/storeops/stores'); setStores((st || []).filter((s: any) => s.store_code))
+      // 2026-07-25 fix: a new hire can only be assigned to an ACTIVE store (a closed store should
+      // never gain new employees/hours).
+      const st = await api('/api/v1/storeops/stores'); setStores((st || []).filter((s: any) => s.store_code && s.is_active !== false))
       const e = await api('/api/v1/hr/employees'); setPeople((e.employees || []).filter((p: any) => p.is_active !== false))
     } catch (err: any) { setMsg('Load failed: ' + (err?.message || err)) }
   }
