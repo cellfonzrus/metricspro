@@ -108,7 +108,12 @@ export default function CashConfigPage() {
             Block the assigned closer from clocking out until the store closing is submitted</label>
           <label style={{ fontSize: 13 }}>Alert if cash not picked up after (days)<br />
             <input type="number" style={{ ...inp, marginTop: 4, width: 90 }} defaultValue={cfg.cash_alert_after_days ?? ''} onBlur={e => saveCfg({ cash_alert_after_days: e.target.value })} /></label>
+          <label style={{ fontSize: 13 }}>Flag a store as &quot;not closing&quot; after (days, 0 = off)<br />
+            <input type="number" min={0} style={{ ...inp, marginTop: 4, width: 90 }} defaultValue={cfg.closing_stale_alert_days ?? 3} onBlur={e => saveCfg({ closing_stale_alert_days: e.target.value })} /></label>
         </div>
+        <p style={{ fontSize: 11, color: 'var(--text3)', margin: '6px 0 0' }}>
+          A store that keeps having B2B sales but no daily closing for this many days shows up in the admin attention popup (login notification) pointing at Management Review.
+        </p>
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Who closes the store each day?</div>
           <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>

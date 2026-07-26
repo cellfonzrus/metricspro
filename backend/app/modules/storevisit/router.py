@@ -4,7 +4,7 @@ Photos go to the Supabase Storage bucket `store-visits` (created on first upload
 only the storage PATH, served to the UI as a short-lived signed URL. Tables live in storeops.*
 (migration 027). A DM = the Market Manager role (scope: market) and acts on stores in their market.
 """
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header
 from app.core.database import get_supabase
 from datetime import datetime, timezone
 import uuid
@@ -52,8 +52,10 @@ def get_storevisit_config(org_id: str = ORG_ID):
 
 
 @router.put("/config")
-def put_storevisit_config(body: dict, org_id: str = ORG_ID):
+def put_storevisit_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Set (or clear, via blank strings -> back to the default) the tenant's accessory-reorder link."""
+    if not _can_edit_visit_setting(_caller_perms(authorization)):
+        raise HTTPException(403, "Editing store-visit settings is permission-restricted.")
     url = (body.get("accessory_order_url") or "").strip()
     label = (body.get("accessory_order_label") or "").strip()
     row = {"org_id": org_id, "accessory_order_url": url or None, "accessory_order_label": label or None,
@@ -67,6 +69,59 @@ def put_storevisit_config(body: dict, org_id: str = ORG_ID):
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# ── Per-setting edit permission (2026-07-26 settings audit) ──────────────────────────────────
+# The checklist TEMPLATE (checklist_items) and the accessory-order link (store_visit_config) are
+# admin-configured settings, not the operational DM visit flow — /storeops/visits/settings (the
+# template editor) is already nav-restricted to company-wide scope, and /closing/store-visit-config
+# likewise, but neither had a matching SERVER-side check: a market-scoped caller who knew the
+# endpoint could still write either. Mirrors closing/router.py's _caller_perms/_can_edit_closing_
+# setting (kept local/self-contained here rather than a cross-module import, matching this module's
+# existing zero-cross-import style). Uses the SAME 'closing' settings-area key core's SETTING_AREAS
+# registry already exposes as "Daily Closing / Tender Fields" — store-visit config is part of that
+# same retail-ops domain and there is no separate key for it.
+def _caller_perms(authorization: str) -> dict:
+    """`__resolved` marks "we found a real, logged-in caller" (mirrors closing/router.py's fix of the
+    same name, 2026-07-26 settings audit) — every early-return/exception yields `{}` (no `__resolved`
+    key), which `_can_edit_visit_setting` below treats as an explicit DENY rather than defaulting to
+    company-wide-allowed."""
+    try:
+        from app.modules.core.router import _uid_from_token
+        uid = _uid_from_token(authorization)
+        if not uid:
+            return {}
+        c = sb()   # already schema("storeops")
+        rows = (c.table("app_users").select("org_id,role,super_admin")
+                .eq("auth_id", uid).limit(1).execute().data) or []
+        if not rows:
+            return {}
+        u = rows[0]
+        perms = {}
+        if u.get("role"):
+            rr = (c.table("roles").select("permissions")
+                  .eq("org_id", u.get("org_id") or ORG_ID).eq("name", u["role"]).limit(1).execute().data) or []
+            if rr:
+                perms = dict(rr[0].get("permissions") or {})
+        perms["__super_admin"] = bool(u.get("super_admin"))
+        perms["__resolved"] = True
+        return perms
+    except Exception:
+        return {}
+
+
+def _can_edit_visit_setting(perms: dict) -> bool:
+    """An explicit settings.closing grant/deny on the caller's role wins; else company-wide scope or
+    super-admin only. A blank/failed perms lookup (no auth header, invalid token, no matching user —
+    `__resolved` absent) is DENIED, never silently allowed."""
+    if perms.get("__super_admin"):
+        return True
+    if not perms.get("__resolved"):
+        return False
+    s = perms.get("settings") or {}
+    if "closing" in s:
+        return bool(s["closing"])
+    return (perms.get("scope") or "all") == "all"
 
 
 # ── Storage helpers ──────────────────────────────────────────────────────────────────────
@@ -105,7 +160,9 @@ def list_checklist_items(include_inactive: bool = False, org_id: str = ORG_ID):
 
 
 @router.post("/checklist-items")
-def create_checklist_item(item: dict, org_id: str = ORG_ID):
+def create_checklist_item(item: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    if not _can_edit_visit_setting(_caller_perms(authorization)):
+        raise HTTPException(403, "Editing the visit checklist template is permission-restricted.")
     label = (item.get("label") or "").strip()
     if not label:
         raise HTTPException(400, "label required")
@@ -123,18 +180,28 @@ def create_checklist_item(item: dict, org_id: str = ORG_ID):
 
 
 @router.patch("/checklist-items/{item_id}")
-def update_checklist_item(item_id: str, updates: dict):
+def update_checklist_item(item_id: str, updates: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """2026-07-26 settings audit: `org_id` was entirely MISSING from this endpoint's signature — the
+    multi-tenant middleware rewrites the query param, but with nothing here to catch it, the UPDATE
+    below matched by `id` alone, org-unscoped (a caller in one tenant could edit ANOTHER tenant's
+    checklist item by id). Fixed the same way every other write in this module already scopes."""
+    if not _can_edit_visit_setting(_caller_perms(authorization)):
+        raise HTTPException(403, "Editing the visit checklist template is permission-restricted.")
     allowed = ("label", "category", "input_type", "sort_order", "is_active")
     body = {k: updates[k] for k in allowed if k in updates}
     body["updated_at"] = _now()
-    r = sb().table("checklist_items").update(body).eq("id", item_id).execute()
+    r = sb().table("checklist_items").update(body).eq("id", item_id).eq("org_id", org_id).execute()
     return r.data[0] if r.data else body
 
 
 @router.delete("/checklist-items/{item_id}")
-def delete_checklist_item(item_id: str):
+def delete_checklist_item(item_id: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """2026-07-26 settings audit: same missing-org_id gap as update_checklist_item above, fixed the
+    same way."""
+    if not _can_edit_visit_setting(_caller_perms(authorization)):
+        raise HTTPException(403, "Editing the visit checklist template is permission-restricted.")
     # Soft-delete (deactivate) so historical visits keep their item snapshots.
-    sb().table("checklist_items").update({"is_active": False, "updated_at": _now()}).eq("id", item_id).execute()
+    sb().table("checklist_items").update({"is_active": False, "updated_at": _now()}).eq("id", item_id).eq("org_id", org_id).execute()
     return {"deactivated": item_id}
 
 
@@ -283,12 +350,16 @@ async def upload_photo(visit_id: str, kind: str = Form("clean_store"),
 
     # clean_store + signed_checklist live on the visit header; per-item / proof photos
     # (kind='item:<key>' / 'proof:<key>') are linked when the frontend saves their rows.
+    # 2026-07-26 settings audit: both updates below were missing `.eq("org_id", org_id)` — the ONLY
+    # write in this whole endpoint that skipped it (the storage path itself is org_id-namespaced, but
+    # the DB pointer update was not org-scoped) — a visit_id from another tenant could have its
+    # clean-store/signed-checklist photo pointer overwritten. Fixed to match every other write here.
     if kind == "clean_store":
         sb().table("store_visits").update(
-            {"clean_store_photo_path": path, "updated_at": _now()}).eq("id", visit_id).execute()
+            {"clean_store_photo_path": path, "updated_at": _now()}).eq("id", visit_id).eq("org_id", org_id).execute()
     elif kind == "signed_checklist":
         sb().table("store_visits").update(
-            {"signed_checklist_path": path, "updated_at": _now()}).eq("id", visit_id).execute()
+            {"signed_checklist_path": path, "updated_at": _now()}).eq("id", visit_id).eq("org_id", org_id).execute()
     return {"path": path, "url": _signed_url(path), "kind": kind}
 
 
@@ -374,3 +445,12 @@ def signoff(visit_id: str, payload: dict, org_id: str = ORG_ID):
 @router.get("/health")
 def health(org_id: str = ORG_ID):
     return {"status": "ok", "module": "storevisit", "vaccessorize_url": _accessory_order_config(sb(), org_id)["url"]}
+
+
+# ── Universal admin-attention contributions (2026-07-26 settings audit) ─────────────────────────────
+# See storevisit/attention_providers.py. Import-time side effect only, guarded so a deployment
+# missing core/import_health.py (mig 717 un-run, or just an older core) never breaks this module.
+try:
+    from . import attention_providers  # noqa: F401
+except Exception as _e:
+    print("storevisit.attention_providers registration skipped:", _e)

@@ -1344,11 +1344,16 @@ def get_tender_config(org_id: str = ORG_ID):
 
 
 @router.put("/tender-config")
-def put_tender_config(payload: dict, org_id: str = ORG_ID):
+def put_tender_config(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save the tenant's tender defs + maps + recon mode. Body {defs:[...], maps:[...], recon_mode, custom}.
-    Full replace (delete-then-insert) — the wizard always sends the complete set."""
+    Full replace (delete-then-insert) — the wizard always sends the complete set. Gated to the 'closing'
+    settings area (2026-07-26 settings audit: /closing/tender-config is already nav-restricted to
+    company-wide scope, but the backend had no matching check — a market-scoped caller who knew the
+    endpoint could still write it)."""
     require_org(org_id)
     client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Editing tender configuration is permission-restricted.")
     defs = payload.get("defs") or []
     maps = payload.get("maps") or []
     client.schema("commcalc").table("closing_tender_def").delete().eq("org_id", org_id).execute()
@@ -1390,10 +1395,12 @@ def put_tender_config(payload: dict, org_id: str = ORG_ID):
 
 
 @router.post("/tender-config/seed-standard")
-def seed_standard_tenders(org_id: str = ORG_ID):
+def seed_standard_tenders(org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Seed the 7 built-in tenders as editable defs — the starting point for a 'standard' tenant."""
     require_org(org_id)
     client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Editing tender configuration is permission-restricted.")
     from .tender_config import STANDARD_DEFS
     client.schema("commcalc").table("closing_tender_def").delete().eq("org_id", org_id).execute()
     rows = [{"org_id": org_id, "tender_key": k, "label": lbl, "sort_order": i,
@@ -1469,11 +1476,14 @@ def get_count_config(org_id: str = ORG_ID):
 
 
 @router.put("/count-config")
-def put_count_config(payload: dict, org_id: str = ORG_ID):
+def put_count_config(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save the tenant's count-field defs. Body {defs:[...]}. Full replace (delete-then-insert) — the
-    wizard always sends the complete set. Saving an EMPTY list reverts the tenant to the hardcoded 3."""
+    wizard always sends the complete set. Saving an EMPTY list reverts the tenant to the hardcoded 3.
+    Gated to the 'closing' settings area (2026-07-26 settings audit — same rationale as tender-config)."""
     require_org(org_id)
     client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Editing count-field configuration is permission-restricted.")
     defs = payload.get("defs") or []
     try:
         client.schema("commcalc").table("closing_count_field_def").delete().eq("org_id", org_id).execute()
@@ -1494,10 +1504,12 @@ def put_count_config(payload: dict, org_id: str = ORG_ID):
 
 
 @router.post("/count-config/seed-standard")
-def seed_standard_counts(org_id: str = ORG_ID):
+def seed_standard_counts(org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Seed the 3 built-in count fields as editable defs — the starting point for a customized tenant."""
     require_org(org_id)
     client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Editing count-field configuration is permission-restricted.")
     from . import count_config
     client.schema("commcalc").table("closing_count_field_def").delete().eq("org_id", org_id).execute()
     rows = [{"org_id": org_id, "field_key": k, "label": lbl, "sort_order": so,
@@ -1644,7 +1656,12 @@ def get_deposit_config(org_id: str = ORG_ID):
 
 
 @router.put("/deposit-config")
-def put_deposit_config(body: dict, org_id: str = ORG_ID):
+def put_deposit_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """2026-07-26 settings audit: this was the ONE gap already flagged by a prior Gate-1 review
+    ('deposit-config PUT ungated = SETTING_AREAS doctrine gap') — closed the same way as the other
+    closing settings writes."""
+    if not _can_edit_closing_setting(_caller_perms(sb(), authorization)):
+        raise HTTPException(403, "Editing deposit-recon configuration is permission-restricted.")
     target = (body.get("match_target") or "total_cash").strip()
     if target not in _DEPOSIT_MATCH_TARGETS:
         raise HTTPException(400, f"match_target must be one of {_DEPOSIT_MATCH_TARGETS}")
@@ -2088,16 +2105,31 @@ def get_cash_config(org_id: str = ORG_ID):
         recips = (c.schema("storeops").table("alert_recipient").select("*").eq("org_id", org_id).execute().data) or []
     except Exception:
         recips = []
+    # closing_stale_alert_days (mig 505) — read SEPARATELY from the tenant select above so a database
+    # that hasn't run mig 505 yet never breaks the rest of this (already-working) endpoint; missing
+    # column/table → the same default (3) the attention provider falls back to.
+    try:
+        _sd = (c.schema("storeops").table("tenants").select("closing_stale_alert_days")
+               .eq("org_id", org_id).limit(1).execute().data) or []
+        stale_days = _sd[0].get("closing_stale_alert_days") if _sd else None
+    except Exception:
+        stale_days = None
     return {"closing_deadline": tenant.get("closing_deadline"),
             "closing_gate_enabled": bool(tenant.get("closing_gate_enabled")),
             "cash_alert_after_days": tenant.get("cash_alert_after_days"),
             "closing_mode": (tenant.get("closing_mode") or "per_rep"),
+            "closing_stale_alert_days": stale_days if stale_days is not None else 3,
             "closers": closers, "recipients": recips}
 
 
 @router.put("/cash-config")
-def put_cash_config(body: dict, org_id: str = ORG_ID):
-    """Update the closing-gate + cash-aging settings (defined at onboarding). Admin/manager only in the UI."""
+def put_cash_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Update the closing-gate + cash-aging settings (defined at onboarding). Gated to the 'closing'
+    settings area (2026-07-26 settings audit — this page is already nav-restricted to company-wide
+    scope; the backend had no matching check)."""
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Editing cash-management settings is permission-restricted.")
     upd = {}
     for k in ("closing_deadline", "closing_gate_enabled", "cash_alert_after_days", "closing_mode"):
         if k in body:
@@ -2113,13 +2145,26 @@ def put_cash_config(body: dict, org_id: str = ORG_ID):
                 v = "one_closing" if str(v) == "one_closing" else "per_rep"
             upd[k] = v
     if upd:
-        sb().schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
+        client.schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
+    if "closing_stale_alert_days" in body:
+        try:
+            _n = max(0, int(body["closing_stale_alert_days"]))
+        except (TypeError, ValueError):
+            _n = 3
+        try:
+            client.schema("storeops").table("tenants").update(
+                {"closing_stale_alert_days": _n}).eq("org_id", org_id).execute()
+        except Exception:
+            pass   # migration 505 not run yet on this database — degrades silently, nothing else breaks
     return get_cash_config(org_id)
 
 
 @router.put("/cash-config/closer")
-def set_store_closer(body: dict, org_id: str = ORG_ID):
-    """Assign (or clear) the closer for a store. Body: {store_code, employee_id?, employee_name?}."""
+def set_store_closer(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Assign (or clear) the closer for a store. Body: {store_code, employee_id?, employee_name?}.
+    Gated to the 'closing' settings area (2026-07-26 settings audit — same rationale as cash-config)."""
+    if not _can_edit_closing_setting(_caller_perms(sb(), authorization)):
+        raise HTTPException(403, "Assigning store closers is permission-restricted.")
     store = (body.get("store_code") or "").strip()
     if not store:
         raise HTTPException(400, "store_code required")
@@ -2133,8 +2178,11 @@ def set_store_closer(body: dict, org_id: str = ORG_ID):
 
 
 @router.put("/cash-config/recipient")
-def upsert_alert_recipient(body: dict, org_id: str = ORG_ID):
-    """Add/update an alert recipient. Body: {id?, scope, name?, email?, whatsapp?, via_email?, via_whatsapp?, include_dm?}."""
+def upsert_alert_recipient(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Add/update an alert recipient. Body: {id?, scope, name?, email?, whatsapp?, via_email?, via_whatsapp?, include_dm?}.
+    Gated to the 'closing' settings area (2026-07-26 settings audit — same rationale as cash-config)."""
+    if not _can_edit_closing_setting(_caller_perms(sb(), authorization)):
+        raise HTTPException(403, "Editing alert recipients is permission-restricted.")
     scope = (body.get("scope") or "all").strip()
     row = {"org_id": org_id, "scope": scope, "name": body.get("name"),
            "email": (body.get("email") or "").strip() or None, "whatsapp": (body.get("whatsapp") or "").strip() or None,
@@ -2149,8 +2197,11 @@ def upsert_alert_recipient(body: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/cash-config/recipient/{rid}")
-def delete_alert_recipient(rid: str, org_id: str = ORG_ID):
-    sb().schema("storeops").table("alert_recipient").delete().eq("id", rid).eq("org_id", org_id).execute()
+def delete_alert_recipient(rid: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Editing alert recipients is permission-restricted.")
+    client.schema("storeops").table("alert_recipient").delete().eq("id", rid).eq("org_id", org_id).execute()
     return {"ok": True}
 
 
@@ -2839,8 +2890,12 @@ def closing_sweep_get_config(org_id: str = ORG_ID):
 
 
 @router.put("/sweep/config")
-def closing_sweep_put_config(body: dict, org_id: str = ORG_ID):
+def closing_sweep_put_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Gated to the 'closing' settings area (2026-07-26 settings audit — /closing/imports is already
+    nav-restricted to company-wide scope; the backend had no matching check)."""
     client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Editing the auto-import schedule is permission-restricted.")
     cur = _closing_cfg(client, org_id) or {}
     row = {"org_id": org_id}
     for k in ("sheet_id", "tab", "enabled", "frequency", "day_of_week", "day_of_month", "hour", "timezone"):
@@ -3135,7 +3190,11 @@ def _log_attempt(client, org_id, d, body, tenders, declared_cash, declared_credi
 
 
 def _caller_perms(client, authorization: str) -> dict:
-    """Resolve the logged-in user's role permissions (same source as /core/me) for a backend gate."""
+    """Resolve the logged-in user's role permissions (same source as /core/me) for a backend gate.
+    `__resolved` (2026-07-26 settings audit) marks "we found a real, logged-in caller" — see
+    `_can_mgmt_review` for why this matters. Every early-return (no/invalid token, no matching
+    app_users row, any exception) returns `{}` — no `__resolved` key, i.e. falsy — never a dict that
+    could accidentally satisfy a later `.get(...)` check."""
     try:
         from app.modules.core.router import _uid_from_token
         uid = _uid_from_token(authorization)
@@ -3153,6 +3212,7 @@ def _caller_perms(client, authorization: str) -> dict:
             if rr:
                 perms = dict(rr[0].get("permissions") or {})
         perms["__super_admin"] = bool(u.get("super_admin"))
+        perms["__resolved"] = True
         return perms
     except Exception:
         return {}
@@ -3160,12 +3220,24 @@ def _caller_perms(client, authorization: str) -> dict:
 
 def _can_mgmt_review(perms: dict) -> bool:
     """Management-review gate: super-admin, an explicit page grant, or company-wide ('all') scope.
-    DMs (market/store scope) are excluded unless an admin grants /closing/management to their role."""
+    DMs (market/store scope) are excluded unless an admin grants /closing/management to their role.
+
+    FIX (2026-07-26 settings audit): the final fallback `(perms.get("scope") or "all") == "all"` used
+    to run even when `perms == {}` — which is exactly what every caller gets for a MISSING or INVALID
+    Authorization header (no exception, just an honest "couldn't resolve anyone") — so an entirely
+    unauthenticated request was being treated as company-wide/all-scope and PASSED this gate. That
+    silently made every endpoint gated by this function (or by `_can_edit_closing_setting`, which
+    falls back to this) effectively ungated for a caller with no valid token at all. Now requires
+    `__resolved` (a REAL caller was found) before that fallback applies; a super-admin or an explicit
+    per-page override still short-circuit first, exactly as before, since those can only be set on a
+    resolved caller's perms dict anyway."""
     if perms.get("__super_admin"):
         return True
     ov = (perms.get("pages") or {}).get("/closing/management")
     if isinstance(ov, bool):
         return ov
+    if not perms.get("__resolved"):
+        return False
     return (perms.get("scope") or "all") == "all"
 
 
@@ -3627,3 +3699,16 @@ def _gate_row(client, org_id, store_code, date, emp_name, declared_cash, declare
     flags = [i["reason"] for i in issues if i["severity"] == "flag"]
     return {"status": "blocked" if blocks else ("flagged" if flags else "ok"),
             "block_reasons": blocks, "flags": flags, "b2b": {"cash": repb["cash"], "card": repb["card"]}}
+
+
+# ── Universal admin-attention contributions (2026-07-26 settings audit) ─────────────────────────────
+# Registers this module's checks with the CENTRAL attention system (core/import_health.py) — see
+# closing/attention_providers.py for what's registered and why. Import-time side effect only (each
+# provider function itself lazily imports back into this module at CALL time, never at import time,
+# so there is no closing<->attention_providers circular import); guarded so a deploy that hasn't run
+# migration 717 (core.import_feed) yet — or is simply missing the file for some other reason — never
+# breaks this module's own endpoints.
+try:
+    from . import attention_providers  # noqa: F401
+except Exception as _e:
+    print("closing.attention_providers registration skipped:", _e)
