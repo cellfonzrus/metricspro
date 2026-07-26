@@ -1,0 +1,965 @@
+{
+ "columns": [
+  "department",
+  "category",
+  "contract_type",
+  "tender_type",
+  "trans_type",
+  "product_desc",
+  "sku"
+ ],
+ "cases": [
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "any",
+    "match_op": "equals",
+    "match_value": ""
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "category",
+    "match_op": "equals",
+    "match_value": "Home Internet"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "category",
+    "match_op": "equals",
+    "match_value": "home internet"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "category",
+    "match_op": "equals",
+    "match_value": " Cases "
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": "home internet"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": "vhi"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": ""
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "sku",
+    "match_op": "in",
+    "match_value": "OTB-1, MOTOG-64"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "sku",
+    "match_op": "in",
+    "match_value": ""
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "contract_type",
+    "match_op": "equals",
+    "match_value": ""
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "tender_type",
+    "match_op": "equals",
+    "match_value": "acima"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "trans_type",
+    "match_op": "equals",
+    "match_value": "Sale"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "department",
+    "match_op": "regex",
+    "match_value": "Internet"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "New Activation",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Home Internet Gateway",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "accessory",
+    "match_op": "equals",
+    "match_value": "yes"
+   },
+   "expect": null
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "any",
+    "match_op": "equals",
+    "match_value": ""
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "category",
+    "match_op": "equals",
+    "match_value": "Home Internet"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "category",
+    "match_op": "equals",
+    "match_value": "home internet"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "category",
+    "match_op": "equals",
+    "match_value": " Cases "
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": "home internet"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": "vhi"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": ""
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "sku",
+    "match_op": "in",
+    "match_value": "OTB-1, MOTOG-64"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "sku",
+    "match_op": "in",
+    "match_value": ""
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "contract_type",
+    "match_op": "equals",
+    "match_value": ""
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "tender_type",
+    "match_op": "equals",
+    "match_value": "acima"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "trans_type",
+    "match_op": "equals",
+    "match_value": "Sale"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "department",
+    "match_op": "regex",
+    "match_value": "Internet"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Internet",
+    "category": "Home Internet",
+    "contract_type": "",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "VHI Home Internet Router",
+    "sku": ""
+   },
+   "rule": {
+    "match_field": "accessory",
+    "match_op": "equals",
+    "match_value": "yes"
+   },
+   "expect": null
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "any",
+    "match_op": "equals",
+    "match_value": ""
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "category",
+    "match_op": "equals",
+    "match_value": "Home Internet"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "category",
+    "match_op": "equals",
+    "match_value": "home internet"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "category",
+    "match_op": "equals",
+    "match_value": " Cases "
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": "home internet"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": "vhi"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": ""
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "sku",
+    "match_op": "in",
+    "match_value": "OTB-1, MOTOG-64"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "sku",
+    "match_op": "in",
+    "match_value": ""
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "contract_type",
+    "match_op": "equals",
+    "match_value": ""
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "tender_type",
+    "match_op": "equals",
+    "match_value": "acima"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "trans_type",
+    "match_op": "equals",
+    "match_value": "Sale"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "department",
+    "match_op": "regex",
+    "match_value": "Internet"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "Accessories",
+    "category": "Cases",
+    "contract_type": "",
+    "tender_type": "Acima",
+    "trans_type": "Sale",
+    "product_desc": "Otterbox Case",
+    "sku": "OTB-1"
+   },
+   "rule": {
+    "match_field": "accessory",
+    "match_op": "equals",
+    "match_value": "yes"
+   },
+   "expect": null
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "any",
+    "match_op": "equals",
+    "match_value": ""
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "category",
+    "match_op": "equals",
+    "match_value": "Home Internet"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "category",
+    "match_op": "equals",
+    "match_value": "home internet"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "category",
+    "match_op": "equals",
+    "match_value": " Cases "
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": "home internet"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": "vhi"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": ""
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "sku",
+    "match_op": "in",
+    "match_value": "OTB-1, MOTOG-64"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "sku",
+    "match_op": "in",
+    "match_value": ""
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "contract_type",
+    "match_op": "equals",
+    "match_value": ""
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "tender_type",
+    "match_op": "equals",
+    "match_value": "acima"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "trans_type",
+    "match_op": "equals",
+    "match_value": "Sale"
+   },
+   "expect": true
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "department",
+    "match_op": "regex",
+    "match_value": "Internet"
+   },
+   "expect": false
+  },
+  {
+   "row": {
+    "department": "",
+    "category": "",
+    "contract_type": "Upgrade",
+    "tender_type": "",
+    "trans_type": "Sale",
+    "product_desc": "Moto G",
+    "sku": "MOTOG-64"
+   },
+   "rule": {
+    "match_field": "accessory",
+    "match_op": "equals",
+    "match_value": "yes"
+   },
+   "expect": null
+  }
+ ]
+}

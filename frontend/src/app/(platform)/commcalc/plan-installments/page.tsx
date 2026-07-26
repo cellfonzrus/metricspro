@@ -1,7 +1,9 @@
 'use client'
-import { useState, useEffect, Fragment } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { PlanOptions, MatchValuePicker, FALLBACK_VOCAB, countMatches, OptionsSourceNote } from '../_lib/planMatch'
+import EntityPicker from '@/components/EntityPicker'
 
 // SALE-TRIGGERED multi-month rep pay (commission-0 doctrine, mig 201; edit + m1-gate mig 210). A schedule
 // attaches to a Commission Plan and is triggered by the SALE LINE (M1..N relative to trans_date). Months are
@@ -32,7 +34,10 @@ const M1_GATES = [
   { v: 'inherit', l: 'Inherit — month 1 uses the paid gate above' },
   { v: 'activation_payment', l: 'Paid at activation — customer paid their 1st month at the sale' },
 ]
-const MATCH_FIELDS = ['any', 'contract_type', 'department', 'category', 'product_desc', 'sku', 'trans_type']
+// MATCH FIELDS/OPS come from the ENGINE (GET /commcalc/plan-field-options → commission_engine.MATCH_FIELDS
+// + _rule_matches), which the sale-installment trigger evaluates through the very same matcher
+// (sale_installment_engine._rule_matches). The list hard-coded here previously offered 7 of the 10 fields —
+// notably not 'activation_bucket', which is the one a blank-Contract-Type tenant needs.
 // The line classifications the MRC mapping assigns (shared mig-210 sales vocabulary; product_mrc.classification).
 const CLASSIFICATIONS = ['accessory', 'activation', 'upgrade', 'swap', 'bill_payment', 'rebate', 'misc_other']
 const blankLine = (i: number): Line => ({ month_index: i, payout_kind: 'flat', flat_amount: '', mrc_pct: '', mrc_source: 'product_catalog' })
@@ -96,6 +101,8 @@ export default function PlanInstallmentsPage() {
   const [audit, setAudit] = useState<{ sid: string; rows: any[] } | null>(null)
   const [showAdvMatcher, setShowAdvMatcher] = useState(false)
   const [msg, setMsg] = useState('')
+  // engine vocabulary + this tenant's observed values for the trigger matcher (RULE THREE §3b)
+  const [planOpts, setPlanOpts] = useState<PlanOptions | null>(null)
 
   useEffect(() => { load() }, [])
 
@@ -113,7 +120,26 @@ export default function PlanInstallmentsPage() {
       setSettings(st || { pay_disabled: false, residual_visibility: 'all' })
       if (mt?.matcher) { setMatcher(mt.matcher); setMatcherOpts({ departments: mt.departments || [], categories: mt.categories || [], value_fields: mt.value_fields || ['ext_price', 'gp'], is_default: !!mt.is_default }) }
     } catch (e: any) { setMsg(e.message) }
+    // read-only; never blocks the page (the picker degrades to the engine's field list + free text)
+    try {
+      const o: PlanOptions = await api(`/api/v1/commcalc/plan-field-options?months=3&period=${encodeURIComponent(period || '')}`)
+      setPlanOpts({ ...o, vocab: o?.vocab || FALLBACK_VOCAB })
+    } catch { setPlanOpts({ ready: false, vocab: FALLBACK_VOCAB, fields: {}, facets: null, periods: [] }) }
   }
+
+  const vocab = planOpts?.vocab || FALLBACK_VOCAB
+  // periods this tenant actually has sales for (+ anything already saved on the schedule — zero-wipe)
+  const periodOptions = useMemo(() => {
+    const out = (planOpts?.periods || []).map(p => ({ id: p.value, label: p.value, sublabel: `${(p.lines || 0).toLocaleString()} sale lines` }))
+    ;(draft.eligible_sale_periods || []).forEach(v => {
+      if (v && !out.some(o => o.id === v)) out.push({ id: v, label: v, sublabel: 'no sales rows found' })
+    })
+    return out
+  }, [planOpts?.periods, draft.eligible_sale_periods])
+  const triggerCount = useMemo(() => countMatches(planOpts, {
+    match_field: draft.trigger_match_field, match_op: draft.trigger_match_op,
+    match_value: draft.trigger_match_value,
+  }), [planOpts, draft.trigger_match_field, draft.trigger_match_op, draft.trigger_match_value])
 
   function setLine(i: number, patch: Partial<Line>) {
     setDraft(d => ({ ...d, lines: (d.lines || []).map((l, k) => k === i ? { ...l, ...patch } : l) }))
@@ -424,23 +450,53 @@ export default function PlanInstallmentsPage() {
               onChange={e => setDraft({ ...draft, gate_from_month: Math.max(1, Number(e.target.value) || 1) })} />
           </label>
           <label style={{ fontSize: 12 }}>Trigger match
-            <select style={{ ...sel, width: '100%' }} value={draft.trigger_match_field} onChange={e => setDraft({ ...draft, trigger_match_field: e.target.value })}>
-              {MATCH_FIELDS.map(f => <option key={f} value={f}>{f}</option>)}
+            <select style={{ ...sel, width: '100%' }} value={draft.trigger_match_field}
+              title={vocab.match_fields.find(f => f.value === draft.trigger_match_field)?.help || ''}
+              onChange={e => setDraft({ ...draft, trigger_match_field: e.target.value })}>
+              {vocab.match_fields.map(f => <option key={f.value} value={f.value} title={f.help}>{f.label}</option>)}
+              {!vocab.match_fields.some(f => f.value === draft.trigger_match_field) &&
+                <option value={draft.trigger_match_field}>{draft.trigger_match_field} (saved)</option>}
             </select>
           </label>
           {draft.trigger_match_field !== 'any' && (
+            <label style={{ fontSize: 12 }}>Match op
+              <select style={{ ...sel, width: '100%' }} value={draft.trigger_match_op || 'equals'}
+                onChange={e => setDraft({ ...draft, trigger_match_op: e.target.value })}>
+                {vocab.match_ops.map(o => <option key={o.value} value={o.value} title={o.help}>{o.label}</option>)}
+              </select>
+            </label>
+          )}
+          {draft.trigger_match_field !== 'any' && (
             <label style={{ fontSize: 12 }}>Match value
-              <input style={{ ...sel, width: '100%' }} value={draft.trigger_match_value} onChange={e => setDraft({ ...draft, trigger_match_value: e.target.value })} />
+              {/* RULE THREE §3b — picked from this tenant's OWN sale lines. A trigger that matches nothing
+                  starts no installment schedule at all, which is invisible until a rep asks where their
+                  multi-month money went. */}
+              <MatchValuePicker opts={planOpts} field={draft.trigger_match_field}
+                op={draft.trigger_match_op || 'equals'} value={draft.trigger_match_value || ''} width={220}
+                ariaLabel="Trigger match value"
+                onChange={v => setDraft({ ...draft, trigger_match_value: v })} />
+              {triggerCount && (
+                <span style={{ fontSize: 10.5, color: triggerCount.lines === 0 ? '#b45309' : 'var(--text3)' }}>
+                  {triggerCount.lines === 0
+                    ? `⚠ matches nothing in the last ${planOpts?.window?.months || 3} months — no schedule would start`
+                    : `${triggerCount.lines.toLocaleString()} sale line${triggerCount.lines === 1 ? '' : 's'} would trigger this schedule`}
+                </span>
+              )}
             </label>
           )}
           <label style={{ fontSize: 12 }}>Effective from (cutover)<input type="date" style={{ ...sel, width: '100%' }} value={draft.effective_from} onChange={e => setDraft({ ...draft, effective_from: e.target.value })} /></label>
           <label style={{ fontSize: 12 }}>Effective to<input type="date" style={{ ...sel, width: '100%' }} value={draft.effective_to} onChange={e => setDraft({ ...draft, effective_to: e.target.value })} /></label>
-          <label style={{ fontSize: 12 }}>Eligible sale months (comma-sep, overrides dates)
-            <input style={{ ...sel, width: '100%' }} placeholder="June 2026, July 2026"
-              value={(draft.eligible_sale_periods || []).join(', ')}
-              onChange={e => setDraft({ ...draft, eligible_sale_periods: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} />
+          <label style={{ fontSize: 12 }}>Eligible sale months (overrides dates)
+            {/* RULE THREE §3b: months are PICKED from the periods this tenant actually has sales for —
+                a mistyped month ('Jun 2026') silently makes every sale ineligible. Free entry stays
+                available for a period whose sales haven't landed yet. */}
+            <EntityPicker multi width="100%" options={periodOptions} allowCreate
+              value={draft.eligible_sale_periods || []} placeholder="all months (no restriction)…"
+              createLabel={v => `Use “${v}”`} ariaLabel="Eligible sale months"
+              onChange={vals => setDraft({ ...draft, eligible_sale_periods: vals })} />
           </label>
         </div>
+        <div style={{ marginBottom: 10 }}><OptionsSourceNote opts={planOpts} /></div>
         {draft.m1_gate === 'activation_payment' && (
           <div style={{ fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)', padding: '8px 10px', borderRadius: 7, marginBottom: 12 }}>
             Month 1 pays when the customer paid their first month <b>at the sale</b> (per the activation-payment

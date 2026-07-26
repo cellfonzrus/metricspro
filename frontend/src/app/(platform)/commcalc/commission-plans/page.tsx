@@ -4,6 +4,10 @@ import { api, fmt } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import EntityPicker from '@/components/EntityPicker'
+import {
+  PlanOptions, MatchRule, MatchValuePicker, MatchWarnings, OptionsSourceNote,
+  usePlanMatchStats, FALLBACK_VOCAB, countMatches,
+} from '../_lib/planMatch'
 
 // Configurable commission PLAN engine (migration 059). A PLAN is a set of RULES the user creates — each
 // rule matches sale lines on any sales-transaction field (contract_type/tender_type/department/category/
@@ -33,23 +37,12 @@ const lbl: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap
 const th: React.CSSProperties = { textAlign: 'left', padding: '5px 8px', fontSize: 11, color: 'var(--text2)' }
 const td: React.CSSProperties = { padding: '4px 8px', fontSize: 12, borderTop: '1px solid var(--border)' }
 
-const MATCH_FIELDS = ['any', 'contract_type', 'tender_type', 'department', 'category', 'product_desc', 'sku', 'trans_type', 'accessory', 'activation_bucket']
-const TIER_BASES = [
-  { v: '', l: 'Legacy — every qualifying matched line (default)' },
-  { v: 'transactions', l: 'Distinct transactions matching the tier rule' },
-  { v: 'lines', l: 'Lines matching the tier rule' },
-]
-const MATCH_OPS = ['equals', 'contains', 'in']
-const PAYOUT_KINDS = [
-  { v: 'flat_per_unit', l: 'Flat $ per unit', use: 'amount' },
-  { v: 'pct_mrc', l: '% of MRC (raw_mi)', use: 'pct' },
-  { v: 'pct_gp', l: '% of GP', use: 'pct' },
-  { v: 'pct_price_over_cost', l: '% of price − cost', use: 'pct' },
-  { v: 'flat', l: 'Flat $ once', use: 'amount' },
-]
-const TIER_METRICS = ['none', 'activations', 'upgrades', 'boxes']
-const usesPct = (k: string) => PAYOUT_KINDS.find(p => p.v === k)?.use === 'pct'
+// VOCABULARY (match fields / ops / payout kinds / tier bases / tier metrics) is SERVED BY THE ENGINE via
+// GET /commcalc/plan-field-options — commission_engine.MATCH_FIELDS / PAYOUT_KINDS / _rule_matches are the
+// source of truth, so this editor can never offer a field the engine ignores (or hide one it supports).
+// FALLBACK_VOCAB (identical to what this page hard-coded before) is used only if that call fails.
 
+// fallback help text — the endpoint serves the engine-authored version per field
 const FIELD_HELP: Record<string, string> = {
   tender_type: 'e.g. acima (case-insensitive)',
   department: 'e.g. accessories, insurance, internet, Ondigo',
@@ -86,9 +79,10 @@ export default function CommissionPlansPage() {
   const [carriers, setCarriers] = useState<any[]>([])
   const [employees, setEmployees] = useState<any[]>([])
   const [stores, setStores] = useState<any[]>([])
-  // OBSERVED raw-data values per match_field (RULE THREE §3b) — powers the match_value picker so a
-  // rule references a REAL sales value instead of a typo that silently never matches ($0 pay).
-  const [observed, setObserved] = useState<Record<string, string[]>>({})
+  // ENGINE VOCABULARY + this tenant's OBSERVED values per match_field (RULE THREE §3b) — powers every
+  // dropdown here, so a rule references a REAL sales value instead of a typo that silently never matches
+  // ($0 pay) or a hand-typed pattern that double-pays with another rule. Read-only; no calc is triggered.
+  const [planOpts, setPlanOpts] = useState<PlanOptions | null>(null)
   const [ready, setReady] = useState(true)
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
@@ -129,24 +123,68 @@ export default function CommissionPlansPage() {
       // too (a mid-month-terminated rep's sales still pay under their role). We show active/inactive split.
       setEmployees(await api('/api/v1/storeops/employees?all_company=true&include_inactive=true').catch(() => []))
       setStores(await api('/api/v1/storeops/stores').catch(() => []))
-      // distinct observed values for the match_value picker (all periods; read-only)
-      const sf: any = await api('/api/v1/commcalc/sales-fields').catch(() => ({}))
-      setObserved({
-        contract_type: sf.contract_types || [], tender_type: sf.tenders || [],
-        department: sf.departments || [], category: sf.categories || [],
-        product_desc: sf.products || [], trans_type: sf.trans_types || [], sku: [],
-        // synthetic accessory field (migs 230/231): a line is stamped 'yes'/'no' by the classifier
-        accessory: ['yes', 'no'],
-        // synthetic activation_bucket field (mig 232): resolved per line/transaction from this tenant's
-        // contract-type map + blank-contract-type activation rules (the SAME resolver the Sales Report uses)
-        activation_bucket: ['premium', 'upgrade', 'byod'],
-      })
+      // (the value options load in their own effect below — they depend on the previewed period)
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
   }
+  // Engine vocabulary + observed values + the facet table that powers the exact "matches nothing" /
+  // "N lines also match rule X" guards. The window is the last 3 months PLUS the period being previewed.
+  // Falls back to the older /sales-fields lists (and the hard-coded vocabulary) if the endpoint is
+  // unavailable, so the editor degrades to exactly today's behaviour instead of breaking.
+  async function loadOptions(forPeriod: string) {
+    try {
+      const o: PlanOptions = await api(`/api/v1/commcalc/plan-field-options?months=3&period=${encodeURIComponent(forPeriod || '')}`)
+      setPlanOpts({ ...o, vocab: o?.vocab || FALLBACK_VOCAB })
+    } catch {
+      try {
+        const sf: any = await api('/api/v1/commcalc/sales-fields')
+        const mk = (vals: string[]): any => ({ values: (vals || []).map(v => ({ value: v })), truncated: true })
+        setPlanOpts({
+          ready: false, vocab: FALLBACK_VOCAB, facets: null, periods: [],
+          fields: {
+            contract_type: mk(sf.contract_types), tender_type: mk(sf.tenders),
+            department: mk(sf.departments), category: mk(sf.categories),
+            product_desc: { ...mk(sf.products), free_text: true }, trans_type: mk(sf.trans_types),
+            sku: mk([]), accessory: { values: [{ value: 'yes' }, { value: 'no' }], closed: true },
+            activation_bucket: { values: [{ value: 'premium' }, { value: 'upgrade' }, { value: 'byod' }], closed: true },
+          },
+        })
+      } catch { setPlanOpts({ ready: false, vocab: FALLBACK_VOCAB, fields: {}, facets: null, periods: [] }) }
+    }
+  }
   useEffect(() => { load(); loadRoster() }, [])
+  // re-read the options when the operator changes the period (server-side TTL cache makes this cheap)
+  useEffect(() => {
+    const t = setTimeout(() => { loadOptions(period) }, 400)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period])
 
   const markets = Array.from(new Set(stores.map(s => (s.market || '').trim()).filter(Boolean))).sort()
   const carrierName = (id?: string | null) => carriers.find(c => c.id === id)?.name || ''
+
+  // ── engine-served vocabulary (falls back to the previously hard-coded lists) ──
+  const vocab = planOpts?.vocab || FALLBACK_VOCAB
+  const usesPct = (k: string) => vocab.payout_kinds.find(p => p.value === k)?.uses === 'pct'
+  const fieldHelp = (f: string) => vocab.match_fields.find(x => x.value === f)?.help || FIELD_HELP[f] || ''
+  // ZERO-WIPE for the two metric dropdowns: a value already stored on THIS plan is always offered, even
+  // when it isn't one of the suggested metrics (the backend also unions in every metric this org stores).
+  const tierMetrics = useMemo(() => {
+    const out = [...vocab.tier_metrics]
+    const stored = [draft?.base_tier_metric || '', ...((draft?.tiers || []).map(t => t.metric || ''))]
+    stored.forEach(v => { if (v && !out.includes(v)) out.push(v) })
+    return out
+  }, [vocab, draft?.base_tier_metric, draft?.tiers])
+  // exact matched-line counts + the pairwise overlap matrix for the rules being edited, PLUS the tier
+  // matcher as one extra pseudo-rule (so the tier rule gets the same "matches nothing" guard).
+  const matchRules: MatchRule[] = useMemo(() => [
+    ...(draft?.rules || []).map(r => ({ match_field: r.match_field, match_op: r.match_op, match_value: r.match_value, label: r.label, qualifies: r.qualifies })),
+  ], [draft?.rules])
+  const matchStats = usePlanMatchStats(planOpts, matchRules)
+  const tierRule: MatchRule = useMemo(() => ({
+    match_field: draft?.tier_match_field || 'any', match_op: draft?.tier_match_op || 'equals',
+    match_value: draft?.tier_match_value || '', label: 'tier rule',
+  }), [draft?.tier_match_field, draft?.tier_match_op, draft?.tier_match_value])
+  const tierCount = useMemo(() => countMatches(planOpts, tierRule), [planOpts, tierRule])
 
   // ── bulk-assign derived state ──
   const nameCounts = useMemo(() => {
@@ -234,6 +272,21 @@ export default function CommissionPlansPage() {
     .map(([r, s]) => ({ id: r,
       label: `${r} — ${s.active} active${s.inactive ? ` (+${s.inactive} inactive)` : ''}` }))
 
+  // Store / market pickers (RULE THREE). A scope_value already saved on the plan is ALWAYS offered even
+  // when the store/market list no longer contains it, so opening the editor can never silently blank an
+  // assignment (which would move that rep onto a different plan on the next save).
+  const storeOptions = (current?: string | null) => {
+    const out = stores.map(s => ({ id: String(s.address || s.store_code || ''), label: String(s.address || s.store_code || ''), sublabel: s.market || undefined }))
+      .filter(o => o.id)
+    if (current && !out.some(o => o.id.toLowerCase() === current.toLowerCase())) out.unshift({ id: current, label: current, sublabel: 'not in the current store list' })
+    return out
+  }
+  const marketOptions = (current?: string | null) => {
+    const out = markets.map(m => ({ id: m, label: m, sublabel: undefined as string | undefined }))
+    if (current && !out.some(o => o.id.toLowerCase() === current.toLowerCase())) out.unshift({ id: current, label: current, sublabel: 'not in the current market list' })
+    return out
+  }
+
   // ── plan-level mutators ──
   const upd = (patch: Partial<Plan>) => setDraft(d => d ? { ...d, ...patch } : d)
   const updRule = (i: number, patch: Partial<Rule>) => setDraft(d => d ? { ...d, rules: (d.rules || []).map((r, j) => j === i ? { ...r, ...patch } : r) } : d)
@@ -279,6 +332,14 @@ export default function CommissionPlansPage() {
       setCov(await api(`/api/v1/commcalc/commission-plans/coverage?period=${encodeURIComponent(period)}`))
     } catch (e: any) { setMsg('❌ Coverage: ' + (e?.message || e)) } finally { setCovBusy(false) }
   }
+
+  // Periods this tenant actually has sales for (pick-don't-type); free entry stays allowed so an operator
+  // can still look at a period that has no rows yet.
+  const periodOptions = useMemo(() => {
+    const out = (planOpts?.periods || []).map(p => ({ id: p.value, label: p.value, sublabel: `${(p.lines || 0).toLocaleString()} sale lines` }))
+    if (period && !out.some(o => o.id === period)) out.unshift({ id: period, label: period, sublabel: 'no sales rows found' })
+    return out
+  }, [planOpts?.periods, period])
 
   function coveragePayload(): ExportPayload {
     const c = cov?.coverage || {}
@@ -400,7 +461,7 @@ export default function CommissionPlansPage() {
             </label>
             <label style={lbl}>Tier metric
               <select style={sel} value={draft.base_tier_metric || 'none'} onChange={e => upd({ base_tier_metric: e.target.value })}>
-                {TIER_METRICS.map(m => <option key={m} value={m}>{m}</option>)}
+                {tierMetrics.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </label>
             <label style={{ ...lbl, justifyContent: 'flex-end' }}>
@@ -420,39 +481,35 @@ export default function CommissionPlansPage() {
                   <tr key={i}>
                     <td style={td}><input style={{ ...sel, width: 110 }} placeholder="(optional)" value={r.label || ''} onChange={e => updRule(i, { label: e.target.value })} /></td>
                     <td style={td}>
-                      <select style={{ ...sel, width: 130 }} value={r.match_field} onChange={e => updRule(i, { match_field: e.target.value })}>
-                        {MATCH_FIELDS.map(f => <option key={f} value={f}>{f}</option>)}
+                      <select style={{ ...sel, width: 130 }} value={r.match_field} title={fieldHelp(r.match_field)}
+                        onChange={e => updRule(i, { match_field: e.target.value })}>
+                        {vocab.match_fields.map(f => <option key={f.value} value={f.value} title={f.help}>{f.label}</option>)}
+                        {!vocab.match_fields.some(f => f.value === r.match_field) && <option value={r.match_field}>{r.match_field} (saved)</option>}
                       </select>
                     </td>
                     <td style={td}>
                       <select style={{ ...sel, width: 90 }} value={r.match_op} onChange={e => updRule(i, { match_op: e.target.value })} disabled={r.match_field === 'any'}>
-                        {MATCH_OPS.map(o => <option key={o} value={o}>{o}</option>)}
+                        {vocab.match_ops.map(o => <option key={o.value} value={o.value} title={o.help}>{o.label}</option>)}
                       </select>
                     </td>
                     <td style={td}>
-                      {(() => {
-                        // RULE THREE §3b: pick an OBSERVED value for the selected match_field instead of
-                        // free-typing (a typo silently never matches → $0 pay). allowCreate keeps the
-                        // legitimate op=contains PATTERN + rules that pre-date the data as an EXPLICIT
-                        // choice. The picker emits the raw string (id===value) — byte-identical to typing.
-                        const isAny = r.match_field === 'any'
-                        const opts = (observed[r.match_field] || []).map(v => ({ id: v, label: v }))
-                        if (r.match_value && !opts.some(o => o.id === r.match_value)) opts.unshift({ id: r.match_value, label: r.match_value })
-                        return (
-                          <EntityPicker
-                            options={opts} value={r.match_value || null} allowCreate disabled={isAny} width={168}
-                            onChange={v => updRule(i, { match_value: v || '' })}
-                            onCreate={v => updRule(i, { match_value: v })}
-                            createLabel={v => `Use “${v}” (${r.match_op === 'contains' ? 'pattern' : r.match_op === 'in' ? 'comma list' : 'exact'})`}
-                            placeholder={isAny ? '(any line)' : r.match_op === 'contains' ? 'pick or type a pattern…' : r.match_op === 'in' ? 'pick or type (comma list)…' : FIELD_HELP[r.match_field] || 'pick or type a value…'}
-                            ariaLabel="Match value" />
-                        )
-                      })()}
+                      {/* RULE THREE §3b: the value is PICKED from what this tenant's own sales actually
+                          contain (a typo silently never matches → $0 pay). Only a 'contains' PATTERN — or a
+                          list the backend had to truncate — can still be typed, and then it is checked:
+                          "matches nothing" and "N lines also match rule X" (the double-pay guard) are shown
+                          inline, computed exactly from the facet table. */}
+                      <MatchValuePicker opts={planOpts} field={r.match_field} op={r.match_op}
+                        value={r.match_value || ''} width={176}
+                        onChange={v => updRule(i, { match_value: v })} />
+                      {r.match_field !== 'any' && (
+                        <MatchWarnings opts={planOpts} rules={matchRules} stats={matchStats} index={i} />
+                      )}
                     </td>
                     <td style={{ ...td, textAlign: 'center' }}><input type="checkbox" checked={r.qualifies} onChange={e => updRule(i, { qualifies: e.target.checked })} /></td>
                     <td style={td}>
                       <select style={{ ...sel, width: 150 }} value={r.payout_kind} onChange={e => updRule(i, { payout_kind: e.target.value })}>
-                        {PAYOUT_KINDS.map(p => <option key={p.v} value={p.v}>{p.l}</option>)}
+                        {vocab.payout_kinds.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                        {!vocab.payout_kinds.some(p => p.value === r.payout_kind) && <option value={r.payout_kind}>{r.payout_kind} (saved)</option>}
                       </select>
                     </td>
                     <td style={td}>
@@ -468,9 +525,16 @@ export default function CommissionPlansPage() {
             </table>
           </div>
           <button className="btn btn-secondary" style={{ fontSize: 12, marginBottom: 16 }} onClick={addRule}>➕ Add rule</button>
-          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 16 }}>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6 }}>
             % payout uses a fraction (0.10 = 10%). pct_mrc joins raw_mi by mdn (then subscriber/serial); pct_price_over_cost uses raw_catalog cost by product_id.
             “Tiered” rules are scaled by the plan’s tier multiplier; “qualifies” lines count toward the tier metric.
+          </div>
+          <div style={{ marginBottom: 16 }}>
+            <OptionsSourceNote opts={planOpts} />
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
+              The line counts under each value are what the rule WOULD match — they never change anyone’s pay.
+              Two rules that match the same line both pay on it, so an overlap warning is worth reading before saving.
+            </div>
           </div>
 
           {/* TIER ATTAINMENT (mig 232) — HOW the tier count is measured */}
@@ -479,34 +543,37 @@ export default function CommissionPlansPage() {
             <label style={lbl}>Count basis
               <select style={{ ...sel, minWidth: 300 }} value={draft.tier_count_basis || ''}
                 onChange={e => upd({ tier_count_basis: e.target.value || null })}>
-                {TIER_BASES.map(b => <option key={b.v} value={b.v}>{b.l}</option>)}
+                {vocab.tier_bases.map(b => <option key={b.value} value={b.value} title={b.help}>{b.label}</option>)}
               </select>
             </label>
             {!!draft.tier_count_basis && <>
               <label style={lbl}>Tier rule — field
                 <select style={{ ...sel, width: 150 }} value={draft.tier_match_field || 'any'}
+                  title={fieldHelp(draft.tier_match_field || 'any')}
                   onChange={e => upd({ tier_match_field: e.target.value })}>
-                  {MATCH_FIELDS.map(f => <option key={f} value={f}>{f}</option>)}
+                  {vocab.match_fields.map(f => <option key={f.value} value={f.value} title={f.help}>{f.label}</option>)}
+                  {!vocab.match_fields.some(f => f.value === (draft.tier_match_field || 'any')) &&
+                    <option value={draft.tier_match_field || ''}>{draft.tier_match_field} (saved)</option>}
                 </select>
               </label>
               <label style={lbl}>Op
                 <select style={{ ...sel, width: 90 }} value={draft.tier_match_op || 'equals'}
                   disabled={(draft.tier_match_field || 'any') === 'any'}
                   onChange={e => upd({ tier_match_op: e.target.value })}>
-                  {MATCH_OPS.map(o => <option key={o} value={o}>{o}</option>)}
+                  {vocab.match_ops.map(o => <option key={o.value} value={o.value} title={o.help}>{o.label}</option>)}
                 </select>
               </label>
               <label style={lbl}>Value
-                {(() => {
-                  const f = draft.tier_match_field || 'any'
-                  const opts = (observed[f] || []).map(v => ({ id: v, label: v }))
-                  if (draft.tier_match_value && !opts.some(o => o.id === draft.tier_match_value)) opts.unshift({ id: draft.tier_match_value, label: draft.tier_match_value })
-                  return <EntityPicker options={opts} value={draft.tier_match_value || null} allowCreate width={200}
-                    disabled={f === 'any'} onChange={v => upd({ tier_match_value: v || '' })}
-                    onCreate={v => upd({ tier_match_value: v })}
-                    createLabel={v => `Use “${v}” (${draft.tier_match_op === 'in' ? 'comma list' : draft.tier_match_op === 'contains' ? 'pattern' : 'exact'})`}
-                    placeholder={f === 'any' ? '(every line)' : FIELD_HELP[f] || 'pick or type…'} ariaLabel="Tier match value" />
-                })()}
+                <MatchValuePicker opts={planOpts} field={draft.tier_match_field || 'any'}
+                  op={draft.tier_match_op || 'equals'} value={draft.tier_match_value || ''} width={200}
+                  ariaLabel="Tier match value" onChange={v => upd({ tier_match_value: v })} />
+                {(draft.tier_match_field || 'any') !== 'any' && tierCount && (
+                  <span style={{ fontSize: 10.5, color: tierCount.lines === 0 ? '#b45309' : 'var(--text3)' }}>
+                    {tierCount.lines === 0
+                      ? `⚠ matches nothing in the last ${planOpts?.window?.months || 3} months — the tier would count 0`
+                      : `${tierCount.lines.toLocaleString()} line${tierCount.lines === 1 ? '' : 's'} match this tier rule`}
+                  </span>
+                )}
               </label>
             </>}
             <label style={lbl}>Below lowest tier ×
@@ -535,7 +602,8 @@ export default function CommissionPlansPage() {
                   <tr key={i}>
                     <td style={td}>
                       <select style={{ ...sel, width: 130 }} value={t.metric || draft.base_tier_metric || 'none'} onChange={e => updTier(i, { metric: e.target.value })}>
-                        {TIER_METRICS.filter(m => m !== 'none').map(m => <option key={m} value={m}>{m}</option>)}
+                        {tierMetrics.filter(m => m !== 'none' || (t.metric || draft.base_tier_metric || 'none') === 'none')
+                          .map(m => <option key={m} value={m}>{m}</option>)}
                       </select>
                     </td>
                     <td style={td}><input style={{ ...sel, width: 90 }} type="number" value={t.min_count} onChange={e => updTier(i, { min_count: Number(e.target.value) })} /></td>
@@ -572,15 +640,11 @@ export default function CommissionPlansPage() {
                         <EntityPicker options={roleOptions} value={a.scope_value || null} width={240}
                           placeholder="pick role — assigns all reps with it…" onChange={v => updAssign(i, { scope_value: v || '' })} />
                       ) : a.scope === 'store' ? (
-                        <select style={{ ...sel, width: 220 }} value={a.scope_value || ''} onChange={e => updAssign(i, { scope_value: e.target.value })}>
-                          <option value="">— pick store —</option>
-                          {stores.map(s => <option key={s.id || s.address} value={s.address || s.store_code}>{s.address || s.store_code}</option>)}
-                        </select>
+                        <EntityPicker options={storeOptions(a.scope_value)} value={a.scope_value || null} width={240}
+                          placeholder="pick store…" onChange={v => updAssign(i, { scope_value: v || '' })} />
                       ) : a.scope === 'market' ? (
-                        <select style={{ ...sel, width: 220 }} value={a.scope_value || ''} onChange={e => updAssign(i, { scope_value: e.target.value })}>
-                          <option value="">— pick market —</option>
-                          {markets.map(m => <option key={m} value={m}>{m}</option>)}
-                        </select>
+                        <EntityPicker options={marketOptions(a.scope_value)} value={a.scope_value || null} width={240}
+                          placeholder="pick market…" onChange={v => updAssign(i, { scope_value: v || '' })} />
                       ) : <span style={{ fontSize: 12, color: 'var(--text3)' }}>all reps (fallback)</span>}
                     </td>
                     <td style={td}><input style={{ ...sel, width: 70 }} type="number" value={a.priority || 0} onChange={e => updAssign(i, { priority: Number(e.target.value) })} /></td>
@@ -605,7 +669,9 @@ export default function CommissionPlansPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>👁️ Preview <span style={{ fontWeight: 400, fontSize: 12, color: '#b45309' }}>(read-only — does NOT change live commissions)</span></div>
           <span style={{ flex: 1 }} />
-          <input style={{ ...sel, width: 140 }} placeholder="June 2026" value={period} onChange={e => setPeriod(e.target.value)} />
+          <EntityPicker options={periodOptions} value={period || null} width={170} allowCreate clearable={false}
+            placeholder="pick a period…" onChange={v => setPeriod(v || '')} onCreate={v => setPeriod(v)}
+            createLabel={v => `Use “${v}”`} ariaLabel="Period" />
           <button className="btn btn-secondary" disabled={previewBusy} onClick={() => runPreview(draft?.id)}>{previewBusy ? '…' : draft?.id ? 'Preview this plan' : 'Preview (per assignment)'}</button>
           {preview?.by_rep?.length > 0 && <><ExportButtons payload={previewPayload} /><SendReportButton exportPayload={previewPayload} compact /></>}
         </div>

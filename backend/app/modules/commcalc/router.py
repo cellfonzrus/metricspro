@@ -20,6 +20,7 @@ from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
 from app.modules.commcalc import installment_engine
 from app.modules.commcalc import commission_engine
+from app.modules.commcalc import plan_options
 from app.modules.commcalc import sale_installment_engine
 from app.modules.commcalc import b2b_sweep
 from app.modules.commcalc import sales_analyzer
@@ -7922,6 +7923,39 @@ async def commission_plan_coverage(period: str, org_id: str = ORG_ID):
                      "the current configuration.") if _stale else None,
         },
     }
+
+
+@router.get("/plan-field-options")
+async def plan_field_options(months: int = 3, period: str = "", limit: int = 4000,
+                             value_limit: int = 400, org_id: str = ORG_ID):
+    """PICK-DON'T-TYPE options for the Commission-Plan + installment-schedule editors (RULE THREE §3b).
+
+    READ-ONLY and money-free: it writes nothing, triggers no calculation, and is never called by
+    _run_calculation / calculator.py / commission_engine.preview. It returns
+      • `vocab`  — the match fields / ops / payout kinds / tier bases the ENGINE actually supports, taken
+        from commission_engine itself so the editor cannot drift from what pays (plan-installments was
+        already offering 7 of the engine's 10 match fields);
+      • `fields` — the DISTINCT values this tenant's own recent sales contain for each match field, with a
+        line count each, so a rule references a REAL value instead of a typo that silently pays $0;
+      • `facets` — the distinct combinations of the seven real match columns (dictionary-encoded, with
+        counts), which let the editor compute an exact matched-line count per rule and an exact
+        rule-vs-rule OVERLAP (the double-pay guard) with no per-keystroke round trip;
+      • `periods` — the period labels this tenant actually has sales for.
+
+    Aggregated in Postgres (migration 240); degrades to a BOUNDED scan (`source:'scan'`) until it runs.
+    Org-scoped on every read; the window is the last `months` months plus whatever `period` is being
+    previewed."""
+    require_org(org_id)
+    client = sb()
+    try:
+        return plan_options.build(client, org_id, months=months, period=period,
+                                  limit=limit, value_limit=value_limit)
+    except Exception as e:
+        # a picker must never take the editor down — degrade to the vocabulary alone (the page then keeps
+        # its dropdowns and falls back to free text for the values).
+        print(f"WARN plan-field-options failed for org {org_id}: {e}")
+        return {"ready": False, "note": f"options unavailable: {e}", "vocab": plan_options.vocabulary(),
+                "fields": {}, "facets": None, "periods": []}
 
 
 @router.get("/commission-plans/preview")
