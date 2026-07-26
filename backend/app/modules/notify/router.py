@@ -687,3 +687,10 @@ async def run_due(x_notify_secret: str = Header(default="")):
         ran.append({"id": s.get("id"), "report_key": s.get("report_key"), **result})
 
     return {"ran": len(ran), "results": ran}
+
+
+# ── Admin-attention providers (owner 2026-07-26) ──────────────────────────────────────────────────
+# Imported for the @register_provider side effect ONLY: notify's delivery-wiring gaps (unconfigured
+# channel, schedule with no recipients, sweep not firing, last send failed) surface in the login
+# attention popup. No routes, no gates, no core edits — the registry exists for exactly this.
+from . import attention as _attention   # noqa: E402,F401

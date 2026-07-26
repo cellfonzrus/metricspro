@@ -3714,3 +3714,8 @@ async def support_docs_seed_bundled(authorization: str = Header(default=""), x_a
 from app.modules.core import import_health as _import_health   # noqa: E402  (bottom-of-file mount)
 
 router.include_router(_import_health.router)
+
+# Platform-core's OWN attention providers (tenant provisioning + system-error backlog). Imported purely
+# for the @register_provider side effect — no routes, no gate, no aggregation change. Each of notify /
+# helpdesk registers its own providers from its own module file the same way (see their routers' tails).
+from app.modules.core import platform_attention as _platform_attention   # noqa: E402,F401

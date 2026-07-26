@@ -34,7 +34,15 @@ WHAT THIS IS
      through `register_provider()`, so another module can contribute an item WITHOUT touching this
      aggregation. Cheap providers run on every call (the login popup); heavy ones run only with deep=1
      (a login must never pay for a 40k-row scan) and are listed under `deferred` so the UI can offer
-     "Run full check".
+     "Run full check". Groups in use: import · mapping · duplicate · config (setup / dead-wiring gaps) ·
+     system (errors awaiting review) · other.
+
+     PROVIDER CONTRACT — "a notification MUST clear when the check says everything is OK" (owner,
+     2026-07-26): a provider item may report LIVE state only, and its deep_link must land on a surface
+     where completing the offered action makes THAT item disappear on the next GET /core/attention. If the
+     state cannot be resolved from the linked page, the item does not belong in the popup. When every
+     provider returns zero items the frontend renders NOTHING at all — no pill, no popup (see
+     frontend/src/components/AdminAttention.tsx).
 
 EVIDENCE — the authoritative "last success" source chosen per feed shape (all pre-existing; nothing new):
   email_sweep  → commcalc.email_processed  (status='ok' AND rows_saved>0), per mailbox account + upload_type
@@ -759,42 +767,106 @@ def _p_imports(client, org_id, ctx):
     return out
 
 
-@register_provider("unmapped_stores", label="Stores missing from the market map",
+# ── STORE COVERAGE (the "attention must clear when the fix is done" rule) ────────────────────
+# 2026-07-26 BUG (user-reported): "the notification to resolve store mapping worked, but after the mapping
+# was done it still shows that the mapping needs to be done." Root cause: this provider only asked whether
+# commcalc.store_mapping contains the store, while the page it deep-links to (/commcalc/store-match — the
+# only user-facing store-mapping surface) fixes things by writing an EXPLICIT commcalc.store_aliases row;
+# it never inserts a store_mapping row (no endpoint does). So completing the exact flow the alert sent the
+# admin to could NEVER clear the alert. It also compared raw lowercased strings, so a punctuation /
+# suite-token difference read as "unmapped" even where the resolver matches it.
+#
+# A store COUNTS AS COVERED when the app can actually attach data to it, which is true either way:
+#   (a) commcalc.store_mapping knows it — by store_code OR store_address — compared with commcalc's OWN
+#       normalizer (_norm_store_match: case-fold, punctuation → space, drop suite/unit tokens), so this
+#       check and the Store-Matching UI can never disagree about what "the same store" means; or
+#   (b) an explicit commcalc.store_aliases row TARGETS its store_code — i.e. an admin has confirmed a
+#       mapping to this store, which is exactly what the "Map stores" flow writes.
+# store_mapping rows count REGARDLESS of is_active because the resolvers (commcalc._store_maps /
+# _store_code_resolver) ignore that flag — coverage must mirror the resolver, not a tidier rule. An
+# INACTIVE storeops store is skipped: a closed store is not a mapping gap.
+def _store_norm():
+    """The shared store-name normalizer, via a LAZY GUARDED import (same pattern as the carrier_map
+    provider): never duplicate commcalc's matching logic here. If that import ever fails we degrade to the
+    previous exact strip/lower compare — stricter, never wrong."""
+    try:
+        from app.modules.commcalc.router import _norm_store_match
+        if isinstance(_norm_store_match("1 Main St, Ste 4"), str):
+            return _norm_store_match
+    except Exception:
+        pass
+    return lambda s: (s or "").strip().lower()
+
+
+def _uncovered_stores(stores, mapping, aliases, norm=None):
+    """PURE (no I/O, unit-testable): the storeops stores the app cannot attach data to. Coverage rule in
+    the block comment above."""
+    norm = norm or _store_norm()
+    mapped_codes = {norm(m.get("store_code")) for m in mapping if (m.get("store_code") or "").strip()}
+    mapped_addrs = {norm(m.get("store_address")) for m in mapping if (m.get("store_address") or "").strip()}
+    alias_codes = {(a.get("store_code") or "").strip().upper()
+                   for a in aliases if (a.get("store_code") or "").strip()}
+    out = []
+    for s in stores:
+        if s.get("is_active") is False:
+            continue                       # closed store — not a mapping gap
+        code = (s.get("store_code") or "").strip()
+        addr = (s.get("address") or "").strip()
+        if not code and not addr:
+            continue                       # nothing identifiable to map
+        if code and norm(code) in mapped_codes:
+            continue                       # (a) store_mapping knows the code
+        if addr and norm(addr) in mapped_addrs:
+            continue                       # (a) store_mapping knows the address
+        if code and code.upper() in alias_codes:
+            continue                       # (b) an explicit store-matching rule points at this store
+        out.append(s)
+    return out
+
+
+@register_provider("unmapped_stores", label="Stores the system can't resolve",
                    group="mapping", cost="cheap")
 def _p_unmapped_stores(client, org_id, ctx):
-    """PENDING MAPPING (cheap, config tables only): stores the tenant operates that commcalc.store_mapping
-    doesn't know, plus mapped stores with no market. Both silently mis-bucket reports."""
+    """PENDING MAPPING (cheap — config tables only, org-scoped): stores the app can't attach data to, plus
+    mapped stores with no market. Each item deep-links to the page where DOING the fix clears the item."""
     try:
-        stores = (client.schema("storeops").table("stores").select("store_code,address,market")
+        stores = (client.schema("storeops").table("stores").select("store_code,address,market,is_active")
                   .eq("org_id", org_id).limit(5000).execute().data) or []
     except Exception:
         stores = []
     try:
-        mapping = (client.schema("commcalc").table("store_mapping").select("store_code,store_address,market")
+        mapping = (client.schema("commcalc").table("store_mapping")
+                   .select("store_code,store_address,market,is_active")
                    .eq("org_id", org_id).limit(5000).execute().data) or []
     except Exception:
         mapping = []
+    try:   # the EXPLICIT mappings the Store-Matching page writes (mig 023; absent → treated as none)
+        aliases = (client.schema("commcalc").table("store_aliases").select("alias,store_code")
+                   .eq("org_id", org_id).limit(5000).execute().data) or []
+    except Exception:
+        aliases = []
     if not stores and not mapping:
         return []
-    known_codes = {(m.get("store_code") or "").strip().lower() for m in mapping if m.get("store_code")}
-    known_addr = {(m.get("store_address") or "").strip().lower() for m in mapping if m.get("store_address")}
-    missing = [s for s in stores
-               if (s.get("store_code") or "").strip().lower() not in known_codes
-               and (s.get("address") or "").strip().lower() not in known_addr]
-    no_market = [m for m in mapping if not (m.get("market") or "").strip()]
+    missing = _uncovered_stores(stores, mapping, aliases)
+    # blank market only for ACTIVE mapped stores (a closed store's market changes no live report)
+    no_market = [m for m in mapping
+                 if m.get("is_active") is not False and not (m.get("market") or "").strip()]
     out = []
     if missing:
-        out.append(_item("mapping", "stores_unmapped", "warning", "Stores not in the market map",
-                         f"{len(missing)} store(s) exist in StoreOps but have no commcalc store mapping — "
-                         f"their sales can land under an unknown store. e.g. "
+        out.append(_item("mapping", "stores_unmapped", "warning", "Stores the system can't resolve",
+                         f"{len(missing)} store(s) in your StoreOps roster are not in the store map and no "
+                         f"store-matching rule points at them, so data arriving for them can land under an "
+                         f"unknown store. Open Store Matching and confirm each unrecognised store name "
+                         f"against the right store — that saves the mapping and clears this. e.g. "
                          + ", ".join(sorted((s.get("address") or s.get("store_code") or "?")
                                             for s in missing)[:3]),
                          len(missing), "/commcalc/store-match", "Map stores"))
     if no_market:
         out.append(_item("mapping", "stores_no_market", "info", "Mapped stores with no market",
                          f"{len(no_market)} mapped store(s) have a blank market, so market filters and "
-                         f"market roll-ups skip them.",
-                         len(no_market), "/commcalc/mapping", "Set markets"))
+                         f"market roll-ups skip them. Set each store's market on Commission Settings → "
+                         f"Stores & Markets.",
+                         len(no_market), "/commcalc/settings", "Set markets"))
     return out
 
 
@@ -927,10 +999,14 @@ def _p_product_mrc(client, org_id, ctx):
             unmatched.add(plan)
     if not unmatched:
         return []
+    # 2026-07-26: deep link moved /commcalc/mapping → /commcalc/payout-schedules. The Mapping page is a
+    # link hub with no MRC card at all; the plan-MRC catalogue (POST /commcalc/product-mrc + the price-sheet
+    # import + the coverage check) lives on Payout Schedules, so THAT is where doing the fix clears this.
     return [_item("mapping", "product_mrc", "warning", "Subscriber plans with no MRC mapped",
                   f"{len(unmatched)} plan name(s) have no monthly-recurring-charge in the catalogue "
-                  f"(e.g. {', '.join(sorted(unmatched)[:3])}), so % -of-MRC pay resolves to $0.",
-                  len(unmatched), "/commcalc/mapping", "Map plan MRC")]
+                  f"(e.g. {', '.join(sorted(unmatched)[:3])}), so % -of-MRC pay resolves to $0. Add or "
+                  f"import each plan's MRC under Payout Schedules → Plan MRC.",
+                  len(unmatched), "/commcalc/payout-schedules", "Map plan MRC")]
 
 
 @register_provider("plan_coverage", label="Sellers with no commission plan", group="mapping", cost="heavy")
@@ -983,6 +1059,9 @@ def collect_attention(client, org_id, *, deep=False, feed_h=None):
             "import": sum(1 for i in items if i.get("group") == "import"),
             "mapping": sum(1 for i in items if i.get("group") == "mapping"),
             "duplicate": sum(1 for i in items if i.get("group") == "duplicate"),
+            # groups contributed by the platform-core providers (setup gaps / system errors)
+            "config": sum(1 for i in items if i.get("group") == "config"),
+            "system": sum(1 for i in items if i.get("group") == "system"),
         },
         "deep": bool(deep), "generated_at": _iso(now),
         "ready": (ctx["feed_health"] or {}).get("ready", True),
