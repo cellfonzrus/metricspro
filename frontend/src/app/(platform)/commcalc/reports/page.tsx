@@ -27,7 +27,9 @@ interface Rep {
   acima_comm: number
   subtotal: number
   total_payout: number
-  residual_installment_comm?: number   // multi-month / Total-carrier installment pay (mig 057/078)
+  residual_installment_comm?: number   // multi-month installment pay from the RESIDUAL (raw_mi) engine
+  installment_comm_sale?: number       // multi-month installment pay from the SALE-triggered ledger
+                                       // (compute_sale_installments) — the one /commission-explain itemizes
   carrier_statement_comm?: number
   plan_comm?: number                    // configurable Commission Plan pay (non-Boost carriers, mig 059)
   plan_name?: string
@@ -77,6 +79,7 @@ export default function ReportsPage() {
   const [drillComp, setDrillComp] = useState<string | null>(null)   // clicked commission component
   const [drillData, setDrillData] = useState<any>(null)
   const [drillBusy, setDrillBusy] = useState(false)
+  const drillReq = useRef('')     // latest in-flight `${rep}|${period}` for the BOOST drill (INFO-4)
   // PLAN-MODE drill (non-Boost carriers). The Boost rows below drill through /commission-drill, which
   // replays raw_sales through the BOOST component classification — for a plan-mode rep those component
   // columns are zeroed by calculator.py, so that endpoint would show real transactions next to
@@ -123,16 +126,37 @@ export default function ReportsPage() {
   const instOf = (r: Rep) => (r.residual_installment_comm || 0) + (r.carrier_statement_comm || 0)
   const hasInstallment = filtered.some(r => instOf(r) !== 0)
 
+  // ── Gate-1 MINOR-2: multi-month installments come from TWO engines, and the plan drill itemizes ONE ──
+  // `installment_comm_sale` = the SALE-triggered ledger (compute_sale_installments) — exactly what the
+  // drill modal lists per device. `residual_installment_comm` = the raw_mi RESIDUAL engine, which pays off
+  // carrier residual rows and therefore has no sale lines for that modal to show. The card used to print
+  // the residual column above a modal telling the sale-triggered story, so on a residual-path tenant the
+  // number and the explanation disagreed. Each POPULATED component now gets its own labelled row and the
+  // clickable one is the component the modal is actually about.
+  // DISPLAY ONLY — nothing stored changes: both columns are already summed into total_payout by the
+  // backend (`base + inst + sale_inst`), and the modal's reconciliation strip still prints both.
+  const instSale  = currentRep?.installment_comm_sale || 0        // itemized by the drill modal
+  const instResid = currentRep?.residual_installment_comm || 0    // raw_mi residual engine — not itemized
+  const showResidRow = instResid !== 0
+  // the sale-triggered row also carries the ALWAYS-available click path, so it renders at $0 too — unless
+  // the residual engine is the only payer, in which case that would be a second, meaningless $0 row.
+  const showSaleRow  = instSale !== 0 || !showResidRow
+
   const COMP_LABEL: Record<string, string> = { premium: 'Premium Activations', byod: 'BYOD Activations', upgrade: 'Device Upgrades', accessories: 'Accessories', setup: 'Setup Fees', acima: 'ACIMA Lease' }
   function openDrill(comp: string) {
     setDrillComp(comp)
     const rep = currentRep?.storeops_name || currentRep?.epay_salesperson || ''
-    if (drillData && drillData._rep === rep) return   // already loaded for this rep+period
+    // Gate-1 INFO-4 — the cache used to be keyed by REP ONLY, so switching the period and reopening the
+    // same rep's drill replayed the PREVIOUS period's transactions under the new period's header. Key +
+    // tag are now `rep|period`, mirroring the plan drill (explainReq / explainFresh).
+    if (drillData && drillData._rep === rep && drillData._period === period) return   // already loaded
+    const key = `${rep}|${period}`
+    drillReq.current = key                          // only the LATEST request may land
     setDrillData(null); setDrillBusy(true)
     api(`/api/v1/commcalc/commission-drill?org_id=${ORG_ID}&period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
-      .then((d: any) => setDrillData({ ...d, _rep: rep }))
-      .catch(e => setDrillData({ error: String(e?.message || e), _rep: rep }))
-      .finally(() => setDrillBusy(false))
+      .then((d: any) => { if (drillReq.current === key) setDrillData({ ...d, _rep: rep, _period: period }) })
+      .catch(e => { if (drillReq.current === key) setDrillData({ error: String(e?.message || e), _rep: rep, _period: period }) })
+      .finally(() => { if (drillReq.current === key) setDrillBusy(false) })
   }
   const drillStyle = { cursor: 'pointer' } as React.CSSProperties
 
@@ -166,6 +190,12 @@ export default function ReportsPage() {
   const explainPc  = explainOk?.plan_component || null
   const explainMm  = explainOk?.multimonth_component || null
   const explainRec = explainOk?.reconciliation || null
+  // Gate-1 INFO-4 — the BOOST drill gets the SAME rep+period render gate (declared here because it reuses
+  // `drillRep` above). openDrill() tags its payload with the identical rep expression, so for a fresh
+  // fetch drillFresh === drillData and the Boost modal renders exactly what it rendered before; what it
+  // can no longer do is render a payload fetched for a DIFFERENT period (or rep).
+  const drillFresh = drillData && drillData._rep === drillRep && drillData._period === period ? drillData : null
+  const drillOk    = drillFresh && !drillFresh.error ? drillFresh : null
   // per-rule matched sale lines (same shape commission-explain/page.tsx maps into planRows)
   const planLineRows = useMemo(() => {
     const out: any[] = []
@@ -375,17 +405,38 @@ export default function ReportsPage() {
                         <td>🔍 Plan commission</td>
                         <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.plan_comm ?? 0)}</td>
                       </tr>
-                      {/* Always rendered (was: only when > 0) so there is ALWAYS a click path to the
-                          per-device installment ledger — a $0 here is exactly the case an operator needs
-                          explained (every month held / no schedule / not calculated yet). */}
-                      <tr className="rs-clickable" style={drillStyle} onClick={() => openPlanDrill('multimonth')}
-                        title="Show each device's M1–M6 installments with gate status and hold reason">
-                        <td>🔍 Multi‑month installments</td>
-                        <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.residual_installment_comm || 0)}</td>
-                      </tr>
+                      {/* SALE-TRIGGERED installments — the component the drill modal itemizes, so this is
+                          the row that opens it. Rendered even at $0 (unless the residual engine is the only
+                          payer) so there is ALWAYS a click path — a $0 here is exactly the case an operator
+                          needs explained (every month held / no schedule / not calculated yet). */}
+                      {showSaleRow && (
+                        <tr className="rs-clickable" style={drillStyle} onClick={() => openPlanDrill('multimonth')}
+                          title="Sale-triggered installment ledger — each device's M1–M6 with gate status and hold reason">
+                          <td>🔍 Multi‑month installments{showResidRow ? ' (sale‑triggered)' : ''}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(instSale)}</td>
+                        </tr>
+                      )}
+                      {/* RESIDUAL (raw_mi) installments — a different engine, paid off carrier residual rows
+                          rather than sale lines, so the sale-triggered modal cannot itemize it. It gets its
+                          own labelled row instead of being displayed under that modal's story. */}
+                      {showResidRow && (
+                        <tr title="Paid by the residual (raw_mi) engine — per-device detail is on the full explain page">
+                          <td>Multi‑month installments (residual · raw_mi)</td>
+                          <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(instResid)}</td>
+                        </tr>
+                      )}
                       <tr style={{ fontWeight: 700 }}><td>Total Payout</td><td style={{ textAlign: 'right', color: 'var(--accent)' }}>{fmt(currentRep.total_payout)}</td></tr>
                     </tbody>
                   </table>
+                  {showResidRow && (
+                    <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 8 }}>
+                      Residual (raw‑mi) installments are paid off carrier residual rows, not off sale lines, so
+                      the sale‑triggered breakdown can’t itemize them —{' '}
+                      <a href={`/commcalc/commission-explain?rep=${encodeURIComponent(drillRep)}`} style={{ color: 'var(--accent)' }}>
+                        open the full explain page
+                      </a>{' '}for their per‑device detail.
+                    </div>
+                  )}
                   {!currentRep.plan_name && (
                     <div style={{ fontSize: 12, color: '#dc2626', marginTop: 8 }}>
                       No plan assigned to this rep — they calculate to $0. Assign one on{' '}
@@ -617,7 +668,7 @@ export default function ReportsPage() {
 
       {/* Commission component drill-down — the exact transactions behind a paid-out line */}
       {drillComp && (() => {
-        const b = drillData && !drillData.error ? drillData[drillComp] : null
+        const b = drillOk ? drillOk[drillComp] : null   // drillOk = drillData, gated on rep+period (INFO-4)
         const moneyBucket = drillComp === 'accessories' || drillComp === 'setup'
         return (
           <div onClick={() => setDrillComp(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
@@ -625,14 +676,14 @@ export default function ReportsPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
                 <div>
                   <div style={{ fontSize: 16, fontWeight: 700 }}>{COMP_LABEL[drillComp]} · {currentRep?.storeops_name || currentRep?.epay_salesperson}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)' }}>{period}{b ? ` · ${moneyBucket ? `${b.count} line${b.count === 1 ? '' : 's'} · ${fmt(b.sales)} sales · ${fmt(b.gp)} GP` : `${b.count} transaction${b.count === 1 ? '' : 's'}`}` : ''}{drillData?.source === 'daily_sales_feed' ? ' · source: daily feed' : ''}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)' }}>{period}{b ? ` · ${moneyBucket ? `${b.count} line${b.count === 1 ? '' : 's'} · ${fmt(b.sales)} sales · ${fmt(b.gp)} GP` : `${b.count} transaction${b.count === 1 ? '' : 's'}`}` : ''}{drillFresh?.source === 'daily_sales_feed' ? ' · source: daily feed' : ''}</div>
                 </div>
                 <button className="btn btn-secondary" style={{ padding: '2px 10px' }} onClick={() => setDrillComp(null)}>✕</button>
               </div>
               {drillBusy ? (
                 <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>Loading transactions…</div>
-              ) : drillData?.error ? (
-                <div style={{ padding: 20, color: '#dc2626', fontSize: 13 }}>❌ {drillData.error}</div>
+              ) : drillFresh?.error ? (
+                <div style={{ padding: 20, color: '#dc2626', fontSize: 13 }}>❌ {drillFresh.error}</div>
               ) : !b || b.items.length === 0 ? (
                 <div style={{ padding: 20, color: 'var(--text3)', fontSize: 13 }}>No transactions found for this component in {period}.</div>
               ) : (
