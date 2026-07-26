@@ -262,30 +262,49 @@ out = L.build_merge_defaults(ORG_A, emp, "cash_shortage")
 check("cash_shortage picks up the closing_attempt shortage amount", out["merge"]["shortage_amount"] == "$40.00", out["merge"])
 check("cash_shortage derives the incident date from the recon row", out["derived_incident_date"] == "2026-07-10")
 
+# GATE-1 MINOR-2 fixture (PRODUCTION-SHAPED): asset/router.py's flags writers (asset_rma/asset_appeal/
+# inventory_recon) never populate epay_salesperson — only store_address (STORE-level, not per-rep).
+# Seed a real storeops.stores row so home_store -> address resolves, matching how _store_label works.
+CLIENT.store.setdefault(("storeops", "stores"), []).append({"org_id": ORG_A, "store_code": "S1", "address": "123 Main St"})
 CLIENT.store.setdefault(("commcalc", "flags"), []).append({
-    "org_id": ORG_A, "epay_salesperson": "Jordan Rivera", "source": "asset_rma",
+    "org_id": ORG_A, "store_address": "123 Main St", "source": "asset_rma",
     "flag_type": "RMA Reimbursement Gap", "description": "IMEI 123 not returned", "amount": 250.0,
     "created_at": "2026-07-11T10:00:00+00:00",
 })
 out = L.build_merge_defaults(ORG_A, emp, "inventory_shortage")
-check("inventory_shortage picks up the flags row", out["merge"]["shortage_amount"] == "$250.00" and "IMEI" in out["merge"]["shortage_detail"], out["merge"])
+check("inventory_shortage matches STORE-LEVEL via employee.home_store -> store address (production shape, no epay_salesperson)",
+     out["merge"]["shortage_amount"] == "$250.00" and "IMEI" in out["merge"]["shortage_detail"], out["merge"])
+check("inventory_shortage merge-defaults surfaces a store-level disclosure note (not attributed to one person)",
+     any("store-level" in n.lower() for n in out["notes"]), out["notes"])
 
-CLIENT.store.setdefault(("commcalc", "chargeback_items"), []).append({
-    "org_id": ORG_A, "epay_salesperson": "Jordan Rivera", "source": "accessory_over", "period": "2026-07",
-    "amount": 35.0, "description": "Accessory over threshold: case",
+# a flags row at a DIFFERENT store must never match (proves it's genuinely store-scoped, not a blanket match)
+CLIENT.store[("commcalc", "flags")].append({
+    "org_id": ORG_A, "store_address": "999 Other Ave", "source": "asset_rma",
+    "flag_type": "RMA Reimbursement Gap", "description": "unrelated store's flag", "amount": 999.0,
+    "created_at": "2026-07-12T10:00:00+00:00",
+})
+out_other_store_check = L.build_merge_defaults(ORG_A, emp, "inventory_shortage")
+check("inventory_shortage never matches a flag at a DIFFERENT store", "999" not in out_other_store_check["merge"]["shortage_amount"])
+
+# GATE-1 MINOR-1 fixture (PRODUCTION-SHAPED): commcalc/router.py's accessory_flags_push writes the
+# per-rep record to chargeback_review (source='accessory_over', status='assigned', assigned_rep=<name>)
+# — chargeback_items.source is 'chargeback_review' there (a source_ref back-pointer), never 'accessory_over'.
+CLIENT.store.setdefault(("commcalc", "chargeback_review"), []).append({
+    "org_id": ORG_A, "source": "accessory_over", "status": "assigned", "assigned_rep": "Jordan Rivera",
+    "period": "2026-07", "occurred_date": "2026-07-05", "amount": 35.0,
+    "detail": "Accessory over threshold: case",
 })
 out = L.build_merge_defaults(ORG_A, emp, "accessory_shortfall", period="2026-07")
-check("accessory_shortfall sums real chargeback_items rows", out["merge"]["shortfall_amount"] == "$35.00", out["merge"])
+check("accessory_shortfall reads chargeback_review (source=accessory_over, status=assigned, assigned_rep) — production shape",
+     out["merge"]["shortfall_amount"] == "$35.00", out["merge"])
 
-# accessory_shortfall configured-default fallback when NO specific incident exists (a different employee)
+# the removed ops_chargeback_policy fallback: a different employee with NO chargeback_review row gets an
+# honest zero + note — never a phantom $ from an unreachable (and now deleted) config fallback.
 seed_employee(ORG_A, "E2", "Alex Chen", email="alex@example.com")
 emp2 = L._find_employee(ORG_A, "E2")
-CLIENT.store.setdefault(("commcalc", "ops_chargeback_policy"), []).append({
-    "org_id": ORG_A, "reason": "accessory_shortfall", "amount": 15.0, "enabled": True,
-})
-out = L.build_merge_defaults(ORG_A, emp2, "accessory_shortfall")
-check("accessory_shortfall falls back to the configured policy amount when no incident exists",
-     out["merge"]["shortfall_amount"] == "$15.00", out["merge"])
+out2 = L.build_merge_defaults(ORG_A, emp2, "accessory_shortfall")
+check("accessory_shortfall with no matching chargeback_review row -> honest $0.00 + a note (fallback REMOVED, not just fixed)",
+     out2["merge"]["shortfall_amount"] == "$0.00" and len(out2["notes"]) > 0, out2)
 
 CLIENT.store.setdefault(("commcalc", "rep_commissions"), []).append({
     "org_id": ORG_A, "period": "2026-06", "storeops_name": "Jordan Rivera", "epay_salesperson": "Jordan Rivera",
@@ -408,6 +427,28 @@ rejected = L.reject_letter(qrow2["id"], {"reason": "not accurate"}, org_id=ORG_A
 check("reject sets status=rejected + records the reason", rejected["status"] == "rejected" and rejected["rejected_reason"] == "not accurate")
 check("reject never sends an email", not any(e["subject"] == tpl_cash["subject"] for e in SENT_EMAILS))
 
+# GATE-1 LOW-1: a letter CLAIMED (status='sending') by an in-flight approve — e.g. a concurrent
+# request, or the final status-update step having failed after the email already went out — must
+# REFUSE a second approve attempt (never a duplicate disciplinary send). The claim update is an
+# atomic filtered UPDATE (`.in_("status", ["queued_approval","failed"])`) — a row already sitting at
+# 'sending' can never match that filter, so a second approve is refused BEFORE any second email send
+# is even attempted.
+qrow3 = run(L._create_and_dispatch_letter(ORG_A, tenantA, emp, tpl_cash, merge, incident_date="2026-07-10"))
+CLIENT.store[("storeops", "sent_letter")] = [
+    (dict(r, status="sending") if r["id"] == qrow3["id"] else r) for r in CLIENT.store[("storeops", "sent_letter")]
+]
+emails_before_claim_test = len(SENT_EMAILS)
+raised_claimed = False
+try:
+    run(L.approve_letter(qrow3["id"], {}, org_id=ORG_A, authorization=""))
+except Exception as e:
+    raised_claimed = "already" in str(e).lower() or getattr(e, "status_code", None) == 409
+check("approving a letter already claimed (status='sending') is refused — no duplicate-send race",
+     raised_claimed, [r for r in CLIENT.store[("storeops", "sent_letter")] if r["id"] == qrow3["id"]])
+check("the refused claim attempt never sent a second email", len(SENT_EMAILS) == emails_before_claim_test)
+claimed_row_after = [r for r in CLIENT.store[("storeops", "sent_letter")] if r["id"] == qrow3["id"]][0]
+check("the claimed row's status is untouched by the refused approve attempt", claimed_row_after["status"] == "sending")
+
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 5. Manual send: force_send bypasses approval; subject/body overrides are sent verbatim
@@ -483,6 +524,74 @@ try:
     check("metrics-miss re-run is idempotent (dedupe_key)", after_n == before_n, (before_n, after_n))
 finally:
     L._default_prior_period = orig_default_period
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 8. GATE-1 LOW-2 — pre-migration-408 degrade: a `hr_letters_config` column select failure (the
+# exact shape of an un-run migration 408 against Postgrest) must degrade CLEANLY, never a bare 500.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+class _BrokenSchema:
+    def __init__(self, mode):
+        self.mode = mode
+
+    def table(self, t):
+        return _BrokenTable(self.mode, t)
+
+
+class _BrokenTable:
+    def __init__(self, mode, name):
+        self.mode = mode
+        self.name = name
+
+    def select(self, *_a, **_k):
+        if self.mode == "select" and self.name == "tenants":
+            raise Exception("column storeops.tenants.hr_letters_config does not exist")
+        return self
+
+    def eq(self, *_a, **_k):
+        return self
+
+    def limit(self, *_a, **_k):
+        return self
+
+    def update(self, *_a, **_k):
+        if self.mode == "update" and self.name == "tenants":
+            raise Exception("column storeops.tenants.hr_letters_config does not exist")
+        return self
+
+    def execute(self):
+        return Result([{"org_id": ORG_A}])  # only reached by the non-broken calls in this drill
+
+
+class _BrokenClient:
+    def __init__(self, mode):
+        self.mode = mode
+
+    def schema(self, name):
+        return _BrokenSchema(self.mode) if name == "storeops" else FakeSchema(CLIENT, name)
+
+
+real_get_supabase = L.get_supabase
+
+L.get_supabase = lambda: _BrokenClient("select")
+out = run(L.late_checkin_run_due(x_notify_secret="TESTSECRET"))
+check("late-checkin run-due degrades cleanly pre-mig-408 (no 500, tenants_checked=0)",
+     out.get("tenants_checked") == 0 and "migration 408" in (out.get("note") or ""), out)
+
+out = run(L.metrics_miss_run_due(x_notify_secret="TESTSECRET"))
+check("metrics-miss run-due degrades cleanly pre-mig-408 (no 500, tenants_checked=0)",
+     out.get("tenants_checked") == 0 and "migration 408" in (out.get("note") or ""), out)
+
+L.get_supabase = lambda: _BrokenClient("update")
+raised_put_cfg = False
+try:
+    L.put_letters_config({"late_clockin": {"enabled": True}}, org_id=ORG_A, authorization="")
+except Exception as e:
+    raised_put_cfg = getattr(e, "status_code", None) == 500 and "migration 408" in str(getattr(e, "detail", e))
+check("PUT /config surfaces a clear 'run migration 408' 500 (not an unhandled crash) when the column is missing",
+     raised_put_cfg)
+
+L.get_supabase = real_get_supabase
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

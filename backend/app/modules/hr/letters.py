@@ -336,59 +336,74 @@ def _cash_shortage_lookup(org_id, employee, incident_date=None) -> dict:
 
 
 def _inventory_shortage_lookup(org_id, employee, incident_date=None) -> dict:
+    """GATE-1 MINOR-2 fix: `commcalc.flags` rows from the asset module's RMA/appeal/inventory-recon
+    sync (asset/router.py ~845/1964/2103) are STORE-LEVEL — they never populate `epay_salesperson`
+    (matching on it was silently dead code, always zero candidates). The only honest match available
+    is the employee's home store vs. the flag's `store_address`; the result is explicitly labeled
+    store-level (not attributable to one person) so HR knows to verify before sending."""
     if not employee:
         return {"note": "Select an employee to look up recon data."}
-    keys = _emp_keys(employee)
+    home_store = (employee or {}).get("home_store") or ""
+    store_label = _store_label(org_id, home_store) if home_store else ""
+    if not store_label:
+        return {"note": "This employee has no home store on file — can't match a store-level inventory flag."}
     try:
         rows = (_cc().table("flags").select("*").eq("org_id", org_id)
                 .in_("source", list(_INVENTORY_FLAG_SOURCES))
                 .order("created_at", desc=True).limit(300).execute().data) or []
     except Exception:
         return {"note": "Flags data unavailable."}
-    cand = [r for r in rows if _norm(r.get("epay_salesperson")) in keys]
+    target = _norm(store_label)
+    cand = [r for r in rows if _norm(r.get("store_address")) == target]
     if incident_date:
         ym = str(incident_date)[:7]
         dated = [r for r in cand if str(r.get("created_at") or "")[:7] == ym]
         cand = dated or cand
     if not cand:
-        return {"note": "No matching inventory/RMA/appeal flag found for this employee."}
+        return {"note": f"No matching inventory/RMA/appeal flag found at {store_label} (store-level only)."}
     r = cand[0]
+    detail = r.get("description") or r.get("flag_type") or "Inventory discrepancy"
     return {"incident_date": str(r.get("created_at") or "")[:10],
-           "detail": r.get("description") or r.get("flag_type") or "Inventory discrepancy",
-           "amount_label": _money(r.get("amount"))}
+           "detail": f"Store-level shortfall at {store_label}: {detail}",
+           "amount_label": _money(r.get("amount")),
+           "note": (f"This is a STORE-LEVEL flag at {store_label}, not attributed to a specific "
+                    f"employee by the source data — verify this employee is responsible before sending.")}
 
 
 def _accessory_shortfall_lookup(org_id, employee, incident_date=None, period=None) -> dict:
+    """GATE-1 MINOR-1 fix: production writes the per-rep accessory-over-threshold record to
+    `commcalc.chargeback_review` (source='accessory_over', status='assigned', `assigned_rep` = the
+    rep's name — commcalc/router.py `accessory_flags_push`), NOT `chargeback_items.source`
+    ('chargeback_review' is what lands there, referencing the review row by `source_ref` — matching
+    chargeback_items.source=='accessory_over' was silently dead code, always zero candidates). Reads
+    chargeback_review directly instead. The `ops_chargeback_policy` configured-default fallback was
+    REMOVED (not fixed) — 'accessory_shortfall' isn't in retail-ops' REASONS registry and can't be
+    created via the pick-don't-type Ops Chargeback Amounts UI (`ops_chargebacks.py` `put_policy` only
+    accepts a reason the registry/history already knows), so that branch could never actually fire in
+    production; inventing a new reason there is retail-ops' call, not this module's to make."""
     if not employee:
         return {"note": "Select an employee to look up recon data."}
     keys = _emp_keys(employee)
     try:
-        rows = (_cc().table("chargeback_items").select("*").eq("org_id", org_id)
-                .eq("source", "accessory_over").execute().data) or []
+        rows = (_cc().table("chargeback_review").select("*").eq("org_id", org_id)
+                .eq("source", "accessory_over").eq("status", "assigned").execute().data) or []
     except Exception:
-        rows = []
-    cand = [r for r in rows if _norm(r.get("epay_salesperson")) in keys]
+        return {"note": "Accessory chargeback data unavailable (is migration 036 applied?)."}
+    cand = [r for r in rows if _norm(r.get("assigned_rep")) in keys]
     if period:
         pv = set(_pvariants_local(period))
         narrowed = [r for r in cand if str(r.get("period") or "") in pv]
         cand = narrowed or cand
-    configured = None
-    try:
-        prows = (_cc().table("ops_chargeback_policy").select("amount,enabled")
-                 .eq("org_id", org_id).eq("reason", "accessory_shortfall").limit(1).execute().data) or []
-        if prows and prows[0].get("enabled"):
-            configured = _f(prows[0].get("amount"))
-    except Exception:
-        pass
+    if incident_date:
+        dated = [r for r in cand if str(r.get("occurred_date") or "")[:10] == str(incident_date)[:10]]
+        cand = dated or cand
     if not cand:
-        if configured:
-            return {"amount_label": _money(configured),
-                   "detail": "No specific accessory chargeback found — using the configured default amount."}
         suffix = f" for {period}" if period else ""
         return {"note": f"No accessory chargeback found for this employee{suffix}."}
     total = sum(_f(r.get("amount")) for r in cand)
-    descs = sorted({(r.get("description") or "")[:80] for r in cand if r.get("description")})
-    return {"detail": ", ".join(descs[:3]) or "Accessory chargeback", "amount_label": _money(total)}
+    descs = sorted({(r.get("detail") or "")[:80] for r in cand if r.get("detail")})
+    return {"incident_date": str(cand[0].get("occurred_date") or "")[:10] or None,
+           "detail": ", ".join(descs[:3]) or "Accessory chargeback", "amount_label": _money(total)}
 
 
 def _rep_commissions_row(org_id, employee, period):
@@ -708,23 +723,46 @@ def list_queue(org_id: str = ORG_ID, authorization: str = Header(default="")):
 @router.post("/queue/{letter_id}/approve")
 async def approve_letter(letter_id: str, body: dict = None, org_id: str = ORG_ID,
                          authorization: str = Header(default="")):
+    """GATE-1 LOW-1 fix: the letter is CLAIMED (status -> 'sending') by an UPDATE that only ever
+    matches while status is still 'queued_approval'/'failed' — the exact same "filtered update as an
+    atomic claim" idiom the payroll-chargeback decision endpoint and the sent_letter dedupe_key
+    already rely on elsewhere in this codebase. Zero rows affected means someone/something already
+    claimed or resolved this letter (already sending/sent/rejected) — refused, never a duplicate
+    disciplinary send. The email is only ever sent AFTER a successful claim; a failure to record the
+    FINAL status (after the email is already out) is surfaced as a warning in the response, never a
+    bare 500 that could look like "nothing happened" to the caller."""
     _, email, _role = _require_hr_or_admin(authorization)
     body = body or {}
-    rows = (_so().table("sent_letter").select("*").eq("org_id", org_id).eq("id", letter_id).limit(1).execute().data) or []
-    if not rows:
-        raise HTTPException(404, "letter not found")
-    row = rows[0]
-    if row.get("status") not in ("queued_approval", "failed"):
-        raise HTTPException(409, f"letter is already '{row.get('status')}' — nothing to approve")
-    subject = str(body.get("subject") or row.get("subject") or "")
-    letter_body = str(body.get("body") or row.get("body") or "")
+    claim_patch = {"status": "sending"}
+    if body.get("subject"):
+        claim_patch["subject"] = str(body["subject"])
+    if body.get("body"):
+        claim_patch["body"] = str(body["body"])
+    claim = (_so().table("sent_letter").update(claim_patch).eq("org_id", org_id).eq("id", letter_id)
+             .in_("status", ["queued_approval", "failed"]).execute())
+    claimed = claim.data or []
+    if not claimed:
+        existing = (_so().table("sent_letter").select("status").eq("org_id", org_id)
+                    .eq("id", letter_id).limit(1).execute().data) or []
+        if not existing:
+            raise HTTPException(404, "letter not found")
+        raise HTTPException(409, f"letter is already '{existing[0].get('status')}' — nothing to approve")
+    row = claimed[0]
+    subject = row.get("subject") or ""
+    letter_body = row.get("body") or ""
     employee = {"employee_id": row.get("employee_id"), "name": row.get("employee_name"),
                "email": row.get("employee_email")}
     ok, err = await _send_email_for_letter(employee, subject, letter_body)
-    upd = {"status": "approved_sent" if ok else "failed", "approved_by": email, "approved_at": _now_iso(),
-          "subject": subject, "body": letter_body, "send_error": err}
-    r = _so().table("sent_letter").update(upd).eq("org_id", org_id).eq("id", letter_id).execute()
-    return (r.data or [dict(row, **upd)])[0]
+    final_status = "approved_sent" if ok else "failed"
+    final_patch = {"status": final_status, "approved_by": email, "approved_at": _now_iso(), "send_error": err}
+    try:
+        r = _so().table("sent_letter").update(final_patch).eq("org_id", org_id).eq("id", letter_id).execute()
+        return (r.data or [dict(row, **final_patch)])[0]
+    except Exception as e:
+        out = dict(row, **final_patch)
+        out["warning"] = (f"The email was already sent (status={final_status}) but recording the final "
+                          f"status failed — re-check this letter's row manually: {e}")
+        return out
 
 
 @router.post("/queue/{letter_id}/reject")
@@ -740,6 +778,20 @@ def reject_letter(letter_id: str, body: dict = None, org_id: str = ORG_ID, autho
           "approved_by": email, "approved_at": _now_iso()}
     r = _so().table("sent_letter").update(upd).eq("org_id", org_id).eq("id", letter_id).execute()
     return (r.data or [dict(rows[0], **upd)])[0]
+
+
+@router.get("/periods")
+def list_periods(org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """GATE-1 NIT-1: real `commcalc.rep_commissions` periods for this org — RULE THREE pick-don't-type
+    source for the Send-Letter page's Period field (kpi_miss/commission_statement/metrics_miss_2consec),
+    instead of a free-text box. Most-recent first."""
+    _require_hr_or_admin(authorization)
+    try:
+        rows = (_cc().table("rep_commissions").select("period").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        return {"periods": []}
+    periods = sorted({(r.get("period") or "").strip() for r in rows if r.get("period")}, reverse=True)
+    return {"periods": periods}
 
 
 @router.get("/sent")
@@ -792,7 +844,10 @@ def put_letters_config(body: dict, org_id: str = ORG_ID, authorization: str = He
         raise HTTPException(500, f"save failed — run migration 408 first: {e}")
     if not rows:
         raise HTTPException(404, "no tenant record for this org — complete tenant setup first")
-    _so().table("tenants").update({"hr_letters_config": cfg}).eq("org_id", org_id).execute()
+    try:
+        _so().table("tenants").update({"hr_letters_config": cfg}).eq("org_id", org_id).execute()
+    except Exception as e:
+        raise HTTPException(500, f"save failed — run migration 408 first: {e}")
     return cfg
 
 
@@ -920,7 +975,12 @@ async def late_checkin_run_due(x_notify_secret: str = Header(default=""), eval_d
     hasn't clocked in yet. Idempotent per (org, employee, work_date) — safe to re-run/retry."""
     if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
         raise HTTPException(403, "forbidden")
-    tens = _so().table("tenants").select("org_id,name,hr_letters_config,timezone").execute().data or []
+    try:
+        tens = _so().table("tenants").select("org_id,name,hr_letters_config,timezone").execute().data or []
+    except Exception as e:
+        # GATE-1 LOW-2: pg_cron can fire before migration 408 has run — degrade cleanly (no tenant has
+        # `hr_letters_config` yet, so there's nothing to check) instead of a bare 500.
+        return {"tenants_checked": 0, "results": [], "note": f"hr_letters_config unavailable — is migration 408 applied? {e}"}
     results = []
     for t in tens:
         cfg = (t.get("hr_letters_config") or {}).get("late_clockin") or {}
@@ -943,7 +1003,10 @@ async def metrics_miss_run_due(x_notify_secret: str = Header(default="")):
     commissions have been calculated). Idempotent per (org, employee, period)."""
     if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
         raise HTTPException(403, "forbidden")
-    tens = _so().table("tenants").select("org_id,name,hr_letters_config,timezone").execute().data or []
+    try:
+        tens = _so().table("tenants").select("org_id,name,hr_letters_config,timezone").execute().data or []
+    except Exception as e:
+        return {"tenants_checked": 0, "results": [], "note": f"hr_letters_config unavailable — is migration 408 applied? {e}"}
     results = []
     for t in tens:
         cfg = (t.get("hr_letters_config") or {}).get("metrics_miss") or {}

@@ -18,6 +18,7 @@ export default function SendLetterPage() {
   const [emps, setEmps] = useState<any[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
   const [categories, setCategories] = useState<Record<string, string>>({})
+  const [periods, setPeriods] = useState<string[]>([])
   const [employeeId, setEmployeeId] = useState<string | null>(null)
   const [templateKey, setTemplateKey] = useState<string | null>(null)
   const [dateMode, setDateMode] = useState<'system' | 'manual'>('system')
@@ -37,6 +38,9 @@ export default function SendLetterPage() {
   useEffect(() => {
     api('/api/v1/storeops/employees?all_company=true').then(setEmps).catch(() => setEmps([]))
     api('/api/v1/hr/letters/templates').then(d => { setTemplates(d.templates || []); setCategories(d.categories || {}) }).catch(() => {})
+    // RULE THREE (§3b): Period is pick-don't-type over the org's REAL rep_commissions periods —
+    // there's nothing to communicate about a period that hasn't been calculated yet anyway.
+    api('/api/v1/hr/letters/periods').then(d => setPeriods(d.periods || [])).catch(() => setPeriods([]))
   }, [])
 
   const empOptions = useMemo(
@@ -53,6 +57,14 @@ export default function SendLetterPage() {
     [templates, categories],
   )
   const selectedTemplate = templates.find(t => t.template_key === templateKey) || null
+  // Union with the currently-set period so a system-derived value (which may not have a calculated
+  // rep_commissions row yet) is never hidden by the picker — still pick-don't-type over real data,
+  // just never silently blanks out the system default.
+  const periodOptions = useMemo(() => {
+    const list = new Set(periods)
+    if (period) list.add(period)
+    return Array.from(list).sort().reverse().map(p => ({ id: p, label: p }))
+  }, [periods, period])
 
   const loadDefaults = useCallback(async () => {
     if (!employeeId || !templateKey) return
@@ -76,7 +88,7 @@ export default function SendLetterPage() {
     setLoadingDefaults(false)
   }, [employeeId, templateKey, dateMode, incidentDate, period, templates])
 
-  useEffect(() => { loadDefaults() }, [employeeId, templateKey])
+  useEffect(() => { loadDefaults() }, [employeeId, templateKey, period])
   // Re-render preview whenever a merge field is edited by hand.
   useEffect(() => {
     if (!templateRaw) return
@@ -149,8 +161,9 @@ export default function SendLetterPage() {
         </div>
         {needsPeriod && (
           <div>
-            <label style={label}>Period (YYYY-MM)</label>
-            <input style={{ ...box, width: 140 }} value={period} placeholder="2026-06" onChange={e => setPeriod(e.target.value)} onBlur={loadDefaults} />
+            <label style={label}>Period</label>
+            <EntityPicker options={periodOptions} value={period || null} width={160}
+              placeholder="Pick a period…" onChange={v => setPeriod(v || '')} />
           </div>
         )}
         <button style={btn} disabled={!employeeId || !templateKey || loadingDefaults} onClick={loadDefaults}>
