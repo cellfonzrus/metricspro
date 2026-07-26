@@ -25,6 +25,17 @@ export default function TimeOffPage() {
   // approveNow: when a manager enters a request, approve it on submit (vs an employee
   // request that a manager approves later).
   const [form, setForm] = useState({ employee_id: '', start_date: '', end_date: '', type: 'PTO', notes: '', approveNow: true })
+  // Edit an EXISTING request's dates/type/notes (employee stays fixed — RULE THREE) so a manager
+  // can reschedule/correct a request instead of denying + re-entering it from scratch.
+  const [editReq, setEditReq] = useState<Request | null>(null)
+  const [editForm, setEditForm] = useState({ start_date: '', end_date: '', type: 'PTO', notes: '' })
+  const [savingEdit, setSavingEdit] = useState(false)
+  const [editErr, setEditErr] = useState('')
+  // Org policy: does scheduling over an employee's approved time off WARN (default, every
+  // tenant) or hard BLOCK (opt-in)? Read-only for everyone; the select below is manager-gated
+  // server-side (PUT /storeops/timeoff-conflict-mode → 403 for a non-manager).
+  const [conflictMode, setConflictMode] = useState<'warn' | 'block'>('warn')
+  const [savingMode, setSavingMode] = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -34,7 +45,22 @@ export default function TimeOffPage() {
       setRequests(reqs || [])
       setEmployees(emps || [])
     }).catch(console.error).finally(() => setLoading(false))
+    api('/api/v1/storeops/timeoff-conflict-mode').then((r: any) => {
+      if (r?.mode === 'block') setConflictMode('block')
+    }).catch(() => {})
   }, [])
+
+  async function changeConflictMode(mode: 'warn' | 'block') {
+    const prev = conflictMode
+    setConflictMode(mode)
+    setSavingMode(true)
+    try {
+      await api('/api/v1/storeops/timeoff-conflict-mode', { method: 'PUT', body: JSON.stringify({ mode }) })
+    } catch (e: any) {
+      setConflictMode(prev)
+      alert(e?.message || "Couldn't save — manager/admin only.")
+    } finally { setSavingMode(false) }
+  }
 
   function empName(id: string) {
     return employees.find(e => e.id?.toString() === id || e.employee_id === id)?.name || id
@@ -71,6 +97,27 @@ export default function TimeOffPage() {
     setRequests(r => r.map(req => req.id === id ? { ...req, status, approved_by: status === 'approved' ? approver : req.approved_by } : req))
   }
 
+  function openEdit(r: Request) {
+    setEditErr('')
+    setEditReq(r)
+    setEditForm({ start_date: r.start_date, end_date: r.end_date, type: r.type || 'PTO', notes: r.notes || '' })
+  }
+
+  async function saveEdit() {
+    if (!editReq) return
+    setEditErr('')
+    if (!editForm.start_date || !editForm.end_date) { setEditErr('Start and end dates are required.'); return }
+    if (editForm.end_date < editForm.start_date) { setEditErr('End date cannot be before the start date.'); return }
+    setSavingEdit(true)
+    try {
+      const updated = await api(`/api/v1/storeops/time-off/${editReq.id}`, { method: 'PATCH', body: JSON.stringify(editForm) })
+      setRequests(r => r.map(req => req.id === editReq.id ? { ...req, ...editForm, ...(updated || {}) } : req))
+      setEditReq(null)
+    } catch (e: any) {
+      setEditErr(e?.message || 'Could not save the changes.')
+    } finally { setSavingEdit(false) }
+  }
+
   // RULE FOUR (§3c): export the visible rows — no PII (dates/type/notes/status only).
   const cols: ExportColumn[] = [
     { header: 'Employee', field: 'employee', role: 'rep', get: r => r.employee_name || empName(r.employee_id) },
@@ -92,10 +139,21 @@ export default function TimeOffPage() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Time Off Requests</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            {requests.filter(r => r.status === 'pending').length} pending · {requests.length} total · approved time off blocks scheduling
+            {requests.filter(r => r.status === 'pending').length} pending · {requests.length} total ·{' '}
+            {conflictMode === 'block'
+              ? 'approved time off BLOCKS scheduling for this tenant'
+              : 'scheduling over approved time off is allowed, with a warning'}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text2)' }}>
+            Scheduling over time off
+            <select className="select" style={{ fontSize: 12, padding: '4px 8px' }} value={conflictMode} disabled={savingMode}
+              onChange={e => changeConflictMode(e.target.value as 'warn' | 'block')}>
+              <option value="warn">Warn, allow (default)</option>
+              <option value="block">Block</option>
+            </select>
+          </label>
           <ReportExportBar title="Time Off Requests" columns={cols} rows={requests} />
           <button className="btn btn-primary" onClick={() => { setErr(''); setShowForm(true) }}>+ New Request</button>
         </div>
@@ -151,6 +209,55 @@ export default function TimeOffPage() {
         </div>
       )}
 
+      {editReq && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <div className="card" style={{ width: 400 }}>
+            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>Edit Time Off Request</div>
+            <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 16 }}>
+              {editReq.employee_name || empName(editReq.employee_id)}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 4 }}>Type</label>
+                <select className="select" style={{ width: '100%' }} value={editForm.type}
+                  onChange={e => setEditForm(f => ({ ...f, type: e.target.value }))}>
+                  <option value="PTO">PTO</option>
+                  <option value="Sick">Sick</option>
+                  <option value="Unpaid">Unpaid</option>
+                  <option value="Personal">Personal</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 4 }}>Status</label>
+                <div style={{ padding: '6px 0' }}>
+                  <span className={`badge ${STATUS_COLORS[editReq.status] || 'badge-slate'}`} style={{ textTransform: 'capitalize' }}>{editReq.status}</span>
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 4 }}>Start Date</label>
+                <input className="input" type="date" value={editForm.start_date}
+                  onChange={e => setEditForm(f => ({ ...f, start_date: e.target.value }))} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 4 }}>End Date</label>
+                <input className="input" type="date" value={editForm.end_date}
+                  onChange={e => setEditForm(f => ({ ...f, end_date: e.target.value }))} />
+              </div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 4 }}>Notes</label>
+                <input className="input" style={{ width: '100%' }} value={editForm.notes} placeholder="Reason (optional)"
+                  onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} />
+              </div>
+            </div>
+            {editErr && <div style={{ color: 'var(--red)', fontSize: 13, marginTop: 10 }}>{editErr}</div>}
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <button className="btn btn-primary" disabled={savingEdit} onClick={saveEdit}>{savingEdit ? 'Saving…' : 'Save Changes'}</button>
+              <button className="btn btn-secondary" onClick={() => setEditReq(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (
@@ -188,17 +295,21 @@ export default function TimeOffPage() {
                       </span>
                     </td>
                     <td>
-                      {r.status === 'pending' ? (
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          <button className="btn btn-primary" style={{ fontSize: 11, padding: '4px 10px' }}
-                            onClick={() => updateStatus(r.id, 'approved')}>Approve</button>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {r.status === 'pending' ? (
+                          <>
+                            <button className="btn btn-primary" style={{ fontSize: 11, padding: '4px 10px' }}
+                              onClick={() => updateStatus(r.id, 'approved')}>Approve</button>
+                            <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px', color: 'var(--red)' }}
+                              onClick={() => updateStatus(r.id, 'denied')}>Deny</button>
+                          </>
+                        ) : r.status === 'approved' ? (
                           <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px', color: 'var(--red)' }}
-                            onClick={() => updateStatus(r.id, 'denied')}>Deny</button>
-                        </div>
-                      ) : r.status === 'approved' ? (
-                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px', color: 'var(--red)' }}
-                          onClick={() => updateStatus(r.id, 'denied')}>Revoke</button>
-                      ) : null}
+                            onClick={() => updateStatus(r.id, 'denied')}>Revoke</button>
+                        ) : null}
+                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px' }}
+                          onClick={() => openEdit(r)}>Edit</button>
+                      </div>
                     </td>
                   </tr>
                 )

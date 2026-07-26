@@ -110,11 +110,56 @@ def get_shifts(store_code: str = None, week_start: str = None, week_end: str = N
         rows = [s for s in rows if in_keyset(ks, s.get("store_code"))]
     return rows
 
+# ── Scheduling-over-approved-time-off policy (owner directive 2026-07-26, ALL tenants) ─────────
+# Managers reported they could NOT reschedule an employee with approved/requested time off — the
+# old create_shift hard-blocked with a 409 and no override. Default policy is now WARN (schedule
+# succeeds, response carries `timeoff_warning`); a tenant may opt back into the original hard
+# BLOCK via PUT /timeoff-conflict-mode. Config lives on storeops.tenants.timeoff_conflict_mode
+# (migration 409) — a missing column/row/migration always degrades to 'warn', never a 500 and
+# never a silent revert to blocking a tenant never asked for.
+def _timeoff_conflict_mode(org_id):
+    try:
+        t = (sb().table("tenants").select("timeoff_conflict_mode").eq("org_id", org_id)
+             .limit(1).execute().data) or []
+        mode = (t[0].get("timeoff_conflict_mode") if t else None) or "warn"
+    except Exception:
+        mode = "warn"
+    mode = str(mode).strip().lower()
+    return mode if mode in ("warn", "block") else "warn"
+
+
+@router.get("/timeoff-conflict-mode")
+def get_timeoff_conflict_mode(org_id: str = ORG_ID):
+    """Current org policy for scheduling over approved time off — 'warn' (default) or 'block'.
+    Any signed-in caller may read (the schedule page uses this to decide whether to show its own
+    confirm() before POSTing, vs. relying on the backend's 409 for a 'block' tenant)."""
+    return {"mode": _timeoff_conflict_mode(org_id)}
+
+
+@router.put("/timeoff-conflict-mode")
+def set_timeoff_conflict_mode(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin only. mode must be 'warn' or 'block'."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    mode = str(body.get("mode") or "").strip().lower()
+    if mode not in ("warn", "block"):
+        raise HTTPException(400, "mode must be 'warn' or 'block'")
+    try:
+        sb().table("tenants").update({"timeoff_conflict_mode": mode}).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save the setting — is migration 409 applied?")
+    return {"ok": True, "mode": mode}
+
+
 @router.post("/shifts")
 def create_shift(shift: dict, org_id: str = ORG_ID):
-    # Block scheduling an employee on a day they have APPROVED time off.
+    # Check for an APPROVED time-off conflict. Default policy is WARN, not block (see above) — a
+    # manager can still schedule over approved time off; the response carries `timeoff_warning` so
+    # the caller can surface it non-blockingly. A tenant opted into 'block' keeps the original
+    # hard-409 behavior.
     eid = shift.get("employee_id")
     sdate = shift.get("shift_date")
+    timeoff_warning = None
     if eid and sdate:
         conflict = (sb().table("time_off_requests").select("id").eq("org_id", org_id)
                     .eq("employee_id", str(eid)).eq("status", "approved")
@@ -122,7 +167,9 @@ def create_shift(shift: dict, org_id: str = ORG_ID):
                     .limit(1).execute().data)
         if conflict:
             who = shift.get("employee_name") or "This employee"
-            raise HTTPException(409, f"{who} has approved time off on {sdate} — cannot schedule.")
+            if _timeoff_conflict_mode(org_id) == "block":
+                raise HTTPException(409, f"{who} has approved time off on {sdate} — cannot schedule.")
+            timeoff_warning = f"{who} has approved time off on {sdate}."
     # Hours-budget guard (mig 087): block scheduling past the store's weekly budget unless a DM
     # approved an override for that store+week. Only enforced when a budget is set for the store;
     # any lookup failure degrades to "allow" so scheduling never breaks on a config/migration gap.
@@ -131,7 +178,10 @@ def create_shift(shift: dict, org_id: str = ORG_ID):
     # (shifts.org_id has NO column default → an unstamped insert lands NULL and vanishes.)
     shift = {**shift, "org_id": shift.get("org_id") or org_id}
     r = sb().table("shifts").insert(shift).execute()
-    return r.data[0] if r.data else shift
+    out = r.data[0] if r.data else shift
+    if timeoff_warning:
+        out = {**out, "timeoff_warning": timeoff_warning}
+    return out
 
 @router.patch("/shifts/{shift_id}")
 def update_shift(shift_id: int, updates: dict, org_id: str = ORG_ID):
@@ -237,7 +287,6 @@ def reconcile_timeoff_duplicates(org_id: str = ORG_ID):
                     client.table("time_off_requests").update({"status": "denied"}).eq("id", x["id"]).execute()
                     fixed.append(x["id"])
     return {"ok": True, "reconciled": len(fixed), "ids": fixed}
-    return r.data[0] if r.data else updates
 
 # ── P0 payroll performance (mig 407, 2026-07-22): Postgres-side month aggregation ───────────────
 # /payroll + /payroll-by-store used to pull EVERY month shift row (select *) plus up to 20,000

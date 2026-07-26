@@ -66,6 +66,10 @@ export default function SchedulePage() {
   const [newShift, setNewShift] = useState({ start_time: '10:00', end_time: '18:00', store_code: '', employee_name: '' })
   const [busy, setBusy] = useState(false)
   const [timeOff, setTimeOff] = useState<any[]>([])
+  // Non-blocking heads-up when a shift was scheduled over an employee's approved time off (the
+  // backend's default 'warn' policy — see PUT /storeops/timeoff-conflict-mode). Dismissible;
+  // never prevents the shift that already saved.
+  const [notice, setNotice] = useState<string | null>(null)
 
   const weekEnd = addDays(weekStart, 6)
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart])
@@ -279,6 +283,12 @@ export default function SchedulePage() {
     const employee_name = addModal.emp || newShift.employee_name
     if (!store_code) { alert('Pick a store.'); return }
     if (!employee_name) { alert('Pick an employee.'); return }
+    // Same data that draws the 🌴 OFF badge — confirm before scheduling over an employee's own
+    // approved time off on this day (the backend now ALLOWS it by default; this is a courtesy
+    // check-with-the-manager step, not a hard stop).
+    if (offByName[employee_name]?.has(addModal.date)) {
+      if (!confirm(`${employee_name} has approved time off on ${addModal.date}. Schedule anyway?`)) return
+    }
     const emp = allEmps.find(e => e.name === employee_name)
     const payload = {
       employee_id: emp?.id?.toString() || '',
@@ -295,8 +305,12 @@ export default function SchedulePage() {
       const created = await api('/api/v1/storeops/shifts', { method: 'POST', body: JSON.stringify(payload) })
       setShifts(s => [...s, created])
       setAddModal(null)
+      // Backend-confirmed heads-up (org's policy is 'warn', default for every tenant) — the shift
+      // already saved; this never blocks, just informs.
+      if (created?.timeoff_warning) setNotice(created.timeoff_warning)
     } catch (e: any) {
-      // Backend returns 409 when the employee has approved time-off on this date.
+      // Backend still 409s when the tenant opted into 'block' via the timeoff-conflict-mode
+      // setting (default is 'warn', which allows the schedule + returns `timeoff_warning` above).
       alert(e?.message || 'Could not add shift.')
     } finally { setBusy(false) }
   }
@@ -407,6 +421,13 @@ export default function SchedulePage() {
           <SendReportButton reportKey="storeops_schedule" filters={{ week_start: weekStart, ...(filterStore ? { store_code: filterStore } : {}) }} compact />
         </div>
       </div>
+
+      {notice && (
+        <div style={{ background: '#eff6ff', border: '1px solid #3b82f6', color: '#1e3a8a', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+          <span>🌴 {notice}</span>
+          <button onClick={() => setNotice(null)} style={{ background: 'none', border: 'none', color: '#1e3a8a', cursor: 'pointer', fontWeight: 700 }}>✕</button>
+        </div>
+      )}
 
       {conflicts.length > 0 && (
         <div style={{ background: '#fef3c7', border: '1px solid #f59e0b', color: '#92400e', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 13 }}>
