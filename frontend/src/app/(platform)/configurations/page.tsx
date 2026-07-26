@@ -69,6 +69,7 @@ const GROUPS: Group[] = [
       { href: '/commcalc/upload', icon: '📁', label: 'Auto-Imports & Uploads', desc: 'Per-source schedules, last-loaded status, manual uploads.' },
       { href: '/commcalc/upload/wizard', icon: '🧭', label: 'Upload Wizard', desc: 'Guided per-report upload (exact report name + source link).' },
       { href: '/closing/imports', icon: '🔄', label: 'Closing Auto-Import', desc: 'Google Sheet closing import — sheet id, tab, schedule, service account.' },
+      { href: '/admin/import-health', icon: '📡', label: 'Import Health', desc: 'Every feed this company expects, how often it should arrive, when it last did — and what to fix. Drives the admin login alert.' },
     ],
   },
   {

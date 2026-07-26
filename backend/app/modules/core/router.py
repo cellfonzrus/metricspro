@@ -821,6 +821,7 @@ SETTING_AREAS = [
     {"key": "failures",          "label": "Failure Logs (clock-in sensitivity, logged categories)"},
     {"key": "security",          "label": "Security (password policy · 2FA · admin-set passwords)"},
     {"key": "support_config",    "label": "Tech Support (SLA policy · canned responses · help docs)"},
+    {"key": "import_health",     "label": "Import Health (feed schedules · expected cadence · snooze)"},
 ]
 
 
@@ -3702,3 +3703,14 @@ async def support_docs_seed_bundled(authorization: str = Header(default=""), x_a
         raise HTTPException(403, "Seeding help docs is restricted to house support staff.")
     from app.modules.core.support_seed import seed_support_docs
     return seed_support_docs(sb(), ORG_ID)
+
+
+# ── Import health + admin attention (mig 717, owner directive 2026-07-25) ────────────────────────
+# Universal import-freshness registry + the consolidated admin-attention feed behind the login popup.
+# Mounted ONTO this router rather than in main.py so the SHARED-file footprint of the feature is ZERO:
+# main.py already does app.include_router(core_router, prefix="/api/v1"), and import_health.router
+# carries no prefix of its own, so its paths resolve to /api/v1/core/import-feeds, /api/v1/core/attention.
+# The sub-module imports core.router only LAZILY (inside functions), so there is no import cycle.
+from app.modules.core import import_health as _import_health   # noqa: E402  (bottom-of-file mount)
+
+router.include_router(_import_health.router)

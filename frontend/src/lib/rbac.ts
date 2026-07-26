@@ -293,6 +293,12 @@ export const NAV: NavGroup[] = [
     { href: '/admin/labels', label: 'Display Labels', icon: '🏷️', module: 'admin' },
     { href: '/admin/menu', label: 'Menu Layout', icon: '🧭', module: 'admin' },
     { href: '/failures', label: 'Failure Logs', icon: '🩺', module: 'admin' },
+    // Import Health (mig 717) — the universal import-freshness registry behind the admin login popup.
+    // module 'admin' + no `scopes`, IDENTICAL to its Failure Logs sibling: an existing admin role already
+    // carries modules.admin, so this adds no new permission surface and needs no SEED_VERSION bump.
+    // Deliberately NOT in REPORT_DIRECTORY — it edits import schedules, and the directory excludes
+    // config/entry surfaces by design (one line to add if the operator prefers it listed).
+    { href: '/admin/import-health', label: 'Import Health', icon: '📡', module: 'admin' },
   ]},
 ]
 
@@ -479,6 +485,18 @@ export function navModuleForPath(path: string): string | null {
 // without re-seeding each role's permissions JSONB. Non-admin roles still need the flag.
 export function isSuperAdmin(perms: Permissions): boolean {
   return !!perms?.modules?.admin
+}
+
+// May this user see the ADMIN ATTENTION popup / indicator (overdue imports, pending mappings,
+// duplicate-data signals)? MIRROR of backend `core.import_health.can_view_attention` — KEEP IN SYNC.
+// It reuses the EXISTING admin-ish concept (no parallel gate is invented): an explicit per-page override
+// for /admin/import-health wins, then the `admin` module, then company-wide scope. A non-admin gets
+// `false` here and the component renders nothing; the backend 403s them independently.
+export function canSeeAttention(perms: Permissions): boolean {
+  const ov = perms?.pages?.['/admin/import-health']
+  if (typeof ov === 'boolean') return ov
+  if (isSuperAdmin(perms)) return true
+  return (perms?.scope || 'all') === 'all'
 }
 
 // ── Carrier-scoped nav ──────────────────────────────────────────────────────────────────────────
