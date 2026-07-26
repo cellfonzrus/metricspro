@@ -320,15 +320,28 @@ def _payroll_month_groups(org_id, lo, hi):
 # (which can't be phantom-filtered after their SQL-side aggregation) or the legacy per-row loops
 # (which are told to skip inactive employees entirely and let this path handle them).
 def _inactive_ids_from(employees_rows):
+    """employee_id set of employees explicitly marked inactive. `is_active` is a NULLABLE column —
+    Gate-1 LOW-B2 (2026-07-26): NULL/missing must be treated as ACTIVE (matching every frontend
+    picker's `s.is_active !== false` convention, and the column's own `DEFAULT true`), never folded
+    into the inactive/phantom-filtering path on an absent flag. Only an EXPLICIT `is_active=false`
+    counts."""
     return {e.get("employee_id") for e in employees_rows
-            if e.get("employee_id") and not e.get("is_active")}
+            if e.get("employee_id") and e.get("is_active") is False}
 
 
 def _inactive_activity_rows(org_id, lo, hi, inactive_ids):
     """(real_shifts, timelog_rows) for INACTIVE employees only. real_shifts = storeops.shifts rows
     (is_deleted=false, in [lo,hi) when given) with actual_hours GENUINELY > 0 — a schedule-only row
     (actual_hours 0/blank) is dropped right here, at the source, for every caller. timelog_rows =
-    CLOSED punches only (never phantom by definition, always real activity)."""
+    CLOSED punches only (never phantom by definition, always real activity) MINUS any punch whose
+    (employee_id, work_date) is already covered by a SURVIVING real shift (Gate-1 MAJOR-B1,
+    2026-07-26: without this, a real shift AND its own same-day punch both counted — the active
+    path's "already represented by a shift that day -> never double-count" invariant had been
+    dropped for inactive employees, e.g. 6h shift + 6h punch on the same day summed to a fabricated
+    12h/$240 instead of 6h/$120). A PHANTOM shift (actual_hours==0, already excluded from
+    real_shifts above) must NOT block its day — that's the point of this whole feature: the
+    phantom-dropped + punch-counted cell is the CORRECT behavior and must keep working exactly as
+    before this fix."""
     if not inactive_ids:
         return [], []
     try:
@@ -339,6 +352,10 @@ def _inactive_activity_rows(org_id, lo, hi, inactive_ids):
     except Exception:
         shifts = []
     real_shifts = [s for s in shifts if float(s.get("actual_hours") or 0) > 0]
+    # (employee_id, work_date) pairs already covered by a REAL (surviving) shift — mirrors the
+    # active-path `shift_days` invariant, but scoped to real_shifts only so a phantom shift's day
+    # stays open for its punch to count (see harness checks for both cases explicitly).
+    real_shift_days = {(s.get("employee_id"), str(s.get("shift_date") or "")[:10]) for s in real_shifts}
     try:
         q2 = (sb().table("timelog").select("employee_id,employee_name,hours,clock_out,work_date,store_code")
               .eq("org_id", org_id))
@@ -347,7 +364,8 @@ def _inactive_activity_rows(org_id, lo, hi, inactive_ids):
         tl = q2.in_("employee_id", list(inactive_ids)).limit(20000).execute().data or []
     except Exception:
         tl = []
-    timelog_rows = [t for t in tl if t.get("clock_out") and t.get("hours") is not None]
+    timelog_rows = [t for t in tl if t.get("clock_out") and t.get("hours") is not None
+                     and (t.get("employee_id"), str(t.get("work_date") or "")[:10]) not in real_shift_days]
     return real_shifts, timelog_rows
 
 

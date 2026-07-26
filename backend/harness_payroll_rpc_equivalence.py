@@ -230,6 +230,16 @@ STORE["employees"] = [
     # appear anywhere, at all, in EITHER endpoint (the money-adjacent "phantom rows drop" half of
     # the rule) — see checks 27-29.
     {"id": 11, "employee_id": "E13", "org_id": ORG, "name": "Zara Ghost", "home_store": "Store1", "pay_rate": 18.0, "is_active": False},
+    # Gate-1 MAJOR-B1 (2026-07-26): INACTIVE employee whose REAL shift (act>0) has a SAME-DAY closed
+    # punch too (id16/t11 below) — must resolve EXACTLY like the active path's own no-double-count
+    # rule (E6's identical sched8/act7.5/punch8h pattern, just a different store/date), not sum both.
+    {"id": 12, "employee_id": "E16", "org_id": ORG, "name": "Uma BothInactive", "home_store": "Store1", "pay_rate": 20.0, "is_active": False},
+    # Gate-1 LOW-B2 (2026-07-26): is_active is NULLABLE — a NULL/missing flag must be treated as
+    # ACTIVE (never folded into the inactive/phantom-filtering path), matching every frontend
+    # picker's `!== false` convention. This employee's ONLY shift is phantom (actual_hours=0); if
+    # wrongly treated as inactive it would vanish entirely — instead it must go through the ordinary
+    # ACTIVE act==0->scheduled fallback and show real scheduled-based pay.
+    {"id": 13, "employee_id": "E17", "org_id": ORG, "name": "Vik NullFlag", "home_store": "Store1", "pay_rate": 25.0, "is_active": None},
 ]
 STORE["shifts"] = [   # list order == id order (bigserial insert order, what PostgREST returns)
     {"id": 1, "org_id": ORG, "employee_id": "E1", "employee_name": "Alice Rep", "store_code": "Store1",
@@ -264,6 +274,16 @@ STORE["shifts"] = [   # list order == id order (bigserial insert order, what Pos
     # deliberately OUTSIDE the 07-10..07-16 multi-week sub-range so it never touches those checks.
     {"id": 13, "org_id": ORG, "employee_id": "E13", "employee_name": "Zara Ghost", "store_code": "Store1",
      "shift_date": "2026-07-20", "scheduled_hours": 5, "actual_hours": 0, "is_deleted": False},
+    # MAJOR-B1 fixture: INACTIVE E16's REAL shift (same numbers as E6's proven sched8/act7.5, but a
+    # fresh store/date — Store4/07-19 — so it never perturbs Store1/Store2/Store3's already-asserted
+    # totals or the 07-10..07-16 multi-week window) — its same-day punch is below (t11).
+    {"id": 16, "org_id": ORG, "employee_id": "E16", "employee_name": "Uma BothInactive", "store_code": "Store4",
+     "shift_date": "2026-07-19", "scheduled_hours": 8, "actual_hours": 7.5, "is_deleted": False},
+    # LOW-B2 fixture: E17 (NULL is_active) — a schedule-only PHANTOM shift (act=0). If wrongly
+    # treated as inactive this would vanish entirely (like E13); correctly treated as ACTIVE it must
+    # survive via the ordinary act==0->scheduled fallback. Store5/07-23 — fresh, no interference.
+    {"id": 17, "org_id": ORG, "employee_id": "E17", "employee_name": "Vik NullFlag", "store_code": "Store5",
+     "shift_date": "2026-07-23", "scheduled_hours": 6, "actual_hours": 0, "is_deleted": False},
 ]
 STORE["timelog"] = [
     # E4 kiosk-only: two closed punches, zero shift rows this month
@@ -288,6 +308,10 @@ STORE["timelog"] = [
      "clock_out": "2026-07-18T19:00:00", "hours": 4.0, "work_date": "2026-07-18", "created_at": "2026-07-18T19:00:01"},
     {"id": "t8", "org_id": ORG2, "employee_id": "X1", "employee_name": "Other Org", "store_code": "OStore",
      "clock_out": "2026-07-06T19:00:00", "hours": 3.0, "work_date": "2026-07-06", "created_at": "2026-07-06T19:00:01"},
+    # MAJOR-B1: E16 (INACTIVE)'s SAME-DAY punch as their real shift (id16, 07-19) — must be BLOCKED
+    # by that surviving real shift (mirrors E6/t4's active-path no-double-count), never summed on top.
+    {"id": "t11", "org_id": ORG, "employee_id": "E16", "employee_name": "Uma BothInactive", "store_code": "Store4",
+     "clock_out": "2026-07-19T21:00:00", "hours": 8.0, "work_date": "2026-07-19", "created_at": "2026-07-19T21:00:01"},
 ]
 
 
@@ -519,6 +543,41 @@ check("30: ORG2 (no inactive employees at all) full-month /payroll output is the
       == '[{"employee_id": "X1", "name": "Other Org", "store": "OStore", "pay_rate": 9.0, '
          '"scheduled_hours": 8.0, "actual_hours": 11.0, "shifts": 1, "scheduled_pay": 72.0, "actual_pay": 99.0}]',
       o2_outs["fast"][0])
+
+# ══ 31-32: Gate-1 MAJOR-B1 — INACTIVE employee, REAL shift + SAME-DAY closed punch must NOT
+# double-count, and must match the ACTIVE path's own treatment of the IDENTICAL shift/punch shape
+# (E6: sched8/act7.5/punch8h same day -> actual stays 7.5, shift wins, punch blocked) ══════════════
+b1_outs = run_both("2026-07", ORG)
+b1_pay = {r["employee_id"]: r for r in json.loads(b1_outs["fast"][0])}
+b1_pay_legacy = {r["employee_id"]: r for r in json.loads(b1_outs["legacy"][0])}
+b1_bys = {s["store_code"]: s for s in json.loads(b1_outs["fast"][1])["stores"]}
+b1_bys_legacy = {s["store_code"]: s for s in json.loads(b1_outs["legacy"][1])["stores"]}
+check("31: INACTIVE E16's real shift + same-day punch does NOT double-count — actual_hours matches "
+      "the ACTIVE E6's IDENTICAL sched8/act7.5/punch8h pattern EXACTLY (7.5, not 15.5), on BOTH "
+      "fast and legacy paths (byte-identical to each other too)",
+      b1_pay["E16"]["actual_hours"] == b1_pay["E6"]["actual_hours"] == 7.5
+      and b1_pay["E16"]["scheduled_hours"] == b1_pay["E6"]["scheduled_hours"] == 8
+      and b1_pay["E16"]["shifts"] == 1 and b1_pay["E16"]["pay_rate"] == 20.0
+      and b1_pay["E16"] == b1_pay_legacy["E16"],
+      (b1_pay.get("E16"), b1_pay.get("E6"), b1_pay_legacy.get("E16")))
+check("32: by-store totals reflect the NON-double-counted number too — Store4 (E16's only store) is "
+      "7.5h/$150.00 (7.5*20), not 15.5h/$310.00, on BOTH paths",
+      b1_bys["Store4"]["hours"] == 7.5 and b1_bys["Store4"]["amount"] == 150.0
+      and b1_bys["Store4"] == b1_bys_legacy["Store4"],
+      (b1_bys.get("Store4"), b1_bys_legacy.get("Store4")))
+
+# ══ 33-34: Gate-1 LOW-B2 — is_active NULL/missing must be treated as ACTIVE, never folded into the
+# inactive/phantom-filtering path (E17's phantom shift must survive via the ORDINARY active-path
+# act==0->scheduled fallback, not vanish like a truly-inactive phantom would) ═══════════════════════
+check("33: NULL-is_active E17 is treated as ACTIVE — survives via the ordinary act==0->scheduled "
+      "fallback (sched6/act6, NOT vanished like a truly-inactive phantom), real rate 25/hr, on BOTH paths",
+      b1_pay["E17"]["scheduled_hours"] == 6 and b1_pay["E17"]["actual_hours"] == 6
+      and b1_pay["E17"]["pay_rate"] == 25.0 and b1_pay["E17"] == b1_pay_legacy["E17"],
+      (b1_pay.get("E17"), b1_pay_legacy.get("E17")))
+check("34: E17's by-store total (Store5) reflects the fallback-based hours too — 6h/$150.00, both paths",
+      b1_bys["Store5"]["hours"] == 6 and b1_bys["Store5"]["amount"] == 150.0
+      and b1_bys["Store5"] == b1_bys_legacy["Store5"],
+      (b1_bys.get("Store5"), b1_bys_legacy.get("Store5")))
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
