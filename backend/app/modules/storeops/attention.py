@@ -30,10 +30,17 @@ def _item(group, key, severity, label, detail, count, deep_link, deep_link_label
 
 
 def register(register_provider):
-    """Called once, with the REAL decorator from core.import_health (import guarded by the caller)."""
+    """Called once, with the REAL decorator from core.import_health (import guarded by the caller).
+
+    GROUP = 'other' for all 5 providers below, deliberately: the login popup
+    (frontend/src/components/AdminAttention.tsx) hard-codes GROUP_ORDER = ['import','mapping',
+    'duplicate','other'] and its modal filters items to exactly those four buckets — an item tagged
+    with any other group string is counted in the header pill's total but never rendered in the
+    modal body (Gate-1 finding, 2026-07-26; the same constraint hit mod-finance/mod-asset). Keep this
+    'other' until platform-core teaches the popup to bucket unknown groups under 'Other' itself."""
 
     @register_provider("storeops_no_payscale", label="Employees with no pay rate set",
-                       group="people", cost="cheap")
+                       group="other", cost="cheap")
     def _p_no_payscale(client, org_id, ctx):
         """PENDING SETUP (cheap, roster-shaped table): an active employee with no hourly pay_rate pays
         $0 for every hour they work, with nothing else in the app ever flagging it (payroll/reports
@@ -49,7 +56,7 @@ def register(register_provider):
         if not missing:
             return []
         eg = ", ".join(sorted((e.get("name") or e.get("employee_id") or "?") for e in missing)[:3])
-        return [_item("people", "no_payscale", "warning", "Employees with no pay rate set",
+        return [_item("other", "no_payscale", "warning", "Employees with no pay rate set",
                       f"{len(missing)} active employee(s) have no hourly pay rate configured "
                       f"(e.g. {eg}) — payroll will pay them $0 for any hours they work until a rate "
                       f"is set. Set it at HR → People (per-employee) or upload a payscale sheet there.",
@@ -57,7 +64,7 @@ def register(register_provider):
 
     @register_provider("storeops_stores_no_coverage",
                        label="Active stores with recent punches but no staff/schedule on record",
-                       group="ops", cost="heavy")
+                       group="other", cost="heavy")
     def _p_stores_no_coverage(client, org_id, ctx):
         """PENDING SETUP (heavy — scans timelog/shifts): a store that people are ACTUALLY clocking in
         at (real recent punches, so it's clearly operating) but that currently has zero active
@@ -103,7 +110,7 @@ def register(register_provider):
         if not gap:
             return []
         eg = ", ".join(gap[:3])
-        return [_item("ops", "stores_no_coverage", "warning",
+        return [_item("other", "stores_no_coverage", "warning",
                       "Active stores with punches but no staff/schedule on record",
                       f"{len(gap)} active store(s) had a real clock-in punch in the last 30 days "
                       f"(e.g. {eg}) but no active employee's home store is set there and nothing is "
@@ -113,7 +120,7 @@ def register(register_provider):
 
     @register_provider("storeops_kiosk_no_face_template",
                        label="Kiosk clock-ins with no enrolled face template",
-                       group="ops", cost="heavy")
+                       group="other", cost="heavy")
     def _p_kiosk_unenrolled(client, org_id, ctx):
         """PENDING SETUP (heavy — scans timelog): the kiosk auto-enrolls a face template on an
         employee's FIRST clock-in and verifies against it from the second onward (portal/page.tsx
@@ -156,7 +163,7 @@ def register(register_provider):
         if not missing:
             return []
         eg = ", ".join((names.get(e) or e) for e in missing[:3])
-        return [_item("ops", "kiosk_no_face_template", "warning",
+        return [_item("other", "kiosk_no_face_template", "warning",
                       "Kiosk clock-ins with no enrolled face template",
                       f"{len(missing)} employee(s) have clocked in via the kiosk at least twice in the "
                       f"last 60 days (e.g. {eg}) but have never enrolled a face template — face-match "

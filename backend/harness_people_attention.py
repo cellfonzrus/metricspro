@@ -28,6 +28,10 @@ Proves:
   G. Registration wiring itself — both attention.py modules register through the REAL
      import_health.register_provider, appear in collect_attention()'s cheap/heavy split exactly as
      declared, and a raising provider is isolated (never taken down by another provider's bug).
+  H. Every item from all 5 providers carries group='other' — the ONLY group of the aggregator's four
+     (import/mapping/duplicate/other) that frontend/src/components/AdminAttention.tsx's modal actually
+     renders (GROUP_ORDER); any other group string is counted in the header pill but invisible in the
+     modal body (Gate-1 finding, 2026-07-26).
 
 Run:  cd backend && python3 harness_people_attention.py
 """
@@ -270,6 +274,7 @@ def main():
     detail = items[0]["detail"] if items else ""
     ok("A count = 2 (Zero Rate + Null Rate, not Inactive Zero)", items and items[0]["count"] == 2, items)
     ok("A severity=warning", items and items[0]["severity"] == "warning")
+    ok("A group='other' (rendered by AdminAttention.tsx GROUP_ORDER)", items and items[0]["group"] == "other", items)
     ok("A names the flagged employees", "Zero Rate" in detail and "Null Rate" in detail, detail)
     ok("A never names the inactive $0 employee", "Inactive Zero" not in detail, detail)
     ok("A never names the good-rate employee", "Good Rate" not in detail, detail)
@@ -282,6 +287,7 @@ def main():
     detail = items[0]["detail"] if items else ""
     ok("B count = 1 (only S3)", items and items[0]["count"] == 1, items)
     ok("B names S3", "S3" in detail, detail)
+    ok("B group='other' (rendered by AdminAttention.tsx GROUP_ORDER)", items and items[0]["group"] == "other", items)
     ok("B never flags S1 (staffed)", "S1" not in detail, detail)
     ok("B never flags S2 (staffed, no punch anyway)", "S2" not in detail, detail)
     ok("B never flags S4 (has a future shift)", "S4" not in detail, detail)
@@ -296,6 +302,7 @@ def main():
     detail = items[0]["detail"] if items else ""
     ok("C count = 1 (only Ten/E10)", items and items[0]["count"] == 1, items)
     ok("C names Ten", "Ten" in detail, detail)
+    ok("C group='other' (rendered by AdminAttention.tsx GROUP_ORDER)", items and items[0]["group"] == "other", items)
     ok("C never flags Eleven (only 1 kiosk punch)", "Eleven" not in detail, detail)
     ok("C never flags Twelve (enrolled)", "Twelve" not in detail, detail)
     ok("C never flags Thirteen (not device=kiosk)", "Thirteen" not in detail, detail)
@@ -309,6 +316,7 @@ def main():
     ok("D fires exactly one item", len(items) == 1, items)
     ok("D count = 1 (only P1 — P2 under threshold, P3 active, P4 no invited_at)",
        items and items[0]["count"] == 1, items)
+    ok("D group='other' (rendered by AdminAttention.tsx GROUP_ORDER)", items and items[0]["group"] == "other", items)
     items_b = after["hr_onboarding_stuck"]["fn"](client, ORG_B, ctx)
     ok("D org B: PB1 (8d, docs_submitted) trips the default-7 threshold", len(items_b) == 1, items_b)
     ok("D org B count = 1", items_b and items_b[0]["count"] == 1, items_b)
@@ -344,6 +352,8 @@ def main():
         ok("E1 fires pii_key_missing", "pii_key_missing" in keys, items)
         sev = next(i["severity"] for i in items if i["key"] == "pii_key_missing")
         ok("E1 severity = error", sev == "error", sev)
+        grp = next(i["group"] for i in items if i["key"] == "pii_key_missing")
+        ok("E1 group='other' (rendered by AdminAttention.tsx GROUP_ORDER)", grp == "other", grp)
         ok("E1 never mentions the actual field value/ciphertext",
            all(ciphertext not in i["detail"] for i in items), items)
         ok("E1 does NOT ALSO fire pii_plaintext_unbackfilled (key is off, can't backfill)",
@@ -364,6 +374,7 @@ def main():
         ok("E2 fires pii_plaintext_unbackfilled", "pii_plaintext_unbackfilled" in keys2, items2)
         w = next(i for i in items2 if i["key"] == "pii_plaintext_unbackfilled")
         ok("E2 severity = warning", w["severity"] == "warning")
+        ok("E2 group='other' (rendered by AdminAttention.tsx GROUP_ORDER)", w["group"] == "other", w)
         ok("E2 count = 1 (only the sensitive key, not legal_name)", w["count"] == 1, w)
         ok("E2 never echoes the plaintext value itself", "0009876543" not in w["detail"], w["detail"])
 

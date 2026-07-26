@@ -48,9 +48,16 @@ def _sensitive_intake_keys(client, org_id):
 
 
 def register(register_provider):
-    """Called once, with the REAL decorator from core.import_health (import guarded by the caller)."""
+    """Called once, with the REAL decorator from core.import_health (import guarded by the caller).
 
-    @register_provider("hr_onboarding_stuck", label="Onboarding invites stuck", group="people",
+    GROUP = 'other' for both providers below, deliberately: the login popup
+    (frontend/src/components/AdminAttention.tsx) hard-codes GROUP_ORDER = ['import','mapping',
+    'duplicate','other'] and its modal filters items to exactly those four buckets — an item tagged
+    with any other group string is counted in the header pill's total but never rendered in the
+    modal body (Gate-1 finding, 2026-07-26; the same constraint hit mod-finance/mod-asset). Keep this
+    'other' until platform-core teaches the popup to bucket unknown groups under 'Other' itself."""
+
+    @register_provider("hr_onboarding_stuck", label="Onboarding invites stuck", group="other",
                        cost="cheap")
     def _p_onboarding_stuck(client, org_id, ctx):
         """PENDING FOLLOW-UP (cheap, bounded per-employee profile table): a new-hire invite that has
@@ -82,7 +89,7 @@ def register(register_provider):
                 stuck += 1
         if not stuck:
             return []
-        return [_item("people", "onboarding_stuck", "warning", "Onboarding invites stuck",
+        return [_item("other", "onboarding_stuck", "warning", "Onboarding invites stuck",
                       f"{stuck} new-hire invite(s) have been sitting in invited / in-progress / "
                       f"docs-submitted for more than {days} day(s) without reaching HR verification. "
                       f"Nudge the employee, re-send the invite, or verify their documents from HR → "
@@ -90,7 +97,7 @@ def register(register_provider):
                       f"/hr/onboarding/attention-config.)",
                       stuck, "/hr/onboarding", "Open HR Onboarding")]
 
-    @register_provider("hr_pii_encryption", label="PII encryption key status", group="security",
+    @register_provider("hr_pii_encryption", label="PII encryption key status", group="other",
                        cost="cheap")
     def _p_pii_encryption(client, org_id, ctx):
         """PENDING SETUP / SAFETY (cheap, bounded per-employee profile table): flags the two real
@@ -123,7 +130,7 @@ def register(register_provider):
         out = []
         if has_ciphertext and not enabled:
             out.append(_item(
-                "security", "pii_key_missing", "error", "PII encryption key is not configured",
+                "other", "pii_key_missing", "error", "PII encryption key is not configured",
                 "Encrypted employee PII (SSN / bank / A-Number, etc.) exists in this tenant's intake "
                 "data, but the backend has no FIELD_ENCRYPTION_KEY configured right now — that data "
                 "can no longer be decrypted (Reveal will show '(unavailable)'). If a key was ever "
@@ -133,7 +140,7 @@ def register(register_provider):
                 1, "/hr/onboarding", "Open HR Onboarding"))
         if plaintext_count:
             out.append(_item(
-                "security", "pii_plaintext_unbackfilled", "warning",
+                "other", "pii_plaintext_unbackfilled", "warning",
                 "Sensitive employee data stored unencrypted",
                 f"Encryption is configured, but {plaintext_count} sensitive intake field value(s) "
                 f"across this org's employees are still stored in the clear (never backfilled). Run "
