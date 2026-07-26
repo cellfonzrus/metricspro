@@ -160,8 +160,19 @@ s['raw_sales'] = [
     act_line('T0', '2225550000', period='June 2026', date='2026-06-10'),
     pay_line('T0', 'Access Charge - $25', 'System', 'System', 25, 12.5, period='June 2026', date='2026-06-10')]
 s['raw_mi'] = [mi_row('3125550001'), mi_row('2225550000')]   # both active+residual
-new_out = E.compute_sale_installments(c, ORG, 'July 2026', persist=False)
-head_out = HEAD.compute_sale_installments(c, ORG, 'July 2026', persist=False)
+def _drop_additive(res):
+    """mig 233 (installment-plan-line-only) adds two purely-additive TOP-LEVEL keys — `chain_guard`
+    (counters for the one-chain-per-activation guard) and `warnings` (operator diagnostics). `totals`,
+    `by_rep`, `flags` and every ledger row are unchanged, so the byte-identity claim below is still a
+    real behavioural differential."""
+    out = dict(res)
+    out.pop("chain_guard", None)
+    out.pop("warnings", None)
+    return out
+
+
+new_out = _drop_additive(E.compute_sale_installments(c, ORG, 'July 2026', persist=False))
+head_out = _drop_additive(HEAD.compute_sale_installments(c, ORG, 'July 2026', persist=False))
 check("inherit output byte-identical to HEAD", new_out == head_out,
       f"\n   new={new_out.get('by_rep')} ledger0={new_out.get('ledger')[:1]}\n   head={head_out.get('by_rep')}")
 check("inherit ledger carries NO new gate_kind keys", all('gate_kind' not in l for l in new_out['ledger']))

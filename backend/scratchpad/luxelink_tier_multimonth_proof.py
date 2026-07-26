@@ -687,10 +687,18 @@ def boost_store(seed=0):
 
 
 def _norm_sie(res):
-    """Drop the purely-additive mig-232 provenance key so the differential compares BEHAVIOUR, not shape.
-    The money (by_rep/totals) and the flags are compared UNMODIFIED alongside it."""
+    """Drop the purely-additive provenance keys so the differential compares BEHAVIOUR, not shape.
+    The money (by_rep/totals) and the flags are compared UNMODIFIED alongside it.
+      · ledger `ma_lookup_periods`          — mig 232.
+      · top-level `chain_guard` / `warnings` — mig 233 (agent/commission/installment-plan-line-only):
+        counters + operator warnings for the one-chain-per-activation guard. `totals` is deliberately
+        UNCHANGED by that package, so the money comparison below stays strict."""
     out = dict(res)
-    out["ledger"] = [{k: v for k, v in r.items() if k != "ma_lookup_periods"} for r in res["ledger"]]
+    out.pop("chain_guard", None)
+    out.pop("warnings", None)
+    out["ledger"] = [{k: v for k, v in r.items()
+                      if k not in ("ma_lookup_periods", "mrc_from_product", "chain_lines_merged")}
+                     for r in res["ledger"]]
     return out
 
 
@@ -700,7 +708,22 @@ def _ledger_key_delta(new, old):
     return nk - ok
 
 
+def _dup_activation_seeds(st):
+    """Seeds whose RANDOM fixture happens to put two sale lines on the same (trans_id, mdn) — i.e. two
+    rows the sale_installment_ledger's own UNIQUE (org_id, trans_id, mdn, month_index, pay_period) could
+    never both hold. mig 233 (installment-plan-line-only) collapses exactly those into one chain, so they
+    are the ONLY Boost seeds allowed to differ from the base engine."""
+    seen = set()
+    for r in st["raw_sales"]:
+        k = (str(r.get("trans_id") or ""), str(r.get("mdn") or "").replace(".0", "").strip())
+        if k in seen:
+            return True
+        seen.add(k)
+    return False
+
+
 drift_ce = drift_sie = 0
+dup_seeds = dup_lower = dup_ok = 0
 for s in range(300):
     st = boost_store(s)
     a = CE.preview(FakeClient(st), HOUSE, "June 2026")
@@ -711,12 +734,24 @@ for s in range(300):
             print("    first CE drift seed", s, a, b)
     x = _norm_sie(SIE.compute_sale_installments(FakeClient(st), HOUSE, "June 2026", persist=False))
     y = OLD_SIE.compute_sale_installments(FakeClient(st), HOUSE, "June 2026", persist=False)
+    if _dup_activation_seeds(st):
+        dup_seeds += 1
+        # allowed to differ — but ONLY downward, and only by collapsed duplicates
+        if sum(x["by_rep"].values()) <= sum(y["by_rep"].values()) + 1e-9 and len(x["ledger"]) <= len(y["ledger"]):
+            dup_lower += 1
+        if x == y:
+            dup_ok += 1
+        continue
     if x != y:
         drift_sie += 1
         if drift_sie == 1:
             print("    first SIE drift seed", s)
 check("F1 300-seed Boost fuzz: preview() identical to the base engine", drift_ce == 0, f"{drift_ce} drifts")
-check("F2 300-seed Boost fuzz: compute_sale_installments() identical", drift_sie == 0, f"{drift_sie} drifts")
+check("F2 300-seed Boost fuzz: compute_sale_installments() identical on every seed WITHOUT a "
+      "duplicate (trans_id, mdn) line pair", drift_sie == 0, f"{drift_sie} drifts")
+check(f"F2b the {dup_seeds} seeds that DO carry a duplicate (trans_id, mdn) pair — rows the ledger's "
+      f"UNIQUE key could never both store — pay LESS, never more (mig 233 dedupe)",
+      dup_seeds > 0 and dup_lower == dup_seeds, f"{dup_lower}/{dup_seeds} lower, {dup_ok} unchanged")
 
 # the same fuzz for a PLAN-mode tenant with none of the new config set
 drift_lux = drift_lux_sie = 0
@@ -770,7 +805,7 @@ stF3 = copy.deepcopy(boost_store(11))
 for c in stF3["installment_gate_source_config"]:
     c.pop("ma_lookup_periods", None)
 check("F7 gate-source rows without ma_lookup_periods behave exactly as before",
-      SIE.compute_sale_installments(FakeClient(stF3), HOUSE, "June 2026", persist=False)
+      _norm_sie(SIE.compute_sale_installments(FakeClient(stF3), HOUSE, "June 2026", persist=False))
       == OLD_SIE.compute_sale_installments(FakeClient(stF3), HOUSE, "June 2026", persist=False))
 check("F8 the boost mode default is 'sale' (raw_mi gate never consults MA anyway)",
       SIE._GATE_CFG_DEFAULTS["boost"]["ma_lookup_periods"] == "sale"

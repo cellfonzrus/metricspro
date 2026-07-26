@@ -92,6 +92,9 @@ export default function PlanInstallmentsPage() {
   const [settings, setSettings] = useState<any>({ pay_disabled: false, residual_visibility: 'all' })
   const [matcher, setMatcher] = useState<Matcher | null>(null)
   const [matcherOpts, setMatcherOpts] = useState<{ departments: string[]; categories: string[]; value_fields: string[]; is_default: boolean }>({ departments: [], categories: [], value_fields: ['ext_price', 'gp'], is_default: true })
+  // mig 233 — which sale line carries the activation's monthly charge (the %-of-MRC basis)
+  const [planLine, setPlanLine] = useState<{ departments: string[]; categories: string[]; product_keywords: string[] } | null>(null)
+  const [planLineOpts, setPlanLineOpts] = useState<{ departments: string[]; categories: string[]; is_default: boolean; ready: boolean }>({ departments: [], categories: [], is_default: true, ready: true })
   const [cands, setCands] = useState<any[]>([])
   const [candFilter, setCandFilter] = useState('')                 // write-in filter ("rtr")
   const [pickedCands, setPickedCands] = useState<Set<string>>(new Set())  // selected plan strings (bulk)
@@ -108,17 +111,19 @@ export default function PlanInstallmentsPage() {
 
   async function load() {
     try {
-      const [pl, sc, st, mt] = await Promise.all([
+      const [pl, sc, st, mt, plm] = await Promise.all([
         api(`/api/v1/commcalc/commission-plans?org_id=${ORG_ID}`),
         api(`/api/v1/commcalc/plan-installments?org_id=${ORG_ID}`),
         api(`/api/v1/commcalc/commission-settings?org_id=${ORG_ID}`),
         api(`/api/v1/commcalc/plan-installments/activation-matcher?org_id=${ORG_ID}`),
+        api(`/api/v1/commcalc/plan-installments/plan-line-matcher?org_id=${ORG_ID}`),
       ])
       setPlans(pl?.plans || [])
       setScheds(sc?.schedules || [])
       setReady(sc?.ready !== false)
       setSettings(st || { pay_disabled: false, residual_visibility: 'all' })
       if (mt?.matcher) { setMatcher(mt.matcher); setMatcherOpts({ departments: mt.departments || [], categories: mt.categories || [], value_fields: mt.value_fields || ['ext_price', 'gp'], is_default: !!mt.is_default }) }
+      if (plm?.matcher) { setPlanLine(plm.matcher); setPlanLineOpts({ departments: plm.departments || [], categories: plm.categories || [], is_default: !!plm.is_default, ready: plm.ready !== false }) }
     } catch (e: any) { setMsg(e.message) }
     // read-only; never blocks the page (the picker degrades to the engine's field list + free text)
     try {
@@ -205,6 +210,17 @@ export default function PlanInstallmentsPage() {
       const body: any = reset ? { reset: true } : { ...matcher }
       await api(`/api/v1/commcalc/plan-installments/activation-matcher?org_id=${ORG_ID}`, { method: 'PUT', body: JSON.stringify(body) })
       setMsg(reset ? 'Reset to the default activation-payment matcher.' : 'Activation-payment matcher saved.')
+      load()
+    } catch (e: any) { setMsg(e.message) }
+  }
+
+  async function savePlanLine(reset = false) {
+    setMsg('')
+    try {
+      const body: any = reset ? { reset: true } : { ...planLine }
+      await api(`/api/v1/commcalc/plan-installments/plan-line-matcher?org_id=${ORG_ID}`, { method: 'PUT', body: JSON.stringify(body) })
+      setMsg(reset ? 'Reset to the default rate-plan line matcher. Run Calculation to apply it.'
+                   : 'Rate-plan line matcher saved. Nothing changes until you Run Calculation.')
       load()
     } catch (e: any) { setMsg(e.message) }
   }
@@ -313,7 +329,55 @@ export default function PlanInstallmentsPage() {
           <b> This can increase pay</b> — it takes effect on the next Run Calculation. Check
           <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}> Commission Plans → Plan coverage</a> first.
         </p>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6 }}>
+          Multi-month %-of-MRC is paid on:
+          <select style={sel} value={settings.installment_mrc_basis || 'plan_line'}
+            onChange={e => setSettings({ ...settings, installment_mrc_basis: e.target.value })}>
+            <option value="plan_line">The activation's rate-plan line (default)</option>
+            <option value="trigger_line">Legacy — whichever line triggered the schedule</option>
+          </select>
+        </label>
+        <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 12px', maxWidth: 760 }}>
+          A multi-month installment pays <b>once per activation</b>, as a percentage of that activation's
+          <b> monthly charge</b>. On the default the MRC is read from the sale's rate-plan line — the
+          confirmed <a href="#mrc" style={{ color: 'var(--accent)' }}>MRC mapping</a> first, then a
+          description that states a monthly amount, then the rate-plan line matcher below. The legacy
+          option resolves the MRC from whichever line matched the trigger, which on a POS that stamps the
+          same Contract Type on every line let a <b>handset's price</b> be paid as if it were a monthly
+          charge. <b>Switching to legacy can increase pay</b> — it takes effect on the next Run Calculation.
+        </p>
         <button className="btn btn-primary" onClick={saveSettings}>Save pay settings</button>
+      </div>
+
+      {/* ── Rate-plan line matcher (mig 233 — the %-of-MRC basis) ────────────────────────── */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>Which line carries the rate plan (multi-month MRC basis)</div>
+        <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 12px', maxWidth: 900 }}>
+          One activation rings several lines — a handset, a rate plan, a SIM. This says which of them
+          carries the <b>monthly charge</b> a %-of-MRC installment is a percentage of. A confirmed
+          <a href="#mrc" style={{ color: 'var(--accent)' }}> MRC mapping</a> always wins, and a description
+          that states a monthly amount (&quot;$25/mo&quot;, &quot;MRC $30&quot;) is always trusted; these
+          settings decide the rest. Keywords match <b>whole words</b> — &quot;plan&quot; never matches
+          &quot;PLANTRONICS&quot;. If no rate-plan line can be identified the installment resolves to
+          <b> $0</b> rather than paying a percentage of a device price, and the
+          <a href="#preview" style={{ color: 'var(--accent)' }}> preview</a> lists every such activation.
+          {planLineOpts.is_default ? ' Currently using the seeded default.' : ' Currently using a tenant override.'}
+          {!planLineOpts.ready && <b> Migration 233 is not applied yet — the engine uses the default and saves will fail until it runs.</b>}
+        </p>
+        {planLine && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 12 }}>
+            <TagPicker label="Rate-plan departments" values={planLine.departments} options={planLineOpts.departments}
+              onChange={v => setPlanLine({ ...planLine, departments: v })} />
+            <TagPicker label="Rate-plan categories" values={planLine.categories} options={planLineOpts.categories}
+              onChange={v => setPlanLine({ ...planLine, categories: v })} />
+            <TagPicker label="Product-desc keywords" values={planLine.product_keywords} allowFree
+              onChange={v => setPlanLine({ ...planLine, product_keywords: v })} />
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-primary" onClick={() => savePlanLine(false)}>Save rate-plan matcher</button>
+          <button className="btn" onClick={() => savePlanLine(true)}>Reset to default</button>
+        </div>
       </div>
 
       {/* ── Activation-payment matcher (month-1 "paid at activation" config) ─────────────── */}
@@ -530,7 +594,7 @@ export default function PlanInstallmentsPage() {
       </div>
 
       {/* ── MRC mapping (classification-first) — write-in filter + bulk assign + cross-menu guard ── */}
-      <div className="card" style={{ marginBottom: 20 }}>
+      <div className="card" id="mrc" style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
           <div style={{ fontWeight: 600 }}>MRC mapping — {period} (auto-classified + $ prefilled from the description)</div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -613,7 +677,7 @@ export default function PlanInstallmentsPage() {
       </div>
 
       {/* ── Preview ────────────────────────────────────────────────────────────────────── */}
-      <div className="card">
+      <div className="card" id="preview">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div style={{ fontWeight: 600 }}>Preview — {period} (read-only, does not change pay)</div>
           <button className="btn" onClick={runPreview}>Run preview</button>
@@ -624,14 +688,37 @@ export default function PlanInstallmentsPage() {
               {preview.totals?.reps || 0} reps · {fmt(preview.totals?.amount || 0)} · paid {preview.totals?.paid || 0} · withheld {preview.totals?.withheld || 0}
               {anyActivation ? ` · activation-payment qualified ${(preview.ledger || []).filter((l: any) => l.gate_kind === 'activation_payment' && l.paid_gate_met).length}` : ''}
               {preview.note ? ` · ${preview.note}` : ''}
+              {(preview.chain_guard?.deduped || 0) > 0 ? ` · ${preview.chain_guard.deduped} duplicate line(s) of an activation merged into their chain` : ''}
             </div>
+            {(preview.warnings || []).length > 0 && (
+              <div style={{ marginBottom: 10, padding: '8px 10px', borderLeft: '3px solid var(--amber)', background: 'var(--surface2)', fontSize: 12 }}>
+                <b>{preview.warnings.length} activation(s) need attention</b>
+                {(preview.chain_guard?.mrc_unresolved || 0) > 0 && <span> · {preview.chain_guard.mrc_unresolved} with no identifiable rate-plan line (paid $0 instead of a % of a device price)</span>}
+                {(preview.chain_guard?.mrc_ambiguous || 0) > 0 && <span> · {preview.chain_guard.mrc_ambiguous} where two lines imply different monthly charges</span>}
+                <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+                  {preview.warnings.slice(0, 8).map((w: any, i: number) => (
+                    <li key={i} style={{ color: 'var(--text2)', marginBottom: 3 }}>
+                      <b>{w.type}</b> · {w.rep || '—'} · trans {w.trans_id || '—'} · M{w.month_index} — {w.detail}
+                      {w.products ? <span style={{ color: 'var(--text3)' }}> [{(w.products || []).join(' | ')}]</span> : null}
+                    </li>
+                  ))}
+                </ul>
+                {preview.warnings.length > 8 && <div style={{ color: 'var(--text3)' }}>…and {preview.warnings.length - 8} more.</div>}
+              </div>
+            )}
             <table>
-              <thead><tr><th>Rep</th><th>MDN</th><th>Sale mo</th><th>Month</th><th>Kind</th><th style={{ textAlign: 'right' }}>$</th><th>Gate</th></tr></thead>
+              <thead><tr><th>Rep</th><th>MDN</th><th>IMEI</th><th>Sale mo</th><th>Month</th><th>Kind</th><th>MRC</th><th style={{ textAlign: 'right' }}>$</th><th>Gate</th></tr></thead>
               <tbody>
                 {(preview.ledger || []).slice(0, 40).map((l: any, i: number) => (
                   <tr key={i}>
-                    <td>{l.epay_salesperson}</td><td>{l.mdn}</td><td>{l.sale_period}</td><td>M{l.month_index}</td>
-                    <td>{l.payout_kind}</td><td style={{ textAlign: 'right' }}>{fmt(l.amount || 0)}</td>
+                    <td>{l.epay_salesperson}</td><td>{l.mdn}</td><td style={{ fontSize: 11 }}>{l.serial_1 || '—'}</td>
+                    <td>{l.sale_period}</td><td>M{l.month_index}</td>
+                    <td>{l.payout_kind}</td>
+                    <td style={{ fontSize: 11 }} title={l.mrc_from_product || ''}>
+                      {l.payout_kind === 'pct_mrc' ? `${fmt(l.mrc_at_pay || 0)} · ${l.mrc_source}` : '—'}
+                      {l.chain_lines_merged ? <span style={{ color: 'var(--text3)' }}> ({l.chain_lines_merged} lines)</span> : null}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>{fmt(l.amount || 0)}</td>
                     <td>
                       {l.paid_gate_met ? <span className="badge badge-green">paid</span> : <span className="badge badge-red">withheld</span>}
                       {l.gate_kind === 'activation_payment' && <span style={{ fontSize: 11, color: 'var(--text3)' }}> via activation</span>}

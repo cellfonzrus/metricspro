@@ -5501,10 +5501,13 @@ def _resolve_carrier_mode(carriers):
 
 
 def _commission_org_config(client, org_id):
-    """Per-tenant commission posture (mig 201, commission-0 §7b; + mig 232 plan_ct_resolution). Degrades to
-    safe defaults if the table/column is absent: pay_disabled False, residual_visibility 'all',
-    plan_ct_resolution 'raw' (= today's raw contract_type matching, byte-identical)."""
-    default = {"pay_disabled": False, "residual_visibility": "all", "plan_ct_resolution": "raw"}
+    """Per-tenant commission posture (mig 201, commission-0 §7b; + mig 232 plan_ct_resolution; + mig 233
+    installment_mrc_basis). Degrades to safe defaults if the table/column is absent: pay_disabled False,
+    residual_visibility 'all', plan_ct_resolution 'raw' (= today's raw contract_type matching,
+    byte-identical), installment_mrc_basis 'plan_line' (the multi-month MRC comes from the activation's
+    rate-plan line — the engine's own default, so the read degrading changes nothing)."""
+    default = {"pay_disabled": False, "residual_visibility": "all", "plan_ct_resolution": "raw",
+               "installment_mrc_basis": "plan_line"}
     try:
         rows = (client.schema('commcalc').table('commission_org_config').select('*')
                 .eq('org_id', org_id).limit(1).execute().data) or []
@@ -5514,9 +5517,11 @@ def _commission_org_config(client, org_id):
         return default
     r = rows[0]
     _ctr = str(r.get("plan_ct_resolution") or "raw").strip().lower()
+    _mb = str(r.get("installment_mrc_basis") or "plan_line").strip().lower()
     return {"pay_disabled": bool(r.get("pay_disabled")),
             "residual_visibility": (r.get("residual_visibility") or "all").strip().lower(),
-            "plan_ct_resolution": _ctr if _ctr in ("raw", "mapped") else "raw"}
+            "plan_ct_resolution": _ctr if _ctr in ("raw", "mapped") else "raw",
+            "installment_mrc_basis": _mb if _mb in ("plan_line", "trigger_line") else "plan_line"}
 
 
 def _can_view_carrier_residual(authorization, org_id):
@@ -6609,6 +6614,13 @@ async def put_commission_settings(body: dict, authorization: str = Header(defaul
     if "plan_ct_resolution" in body:
         cr = (body.get("plan_ct_resolution") or "raw").strip().lower()
         row["plan_ct_resolution"] = cr if cr in ("raw", "mapped") else "raw"
+    # mig 233 — MONEY: which sale line a multi-month %-of-MRC installment is paid on. 'plan_line'
+    # (default) = the activation's RATE-PLAN line; 'trigger_line' = the pre-2026-07-25 per-line
+    # resolution, which let a handset line's PRICE be paid as if it were a monthly charge. Switching to
+    # 'trigger_line' can INCREASE pay on the next Calculate. Same admin gate as the rest of this endpoint.
+    if "installment_mrc_basis" in body:
+        mb = (body.get("installment_mrc_basis") or "plan_line").strip().lower()
+        row["installment_mrc_basis"] = mb if mb in ("plan_line", "trigger_line") else "plan_line"
     try:
         client = sb()
         client.schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
@@ -6914,6 +6926,73 @@ async def put_activation_matcher(body: dict, authorization: str = Header(default
         client.schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
     except Exception as e:
         raise HTTPException(500, f"could not save activation-payment matcher (is migration 210 applied?): {e}")
+    return {"saved": True, "is_default": matcher is None}
+
+
+# ── RATE-PLAN LINE MATCHER (mig 233): which sale line carries the activation's monthly charge ───────
+@router.get("/plan-installments/plan-line-matcher")
+async def get_plan_line_matcher(period: str = "", org_id: str = ORG_ID):
+    """The tenant's RATE-PLAN LINE matcher — the money-path answer to "which line of this sale carries the
+    monthly charge?" — plus the distinct raw_sales departments/categories present (pick-don't-type editor,
+    §3b) and the current installment_mrc_basis. Falls back to the engine's seeded default when unset
+    (is_default=true). Read-only."""
+    require_org(org_id)
+    from app.modules.commcalc.sale_installment_engine import DEFAULT_PLAN_LINE_MATCHER
+    from collections import Counter
+    client = sb()
+    stored, ready = None, True
+    try:
+        rows = (client.schema('commcalc').table('commission_org_config')
+                .select('plan_line_matcher').eq('org_id', org_id).limit(1).execute().data) or []
+        if rows:
+            stored = rows[0].get('plan_line_matcher')
+    except Exception:
+        ready = False       # migration 233 not applied yet — the engine still uses the default
+    eff = stored or DEFAULT_PLAN_LINE_MATCHER
+    matcher = {"departments": [str(x) for x in (eff.get("departments") or [])],
+               "categories": [str(x) for x in (eff.get("categories") or [])],
+               "product_keywords": [str(x) for x in (eff.get("product_keywords") or [])]}
+    depts, cats = [], []
+    try:
+        q = client.schema('commcalc').table('raw_sales').select('department,category').eq('org_id', org_id)
+        if period:
+            q = q.in_('period', _pvariants(period))
+        rs = q.limit(50000).execute().data or []
+        depts = [d for d, _ in Counter(str(r.get('department') or '').strip()
+                                       for r in rs if str(r.get('department') or '').strip()).most_common()]
+        cats = [c for c, _ in Counter(str(r.get('category') or '').strip()
+                                      for r in rs if str(r.get('category') or '').strip()).most_common()]
+    except Exception:
+        pass
+    return {"matcher": matcher, "is_default": stored is None, "ready": ready,
+            "mrc_basis": _commission_org_config(client, org_id).get("installment_mrc_basis"),
+            "departments": depts, "categories": cats}
+
+
+@router.put("/plan-installments/plan-line-matcher")
+async def put_plan_line_matcher(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Admin-only. Save the tenant's rate-plan line matcher (mig 233). body: {departments[], categories[],
+    product_keywords[]} — OR {reset:true} to revert to the engine default (stored NULL).
+
+    MONEY-ADJACENT: this decides which line's monthly charge a multi-month installment is a percentage of.
+    Widening it can make previously-$0 installments pay; narrowing it can make them $0. Nothing moves until
+    the next POST /calculate. Keywords match WHOLE WORDS ('plan' never matches 'PLANTRONICS')."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    client = sb()
+    if body.get("reset"):
+        matcher = None
+    else:
+        matcher = {"departments": [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()],
+                   "categories": [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()],
+                   "product_keywords": [str(x).strip() for x in (body.get("product_keywords") or [])
+                                        if str(x).strip()]}
+    row = {"org_id": org_id, "plan_line_matcher": matcher,
+           "updated_by": _caller_uid(authorization), "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    try:
+        client.schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not save the rate-plan line matcher (is migration 233 applied?): {e}")
     return {"saved": True, "is_default": matcher is None}
 
 

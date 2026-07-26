@@ -207,14 +207,11 @@ def _to_f(tok):
         return None
 
 
-def extract_mrc_from_desc(desc):
-    """Best-effort MONTHLY recurring charge ($) extracted from a product-description string, or None.
-
-    Preference order so a device PRICE doesn't masquerade as an MRC:
-      1. a $ amount adjacent to a monthly keyword  ("$25/mo", "25 monthly", "$50 per month")
-      2. a monthly keyword followed by a $ amount   ("MRC $30", "monthly: 40")
-      3. a bare $-prefixed amount                    ("Unlimited $50")  — last resort
-    Commas are stripped ("$1,234.00" → 1234.0). Returns None for 0 / no match. PURE (no I/O)."""
+def extract_mrc_monthly(desc):
+    """The MONTHLY-KEYWORD-ANCHORED half of extract_mrc_from_desc: a $ amount that the text itself calls
+    a recurring/monthly charge ("$25/mo", "MRC $30", "$50 per month"). This is a STRUCTURAL rate-plan
+    signal — a hardware price is never written this way — so it is trusted on ANY line. None if absent.
+    PURE (no I/O)."""
     s = "" if desc is None else str(desc)
     if not s.strip():
         return None
@@ -224,12 +221,187 @@ def extract_mrc_from_desc(desc):
             v = _to_f(m.group(1))
             if v and v > 0:
                 return round(v, 2)
+    return None
+
+
+def extract_mrc_bare(desc):
+    """The LAST-RESORT half of extract_mrc_from_desc: any bare $-prefixed amount ("Unlimited $50").
+
+    ⚠ THIS IS THE ONE THAT CAN TURN A DEVICE PRICE INTO AN "MRC" (owner repro 2026-07-25: the device
+    line "… $575.00" produced MRC 575 and paid a 5% installment on it). It is therefore only consulted
+    for a line that IDENTIFIES AS A RATE-PLAN LINE (_line_is_plan_line) when the engine resolves an
+    installment's MRC — see _mrc_candidate. Kept public + unbounded for the display-only MRC-mapping
+    prefill, which a human confirms. PURE (no I/O)."""
+    s = "" if desc is None else str(desc)
+    if not s.strip():
+        return None
     m = _ANY_DOLLAR.search(s)
     if m:
         v = _to_f(m.group(1))
         if v and v > 0:
             return round(v, 2)
     return None
+
+
+def extract_mrc_from_desc(desc):
+    """Best-effort MONTHLY recurring charge ($) extracted from a product-description string, or None.
+
+    Preference order so a device PRICE doesn't masquerade as an MRC:
+      1. a $ amount adjacent to a monthly keyword  ("$25/mo", "25 monthly", "$50 per month")
+      2. a monthly keyword followed by a $ amount   ("MRC $30", "monthly: 40")
+      3. a bare $-prefixed amount                    ("Unlimited $50")  — last resort
+    Commas are stripped ("$1,234.00" → 1234.0). Returns None for 0 / no match. PURE (no I/O).
+    UNCHANGED contract — now expressed as its two halves so the money path can bound step 3."""
+    return extract_mrc_monthly(desc) or extract_mrc_bare(desc)
+
+
+# ── RATE-PLAN LINE IDENTIFICATION + ONE-CHAIN-PER-ACTIVATION (mig 233; owner money fix 2026-07-25) ───
+# A multi-month schedule pays ONCE PER ACTIVATION, on the ACTIVATION'S RATE-PLAN MRC — never on a device
+# or accessory line's price. Two independent guards enforce that, and BOTH default ON:
+#   (1) chain dedupe: every qualifying line of one activation collapses to ONE installment chain per
+#       schedule (the ledger's own UNIQUE grain: trans_id + mdn/serial). No trigger configuration can
+#       double-pay an activation any more.
+#   (2) MRC basis: the %-of-MRC amount resolves from the activation's rate-plan line, chosen by the
+#       product_mrc CATALOG first (user-confirmed), then a structurally-monthly description, then a
+#       tenant-configurable rate-plan matcher. A line that identifies as none of those can no longer
+#       donate a bare $ amount (i.e. its PRICE) as an MRC.
+# WHAT COUNTS AS A RATE-PLAN LINE IS CONFIGURABLE PER TENANT (RULE TWO): commission_org_config
+# .plan_line_matcher, same shape as the activation-payment matcher. The seeded default below is keyword-
+# first on purpose — department/category naming is tenant-specific, so it stays EMPTY by default and the
+# tenant fills it from its own real values (pick-don't-type, §3b).
+DEFAULT_PLAN_LINE_MATCHER = {
+    "departments": [],
+    "categories": [],
+    "product_keywords": ["plan", "unlimited", "airtime", "access charge", "monthly", "mrc",
+                         "per month", "rate plan", "talk & text"],
+}
+
+# Line classes that can NEVER be the activation's rate plan, whatever their wording says (a
+# "PLANTRONICS $89.99" accessory must not donate an MRC). Uses the EXISTING classifier config
+# (classify_line — mig 092 accessory config + mig 038 carrier_category_map); no new classifier.
+_NON_PLAN_CLASSES = ("accessory", "bill_payment", "rebate")
+
+# 'plan_line' = the fix (default). 'trigger_line' = the pre-fix resolution, kept as the documented
+# escape hatch for a tenant whose rate-plan wording the matcher cannot express yet.
+_MRC_BASIS_VALUES = ("plan_line", "trigger_line")
+
+# L2 KILL SWITCH (reversal layer, same doctrine as INSTALLMENT_GATE_LEGACY): truthy restores BOTH the
+# per-line chains and the unbounded MRC prefill — i.e. the exact pre-fix behaviour, including its
+# double-pay. Emergency reversal only; read at compute time so a Railway toggle needs no redeploy.
+def _chain_legacy_forced():
+    """True when env INSTALLMENT_CHAIN_LEGACY is truthy (per-activation dedupe + plan-line MRC OFF)."""
+    return str(os.getenv("INSTALLMENT_CHAIN_LEGACY", "")).strip().lower() in _LEGACY_TRUTHY
+
+
+def _norm_plan_matcher(m):
+    """Normalize a stored/default rate-plan matcher into lowercased sets. PURE."""
+    m = m or {}
+    return {
+        "departments": {str(x).strip().lower() for x in (m.get("departments") or []) if str(x).strip()},
+        "categories": {str(x).strip().lower() for x in (m.get("categories") or []) if str(x).strip()},
+        "product_keywords": {str(x).strip().lower() for x in (m.get("product_keywords") or []) if str(x).strip()},
+    }
+
+
+_KW_RX_CACHE = {}
+
+
+def _kw_hit(text, kws):
+    """True if any keyword appears in `text` as a WHOLE WORD/PHRASE. PURE.
+
+    A plain substring test is not safe here: the money path uses this to decide whether a line may
+    donate a bare $ amount as an MRC, and "PLANTRONICS BT HEADSET $89.99" contains "plan" (the proof
+    harness caught exactly that, and would have paid 5% of $89.99). Boundaries are alphanumeric-aware,
+    so "Plan.", "plan,", "$65 Plan" and "ALL ACCESS Plan" all still hit while "plantronics",
+    "planning" and "planet" do not.
+    NOTE: the ACTIVATION-PAYMENT matcher (_line_class_matches) deliberately keeps its historical
+    substring semantics — changing it would move a different, already-shipped money gate."""
+    for k in (kws or ()):
+        rx = _KW_RX_CACHE.get(k)
+        if rx is None:
+            rx = _KW_RX_CACHE[k] = re.compile(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])", re.I)
+        if rx.search(text):
+            return True
+    return False
+
+
+def _line_is_plan_line(row, matcher):
+    """True if this sale line looks like the activation's RATE-PLAN line per the tenant's matcher
+    (department OR category OR a whole-word product-description keyword). PURE (normalized sets)."""
+    dept = str(row.get("department", "") or "").strip().lower()
+    cat = str(row.get("category", "") or "").strip().lower()
+    prod = str(row.get("product_desc", "") or row.get("customer_plan", "") or "").strip().lower()
+    kws = (matcher or {}).get("product_keywords") or set()
+    return ((dept and dept in ((matcher or {}).get("departments") or set()))
+            or (cat and cat in ((matcher or {}).get("categories") or set()))
+            or (bool(kws) and bool(prod) and _kw_hit(prod, kws)))
+
+
+def _trigger_rank(line, matcher):
+    """Deterministic ordering used to pick a chain's REPRESENTATIVE trigger line when several lines of one
+    activation match the schedule's trigger. Identity FIRST (the ledger row and the paid gate are keyed on
+    MDN/serial, so a line carrying both must win), then rate-plan-ness, then a stable value key so the same
+    file always picks the same line regardless of row order. PURE."""
+    return (0 if _norm_mdn(line.get("mdn")) else 1,
+            0 if _norm_mdn(line.get("serial_1")) else 1,
+            0 if _line_is_plan_line(line, matcher) else 1,
+            str(line.get("product_desc") or ""), str(line.get("sku") or ""),
+            str(line.get("serial_1") or ""), str(line.get("mdn") or ""),
+            str(line.get("salesperson") or ""))
+
+
+def _mrc_candidate(line, catalog, carrier_id, matcher, acc=None, ccmap=None):
+    """(rank, mrc, source) — how good a RATE-PLAN MRC source this one line is. LOWER RANK WINS. PURE.
+
+      0  product_mrc CATALOG hit (user-confirmed; authoritative, mirrors _line_amount's first choice)
+      1  the description is structurally monthly ("$25/mo", "MRC $30") — trusted on any line
+      2  the line matches the tenant's rate-plan matcher AND carries a bare $ amount ("… Plan $65")
+      3  the line matches the matcher but carries no $ at all           → (0.0, 'none')
+      4  the line is not identifiable as a rate plan                    → (0.0, 'none')
+      9  the line's CLASS can never be a rate plan (accessory / bill payment / rebate) → (0.0, 'none')
+
+    Ranks 3/4/9 deliberately resolve to $0 rather than to the line's PRICE: paying 5% of a $575 handset
+    because its description happened to contain a $ amount is exactly the bug this fixes. An activation
+    that lands there is counted + reported in the result's `warnings` so it is never a SILENT zero."""
+    desc_key = str(line.get("customer_plan") or line.get("product_desc") or "").strip()
+    cat_mrc = _catalog_mrc(catalog, carrier_id, desc_key)
+    if cat_mrc is not None:
+        return 0, round(safe_float(cat_mrc), 2), "product_catalog"
+    if acc is not None:
+        try:
+            if classify_line(line, acc, ccmap) in _NON_PLAN_CLASSES:
+                return 9, 0.0, "none"
+        except Exception:
+            pass
+    monthly = extract_mrc_monthly(line.get("product_desc"))
+    if monthly:
+        return 1, round(safe_float(monthly), 2), "prefill"
+    if _line_is_plan_line(line, matcher):
+        bare = extract_mrc_bare(line.get("product_desc"))
+        if bare:
+            return 2, round(safe_float(bare), 2), "prefill"
+        return 3, 0.0, "none"
+    return 4, 0.0, "none"
+
+
+def _load_plan_line_config(client, org_id):
+    """(mrc_basis, normalized rate-plan matcher) for the tenant (mig 233). Degrades to the code defaults
+    ('plan_line' + DEFAULT_PLAN_LINE_MATCHER) when the migration isn't applied. Never raises."""
+    basis, stored = "plan_line", None
+    try:
+        rows = (client.schema("commcalc").table("commission_org_config")
+                .select("installment_mrc_basis,plan_line_matcher")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        if rows:
+            b = str(rows[0].get("installment_mrc_basis") or "").strip().lower()
+            if b in _MRC_BASIS_VALUES:
+                basis = b
+            stored = rows[0].get("plan_line_matcher")
+    except Exception:
+        pass
+    if _chain_legacy_forced():
+        basis = "trigger_line"
+    return basis, _norm_plan_matcher(stored or DEFAULT_PLAN_LINE_MATCHER)
 
 
 # ── CLASSIFIER: reuse existing config to label a line (PURE given the config) ──────────────────────
@@ -609,19 +781,26 @@ def _in_effective_window(sale_line, sale_period, sched):
 
 
 # ── amount for one installment line (PURE given the catalog) ───────────────────────────────────────
-def _line_amount(sale_line, iline, catalog, carrier_id):
+def _line_amount(sale_line, iline, catalog, carrier_id, mrc_override=None):
     """(amount, mrc, mrc_source) for one installment line on one sold line.
-    flat → flat_amount. pct_mrc → mrc_pct × MRC where MRC = product_mrc catalog (keyed on the line's
-    customer_plan/product_desc), falling back to a description-extracted prefill, then 0. PURE."""
+    flat → flat_amount. pct_mrc → mrc_pct × MRC.
+
+    `mrc_override` = an (mrc, source) pair already resolved for the whole ACTIVATION (the rate-plan line
+    of this trans/MDN — see _mrc_candidate). When it is None the legacy per-line resolution is used:
+    product_mrc catalog keyed on the line's customer_plan/product_desc, falling back to a description-
+    extracted prefill, then 0. PURE."""
     kind = (iline.get("payout_kind") or "flat").strip().lower()
     if kind != "pct_mrc":
         return round(safe_float(iline.get("flat_amount")), 2), 0.0, "flat"
-    plan = str(sale_line.get("customer_plan") or sale_line.get("product_desc") or "").strip()
-    mrc = _catalog_mrc(catalog, carrier_id, plan)
-    src = "product_catalog"
-    if mrc is None:
-        mrc = extract_mrc_from_desc(sale_line.get("product_desc"))
-        src = "prefill" if mrc is not None else "none"
+    if mrc_override is not None:
+        mrc, src = mrc_override[0], mrc_override[1]
+    else:
+        plan = str(sale_line.get("customer_plan") or sale_line.get("product_desc") or "").strip()
+        mrc = _catalog_mrc(catalog, carrier_id, plan)
+        src = "product_catalog"
+        if mrc is None:
+            mrc = extract_mrc_from_desc(sale_line.get("product_desc"))
+            src = "prefill" if mrc is not None else "none"
     mrc = safe_float(mrc)
     return round(safe_float(iline.get("mrc_pct")) * mrc, 2), round(mrc, 2), src
 
@@ -700,6 +879,10 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
     catalog = _load_product_mrc(client, org_id)
     ccmap = _load_ccmap(client, org_id)
     acc = _acc_sets(client, org_id)
+    # ONE CHAIN PER ACTIVATION + rate-plan MRC basis (mig 233). Both default ON; 'trigger_line' (or the
+    # INSTALLMENT_CHAIN_LEGACY env) restores the pre-fix per-line resolution.
+    mrc_basis, plan_matcher = _load_plan_line_config(client, org_id)
+    chain_legacy = _chain_legacy_forced()
     store_market = _read_store_market(client, org_id)
     role_by_rep = _read_employee_roles(client, org_id)   # {_canon_person(name) -> role} for scope='role'
 
@@ -775,8 +958,9 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
         for v in ap_item_map.values()) if any_activation else False
 
     pm = parse_period(pay_period)
-    by_rep, ledger, flags = {}, [], []
+    by_rep, ledger, flags, warnings = {}, [], [], []
     n_paid = n_withheld = 0
+    n_dedup = n_mrc_unresolved = n_mrc_ambiguous = 0
     total_amt = 0.0
 
     for sale_period in sale_periods:
@@ -802,6 +986,93 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                     _r["activation_bucket"] = _b or ""
             except Exception:
                 pass
+        # ── ONE CHAIN PER ACTIVATION (owner money fix 2026-07-25) ───────────────────────────────
+        # A POS that stamps the transaction's Contract Type — or a resolved activation_bucket — on EVERY
+        # line of the sale makes one trigger match the DEVICE line, the RATE-PLAN line and the SIM line
+        # of the SAME activation. Before this guard each matching line started its OWN installment chain,
+        # so the rep was paid once per matching LINE. Owner repro (luxelink, IMEI 357612117781238, sold
+        # July 2026, trigger `activation_bucket in premium,byod`): the $575 device line AND the $65
+        # "Total ALL ACCESS Plan $65" line both matched, producing TWO month-1 installments ($28.75 +
+        # $3.25) where only $3.25 is owed.
+        #
+        # PARTITION = THE TRANSACTION, SPLIT ONLY BY DISTINCT MDN. The owner's July ledger settled how the
+        # real feed shapes these lines: the RATE-PLAN / airtime lines carry the MDN and a BLANK serial_1
+        # (31 of them in one July group), while the DEVICE lines carry the IMEI. So the two halves of ONE
+        # activation share NO identity field, and any "group by mdn-or-serial" key splits them apart.
+        # The MDN is the subscriber, so it is the only sound split key: a family/multi-line sale with k
+        # distinct MDNs still pays k times, while a SIM or accessory line that happens to carry a serial
+        # can no longer manufacture an extra activation.
+        # Identity is then COALESCED across the group (MDN from the airtime line, IMEI from the device
+        # line, device first by ext_price) — the chain MUST keep the IMEI because the master-agent paid
+        # gate joins raw_ma_commission on serial_1/imei and the Device History page reads the ledger by
+        # serial_1. `chain_legacy` (env INSTALLMENT_CHAIN_LEGACY) restores per-line chains verbatim.
+        chain_key_of, groups, tx_mdns, tx_lines = {}, {}, {}, {}
+        for _r in valid:
+            _t = str(_r.get("trans_id") or "").strip()
+            _m = _norm_mdn(_r.get("mdn"))
+            if _t:
+                tx_lines.setdefault(_t, []).append(_r)
+            if _t and _m:
+                tx_mdns.setdefault(_t, set()).add(_m)
+        for _i, _r in enumerate(valid):
+            _t = str(_r.get("trans_id") or "").strip()
+            _m = _norm_mdn(_r.get("mdn"))
+            _s = _norm_mdn(_r.get("serial_1"))
+            if chain_legacy or not (_t or _m or _s):
+                _ck = ("l", str(_i))                    # nothing to group by → pre-fix per-line behaviour
+            elif not _t:
+                _ck = ("i", _m or _s)                   # no transaction id → identity alone
+            elif len(tx_mdns.get(_t) or ()) > 1:
+                _ck = ("t", _t, _m)                     # multi-subscriber sale → one chain per MDN
+            else:
+                _ck = ("t", _t, "")                     # one subscriber → one chain for the transaction
+            chain_key_of[id(_r)] = _ck
+            groups.setdefault(_ck, []).append(_r)
+
+        def _tx_pool(ck):
+            """In a MULTI-SUBSCRIBER transaction the lines that carry no MDN (typically the handsets and
+            the SIMs) cannot be attributed to one subscriber — they are shared context: they may donate an
+            MRC or an IMEI, but they never create a chain of their own (that is what produced the extra
+            device-line chains). Never crosses a transaction boundary."""
+            if ck[0] == "t" and ck[1] and ck[2]:
+                return groups.get(("t", ck[1], ""), [])
+            if ck[0] == "d" and ck[1]:      # device-keyed fallback: the rest of the transaction
+                own = {id(r) for r in groups.get(ck, [])}
+                return [r for r in tx_lines.get(ck[1], []) if id(r) not in own]
+            return []
+
+        def _dev_order(rows):
+            """Deterministic 'device first' ordering — highest ext_price, then a stable value key."""
+            return sorted(rows, key=lambda x: (-safe_float(x.get("ext_price")),
+                                               str(x.get("product_desc") or ""), str(x.get("sku") or ""),
+                                               str(x.get("serial_1") or ""), str(x.get("mdn") or "")))
+
+        def _chain_identity(ck, rows):
+            """(mdn, serial) for the whole activation, coalesced across its lines. The MDN comes from the
+            chain key when the transaction was split per subscriber; the IMEI comes from the group's
+            device line, or — only when it is UNAMBIGUOUS (exactly one distinct serial in the shared
+            pool) — from the transaction's shared lines. PURE."""
+            mdn = ck[2] if (ck[0] == "t" and ck[2]) else ""
+            serial = ""
+            for r in _dev_order(rows):
+                if not serial:
+                    serial = _norm_mdn(r.get("serial_1"))
+                if not mdn:
+                    mdn = _norm_mdn(r.get("mdn"))
+            if not serial:
+                pool_ser = {_norm_mdn(r.get("serial_1")) for r in _tx_pool(ck)} - {""}
+                if len(pool_ser) == 1:
+                    serial = next(iter(pool_ser))
+            return mdn, serial
+
+        def _mrc_pool(ck):
+            """Every line that may carry THIS activation's rate-plan MRC: the activation's own lines plus
+            the transaction's shared (MDN-less) lines."""
+            return list(groups.get(ck, [])) + list(_tx_pool(ck))
+
+        # PHASE 1 — collect every qualifying (line, schedule) pair, keyed by (schedule, activation).
+        # Every filter below is UNCHANGED; only the terminal action moved (collect, don't emit).
+        chains, shared = {}, {}
         for line in valid:
             rep = str(line.get("salesperson", "") or "").strip()
             if not rep or rep.lower() == "admin":
@@ -827,163 +1098,320 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                               if int(l.get("month_index") or 0) == month_index), None)
                 if not iline:
                     continue
-                carrier_id = plan.get("carrier_id")
+                _lck = chain_key_of[id(line)]
+                if _lck[0] == "t" and _lck[1] and not _lck[2] and len(tx_mdns.get(_lck[1]) or ()) > 1:
+                    # shared (MDN-less) line of a multi-subscriber sale — context, not an activation
+                    shared.setdefault((sched.get("id"), _lck[1]), []).append(
+                        (line, rep, store, plan, sched, iline))
+                else:
+                    chains.setdefault((sched.get("id"), _lck), []).append(
+                        (line, rep, store, plan, sched, iline))
+
+        # A shared line pays ONLY when its transaction produced no subscriber chain for that schedule
+        # (e.g. the trigger matches handset lines and the airtime lines are absent). It is then keyed by
+        # its own device serial, so two genuinely different handsets still pay twice.
+        _covered = {(sid, ck[1]) for (sid, ck) in chains if ck[0] == "t" and ck[1]}
+        for (_sid, _tid), _sc in shared.items():
+            if (_sid, _tid) in _covered:
+                n_dedup += len(_sc)
+                continue
+            for _cand in _sc:
+                _dk = ("d", _tid, _norm_mdn(_cand[0].get("serial_1")))
+                _g = groups.setdefault(_dk, [])
+                if not any(r is _cand[0] for r in _g):     # identity, not dict equality
+                    _g.append(_cand[0])
+                chains.setdefault((_sid, _dk), []).append(_cand)
+
+        # PHASE 2 — ONE installment per (schedule, activation). Insertion order = first-appearance order
+        # of each chain, i.e. the pre-fix emission order when no activation had duplicate lines.
+        for (_sched_id, _ck), _cands in chains.items():
+            if len(_cands) > 1:
+                _cands.sort(key=lambda c: _trigger_rank(c[0], plan_matcher))
+                n_dedup += len(_cands) - 1
+            line, rep, store, plan, sched, iline = _cands[0]
+            carrier_id = plan.get("carrier_id")
+            # COALESCED activation identity (see _chain_identity). `gate_line` is the SAME object as
+            # `line` whenever the representative already carries the whole identity — so an activation
+            # whose lines were never split is byte-identical to the pre-fix gate call.
+            mdn, serial = _chain_identity(_ck, groups.get(_ck, [line]))
+            if mdn == _norm_mdn(line.get("mdn")) and serial == _norm_mdn(line.get("serial_1")):
+                gate_line = line
+            else:
+                gate_line = {**line, "mdn": mdn, "serial_1": serial}
+            if _ck[0] == "t" and _ck[2] and not serial and len(warnings) < 200:
+                # subscriber-split chain with no resolvable IMEI: months 2..N are gated on a per-device
+                # join (raw_ma_commission / raw_mi), so say so instead of silently withholding later.
+                warnings.append({
+                    "type": "no_device_identity", "sale_period": sale_period, "month_index": month_index,
+                    "rep": rep, "store": store, "trans_id": str(line.get("trans_id") or "").strip(),
+                    "mdn": mdn,
+                    "detail": ("This subscriber's lines carry no device serial, and the transaction has "
+                               "several, so months 2+ cannot be matched to the carrier statement by IMEI "
+                               "and will be held. Have the POS export carry Serial 1 on the airtime line.")})
+            if len(_cands) > 1 and len(tx_mdns.get(str(line.get("trans_id") or "").strip()) or ()) <= 1:
+                # >1 distinct device serial collapsed into ONE chain because the sale carries at most one
+                # MDN: two devices really sold on one transaction would be paid once. Never silent.
+                _sers = {_norm_mdn(c[0].get("serial_1")) for c in _cands} - {""}
+                if len(_sers) > 1 and len(warnings) < 200:
+                    warnings.append({
+                        "type": "multi_device_single_chain", "sale_period": sale_period,
+                        "month_index": month_index, "rep": rep, "store": store,
+                        "trans_id": str(line.get("trans_id") or "").strip(),
+                        "imeis": sorted(_sers)[:8], "paid_chains": 1,
+                        "detail": ("This transaction has several device serials but no per-line mobile "
+                                   "number to tell the subscribers apart, so it paid ONE installment. If "
+                                   "these were separate activations, the POS export must carry the "
+                                   "Activated Mobile Number on each line.")})
+            # MRC BASIS (mig 233): a %-of-MRC installment is paid on the ACTIVATION'S RATE-PLAN line —
+            # never on a device/hardware line's price. 'trigger_line' = the pre-fix per-line resolution.
+            _mrc_override, _mrc_line = None, None
+            if (mrc_basis == "plan_line"
+                    and str(iline.get("payout_kind") or "flat").strip().lower() == "pct_mrc"):
+                _cs = []
+                for _cl in _mrc_pool(_ck):
+                    _rk, _mv, _ms = _mrc_candidate(_cl, catalog, carrier_id, plan_matcher, acc, ccmap)
+                    _cs.append(((_rk, str(_cl.get("product_desc") or ""), str(_cl.get("sku") or ""),
+                                 str(_cl.get("serial_1") or ""), str(_cl.get("mdn") or "")),
+                                _rk, _mv, _ms, _cl))
+                if _cs:
+                    _cs.sort(key=lambda x: x[0])
+                    _rk, _mv, _ms, _mrc_line = _cs[0][1], _cs[0][2], _cs[0][3], _cs[0][4]
+                    _mrc_override = (_mv, _ms)
+                    if _ms == "none":
+                        # NEVER a silent $0: say which activation, and what its lines actually said.
+                        n_mrc_unresolved += 1
+                        if len(warnings) < 200:
+                            warnings.append({
+                                "type": "mrc_unresolved", "sale_period": sale_period,
+                                "month_index": month_index, "rep": rep, "store": store,
+                                "trans_id": str(line.get("trans_id") or "").strip(),
+                                "mdn": _norm_mdn(line.get("mdn")), "imei": _norm_mdn(line.get("serial_1")),
+                                "products": [str(c[4].get("product_desc") or "")[:120] for c in _cs[:6]],
+                                "detail": ("No rate-plan line could be identified on this activation, so the "
+                                           "%-of-MRC installment resolved to $0 instead of paying a "
+                                           "percentage of a device price. Confirm the plan under Plan "
+                                           "Installments → MRC mapping, or add its wording to the "
+                                           "rate-plan line matcher.")})
+                    elif len({round(safe_float(c[2]), 2) for c in _cs if c[1] == _rk}) > 1:
+                        # two equally-ranked lines disagree on the MRC — the catalog is the tie-breaker
+                        n_mrc_ambiguous += 1
+                        if len(warnings) < 200:
+                            warnings.append({
+                                "type": "mrc_ambiguous", "sale_period": sale_period,
+                                "month_index": month_index, "rep": rep, "store": store,
+                                "trans_id": str(line.get("trans_id") or "").strip(),
+                                "imei": _norm_mdn(line.get("serial_1")), "chosen_mrc": round(safe_float(_mv), 2),
+                                "candidates": [{"product": str(c[4].get("product_desc") or "")[:120],
+                                                "mrc": round(safe_float(c[2]), 2)} for c in _cs[:6]
+                                               if c[1] == _rk],
+                                "detail": ("Two lines of this activation look equally like the rate plan but "
+                                           "imply different MRCs — the highest-confidence one was used. "
+                                           "Confirm the correct plan under Plan Installments → MRC mapping.")})
+                amount, mrc, mrc_src = _line_amount(line, iline, catalog, carrier_id, _mrc_override)
+            else:
                 amount, mrc, mrc_src = _line_amount(line, iline, catalog, carrier_id)
 
-                gate_mode = (sched.get("gate_mode") or "paid_residual").strip().lower()
-                gate_from = int(sched.get("gate_from_month") or 1)
-                m1_gate = (str(sched.get("m1_gate") or "inherit").strip().lower())
-                gate_cfg = _gate_cfg_for(carrier_id)
-                gate_source = (gate_cfg.get("gate_source") or "boost_mi")
-                mi_row, ma_ev = None, None
-                # MONTH-1 "paid at activation" (mig 210): month 1 qualifies when the ACTIVATION TRANSACTION
-                # shows a first-month payment (configurable matcher), NOT via a carrier statement. Months
-                # 2..N keep the schedule's existing gate. Only opted-in rows carry the extra ledger fields,
-                # so an 'inherit' schedule is byte-identical to pre-mig-210. m1_gate wins over gate_from_month
-                # for month 1 (the owner wants month 1 GATED on the sale's own payment, not ungated).
-                if month_index == 1 and m1_gate == "activation_payment":
-                    gate_met = _activation_payment_met(str(line.get("trans_id") or "").strip(),
-                                                       trans_index or {}, act_matcher or {},
-                                                       ap_item_map, ACTIVATION_PAYMENT_CATEGORY, has_ap_mappings)
-                    gate_kind = "activation_payment"
-                elif gate_source == "ma_commission":
-                    # MASTER-AGENT paid gate (mig 223): prove "dealer paid month N" from raw_ma_commission
-                    # (per-IMEI per-month spiffs) instead of raw_mi. Read the SALE (activation) period — that
-                    # row carries the device's forward M1-M6 schedule (owner repro: the June row holds both
-                    # spiff_m1 and spiff_m2). This branch is NEVER reached for a Boost carrier.
-                    gated = month_index >= gate_from and gate_mode != "none"
-                    if gated:
-                        _ma_periods = _ma_lookup_periods(gate_cfg, sale_period, pay_period)
-                        gate_met, ma_ev = _gate_met_ma(line, _ma_index_for(_ma_periods),
-                                                       month_index, gate_cfg)
-                        if ma_ev is not None:
-                            ma_ev = {**ma_ev, "lookup_periods": list(_ma_periods)}
-                    else:
-                        gate_met = True
-                    gate_kind = "ma_residual"
+            gate_mode = (sched.get("gate_mode") or "paid_residual").strip().lower()
+            gate_from = int(sched.get("gate_from_month") or 1)
+            m1_gate = (str(sched.get("m1_gate") or "inherit").strip().lower())
+            gate_cfg = _gate_cfg_for(carrier_id)
+            gate_source = (gate_cfg.get("gate_source") or "boost_mi")
+            mi_row, ma_ev = None, None
+            # MONTH-1 "paid at activation" (mig 210): month 1 qualifies when the ACTIVATION TRANSACTION
+            # shows a first-month payment (configurable matcher), NOT via a carrier statement. Months
+            # 2..N keep the schedule's existing gate. Only opted-in rows carry the extra ledger fields,
+            # so an 'inherit' schedule is byte-identical to pre-mig-210. m1_gate wins over gate_from_month
+            # for month 1 (the owner wants month 1 GATED on the sale's own payment, not ungated).
+            if month_index == 1 and m1_gate == "activation_payment":
+                gate_met = _activation_payment_met(str(line.get("trans_id") or "").strip(),
+                                                   trans_index or {}, act_matcher or {},
+                                                   ap_item_map, ACTIVATION_PAYMENT_CATEGORY, has_ap_mappings)
+                gate_kind = "activation_payment"
+            elif gate_source == "ma_commission":
+                # MASTER-AGENT paid gate (mig 223): prove "dealer paid month N" from raw_ma_commission
+                # (per-IMEI per-month spiffs) instead of raw_mi. Read the SALE (activation) period — that
+                # row carries the device's forward M1-M6 schedule (owner repro: the June row holds both
+                # spiff_m1 and spiff_m2). This branch is NEVER reached for a Boost carrier.
+                gated = month_index >= gate_from and gate_mode != "none"
+                if gated:
+                    _ma_periods = _ma_lookup_periods(gate_cfg, sale_period, pay_period)
+                    gate_met, ma_ev = _gate_met_ma(gate_line, _ma_index_for(_ma_periods),
+                                                   month_index, gate_cfg)
+                    if ma_ev is not None:
+                        ma_ev = {**ma_ev, "lookup_periods": list(_ma_periods)}
                 else:
-                    # BOOST / raw_mi paid gate — UNCHANGED (byte-identical to pre-mig-223).
-                    gated = month_index >= gate_from and gate_mode != "none"
-                    gate_met, mi_row = _gate_met(line, mi_index, gate_mode) if gated else (True, None)
-                    gate_kind = None
+                    gate_met = True
+                gate_kind = "ma_residual"
+            else:
+                # BOOST / raw_mi paid gate — UNCHANGED (byte-identical to pre-mig-223).
+                gated = month_index >= gate_from and gate_mode != "none"
+                gate_met, mi_row = _gate_met(gate_line, mi_index, gate_mode) if gated else (True, None)
+                gate_kind = None
 
-                repU = rep.upper()
-                mdn = _norm_mdn(line.get("mdn"))
-                serial = _norm_mdn(line.get("serial_1"))
-                if gate_met:
-                    if amount:
-                        by_rep[repU] = round(by_rep.get(repU, 0.0) + amount, 2)
-                        total_amt += amount
-                    n_paid += 1
-                    status = "paid"
-                else:
-                    n_withheld += 1
-                    status = "withheld_unpaid"
-                    # TWO flags for a sold-but-unpaid line (existing flags machinery; delete-first by source).
-                    # Under the month-1 activation-payment gate the miss reason is "no first-month payment
-                    # collected at activation" rather than "not receiving residual" — same two flag sources.
-                    base = {"period": pay_period, "period_month": pm.get("month"),
-                            "period_year": pm.get("year"), "epay_salesperson": rep,
-                            "store_address": store, "mdn": mdn, "imei": serial,
-                            "amount": round(safe_float(amount), 2)}
-                    if gate_kind == "activation_payment":
-                        desc1 = (f"Month {month_index} installment ${safe_float(amount):,.2f} WITHHELD — no "
-                                 f"qualifying first-month payment collected at activation for trans "
-                                 f"{str(line.get('trans_id') or '').strip() or (mdn or serial)}.")
-                        coach1 = ("Month 1 pays only when payment is received at activation — verify the "
-                                  "first-month / plan / access-charge payment was rung on this sale.")
-                        desc2 = (f"{rep} sold {mdn or serial} but no activation payment was collected — "
-                                 f"month {month_index} commission gated.")
-                        coach2 = "Confirm the customer paid their first month at the point of sale."
-                    elif gate_kind == "ma_residual":
-                        # MASTER-AGENT gate miss — say EXACTLY why (no MA record / no month-N payout / beyond
-                        # the MA month columns) rather than the raw_mi "not receiving residual" text.
-                        reason = (ma_ev or {}).get("reason")
-                        if reason == "no_ma_record":
-                            why = (f"no master-agent commission record found for device {serial or mdn} in "
-                                   f"{sale_period}")
-                        elif reason == "month_beyond_ma_columns":
-                            why = (f"master-agent data covers months 1-{(ma_ev or {}).get('max_month')}; there "
-                                   f"is no month-{month_index} payout column")
-                        else:
-                            why = (f"no master-agent month-{month_index} payout posted for device "
-                                   f"{serial or mdn}")
-                        desc1 = (f"Month {month_index} installment ${safe_float(amount):,.2f} WITHHELD — {why} "
-                                 f"(dealer not yet paid). Tracked; pays when the MA statement posts the payout.")
-                        coach1 = ("We pay as we get paid — recheck when the master-agent commission posts this "
-                                  "month's spiff/residual for the line.")
-                        desc2 = (f"{rep} sold {mdn or serial} but the master-agent statement shows no "
-                                 f"month-{month_index} payout — commission gated.")
-                        coach2 = "Verify the line stayed active and the carrier posted this month's residual/spiff."
-                    else:
-                        desc1 = (f"Month {month_index} installment ${safe_float(amount):,.2f} WITHHELD — line "
-                                 f"{mdn or serial} not active/receiving residual (dealer unpaid). Tracked; "
-                                 f"pays when residual resumes.")
-                        coach1 = "We pay as we get paid — recheck when the carrier residual posts."
-                        desc2 = (f"{rep} sold {mdn or serial} but the line is not active/paying residual — "
-                                 f"month {month_index} commission gated.")
-                        coach2 = "Review activation quality / early deactivation for this line."
-                    flags.append({**base, "flag_type": "INSTALLMENT_WITHHELD_UNPAID",
-                                  "source": "commission_rebate_tracking", "severity": "MEDIUM",
-                                  "description": desc1, "coaching_note": coach1})
-                    flags.append({**base, "flag_type": "SOLD_LINE_NOT_PAYING",
-                                  "source": "employee_miss", "severity": "MEDIUM",
-                                  "description": desc2, "coaching_note": coach2})
-
-                ledger_row = {
-                    "org_id": org_id, "trans_id": str(line.get("trans_id") or "").strip(),
-                    "mdn": mdn, "serial_1": serial, "plan_id": plan.get("id"),
-                    "schedule_id": sched.get("id"), "store": store, "epay_salesperson": rep,
-                    "sale_period": sale_period, "pay_period": pay_period, "month_index": month_index,
-                    "payout_kind": iline.get("payout_kind"), "mrc_at_pay": mrc, "mrc_source": mrc_src,
-                    "amount": round(safe_float(amount) if gate_met else 0.0, 2),
-                    "paid_gate_met": gate_met, "gate_mode": gate_mode, "status": status,
-                    "matched_mi_period": pay_period if mi_row is not None else None,
-                }
-                # OPT-IN ONLY: the month-1 activation-payment rows carry the extra provenance fields so the
-                # preview can show WHY month 1 qualified. Rows on schedules that don't opt in stay byte-
-                # identical to pre-mig-210 (no new keys → no persistence/shape drift).
+            repU = rep.upper()
+            if gate_met:
+                if amount:
+                    by_rep[repU] = round(by_rep.get(repU, 0.0) + amount, 2)
+                    total_amt += amount
+                n_paid += 1
+                status = "paid"
+            else:
+                n_withheld += 1
+                status = "withheld_unpaid"
+                # TWO flags for a sold-but-unpaid line (existing flags machinery; delete-first by source).
+                # Under the month-1 activation-payment gate the miss reason is "no first-month payment
+                # collected at activation" rather than "not receiving residual" — same two flag sources.
+                base = {"period": pay_period, "period_month": pm.get("month"),
+                        "period_year": pm.get("year"), "epay_salesperson": rep,
+                        "store_address": store, "mdn": mdn, "imei": serial,
+                        "amount": round(safe_float(amount), 2)}
                 if gate_kind == "activation_payment":
-                    ledger_row["gate_kind"] = "activation_payment"
-                    ledger_row["activation_payment_matched"] = gate_met
-                # MASTER-AGENT gate rows (mig 223) carry the per-month evidence + match flag so the preview
-                # explains WHY it paid/withheld. Only the MA path adds these keys; the Boost/raw_mi path is
-                # untouched (no new keys → byte-identical ledger shape for Boost).
+                    desc1 = (f"Month {month_index} installment ${safe_float(amount):,.2f} WITHHELD — no "
+                             f"qualifying first-month payment collected at activation for trans "
+                             f"{str(line.get('trans_id') or '').strip() or (mdn or serial)}.")
+                    coach1 = ("Month 1 pays only when payment is received at activation — verify the "
+                              "first-month / plan / access-charge payment was rung on this sale.")
+                    desc2 = (f"{rep} sold {mdn or serial} but no activation payment was collected — "
+                             f"month {month_index} commission gated.")
+                    coach2 = "Confirm the customer paid their first month at the point of sale."
                 elif gate_kind == "ma_residual":
-                    ledger_row["gate_kind"] = "ma_residual"
-                    ledger_row["gate_source"] = gate_source
-                    ledger_row["ma_matched"] = bool((ma_ev or {}).get("matched"))
-                    ledger_row["ma_evidence"] = (ma_ev or {}).get("evidence")
-                    ledger_row["ma_reason"] = (ma_ev or {}).get("reason")
-                    # mig 232: WHICH statement period(s) the evidence was read from (default ['<sale>'],
-                    # i.e. pre-mig-232). In-memory only — _persist writes a fixed column list.
-                    ledger_row["ma_lookup_periods"] = (ma_ev or {}).get("lookup_periods")
-                ledger.append(ledger_row)
+                    # MASTER-AGENT gate miss — say EXACTLY why (no MA record / no month-N payout / beyond
+                    # the MA month columns) rather than the raw_mi "not receiving residual" text.
+                    reason = (ma_ev or {}).get("reason")
+                    if reason == "no_ma_record":
+                        why = (f"no master-agent commission record found for device {serial or mdn} in "
+                               f"{sale_period}")
+                    elif reason == "month_beyond_ma_columns":
+                        why = (f"master-agent data covers months 1-{(ma_ev or {}).get('max_month')}; there "
+                               f"is no month-{month_index} payout column")
+                    else:
+                        why = (f"no master-agent month-{month_index} payout posted for device "
+                               f"{serial or mdn}")
+                    desc1 = (f"Month {month_index} installment ${safe_float(amount):,.2f} WITHHELD — {why} "
+                             f"(dealer not yet paid). Tracked; pays when the MA statement posts the payout.")
+                    coach1 = ("We pay as we get paid — recheck when the master-agent commission posts this "
+                              "month's spiff/residual for the line.")
+                    desc2 = (f"{rep} sold {mdn or serial} but the master-agent statement shows no "
+                             f"month-{month_index} payout — commission gated.")
+                    coach2 = "Verify the line stayed active and the carrier posted this month's residual/spiff."
+                else:
+                    desc1 = (f"Month {month_index} installment ${safe_float(amount):,.2f} WITHHELD — line "
+                             f"{mdn or serial} not active/receiving residual (dealer unpaid). Tracked; "
+                             f"pays when residual resumes.")
+                    coach1 = "We pay as we get paid — recheck when the carrier residual posts."
+                    desc2 = (f"{rep} sold {mdn or serial} but the line is not active/paying residual — "
+                             f"month {month_index} commission gated.")
+                    coach2 = "Review activation quality / early deactivation for this line."
+                flags.append({**base, "flag_type": "INSTALLMENT_WITHHELD_UNPAID",
+                              "source": "commission_rebate_tracking", "severity": "MEDIUM",
+                              "description": desc1, "coaching_note": coach1})
+                flags.append({**base, "flag_type": "SOLD_LINE_NOT_PAYING",
+                              "source": "employee_miss", "severity": "MEDIUM",
+                              "description": desc2, "coaching_note": coach2})
 
+            ledger_row = {
+                "org_id": org_id, "trans_id": str(line.get("trans_id") or "").strip(),
+                "mdn": mdn, "serial_1": serial, "plan_id": plan.get("id"),
+                "schedule_id": sched.get("id"), "store": store, "epay_salesperson": rep,
+                "sale_period": sale_period, "pay_period": pay_period, "month_index": month_index,
+                "payout_kind": iline.get("payout_kind"), "mrc_at_pay": mrc, "mrc_source": mrc_src,
+                "amount": round(safe_float(amount) if gate_met else 0.0, 2),
+                "paid_gate_met": gate_met, "gate_mode": gate_mode, "status": status,
+                "matched_mi_period": pay_period if mi_row is not None else None,
+            }
+            # OPT-IN ONLY: the month-1 activation-payment rows carry the extra provenance fields so the
+            # preview can show WHY month 1 qualified. Rows on schedules that don't opt in stay byte-
+            # identical to pre-mig-210 (no new keys → no persistence/shape drift).
+            if gate_kind == "activation_payment":
+                ledger_row["gate_kind"] = "activation_payment"
+                ledger_row["activation_payment_matched"] = gate_met
+            # MASTER-AGENT gate rows (mig 223) carry the per-month evidence + match flag so the preview
+            # explains WHY it paid/withheld. Only the MA path adds these keys; the Boost/raw_mi path is
+            # untouched (no new keys → byte-identical ledger shape for Boost).
+            elif gate_kind == "ma_residual":
+                ledger_row["gate_kind"] = "ma_residual"
+                ledger_row["gate_source"] = gate_source
+                ledger_row["ma_matched"] = bool((ma_ev or {}).get("matched"))
+                ledger_row["ma_evidence"] = (ma_ev or {}).get("evidence")
+                ledger_row["ma_reason"] = (ma_ev or {}).get("reason")
+                # mig 232: WHICH statement period(s) the evidence was read from (default ['<sale>'],
+                # i.e. pre-mig-232). In-memory only — _persist writes a fixed column list.
+                ledger_row["ma_lookup_periods"] = (ma_ev or {}).get("lookup_periods")
+            # OPT-IN provenance (absent unless this chain actually needed the new logic, so an
+            # ordinary one-line activation keeps the pre-fix ledger shape byte-for-byte). In-memory
+            # only — _persist writes a fixed column list.
+            if _mrc_line is not None and _mrc_line is not line:
+                ledger_row["mrc_from_product"] = str(_mrc_line.get("product_desc") or "")[:200]
+            if len(_cands) > 1:
+                ledger_row["chain_lines_merged"] = len(_cands)
+            ledger.append(ledger_row)
+
+    _persisted = None
     if persist:
-        _persist(client, org_id, pay_period, ledger)
+        _persisted = _persist(client, org_id, pay_period, ledger)
 
     ledger.sort(key=lambda x: -(x.get("amount") or 0))
     return {"pay_period": pay_period, "by_rep": by_rep, "ledger": ledger, "flags": flags,
             "schedules": len(scheds),
             "totals": {"amount": round(total_amt, 2), "paid": n_paid, "withheld": n_withheld,
                        "reps": len(by_rep)},
+            # mig 233 transparency, kept OUT of `totals` so that dict stays byte-identical for every
+            # existing consumer/harness: duplicate lines of one activation collapsed into a single
+            # chain, and %-of-MRC chains whose rate-plan line is unresolved (paid $0 rather than a
+            # percentage of a device price) or ambiguous.
+            "chain_guard": {"deduped": n_dedup, "mrc_unresolved": n_mrc_unresolved,
+                            "mrc_ambiguous": n_mrc_ambiguous, "mrc_basis": mrc_basis,
+                            "ledger_rows_dropped": _persisted.get("dropped", 0) if _persisted else 0},
+            "warnings": warnings,
             "note": None}
 
 
 def _persist(client, org_id, pay_period, ledger):
-    """Idempotent upsert of the sale_installment_ledger for this pay_period (opt-in)."""
-    rows = [{k: d.get(k) for k in (
-        "org_id", "trans_id", "mdn", "serial_1", "plan_id", "schedule_id", "store",
-        "epay_salesperson", "sale_period", "pay_period", "month_index", "payout_kind",
-        "mrc_at_pay", "mrc_source", "amount", "paid_gate_met", "gate_mode", "status",
-        "matched_mi_period")} for d in ledger if d.get("trans_id") or d.get("mdn")]
+    """Write this pay period's sale_installment_ledger (opt-in). Returns {'rows','dropped','deleted'}.
+
+    SELF-HEALING (owner money fix 2026-07-25): the period's existing rows for this org are DELETED first,
+    then the fresh set is upserted. The old pure-upsert never removed a row the engine no longer emits, so
+    a chain that stopped qualifying — e.g. the duplicate device-line chain this release collapses — would
+    have survived every recalculation forever. The delete is skipped when there is nothing to write, so a
+    transient read failure can never empty a period; and the write stays an UPSERT so a partially-applied
+    delete + retry is still idempotent.
+
+    DUPLICATE-SAFE: rows are de-duplicated on the table's own UNIQUE key
+    (org_id, trans_id, mdn, month_index, pay_period) BEFORE the write. Postgres rejects an INSERT ... ON
+    CONFLICT that touches one row twice in a single statement, so a single duplicate used to fail — and
+    silently discard — a whole 500-row batch. Anything dropped is REPORTED (two schedules paying the same
+    device+month cannot both be stored; the money is still correct, only the audit row is).
+    """
+    cols = ("org_id", "trans_id", "mdn", "serial_1", "plan_id", "schedule_id", "store",
+            "epay_salesperson", "sale_period", "pay_period", "month_index", "payout_kind",
+            "mrc_at_pay", "mrc_source", "amount", "paid_gate_met", "gate_mode", "status",
+            "matched_mi_period")
+    rows, seen, dropped = [], set(), 0
+    for d in ledger:
+        if not (d.get("trans_id") or d.get("mdn")):
+            continue
+        key = (str(d.get("trans_id") or ""), str(d.get("mdn") or ""),
+               int(d.get("month_index") or 0), str(d.get("pay_period") or ""))
+        if key in seen:
+            dropped += 1
+            continue
+        seen.add(key)
+        rows.append({k: d.get(k) for k in cols})
+    deleted = False
+    if rows:
+        try:
+            (client.schema("commcalc").table("sale_installment_ledger").delete()
+             .eq("org_id", org_id).in_("pay_period", _pvariants(pay_period)).execute())
+            deleted = True
+        except Exception:
+            deleted = False
     for i in range(0, len(rows), 500):
         try:
             client.schema("commcalc").table("sale_installment_ledger").upsert(
                 rows[i:i + 500], on_conflict="org_id,trans_id,mdn,month_index,pay_period").execute()
         except Exception:
             pass
+    return {"rows": len(rows), "dropped": dropped, "deleted": deleted}
 
 
 # ── IMPACT PREVIEW (read-only; Gate-2 review artifact for mig 223) ──────────────────────────────────
