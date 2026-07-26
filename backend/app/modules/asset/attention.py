@@ -160,7 +160,7 @@ def _p_asset_market_gap(client, org_id, ctx):
                   f"silently drop out of every market-filtered asset report (Charges Dashboard, RMA, "
                   f"Aging, Owed-Weekly). Fix: open Settings → Stores and set the market for that "
                   f"store (the dropdown there edits commcalc.store_mapping directly — the ONLY thing "
-                  f"this backfill checks; a Store-Matching alias does NOT fix this, see note below). "
+                  f"this backfill checks; a Store-Matching alias does NOT fix this). "
                   f"If the store isn't listed there at all, it needs to be created in StoreOps first "
                   f"with its address spelled EXACTLY like VIP's file, then re-upload the Asset Ledger "
                   f"(or wait for the next scheduled upload) to backfill.",
