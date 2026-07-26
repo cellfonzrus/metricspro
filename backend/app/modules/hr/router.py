@@ -2852,3 +2852,41 @@ def onboarding_compliance_export(org_id: str = ORG_ID, employee_id: str = ""):
 # at all — see the comment on its own _require_hr_or_admin duplicate). ────────────────────────────
 from app.modules.hr import letters as _letters  # noqa: E402
 router.include_router(_letters.router)
+
+
+@router.get("/onboarding/attention-config")
+def onboarding_attention_config(org_id: str = ORG_ID):
+    """The tenant's 'stuck onboarding invite' alert threshold (days). Always returns a value (default
+    7) even pre-migration-410 — see hr/attention.py's onboarding_stuck_days()."""
+    from app.modules.hr import attention as _hr_attention
+    return {"stuck_invite_days": _hr_attention.onboarding_stuck_days(get_supabase(), org_id)}
+
+
+@router.put("/onboarding/attention-config")
+def put_onboarding_attention_config(body: dict, org_id: str = ORG_ID,
+                                    authorization: str = Header(default="")):
+    """Set the tenant's 'stuck onboarding invite' alert threshold (days, clamped 1-90). HR/admin-only
+    — same gate as every other HR-config write in this file."""
+    org_id, _email, _role = _require_hr_or_admin(authorization)   # the caller's OWN tenant is authoritative
+    try:
+        days = int(body.get("stuck_invite_days"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "stuck_invite_days must be a whole number of days")
+    days = max(1, min(90, days))
+    try:
+        _so().table("tenants").update({"onboarding_stuck_days": days}).eq("org_id", org_id).execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save (run migration 410 first?): {str(e)[:160]}")
+    return {"ok": True, "stuck_invite_days": days}
+
+
+# ── Admin-attention providers (settings-audit package, 2026-07-26) ────────────────────────────────
+# Contribute HR findings to the cross-module attention feed WITHOUT editing the shared
+# core/import_health.py (AGENT_CONTRACT §1). Guarded: a missing/renamed core module must never break
+# HR itself.
+try:
+    from app.modules.core.import_health import register_provider as _register_attention_provider
+    from app.modules.hr import attention as _hr_attention_reg
+    _hr_attention_reg.register(_register_attention_provider)
+except Exception as _attn_e:
+    print(f"WARN hr attention providers not registered: {_attn_e}")

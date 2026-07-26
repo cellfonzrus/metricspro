@@ -42,12 +42,18 @@ export default function OnboardingAdminPage() {
   const [ifields, setIfields] = useState<IField[]>([])
   const [propagatable, setPropagatable] = useState<string[]>([])
   const [fedit, setFedit] = useState<IField | null>(null)  // intake-field add/edit form
+  const [stuckDays, setStuckDays] = useState<number | ''>('')      // "onboarding invite stuck" alert threshold
+  const [savingStuck, setSavingStuck] = useState(false)
 
   async function load() {
     try {
       const d = await api('/api/v1/hr/onboarding/template?include_inactive=true')
       setReady(d?.ready !== false); setCats(d?.categories || []); setStates(d?.states || [])
     } catch (e: any) { setMsg(e?.message || 'Load failed') }
+    try {
+      const ac = await api('/api/v1/hr/onboarding/attention-config')
+      setStuckDays(ac?.stuck_invite_days ?? 7)
+    } catch { setStuckDays(7) }   // pre-migration-410 / any load error → the code default, never blank
     try {
       const f = await api('/api/v1/hr/onboarding/intake-fields?include_inactive=true')
       setIfields(f?.fields || []); setPropagatable(f?.propagatable || [])
@@ -77,6 +83,17 @@ export default function OnboardingAdminPage() {
     if (!label) return
     try { await api('/api/v1/hr/onboarding/categories', { method: 'POST', body: JSON.stringify({ label, sort_order: (cats.length + 1) * 10 }) }); load() }
     catch (e: any) { flash(e?.message || 'Save failed — is migration 073 applied?') }
+  }
+
+  // Settings-audit (2026-07-26): the "onboarding invite stuck" admin-attention alert threshold —
+  // GET/PUT /hr/onboarding/attention-config (migration 410, degrades to the code default of 7 pre-migration).
+  async function saveStuckDays() {
+    const n = Number(stuckDays)
+    if (!Number.isFinite(n) || n < 1 || n > 90) { flash('Enter a whole number of days between 1 and 90.'); return }
+    setSavingStuck(true)
+    try { await api('/api/v1/hr/onboarding/attention-config', { method: 'PUT', body: JSON.stringify({ stuck_invite_days: Math.round(n) }) }); flash('Saved.') }
+    catch (e: any) { flash(e?.message || 'Save failed') }
+    finally { setSavingStuck(false) }
   }
   async function renameCategory(c: Cat) {
     const label = window.prompt('Rename category', c.label)?.trim()
@@ -168,6 +185,15 @@ export default function OnboardingAdminPage() {
       {tab === 'reconcile' && <ReconcilePanel />}
 
       {tab === 'setup' && <>
+      <div className="card" style={{ padding: 12, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>🔔 Alert if an invite is stuck for more than</span>
+        <input type="number" min={1} max={90} style={{ ...inp, width: 70 }} value={stuckDays}
+          onChange={e => setStuckDays(e.target.value === '' ? '' : Number(e.target.value))} />
+        <span style={{ fontSize: 13 }}>day(s) without reaching HR verification</span>
+        <button style={btn} disabled={savingStuck} onClick={saveStuckDays}>{savingStuck ? 'Saving…' : 'Save'}</button>
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Shown to admins on login via Import Health / Attention.</span>
+      </div>
+
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         <button style={btnP} onClick={addCategory}>＋ Add category</button>
       </div>
