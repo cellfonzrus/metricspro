@@ -1620,6 +1620,14 @@ async def upload_vip_invoices(file: UploadFile = File(...), org_id: str = ORG_ID
     except Exception as e:
         print(f'WARN upload_log insert failed: {e}')
 
+    # mig-202 upload_trace under the REPORT KEY the connector registry uses ('vip_workbook'), so import
+    # health sees a hand-uploaded workbook as a real delivery instead of reporting the feed as never-run.
+    _write_upload_trace(org_id, source="manual", filename=getattr(file, 'filename', None),
+                        upload_type="vip_workbook", period="",
+                        result={"saved": n_inv + n_line + n_dev,
+                                "note": f"{n_inv} invoices, {n_line} lines, {n_dev} devices",
+                                "_trace": {"rows_in": n_inv + n_line + n_dev,
+                                           "target_table": "vip_invoices"}})
     return {"invoices": n_inv, "lines": n_line, "devices": n_dev}
 
 
@@ -1799,17 +1807,88 @@ def _vip_public_cfg(cfg):
     out = {k: cfg.get(k) for k in (
         'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
         'lookback_days', 'sweep_invoices', 'sweep_asset', 'sweep_creditmemo', 'sweep_asset_ledger',
-        'sweep_chargebacks', 'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail')}
+        'sweep_chargebacks', 'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail',
+        'last_attempt_at')}
     out['configured'] = True
     out['has_credentials'] = bool(cfg.get('portal_user') and cfg.get('portal_pass'))
     return out
 
 
-def _vip_set_status(client, org_id, status, detail, mark_run=False):
+# ── IMPORT-FRESHNESS TRAIL (owner directive 2026-07-26) ──────────────────────────────────────────
+# core.import_evidence (mig 717) answers "when did this feed last DELIVER data?" for every portal feed
+# from ONE column: commcalc.<x>_sweep_config.last_run_at / commcalc.data_source.last_run_at. So
+# last_run_at MUST mean "the last run that actually imported something".
+#
+# It used to be bumped on FAILURE too (rejected credentials, "needs login", a sweep with every report
+# switched off, even merely opening the portal login screen). Consequence: a connector that had imported
+# nothing for weeks looked FRESH, so the admin attention popup stayed silent — the exact opposite of the
+# directive. Every non-delivering attempt now records `last_attempt_at` (mig 241) instead, and the UI
+# shows both ("Last success" vs "Last attempt").
+#
+# Degrades: if last_attempt_at doesn't exist yet the write is retried without it, so the freshness fix is
+# live BEFORE the SQL runs. Scheduling is untouched — the /run-due sweeps key off next_run_at, never
+# last_run_at — and nothing else in the codebase treats last_run_at as "attempted".
+_OPTIONAL_STATUS_COLS = ('last_attempt_at',)
+_MISSING_STATUS_COLS: set = set()     # (table, column) pairs this database doesn't have yet
+
+
+def _status_update(client, table, upd, filt):
+    """UPDATE commcalc.<table> SET <upd> WHERE <filt(...)>, tolerating a not-yet-migrated column.
+
+    `filt` applies the row filter (org_id / id) so every caller keeps its RULE ONE scoping. A failure
+    for any reason OTHER than an optional column is re-raised — a real DB error must still surface."""
+    row = {k: v for k, v in upd.items() if (table, k) not in _MISSING_STATUS_COLS}
+    try:
+        filt(client.schema('commcalc').table(table).update(row)).execute()
+        return
+    except Exception:
+        opt = [k for k in row if k in _OPTIONAL_STATUS_COLS]
+        if not opt:
+            raise
+    for k in opt:
+        _MISSING_STATUS_COLS.add((table, k))     # probe once per process, then stop paying for it
+    filt(client.schema('commcalc').table(table).update(
+        {k: v for k, v in row.items() if k not in opt})).execute()
+
+
+def _require_import_admin(authorization, org_id):
+    """Editing an IMPORT CHANNEL (portal credentials, mailbox rules, schedules) is a settings action.
+
+    Gated on core's registered 'import_health' settings area, so an owner can grant it to one role in the
+    Roles UI instead of it being open to everyone with the page. Degrades OPEN when the caller cannot be
+    resolved (no token / RBAC off) — the same posture as _require_commission_admin, so the house org and
+    any existing automation are never locked out. Never 500s a settings save."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller, _can_edit_setting
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid) if uid else None
+        if caller is None:
+            return
+        if caller.get("super_admin") or _can_edit_setting(caller, "import_health"):
+            return
+        raise HTTPException(403, "You don't have permission to change import connections. Ask an "
+                                 "administrator to grant your role the 'Import Health' setting.")
+    except HTTPException:
+        raise
+    except Exception:
+        return
+
+
+def _sweep_set_status(client, table, org_id, status, detail, mark_run=False, success=None):
+    """Record ONE portal sweep's outcome on its own *_sweep_config row.
+
+    mark_run — this call ends a run (not the 'running…' heartbeat, which must stamp no timestamp).
+    success  — did the run actually IMPORT data? Defaults to status in ('ok','partial'); only a success
+               advances last_run_at (the freshness trail core.import_evidence reads)."""
     upd = {'last_status': status, 'last_detail': (detail or '')[:600]}
     if mark_run:
-        upd['last_run_at'] = _datetime.now(_timezone.utc).isoformat()
-    client.schema('commcalc').table('vip_sweep_config').update(upd).eq('org_id', org_id).execute()
+        ok = (str(status or '').strip().lower() in ('ok', 'partial')) if success is None else bool(success)
+        upd['last_run_at' if ok else 'last_attempt_at'] = _datetime.now(_timezone.utc).isoformat()
+    _status_update(client, table, upd, lambda q: q.eq('org_id', org_id))
+
+
+def _vip_set_status(client, org_id, status, detail, mark_run=False, success=None):
+    _sweep_set_status(client, 'vip_sweep_config', org_id, status, detail, mark_run, success)
 
 
 def _registry_auto_map(client, org_id):
@@ -1888,7 +1967,12 @@ def _do_vip_sweep(org_id):
     _step('chargebacks', do_chargebacks, _chargebacks)
 
     if not parts and not errs:
-        _vip_set_status(client, org_id, 'ok', "Nothing enabled (tick a report on the Distributor Sweep page)", mark_run=True)
+        # NOT a delivery: every report toggle is off, so this sweep imported nothing. Recording it as
+        # 'ok' + a fresh last_run_at made the feed look healthy forever while no data ever arrived.
+        _vip_set_status(client, org_id, 'idle',
+                        "Nothing enabled — tick at least one report on the Distributor Sweep page "
+                        "(or turn the sweep off if this tenant doesn't use the distributor portal)",
+                        mark_run=True, success=False)
         return
     status = 'ok' if not errs else ('partial' if parts else 'error')
     detail = (("OK — " if status == 'ok' else "") + " · ".join(parts)
@@ -1903,10 +1987,12 @@ async def vip_sweep_get_config(org_id: str = ORG_ID):
 
 
 @router.put("/vip/sweep/config")
-async def vip_sweep_put_config(body: dict, org_id: str = ORG_ID):
+async def vip_sweep_put_config(body: dict, org_id: str = ORG_ID,
+                               authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
     require_org(org_id)
+    _require_import_admin(authorization, org_id)
     client = sb()
     cur = _vip_cfg(client, org_id) or {}
     row = {'org_id': org_id}
@@ -2786,6 +2872,12 @@ async def commission_ledger_import(
              "filename": getattr(file, "filename", None), "rows_saved": saved}).execute()
     except Exception as e:
         print(f"WARN upload_log insert failed: {e}")
+    # mig-202 upload_trace keyed on the SOURCE report (e.g. ma_daily_tx), which is the feed an admin is
+    # actually satisfying by hand when they upload here — see the note on /vip/upload.
+    _write_upload_trace(org_id, source="ledger-import", filename=getattr(file, "filename", None),
+                        upload_type=source_report, period=period,
+                        result={"saved": saved, "note": "classified into the canonical ledger",
+                                "_trace": {"rows_in": len(rows), "target_table": "commission_ledger"}})
     summary = commission_ledger.summarize(rows)
     return {"saved": saved, "source_report": source_report, "period": period, "summary": summary}
 
@@ -3154,6 +3246,12 @@ async def commission_import_commit(
              "filename": getattr(file, "filename", None), "rows_saved": saved}).execute()
     except Exception as e:
         print(f"WARN upload_log insert failed: {e}")
+    # mig-202 upload_trace keyed on report_key — the import wizard is a real ingest channel for this
+    # report, so its feed must count it as a delivery (see the note on /vip/upload).
+    _write_upload_trace(org_id, source="import-wizard", filename=getattr(file, "filename", None),
+                        upload_type=report_key, period=period,
+                        result={"saved": saved, "note": f"{len(mapped)} row(s) mapped",
+                                "_trace": {"rows_in": len(mapped), "target_table": table}})
     return {"saved": saved, "report_key": report_key, "target_table": table, "period": period,
             "mapped": len(mapped), "new_categories": created, "template_rows": persisted}
 
@@ -3404,13 +3502,22 @@ def _connector_status(client, org_id, cfg_table):
     except Exception:
         return {}
     try:
+        # last_attempt_at rides the best-effort query on purpose: pre-mig-241 the column doesn't exist and
+        # this whole select 400s — the primary status block above must still come through.
         sch = (client.schema('commcalc').table(cfg_table)
-               .select('frequency,day_of_week,day_of_month,hour,timezone')
+               .select('frequency,day_of_week,day_of_month,hour,timezone,last_attempt_at')
                .eq('org_id', org_id).limit(1).execute().data) or []
         if sch:
             out = {**out, **sch[0]}
     except Exception:
-        pass
+        try:
+            sch = (client.schema('commcalc').table(cfg_table)
+                   .select('frequency,day_of_week,day_of_month,hour,timezone')
+                   .eq('org_id', org_id).limit(1).execute().data) or []
+            if sch:
+                out = {**out, **sch[0]}
+        except Exception:
+            pass
     return out
 
 
@@ -5069,17 +5176,16 @@ def _dlar_public_cfg(cfg):
                 'last_status': None, 'last_detail': None}
     out = {k: cfg.get(k) for k in (
         'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
-        'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail')}
+        'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail',
+        'last_attempt_at')}
     out['configured'] = True
     out['has_credentials'] = bool(cfg.get('portal_user') and cfg.get('portal_pass'))
     return out
 
 
-def _dlar_set_status(client, org_id, status, detail, mark_run=False):
-    upd = {'last_status': status, 'last_detail': (detail or '')[:600]}
-    if mark_run:
-        upd['last_run_at'] = _datetime.now(_timezone.utc).isoformat()
-    client.schema('commcalc').table('dlar_sweep_config').update(upd).eq('org_id', org_id).execute()
+def _dlar_set_status(client, org_id, status, detail, mark_run=False, success=None):
+    """See _sweep_set_status: only a run that IMPORTED data advances last_run_at."""
+    _sweep_set_status(client, 'dlar_sweep_config', org_id, status, detail, mark_run, success)
 
 
 def _do_dlar_sweep(org_id):
@@ -5120,10 +5226,12 @@ async def dlar_sweep_get_config(org_id: str = ORG_ID):
 
 
 @router.put("/dlar/sweep/config")
-async def dlar_sweep_put_config(body: dict, org_id: str = ORG_ID):
+async def dlar_sweep_put_config(body: dict, org_id: str = ORG_ID,
+                                authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
     require_org(org_id)
+    _require_import_admin(authorization, org_id)
     client = sb()
     cur = _dlar_cfg(client, org_id) or {}
     row = {'org_id': org_id}
@@ -5196,17 +5304,16 @@ def _b2b_public_cfg(cfg):
                 'last_status': None, 'last_detail': None}
     out = {k: cfg.get(k) for k in (
         'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
-        'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail')}
+        'portal_user', 'next_run_at', 'last_run_at', 'last_status', 'last_detail',
+        'last_attempt_at')}
     out['configured'] = True
     out['has_credentials'] = bool(cfg.get('portal_user') and cfg.get('portal_pass'))
     return out
 
 
-def _b2b_set_status(client, org_id, status, detail, mark_run=False):
-    upd = {'last_status': status, 'last_detail': (detail or '')[:600]}
-    if mark_run:
-        upd['last_run_at'] = _datetime.now(_timezone.utc).isoformat()
-    client.schema('commcalc').table('b2b_sweep_config').update(upd).eq('org_id', org_id).execute()
+def _b2b_set_status(client, org_id, status, detail, mark_run=False, success=None):
+    """See _sweep_set_status: only a run that IMPORTED data advances last_run_at."""
+    _sweep_set_status(client, 'b2b_sweep_config', org_id, status, detail, mark_run, success)
 
 
 def _do_b2b_sweep(org_id):
@@ -5219,9 +5326,19 @@ def _do_b2b_sweep(org_id):
     _b2b_set_status(client, org_id, 'running', 'Sweep in progress…')
     try:
         res = b2b_sweep.run_inventory_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'])
-        _b2b_set_status(client, org_id, 'ok',
-                        f"OK — {res['stores']} stores, ${res['total_value']:,.2f} on-hand "
-                        f"(as of {res['as_of_date']}). Re-compute statements to apply.", mark_run=True)
+        # HONEST ZERO: the login can succeed and the report still parse 0 stores (a renamed store/value
+        # column, a layout we don't flatten). That is NOT an import — recording it as 'ok' + a fresh
+        # last_run_at is exactly the false green the 2026-07-26 audit removed. Same posture the email
+        # sweep already takes for this report ('inventory_no_stores').
+        if not (res.get('stores') or 0):
+            _b2b_set_status(client, org_id, 'error',
+                            f"Logged in but the Inventory Aging report produced 0 stores (as of "
+                            f"{res.get('as_of_date')}) — the store or value column may have been renamed. "
+                            f"Nothing was imported.", mark_run=True, success=False)
+        else:
+            _b2b_set_status(client, org_id, 'ok',
+                            f"OK — {res['stores']} stores, ${res['total_value']:,.2f} on-hand "
+                            f"(as of {res['as_of_date']}). Re-compute statements to apply.", mark_run=True)
     except b2b_sweep.B2BLoginError as e:
         _b2b_set_status(client, org_id, 'error', str(e), mark_run=True)
     except b2b_sweep.B2BNotConfigured as e:
@@ -5237,10 +5354,12 @@ async def b2b_sweep_get_config(org_id: str = ORG_ID):
 
 
 @router.put("/b2b/sweep/config")
-async def b2b_sweep_put_config(body: dict, org_id: str = ORG_ID):
+async def b2b_sweep_put_config(body: dict, org_id: str = ORG_ID,
+                               authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
     require_org(org_id)
+    _require_import_admin(authorization, org_id)
     client = sb()
     cur = _b2b_cfg(client, org_id) or {}
     row = {'org_id': org_id}
@@ -5315,7 +5434,7 @@ def _epay_public_cfg(cfg):
     out = {k: cfg.get(k) for k in (
         'enabled', 'frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
         'portal_url', 'portal_user', 'sweep_mi', 'sweep_comp', 'sweep_payment',
-        'next_run_at', 'last_run_at', 'last_status', 'last_detail')}
+        'next_run_at', 'last_run_at', 'last_status', 'last_detail', 'last_attempt_at')}
     out['configured'] = True
     out['has_credentials'] = bool(cfg.get('portal_user') and cfg.get('portal_pass'))
     # sweep_mi defaults on (back-compat: pre-toggle configs only ever pulled MI)
@@ -5324,11 +5443,9 @@ def _epay_public_cfg(cfg):
     return out
 
 
-def _epay_set_status(client, org_id, status, detail, mark_run=False):
-    upd = {'last_status': status, 'last_detail': (detail or '')[:600]}
-    if mark_run:
-        upd['last_run_at'] = _datetime.now(_timezone.utc).isoformat()
-    client.schema('commcalc').table('epay_sweep_config').update(upd).eq('org_id', org_id).execute()
+def _epay_set_status(client, org_id, status, detail, mark_run=False, success=None):
+    """See _sweep_set_status: only a run that IMPORTED data advances last_run_at."""
+    _sweep_set_status(client, 'epay_sweep_config', org_id, status, detail, mark_run, success)
 
 
 def _do_epay_sweep(org_id):
@@ -5354,7 +5471,12 @@ def _do_epay_sweep(org_id):
     try:
         res = epay_sweep.run_epay_sweep(client, org_id, cfg.get('portal_url'),
                                         cfg['portal_user'], cfg['portal_pass'], reports=reports)
-        _epay_set_status(client, org_id, 'ok', f"OK — {res}", mark_run=True)
+        # run_epay_sweep raises only when EVERY report failed; a mixed run returns res['errors'].
+        # That used to be reported as a flat 'ok' (the failed report looked imported) — call it 'partial'
+        # so the connectors page and the attention feed can tell the operator WHICH report is missing.
+        _errs = (res or {}).get('errors') if isinstance(res, dict) else None
+        _epay_set_status(client, org_id, 'partial' if _errs else 'ok',
+                         (f"PARTIAL — {res}" if _errs else f"OK — {res}"), mark_run=True)
     except epay_sweep.EpayLoginError as e:
         _epay_set_status(client, org_id, 'error', str(e), mark_run=True)
     except epay_sweep.EpayPortalError as e:
@@ -5371,10 +5493,12 @@ async def epay_sweep_get_config(org_id: str = ORG_ID):
 
 
 @router.put("/epay/sweep/config")
-async def epay_sweep_put_config(body: dict, org_id: str = ORG_ID):
+async def epay_sweep_put_config(body: dict, org_id: str = ORG_ID,
+                                authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
     require_org(org_id)
+    _require_import_admin(authorization, org_id)
     client = sb()
     cur = _epay_cfg(client, org_id) or {}
     row = {'org_id': org_id}
@@ -8688,6 +8812,11 @@ async def upload_hotsheet(
         rows, on_conflict="org_id,effective_date,device_model"
     ).execute()
 
+    # mig-202 upload_trace under the registry's report_key ('hotsheet') — see the note on /vip/upload.
+    _write_upload_trace(org_id, source="manual", filename=getattr(file, "filename", None),
+                        upload_type="hotsheet", period="",
+                        result={"saved": len(rows), "note": f"effective {effective_date}",
+                                "_trace": {"rows_in": len(rows), "target_table": "hotsheet"}})
     return {"status": "ok", "rows_uploaded": len(rows), "effective_date": effective_date}
 
 
@@ -13933,9 +14062,10 @@ def get_ftp_config(org_id: str = ORG_ID):
 
 
 @router.put("/ftp-sweep/config")
-def put_ftp_config(body: dict, org_id: str = ORG_ID):
+def put_ftp_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save config. Password only updated when a non-empty value is supplied (so it isn't wiped)."""
     require_org(org_id)
+    _require_import_admin(authorization, org_id)
     row = {"org_id": org_id, "host": (body.get("host") or "").strip() or None,
            "port": int(body.get("port") or 21), "username": (body.get("username") or "").strip() or None,
            "use_tls": bool(body.get("use_tls")), "passive": body.get("passive", True) is not False,
@@ -14543,10 +14673,11 @@ def get_email_config(org_id: str = ORG_ID, account: str = "default"):
 
 
 @router.put("/email-sweep/config")
-def put_email_config(body: dict, org_id: str = ORG_ID):
+def put_email_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save one mailbox. `account` keys which mailbox (default 'default'); pass a distinct key + label to
     add another (e.g. account='total', label='Total Wireless'). Password only updated when supplied."""
     require_org(org_id)
+    _require_import_admin(authorization, org_id)
     account = (body.get("account") or "default").strip() or "default"
     row = {"org_id": org_id, "account": account, "label": (body.get("label") or "").strip() or None,
            "imap_host": (body.get("imap_host") or "").strip() or None,
@@ -14861,12 +14992,40 @@ _CONNECTOR_HEALTH_SOURCES = [
     ("vip_sweep_config", "VIP sweep"), ("b2b_sweep_config", "B2B sweep"),
     ("ftp_sweep_config", "FTP import"),
 ]
-_CONNECTOR_STALE_HOURS = 30  # a daily source with no run in >30h has silently stalled
+_CONNECTOR_STALE_HOURS = 30  # DEFAULT only — per tenant: commission_org_config.connector_stale_hours
+
+
+def _connector_stale_hours_map(client):
+    """{org_id: hours} from commcalc.commission_org_config.connector_stale_hours (mig 241).
+
+    RULE TWO: "how long without a successful import before we call it stalled" is exactly the kind of
+    threshold a tenant wants to tune (a weekly distributor sweep is not late at 31h), so it lives in
+    config with a documented default. Missing table/column ⇒ {} ⇒ every org uses the default. This scan
+    is the cross-tenant cron pass, so it reads the column for all orgs and keys the result per org."""
+    try:
+        rows = (client.schema('commcalc').table('commission_org_config')
+                .select('org_id,connector_stale_hours').limit(2000).execute().data) or []
+    except Exception:
+        return {}
+    out = {}
+    for r in rows or []:
+        try:
+            v = float(r.get('connector_stale_hours') or 0)
+        except Exception:
+            v = 0.0
+        if v > 0 and r.get('org_id'):
+            out[str(r['org_id'])] = v
+    return out
 
 
 def _scan_connector_health(client):
-    """Enabled data sources across the sweep + portal registries that have ERRORED or gone STALE."""
+    """Enabled data sources across the sweep + portal registries that have ERRORED or gone STALE.
+
+    'Stale' now means NO SUCCESSFUL RUN in the window: since 2026-07-26 last_run_at only advances on a
+    run that actually imported data (failures record last_attempt_at), so a connector that keeps failing
+    every 30 minutes is correctly reported instead of looking busy."""
     now = _datetime.now(_timezone.utc)
+    stale_hours = _connector_stale_hours_map(client)
     out = []
     for table, label in _CONNECTOR_HEALTH_SOURCES:
         try:
@@ -14880,6 +15039,7 @@ def _scan_connector_health(client):
             name = (r.get("label") or r.get("source_name") or r.get("account")
                     or r.get("vendor_name") or label)
             failed = ("error" in status) or ("fail" in status) or ("403" in status)
+            hrs = stale_hours.get(str(r.get("org_id") or ORG_ID), _CONNECTOR_STALE_HOURS)
             stale = False
             lr = r.get("last_run_at")
             if not failed and lr:
@@ -14887,14 +15047,14 @@ def _scan_connector_health(client):
                     last = _datetime.fromisoformat(str(lr).replace("Z", "+00:00"))
                     if last.tzinfo is None:
                         last = last.replace(tzinfo=_timezone.utc)
-                    stale = (now - last).total_seconds() > _CONNECTOR_STALE_HOURS * 3600
+                    stale = (now - last).total_seconds() > hrs * 3600
                 except Exception:
                     stale = False
             if failed or stale:
                 kind = "errored" if failed else "stalled"
                 out.append({
                     "org_id": r.get("org_id") or ORG_ID, "source": f"{label} — {name}", "kind": kind,
-                    "detail": (r.get("last_status") or f"no run in {_CONNECTOR_STALE_HOURS}h+")[:180],
+                    "detail": (r.get("last_status") or f"no successful run in {hrs:g}h+")[:180],
                     "ref_key": f"connector:{table}:{r.get('id')}:{now.date()}:{kind}",
                 })
     return out
@@ -15017,6 +15177,41 @@ def _strip_source_pw(row):
     return row
 
 
+def _pull_delivered(res):
+    """Did this portal pull actually LAND rows? Mirrors the platform's own evidence standard — the email,
+    FTP and upload_trace probes all require rows_saved>0 before they count an import as delivered — so a
+    pull that reports "0 rows across 0 report(s)" must not advance the freshness timestamp either.
+    Unknown result shape ⇒ True, so a scraper that doesn't report counts is never regressed. PURE."""
+    if not isinstance(res, dict):
+        return True
+    for k in ("rows_ingested", "rows_saved", "saved", "rows"):
+        if k in res:
+            try:
+                return float(res[k] or 0) > 0
+            except Exception:
+                return True
+    return True
+
+
+def _source_stamp(client, sid, org_id, patch, *, success=False):
+    """Write a status patch onto ONE data_source login, routing the timestamp honestly.
+
+    success=True  → last_run_at   (a pull that actually IMPORTED report data — the freshness trail
+                    core.import_evidence reads for the "VidaPay commission" / T-CETRA / b2bsoft feeds)
+    success=False → last_attempt_at (a login, a 2FA prompt, an auth failure, an errored/not-wired pull)
+
+    Before this split, opening the login screen was enough to make the pull feed look FRESH, so a
+    processor that had never delivered a row showed green and no admin was ever notified. org-scoped on
+    the UPDATE; best-effort so a status write can never break a login or a pull."""
+    upd = dict(patch or {})
+    stamp = upd.pop('last_run_at', None) or datetime.now(timezone.utc).isoformat()
+    upd['last_run_at' if success else 'last_attempt_at'] = stamp
+    try:
+        _status_update(client, 'data_source', upd, lambda q: q.eq('id', sid).eq('org_id', org_id))
+    except Exception as e:
+        print(f"WARN data_source status stamp skipped: {e}")
+
+
 def _store_login_shot(client, sid, org_id, shot):
     """Best-effort: persist the 'what the headless browser saw' JPEG (base64) for the
     /login/screenshot endpoint. A SEPARATE update so a missing login_shot column (migration
@@ -15045,9 +15240,10 @@ def list_data_sources(org_id: str = ORG_ID):
 
 
 @router.put("/data-sources")
-def save_data_source(body: dict, org_id: str = ORG_ID):
+def save_data_source(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Create/update one login. Omitting password on an update KEEPS the stored one."""
     require_org(org_id)
+    _require_import_admin(authorization, org_id)
     row = {k: body[k] for k in _SOURCE_FIELDS if k in body}
     if not (row.get("processor") or "").strip() and not body.get("id"):
         raise HTTPException(400, "processor is required (e.g. vidapay, total_access, epay)")
@@ -15074,8 +15270,9 @@ def save_data_source(body: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/data-sources/{sid}")
-def delete_data_source(sid: str, org_id: str = ORG_ID):
+def delete_data_source(sid: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
+    _require_import_admin(authorization, org_id)
     sb().schema("commcalc").table("data_source").delete().eq("id", sid).eq("org_id", org_id).execute()
     return {"ok": True}
 
@@ -15141,12 +15338,7 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
     if not handler:
         status = (f"scraper for '{proc}' not wired yet — reports ingest via the email sweep or the "
                   f"Data Imports upload (ma_commission / ma_daily_tx / ma_fulfillment) today")
-        try:
-            client.schema("commcalc").table("data_source").update(
-                {"last_run_at": datetime.now(timezone.utc).isoformat(), "last_status": status})\
-                .eq("id", sid).eq("org_id", org_id).execute()
-        except Exception:
-            pass
+        _source_stamp(client, sid, org_id, {"last_status": status}, success=False)
         return {"ok": False, "error": status}
     from app.modules.commcalc.vidapay_sweep import VidaPayAuthError
     # PREFER THE LIVE AUTHENTICATED BROWSER. T-CETRA/VidaPay re-challenges the cold storage_state restore
@@ -15164,46 +15356,29 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
         if sess is not None and sess.can_pull():
             res = await run_in_threadpool(sess.run_pull_blocking, 900)
             if res is not None:
-                try:
-                    client.schema("commcalc").table("data_source").update(
-                        {"last_run_at": datetime.now(timezone.utc).isoformat(),
-                         "last_status": str((res or {}).get("status") or "ok"),
-                         "auth_status": "authenticated"})\
-                        .eq("id", sid).eq("org_id", org_id).execute()
-                except Exception:
-                    pass
+                _source_stamp(client, sid, org_id,
+                              {"last_status": str((res or {}).get("status") or "ok"),
+                               "auth_status": "authenticated"},
+                              success=_pull_delivered(res))
                 return {"ok": True, "via": "live-session", **(res or {})}
             # res is None → the live session couldn't pull (timed out / just closed) → fall through.
     try:
         res = await handler(org_id, src_row)
-        client.schema("commcalc").table("data_source").update(
-            {"last_run_at": datetime.now(timezone.utc).isoformat(),
-             "last_status": str((res or {}).get("status") or "ok"),
-             "auth_status": "authenticated"})\
-            .eq("id", sid).eq("org_id", org_id).execute()
+        _source_stamp(client, sid, org_id, {"last_status": str((res or {}).get("status") or "ok"),
+                                            "auth_status": "authenticated"},
+                      success=_pull_delivered(res))
         return {"ok": True, **(res or {})}
     except VidaPayAuthError as e:
         # Session expired / never authenticated — not a hard failure; prompt the operator to log in.
         # Do NOT null session_state here: a transient nav/validity blip would otherwise DESTROY a good
         # saved login and force a needless re-login (+ new 2FA code). Leave the stored session in place;
         # a real re-login overwrites it, and a still-valid session is reused on the next Pull.
-        try:
-            client.schema("commcalc").table("data_source").update(
-                {"last_run_at": datetime.now(timezone.utc).isoformat(),
-                 "last_status": f"needs login: {str(e)[:160]}",
-                 "auth_status": "needs_2fa", "auth_message": str(e)[:300]})\
-                .eq("id", sid).eq("org_id", org_id).execute()
-        except Exception:
-            pass
+        _source_stamp(client, sid, org_id,
+                      {"last_status": f"needs login: {str(e)[:160]}",
+                       "auth_status": "needs_2fa", "auth_message": str(e)[:300]}, success=False)
         return {"ok": False, "needs_2fa": True, "error": str(e)}
     except Exception as e:
-        try:
-            client.schema("commcalc").table("data_source").update(
-                {"last_run_at": datetime.now(timezone.utc).isoformat(),
-                 "last_status": f"error: {str(e)[:180]}"})\
-                .eq("id", sid).eq("org_id", org_id).execute()
-        except Exception:
-            pass
+        _source_stamp(client, sid, org_id, {"last_status": f"error: {str(e)[:180]}"}, success=False)
         raise HTTPException(500, f"pull failed: {e}")
 
 
@@ -15664,19 +15839,30 @@ async def manual_upload_ingest(
 
 
 @router.post("/data-sources/sweep/run-due")
-async def data_sources_run_due(org_id: str = ORG_ID):
+async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Header(default="")):
     """Scheduled trigger (pg_cron → this endpoint, like the other /run-due sweeps): for every ENABLED
     data_source whose next_run_at has passed and whose processor has a wired scraper, pull ALL enabled
     reports (config-driven) and re-schedule next_run_at. The tenant does nothing in the UI. Best-effort
-    per source — one failure never aborts the batch. NOT money-touching: this only INGESTS source data."""
-    require_org(org_id)
+    per source — one failure never aborts the batch. NOT money-touching: this only INGESTS source data.
+
+    SCOPE (settings-audit 2026-07-26): with a valid X-Notify-Secret this is the cron entrypoint and sweeps
+    EVERY tenant's due logins (unchanged behaviour, and the same gate the other five /run-due sweeps use).
+    Without the secret it is an ordinary authenticated call and sweeps ONLY the caller's own org — before
+    this, any signed-in user could trigger pulls for every tenant on the platform.
+    NOTE the cron itself does not exist yet: nothing scheduled this endpoint, so the "VidaPay runs on a
+    schedule" expectation has never been true. The SQL to schedule it is in migration 241."""
+    cron = bool(settings.NOTIFY_RUN_SECRET) and x_notify_secret == settings.NOTIFY_RUN_SECRET
+    if not cron:
+        require_org(org_id)
     client = sb()
     now = datetime.now(timezone.utc)
     try:
-        rows = (client.schema("commcalc").table("data_source").select("*")
-                .eq("enabled", True)
-                .or_(f"next_run_at.is.null,next_run_at.lte.{now.isoformat()}")
-                .execute().data) or []
+        q = (client.schema("commcalc").table("data_source").select("*")
+             .eq("enabled", True)
+             .or_(f"next_run_at.is.null,next_run_at.lte.{now.isoformat()}"))
+        if not cron:
+            q = q.eq("org_id", org_id)
+        rows = q.execute().data or []
     except Exception as e:
         return {"ok": False, "error": f"data_source not ready (mig 083/084/207?): {e}", "ran": []}
     ran = []
@@ -15689,18 +15875,15 @@ async def data_sources_run_due(org_id: str = ORG_ID):
             continue
         try:
             res = await handler(oid, s)
-            client.schema("commcalc").table("data_source").update(
-                {"last_run_at": now.isoformat(), "last_status": str((res or {}).get("status") or "ok"),
-                 "auth_status": "authenticated", "next_run_at": nxt})\
-                .eq("id", s["id"]).eq("org_id", oid).execute()
+            _source_stamp(client, s["id"], oid,
+                          {"last_status": str((res or {}).get("status") or "ok"),
+                           "auth_status": "authenticated", "next_run_at": nxt,
+                           "last_run_at": now.isoformat()}, success=_pull_delivered(res))
             ran.append({"id": s["id"], "ok": True, "status": (res or {}).get("status")})
         except Exception as e:
-            try:
-                client.schema("commcalc").table("data_source").update(
-                    {"last_run_at": now.isoformat(), "last_status": f"error: {str(e)[:160]}",
-                     "next_run_at": nxt}).eq("id", s["id"]).eq("org_id", oid).execute()
-            except Exception:
-                pass
+            _source_stamp(client, s["id"], oid,
+                          {"last_status": f"error: {str(e)[:160]}", "next_run_at": nxt,
+                           "last_run_at": now.isoformat()}, success=False)
             ran.append({"id": s["id"], "ok": False, "error": str(e)[:200]})
     return {"ok": True, "ran": ran, "count": len(ran)}
 
@@ -15726,25 +15909,26 @@ def _do_portal_login(sid: str, org_id: str):
         msg = str(e)
         if "egress" in msg.lower() or "waf" in msg.lower():
             msg += vp.egress_hint(s.get("proxy_url"))   # which IP did we actually go out from?
-        client.schema("commcalc").table("data_source").update(
-            {"auth_status": "error", "auth_message": msg[:400], "last_run_at": now.isoformat()})\
-            .eq("id", sid).eq("org_id", org_id).execute()
+        _source_stamp(client, sid, org_id,
+                      {"auth_status": "error", "auth_message": msg[:400],
+                       "last_run_at": now.isoformat()}, success=False)
         _store_login_shot(client, sid, org_id, getattr(e, "screenshot_b64", None))
         return
     except Exception as e:
-        client.schema("commcalc").table("data_source").update(
-            {"auth_status": "error", "auth_message": ("Login crashed: " + str(e))[:400],
-             "last_run_at": now.isoformat()})\
-            .eq("id", sid).eq("org_id", org_id).execute()
+        _source_stamp(client, sid, org_id,
+                      {"auth_status": "error", "auth_message": ("Login crashed: " + str(e))[:400],
+                       "last_run_at": now.isoformat()}, success=False)
         _store_login_shot(client, sid, org_id, getattr(e, "screenshot_b64", None))
         return
     if res.get("status") == "authenticated":
-        client.schema("commcalc").table("data_source").update(
-            {"auth_status": "authenticated", "auth_message": "Logged in (no 2FA prompt). Session saved.",
-             "session_state": res.get("storage_state"), "pending_state": None,
-             "session_expires_at": (now + timedelta(hours=vp.SESSION_TTL_HOURS)).isoformat(),
-             "last_run_at": now.isoformat()})\
-            .eq("id", sid).eq("org_id", org_id).execute()
+        # Signed in ≠ imported. This is an ATTEMPT stamp: the feed only goes green when a Pull
+        # actually lands report rows (see _source_stamp).
+        _source_stamp(client, sid, org_id,
+                      {"auth_status": "authenticated",
+                       "auth_message": "Logged in (no 2FA prompt). Session saved.",
+                       "session_state": res.get("storage_state"), "pending_state": None,
+                       "session_expires_at": (now + timedelta(hours=vp.SESSION_TTL_HOURS)).isoformat(),
+                       "last_run_at": now.isoformat()}, success=False)
         _store_login_shot(client, sid, org_id, res.get("screenshot_b64"))
         return
     hint = res.get("two_fa_hint")
@@ -15763,12 +15947,11 @@ def _do_portal_login(sid: str, org_id: str):
         amsg = "Enter the 2FA code." + (f" Sent to: {hint}" if hint else "")
         if btns:
             amsg += " If no code arrived, the portal likely needs a button clicked \u2014 buttons on the page: " + " | ".join(btns[:8])
-    client.schema("commcalc").table("data_source").update(
-        {"auth_status": "needs_2fa", "two_fa_hint": hint, "pending_state": res.get("storage_state"),
-         "pending_started_at": now.isoformat(),
-         "auth_message": amsg[:400],
-         "last_run_at": now.isoformat()})\
-        .eq("id", sid).eq("org_id", org_id).execute()
+    _source_stamp(client, sid, org_id,
+                  {"auth_status": "needs_2fa", "two_fa_hint": hint,
+                   "pending_state": res.get("storage_state"),
+                   "pending_started_at": now.isoformat(), "auth_message": amsg[:400],
+                   "last_run_at": now.isoformat()}, success=False)
     _store_login_shot(client, sid, org_id, res.get("screenshot_b64"))
 
 
@@ -15788,10 +15971,10 @@ async def data_source_login_start(sid: str, background_tasks: BackgroundTasks, o
     if not (s.get("password") and (s.get("username") or s.get("account_id"))):
         raise HTTPException(400, "Enter the Account ID, User ID and Password on this login first, then Log in.")
     now = datetime.now(timezone.utc)
-    client.schema("commcalc").table("data_source").update(
-        {"auth_status": "authenticating", "auth_message": "Logging in…",
-         "pending_started_at": now.isoformat(), "last_run_at": now.isoformat()})\
-        .eq("id", sid).eq("org_id", org_id).execute()
+    _source_stamp(client, sid, org_id,
+                  {"auth_status": "authenticating", "auth_message": "Logging in…",
+                   "pending_started_at": now.isoformat(), "last_run_at": now.isoformat()},
+                  success=False)
     background_tasks.add_task(_do_portal_login, sid, org_id)
     return {"ok": True, "status": "authenticating",
             "message": "Logging in — this can take up to a minute (Chromium + your proxy). "
@@ -15837,12 +16020,12 @@ async def data_source_login_verify(sid: str, body: dict, org_id: str = ORG_ID):
         _store_login_shot(client, sid, org_id, getattr(e, "screenshot_b64", None))
         raise HTTPException(400, str(e))
     now = datetime.now(timezone.utc)
-    client.schema("commcalc").table("data_source").update(
-        {"auth_status": "authenticated", "auth_message": "Signed in — session saved.",
-         "session_state": res.get("storage_state"), "pending_state": None, "pending_started_at": None,
-         "session_expires_at": (now + timedelta(hours=vp.SESSION_TTL_HOURS)).isoformat(),
-         "last_run_at": now.isoformat()})\
-        .eq("id", sid).eq("org_id", org_id).execute()
+    _source_stamp(client, sid, org_id,
+                  {"auth_status": "authenticated", "auth_message": "Signed in — session saved.",
+                   "session_state": res.get("storage_state"), "pending_state": None,
+                   "pending_started_at": None,
+                   "session_expires_at": (now + timedelta(hours=vp.SESSION_TTL_HOURS)).isoformat(),
+                   "last_run_at": now.isoformat()}, success=False)
     _store_login_shot(client, sid, org_id, res.get("screenshot_b64"))
     return {"ok": True, "status": "authenticated",
             "message": "Signed in — the session is saved and will be reused until it expires."}
@@ -15882,9 +16065,11 @@ def _live_persist(client, sid, org_id):
     """A persist callback the live session calls (from its worker thread) to store the durable session
     once authenticated. Org-scoped write; best-effort so a DB hiccup can't crash the login thread."""
     def _p(updates):
+        # live_login stamps last_run_at when it stops (error/cancelled) and when it authenticates —
+        # neither imported anything, so both are recorded as ATTEMPTS. A live-session PULL that really
+        # lands rows is stamped success=True by run_data_source, not here.
         try:
-            client.schema("commcalc").table("data_source").update(updates)\
-                .eq("id", sid).eq("org_id", org_id).execute()
+            _source_stamp(client, sid, org_id, dict(updates or {}), success=False)
         except Exception:
             pass
     return _p
@@ -15937,13 +16122,10 @@ def live_login_start(sid: str, org_id: str = ORG_ID):
     if not (s.get("password") and (s.get("username") or s.get("account_id"))):
         raise HTTPException(400, "Enter the Account ID, User ID and Password on this login first, then start the live login.")
     now = datetime.now(timezone.utc)
-    try:
-        client.schema("commcalc").table("data_source").update(
-            {"auth_status": "authenticating", "auth_message": "Live login in progress…",
-             "pending_started_at": now.isoformat(), "last_run_at": now.isoformat()})\
-            .eq("id", sid).eq("org_id", org_id).execute()
-    except Exception:
-        pass
+    _source_stamp(client, sid, org_id,
+                  {"auth_status": "authenticating", "auth_message": "Live login in progress…",
+                   "pending_started_at": now.isoformat(), "last_run_at": now.isoformat()},
+                  success=False)
     sess = live_login.start_session(sid, org_id, s, _live_persist(client, sid, org_id),
                                     _live_persist_shot(client, sid, org_id),
                                     _live_pull(client, org_id, s))
@@ -16914,3 +17096,15 @@ def agency_void_invoice(invoice_id: str, org_id: str = ORG_ID, authorization: st
     require_org(org_id)
     _require_agency_edit(authorization, org_id)
     return _agency.void_invoice(sb(), org_id, invoice_id, _agency_who(authorization, org_id))
+
+
+# ── ADMIN-ATTENTION PROVIDERS (settings-audit 2026-07-26) ────────────────────────────────────────
+# Importing commcalc.import_audit registers this module's attention providers with platform-core's
+# aggregator (GET /core/attention → the admin login popup): connectors that cannot import, the
+# carrier-mode/plan trap that silently pays $0, a monthly basis that won't auto-build, and a degraded
+# sales export. Kept LAST in the file and fully guarded — if core/import_health.py is absent or changes
+# shape, commcalc must still import cleanly (the providers simply don't register).
+try:                                                                  # pragma: no cover
+    from app.modules.commcalc import import_audit as _import_audit    # noqa: F401
+except Exception as _e:                                               # pragma: no cover
+    print(f"WARN commcalc attention providers not registered: {_e}")

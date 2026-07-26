@@ -132,7 +132,9 @@ export default function ConnectorsPage() {
                 )}
                 {(st.last_run_at || st.last_status) && (
                   <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 6 }}>
-                    Last run {dt(st.last_run_at)} · <b style={{ color: stColor }}>{st.last_status || '—'}</b>
+                    Last successful import {dt(st.last_run_at)} · <b style={{ color: stColor }}>{st.last_status || '—'}</b>
+                    {st.last_attempt_at && st.last_attempt_at !== st.last_run_at
+                      ? <> · last attempt (no data) {dt(st.last_attempt_at)}</> : null}
                     {st.next_run_at ? <> · next {dt(st.next_run_at)}</> : null}
                     {st.last_detail ? <div style={{ color: 'var(--text3)', fontSize: 11, marginTop: 2 }}>{String(st.last_detail).slice(0, 200)}</div> : null}
                   </div>

@@ -9,7 +9,7 @@ type Cfg = {
   enabled: boolean; frequency: string; day_of_week: number; day_of_month: number
   hour: number; timezone: string
   sweep_mi: boolean; sweep_comp: boolean; sweep_payment: boolean
-  next_run_at: string | null; last_run_at: string | null
+  next_run_at: string | null; last_run_at: string | null; last_attempt_at?: string | null
   last_status: string | null; last_detail: string | null
 }
 
@@ -103,11 +103,20 @@ export default function EpaySweepAdmin() {
       <div className="card" style={{ marginBottom: 18, padding: '16px 20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>Last run</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>Last successful import</div>
             <div style={{ fontSize: 14, marginTop: 3 }}>
               <span style={{ color: statusColor, fontWeight: 700 }}>{cfg.last_status || 'never run'}</span>
-              {cfg.last_run_at && <span style={{ color: 'var(--text3)' }}> · {fmtTs(cfg.last_run_at)}</span>}
+              {cfg.last_run_at
+                ? <span style={{ color: 'var(--text3)' }}> · {fmtTs(cfg.last_run_at)}</span>
+                : <span style={{ color: 'var(--text3)' }}> · no data imported yet</span>}
             </div>
+            {/* last_run_at = the last run that actually IMPORTED data (the timestamp import health reads);
+                a failed / nothing-to-do run records last_attempt_at instead, so both are shown. */}
+            {cfg.last_attempt_at && cfg.last_attempt_at !== cfg.last_run_at && (
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 3 }}>
+                Last attempt (no data imported): {fmtTs(cfg.last_attempt_at)}
+              </div>
+            )}
             {cfg.last_detail && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 3 }}>{cfg.last_detail}</div>}
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>Next scheduled: <strong>{cfg.enabled ? fmtTs(cfg.next_run_at) : 'disabled'}</strong></div>
           </div>
