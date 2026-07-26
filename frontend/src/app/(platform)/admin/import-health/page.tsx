@@ -71,8 +71,11 @@ export default function ImportHealthPage() {
   }, [loadHealth, loadAtt])
 
   const canEdit = !!health?.can_edit
+  // A channel-stale feed is state 'ok' by construction (the data IS arriving, just not through the
+  // configured channel — see feed_status), so the problems-only view must keep it visible or the one
+  // surface that reports a silently-broken sweep would hide it.
   const feeds = useMemo(
-    () => (health?.feeds || []).filter(f => showOk || f.state !== 'ok'),
+    () => (health?.feeds || []).filter(f => showOk || f.state !== 'ok' || f.channel_stale),
     [health, showOk])
 
   const sync = async () => {

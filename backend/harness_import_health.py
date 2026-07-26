@@ -247,6 +247,32 @@ s_manual = IH.feed_status(feed, [{"kind": "upload_trace", "k1": "daily_sales",
 ok("A7 manual upload clears overdue", s_manual["state"] == "ok", s_manual)
 ok("A8 …but flags channel_stale", s_manual["channel_stale"] is True, s_manual)
 ok("A9 healthy channel -> channel_stale False", s_fresh["channel_stale"] is False, s_fresh)
+# ── Gate-1 MINOR-1: channel_stale must mean "data IS arriving, just not via the channel" ─────────────
+ok("A9b SINGLE-CHANNEL OVERDUE (nothing arrived by ANY route) -> channel_stale FALSE",
+   s_old["state"] == "overdue" and s_old["channel_stale"] is False, s_old)
+ok("A9c NEVER-run feed -> channel_stale FALSE", s_never["channel_stale"] is False, s_never)
+# manual upload FRESHER than a stale channel -> the channel really is the problem
+s_cs = IH.feed_status(feed, [{"kind": "email", "k1": "default", "k2": "daily_sales",
+                              "last_success": iso(NOW - timedelta(hours=200))},
+                             {"kind": "upload_trace", "k1": "daily_sales",
+                              "last_success": iso(NOW - timedelta(hours=2))}], now=NOW)
+ok("A9d manual upload FRESHER than a stale channel -> channel_stale TRUE",
+   s_cs["state"] == "ok" and s_cs["channel_stale"] is True, s_cs)
+# both routes fresh -> the channel is fine, no accusation
+s_both = IH.feed_status(feed, [{"kind": "email", "k1": "default", "k2": "daily_sales",
+                                "last_success": iso(NOW - timedelta(hours=5))},
+                               {"kind": "upload_trace", "k1": "daily_sales",
+                                "last_success": iso(NOW - timedelta(hours=2))}], now=NOW)
+ok("A9e both routes fresh (manual merely newer) -> channel_stale FALSE", s_both["channel_stale"] is False, s_both)
+# best comes from a NON-channel route but is ITSELF stale -> plain overdue, not a channel accusation
+s_bothold = IH.feed_status(feed, [{"kind": "email", "k1": "default", "k2": "daily_sales",
+                                   "last_success": iso(NOW - timedelta(hours=400))},
+                                  {"kind": "upload_trace", "k1": "daily_sales",
+                                   "last_success": iso(NOW - timedelta(hours=200))}], now=NOW)
+ok("A9f non-channel evidence that is ALSO stale -> overdue, channel_stale FALSE",
+   s_bothold["state"] == "overdue" and s_bothold["channel_stale"] is False, s_bothold)
+ok("A9g channel_stale is IMPOSSIBLE on a non-ok feed (invariant over the whole matrix)",
+   all(st["channel_stale"] is False for st in (s_old, s_never, s_bothold) if st["state"] != "ok"))
 # monthly manual feed: default grace scales, so 30 days late is NOT overdue for a 720h cadence
 mfeed = {"cadence_hours": 720, "grace_hours": IH.default_grace(720),
          "evidence": [{"kind": "upload_trace", "upload_type": "ma_commission"}]}
@@ -413,6 +439,9 @@ ok("F1 the 9-day-late email feed raises an OVERDUE import item",
 ok("F2 overdue import item severity=error + carries a fix deep link",
    all(i["severity"] == "error" and i["deep_link"] for i in res["items"]
        if i["key"] == "feed:email:default:inventory_aging"))
+ok("F2b Gate-1 MINOR-1: no overdue item claims 'arrived by another route'",
+   not any("another route" in (i.get("detail") or "") for i in res["items"]),
+   [i.get("detail") for i in res["items"] if i["group"] == "import"])
 ok("F3 a NEVER-run feed is reported as a warning",
    any(i["group"] == "import" and i["severity"] == "warning" for i in res["items"]),
    [(i["key"], i["severity"]) for i in res["items"]])

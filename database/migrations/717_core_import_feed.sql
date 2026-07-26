@@ -82,9 +82,13 @@ GRANT ALL ON core.import_feed TO anon, authenticated, service_role;
 --   kind='source'       k1=data_source.id               → portal-login pull last_run_at / last_status
 -- Each block is independently exception-guarded so a table that does not exist yet on a given database
 -- (e.g. mig 202 un-run) silently contributes no rows instead of failing the whole call.
--- SECURITY INVOKER (default) on purpose: the *_sweep_config tables hold PORTAL CREDENTIALS and have
--- anon/authenticated REVOKED. A SECURITY DEFINER function would have handed their contents to anon.
--- Only service_role (what the backend uses) may execute it.
+-- SECURITY INVOKER (default) on purpose. FOUR of the seven sweep-config tables hold PORTAL CREDENTIALS
+-- and deliberately REVOKE anon/authenticated, leaving service_role only: dlar (mig 012), epay (020),
+-- vip (011), b2b (026). The other three are open_all because they carry no secret of that kind:
+-- email_sweep_config (049) / ftp_sweep_config (046) / closing_sweep_config (033). A SECURITY DEFINER
+-- function here would have run as the owner and handed the FOUR credential-bearing tables' contents to
+-- anon through this one entry point, silently undoing their REVOKE. SECURITY INVOKER keeps each table's
+-- own grants authoritative, and EXECUTE is granted to service_role (what the backend uses) only.
 CREATE OR REPLACE FUNCTION core.import_evidence(p_org uuid)
 RETURNS TABLE (kind text, k1 text, k2 text, last_success timestamptz, last_status text, n bigint)
 LANGUAGE plpgsql STABLE AS $fn$

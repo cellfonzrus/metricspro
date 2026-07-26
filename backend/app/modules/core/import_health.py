@@ -618,11 +618,23 @@ def feed_status(feed, evidence, now=None, raw_freshness=None):
         due_at = best + window
         age_h = round((now - best).total_seconds() / 3600.0, 1)
         state = "overdue" if now > due_at else "ok"
-    # Only meaningful when the feed HAS a channel probe (probe 0 is a real channel, not a raw-table
-    # fallback) and some data has landed; otherwise there is nothing to compare and it stays False.
+    # channel_stale asserts ONE specific thing: "the data IS arriving — just NOT through the configured
+    # channel" (someone is uploading around a broken sweep). Gate-1 MINOR-1: the first cut set it whenever
+    # the channel was past its window, which is ALSO true for the ordinary single-channel feed where
+    # nothing arrived by ANY route — so every plain-overdue feed was mislabelled "arrived another way".
+    # All four conditions are now required, and they are mutually reinforcing:
+    #   1. state == 'ok'          — something DID land recently. An overdue feed is just overdue; there is
+    #                               no "another route" to point at, so the honest message is "no data".
+    #   2. has_channel            — probe 0 is a real channel (not a raw-table fallback) to compare against.
+    #   3. best > channel         — the recent arrival did NOT come from the channel (None = never did).
+    #   4. channel past its window— the channel itself really is late, not merely a few hours behind a
+    #                               manual upload that happened to also run.
+    # Consequence: channel_stale is now IMPOSSIBLE on an overdue/never feed, which is exactly why the
+    # "arrived by another route" sentence is no longer emitted on those items (_p_imports).
     has_channel = bool(probes) and isinstance(probes[0], dict) and probes[0].get("kind") != "raw_table"
-    channel_stale = (bool(channel is None or (now - channel) > window)
-                     if (best is not None and has_channel) else False)
+    channel_stale = bool(
+        state == "ok" and has_channel and best is not None
+        and (channel is None or (best > channel and (now - channel) > window)))
     return {
         "last_success": _iso(best), "last_status": last_status,
         "channel_success": _iso(channel), "channel_stale": channel_stale,
@@ -728,11 +740,14 @@ def _p_imports(client, org_id, ctx):
         if f["state"] == "overdue":
             age = f.get("age_hours")
             out.append(_item("import", f"feed:{f['feed_key']}", "error", f.get("label") or f["feed_key"],
+                             # NO "arrived by another route" note here: after the Gate-1 MINOR-1 fix
+                             # channel_stale can never be True on an overdue feed (it requires state
+                             # 'ok'), so the clause was dead AND its claim was false for the common
+                             # single-channel case. A genuinely channel-stale feed is state 'ok' and
+                             # surfaces as the badge on /admin/import-health, not as an alert.
                              (f"No successful import for {age:g}h "
                               f"(expected every {f['cadence_hours']:g}h + {f['grace_hours']:g}h grace)."
-                              if age is not None else "Import is overdue.")
-                             + (" The data arrived by another route, so the CONFIGURED channel is the "
-                                "problem." if f.get("channel_stale") and f.get("last_success") else ""),
+                              if age is not None else "Import is overdue."),
                              1, f.get("deep_link") or "/commcalc/upload",
                              "Fix channel / Upload manually"))
         elif f["state"] == "never":
