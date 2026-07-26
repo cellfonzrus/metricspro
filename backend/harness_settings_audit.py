@@ -402,6 +402,8 @@ check("E3. readiness bridge: tender_config_default INFO surfaces as severity=inf
       any(i["key"] == "closing_readiness:tender_config_default" and i["severity"] == "info" for i in items))
 check("E4. readiness bridge: every item deep-links to /closing/readiness",
       items and all(i["deep_link"] == "/closing/readiness" for i in items))
+check("E4b. GATE-1 REWORK: readiness-bridge items carry group='other' (rendered by AdminAttention.tsx), never 'ops'",
+      items and all(i["group"] == "other" for i in items))
 
 st["store_mapping"] = [{"org_id": HOUSE, "store_code": "S1", "store_address": "1 Main"}]
 st["raw_sales"] = [{"org_id": HOUSE, "store": "1 Main"}]
@@ -426,6 +428,8 @@ st["closing_sweep_config"] = [{"org_id": HOUSE, "sheet_id": "abc", "enabled": Tr
 items = cap._p_closing_sweep_credentials(cr.sb(), HOUSE, ctx())
 check("E8. sweep configured, SA present, last_status=error → ERROR item mentioning the detail",
       len(items) == 1 and items[0]["severity"] == "error" and "sheet not shared" in items[0]["detail"])
+check("E8b. GATE-1 REWORK: sweep-credentials items carry group='import' (rendered), unchanged by the rework",
+      items and all(i["group"] == "import" for i in items))
 
 gsheet.sa_info = lambda: None
 items = cap._p_closing_sweep_credentials(cr.sb(), HOUSE, ctx())
@@ -453,6 +457,8 @@ cr._b2b_day = fake_b2b_day_selling
 items = cap._p_closing_stale_stores(cr.sb(), HOUSE, ctx())
 check("E10. store sold in-window, no daily_closing row at all → flagged",
       len(items) == 1 and items[0]["count"] == 1 and "S1" in items[0]["detail"])
+check("E10b. GATE-1 REWORK: stale-stores item carries group='other', never 'ops'",
+      items and all(i["group"] == "other" for i in items))
 
 st["daily_closing"] = [{"org_id": HOUSE, "store_code": "S1",
                         "close_date": (NOW - timedelta(days=1)).date().isoformat()}]
@@ -487,6 +493,8 @@ st["app_users"] = [{"org_id": HOUSE, "role": "market_manager", "id": "u1"}]
 items = svp._p_checklist_template(sv.sb(), HOUSE, ctx())
 check("E16. zero checklist items + a DM role WITH an assigned user → FLAGGED",
       len(items) == 1 and items[0]["deep_link"] == "/storeops/visits/settings")
+check("E16b. GATE-1 REWORK: checklist-template item carries group='other', never 'ops'",
+      items and all(i["group"] == "other" for i in items))
 
 st["checklist_items"] = [{"org_id": HOUSE, "item_key": "uniform", "is_active": True}]
 items = svp._p_checklist_template(sv.sb(), HOUSE, ctx())
@@ -496,6 +504,30 @@ st["checklist_items"] = []
 st["app_users"] = []   # DM role exists but nobody is assigned it
 items = svp._p_checklist_template(sv.sb(), HOUSE, ctx())
 check("E18. DM role defined but zero app_users hold it → not flagged", items == [])
+
+
+# ═════ E19-E22. GATE-1 REWORK GUARD — registry-level: frontend/src/components/AdminAttention.tsx ═════
+# only renders GROUP_ORDER = ['import','mapping','duplicate','other'] in the modal body; any OTHER
+# group value is counted in the "N needs attention" pill (counts.total) but never shown in a row —
+# the pill and the visible list would disagree. Checking every item dict above (E4b/E8b/E10b/E16b)
+# proves the RUNTIME output; this checks the REGISTRY itself so a future edit that reintroduces
+# group="ops" on the decorator (even if some code path never emits an item to catch it live) fails
+# loudly here instead of silently shipping.
+RENDERED_GROUPS = {"import", "mapping", "duplicate", "other"}
+from app.modules.core.import_health import PROVIDERS   # noqa: E402
+_our_provider_keys = {"closing_readiness", "closing_sweep_credentials", "closing_stale_stores",
+                      "storevisit_checklist_template"}
+_ours = {p["key"]: p for p in PROVIDERS if p["key"] in _our_provider_keys}
+check("E19. all 4 retail-ops providers are actually registered", _ours.keys() == _our_provider_keys)
+check("E20. none of our registered providers use group='ops' (the Gate-1 defect)",
+      all(p["group"] != "ops" for p in _ours.values()))
+check("E21. every one of our registered providers uses a group AdminAttention.tsx renders",
+      all(p["group"] in RENDERED_GROUPS for p in _ours.values()))
+check("E22. the 3 'ops'→'other' reworked providers now say 'other'; sweep-credentials stays 'import'",
+      _ours["closing_readiness"]["group"] == "other"
+      and _ours["closing_stale_stores"]["group"] == "other"
+      and _ours["storevisit_checklist_template"]["group"] == "other"
+      and _ours["closing_sweep_credentials"]["group"] == "import")
 
 
 # ═══════════ F. DM store-visit WRITE PATH — multi-tenant org-scoping fixes (code-path review) ═══════

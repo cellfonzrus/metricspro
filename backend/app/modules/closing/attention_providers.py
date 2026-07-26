@@ -35,7 +35,7 @@ def _now():
 _SEV = {"critical": "error", "warning": "warning", "info": "info"}
 
 
-@register_provider("closing_readiness", label="Daily Closing readiness", group="ops", cost="heavy")
+@register_provider("closing_readiness", label="Daily Closing readiness", group="other", cost="heavy")
 def _p_closing_readiness(client, org_id, ctx):
     """Bridges the EXISTING `/closing/readiness` self-diagnostic (module disabled, no stores, no B2B
     sales source ever, no X-report ever, tender/count-config left at the built-in default) into the
@@ -58,7 +58,7 @@ def _p_closing_readiness(client, org_id, ctx):
     out = []
     for i in (rep.get("issues") or []):
         out.append({
-            "group": "ops", "key": f"closing_readiness:{i.get('code')}",
+            "group": "other", "key": f"closing_readiness:{i.get('code')}",
             "severity": _SEV.get(i.get("severity"), "info"),
             "label": "Daily Closing — " + (i.get("code") or "issue").replace("_", " "),
             "detail": i.get("message") or "",
@@ -126,7 +126,7 @@ def _p_closing_sweep_credentials(client, org_id, ctx):
 
 
 @register_provider("closing_stale_stores", label="Stores selling but not submitting closings",
-                   group="ops", cost="heavy")
+                   group="other", cost="heavy")
 def _p_closing_stale_stores(client, org_id, ctx):
     """HEAVY (scans recent B2B sales + daily_closing history): a store with recent B2B sales activity
     but no daily_closing row in the last N days is either not closing its books at all, or closing
@@ -170,7 +170,7 @@ def _p_closing_stale_stores(client, org_id, ctx):
         return []
     eg = ", ".join(stale[:5]) + (f" +{len(stale) - 5} more" if len(stale) > 5 else "")
     return [{
-        "group": "ops", "key": "closing_stale_stores", "severity": "warning",
+        "group": "other", "key": "closing_stale_stores", "severity": "warning",
         "label": "Stores selling but not submitting daily closings",
         "detail": (f"{len(stale)} store(s) had B2B sales in the last {n_days} day(s) but no "
                   f"daily_closing submission in that window — cash/tender recon has been blind for "

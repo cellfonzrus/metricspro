@@ -14,7 +14,7 @@ except Exception:                      # mig 717 / import_health not present in 
 
 
 @register_provider("storevisit_checklist_template", label="Store-visit checklist template",
-                   group="ops", cost="cheap")
+                   group="other", cost="cheap")
 def _p_checklist_template(client, org_id, ctx):
     """A tenant with District Managers (a 'market_manager'-scope role, per storeops.roles) but ZERO
     active storeops.checklist_items rows has no template to hand its DMs at all — every store visit
@@ -46,7 +46,7 @@ def _p_checklist_template(client, org_id, ctx):
     if not dm_count:
         return []
     return [{
-        "group": "ops", "key": "storevisit_no_checklist_template", "severity": "warning",
+        "group": "other", "key": "storevisit_no_checklist_template", "severity": "warning",
         "label": "No store-visit checklist template configured",
         "detail": (f"This tenant has {dm_count} District Manager account(s) but zero active checklist "
                   f"items — a store visit has nothing to check off. Add items on Visit Checklist "
