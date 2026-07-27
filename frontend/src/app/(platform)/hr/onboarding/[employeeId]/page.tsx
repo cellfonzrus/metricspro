@@ -24,7 +24,7 @@ type Task = {
   documents?: DocFile[]
 }
 type Cat = { id: string; key: string; label: string; tasks: Task[] }
-type Field = { key: string; label: string; sensitive?: boolean }
+type Field = { key: string; label: string; sensitive?: boolean; section?: string }
 type Data = {
   ready: boolean; employee_id: string; employee_name?: string; work_state?: string | null
   needs_work_state?: boolean; categories: Cat[]; progress?: { total: number; done: number }
@@ -307,6 +307,9 @@ export default function EmployeeOnboardingPage() {
         {(() => {
           const visibleValues = (d.intake_fields || []).filter(f => !f.sensitive && (d.intake_values || {})[f.key])
           const hasSensitive = !!(d.sensitive_on_file && d.sensitive_on_file.length > 0)
+          // Gate-1 fold N2 (2026-07-27): config-driven (not a fragile label-text heuristic) — is
+          // direct deposit even part of this tenant's intake form at all.
+          const ddConfigured = (d.intake_fields || []).some(f => f.section === 'direct_deposit')
           if (!d.intake_submitted && !hasSensitive && visibleValues.length === 0) return null
           return (
           <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 14 }}>
@@ -317,9 +320,16 @@ export default function EmployeeOnboardingPage() {
                 <div key={f.key} style={{ fontSize: 12 }}><span style={{ color: 'var(--text3)' }}>{f.label}: </span><b>{(d.intake_values || {})[f.key]}</b></div>
               ))}
             </div>
-            {(d.sensitive_on_file || []).some(l => l.toLowerCase().includes('bank') || l.toLowerCase().includes('routing') || l.toLowerCase().includes('account')) && (
-              <div style={{ marginTop: 8, fontSize: 12, color: d.dd_disclaimer_signed ? '#059669' : '#9a3412' }}>
-                {d.dd_disclaimer_signed ? '✓ Direct-deposit disclaimer initialed by the employee (see History below for the timestamp).' : '⚠️ Direct-deposit disclaimer not yet initialed.'}
+            {/* Gate-1 fold N2: an AFFIRMATIVE chip so HR can chase an outstanding direct-deposit
+                disclaimer without digging into History — fires whenever DD is part of this tenant's
+                form and intake was submitted but the disclaimer isn't signed yet, regardless of
+                whether any bank field was actually captured (post-fix, an unsigned DD section is
+                withheld entirely — see hr/router.py _apply_intake's dd_disclaimer_pending). */}
+            {ddConfigured && d.intake_submitted && (
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: d.dd_disclaimer_signed ? 400 : 700, color: d.dd_disclaimer_signed ? '#059669' : '#9a3412' }}>
+                {d.dd_disclaimer_signed
+                  ? '✓ Direct-deposit disclaimer initialed by the employee (see History below for the timestamp).'
+                  : '⚠️ Bank details not yet provided or initialed — direct deposit is still outstanding for this hire.'}
               </div>
             )}
             {d.sensitive_on_file && d.sensitive_on_file.length > 0 && (

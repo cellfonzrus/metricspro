@@ -131,6 +131,13 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
   const fields: Field[] = d.intake_fields || []
   const cats: Cat[] = d.categories || []
   const sections = Array.from(new Set(fields.map(f => f.section || 'personal')))
+  // Gate-1 fold N1 (2026-07-27): a PERSISTENT cue (not tied to the one-shot `note` banner, which
+  // clears on the next action/reload) for a returning employee whose intake was submitted but
+  // whose direct-deposit fields were withheld pending the disclaimer initials (see _apply_intake's
+  // dd_disclaimer_pending fix above this in the same package) — otherwise the only surviving signal
+  // was the passive green "· saved ✓" section chip, easy to read as fully done.
+  const ddConfigured = fields.some(f => (f.section || 'personal') === 'direct_deposit')
+  const ddPending = !!d.intake_submitted && !d.dd_disclaimer_signed && ddConfigured
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -138,6 +145,13 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
       {(d.work_auth_pending || []).length > 0 && (
         <div style={{ ...card, background: '#fef2f2', borderColor: '#fca5a5', color: '#991b1b', fontSize: 14 }}>
           ⛔ {d.work_auth_notice || 'Your work-authorization documents are still outstanding. Your payroll will be delayed until these documents are submitted.'}
+        </div>
+      )}
+      {/* Gate-1 fold N1: persistent (survives reload, unlike `note`) — bank details were withheld
+          until the disclaimer is acknowledged. */}
+      {ddPending && (
+        <div style={{ ...card, background: '#fffbeb', borderColor: '#fde68a', color: '#92400e', fontSize: 14 }}>
+          🏦 Bank details pending — add your initials to finish direct deposit (see &quot;Your information&quot; below).
         </div>
       )}
       {d.progress && <div style={{ ...card, padding: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -161,7 +175,7 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
 
       {fields.length > 0 && (
         <div style={card}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Your information {d.intake_submitted && <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>· saved ✓</span>}</div>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Your information {d.intake_submitted && (ddPending ? <span style={{ fontSize: 12, color: '#92400e', fontWeight: 600 }}>· bank details pending</span> : <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>· saved ✓</span>)}</div>
           <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 12 }}>This fills your employee record automatically.</div>
           {sections.map(sec => (
             <div key={sec} style={{ marginBottom: 14 }}>

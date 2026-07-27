@@ -183,6 +183,13 @@ export default function PublicOnboardPage() {
   }
 
   const sections = Array.from(new Set(fields.map(f => f.section || 'personal')))
+  // Gate-1 fold N1 (2026-07-27): a PERSISTENT cue (not tied to the one-shot `note` banner, which
+  // clears on the next action/reload) for a returning employee whose intake was submitted but
+  // whose direct-deposit fields were withheld pending the disclaimer initials (see _apply_intake's
+  // dd_disclaimer_pending fix above this in the same package) — otherwise the only surviving signal
+  // was the passive green "· saved ✓" section chip, easy to read as fully done.
+  const ddConfigured = fields.some(f => (f.section || 'personal') === 'direct_deposit')
+  const ddPending = intakeDone && !ddSigned && ddConfigured
 
   return (
     <div style={{ minHeight: '100vh', background: '#f1f5f9', padding: '32px 16px', fontFamily: 'system-ui, sans-serif' }}>
@@ -210,6 +217,13 @@ export default function PublicOnboardPage() {
               ⛔ {workAuthNotice || 'Your work-authorization documents are still outstanding. Your payroll will be delayed until these documents are submitted.'}
             </div>
           )}
+          {/* Gate-1 fold N1: persistent (survives reload, unlike `note`) — bank details were withheld
+              until the disclaimer is acknowledged. */}
+          {ddPending && (
+            <div style={{ ...card, background: '#fffbeb', borderColor: '#fde68a', color: '#92400e', fontSize: 14 }}>
+              🏦 Bank details pending — add your initials to finish direct deposit (see &quot;Your information&quot; below).
+            </div>
+          )}
           {progress && <div style={{ ...card, padding: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ flex: 1, height: 8, background: '#e2e8f0', borderRadius: 8, overflow: 'hidden' }}><div style={{ width: `${progress.total ? Math.round(progress.done / progress.total * 100) : 0}%`, height: '100%', background: '#059669' }} /></div>
             <span style={{ fontSize: 13, color: '#475569' }}>{progress.done}/{progress.total} done</span>
@@ -233,7 +247,7 @@ export default function PublicOnboardPage() {
           {/* Step 2 — structured intake form (configurable) */}
           {fields.length > 0 && (
             <div style={card}>
-              <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 4px' }}>Your information {intakeDone && <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>· saved ✓</span>}</h2>
+              <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 4px' }}>Your information {intakeDone && (ddPending ? <span style={{ fontSize: 12, color: '#92400e', fontWeight: 600 }}>· bank details pending</span> : <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>· saved ✓</span>)}</h2>
               <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 12px' }}>This fills your employee record automatically — no PDF needed for these.</p>
               {sections.map(sec => (
                 <div key={sec} style={{ marginBottom: 14 }}>
