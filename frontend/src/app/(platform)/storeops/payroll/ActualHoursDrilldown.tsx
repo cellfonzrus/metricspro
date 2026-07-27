@@ -66,6 +66,12 @@ export default function ActualHoursDrilldown({ employeeId, name, start, end, onC
                   <div style={{ fontSize: 18, fontWeight: 700 }}>{fmt(data.pay_rate)}/hr</div>
                 </div>
               ) : null}
+              {data.total_manual_hours_not_in_payroll ? (
+                <div className="card" style={{ padding: '8px 14px' }} title="storeops.manual_hours entries — /payroll never reads this table, so these are NOT part of the report row's Actual Hrs">
+                  <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>Manual hours (not in payroll)</div>
+                  <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtN(data.total_manual_hours_not_in_payroll)}h</div>
+                </div>
+              ) : null}
             </div>
 
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -102,7 +108,10 @@ export default function ActualHoursDrilldown({ employeeId, name, start, end, onC
                     </td>
                     <td style={{ padding: '6px 8px' }}>
                       {d.manual.length === 0 ? '—' : d.manual.map((m: any) => (
-                        <div key={m.id}>{m.hours > 0 ? '+' : ''}{fmtN(m.hours)}h — {m.reason} ✎</div>
+                        <div key={m.id} style={{ opacity: 0.7 }} title="Not in the payroll total below — /payroll never reads manual hours adjustments">
+                          {m.hours > 0 ? '+' : ''}{fmtN(m.hours)}h — {m.reason} ✎
+                          <span style={{ color: 'var(--text3)', fontSize: 11 }}> (not in payroll total)</span>
+                        </div>
                       ))}
                     </td>
                     <td style={{ padding: '6px 8px', fontWeight: 700 }}>{fmtN(d.actual_hours)}h</td>

@@ -167,6 +167,11 @@ export default function PayrollPage() {
         const f: string[] = []
         if (editedEmpIds.has(r.employee_id)) f.push('✎ edited')
         if (overAlone.has(r.employee_id) || overStores.has(r.store)) f.push('⚠ over weekly limit')
+        // Gate-1 N6 (2026-07-27): a merged row with scheduled hours but $0 scheduled pay means the
+        // shift-derived sub-component was computed at a $0 rate (the id-mismatch's shift bucket
+        // never matched emp_map before the merge) — visible inconsistency the owner will ask about,
+        // so surface it rather than let it look like a silent data error.
+        if ((r.scheduled_hours || 0) > 0.05 && !(r.scheduled_pay > 0) && (r.pay_rate || 0) > 0) f.push('ℹ sched pay incl. a $0-rate portion')
         return f.join(' · ')
       } },
     { header: 'Scheduled Pay', field: 'scheduled_pay', money: true, get: r => r.scheduled_pay },

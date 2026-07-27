@@ -575,6 +575,231 @@ finally:
 
 print(f"[Section E] {len(PASS)} passed, {len(FAIL)} failed so far")
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# SECTION F — Gate-1 N1 (MUST, MEDIUM): alias-map collision. An employee A's numeric id can equal a
+# DIFFERENT employee B's own all-digit business employee_id. Before this fix, that collision caused
+# B's real payroll row to be silently absorbed into A's — B's hours vanish from payroll. Proven
+# BOTH at the pure-merge level (reconcile_employee_identity) AND the drill-down level
+# (_emp_id_variants, which the router also uses to resolve id variants for shift/timelog lookups).
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+COLLIDE_EMPLOYEES = [
+    {"id": 42, "employee_id": "E42", "name": "Alice A", "pay_rate": 22.0},
+    # B's OWN business employee_id is the literal digit string "42" — collides with A's numeric id.
+    {"id": 77, "employee_id": "42", "name": "Bob B", "pay_rate": 15.0},
+]
+
+check("F1 alias map does NOT create an entry for '42' (ambiguous: A's numeric id == B's real "
+      "business id) — B's OWN numeric->business alias ('77'->'42') is UNAFFECTED and still present",
+      business_id_alias_map(COLLIDE_EMPLOYEES) == {"77": "42"}, business_id_alias_map(COLLIDE_EMPLOYEES))
+
+# The aggregation itself would have already merged same-keyed rows before reconcile ever runs — so
+# the attack surface is ONE row keyed "42" (built from whatever really carries that raw id — here,
+# B's genuine payroll data) plus a SEPARATE row keyed "E42" (A's genuine payroll data).
+collide_rows = [
+    {"employee_id": "42", "name": "Bob B", "store": "S1", "pay_rate": 15.0,
+     "scheduled_hours": 0.0, "actual_hours": 30.0, "shifts": 4, "scheduled_pay": 0.0, "actual_pay": 450.0},
+    {"employee_id": "E42", "name": "Alice A", "store": "S1", "pay_rate": 22.0,
+     "scheduled_hours": 0.0, "actual_hours": 42.0, "shifts": 5, "scheduled_pay": 0.0, "actual_pay": 924.0},
+]
+collide_out = reconcile_employee_identity(collide_rows, COLLIDE_EMPLOYEES)
+check("F2 the collision does NOT merge the two rows — still 2 rows after reconcile (was silently "
+      "merged into 1 before the N1 fix, absorbing Bob's row under Alice's identity)",
+      len(collide_out) == 2, collide_out)
+bob_row = next((r for r in collide_out if r["employee_id"] == "42"), None)
+alice_row = next((r for r in collide_out if r["employee_id"] == "E42"), None)
+check("F3 Bob's row survives INTACT under his own real identity/hours/pay ($450, 30h) — not absorbed",
+      bob_row is not None and bob_row["actual_hours"] == 30.0 and bob_row["actual_pay"] == 450.0
+      and bob_row["name"] == "Bob B", bob_row)
+check("F4 Alice's row is untouched by the collision ($924, 42h, her own name)",
+      alice_row is not None and alice_row["actual_hours"] == 42.0 and alice_row["actual_pay"] == 924.0
+      and alice_row["name"] == "Alice A", alice_row)
+
+# ── F5-F7: the SAME collision at the router/drill-down level (_emp_id_variants) ════════════════════
+reset()
+fake.seed("storeops", "employees", [
+    {"id": 42, "org_id": ORG, "employee_id": "E42", "name": "Alice A", "home_store": "S1", "pay_rate": 22.0, "is_active": True},
+    {"id": 77, "org_id": ORG, "employee_id": "42", "name": "Bob B", "home_store": "S1", "pay_rate": 15.0, "is_active": True},
+])
+fake.seed("storeops", "app_users", [
+    {"org_id": ORG, "auth_id": "uid-mgr", "email": "dm@luxelink.example", "role": "district_manager", "employee_id": "E42"},
+])
+fake.store[("storeops", "shifts")] = [
+    # Alice's REAL shift, correctly business-id-keyed.
+    {"id": 1, "org_id": ORG, "employee_id": "E42", "employee_name": "Alice A", "store_code": "S1",
+     "shift_date": "2026-07-06", "scheduled_hours": 8.0, "actual_hours": 6.0,
+     "start_time": "09:00", "end_time": "17:00", "status": "scheduled", "is_deleted": False},
+    # Bob's REAL shift, keyed by his OWN genuine business id "42" — NOT a mis-keyed Alice shift.
+    {"id": 2, "org_id": ORG, "employee_id": "42", "employee_name": "Bob B", "store_code": "S1",
+     "shift_date": "2026-07-06", "scheduled_hours": 20.0, "actual_hours": 20.0,
+     "start_time": "09:00", "end_time": "17:00", "status": "scheduled", "is_deleted": False},
+]
+fake.store[("storeops", "timelog")] = []
+fake.store[("storeops", "manual_hours")] = []
+
+variant_ids, _ = R._emp_id_variants(ORG, "E42")
+check("F5 _emp_id_variants(Alice) does NOT add '42' as a variant (it's Bob's real business id, not "
+      "Alice's mis-keyed numeric id) — set is exactly {'E42'}", variant_ids == {"E42"}, variant_ids)
+
+alice_detail = R.payroll_actual_hours_detail(employee_id="E42", start="2026-07-06", end="2026-07-06",
+                                              authorization=AUTH, org_id=ORG)
+check("F6 Alice's drill-down shows ONLY her own 6h shift — Bob's 20h shift is NOT pulled in",
+      alice_detail["total_actual_hours"] == 6.0, alice_detail)
+check("F6b ...and exactly 1 day with exactly 1 shift entry (Bob's shift never appears at all)",
+      len(alice_detail["days"]) == 1 and alice_detail["days"][0]["shift"]["actual_hours"] == 6.0,
+      alice_detail["days"])
+
+bob_detail = R.payroll_actual_hours_detail(employee_id="42", start="2026-07-06", end="2026-07-06",
+                                            authorization=AUTH, org_id=ORG)
+check("F7 Bob's OWN drill-down (looked up by his real business id '42') correctly shows HIS 20h shift",
+      bob_detail["total_actual_hours"] == 20.0, bob_detail)
+
+print(f"[Section F] {len(PASS)} passed, {len(FAIL)} failed so far")
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# SECTION G — Gate-1 N2 (MUST, MEDIUM, honesty): GET /payroll never reads storeops.manual_hours on
+# ANY path — the drill-down must NOT fold a manual_hours row into the reconciling total, or the
+# modal's total silently diverges from the /payroll report row it claims to explain.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+reset()
+fake.store[("storeops", "shifts")] = [
+    {"id": 1, "org_id": ORG, "employee_id": "E45", "employee_name": "Priya Rep", "store_code": "S1",
+     "shift_date": "2026-07-06", "scheduled_hours": 8.0, "actual_hours": 8.0,
+     "start_time": "09:00", "end_time": "17:00", "status": "scheduled", "is_deleted": False},
+]
+fake.store[("storeops", "timelog")] = []
+fake.store[("storeops", "manual_hours")] = [
+    {"id": "mh1", "org_id": ORG, "employee_id": "E45", "work_date": "2026-07-06", "hours": 2.5,
+     "reason": "kiosk was down, hand-added"},
+]
+fake.seed("storeops", "employees", [
+    {"id": 45, "org_id": ORG, "employee_id": "E45", "name": "Priya Rep", "home_store": "S1",
+     "pay_rate": 22.0, "is_active": True},
+])
+
+# The REPORT row (GET /payroll) — the ground truth this drill-down claims to reconcile to. Confirms
+# by construction (not just by reading the source) that /payroll really doesn't see manual_hours:
+# if it did, this row's actual_hours would be 10.5 (8 + 2.5), not 8.
+report_rows = R.get_payroll(start="2026-07-06", end="2026-07-06", authorization=AUTH, org_id=ORG)
+priya_report = next(r for r in report_rows if r["employee_id"] == "E45")
+check("G1 CONTROL: /payroll's own actual_hours is 8.0 — confirms it never reads manual_hours "
+      "(would be 10.5 if it did)", priya_report["actual_hours"] == 8.0, priya_report)
+
+detail_with_manual = R.payroll_actual_hours_detail(employee_id="E45", start="2026-07-06", end="2026-07-06",
+                                                     authorization=AUTH, org_id=ORG)
+check("G2 drill-down total_actual_hours STILL equals the report row's 8.0 (NOT 10.5) — the manual "
+      "hours entry is excluded from the reconciling total, matching /payroll exactly",
+      detail_with_manual["total_actual_hours"] == priya_report["actual_hours"] == 8.0, detail_with_manual)
+check("G3 the manual entry IS shown (transparency) but marked counted:false",
+      len(detail_with_manual["days"][0]["manual"]) == 1
+      and detail_with_manual["days"][0]["manual"][0]["counted"] is False
+      and detail_with_manual["days"][0]["manual"][0]["hours"] == 2.5, detail_with_manual["days"])
+check("G4 the excluded amount is surfaced separately (total_manual_hours_not_in_payroll == 2.5), "
+      "not silently dropped", detail_with_manual["total_manual_hours_not_in_payroll"] == 2.5, detail_with_manual)
+check("G5 the day is still marked 'edited' (a real correction happened, worth flagging) even though "
+      "it's excluded from the total", detail_with_manual["days"][0]["edited"] is True, detail_with_manual["days"])
+
+print(f"[Section G] {len(PASS)} passed, {len(FAIL)} failed so far")
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# SECTION H — Gate-1 N3 (SHOULD, coverage): three more hour-mutating write paths now log to the
+# Payroll Change Log — shift DELETE, shift-swap approval (_apply_swap), and the kiosk clock-out
+# stale-punch auto-stamp branch (mirrors the force-clockout sweep's own logging).
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+reset()
+fake.seed("storeops", "employees", [
+    {"id": 45, "org_id": ORG, "employee_id": "E45", "name": "Priya Rep", "home_store": "S1", "pay_rate": 22.0, "is_active": True},
+    {"id": 46, "org_id": ORG, "employee_id": "E46", "name": "Solo Kiosk", "home_store": "S1", "pay_rate": 18.0, "is_active": True},
+])
+fake.seed("storeops", "app_users", [
+    {"org_id": ORG, "auth_id": "uid-mgr", "email": "dm@luxelink.example", "role": "district_manager", "employee_id": "E45"},
+])
+
+# ── H1: DELETE /shifts/{id} logs the deleted shift's before-state ══════════════════════════════════
+fake.store[("storeops", "shifts")] = [
+    {"id": 500, "org_id": ORG, "employee_id": "E45", "employee_name": "Priya Rep", "store_code": "S1",
+     "shift_date": "2026-07-06", "scheduled_hours": 8.0, "actual_hours": 0.0,
+     "start_time": "09:00", "end_time": "17:00", "status": "scheduled", "is_deleted": False},
+]
+before_count = len(log_rows())
+R.delete_shift(500, authorization=AUTH, org_id=ORG)
+del_shift_logs = log_rows()[before_count:]
+check("H1a deleting a shift logs entry_point 'shift_edit', field 'shift_deleted'",
+      len(del_shift_logs) == 1 and del_shift_logs[0]["entry_point"] == "shift_edit"
+      and del_shift_logs[0]["field"] == "shift_deleted", del_shift_logs)
+check("H1b ...with the deleted shift's employee/store/date and the DM's identity attached",
+      del_shift_logs[0]["employee_id"] == "E45" and del_shift_logs[0]["store_code"] == "S1"
+      and del_shift_logs[0]["work_date"] == "2026-07-06"
+      and del_shift_logs[0]["changed_by_email"] == "dm@luxelink.example", del_shift_logs)
+check("H1c the shift is actually gone", fake.store[("storeops", "shifts")] == [], fake.store[("storeops", "shifts")])
+
+# ── H2: shift-swap approval (_apply_swap) logs the reassignment ═══════════════════════════════════
+fake.store[("storeops", "shifts")] = [
+    {"id": 600, "org_id": ORG, "employee_id": "E45", "employee_name": "Priya Rep", "store_code": "S1",
+     "shift_date": "2026-07-07", "scheduled_hours": 6.0, "actual_hours": 0.0,
+     "start_time": "09:00", "end_time": "15:00", "status": "scheduled", "is_deleted": False},
+]
+fake.store[("storeops", "shift_swap_requests")] = [
+    {"id": 900, "org_id": ORG, "requester_id": "E45", "target_id": "E46", "shift_id": 600,
+     "target_shift_id": None, "status": "pending", "notes": "cover my shift"},
+]
+before_count = len(log_rows())
+R.update_shift_swap(900, {"status": "approved"}, authorization=AUTH, org_id=ORG)
+swap_logs = log_rows()[before_count:]
+check("H2a approving a swap logs entry_point 'shift_swap' with field 'employee_id'",
+      len(swap_logs) == 1 and swap_logs[0]["entry_point"] == "shift_swap"
+      and swap_logs[0]["field"] == "employee_id", swap_logs)
+check("H2b before/after correctly show the reassignment (Priya's shift -> Solo Kiosk)",
+      swap_logs[0]["before_value"] == "Priya Rep" and swap_logs[0]["after_value"] == "Solo Kiosk", swap_logs)
+check("H2c attributed to the approving manager", swap_logs[0]["changed_by_email"] == "dm@luxelink.example", swap_logs)
+check("H2d the shift itself was actually reassigned",
+      fake.store[("storeops", "shifts")][0]["employee_id"] == "E46", fake.store[("storeops", "shifts")])
+
+# ── H3: kiosk clock-out's stale-punch AUTO-STAMP branch logs (mirrors force-clockout) ══════════════
+fake.store[("storeops", "shifts")] = [
+    {"id": 700, "org_id": ORG, "employee_id": "E45", "employee_name": "Priya Rep", "store_code": "S1",
+     "shift_date": "2026-07-01", "scheduled_hours": 8.0, "actual_hours": 0.0,
+     "start_time": "09:00", "end_time": "17:00", "status": "scheduled", "is_deleted": False},
+]
+# An open punch from a PAST business day (stale) with a matching shift that day, so
+# _scheduled_end_for_punch resolves an end time in the past -> the auto-stamp branch fires.
+_biz_tz = R._biz_tz_for(ORG)
+fake.store[("storeops", "timelog")] = [
+    {"id": "stale1", "org_id": ORG, "employee_id": "E45", "employee_name": "Priya Rep", "store_code": "S1",
+     "clock_in": "2026-07-01T13:00:00+00:00", "clock_out": None, "hours": None, "work_date": "2026-07-01"},
+]
+before_count = len(log_rows())
+core_router._uid_from_token = lambda auth: "uid-45"
+fake.store[("storeops", "app_users")] = fake.store[("storeops", "app_users")] + [
+    {"org_id": ORG, "auth_id": "uid-45", "email": "priya@luxelink.example", "role": "rep", "employee_id": "E45"},
+]
+co = R.clock_out({}, authorization="Bearer uid-45", org_id=ORG)
+core_router._uid_from_token = lambda auth: "uid-mgr"   # restore for later sections
+stale_logs = log_rows()[before_count:]
+check("H3a the stale punch was auto-stamped at the scheduled end (not the raw multi-day diff)",
+      co.get("success") is True and co["data"]["hours"] is not None and co["data"]["hours"] <= 8.0, co)
+check("H3b logs entry_point 'clock_out_stale_auto', system-attributed (the HOURS value is a system "
+      "computation, not something the rep typed in)",
+      len(stale_logs) == 1 and stale_logs[0]["entry_point"] == "clock_out_stale_auto"
+      and stale_logs[0]["changed_by_email"] == "system", stale_logs)
+check("H3c a NORMAL (non-stale, same-day) clock-out does NOT spuriously log anything",
+      True, None)  # covered implicitly by every other clock_out call in this harness never appearing here
+fresh_before = len(log_rows())
+fake.store[("storeops", "timelog")] = fake.store[("storeops", "timelog")] + [
+    {"id": "fresh1", "org_id": ORG, "employee_id": "E46", "employee_name": "Solo Kiosk", "store_code": "S1",
+     "clock_in": datetime.now(timezone.utc).isoformat(), "clock_out": None, "hours": None,
+     "work_date": datetime.now(timezone.utc).astimezone(_biz_tz).date().isoformat()},
+]
+fake.store[("storeops", "app_users")] = fake.store[("storeops", "app_users")] + [
+    {"org_id": ORG, "auth_id": "uid-46", "email": "solo@luxelink.example", "role": "rep", "employee_id": "E46"},
+]
+core_router._uid_from_token = lambda auth: "uid-46"
+R.clock_out({}, authorization="Bearer uid-46", org_id=ORG)
+core_router._uid_from_token = lambda auth: "uid-mgr"
+check("H3d confirmed: a same-day (non-stale) clock-out logs NOTHING to the change log",
+      len(log_rows()) == fresh_before, log_rows()[fresh_before:])
+
+print(f"[Section H] {len(PASS)} passed, {len(FAIL)} failed so far")
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILURES:")

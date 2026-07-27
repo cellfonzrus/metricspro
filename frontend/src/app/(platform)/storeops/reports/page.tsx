@@ -137,6 +137,8 @@ export default function StoreOpsReportsPage() {
         const f: string[] = []
         if (editedEmpIds.has(r.employee_id)) f.push('✎ edited')
         if (overAlone.has(r.employee_id) || overStores.has(r.store)) f.push('⚠ over weekly limit')
+        // Gate-1 N6 — see payroll/page.tsx's identical column for the full rationale.
+        if ((r.scheduled_hours || 0) > 0.05 && !(r.scheduled_pay > 0) && (r.pay_rate || 0) > 0) f.push('ℹ sched pay incl. a $0-rate portion')
         return f.join(' · ')
       } },
   ]

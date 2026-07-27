@@ -55,16 +55,31 @@ def business_id_alias_map(employees):
     forms actually differ (the common case, since the auto-generated business id is "E<numeric id>",
     e.g. numeric id 45 -> business id "E45" -- never equal as strings). An employee with no business
     employee_id, or whose business id happens to equal their numeric id (imported data), contributes
-    no alias entry, which is exactly correct: nothing to reconcile."""
+    no alias entry, which is exactly correct: nothing to reconcile.
+
+    Gate-1 N1 fix (2026-07-27, MEDIUM, reviewer-proven executable): a NUMERIC id can collide with a
+    DIFFERENT employee's own all-digit business employee_id — e.g. employee A (numeric id 42,
+    business "E42") and employee B (business employee_id literally "42", imported/typed data, no
+    relation to A). Before this fix, alias["42"] = "E42" unconditionally, so a shift stored under the
+    numeric id "42" (A's Schedule-created shift) would be silently relabeled and MERGED into A's row
+    even when "42" is actually B's own canonical identity — B's hours vanish from payroll, absorbed
+    under A's name/rate. Guarded: an alias entry is only created when its numeric_s does NOT appear
+    anywhere in the org's set of real business employee_ids — an ambiguous numeric_s is left
+    UNALIASED (two rows, the safe fallback) rather than guessed at."""
+    employees = list(employees or ())
+    all_business_ids = {str(e.get("employee_id") or "").strip() for e in employees if e.get("employee_id")}
     alias = {}
-    for e in employees or ():
+    for e in employees:
         numeric = e.get("id")
         biz = str(e.get("employee_id") or "").strip()
         if numeric is None or not biz:
             continue
         numeric_s = str(numeric).strip()
-        if numeric_s and numeric_s != biz:
-            alias[numeric_s] = biz
+        if not numeric_s or numeric_s == biz:
+            continue
+        if numeric_s in all_business_ids:
+            continue   # AMBIGUOUS — numeric_s is itself someone's real business id; don't guess
+        alias[numeric_s] = biz
     return alias
 
 

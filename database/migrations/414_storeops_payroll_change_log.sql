@@ -1,19 +1,25 @@
 -- 414_storeops_payroll_change_log.sql
 -- Payroll module rework (owner directive 2026-07-27, mod-people band 400-499).
 --
--- Deliverable 4: an append-only audit trail for every MANUAL change that alters a rep's payroll
--- hours — shift edits (PATCH /storeops/shifts/{id}), manager clock-in overrides
--- (POST /storeops/timeclock/override), manual hours adjustments (POST/DELETE
--- /storeops/manual-hours), and the force-clockout sweep (POST /storeops/timeclock/force-clockout/run,
--- both the manager "run now" button and the pg_cron auto-sweep) — so a District Manager's hand
--- corrections are visible on a dedicated "Payroll Change Log" page instead of silently vanishing
--- into the raw shifts/timelog tables.
+-- Deliverable 4: an append-only audit trail for MANUAL changes that alter a rep's payroll hours.
+-- Gate-1 review (2026-07-27) corrected this comment's original "every write path" overclaim — the
+-- ACTUAL hooked set, as of this migration's Gate-1-folded revision, is:
+--   PATCH /storeops/shifts/{id} (field diff)      DELETE /storeops/shifts/{id} (before-state)
+--   PATCH /storeops/shift-swaps/{id} approval (_apply_swap's employee_id reassignment)
+--   POST /storeops/timeclock/override             POST/DELETE /storeops/manual-hours
+--   POST /storeops/timeclock/force-clockout/run (manager "run now") + the pg_cron auto-sweep
+--   POST /storeops/timeclock/clock-out's stale-punch auto-stamp branch (mirrors the force-clockout
+--     sweep's own "stamp at scheduled end" logic, so it's logged the same way)
+-- Filed as follow-ups, NOT hooked yet (see docs/handoffs/people.md OPEN): shift CREATE
+-- (POST /shifts — the original schedule entry, not a correction), the bulk shift-template apply
+-- (/shift-templates/save-week), and the employee-merge shift reassignment (/employees/merge).
 --
--- Additive-only (ONE new table, nothing existing touched) + idempotent (CREATE TABLE IF NOT EXISTS).
--- What breaks until this runs: nothing — every write path's logging call is wrapped in try/except
--- (see storeops/router.py `_log_payroll_change`) and degrades to "no log row written" on a missing
--- table; the underlying shift/punch/manual-hours write itself is COMPLETELY unaffected either way
--- (the log call happens after the real write succeeds, and never raises on its own failure).
+-- Additive-only (ONE new table, nothing existing touched) + idempotent (CREATE TABLE IF NOT EXISTS
+-- — confirmed safe to re-run/double-apply in Gate-1 review). What breaks until this runs: nothing —
+-- every write path's logging call is wrapped in try/except (see storeops/router.py
+-- `_log_payroll_change`) and degrades to "no log row written" on a missing table; the underlying
+-- shift/punch/manual-hours write itself is COMPLETELY unaffected either way (the log call happens
+-- after the real write succeeds, and never raises on its own failure).
 -- What it enables once run: the Payroll Change Log page + the "edited" marker/tooltip on the
 -- Payroll Report's Actual Hrs drill-down actually have data to show.
 CREATE TABLE IF NOT EXISTS storeops.payroll_change_log (
@@ -26,8 +32,10 @@ CREATE TABLE IF NOT EXISTS storeops.payroll_change_log (
   field             text NOT NULL,          -- e.g. 'scheduled_hours', 'actual_hours', 'clock_in', 'manual_hours'
   before_value      text,
   after_value       text,
-  entry_point       text NOT NULL,          -- 'shift_edit' | 'timeclock_override' | 'manual_hours_add' |
-                                             -- 'manual_hours_delete' | 'force_clockout_manual' | 'force_clockout_cron'
+  entry_point       text NOT NULL,          -- 'shift_edit' | 'shift_swap' | 'timeclock_override' |
+                                             -- 'manual_hours_add' | 'manual_hours_delete' |
+                                             -- 'force_clockout_manual' | 'force_clockout_cron' |
+                                             -- 'clock_out_stale_auto'
   source_table      text,                   -- 'shifts' | 'timelog' | 'manual_hours'
   source_id         text,
   changed_by_email  text,

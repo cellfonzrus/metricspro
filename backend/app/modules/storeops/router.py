@@ -214,9 +214,25 @@ def update_shift(shift_id: int, updates: dict, authorization: str = Header(defau
     return after
 
 @router.delete("/shifts/{shift_id}")
-def delete_shift(shift_id: int, org_id: str = ORG_ID):
-    """org_id-scoped so a foreign shift_id is a no-op instead of a cross-tenant delete."""
+def delete_shift(shift_id: int, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """org_id-scoped so a foreign shift_id is a no-op instead of a cross-tenant delete.
+
+    Gate-1 N3 (2026-07-27): deleting a shift IS a manual hours fix (the sharpest gap the reviewer
+    found — a DM removing a scheduled shift entirely is at least as consequential as editing its
+    hours) — logs the deletion's full before-state (best-effort, never blocks the delete itself)."""
+    before = dict((sb().table("shifts").select("*").eq("id", shift_id).eq("org_id", org_id)
+                   .limit(1).execute().data or [{}])[0])
     sb().table("shifts").delete().eq("id", shift_id).eq("org_id", org_id).execute()
+    if before:
+        try:
+            _log_payroll_change(org_id, field="shift_deleted", entry_point="shift_edit",
+                                 employee_id=before.get("employee_id"), employee_name=before.get("employee_name"),
+                                 store_code=before.get("store_code"), work_date=before.get("shift_date"),
+                                 before=f"{before.get('scheduled_hours')}h scheduled ({before.get('start_time')}-{before.get('end_time')})",
+                                 after=None, source_table="shifts", source_id=shift_id,
+                                 who=_who_for_log(authorization, org_id))
+        except Exception:
+            pass
     return {"deleted": shift_id}
 
 @router.get("/time-off")
@@ -1007,6 +1023,17 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
                             f"{hrs:.1f}h from a separate clock punch both counted this day — see "
                             f"Deliverable 3 (payroll investigation) in docs/handoffs/people.md.")
 
+    # Gate-1 N2 fix (2026-07-27, MEDIUM, honesty): GET /payroll never reads storeops.manual_hours on
+    # ANY path (grep-verified — neither the legacy Python aggregation nor the mig-407
+    # payroll_month_rows SQL touches that table at all). Folding a manual_hours row into
+    # `actual_hours` here would make this endpoint's total DIVERGE from the /payroll report row it
+    # exists to explain, for any employee with a manual-hours entry in range — exactly what the
+    # harness (Section C) now proves does NOT happen. Shown for transparency (a real correction
+    # happened, worth seeing) but marked `counted: false` and EXCLUDED from the reconciling total —
+    # consistent with the SAME `counted` language already used for shift/punch line items. Do NOT
+    # fold manual_hours into /payroll itself to "fix" this instead — that changes a pay figure
+    # (propose-first, see docs/handoffs/people.md Deliverable 3).
+    total_manual_not_in_payroll = 0.0
     for m in manual:
         d = str(m.get("work_date") or "")[:10]
         if not d:
@@ -1014,9 +1041,10 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
         row = day(d)
         hrs = float(m.get("hours") or 0)
         edited = ("manual_hours", str(m.get("id"))) in edited_source_ids
-        row["manual"].append({"id": m.get("id"), "hours": hrs, "reason": m.get("reason"), "edited": edited})
-        row["actual_hours"] += hrs
-        row["edited"] = True   # a manual_hours row is a manual adjustment by definition
+        row["manual"].append({"id": m.get("id"), "hours": hrs, "reason": m.get("reason"), "edited": edited,
+                              "counted": False})
+        row["edited"] = True   # a manual_hours row is a manual adjustment by definition — worth flagging
+        total_manual_not_in_payroll += hrs
 
     out_days = [days[d] for d in sorted(days)]
     for r in out_days:
@@ -1031,7 +1059,8 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
             raise HTTPException(403, "not in your scope")
 
     return {"employee_id": employee_id, "name": name, "pay_rate": pay_rate, "start": start, "end": end,
-            "days": out_days, "total_actual_hours": total_actual, "total_scheduled_hours": total_scheduled}
+            "days": out_days, "total_actual_hours": total_actual, "total_scheduled_hours": total_scheduled,
+            "total_manual_hours_not_in_payroll": round(total_manual_not_in_payroll, 2)}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1627,21 +1656,48 @@ def create_shift_swap(req: dict, org_id: str = ORG_ID):
     return r.data[0] if r.data else row
 
 
-def _apply_swap(swap, org_id: str = ORG_ID):
+def _apply_swap(swap, org_id: str = ORG_ID, who=None):
     """On approval, reassign the shift(s). If both shifts present it's a true swap;
-    otherwise the single shift is handed to the target employee."""
+    otherwise the single shift is handed to the target employee.
+
+    Gate-1 N3 (2026-07-27): a swap approval REWRITES shifts.employee_id — exactly the kind of manual
+    hours/assignment fix the Payroll Change Log exists for. Logs each reassigned shift's before/after
+    employee (best-effort, never blocks the swap itself). `who` = the approver's identity dict (or
+    None if unresolved) for attribution."""
     names = _emp_name_map(org_id)
     tgt, reqr = swap.get("target_id"), swap.get("requester_id")
     if swap.get("shift_id") and tgt:
+        before = dict((sb().table("shifts").select("*").eq("id", swap["shift_id"])
+                       .eq("org_id", org_id).limit(1).execute().data or [{}])[0])
         sb().table("shifts").update({"employee_id": tgt, "employee_name": names.get(str(tgt))}) \
             .eq("id", swap["shift_id"]).eq("org_id", org_id).execute()
+        try:
+            _log_payroll_change(org_id, field="employee_id", entry_point="shift_swap",
+                                 employee_id=tgt, employee_name=names.get(str(tgt)),
+                                 store_code=before.get("store_code"), work_date=before.get("shift_date"),
+                                 before=before.get("employee_name") or before.get("employee_id"),
+                                 after=names.get(str(tgt)) or tgt, source_table="shifts",
+                                 source_id=swap["shift_id"], who=who, reason="shift swap approved")
+        except Exception:
+            pass
     if swap.get("target_shift_id") and reqr:
+        before2 = dict((sb().table("shifts").select("*").eq("id", swap["target_shift_id"])
+                        .eq("org_id", org_id).limit(1).execute().data or [{}])[0])
         sb().table("shifts").update({"employee_id": reqr, "employee_name": names.get(str(reqr))}) \
             .eq("id", swap["target_shift_id"]).eq("org_id", org_id).execute()
+        try:
+            _log_payroll_change(org_id, field="employee_id", entry_point="shift_swap",
+                                 employee_id=reqr, employee_name=names.get(str(reqr)),
+                                 store_code=before2.get("store_code"), work_date=before2.get("shift_date"),
+                                 before=before2.get("employee_name") or before2.get("employee_id"),
+                                 after=names.get(str(reqr)) or reqr, source_table="shifts",
+                                 source_id=swap["target_shift_id"], who=who, reason="shift swap approved")
+        except Exception:
+            pass
 
 
 @router.patch("/shift-swaps/{swap_id}")
-def update_shift_swap(swap_id: int, updates: dict, org_id: str = ORG_ID):
+def update_shift_swap(swap_id: int, updates: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Approve/deny/cancel a swap. Approving reassigns the shift(s)."""
     status = updates.get("status")
     if status not in ("approved", "denied", "pending", "cancelled"):
@@ -1650,7 +1706,7 @@ def update_shift_swap(swap_id: int, updates: dict, org_id: str = ORG_ID):
     if not cur:
         raise HTTPException(404, "swap not found")
     if status == "approved":
-        _apply_swap(cur[0], org_id)
+        _apply_swap(cur[0], org_id, who=_who_for_log(authorization, org_id))
     r = sb().table("shift_swap_requests").update({"status": status}).eq("id", swap_id).eq("org_id", org_id).execute()
     return r.data[0] if r.data else {"id": swap_id, "status": status}
 
@@ -2162,11 +2218,13 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
     # now-minus-clock-in across days.
     today = now.astimezone(_biz_tz_for(org_id)).date().isoformat()
     wdate = str(entry.get("work_date") or "")[:10]
+    auto_stamped = False
     if wdate and wdate != today:
         end_dt = _scheduled_end_for_punch(org_id, entry)
         if end_dt and end_dt < now:
             out_at = end_dt
             note_add = "auto clock-out at scheduled end (stale punch closed from kiosk)"
+            auto_stamped = True
         else:
             note_add = f"stale punch (opened {wdate}) closed from kiosk — review hours"
     try:
@@ -2180,6 +2238,19 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
     if note_add:
         upd["notes"] = ((entry.get("notes") or "") + " | " + note_add).strip(" |")
     sb().table("timelog").update(upd).eq("id", entry["id"]).execute()
+    # Gate-1 N3 (2026-07-27): this branch auto-stamps hours away from a raw clock-in/out diff exactly
+    # like _do_force_clockout (which IS logged) — log it here too, system-attributed (the employee's
+    # own self-service clock-out triggered it, but the HOURS value itself is a system computation,
+    # not something they typed in).
+    if auto_stamped:
+        try:
+            _log_payroll_change(org_id, field="clock_out", entry_point="clock_out_stale_auto",
+                                 employee_id=employee_id, employee_name=entry.get("employee_name"),
+                                 store_code=entry.get("store_code"), work_date=wdate,
+                                 before=None, after=f"{out_at.isoformat()} ({hours}h, auto at scheduled end)",
+                                 source_table="timelog", source_id=entry.get("id"))
+        except Exception:
+            pass
     resp = {"success": True, "data": {"time": _fmt_time(out_at.isoformat(), org_id), "hours": hours,
                                       "clock_in": _fmt_time(entry.get("clock_in"), org_id)}}
     notice = _missed_closing_notice(org_id, employee_id)
@@ -2326,15 +2397,26 @@ FORCE_CLOCKOUT_GRACE_MIN = 15
 def _emp_id_variants(org_id, employee_id):
     """The set of ids a shift/extension for this employee might carry — the schedule stores the
     NUMERIC employees.id while the punch carries the BUSINESS employee_id (same mismatch the clock-in
-    gate reconciles). Returns ({id-strings}, name)."""
+    gate reconciles). Returns ({id-strings}, name).
+
+    Gate-1 N1 fix (2026-07-27, MEDIUM, same class as payroll_identity.business_id_alias_map): this
+    employee's own numeric id can collide with a DIFFERENT employee's own all-digit business
+    employee_id (e.g. this employee's numeric id is 42, while some OTHER employee's business
+    employee_id literally is "42"). Adding "42" as a variant unconditionally would pull that OTHER
+    employee's shifts/timelog into THIS employee's result set. Guarded: the numeric id is added only
+    when no OTHER employee in the org claims it as their own business employee_id."""
     ids = {str(employee_id)}
     name = None
     try:
         er = (sb().table("employees").select("id,name").eq("org_id", org_id)
               .eq("employee_id", employee_id).limit(1).execute().data) or []
         if er:
-            if er[0].get("id") is not None:
-                ids.add(str(er[0]["id"]))
+            numeric_s = str(er[0]["id"]) if er[0].get("id") is not None else None
+            if numeric_s and numeric_s != str(employee_id):
+                collision = (sb().table("employees").select("id").eq("org_id", org_id)
+                             .eq("employee_id", numeric_s).limit(1).execute().data) or []
+                if not collision:
+                    ids.add(numeric_s)
             name = er[0].get("name")
     except Exception:
         pass
