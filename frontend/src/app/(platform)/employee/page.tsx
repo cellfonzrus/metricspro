@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-context'
 import EmployeeWidgets from '@/components/EmployeeWidgets'
 import PortalReports from '@/components/PortalReports'
 import MyChargebacks from '@/components/MyChargebacks'
+import GoogleReviewsCard from '@/components/GoogleReviewsCard'
 
 const sel: React.CSSProperties = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, background: 'var(--surface)' }
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -85,6 +86,7 @@ export default function EmployeeDashboardPage() {
               the picker's selection) — only render it while the picker is on the caller's own
               record, so it never reads like it belongs to whichever employee is being viewed. */}
           {eid && eid === (user?.employee_id || '') && <MyChargebacks />}
+          {eid && eid === (user?.employee_id || '') && <GoogleReviewsCard />}
         </>
       )}
 
