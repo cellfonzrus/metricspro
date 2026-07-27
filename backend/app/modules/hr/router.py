@@ -1532,20 +1532,35 @@ def _apply_intake(org_id, employee_id, data: dict, actor="employee"):
     # direct_deposit section, the employee must have initialed the disclaimer — either already on file,
     # or included in THIS submission as data['dd_disclaimer_initials'] (a protocol-level key, not a
     # configured onboarding_intake_field — always accepted, never propagated/stored as a regular field).
+    #
+    # BUG FIX (2026-07-27, owner report "employee completed all information but no information can be
+    # seen at our end"): this used to raise a 400 for the WHOLE submission the instant DD fields carried
+    # a value without initials — discarding every OTHER already-filled field (name/address/emergency
+    # contact) in the SAME payload, since the portal always posts the one merged form in a single call.
+    # An employee who filled in everything but missed the small initials box under the DD disclaimer
+    # lost their ENTIRE submission with zero persisted trace: intake_submitted_at never got set, so the
+    # admin's "Captured information" card (gated on that flag, see hr/onboarding/[employeeId]/page.tsx)
+    # rendered nothing at all — exactly the reported symptom. Now: withhold ONLY the direct-deposit
+    # fields until the disclaimer is acknowledged; every other field in the same submission still saves,
+    # and the response tells the caller the DD section specifically still needs initials.
     dd_keys_present = [k for k in (data or {}) if by_key.get(k, {}).get("section") == "direct_deposit"
                        and str(data.get(k, "")).strip()]
+    dd_disclaimer_ok = True
     if dd_keys_present and not prof.get("dd_disclaimer_signed_at"):
         initials = (data.get("dd_disclaimer_initials") or "").strip()
-        if not initials:
-            raise HTTPException(400, "Please type your initials to acknowledge the direct-deposit "
-                                      "disclaimer before saving your bank details.")
-        _sign_dd_disclaimer(org_id, employee_id, initials, actor=actor)
+        if initials:
+            _sign_dd_disclaimer(org_id, employee_id, initials, actor=actor)
+        else:
+            dd_disclaimer_ok = False
     stored = dict(prof.get("intake_data") or {})
     emp_upd, propagated = {}, []
     for k, v in (data.items() if isinstance(data, dict) else []):
         f = by_key.get(k)
         if not f:
             continue
+        if f.get("section") == "direct_deposit" and not dd_disclaimer_ok:
+            continue  # never store bank details before the disclaimer is acknowledged — but this must
+                      # NEVER block saving the rest of the form (see bug-fix note above)
         val = (str(v).strip() if v is not None else "")
         if f.get("sensitive"):
             # Sensitive PII (SSN/bank/A-Number): store ENCRYPTED, and never propagate it onto the
@@ -1588,9 +1603,20 @@ def _apply_intake(org_id, employee_id, data: dict, actor="employee"):
     except Exception:
         pass
     _log_event(org_id, employee_id, "intake_submitted", actor=actor,
-               detail={"fields": list(stored.keys()), "propagated": propagated})
+               detail={"fields": list(stored.keys()), "propagated": propagated,
+                       **({"dd_disclaimer_pending": True} if (dd_keys_present and not dd_disclaimer_ok) else {})})
     _recompute_status(so, org_id, employee_id, actor=actor)
-    return {"ok": True, "propagated": propagated, "work_state": pupd.get("work_state")}
+    resp = {"ok": True, "propagated": propagated, "work_state": pupd.get("work_state")}
+    if dd_keys_present and not dd_disclaimer_ok:
+        # Honest partial-success: everything else in this submission was saved; only the bank/DD
+        # fields were withheld pending the disclaimer initials. Callers (portal + logged-in "me")
+        # surface this distinctly (never as a plain green "saved" — see the frontend fix alongside
+        # this one) so the employee knows exactly what still needs their attention.
+        resp["dd_disclaimer_pending"] = True
+        resp["warning"] = ("Everything else was saved. Direct-deposit details still need your typed "
+                            "initials on the disclaimer above before they can be saved — add them and "
+                            "save again.")
+    return resp
 
 
 def _set_work_state(org_id, employee_id, state, actor="employee"):

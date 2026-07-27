@@ -297,11 +297,23 @@ export default function EmployeeOnboardingPage() {
         </div>
 
         {/* captured info (from the intake form) */}
-        {(d.intake_submitted || (d.sensitive_on_file && d.sensitive_on_file.length > 0)) && (
+        {/* BUG FIX (2026-07-27, owner report "employee completed all information but no information can
+            be seen at our end"): this card used to gate on d.intake_submitted alone. The root cause
+            (hr/router.py _apply_intake's direct-deposit disclaimer gate) has been fixed to never lose an
+            otherwise-complete submission, but this card must ALSO never go blank while real data exists
+            on the record — belt-and-suspenders honesty for any other path that could leave intake_values
+            populated without the submitted flag having (re)synced. Render whenever there's a submitted
+            flag, a sensitive field on file, OR at least one visible (non-sensitive) captured value. */}
+        {(() => {
+          const visibleValues = (d.intake_fields || []).filter(f => !f.sensitive && (d.intake_values || {})[f.key])
+          const hasSensitive = !!(d.sensitive_on_file && d.sensitive_on_file.length > 0)
+          if (!d.intake_submitted && !hasSensitive && visibleValues.length === 0) return null
+          return (
           <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Captured information {d.intake_submitted && <span style={{ color: '#059669' }}>· submitted</span>}</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Captured information {d.intake_submitted ? <span style={{ color: '#059669' }}>· submitted</span> : <span style={{ color: '#9a3412' }}>· not yet marked submitted (partial — verify with the employee)</span>}</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 8 }}>
-              {(d.intake_fields || []).filter(f => !f.sensitive && (d.intake_values || {})[f.key]).map(f => (
+              {visibleValues.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>No non-sensitive fields captured yet.</div>}
+              {visibleValues.map(f => (
                 <div key={f.key} style={{ fontSize: 12 }}><span style={{ color: 'var(--text3)' }}>{f.label}: </span><b>{(d.intake_values || {})[f.key]}</b></div>
               ))}
             </div>
@@ -332,7 +344,8 @@ export default function EmployeeOnboardingPage() {
               </div>
             )}
           </div>
-        )}
+          )
+        })()}
 
         {/* work state + QR access */}
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
