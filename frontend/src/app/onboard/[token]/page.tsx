@@ -46,6 +46,13 @@ export default function PublicOnboardPage() {
   const [states, setStates] = useState<string[]>([])
   const [err, setErr] = useState('')
   const [note, setNote] = useState('')
+  // BUG FIX (2026-07-27): every post-verification message (success AND error) used to render
+  // in the SAME green "saved" box — an employee whose save actually FAILED (e.g. the direct-
+  // deposit disclaimer gate below) saw a green confirmation-looking banner and had no visual cue
+  // anything was wrong. Track the kind explicitly so error/warning states are never disguised as
+  // success (see hr/onboarding/[employeeId]/page.tsx's admin-side "Captured information" card,
+  // which is exactly what stayed blank when a save silently failed this way).
+  const [noteKind, setNoteKind] = useState<'ok' | 'warn' | 'err'>('ok')
   const [busy, setBusy] = useState(false)
   const [signing, setSigning] = useState<Task | null>(null)
   const [tenantConfig, setTenantConfig] = useState<TenantConfig>({})
@@ -98,25 +105,30 @@ export default function PublicOnboardPage() {
     setBusy(false)
   }
   async function saveState(st: string) {
-    setBusy(true); setNote('')
+    setBusy(true); setNote(''); setNoteKind('ok')
     try {
       const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/state`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, work_state: st }) })
       if (!r.ok) throw new Error((await r.json())?.detail || 'Could not save')
       await loadChecklist()
-    } catch (e: any) { setNote(e?.message || 'Could not save state') }
+    } catch (e: any) { setNote(e?.message || 'Could not save state'); setNoteKind('err') }
     setBusy(false)
   }
   async function saveIntake() {
-    setBusy(true); setNote('')
+    setBusy(true); setNote(''); setNoteKind('ok')
     try {
       const dd = ddInitials.trim() ? { dd_disclaimer_initials: ddInitials.trim() } : {}
       const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/intake`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, ...vals, ...dd }) })
       const d = await r.json()
       if (!r.ok) throw new Error(typeof d?.detail === 'string' ? d.detail : 'Could not save your information')
-      setNote('✓ Your information was saved'); await loadChecklist()
-    } catch (e: any) { setNote(e?.message || 'Could not save') }
+      // BUG FIX (2026-07-27): the backend now saves everything EXCEPT direct-deposit fields when the
+      // disclaimer initials are missing (was: reject the whole submission, see hr/router.py
+      // _apply_intake). Surface that distinctly — amber "still needs attention", never green "all set".
+      if (d?.dd_disclaimer_pending) { setNote('⚠️ ' + (d.warning || 'Everything else was saved — direct-deposit details still need your initials above.')); setNoteKind('warn') }
+      else { setNote('✓ Your information was saved'); setNoteKind('ok') }
+      await loadChecklist()
+    } catch (e: any) { setNote(e?.message || 'Could not save'); setNoteKind('err') }
     setBusy(false)
   }
   async function signOnline(payload: { form_data: Record<string, string>; signature: string; signed_name: string }) {
@@ -126,24 +138,26 @@ export default function PublicOnboardPage() {
       body: JSON.stringify({ value, task_id: signing.id, ...payload }) })
     const d = await r.json()
     if (!r.ok) throw new Error(typeof d?.detail === 'string' ? d.detail : 'Could not submit')
-    setSigning(null); setNote('✓ Signed and submitted — thank you!'); loadChecklist()
+    setSigning(null); setNote('✓ Signed and submitted — thank you!'); setNoteKind('ok'); loadChecklist()
   }
   async function upload(t: Task, file: File) {
     if (!extLooksAllowed(file.name, tenantConfig.upload_allowed_formats)) {
-      setNote(`Only ${(tenantConfig.upload_allowed_formats || ['pdf', 'jpeg']).join('/').toUpperCase()} files are accepted here.`)
+      setNote(`Only ${(tenantConfig.upload_allowed_formats || ['pdf', 'jpeg']).join('/').toUpperCase()} files are accepted here.`); setNoteKind('err')
       return
     }
-    setNote(''); setBusy(true)
+    setNote(''); setNoteKind('ok'); setBusy(true)
     try {
       const fd = new FormData(); fd.append('value', value); fd.append('task_id', t.id); fd.append('file', file)
       const r = await fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}/upload`, { method: 'POST', body: fd })
       const d = await r.json()
       if (!r.ok) throw new Error(d?.detail || 'Upload failed')
-      setNote(d?.status === 'returned'
-        ? `⚠️ ${file.name} came back incomplete — missing: ${(d.missing || []).join(', ')}. Please fix and re-upload (we also emailed you the list).`
-        : `✓ Uploaded ${file.name}${d?.note ? ` — ${d.note}` : ''}`)
+      if (d?.status === 'returned') {
+        setNote(`⚠️ ${file.name} came back incomplete — missing: ${(d.missing || []).join(', ')}. Please fix and re-upload (we also emailed you the list).`); setNoteKind('warn')
+      } else {
+        setNote(`✓ Uploaded ${file.name}${d?.note ? ` — ${d.note}` : ''}`); setNoteKind('ok')
+      }
       loadChecklist()
-    } catch (e: any) { setNote(e?.message || 'Upload failed') }
+    } catch (e: any) { setNote(e?.message || 'Upload failed'); setNoteKind('err') }
     setBusy(false)
   }
   // migration 402: multiple files per document — a new upload APPENDS, never replaces. Delete is
@@ -154,7 +168,7 @@ export default function PublicOnboardPage() {
       const d = await r.json()
       if (!r.ok) throw new Error(d?.detail || 'Could not open that file')
       if (d?.url) window.open(d.url, '_blank')
-    } catch (e: any) { setNote(e?.message || 'Could not open that file') }
+    } catch (e: any) { setNote(e?.message || 'Could not open that file'); setNoteKind('err') }
   }
   async function deleteFile(t: Task, f: DocFile) {
     if (!window.confirm(`Remove ${f.name}? This cannot be undone.`)) return
@@ -164,11 +178,18 @@ export default function PublicOnboardPage() {
       const d = await r.json()
       if (!r.ok) throw new Error(d?.detail || 'Could not remove that file')
       loadChecklist()
-    } catch (e: any) { setNote(e?.message || 'Could not remove that file') }
+    } catch (e: any) { setNote(e?.message || 'Could not remove that file'); setNoteKind('err') }
     setBusy(false)
   }
 
   const sections = Array.from(new Set(fields.map(f => f.section || 'personal')))
+  // Gate-1 fold N1 (2026-07-27): a PERSISTENT cue (not tied to the one-shot `note` banner, which
+  // clears on the next action/reload) for a returning employee whose intake was submitted but
+  // whose direct-deposit fields were withheld pending the disclaimer initials (see _apply_intake's
+  // dd_disclaimer_pending fix above this in the same package) — otherwise the only surviving signal
+  // was the passive green "· saved ✓" section chip, easy to read as fully done.
+  const ddConfigured = fields.some(f => (f.section || 'personal') === 'direct_deposit')
+  const ddPending = intakeDone && !ddSigned && ddConfigured
 
   return (
     <div style={{ minHeight: '100vh', background: '#f1f5f9', padding: '32px 16px', fontFamily: 'system-ui, sans-serif' }}>
@@ -196,11 +217,21 @@ export default function PublicOnboardPage() {
               ⛔ {workAuthNotice || 'Your work-authorization documents are still outstanding. Your payroll will be delayed until these documents are submitted.'}
             </div>
           )}
+          {/* Gate-1 fold N1: persistent (survives reload, unlike `note`) — bank details were withheld
+              until the disclaimer is acknowledged. */}
+          {ddPending && (
+            <div style={{ ...card, background: '#fffbeb', borderColor: '#fde68a', color: '#92400e', fontSize: 14 }}>
+              🏦 Bank details pending — add your initials to finish direct deposit (see &quot;Your information&quot; below).
+            </div>
+          )}
           {progress && <div style={{ ...card, padding: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ flex: 1, height: 8, background: '#e2e8f0', borderRadius: 8, overflow: 'hidden' }}><div style={{ width: `${progress.total ? Math.round(progress.done / progress.total * 100) : 0}%`, height: '100%', background: '#059669' }} /></div>
             <span style={{ fontSize: 13, color: '#475569' }}>{progress.done}/{progress.total} done</span>
           </div>}
-          {note && <div style={{ ...card, padding: 12, background: '#ecfdf5', borderColor: '#a7f3d0', color: '#065f46', fontSize: 14 }}>{note}</div>}
+          {note && <div style={{ ...card, padding: 12,
+            background: noteKind === 'err' ? '#fef2f2' : noteKind === 'warn' ? '#fffbeb' : '#ecfdf5',
+            borderColor: noteKind === 'err' ? '#fca5a5' : noteKind === 'warn' ? '#fde68a' : '#a7f3d0',
+            color: noteKind === 'err' ? '#991b1b' : noteKind === 'warn' ? '#92400e' : '#065f46', fontSize: 14 }}>{note}</div>}
 
           {/* Step 1 — which state do you work in? (drives which tax forms you get) */}
           <div style={{ ...card, borderColor: needsState ? '#fca5a5' : '#e5e7eb' }}>
@@ -216,7 +247,7 @@ export default function PublicOnboardPage() {
           {/* Step 2 — structured intake form (configurable) */}
           {fields.length > 0 && (
             <div style={card}>
-              <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 4px' }}>Your information {intakeDone && <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>· saved ✓</span>}</h2>
+              <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 4px' }}>Your information {intakeDone && (ddPending ? <span style={{ fontSize: 12, color: '#92400e', fontWeight: 600 }}>· bank details pending</span> : <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>· saved ✓</span>)}</h2>
               <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 12px' }}>This fills your employee record automatically — no PDF needed for these.</p>
               {sections.map(sec => (
                 <div key={sec} style={{ marginBottom: 14 }}>

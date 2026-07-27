@@ -34,6 +34,11 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
   const [err, setErr] = useState('')
+  // BUG FIX (2026-07-27): every post-load message (success AND error) used to render in the SAME
+  // green "saved" box — an employee whose save actually FAILED (e.g. the direct-deposit
+  // disclaimer gate below) saw a green confirmation-looking banner with no visual cue anything
+  // was wrong. See frontend/src/app/onboard/[token]/page.tsx for the twin fix on the public portal.
+  const [noteKind, setNoteKind] = useState<'ok' | 'warn' | 'err'>('ok')
   const [signing, setSigning] = useState<Task | null>(null)
   const [ddInitials, setDdInitials] = useState('')
   const [routingInfo, setRoutingInfo] = useState<{ valid_checksum?: boolean; bank_name?: string | null; routing?: string } | null>(null)
@@ -50,19 +55,24 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
   useEffect(() => { load() }, [load])
 
   async function saveState(st: string) {
-    setBusy(true); setNote('')
+    setBusy(true); setNote(''); setNoteKind('ok')
     try { await api('/api/v1/hr/onboarding/me/state', { method: 'POST', body: JSON.stringify({ work_state: st }) }); await load() }
-    catch (e: any) { setNote(e?.message || 'Could not save state') }
+    catch (e: any) { setNote(e?.message || 'Could not save state'); setNoteKind('err') }
     setBusy(false)
   }
   async function saveIntake() {
-    setBusy(true); setNote('')
+    setBusy(true); setNote(''); setNoteKind('ok')
     try {
       const dd = ddInitials.trim() ? { dd_disclaimer_initials: ddInitials.trim() } : {}
-      await api('/api/v1/hr/onboarding/me/intake', { method: 'POST', body: JSON.stringify({ ...vals, ...dd }) })
-      setNote('✓ Your information was saved'); await load()
+      const r: any = await api('/api/v1/hr/onboarding/me/intake', { method: 'POST', body: JSON.stringify({ ...vals, ...dd }) })
+      // BUG FIX (2026-07-27): the backend now saves everything EXCEPT direct-deposit fields when the
+      // disclaimer initials are missing (was: reject the whole submission, see hr/router.py
+      // _apply_intake). Surface that distinctly — amber "still needs attention", never green "all set".
+      if (r?.dd_disclaimer_pending) { setNote('⚠️ ' + (r.warning || 'Everything else was saved — direct-deposit details still need your initials above.')); setNoteKind('warn') }
+      else { setNote('✓ Your information was saved'); setNoteKind('ok') }
+      await load()
     }
-    catch (e: any) { setNote(e?.message || 'Could not save') }
+    catch (e: any) { setNote(e?.message || 'Could not save'); setNoteKind('err') }
     setBusy(false)
   }
   async function checkRouting(routing: string) {
@@ -79,36 +89,38 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
   }
   async function upload(t: Task, file: File) {
     const formats = d?.tenant_config?.upload_allowed_formats
-    if (!extLooksAllowed(file.name, formats)) { setNote(`Only ${(formats || ['pdf', 'jpeg']).join('/').toUpperCase()} files are accepted here.`); return }
-    setBusy(true); setNote('')
+    if (!extLooksAllowed(file.name, formats)) { setNote(`Only ${(formats || ['pdf', 'jpeg']).join('/').toUpperCase()} files are accepted here.`); setNoteKind('err'); return }
+    setBusy(true); setNote(''); setNoteKind('ok')
     try {
       const fd = new FormData(); fd.append('task_id', t.id); fd.append('file', file)
       const r = await apiUpload('/api/v1/hr/onboarding/me/upload', fd)
-      setNote(r?.status === 'returned'
-        ? `⚠️ ${file.name} came back incomplete — missing: ${(r.missing || []).join(', ')}. Please fix and re-upload (we also emailed you the list).`
-        : `✓ Uploaded ${file.name}${r?.note ? ` — ${r.note}` : ''}`)
+      if (r?.status === 'returned') {
+        setNote(`⚠️ ${file.name} came back incomplete — missing: ${(r.missing || []).join(', ')}. Please fix and re-upload (we also emailed you the list).`); setNoteKind('warn')
+      } else {
+        setNote(`✓ Uploaded ${file.name}${r?.note ? ` — ${r.note}` : ''}`); setNoteKind('ok')
+      }
       await load()
     }
-    catch (e: any) { setNote(e?.message || 'Upload failed') }
+    catch (e: any) { setNote(e?.message || 'Upload failed'); setNoteKind('err') }
     setBusy(false)
   }
   async function signOnline(payload: { form_data: Record<string, string>; signature: string; signed_name: string }) {
     if (!signing) return
     await api('/api/v1/hr/onboarding/me/sign', { method: 'POST', body: JSON.stringify({ task_id: signing.id, ...payload }) })
-    setSigning(null); setNote('✓ Signed and submitted — thank you!'); await load()
+    setSigning(null); setNote('✓ Signed and submitted — thank you!'); setNoteKind('ok'); await load()
   }
   // migration 402: multiple files per document (front + back of an ID, a multi-page form, …) — a new
   // upload APPENDS, never replaces. Delete is server-enforced: only while employee_can_delete is true
   // (the task hasn't been submitted for review yet) can the employee remove one of THEIR OWN files.
   async function viewFile(t: Task, f: DocFile) {
     try { const r = await api(`/api/v1/hr/onboarding/me/task/${t.id}/document/${f.id}`); if (r?.url) window.open(r.url, '_blank') }
-    catch (e: any) { setNote(e?.message || 'Could not open that file') }
+    catch (e: any) { setNote(e?.message || 'Could not open that file'); setNoteKind('err') }
   }
   async function deleteFile(t: Task, f: DocFile) {
     if (!window.confirm(`Remove ${f.name}? This cannot be undone.`)) return
     setBusy(true)
     try { await api(`/api/v1/hr/onboarding/me/task/${t.id}/document/${f.id}`, { method: 'DELETE' }); await load() }
-    catch (e: any) { setNote(e?.message || 'Could not remove that file') }
+    catch (e: any) { setNote(e?.message || 'Could not remove that file'); setNoteKind('err') }
     setBusy(false)
   }
 
@@ -119,6 +131,13 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
   const fields: Field[] = d.intake_fields || []
   const cats: Cat[] = d.categories || []
   const sections = Array.from(new Set(fields.map(f => f.section || 'personal')))
+  // Gate-1 fold N1 (2026-07-27): a PERSISTENT cue (not tied to the one-shot `note` banner, which
+  // clears on the next action/reload) for a returning employee whose intake was submitted but
+  // whose direct-deposit fields were withheld pending the disclaimer initials (see _apply_intake's
+  // dd_disclaimer_pending fix above this in the same package) — otherwise the only surviving signal
+  // was the passive green "· saved ✓" section chip, easy to read as fully done.
+  const ddConfigured = fields.some(f => (f.section || 'personal') === 'direct_deposit')
+  const ddPending = !!d.intake_submitted && !d.dd_disclaimer_signed && ddConfigured
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -128,11 +147,21 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
           ⛔ {d.work_auth_notice || 'Your work-authorization documents are still outstanding. Your payroll will be delayed until these documents are submitted.'}
         </div>
       )}
+      {/* Gate-1 fold N1: persistent (survives reload, unlike `note`) — bank details were withheld
+          until the disclaimer is acknowledged. */}
+      {ddPending && (
+        <div style={{ ...card, background: '#fffbeb', borderColor: '#fde68a', color: '#92400e', fontSize: 14 }}>
+          🏦 Bank details pending — add your initials to finish direct deposit (see &quot;Your information&quot; below).
+        </div>
+      )}
       {d.progress && <div style={{ ...card, padding: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
         <div style={{ flex: 1, height: 8, background: '#e2e8f0', borderRadius: 8, overflow: 'hidden' }}><div style={{ width: `${d.progress.total ? Math.round(d.progress.done / d.progress.total * 100) : 0}%`, height: '100%', background: '#059669' }} /></div>
         <span style={{ fontSize: 13, color: 'var(--text2)' }}>{d.progress.done}/{d.progress.total} done</span>
       </div>}
-      {note && <div style={{ ...card, padding: 12, background: '#ecfdf5', borderColor: '#a7f3d0', color: '#065f46', fontSize: 14 }}>{note}</div>}
+      {note && <div style={{ ...card, padding: 12,
+        background: noteKind === 'err' ? '#fef2f2' : noteKind === 'warn' ? '#fffbeb' : '#ecfdf5',
+        borderColor: noteKind === 'err' ? '#fca5a5' : noteKind === 'warn' ? '#fde68a' : '#a7f3d0',
+        color: noteKind === 'err' ? '#991b1b' : noteKind === 'warn' ? '#92400e' : '#065f46', fontSize: 14 }}>{note}</div>}
 
       <div style={{ ...card, borderColor: d.needs_work_state ? '#fca5a5' : 'var(--border)' }}>
         <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Which state will you work in?</div>
@@ -146,7 +175,7 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
 
       {fields.length > 0 && (
         <div style={card}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Your information {d.intake_submitted && <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>· saved ✓</span>}</div>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Your information {d.intake_submitted && (ddPending ? <span style={{ fontSize: 12, color: '#92400e', fontWeight: 600 }}>· bank details pending</span> : <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>· saved ✓</span>)}</div>
           <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 12 }}>This fills your employee record automatically.</div>
           {sections.map(sec => (
             <div key={sec} style={{ marginBottom: 14 }}>
