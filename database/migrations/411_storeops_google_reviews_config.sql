@@ -26,9 +26,13 @@ REVOKE ALL ON storeops.google_review_config FROM anon, authenticated;
 GRANT ALL ON storeops.google_review_config TO service_role;
 
 -- storeops.google_review_store — per-store Google Place resolution cache + manual override, and an
--- optional per-store target override (NULL = inherit google_review_config.target_default). No secret
--- lives here, so it uses the normal open_all posture (the backend still enforces org_id scoping on
--- every call regardless of RLS, same as every other storeops config table).
+-- optional per-store target override (NULL = inherit google_review_config.target_default).
+-- ⚠️ Gate-1 finding N2 (2026-07-28): originally shipped `open_all` (no secret lives in the row, so
+-- that seemed fine) — but an anon/authenticated PostgREST caller could still flip a store's
+-- place_id to point at a DIFFERENT business, or falsify target_override. Hardened to service-role-
+-- only below (same posture as google_review_config), verified first that the frontend NEVER reads
+-- this table directly (no `supabase.from(...)` PostgREST calls anywhere in this codebase — every
+-- read goes through the FastAPI backend, which uses the service_role key via get_supabase()).
 CREATE TABLE IF NOT EXISTS storeops.google_review_store (
   id                     BIGSERIAL PRIMARY KEY,
   org_id                 UUID NOT NULL,
@@ -101,5 +105,36 @@ BEGIN
   END;
 END $seed$;
 
+-- ── Gate-1 fix N1 (2026-07-28, SECURITY, MUST): this migration already RAN in prod before this fix
+-- landed. `CREATE OR REPLACE FUNCTION` in Postgres defaults new/replaced functions to PUBLIC EXECUTE
+-- unless explicitly revoked — the `GRANT ... TO service_role` above added a grant but never revoked
+-- the default PUBLIC one, so the anon/authenticated PostgREST role could still call
+-- storeops.seed_google_review_config(uuid) for ANY org UUID and seed a junk config row for a tenant
+-- that isn't theirs. Idempotent (REVOKE/GRANT are no-ops if already applied) — safe to re-run
+-- alongside the rest of this file even though 411 already ran once.
+REVOKE ALL ON FUNCTION storeops.seed_google_review_config(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION storeops.seed_google_review_config(uuid) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION storeops.seed_google_review_config(uuid) TO service_role;
+
+-- ── Gate-1 fix N2 (2026-07-28, SECURITY, SHOULD): storeops.google_review_store and
+-- storeops.google_review_sweep_config shipped as `open_all` (anon/authenticated FOR ALL) — neither
+-- table holds a secret, but an anon-key PostgREST caller could still (a) flip a store's place_id to
+-- a DIFFERENT business's Google listing, (b) rewrite target_override to hide a real problem, or
+-- (c) flip the sweep schedule/enabled flag (quota/cost abuse) or falsify last_status. Re-hardened to
+-- the SAME service-role-only posture as google_review_config above — confirmed safe: the frontend
+-- has ZERO direct `supabase.from(...)` table reads anywhere in this codebase (only `supabase.auth.*`
+-- for login), every read/write for these two tables goes through the FastAPI backend's
+-- `get_supabase()`, which authenticates with SUPABASE_SERVICE_KEY, not the anon key. Idempotent —
+-- DROP POLICY IF EXISTS / REVOKE / GRANT are all safe to re-run.
+DO $harden$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['storeops.google_review_store', 'storeops.google_review_sweep_config'] LOOP
+    EXECUTE format('DROP POLICY IF EXISTS open_all ON %s', t);
+    EXECUTE format('REVOKE ALL ON %s FROM anon, authenticated', t);
+    EXECUTE format('GRANT ALL ON %s TO service_role', t);
+  END LOOP;
+END $harden$;
+
 NOTIFY pgrst, 'reload schema';
-SELECT 'Migration 411 complete — storeops.google_review_config + google_review_store + google_review_sweep_config' AS status;
+SELECT 'Migration 411 complete — storeops.google_review_config + google_review_store + google_review_sweep_config (Gate-1 N1/N2 hardening applied)' AS status;

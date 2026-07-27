@@ -3830,11 +3830,23 @@ def _do_google_reviews_sweep(org_id, store_codes=None):
         _gr_set_sweep_status(client, org_id, "idle", res.get("reason") or "not enabled", mark_run=True)
         return res
     stores_res = res.get("stores") or []
-    errs = [s.get("error") for s in stores_res if s.get("error")]
+    # Gate-1 N5: a FATAL failure (ok=False, e.g. no place_id resolvable) is a real 'error'; a
+    # non-fatal per-row write failure (ok=True but status='partial' — see sweep_store) is reported
+    # separately so a transient write hiccup never reads as an outright sweep failure.
+    fatal_errs = [s.get("error") for s in stores_res if s.get("error") and not s.get("ok")]
+    partials = [s for s in stores_res if s.get("status") == "partial"]
     ok_count = len([s for s in stores_res if s.get("ok")])
-    detail = f"OK — {ok_count}/{len(stores_res)} store(s)" + (f" · {len(errs)} error(s)" if errs else "")
-    _gr_set_sweep_status(client, org_id, "ok" if not errs else ("partial" if ok_count else "error"),
-                         detail, mark_run=True)
+    detail = f"OK — {ok_count}/{len(stores_res)} store(s)"
+    if partials:
+        detail += f" · {len(partials)} partial ({'; '.join(p.get('partial_detail') or '' for p in partials)[:200]})"
+    if fatal_errs:
+        detail += f" · {len(fatal_errs)} error(s)"
+    status = "ok"
+    if fatal_errs and ok_count == 0:
+        status = "error"
+    elif fatal_errs or partials:
+        status = "partial"
+    _gr_set_sweep_status(client, org_id, status, detail, mark_run=True)
     all_notes = [n for s in stores_res for n in (s.get("notifications") or [])]
     if all_notes:
         try:

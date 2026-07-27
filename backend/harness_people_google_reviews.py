@@ -75,6 +75,17 @@ def section_pure():
     ok("A2 clamp_target clamps below range", gr.clamp_target(0.1) == gr.TARGET_MIN)
     ok("A3 clamp_target passes a valid value through", gr.clamp_target(4.5) == 4.5)
     ok("A4 clamp_target falls back to default on garbage", gr.clamp_target("abc") == gr.DEFAULT_TARGET)
+    ok("A4b mask_api_key: None/empty -> None", gr.mask_api_key(None) is None and gr.mask_api_key("") is None)
+    short_masked = gr.mask_api_key("abc")
+    ok("A4c Gate-1 N6: a SHORT key (<8 chars) is masked OPAQUE — never reveals any of it",
+       short_masked == "•" * 8 and "abc" not in short_masked, short_masked)
+    short_masked2 = gr.mask_api_key("1234567")  # exactly 7 chars — still under the 8-char floor
+    ok("A4d a 7-char key is also fully opaque (boundary just under 8)",
+       short_masked2 == "•" * 8 and "1234567" not in short_masked2 and "4567" not in short_masked2, short_masked2)
+    long_masked = gr.mask_api_key("AIzaSyABCDEFGHIJKLMNOPWxYz")
+    ok("A4e a real-length key shows only a trailing 4-char hint", long_masked == "•" * 8 + "WxYz", long_masked)
+    ok("A4f the trailing hint never leaks the rest of a long key",
+       "AIzaSy" not in long_masked and "ABCDEFGHIJKLMNOP" not in long_masked, long_masked)
     ok("A5 effective_target: store override wins", gr.effective_target({"target_override": 4.2}, 4.7) == 4.2)
     ok("A6 effective_target: no override -> org default", gr.effective_target({"target_override": None}, 4.3) == 4.3)
     ok("A7 effective_target: no store row at all -> org default", gr.effective_target(None, 4.9) == 4.9)
@@ -416,9 +427,48 @@ def section_logic():
         ok("E23 review_item table still has exactly 2 rows (no dup insert)",
            len(store2["storeops.google_review_item"]) == 2)
 
+        ok("E24z a clean sweep reports status='ok' (not just ok=True)", res1["status"] == "ok", res1)
+
+        # ── Gate-1 N5: a non-fatal per-row write failure (one review-item insert raising) must
+        #    NOT flip the whole store to ok=False — it's reported as status='partial' with a count,
+        #    never silently swallowed with no signal at all (the original gap) ─────────────────────
+        class _FailOneTableSchema:
+            """Wraps a real _SchemaClient; every INSERT against `fail_table` raises. Everything
+            else (including reads) passes straight through unchanged."""
+            def __init__(self, inner, fail_table):
+                self._inner, self._fail_table = inner, fail_table
+
+            def table(self, name):
+                q = self._inner.table(name)
+                if name == self._fail_table:
+                    def bad_insert(payload):
+                        raise RuntimeError("simulated write failure")
+                    q.insert = bad_insert
+                return q
+
+            def schema(self, name):
+                return self
+
+        store3 = make_store()
+        client3 = _FailOneTableSchema(_SchemaClient(store3, "storeops"), "google_review_item")
+        store3["storeops.employees"] = store["storeops.employees"]
+        store3["storeops.shifts"] = []
+        store3["storeops.google_review_store"] = []
+        store3["storeops.google_review_snapshot"] = []
+        store3["storeops.google_review_item"] = []
+        store3["storeops.action_plan"] = []
+        res_partial = gr.sweep_store(client3, ORG_A, store_row, org_cfg)
+        ok("E24a a review-item write failure does NOT flip ok=False", res_partial["ok"] is True, res_partial)
+        ok("E24b ...but status is 'partial', not silently 'ok'", res_partial["status"] == "partial", res_partial)
+        ok("E24c partial_detail names the failure with a count",
+           res_partial["partial_detail"] and "review-item write" in res_partial["partial_detail"], res_partial)
+        ok("E24d the snapshot (which didn't fail) was still written",
+           len(store3["storeops.google_review_snapshot"]) == 1, store3["storeops.google_review_snapshot"])
+
         # ── no API key -> a clean, non-raising error result ────────────────────────────────────
         res3 = gr.sweep_store(client2, ORG_A, store_row, {"api_key": None, "target_default": 4.7})
         ok("E24 missing API key never raises, reports a clear error", res3["ok"] is False and res3["error"])
+        ok("E24e a fatal (no-key) failure reports status='error'", res3["status"] == "error", res3)
     finally:
         gr.text_search_place, gr.place_details = real_text_search, real_details
 

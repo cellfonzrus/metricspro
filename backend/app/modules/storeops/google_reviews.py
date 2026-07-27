@@ -45,12 +45,16 @@ PLACES_DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
 
 # ── small pure helpers ──────────────────────────────────────────────────────────────────────────
 def mask_api_key(key: str | None) -> str | None:
-    """Never return the raw key. Shows only a trailing 4-char hint, e.g. '••••••••WxYz'."""
+    """Never return the raw key. Shows only a trailing 4-char hint, e.g. '••••••••WxYz' — but a key
+    SHORTER than 8 chars gets an all-star mask with NO hint at all (Gate-1 N6: a <4-char key used to
+    be revealed WHOLE via `key[-4:]`; any short key is masked opaque instead, since 4 of a <8-char
+    key is a large fraction of it)."""
     key = (key or "").strip()
     if not key:
         return None
-    tail = key[-4:] if len(key) >= 4 else key
-    return "•" * 8 + tail
+    if len(key) < 8:
+        return "•" * 8
+    return "•" * 8 + key[-4:]
 
 
 def clamp_target(v, default=DEFAULT_TARGET) -> float:
@@ -451,13 +455,18 @@ def build_notifications(store_code: str, rating, target, new_items: list[dict],
 def sweep_store(client, org_id: str, store_row: dict, org_cfg: dict) -> dict:
     """Pull one store's Google rating + reviews, persist a snapshot, dedupe/insert new review items
     (with name matching), materialize any newly-required action plans, and build (but not send)
-    notification payloads. NEVER raises — every failure is captured in result['error']."""
+    notification payloads. NEVER raises — every FATAL failure (no key, no place, lookup failed) is
+    captured in result['error'] with result['ok']=False/status='error'. A non-fatal write failure
+    (the snapshot insert, or one review-item insert, failing while everything else succeeded) does
+    NOT flip ok=False — Gate-1 N5: it used to be silently swallowed and still reported ok=True with
+    no signal at all; now it's reported as status='partial' with a count in result['partial_detail']
+    (self-healing: a skipped row is simply re-attempted, and re-deduped, on the next sweep)."""
     store_code = store_row.get("store_code")
     address = store_row.get("address")
     api_key = org_cfg.get("api_key")
-    result = {"store_code": store_code, "ok": False, "new_reviews": 0, "rating": None,
-              "review_count": None, "target": None, "notifications": [], "new_action_plans": 0,
-              "error": None}
+    result = {"store_code": store_code, "ok": False, "status": "error", "new_reviews": 0,
+              "rating": None, "review_count": None, "target": None, "notifications": [],
+              "new_action_plans": 0, "error": None, "partial_detail": None}
     if not api_key:
         result["error"] = "No Google Places API key configured"
         return result
@@ -486,14 +495,16 @@ def sweep_store(client, org_id: str, store_row: dict, org_cfg: dict) -> dict:
     reviews = details.get("reviews") or []
     result["rating"], result["review_count"] = rating, review_count
     now_iso = datetime.now(timezone.utc).isoformat()
+    snapshot_ok = True
     try:
         client.table("google_review_snapshot").insert({
             "org_id": org_id, "store_code": store_code, "place_id": place_id,
             "rating": rating, "review_count": review_count, "fetched_at": now_iso}).execute()
     except Exception:
-        pass
+        snapshot_ok = False
     employees = employees_for_store(client, org_id, store_code, address)
     new_items = []
+    item_write_failures = 0
     for rv in reviews:
         h = review_hash(rv.get("review_ref"), rv.get("author_name"), rv.get("text"), rv.get("publish_time"))
         try:
@@ -514,6 +525,7 @@ def sweep_store(client, org_id: str, store_row: dict, org_cfg: dict) -> dict:
         try:
             client.table("google_review_item").insert(row).execute()
         except Exception:
+            item_write_failures += 1
             continue
         new_items.append(row)
     result["new_reviews"] = len(new_items)
@@ -525,6 +537,16 @@ def sweep_store(client, org_id: str, store_row: dict, org_cfg: dict) -> dict:
         result["notifications"] = build_notifications(store_code, rating, target, new_items,
                                                        employees, bool(plans))
     result["ok"] = True
+    partial_notes = []
+    if not snapshot_ok:
+        partial_notes.append("snapshot write failed")
+    if item_write_failures:
+        partial_notes.append(f"{item_write_failures} review-item write(s) failed (will retry next sweep)")
+    if partial_notes:
+        result["status"] = "partial"
+        result["partial_detail"] = "; ".join(partial_notes)
+    else:
+        result["status"] = "ok"
     return result
 
 

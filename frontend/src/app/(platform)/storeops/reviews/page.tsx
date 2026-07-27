@@ -19,11 +19,28 @@ interface StoreCard {
   store_code: string; address?: string; market?: string; is_active?: boolean
   rating?: number | null; review_count?: number | null; target: number; status: string
   reviews: any[]; action_plans: ActionPlan[]; open_action_plan_count: number
+  fetched_at?: string | null
 }
 
 const STATUS_LABEL: Record<string, string> = {
   required: 'Needs plan', submitted: 'Awaiting review', pushed_back: 'Sent back — in progress',
   in_progress: 'In progress', completed: 'Completed',
+}
+
+// Gate-1 N6 (optional, quick): a rating with no visible staleness signal looks fresher than it may
+// be — a store nobody has swept in weeks reads identically to one swept an hour ago. Cheap,
+// client-side "time ago" from the same fetched_at the backend already returns per store card.
+function timeAgo(iso?: string | null): string {
+  if (!iso) return 'never fetched'
+  const ms = Date.now() - new Date(iso).getTime()
+  if (!Number.isFinite(ms) || ms < 0) return 'just now'
+  const mins = Math.floor(ms / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  return `${days}d ago`
 }
 
 function PlanRow({ plan, onChanged }: { plan: ActionPlan; onChanged: () => void }) {
@@ -154,7 +171,8 @@ export default function GoogleReviewsDashboardPage() {
                 </div>
               </div>
               <div style={{ padding: 12, fontSize: 12.5 }}>
-                <div style={{ color: 'var(--text2)', marginBottom: 6 }}>{s.review_count ?? '—'} reviews on file</div>
+                <div style={{ color: 'var(--text2)', marginBottom: 2 }}>{s.review_count ?? '—'} reviews on file</div>
+                <div style={{ color: 'var(--text3)', fontSize: 11, marginBottom: 6 }}>Updated {timeAgo(s.fetched_at)}</div>
                 {s.open_action_plan_count > 0 && (
                   <div style={{ display: 'inline-block', background: '#fff7e6', color: '#92400e', borderRadius: 6, padding: '2px 8px', fontWeight: 700, fontSize: 11 }}>
                     {s.open_action_plan_count} open action plan{s.open_action_plan_count > 1 ? 's' : ''}
