@@ -36,6 +36,7 @@ from app.modules.storeops.payroll_identity import (
     business_id_alias_map as _business_id_alias_map,
     reconcile_employee_identity as _reconcile_employee_identity,
 )
+from app.modules.storeops import payroll_salary
 
 try:
     from zoneinfo import ZoneInfo
@@ -345,6 +346,31 @@ def reconcile_timeoff_duplicates(org_id: str = ORG_ID):
 # the SAME RPC/legacy paths with NO new migration. `month` stays supported byte-identically (still the
 # only param the harness's month-mode assertions ever pass); start/end are additive and take precedence
 # when both are given, so a caller can never end up with an ambiguous half-range.
+# ── Salary pay-basis (owner directive 2026-07-27, migrations 416/417) ───────────────────────────────
+# See payroll_salary.py's module docstring for the full design. These two helpers are the ONLY I/O
+# this feature needs beyond widening an existing `employees` SELECT: reading the tenant's own
+# pay-period config row (mirrors `_work_week_bounds`'s existing direct-table-read pattern, just below)
+# and widening a base employees SELECT to also carry pay_basis/pay_amount/hire_date/termination_date,
+# degrading to the caller's original field list on a pre-migration database so every salary code path
+# is a silent no-op until both 416 and 417 have run (see payroll_salary.py PAY_FIELDS).
+def _tenant_pp_settings(org_id):
+    try:
+        rows = (sb().table("tenants").select(
+            "work_week_start_dow,pay_period_type,payday_dow,payday_weeks_after,biweekly_anchor,timezone"
+        ).eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    return payroll_salary.tenant_pay_period_settings(rows[0] if rows else {})
+
+
+def _employees_with_pay_fields(org_id, base_fields):
+    try:
+        return (sb().table("employees").select(f"{base_fields},{payroll_salary.PAY_FIELDS}")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        return sb().table("employees").select(base_fields).eq("org_id", org_id).execute().data or []
+
+
 def _resolve_range(month, start, end):
     """(lo, hi) exclusive-upper-bound date strings for payroll aggregation. Precedence: explicit
     start/end (INCLUSIVE on both ends, per RULE ONE-style caller ergonomics — a "Jan 1 to Jan 31" range
@@ -1221,8 +1247,16 @@ def decide_payroll_chargeback(cb_id: str, body: dict, authorization: str = Heade
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
 EMP_FIELDS = ("name", "home_store", "role", "pay_rate", "is_active", "email",
-              "phone", "notes", "epay_login", "epay_salesperson", "employee_id")
+              "phone", "notes", "epay_login", "epay_salesperson", "employee_id",
+              "pay_basis", "pay_amount", "termination_date")
 STORE_FIELDS = ("store_code", "address", "market", "monthly_target", "is_active", "phone", "notes")
+
+# Pay-adjacent fields on `employees` (2026-07-27 Deliverable 6): PATCH /employees/{id} previously took
+# NO role gate at all for pay_rate — only org_id scoping. Per the owner dispatch's explicit rule ("if
+# ungated, gate BOTH + note"): editing any of these now requires `_require_manager`. A non-pay field
+# edit in the SAME PATCH body (name/email/home_store/...) is unaffected, so this can't break an
+# existing non-pay-editing caller.
+_PAY_GATED_FIELDS = {"pay_rate", "pay_basis", "pay_amount", "termination_date"}
 
 
 @router.post("/employees/bulk")
@@ -1292,23 +1326,53 @@ def create_employee(emp: dict, org_id: str = ORG_ID):
 
 
 @router.patch("/employees/{emp_id}")
-def update_employee(emp_id: str, updates: dict, org_id: str = ORG_ID):
-    """Update an employee (name/role/home_store/pay_rate/active/contact). StoreOps Admin.
+def update_employee(emp_id: str, updates: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Update an employee (name/role/home_store/pay_rate/active/contact/pay_basis/pay_amount).
+    StoreOps Admin + HR (hr_update_employee delegates here).
     emp_id is str (not int) so a UUID or numeric id both work — a typed int rejected UUID ids
     with a 422, which read as 'cannot edit' in the UI.
 
     org_id-scoped so a foreign (guessable BIGSERIAL) emp_id is a no-op instead of a cross-tenant
-    write — this previously took NO org filter at all, and it's the pay_rate write path."""
+    write — this previously took NO org filter at all, and it's the pay_rate write path.
+
+    MANAGER-GATED for pay fields (see _PAY_GATED_FIELDS) — a genuine security hardening added
+    2026-07-27, not just posture-matching (docs/handoffs/people.md). A pay_basis/pay_amount edit is
+    also best-effort logged to storeops.payroll_change_log (entry_point='pay_basis_change', migration
+    414) so it shows the same ✎ manual-edit trail as an hours correction."""
     row = {k: updates[k] for k in EMP_FIELDS if k in updates}
     if not row:
         raise HTTPException(400, "no valid fields to update")
+    if _PAY_GATED_FIELDS & set(row):
+        _require_manager(authorization, org_id)
     # Clearing the Emp ID must store NULL, not '' (TEXT UNIQUE → '' collides across people).
     if "employee_id" in row and not (row.get("employee_id") or "").strip():
         row["employee_id"] = None
+    if "pay_basis" in row:
+        b = str(row["pay_basis"] or "hourly").strip().lower()
+        row["pay_basis"] = b if b in payroll_salary.PAY_BASES else "hourly"
+    if "pay_amount" in row:
+        try:
+            row["pay_amount"] = float(row["pay_amount"]) if row["pay_amount"] not in (None, "") else None
+        except (TypeError, ValueError):
+            row["pay_amount"] = None
+    before = None
+    if {"pay_basis", "pay_amount"} & set(row):
+        before_rows = (sb().table("employees").select("id,employee_id,name,pay_basis,pay_amount")
+                       .eq("id", emp_id).eq("org_id", org_id).limit(1).execute().data) or []
+        before = before_rows[0] if before_rows else None
     r = sb().table("employees").update(row).eq("id", emp_id).eq("org_id", org_id).execute()
     if not r.data:
         raise HTTPException(404, "employee not found")
-    return _ensure_employee_id(r.data[0])
+    after = r.data[0]
+    if before is not None:
+        who = _who_for_log(authorization, org_id)
+        for f in ("pay_basis", "pay_amount"):
+            if f in row and str(before.get(f) or "") != str(after.get(f) or ""):
+                _log_payroll_change(org_id, field=f, entry_point="pay_basis_change",
+                                     employee_id=after.get("employee_id"), employee_name=after.get("name"),
+                                     before=before.get(f), after=after.get(f),
+                                     source_table="employees", source_id=after.get("id"), who=who)
+    return _ensure_employee_id(after)
 
 
 @router.delete("/employees/{emp_id}")
@@ -1390,9 +1454,12 @@ def merge_employees(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/employees/bulk-payscale")
-def bulk_payscale(body: dict, org_id: str = ORG_ID):
+def bulk_payscale(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Bulk set pay rates from a list. Body: {rows:[{employee_id|name, pay_rate}]}.
-    Matches by employee_id, else exact name (case-insensitive). Reports unmatched/bad rows."""
+    Matches by employee_id, else exact name (case-insensitive). Reports unmatched/bad rows.
+    MANAGER-GATED (2026-07-27) — same posture as the single-row PATCH's pay-field gate
+    (_PAY_GATED_FIELDS, Deliverable 6)."""
+    _require_manager(authorization, org_id)
     rows = body.get("rows") or body.get("employees") or []
     if not isinstance(rows, list) or not rows:
         raise HTTPException(400, "rows[] required")
