@@ -83,6 +83,42 @@ _CLASSIFY_POLL_S = 1.2         # pre-auth: how often to re-DETECT state (captcha
 _B2B_PROCESSORS = ("b2bsoft", "b2b")
 
 
+def _takes_stop(fn):
+    """True when `fn` can accept a second (should_stop) argument. Arity is inspected once per call
+    site; anything unintrospectable is treated as one-arg (the safe, pre-existing behaviour)."""
+    try:
+        import inspect
+        params = list(inspect.signature(fn).parameters.values())
+        if any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in params):
+            return True
+        positional = [p for p in params
+                      if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                                    inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+        return len(positional) >= 2
+    except Exception:
+        return False
+
+
+def _delivered(res):
+    """Did this pull actually LAND rows? PURE. Mirrors router._pull_delivered so the live session's
+    message, the data_source stamp and the UI can never disagree about what 'success' means. An explicit
+    `delivered` flag wins; then any row-count key; unknown shape ⇒ True (never regress a driver that
+    doesn't report counts)."""
+    if not isinstance(res, dict):
+        return False
+    if res.get("ok") is False:
+        return False
+    if "delivered" in res:
+        return bool(res.get("delivered"))
+    for k in ("rows_ingested", "rows_saved", "saved", "rows"):
+        if k in res:
+            try:
+                return float(res[k] or 0) > 0
+            except Exception:
+                return True
+    return True
+
+
 def _vp():
     """Lazy import of the driver library (keeps Playwright import cost off module load)."""
     from app.modules.commcalc import vidapay_sweep as vp
@@ -145,7 +181,8 @@ def _squid_reported(vp, page):
 class LiveLoginSession:
     """One persistent browser-backed login session. Owns a single worker thread for its whole life."""
 
-    def __init__(self, sid, org_id, row, persist=None, persist_shot=None, pull_fn=None):
+    def __init__(self, sid, org_id, row, persist=None, persist_shot=None, pull_fn=None,
+                 persist_pull=None):
         self.sid = sid
         self.org_id = org_id
         self.url = row.get("portal_url")
@@ -158,8 +195,17 @@ class LiveLoginSession:
         self.persist = persist                    # callable(updates: dict) -> persists to data_source
         self.persist_shot = persist_shot          # callable(shot_b64) -> writes login_shot/login_shot_at
         self.pull_fn = pull_fn                     # callable(page) -> pull result; runs on THIS live page
-        self.pull_result = None                    # last '▶ Pull now' result (reuse-the-session pull)
+        self.persist_pull = persist_pull           # callable(result) -> stamps the pull's outcome honestly
+        self.pull_result = None                    # last pull result (auto-pull or '▶ Pull now')
         self.session_state = None                 # durable storage_state once authenticated
+        # AUTO-PULL AFTER LOGIN (owner report 2026-07-27 — "shows logged in ... does not import any
+        # file"). Signing in used to leave the trusted browser idling until a human clicked a SECOND
+        # button (▶ Pull now); if they didn't, the session simply expired and nothing was ever imported.
+        # Per-source switch (data_source.auto_pull_after_login, mig 242), default ON; a row without the
+        # column (pre-migration) reads None → ON.
+        self.auto_pull = (row.get("auto_pull_after_login") is not False)
+        self._auto_pulled = False
+        self._cancel_flag = False                 # set by cancel(); a running pull checks it between reports
 
         self._cmd_q = queue.Queue()               # SUBMIT_CODE / RESEND / CANCEL / PULL
         self._hi_q = queue.Queue()                # HIGH-priority human input (click / type / key / scroll)
@@ -253,6 +299,7 @@ class LiveLoginSession:
 
     def state(self):
         with self._lock:
+            pr = self.pull_result
             return {
                 "phase": self.phase,
                 "message": self.message,
@@ -260,6 +307,21 @@ class LiveLoginSession:
                 "seq": self._seq,
                 "human": self._human_driving,
                 "updated_at": self._updated_at,
+                # The pull outcome the UI must render HONESTLY (a 0-row import is never a green tick).
+                # Trimmed to the summary fields — the full per-report diagnostic is served by
+                # GET /data-sources/{sid}/pull-diagnostic, not by this ~1s poll.
+                "pull": ({"ran": True,
+                          "delivered": bool(_delivered(pr)),
+                          "rows": (pr.get("rows_ingested") if isinstance(pr, dict) else None),
+                          "status": (pr.get("status") or pr.get("error") or "")[:400]
+                                    if isinstance(pr, dict) else "",
+                          "reason": (pr.get("reason") if isinstance(pr, dict) else None),
+                          "options": ((pr.get("calibration") or {}).get("portal_report_options") or [])[:20]
+                                     if isinstance(pr, dict) else []}
+                         if pr is not None else
+                         {"ran": False, "delivered": None, "rows": None, "status": "", "reason": None,
+                          "options": []}),
+                "auto_pull": self.auto_pull,
             }
 
     def frame_since(self, since):
@@ -310,7 +372,13 @@ class LiveLoginSession:
 
     def cancel(self):
         self._touch()
+        with self._lock:
+            self._cancel_flag = True   # a pull in flight stops at its next report boundary
         self._cmd_q.put(("CANCEL",))
+
+    def _stop_requested(self):
+        with self._lock:
+            return self._cancel_flag
 
     def pull(self, result_q=None):
         """Enqueue a report pull to run on THIS live authenticated browser (not a cold restore)."""
@@ -806,8 +874,15 @@ class LiveLoginSession:
         T-CETRA (a fresh browser / egress IP / server session isn't the trusted device — this is the
         'Pull asks for another code / session expired' the operator hit), so reusing this page is the
         fix. Services PULL + CANCEL (+ input 'take control'); auto-closes after an idle window.
-        All Playwright work stays on this (the worker) thread; SUBMIT_CODE/RESEND are ignored post-auth."""
+        All Playwright work stays on this (the worker) thread; SUBMIT_CODE/RESEND are ignored post-auth.
+
+        AUTO-PULL: the due reports are fetched IMMEDIATELY on arrival here (once per session, switchable
+        per source), because a trusted session that expires before anything is pulled is worth nothing —
+        that is the owner's 2026-07-27 "logged in but no file imports" report."""
         self._touch()
+        if self.auto_pull and self.pull_fn is not None and not self._auto_pulled:
+            self._auto_pulled = True
+            self._handle_pull(page, vp, None)
         while True:
             self._pump(page)
             with self._lock:
@@ -834,25 +909,41 @@ class LiveLoginSession:
         """Run the report pull on THIS live authenticated browser (never a cold restore) and hand the
         result back to the waiting request thread via `result_q`. Keeps the page open afterwards so the
         operator can pull again. Best-effort — a pull failure is reported, never crashes the session."""
-        self._set(phase="pulling", message="Pulling reports on the live session…")
+        self._set(phase="pulling",
+                  message="Signed in — fetching this login's reports on the live session…")
         self._capture(page)
         res = None
         try:
             if self.pull_fn is not None:
-                res = self.pull_fn(page)
+                # Hand the pull a stop signal WHEN it accepts one (checked by arity, not by catching
+                # TypeError — a TypeError raised *inside* the pull must never be mistaken for a
+                # signature mismatch). Older/one-arg pull_fns keep working unchanged.
+                res = (self.pull_fn(page, self._stop_requested) if _takes_stop(self.pull_fn)
+                       else self.pull_fn(page))
             else:
                 res = {"ok": False, "error": "No pull is configured for this live session."}
         except Exception as e:
             res = {"ok": False, "error": ("Pull failed on the live session: " + str(e))[:300]}
         with self._lock:
             self.pull_result = res
+        # Route the outcome to the data_source row through the SAME honest split /run uses:
+        # delivered ⇒ last_run_at, anything else ⇒ last_attempt_at (mig 241). Best-effort.
+        if self.persist_pull is not None:
+            try:
+                self.persist_pull(res)
+            except Exception:
+                pass
         if result_q is not None:
             try:
                 result_q.put(res)
             except Exception:
                 pass
-        msg = (res.get("status") if isinstance(res, dict) and res.get("status") else "Pull finished.")
-        self._set(phase="authenticated", message=("Pulled: " + str(msg))[:300])
+        msg = (res.get("status") if isinstance(res, dict) and res.get("status")
+               else (res.get("error") if isinstance(res, dict) and res.get("error") else "Pull finished."))
+        # NEVER report a 0-row pull as a success: that green tick over "pulled 0 rows across 0
+        # report(s)" is precisely what made a dead connector look healthy.
+        prefix = "Imported: " if _delivered(res) else "⚠️ Nothing imported — "
+        self._set(phase="authenticated", message=(prefix + str(msg))[:400])
         self._capture(page)
 
     def _do_input(self, page, ctx, vp, ev):
@@ -1090,9 +1181,11 @@ def _prune_locked():
         _SESSIONS.pop(k, None)
 
 
-def start_session(sid, org_id, row, persist=None, persist_shot=None, pull_fn=None):
+def start_session(sid, org_id, row, persist=None, persist_shot=None, pull_fn=None, persist_pull=None):
     """Spawn (or REPLACE) the live session for `sid`. Non-blocking — the worker thread drives it.
-    `pull_fn` (callable(page) -> pull result) lets a later '▶ Pull now' run on THIS live browser."""
+    `pull_fn` (callable(page) -> pull result) runs the report pull on THIS live browser — automatically
+    the moment the login authenticates, and again on every '▶ Pull now'. `persist_pull(result)` records
+    that pull's outcome on the data_source row (honest last_run_at vs last_attempt_at)."""
     with _SESSIONS_LOCK:
         _prune_locked()
         old = _SESSIONS.get(sid)
@@ -1101,7 +1194,7 @@ def start_session(sid, org_id, row, persist=None, persist_shot=None, pull_fn=Non
                 old.cancel()
             except Exception:
                 pass
-        sess = LiveLoginSession(sid, org_id, row, persist, persist_shot, pull_fn)
+        sess = LiveLoginSession(sid, org_id, row, persist, persist_shot, pull_fn, persist_pull)
         _SESSIONS[sid] = sess
     sess.start()
     return sess

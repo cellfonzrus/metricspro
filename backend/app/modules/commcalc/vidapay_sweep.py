@@ -634,6 +634,49 @@ def _click_submit(scope, texts):
     return False
 
 
+# Controls a navigation click must NEVER hit, whatever the caller asked for. Clicking one of these
+# would end the very session the pull is running on.
+_NAV_NEVER = ("log out", "logout", "sign out", "signout", "log off", "logoff")
+
+
+def _click_nav(scope, texts):
+    """Click the first visible NAVIGATION control in `scope` matching any of `texts` — buttons FIRST
+    (identical to _click_submit), then ordinary `<a href>` LINKS.
+
+    ROOT CAUSE OF "logged in but nothing imports" (owner report 2026-07-27). _open_reports_page's
+    comment says it clicks "a Reports / Billing Manager link", but the only helper it had was
+    _click_submit, whose selector is `button, input[type=submit], input[type=button], a[role=button]`
+    — an ordinary ASP.NET menu anchor (`<a href="Reports.aspx">Reports</a>`, or the
+    `href="javascript:__doPostBack(...)"` variant) matches NONE of those. So on any portal whose
+    post-login landing page is not already the Reports page, the navigation silently did nothing,
+    _select_report then found no report <select>, and EVERY report came back
+    "report not found in the Reports dropdown" → "pulled 0 rows across 0 report(s)" while the login
+    itself showed a green ✅ Connected. Anchors are now clickable; sign-out controls never are."""
+    try:
+        btns = scope.query_selector_all("button, input[type=submit], input[type=button], a[role=button]")
+    except Exception:
+        btns = []
+    try:
+        links = scope.query_selector_all("a[href], a")
+    except Exception:
+        links = []
+    for c in list(btns) + list(links):
+        try:
+            if not c.is_visible():
+                continue
+            label = ((c.get_attribute("value") or "") + " " + (c.inner_text() or "")).strip().lower()
+            if not label:
+                label = (c.get_attribute("title") or c.get_attribute("aria-label") or "").strip().lower()
+            if not label or any(bad in label for bad in _NAV_NEVER):
+                continue
+            if any(t in label for t in texts):
+                c.click()
+                return True
+        except Exception:
+            continue
+    return False
+
+
 _CODE_KWS = ("code", "otp", "pin", "verif", "token", "authenticat", "2fa", "twofactor",
              "one-time", "onetime", "passcode", "security code")
 
@@ -1939,41 +1982,154 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
 # knows how to DRIVE the ASP.NET Reports page for whatever specs it's handed, and returns a per-report
 # summary + a DOM diagnostic on any report whose page didn't match (so the un-screenshotted SIM/PR
 # reports self-calibrate on the first live run).
-def _open_reports_page(page):
-    """Find the frame holding the Report <select>. If we're not on the Reports page yet, click a
-    'Reports' / 'Billing Manager' nav link and settle. Returns the frame (or the main page)."""
-    def _report_select_frame():
-        for fr in _frames(page):
-            try:
-                for s in fr.query_selector_all("select"):
-                    if not s.is_visible():
-                        continue
-                    opts = " ".join([(o.inner_text() or "") for o in s.query_selector_all("option")]).lower()
-                    hay = ((s.get_attribute("name") or "") + (s.get_attribute("id") or "")).lower()
-                    if "report" in hay or any(k in opts for k in
-                                              ("commission details", "daily tx", "fulfillment",
-                                               "sim assignment", "activation details")):
-                        return fr
-            except Exception:
-                continue
+# Option text that identifies THE report <select> (vs a store/period dropdown on the same page).
+_REPORT_OPTION_HINTS = ("commission details", "daily tx", "fulfillment", "sim assignment",
+                        "activation details", "activation sim", "marketplace", "pr activation")
+# Nav labels tried, in order, to reach the Reports page. Config-free heuristics: a tenant that needs a
+# different word calibrates the report display_name at /commcalc/report-mappings, and the probe below
+# tells them exactly which links the portal actually offers.
+_REPORT_NAV_LABELS = ("reports", "my reports", "reporting", "billing manager", "billing",
+                      "commission", "report")
+
+
+def _report_select(frame):
+    """The visible <select> in `frame` that holds the report list, or None."""
+    try:
+        cands = frame.query_selector_all("select")
+    except Exception:
         return None
-    fr = _report_select_frame()
+    for s in cands:
+        try:
+            if not s.is_visible():
+                continue
+            opts = " ".join([(o.inner_text() or "") for o in s.query_selector_all("option")]).lower()
+            hay = ((s.get_attribute("name") or "") + (s.get_attribute("id") or "")).lower()
+            if "report" in hay or any(k in opts for k in _REPORT_OPTION_HINTS):
+                return s
+        except Exception:
+            continue
+    return None
+
+
+def _report_select_frame(page):
+    """The frame holding the report <select>, or None when this page isn't the Reports page."""
+    for fr in _frames(page):
+        try:
+            if _report_select(fr) is not None:
+                return fr
+        except Exception:
+            continue
+    return None
+
+
+def report_options(page):
+    """The report names the portal's OWN dropdown offers, in portal order. [] when not on the Reports
+    page. This is the calibration vocabulary: a configured display_name that is not in this list can
+    never be selected, and until 2026-07-27 nothing ever showed it to the operator."""
+    fr = _report_select_frame(page)
+    if fr is None:
+        return []
+    s = _report_select(fr)
+    if s is None:
+        return []
+    out = []
+    try:
+        for o in s.query_selector_all("option"):
+            t = (o.inner_text() or "").strip()
+            if t:
+                out.append(t[:120])
+    except Exception:
+        return out
+    return out[:60]
+
+
+def reports_probe(page):
+    """A credential-free description of what the AUTHENTICATED portal actually offers — nav links,
+    every <select> with its option texts, the report-ish buttons and the date fields — so the operator
+    can calibrate report names/params from the UI instead of the module guessing blind. The VidaPay twin
+    of run_b2bsoft_sweep's `report_probe`. Never raises; no value of any input is read (only
+    name/id/placeholder), so no credential can appear in it."""
+    out = {"url": "", "title": "", "frames": 0, "nav_links": [], "selects": [],
+           "buttons": [], "date_fields": []}
+    try:
+        out["url"] = (page.url or "")[:200]
+    except Exception:
+        pass
+    try:
+        out["title"] = (page.title() or "")[:120]
+    except Exception:
+        pass
+    frames = _frames(page)
+    out["frames"] = len(frames)
+    for fr in frames:
+        try:
+            p = fr.evaluate(
+                """() => ({
+                    links: Array.from(document.querySelectorAll('a')).map(a=>({t:(a.innerText||'').trim().slice(0,60), href:(a.getAttribute('href')||'').slice(0,120)}))
+                            .filter(x=>x.t).slice(0,60),
+                    selects: Array.from(document.querySelectorAll('select')).map(s=>({
+                            name:s.name||'', id:s.id||'',
+                            opts:Array.from(s.options).slice(0,60).map(o=>(o.text||'').trim()).filter(Boolean)})).slice(0,12),
+                    buttons: Array.from(document.querySelectorAll('button,input[type=button],input[type=submit]'))
+                            .map(b=>({t:((b.innerText||b.value||'').trim()).slice(0,40), id:b.id||'', name:b.name||''}))
+                            .filter(x=>x.t).slice(0,40),
+                    dates: Array.from(document.querySelectorAll('input')).map(i=>({id:i.id||'',name:i.name||'',type:i.type||'',ph:i.placeholder||''}))
+                            .filter(x=>/date|from|to|start|end|period/i.test(x.id+x.name+x.ph)).slice(0,20),
+                })""") or {}
+        except Exception:
+            continue
+        for l in (p.get("links") or []):
+            if len(out["nav_links"]) < 60:
+                out["nav_links"].append(l)
+        for s in (p.get("selects") or []):
+            if len(out["selects"]) < 12:
+                out["selects"].append(s)
+        for b in (p.get("buttons") or []):
+            if len(out["buttons"]) < 40:
+                out["buttons"].append(b)
+        for d in (p.get("dates") or []):
+            if len(out["date_fields"]) < 20:
+                out["date_fields"].append(d)
+    out["report_options"] = report_options(page)
+    return out
+
+
+def _open_reports_page(page):
+    """Find the frame holding the Report <select>, navigating there if we aren't on it yet.
+
+    Returns the frame, or **None** when the Reports page could not be reached at all. Returning None
+    (instead of the old `or page` fallback) is deliberate: with the fallback, an unreachable Reports
+    page was indistinguishable from a mis-named report, and every report reported
+    "calibrate the display_name" — pointing the operator at the wrong fix.
+    Navigation now goes through _click_nav, which can click a plain `<a href>` menu link (the old
+    _click_submit could not — that was the 2026-07-27 "nothing imports" root cause)."""
+    fr = _report_select_frame(page)
     if fr:
         return fr
-    # navigate: click a Reports / Billing Manager link
-    for want in ("reports", "billing manager", "report"):
+    for want in _REPORT_NAV_LABELS:
+        clicked = False
         for f in _frames(page):
             try:
-                if _click_submit(f, (want,)):
-                    page.wait_for_timeout(2500)
-                    _wait_settle(page)
+                if _click_nav(f, (want,)):
+                    clicked = True
                     break
             except Exception:
                 continue
-        fr = _report_select_frame()
+        if not clicked:
+            continue
+        try:
+            page.wait_for_load_state("networkidle", timeout=20000)
+        except Exception:
+            pass
+        try:
+            page.wait_for_timeout(2000)
+        except Exception:
+            pass
+        _wait_settle(page)
+        fr = _report_select_frame(page)
         if fr:
             return fr
-    return _report_select_frame() or page
+    return _report_select_frame(page)
 
 
 def _select_report(frame, display_name):
@@ -2093,17 +2249,33 @@ def _submit_and_export(page, frame, export_pref, timeout_s=300):
     return None, None
 
 
-def _pull_one_report(page, client, org_id, source_id, carrier_id, source_row, spec, start_dt, end_dt):
-    """Drive one report end-to-end across its month windows. Returns a summary dict (never raises)."""
+def _pull_one_report(page, client, org_id, source_id, carrier_id, source_row, spec, start_dt, end_dt,
+                     frame=None, options=None):
+    """Drive one report end-to-end across its month windows. Returns a summary dict (never raises).
+
+    `frame` is the already-resolved Reports frame (resolved ONCE per pull by the caller instead of
+    re-navigating per report); `options` is what the portal's dropdown actually offers, echoed into the
+    failure so the operator is told the real report names rather than "calibrate the display_name"."""
     from app.modules.commcalc import report_pull as rp
     rk = spec.get("report_key")
     ps = spec.get("param_spec") or {}
     target = spec.get("target_table")
     date_col = ps.get("date_col")
-    frame = _open_reports_page(page)
+    if frame is None:
+        frame = _open_reports_page(page)
+    if frame is None:
+        return {"report_key": rk, "target_table": target, "ok": False, "reason": "no_reports_page",
+                "error": ("the portal's Reports page could not be opened from the page this login "
+                          "landed on, so no report could be selected"),
+                "diag": _snapshot(page)}
     if not _select_report(frame, spec.get("display_name")):
-        return {"report_key": rk, "ok": False,
-                "error": "report not found in the Reports dropdown — calibrate the display_name",
+        opts = list(options if options is not None else report_options(page))
+        return {"report_key": rk, "target_table": target, "ok": False, "reason": "report_not_listed",
+                "display_name": spec.get("display_name"),
+                "error": ("\u201c%s\u201d is not one of the reports this portal login offers%s"
+                          % (spec.get("display_name") or rk,
+                             (" \u2014 it offers: " + ", ".join(opts[:12])) if opts else "")),
+                "portal_options": opts[:20],
                 "diag": _snapshot(page)}
     # month iteration, capped at the report's max_months_back and VidaPay's ≤1-year hard limit
     max_back = min(int(ps.get("max_months_back") or 12), 12)
@@ -2147,7 +2319,7 @@ def _pull_one_report(page, client, org_id, source_id, carrier_id, source_row, sp
 
 
 def _pull_all_reports_on_page(page, client, org_id, source_id=None, carrier_id=None,
-                              months_back=2, source_row=None):
+                              months_back=2, source_row=None, should_stop=None):
     """Pull EVERY enabled report (config-driven report_pull_map, degrading to DEFAULT_REPORT_SPECS) on
     an ALREADY-AUTHENTICATED `page`, month-by-month across the last `months_back` months (each report's
     ≤1-month window + ≤1-year-back caps still apply), mapping + ingesting each export idempotently.
@@ -2163,18 +2335,69 @@ def _pull_all_reports_on_page(page, client, org_id, source_id=None, carrier_id=N
     end_dt = _dt.now()
     start_dt = end_dt - _td(days=31 * max(1, int(months_back or 1)))
     src = dict(source_row or {})
+    # Reach the Reports page ONCE (was: re-navigated inside every report), then capture what the portal
+    # really offers so a failure can name the fix instead of saying "calibration needed".
+    frame = _open_reports_page(page)
+    options = report_options(page) if frame is not None else []
+    probe = reports_probe(page)
     reports = []
+    if not specs:
+        return {"status": ("\u26a0\ufe0f imported 0 rows \u2014 no reports are switched on for this "
+                           "tenant, so the pull had nothing to fetch. Turn them on at Report mapping."),
+                "authenticated": True, "delivered": False, "reports": [], "rows_ingested": 0,
+                "months_back": months_back, "reason": "no_reports_configured",
+                "reports_page_reachable": frame is not None, "probe": probe,
+                "calibration": {"portal_report_options": options, "configured": [], "unmatched": []}}
+    stopped = False
     for spec in specs:
+        # INTERRUPTIBLE between reports. Five reports × several month-windows × a 300s submit timeout is
+        # a long time to hold the live session's only worker thread; since a successful login now starts
+        # this pull on its own, an operator who presses Close must not have to wait it out.
+        if should_stop is not None:
+            try:
+                if should_stop():
+                    stopped = True
+                    break
+            except Exception:
+                pass
         reports.append(_pull_one_report(page, client, org_id, source_id, carrier_id,
-                                        src, spec, start_dt, end_dt))
+                                        src, spec, start_dt, end_dt, frame=frame, options=options))
     ok_rows = sum(r.get("rows_ingested", 0) for r in reports)
     ok_reports = [r["report_key"] for r in reports if r.get("ok") and r.get("rows_ingested")]
     calib = [r["report_key"] for r in reports if not r.get("ok") or r.get("calibration")]
-    status = (f"pulled {ok_rows} rows across {len(ok_reports)} report(s): "
-              f"{', '.join(ok_reports) or '—'}"
-              + (f"; calibration/diagnostic needed: {', '.join(calib)}" if calib else ""))
-    return {"status": status, "authenticated": True, "reports": reports,
-            "rows_ingested": ok_rows, "months_back": months_back}
+    configured = [(s.get("display_name") or s.get("report_key") or "") for s in specs]
+    unmatched = [r.get("display_name") or r.get("report_key")
+                 for r in reports if r.get("reason") == "report_not_listed"]
+    delivered = ok_rows > 0
+    if delivered:
+        status = (f"imported {ok_rows} rows across {len(ok_reports)} report(s): "
+                  f"{', '.join(ok_reports)}"
+                  + (f"; still uncalibrated: {', '.join(calib)}" if calib else ""))
+        reason = None
+    elif frame is None:
+        reason = "no_reports_page"
+        status = ("\u26a0\ufe0f imported 0 rows \u2014 signed in fine, but the portal's Reports page "
+                  "could not be opened, so no report could be run. Open \ud83d\udd27 What the pull saw "
+                  "to see the menu this login actually has.")
+    elif unmatched and len(unmatched) == len(reports):
+        reason = "report_not_listed"
+        status = ("\u26a0\ufe0f imported 0 rows \u2014 none of the %d configured report names exist in "
+                  "this portal's Reports list%s. Fix the names at Report mapping."
+                  % (len(reports),
+                     (" (it offers: " + ", ".join(options[:8]) + ")") if options else ""))
+    else:
+        reason = "no_rows"
+        status = ("\u26a0\ufe0f imported 0 rows \u2014 the reports ran but returned nothing for the "
+                  "last %s month(s)%s." % (months_back,
+                                           ("; not yet calibrated: " + ", ".join(calib)) if calib else ""))
+    if stopped:
+        status = ("stopped early at the operator's request — " + status)[:600]
+    return {"status": status, "authenticated": True, "delivered": delivered, "reports": reports,
+            "rows_ingested": ok_rows, "months_back": months_back, "reason": reason,
+            "stopped": stopped,
+            "reports_page_reachable": frame is not None, "probe": probe,
+            "calibration": {"portal_report_options": options, "configured": configured,
+                            "unmatched": unmatched}}
 
 
 def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrier_id=None,
@@ -2231,6 +2454,56 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
 B2BSOFT_URL = "https://wsreports.b2bsoft.com"
 
 
+def b2b_reports_probe(page):
+    """Rich probe of the b2bsoft reports UI (links + export buttons + date fields + dropdowns) so the
+    actual Sales-Transaction-Details download can be wired in ONE pass from a real logged-in session,
+    instead of guessing the portal's navigation blind. Never raises; reads names/ids/labels only."""
+    probe = {}
+    for fr in _frames(page):
+        try:
+            p = fr.evaluate(
+                """() => ({
+                    url: location.href, title: document.title,
+                    links: Array.from(document.querySelectorAll('a')).map(a=>({t:(a.innerText||'').trim(), href:a.href, id:a.id}))
+                            .filter(x=>x.t && /sales|transaction|report|export|download|daily|detail/i.test(x.t)).slice(0,40),
+                    buttons: Array.from(document.querySelectorAll('button,input[type=button],input[type=submit]'))
+                            .map(b=>({t:(b.innerText||b.value||'').trim(), id:b.id, name:b.name}))
+                            .filter(x=>x.t && /report|export|download|run|view|generate|search|submit|go/i.test(x.t)).slice(0,40),
+                    dates: Array.from(document.querySelectorAll('input')).map(i=>({id:i.id,name:i.name,type:i.type,ph:i.placeholder}))
+                            .filter(x=>/date|from|to|start|end/i.test((x.id||'')+(x.name||'')+(x.ph||''))).slice(0,20),
+                    selects: Array.from(document.querySelectorAll('select')).map(s=>({id:s.id,name:s.name,opts:Array.from(s.options).slice(0,12).map(o=>(o.text||'').trim())})).slice(0,20),
+                })""")
+            if p and (p.get("links") or p.get("buttons") or p.get("selects")):
+                return p
+            if p and not probe:
+                probe = p
+        except Exception:
+            continue
+    return probe
+
+
+def pull_b2bsoft_on_page(page):
+    """The b2bsoft 'pull' on an ALREADY-AUTHENTICATED page: there is no report download wired for this
+    portal yet, so it probes what the session offers and says so HONESTLY.
+
+    Split out of run_b2bsoft_sweep so the LIVE session can call it too. Before this, a b2bsoft live
+    login's pull ran `_pull_all_reports_on_page`, which resolves specs for processor='vidapay' — i.e.
+    it drove the VidaPay MA report list against the b2bsoft portal. Harmless-looking while it was only
+    reachable by clicking ▶ Pull now; wrong for every reason once login auto-pulls.
+
+    rows_ingested/delivered are EXPLICIT zeros: without them `_pull_delivered` fell through to its
+    "unknown shape ⇒ True" branch and a b2bsoft pull that imported NOTHING advanced
+    data_source.last_run_at — re-creating, for this processor, exactly the fake freshness that
+    migration 241 was written to kill."""
+    return {
+        "status": "⚠️ imported 0 rows — signed in to b2bsoft OK, but its Sales Transaction Details "
+                  "auto-download is not wired yet, so this pull imported nothing (the daily email "
+                  "feed keeps ingesting meanwhile)",
+        "authenticated": True, "delivered": False, "rows_ingested": 0, "reason": "not_wired",
+        "report_probe": b2b_reports_probe(page), "diag": _snapshot(page),
+    }
+
+
 def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrier_id=None, proxy_url=None):
     """Restore the authenticated b2bsoft session (established via the interactive Log in + 2FA flow and
     persisted as storage_state — optionally routed through a residential proxy to clear b2bsoft's
@@ -2267,36 +2540,6 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
                     or "/account/login" in u or "twofactor" in u:
                 raise VidaPayAuthError(
                     "The b2bsoft session has expired — please re-authenticate (Log in + enter the 2FA code).")
-            diag = _snapshot(page)
-            # Rich probe of the reports UI (links + export buttons + date fields + dropdowns) so the
-            # actual Sales-Transaction-Details download can be wired in ONE pass from a real logged-in
-            # session, instead of guessing the portal's navigation blind.
-            probe = {}
-            for fr in _frames(page):
-                try:
-                    p = fr.evaluate(
-                        """() => ({
-                            url: location.href, title: document.title,
-                            links: Array.from(document.querySelectorAll('a')).map(a=>({t:(a.innerText||'').trim(), href:a.href, id:a.id}))
-                                    .filter(x=>x.t && /sales|transaction|report|export|download|daily|detail/i.test(x.t)).slice(0,40),
-                            buttons: Array.from(document.querySelectorAll('button,input[type=button],input[type=submit]'))
-                                    .map(b=>({t:(b.innerText||b.value||'').trim(), id:b.id, name:b.name}))
-                                    .filter(x=>x.t && /report|export|download|run|view|generate|search|submit|go/i.test(x.t)).slice(0,40),
-                            dates: Array.from(document.querySelectorAll('input')).map(i=>({id:i.id,name:i.name,type:i.type,ph:i.placeholder}))
-                                    .filter(x=>/date|from|to|start|end/i.test((x.id||'')+(x.name||'')+(x.ph||''))).slice(0,20),
-                            selects: Array.from(document.querySelectorAll('select')).map(s=>({id:s.id,name:s.name,opts:Array.from(s.options).slice(0,12).map(o=>(o.text||'').trim())})).slice(0,20),
-                        })""")
-                    if p and (p.get("links") or p.get("buttons") or p.get("selects")):
-                        probe = p
-                        break
-                    if p and not probe:
-                        probe = p
-                except Exception:
-                    continue
-            return {
-                "status": "session verified — logged in to b2bsoft OK; Sales Transaction Details auto-"
-                          "download pending one live calibration (the email feed keeps ingesting meanwhile)",
-                "authenticated": True, "report_probe": probe, "diag": diag,
-            }
+            return pull_b2bsoft_on_page(page)
         finally:
             browser.close()

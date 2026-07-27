@@ -15118,7 +15118,10 @@ async def email_run_due(x_notify_secret: str = Header(default="")):
 # without a wired scraper still ingest via the email sweep or manual upload (ma_* upload types).
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _SOURCE_FIELDS = ["distributor_id", "carrier_id", "processor", "label", "portal_url", "username",
-                  "account_id", "password", "proxy_url", "enabled", "frequency", "hour", "notes"]
+                  "account_id", "password", "proxy_url", "enabled", "frequency", "hour", "notes",
+                  # months_back (mig 207) and auto_pull_after_login (mig 242) are per-source knobs the
+                  # admin page edits — RULE TWO: config, not constants.
+                  "months_back", "auto_pull_after_login"]
 # Columns that never leave the backend (credentials + serialized browser sessions).
 _SOURCE_SECRETS = ("password", "session_state", "pending_state")
 
@@ -15174,6 +15177,13 @@ def _strip_source_pw(row):
     # Not secret, but ~50–100KB of base64 — the list is polled every 3s during login, so the
     # screenshot is served only by the dedicated /login/screenshot endpoint.
     row.pop("login_shot", None)
+    # Same reasoning for the pull diagnostic (a DOM probe can be tens of KB): the list carries only the
+    # flag + headline, the payload is served by /data-sources/{sid}/pull-diagnostic.
+    diag = row.pop("last_pull_diag", None)
+    row["has_pull_diag"] = bool(diag)
+    if isinstance(diag, dict):
+        row["last_pull_delivered"] = diag.get("delivered")
+        row["last_pull_reason"] = diag.get("reason")
     return row
 
 
@@ -15184,6 +15194,12 @@ def _pull_delivered(res):
     Unknown result shape ⇒ True, so a scraper that doesn't report counts is never regressed. PURE."""
     if not isinstance(res, dict):
         return True
+    if res.get("ok") is False:
+        return False
+    # An EXPLICIT delivered flag wins over inference (the pull drivers now set it, so "session verified,
+    # imported nothing" can never be counted as an import again).
+    if "delivered" in res:
+        return bool(res.get("delivered"))
     for k in ("rows_ingested", "rows_saved", "saved", "rows"):
         if k in res:
             try:
@@ -15210,6 +15226,96 @@ def _source_stamp(client, sid, org_id, patch, *, success=False):
         _status_update(client, 'data_source', upd, lambda q: q.eq('id', sid).eq('org_id', org_id))
     except Exception as e:
         print(f"WARN data_source status stamp skipped: {e}")
+
+
+def _pull_diag_payload(res):
+    """The durable, credential-free "what the pull saw" record kept on the data_source row so the
+    operator can CALIBRATE from the UI. Before 2026-07-27 the per-report errors and the DOM snapshot the
+    driver builds were returned over HTTP and then dropped on the floor by the page — so the module's
+    own stated strategy ("the operator's first real login is the calibration pass") had no last mile and
+    nobody could ever see why 0 rows came back. Bounded in size; PURE."""
+    if not isinstance(res, dict):
+        return None
+    reports = []
+    for r in (res.get("reports") or [])[:12]:
+        if not isinstance(r, dict):
+            continue
+        reports.append({
+            "report_key": r.get("report_key"), "target_table": r.get("target_table"),
+            "ok": bool(r.get("ok")), "rows_ingested": r.get("rows_ingested"),
+            "months_covered": (r.get("months_covered") or [])[:12],
+            "reason": r.get("reason"), "error": (str(r.get("error"))[:400] if r.get("error") else None),
+            "calibration": bool(r.get("calibration")),
+            "window_diag": r.get("window_diag"),
+        })
+    probe = res.get("probe") or res.get("report_probe") or {}
+    if isinstance(probe, dict):
+        probe = {k: probe.get(k) for k in
+                 ("url", "title", "frames", "report_options", "nav_links", "selects",
+                  "buttons", "date_fields") if probe.get(k) is not None}
+    return {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "status": str(res.get("status") or res.get("error") or "")[:600],
+        "delivered": _pull_delivered(res), "rows_ingested": res.get("rows_ingested"),
+        "reason": res.get("reason"),
+        "reports_page_reachable": res.get("reports_page_reachable"),
+        "calibration": res.get("calibration"),
+        "reports": reports, "probe": probe,
+    }
+
+
+def _store_pull_diag(client, sid, org_id, res):
+    """Persist the pull diagnostic on the data_source row. A SEPARATE, self-contained update (never
+    merged into the _source_stamp patch) on purpose: _status_update marks EVERY optional column in a
+    failing update as missing-for-this-process, so folding a pre-migration-242 column into the same
+    write would also disable the already-shipped last_attempt_at write. Best-effort; a missing column
+    (mig 242 unrun) simply means no stored diagnostic."""
+    payload = _pull_diag_payload(res)
+    if payload is None:
+        return
+    try:
+        client.schema("commcalc").table("data_source").update(
+            {"last_pull_diag": payload, "last_pull_at": payload["at"]})\
+            .eq("id", sid).eq("org_id", org_id).execute()
+    except Exception as e:
+        print(f"WARN data_source pull diagnostic not stored (run mig 242?): {e}")
+
+
+def _record_pull_result(client, sid, org_id, res, *, source="portal-pull"):
+    """ONE place where a portal pull's outcome is recorded, shared by ▶ Pull now, the scheduled pull and
+    the automatic post-login pull, so all three tell the operator the same truth:
+      • delivered  → last_run_at advances (the freshness trail core.import_evidence reads) + one
+        upload_trace row per report that actually landed rows (mig-202 evidence, keyed on report_key);
+      • otherwise  → last_attempt_at only, and the honest status text stays on the row.
+    Always writes the durable diagnostic. Never raises."""
+    delivered = _pull_delivered(res)
+    try:
+        _source_stamp(client, sid, org_id,
+                      {"last_status": str((res or {}).get("status")
+                                          or (res or {}).get("error") or "ok")[:600],
+                       "auth_status": "authenticated"},
+                      success=delivered)
+    except Exception:
+        pass
+    try:
+        _store_pull_diag(client, sid, org_id, res)
+    except Exception:
+        pass
+    if delivered and isinstance(res, dict):
+        for r in (res.get("reports") or []):
+            if not isinstance(r, dict) or not r.get("rows_ingested"):
+                continue
+            try:
+                _write_upload_trace(
+                    org_id, source=source, filename=None,
+                    upload_type=r.get("report_key"),
+                    result={"saved": r.get("rows_ingested"),
+                            "_trace": {"target_table": r.get("target_table"),
+                                       "rows_in": r.get("rows_ingested")}},
+                    status="ok")
+            except Exception:
+                pass
+    return delivered
 
 
 def _store_login_shot(client, sid, org_id, shot):
@@ -15356,18 +15462,13 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
         if sess is not None and sess.can_pull():
             res = await run_in_threadpool(sess.run_pull_blocking, 900)
             if res is not None:
-                _source_stamp(client, sid, org_id,
-                              {"last_status": str((res or {}).get("status") or "ok"),
-                               "auth_status": "authenticated"},
-                              success=_pull_delivered(res))
-                return {"ok": True, "via": "live-session", **(res or {})}
+                delivered = _record_pull_result(client, sid, org_id, res, source="portal-pull-live")
+                return {"ok": True, "via": "live-session", "delivered": delivered, **(res or {})}
             # res is None → the live session couldn't pull (timed out / just closed) → fall through.
     try:
         res = await handler(org_id, src_row)
-        _source_stamp(client, sid, org_id, {"last_status": str((res or {}).get("status") or "ok"),
-                                            "auth_status": "authenticated"},
-                      success=_pull_delivered(res))
-        return {"ok": True, **(res or {})}
+        delivered = _record_pull_result(client, sid, org_id, res)
+        return {"ok": True, "delivered": delivered, **(res or {})}
     except VidaPayAuthError as e:
         # Session expired / never authenticated — not a hard failure; prompt the operator to log in.
         # Do NOT null session_state here: a transient nav/validity blip would otherwise DESTROY a good
@@ -16093,13 +16194,34 @@ def _live_pull(client, org_id, src_row):
     from app.modules.commcalc import vidapay_sweep as vp
     sid = src_row.get("id")
     carrier_id = src_row.get("carrier_id")
+    proc = (src_row.get("processor") or "").strip().lower()
     try:
         mb = int(src_row.get("months_back") or 2)
     except Exception:
         mb = 2
 
-    def _p(page):
-        return vp._pull_all_reports_on_page(page, client, org_id, sid, carrier_id, mb, dict(src_row or {}))
+    def _p(page, should_stop=None):
+        # DISPATCH ON THE PROCESSOR. `_pull_all_reports_on_page` resolves specs for processor='vidapay',
+        # so running it for a b2bsoft session would drive the VidaPay MA report list against the
+        # b2bsoft portal. Latent while a pull needed a deliberate ▶ Pull now; wrong the moment a
+        # successful login pulls on its own.
+        if proc in ("b2bsoft", "b2b"):
+            return vp.pull_b2bsoft_on_page(page)
+        return vp._pull_all_reports_on_page(page, client, org_id, sid, carrier_id, mb,
+                                            dict(src_row or {}), should_stop=should_stop)
+    return _p
+
+
+def _live_pull_persist(client, org_id, sid):
+    """The callback the live session invokes with the AUTOMATIC post-login pull's result. Routes it
+    through the very same recorder as ▶ Pull now, so an auto-pull that lands rows advances last_run_at
+    (and leaves upload_trace evidence) while one that imports nothing records an ATTEMPT and the honest
+    reason — never a silent, green, zero-row 'success'. org-scoped; best-effort."""
+    def _p(res):
+        try:
+            _record_pull_result(client, sid, org_id, res, source="portal-pull-auto")
+        except Exception:
+            pass
     return _p
 
 
@@ -16109,6 +16231,52 @@ def _live_source_row(client, sid, org_id):
     if not rows:
         raise HTTPException(404, "unknown data source")
     return rows[0]
+
+
+@router.get("/data-sources/{sid}/pull-diagnostic")
+def data_source_pull_diagnostic(sid: str, org_id: str = ORG_ID):
+    """WHAT THE LAST PULL SAW — the per-report outcome plus the portal's own Reports vocabulary.
+
+    This is the missing last mile of the module's stated calibration strategy: the driver has always
+    built a DOM diagnostic on every ambiguous outcome, but until 2026-07-27 it was returned over HTTP
+    and thrown away, so an operator staring at "pulled 0 rows across 0 report(s)" had nothing to act on.
+    Read-only, org-scoped, no credential ever enters the payload (the probe reads names/ids/labels, never
+    input values). Degrades to an explanatory note before migration 242."""
+    require_org(org_id)
+    client = sb()
+    try:
+        rows = (client.schema("commcalc").table("data_source")
+                .select("id,label,processor,last_pull_diag,last_pull_at,last_status,"
+                        "last_run_at,last_attempt_at,auth_status")
+                .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+        try:
+            rows = (client.schema("commcalc").table("data_source")
+                    .select("id,label,processor,last_status,last_run_at,auth_status")
+                    .eq("id", sid).eq("org_id", org_id).limit(1).execute().data) or []
+        except Exception:
+            rows = []
+        if rows:
+            return {"ready": False, "diag": None, "row": rows[0],
+                    "note": ("Run migration 242_commission_pull_diagnostic.sql to store what each pull "
+                             "saw. Until then only the one-line status below is kept.")}
+    if not rows:
+        raise HTTPException(404, "unknown data source")
+    r = rows[0]
+    diag = r.get("last_pull_diag")
+    if isinstance(diag, str):
+        import json as _json
+        try:
+            diag = _json.loads(diag)
+        except Exception:
+            diag = None
+    return {"ready": True, "diag": diag, "at": r.get("last_pull_at"),
+            "row": {k: r.get(k) for k in ("id", "label", "processor", "last_status", "last_run_at",
+                                          "last_attempt_at", "auth_status")},
+            "note": (None if diag else
+                     "No pull has been recorded for this login yet — sign in (the reports are then "
+                     "pulled automatically) or press ▶ Pull now.")}
 
 
 @router.post("/data-sources/{sid}/live-login/start")
@@ -16128,10 +16296,14 @@ def live_login_start(sid: str, org_id: str = ORG_ID):
                   success=False)
     sess = live_login.start_session(sid, org_id, s, _live_persist(client, sid, org_id),
                                     _live_persist_shot(client, sid, org_id),
-                                    _live_pull(client, org_id, s))
-    return {"ok": True, "phase": sess.snapshot_phase(),
-            "message": "Live session starting — watch it below. The 2FA code is sent ONCE to this same "
-                       "live browser; enter it here when the code box appears."}
+                                    _live_pull(client, org_id, s),
+                                    _live_pull_persist(client, org_id, sid))
+    auto = (s.get("auto_pull_after_login") is not False)
+    return {"ok": True, "phase": sess.snapshot_phase(), "auto_pull": auto,
+            "message": ("Live session starting — watch it below. The 2FA code is sent ONCE to this same "
+                        "live browser; enter it here when the code box appears."
+                        + (" As soon as you're signed in, this login's reports are pulled automatically."
+                           if auto else ""))}
 
 
 @router.get("/data-sources/{sid}/live-login/state")

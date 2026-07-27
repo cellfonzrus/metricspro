@@ -161,6 +161,29 @@ def _login_hint(processor, status, auth_status, auth_message):
             f"read the status it reports.")
 
 
+_ZERO_ROW_MARKERS = ("0 rows", "no reports", "0 report(s)", "nothing imported", "imported 0",
+                     "calibration/diagnostic needed", "not calibrated", "0 report")
+
+
+def _signed_in_never_delivered(s):
+    """True when a portal login is AUTHENTICATED yet has never actually imported anything. PURE.
+
+    Two independent signals, either is enough:
+      • `last_run_at` (which since mig 241 advances ONLY on a run that imported data) is empty while an
+        attempt HAS been recorded — the login has been exercised and delivered nothing; or
+      • the last status literally reports a zero-row pull.
+    Deliberately keyword-independent of the `bad` branch above: the owner's row said
+    "pulled 0 rows across 0 report(s): —; calibration/diagnostic needed: …", which contains no
+    error/fail/403 token and therefore matched nothing at all."""
+    au = (s.get("auth_status") or "").strip().lower()
+    st = (s.get("last_status") or "").strip().lower()
+    if au != "authenticated":
+        return False
+    if any(m in st for m in _ZERO_ROW_MARKERS):
+        return True
+    return bool(not s.get("last_run_at") and (s.get("last_attempt_at") or st))
+
+
 @register_provider("commcalc_connectors", label="Imports that cannot run (credentials / login / schedule)",
                    group="import", cost="cheap")
 def p_connectors(client, org_id, ctx):
@@ -230,7 +253,8 @@ def p_connectors(client, org_id, ctx):
     # ── (b) portal-login pulls (VidaPay / T-CETRA / b2bsoft — the owner's example) ───────────────────
     sources = _rows(client, "data_source", org_id, limit=200,
                     select="id,label,processor,enabled,username,account_id,password,auth_status,"
-                           "auth_message,last_status,last_run_at,next_run_at,frequency")
+                           "auth_message,last_status,last_run_at,last_attempt_at,next_run_at,"
+                           "frequency,session_expires_at")
     procs = set()
     for s in sources:
         proc = (s.get("processor") or "").strip()
@@ -255,6 +279,21 @@ def p_connectors(client, org_id, ctx):
                              f"{name} is not importing",
                              _login_hint(proc or name, st, au, s.get("auth_message")),
                              1, "/commcalc/email-imports", "Fix the login"))
+        elif _signed_in_never_delivered(s):
+            # THE SILENT CASE (owner report 2026-07-27). The login is green — auth_status
+            # 'authenticated', a saved session, an attempt recorded — and the last pull imported
+            # NOTHING ("pulled 0 rows across 0 report(s)"). None of the keywords above match that
+            # sentence, so this connector used to pass every check while delivering nothing, forever.
+            out.append(_item("import", f"commcalc:src_nodata:{s.get('id')}", "error",
+                             f"{name} signs in, but has never imported a report",
+                             ("The portal login works — the last attempt reached the site and came back "
+                              "with no data at all. Nothing from this processor is reaching MetricsPro. "
+                              "Open Data Imports → this login → 🔧 What the pull saw: it lists every "
+                              "report the pull tried and the names the portal itself offers. Where a name "
+                              "doesn't match, correct it on Report mapping; then sign in again (the "
+                              "reports are pulled automatically) or press ▶ Pull now."
+                              + (f" It last reported: {st[:180]}" if st else "")),
+                             1, "/commcalc/email-imports", "See what the pull saw"))
         it = sched_silent(s, f"src:{s.get('id')}", f"{name} scheduled pull",
                           "/commcalc/email-imports", f"the reports pulled from {proc or name}")
         if it:
