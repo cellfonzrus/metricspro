@@ -125,7 +125,7 @@ def convert_to_period_pay(pay_basis, pay_amount, pay_period_type):
         factor = (Decimal(12) / Decimal(26)) if biweekly else (Decimal(12) / Decimal(52))
     else:  # annual
         factor = (Decimal(1) / Decimal(26)) if biweekly else (Decimal(1) / Decimal(52))
-    return (amt * factor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return float((amt * factor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def tenant_pay_period_settings(tenant_row):
@@ -165,6 +165,7 @@ def derive_salary_pay(pay_basis, pay_amount, settings, lo: date, hi: date,
     period_pay = convert_to_period_pay(pay_basis, pay_amount, settings.get("pay_period_type"))
     if period_pay is None or lo is None or hi is None or lo > hi:
         return None
+    period_pay_dec = Decimal(str(period_pay))   # re-Decimal'd for exact per-period proration math below
     plen = period_length_days(settings.get("pay_period_type"))
     periods = pay_periods_overlapping(settings, lo, hi)
     total = Decimal("0.00")
@@ -178,12 +179,12 @@ def derive_salary_pay(pay_basis, pay_amount, settings, lo: date, hi: date,
             continue
         days = (eff_end - eff_start).days + 1
         prorated = days != plen
-        amt = (period_pay * Decimal(days) / Decimal(plen)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        amt = (period_pay_dec * Decimal(days) / Decimal(plen)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         total += amt
         any_prorated = any_prorated or prorated
         detail.append({"period_start": p["start"], "period_end": p["end"], "days_counted": days,
                         "period_length_days": plen, "amount": float(amt), "prorated": prorated})
-    return {"amount": float(total), "period_pay": float(period_pay),
+    return {"amount": float(total), "period_pay": period_pay,
             "pay_period_type": settings.get("pay_period_type") or "weekly",
             "periods": detail, "prorated": any_prorated}
 
