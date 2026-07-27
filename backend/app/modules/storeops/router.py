@@ -3711,3 +3711,15 @@ def run_payroll_expenses(period: str, authorization: str = Header(default=""), o
             "expense_ledger_rows_written": len(exp_rows), "push": push,
             "gross_cells": gross_cells, "gross_ledger_rows_written": gross_ledger_rows_written,
             "gross_ledger_error": _gross_ledger_error, "gross_push": gross_push}
+
+
+# ── Admin-attention providers (settings-audit package, 2026-07-26) ────────────────────────────────
+# Contribute StoreOps findings to the cross-module attention feed WITHOUT editing the shared
+# core/import_health.py (AGENT_CONTRACT §1). Guarded: a missing/renamed core module (e.g. migration
+# 717 not applied, or the module simply absent in an older deploy) must never break StoreOps itself.
+try:
+    from app.modules.core.import_health import register_provider as _register_attention_provider
+    from app.modules.storeops import attention as _storeops_attention
+    _storeops_attention.register(_register_attention_provider)
+except Exception as _attn_e:
+    print(f"WARN storeops attention providers not registered: {_attn_e}")
