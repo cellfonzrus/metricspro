@@ -16,7 +16,7 @@ interface Shift {
   status: string
 }
 
-interface Employee { id: number; name: string; home_store: string; role: string }
+interface Employee { id: number; employee_id?: string | null; name: string; home_store: string; role: string }
 interface Store { id: number; store_code: string; address: string; market: string; is_active?: boolean }
 
 // Local-safe day-of-week + m/d label (never the old DAYS[i] index — that was the
@@ -291,7 +291,15 @@ export default function SchedulePage() {
     }
     const emp = allEmps.find(e => e.name === employee_name)
     const payload = {
-      employee_id: emp?.id?.toString() || '',
+      // 2026-07-27 money fix (owner-approved): store the employee's BUSINESS employee_id — the SAME
+      // identity a kiosk punch (storeops.timelog), a manual-hours adjustment, and the employees
+      // roster's own pay-rate lookup (emp_map) all key on. The old `emp?.id` here was the employee's
+      // NUMERIC primary key, which almost never equals the business id ("E<id>") — that mismatch is
+      // what made a scheduled+punched rep show as TWO payroll rows (one at pay_rate $0) and let the
+      // no-double-count rule silently miss same-day shift+punch pairs (see payroll_identity.py +
+      // migration 415's backfill for the full root-cause writeup). Falls back to the numeric id only
+      // for the rare employee record with no business id assigned yet (pre-existing, safe no-op).
+      employee_id: emp?.employee_id || emp?.id?.toString() || '',
       employee_name,
       store_code,
       shift_date: addModal.date,

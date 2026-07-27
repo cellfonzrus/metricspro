@@ -168,7 +168,13 @@ export default function TimeOffPage() {
               <select className="select" style={{ width: '100%' }} value={form.employee_id}
                 onChange={e => setForm(f => ({ ...f, employee_id: e.target.value }))}>
                 <option value="">Select employee...</option>
-                {employees.map(e => <option key={e.id} value={e.id?.toString()}>{e.name}</option>)}
+                {/* 2026-07-27 Gate-1 REDO N1 root-cause fix (owner-approved money-fix package): send
+                    the BUSINESS employee_id — the same identity storeops.shifts/timelog/manual_hours
+                    all key on — not the employee's numeric primary key. The old `e.id` here is the
+                    exact same class of bug fixed in schedule/page.tsx:294 (numeric id stored where a
+                    business id was expected), except here it silently poisoned time_off_requests
+                    instead of shifts; migration 415 backfills the existing rows this produced. */}
+                {employees.map(e => <option key={e.id} value={e.employee_id || e.id?.toString()}>{e.name}</option>)}
               </select>
             </div>
             <div>
