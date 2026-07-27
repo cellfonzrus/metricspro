@@ -26,6 +26,10 @@ export default function CommCalcDashboard() {
   const [loading, setLoading] = useState(true)
   const [calcStatus, setCalcStatus] = useState<string>('')
   const [calcError, setCalcError] = useState<string>('')
+  // CALC WARNINGS (mig 243): a calc can SUCCEED and still leave real activations paid by nothing —
+  // plan rules have no exclusivity and the multi-month engine has its own trigger, so a rule that stops
+  // matching does not hand its lines to anything else. Read-only; never blocks anything.
+  const [calcWarn, setCalcWarn] = useState<any>(null)
 
   useEffect(() => {
     loadData()
@@ -46,6 +50,15 @@ export default function CommCalcDashboard() {
       const errs = status?.save_errors
       setCalcError(status?.calc_status === 'error'
         ? (Array.isArray(errs) ? errs.join(' ') : (errs || 'Calculation failed.')) : '')
+      // pre-mig-243 the column doesn't exist, so fall back to computing them live
+      const w = status?.calc_warnings
+      if (w && (w.counts?.unpaid_activations || w.counts?.unassigned_reps)) setCalcWarn(w)
+      else {
+        try {
+          const live = await api(`/api/v1/commcalc/commission-plans/pay-warnings?period=${enc}&org_id=${ORG_ID}`)
+          setCalcWarn((live?.counts?.unpaid_activations || live?.counts?.unassigned_reps) ? live : null)
+        } catch { setCalcWarn(null) }
+      }
     } catch (e) {
       console.error(e)
     }
@@ -111,6 +124,37 @@ export default function CommCalcDashboard() {
               </a>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Unpaid-activation warnings — a SUCCESSFUL calc that still left activations paying $0 */}
+      {calcWarn && (
+        <div className="card" style={{ borderLeft: '4px solid var(--amber)', background: 'var(--surface2)', marginBottom: 24 }}>
+          <div style={{ fontWeight: 700, color: '#b45309', marginBottom: 6 }}>
+            ⚠ Calculated — but {calcWarn.counts?.unpaid_activations || 0} transaction(s) paid nothing
+            {calcWarn.counts?.unassigned_reps ? ` and ${calcWarn.counts.unassigned_reps} seller(s) have no plan attached` : ''}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
+            These activations matched no Commission-Plan rule and no multi-month schedule trigger, so no
+            configured source pays them. That is usually a rule keyed on the wrong field (an item-description
+            keyword instead of the tender / contract type), or a missing multi-month trigger.
+          </div>
+          <ul style={{ fontSize: 12, color: 'var(--text2)', margin: '8px 0 0', paddingLeft: 18, lineHeight: 1.7 }}>
+            {(calcWarn.unpaid_activations || []).slice(0, 6).map((g: any, i: number) => (
+              <li key={i}>
+                <b>{g.rep}</b> · trans {g.trans_id} · {g.date} · {g.activations} activation(s) ·{' '}
+                {(g.samples || []).map((s: any) => s.product).filter(Boolean).slice(0, 2).join(' | ') || '—'}
+              </li>
+            ))}
+            {(calcWarn.unassigned_reps || []).slice(0, 3).map((u: any, i: number) => (
+              <li key={`u${i}`}>{u.rep} — {u.reason}</li>
+            ))}
+          </ul>
+          <div style={{ marginTop: 10, display: 'flex', gap: 12, alignItems: 'center' }}>
+            <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)', fontSize: 13 }}>Review Commission Plans →</a>
+            <a href="/commcalc/plan-installments" style={{ color: 'var(--accent)', fontSize: 13 }}>Multi-month schedules →</a>
+            <a href="/commcalc/commission-explain" style={{ color: 'var(--accent)', fontSize: 13 }}>Explain a rep's pay →</a>
+          </div>
         </div>
       )}
 
