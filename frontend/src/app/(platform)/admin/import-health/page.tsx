@@ -29,7 +29,10 @@ type Item = {
 }
 type Attention = {
   items: Item[]; deferred: { key: string; label: string }[]
-  counts: { total: number; error: number; warning: number; import: number; mapping: number; duplicate: number }
+  counts: {
+    total: number; error: number; warning: number
+    import: number; mapping: number; duplicate: number; config?: number; system?: number
+  }
   deep: boolean; provider_errors?: { key: string; error: string }[]
 }
 
@@ -134,7 +137,13 @@ export default function ImportHealthPage() {
             <div style={{ fontWeight: 700, fontSize: 14 }}>Needs attention</div>
             <span style={{ fontSize: 12.5, color: 'var(--text2)' }}>
               {att.counts.import} import · {att.counts.mapping} mapping · {att.counts.duplicate} duplicate
+              {' · '}{att.counts.config || 0} setup · {att.counts.system || 0} system
             </span>
+            <button className="btn" disabled={busy} style={{ fontSize: 12.5 }}
+              title="Re-run the checks now — anything you have just fixed drops off the list"
+              onClick={async () => { setBusy(true); await loadAtt(att.deep); setBusy(false) }}>
+              Re-check
+            </button>
             {!att.deep && (att.deferred || []).length > 0 && (
               <button className="btn" disabled={busy} style={{ marginLeft: 'auto', fontSize: 12.5 }}
                 onClick={async () => { setBusy(true); await loadAtt(true); setBusy(false) }}>
@@ -146,8 +155,10 @@ export default function ImportHealthPage() {
             ? <div style={{ fontSize: 13, color: '#166534', marginTop: 8 }}>✅ Nothing needs attention right now.</div>
             : (
               <div style={{ marginTop: 10, display: 'grid', gap: 6 }}>
+                {/* every item renders here regardless of its group (this list is flat, not bucketed);
+                    the key carries the group so two providers using the same item key can't collide */}
                 {att.items.map(i => (
-                  <div key={i.key} style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12.5 }}>
+                  <div key={`${i.group || ''}:${i.key}`} style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12.5 }}>
                     <span style={{ width: 74, flexShrink: 0, fontWeight: 700, textTransform: 'uppercase',
                       fontSize: 10, letterSpacing: '0.05em', color: 'var(--text3)' }}>{i.group}</span>
                     <span style={{ fontWeight: 600 }}>{i.label}</span>

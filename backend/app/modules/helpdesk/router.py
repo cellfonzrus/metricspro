@@ -1370,3 +1370,9 @@ async def support_fix_request_status(fid: str, body: dict, authorization: str = 
                     pass
     db("support_fix_request").update(patch).eq("id", fid).execute()
     return {"ok": True, "status": target, "approved_by": patch.get("approved_by")}
+
+
+# ── Admin-attention provider (owner 2026-07-26) ───────────────────────────────────────────────────
+# Imported for the @register_provider side effect ONLY: a tenant collecting tickets with no alert email
+# configured anywhere surfaces in the login attention popup. No routes, no gates, no core edits.
+from . import attention as _attention   # noqa: E402,F401

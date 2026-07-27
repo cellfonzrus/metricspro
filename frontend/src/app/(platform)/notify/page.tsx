@@ -29,8 +29,24 @@ const th: React.CSSProperties = { textAlign: 'left', padding: '8px 12px', fontSi
 const td: React.CSSProperties = { padding: '8px 12px', fontSize: 13, borderBottom: '1px solid var(--border,#f3f4f6)' }
 const d10 = (s: string | null) => (s ? String(s).slice(0, 16).replace('T', ' ') : '—')
 
+type NotifyTab = 'recipients' | 'subs' | 'log' | 'settings'
+const NOTIFY_TABS: NotifyTab[] = ['recipients', 'subs', 'log', 'settings']
+
+// Deep-linkable tab (?tab=subs|log|recipients|settings): the admin-attention items for notify link
+// straight to the tab that FIXES them, so "Review schedules" lands on Subscriptions rather than making
+// the admin hunt for it. Read from window.location on mount (not useSearchParams) so the page keeps its
+// current static-render behaviour and needs no Suspense boundary. Unknown value → today's default.
+function initialTab(): NotifyTab {
+  try {
+    const t = new URLSearchParams(window.location.search).get('tab') as NotifyTab | null
+    if (t && NOTIFY_TABS.includes(t)) return t
+  } catch { /* SSR / no window → default */ }
+  return 'subs'
+}
+
 export default function NotifyPage() {
-  const [tab, setTab] = useState<'recipients' | 'subs' | 'log' | 'settings'>('subs')
+  const [tab, setTab] = useState<NotifyTab>('subs')
+  useEffect(() => { setTab(initialTab()) }, [])
   const [reports, setReports] = useState<Report[]>([])
   const [saved, setSaved] = useState<Saved[]>([])
   const [employees, setEmployees] = useState<Emp[]>([])
