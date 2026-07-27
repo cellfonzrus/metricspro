@@ -12,13 +12,14 @@ import calendar
 import re
 import secrets
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as _date
 from fastapi import APIRouter, Header, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.core import crypto
-from app.modules.storeops.router import scope_keyset, in_keyset
+from app.modules.storeops.router import scope_keyset, in_keyset, _tenant_pp_settings, _employees_with_pay_fields
+from app.modules.storeops import payroll_salary
 
 router = APIRouter(prefix="/hr", tags=["HR"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -152,13 +153,17 @@ async def hr_create_employee(body: dict, org_id: str = ORG_ID):
 
 
 @router.patch("/employees/{emp_id}")
-async def hr_update_employee(emp_id: str, body: dict, org_id: str = ORG_ID):
+async def hr_update_employee(emp_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Update a person from HR. Updates the roster row (if roster fields are present) and, when a
-    role/scope + email is given, re-syncs the app_users assignment so the login stays in step."""
+    role/scope + email is given, re-syncs the app_users assignment so the login stays in step.
+
+    `authorization` is threaded through to storeops.update_employee (2026-07-27) so its manager gate
+    on pay_rate/pay_basis/pay_amount/termination_date (_PAY_GATED_FIELDS) also applies when a pay
+    field is edited via HR (the HR "Employees & Pay" page is the primary pay-setup surface)."""
     from app.modules.storeops.router import EMP_FIELDS, update_employee
     res = None
     if any(k in body for k in EMP_FIELDS):
-        res = update_employee(emp_id, body, org_id)   # sync handler; raises 404 if missing; org-scoped
+        res = update_employee(emp_id, body, authorization=authorization, org_id=org_id)   # sync handler; raises 404 if missing; org-scoped
     email = (body.get("email") or (res or {}).get("email") or "").strip().lower()
     role = (body.get("role_name") or body.get("app_role") or "").strip()
     has_scope = any(k in body for k in ("market", "store_code", "store_codes"))
@@ -178,15 +183,20 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
     """Per-employee total compensation for a period: wages (hours × pay_rate, from shifts) +
     commission (rep_commissions total_payout) − chargeback deductions. Span-scoped to the caller."""
     so, cc = _so(), _cc()
-    emps = (so.table("employees")
-            .select("employee_id,name,home_store,pay_rate,is_active,epay_salesperson")
-            .eq("org_id", org_id).eq("is_active", True).execute().data) or []
+    emps = _employees_with_pay_fields(org_id, "employee_id,name,home_store,pay_rate,is_active,epay_salesperson")
+    emps = [e for e in emps if e.get("is_active") is True]   # matches the prior .eq("is_active", True)
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / enforcement off)
     if ks is not None:
         emps = [e for e in emps if in_keyset(ks, e.get("home_store"))]
 
     # Wages — sum the month's shift hours (actual, falling back to scheduled) × pay_rate.
     start, nxt = _month_range(period)
+    # Salary pay-basis (2026-07-27) — resolved ONCE for the whole period, reused per employee below.
+    # Degrades to weekly-Monday defaults on any tenant-settings read failure (payroll_salary never
+    # raises past this call).
+    pp_settings = _tenant_pp_settings(org_id)
+    period_lo = _date.fromisoformat(start) if start else None
+    period_hi = (_date.fromisoformat(nxt) - timedelta(days=1)) if start else None
     hours_by_eid = {}
     if start:
         shifts = (so.table("shifts").select("employee_id,scheduled_hours,actual_hours")
@@ -228,12 +238,34 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
         rate = float(e.get("pay_rate") or 0)
         hrs = round(hours_by_eid.get(e.get("employee_id"), 0.0), 1)
         wages = round(hrs * rate, 2)
+        # Salary pay-basis override (2026-07-27) — SAME shared payroll_salary.derive_salary_pay used
+        # by GET /payroll, so Total Compensation's "Base salary" never disagrees with the Payroll
+        # Report for the same employee/period. `basis` stays 'hourly' (no-op) unless the pay_basis
+        # column is present AND actually set to something else with a usable pay_amount.
+        basis, salary_meta = "hourly", {}
+        if "pay_basis" in e and period_lo and period_hi:
+            basis, amount = payroll_salary.resolve_pay_basis(e)
+            if basis != "hourly" and amount and amount > 0:
+                try:
+                    derived = payroll_salary.derive_salary_pay(
+                        basis, amount, pp_settings, period_lo, period_hi,
+                        payroll_salary.parse_date(e.get("hire_date")),
+                        payroll_salary.parse_date(e.get("termination_date")))
+                except Exception:
+                    derived = None
+                if derived is not None:
+                    wages = derived["amount"]
+                    salary_meta = {"pay_basis": basis, "salary_period_pay": derived["period_pay"],
+                                    "salary_prorated": derived["prorated"]}
         keys = {str(e.get("name") or "").strip().upper(),
                 str(e.get("epay_salesperson") or "").strip().upper()} - {""}
         cr = next((comm_by_key[k] for k in keys if k in comm_by_key), None)
         commission = round(float((cr or {}).get("total_payout") or 0), 2)
         cb = round(sum(cb_by_key[k] for k in keys if k in cb_by_key), 2)
-        if hrs == 0 and commission == 0 and not rate:
+        # A salaried employee with a configured pay_amount always shows even with 0 hours/rate/comm
+        # this period (they still earn their salary) — everyone else keeps the original "nothing to
+        # show" skip.
+        if hrs == 0 and commission == 0 and not rate and not salary_meta:
             continue   # nothing to show for this person
         total = round(wages + commission - cb, 2)
         # Annualized projection: this period's total comp run-rate × 12 months.
@@ -241,7 +273,7 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
         rows.append({"employee_id": e.get("employee_id"), "name": e.get("name"),
                      "store": e.get("home_store"), "pay_rate": rate, "hours": hrs,
                      "base_salary": wages, "commission": commission, "chargebacks": cb,
-                     "total_comp": total, "annualized": annualized})
+                     "total_comp": total, "annualized": annualized, **salary_meta})
         tot_w += wages; tot_c += commission; tot_cb += cb
 
     rows.sort(key=lambda r: -r["total_comp"])

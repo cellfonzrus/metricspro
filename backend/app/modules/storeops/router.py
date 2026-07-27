@@ -655,7 +655,7 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
     # must still be paid their real rate (2026-07-25 fix) — matches /payroll-by-store's existing
     # all-employees rate_map. Row EXISTENCE for an inactive employee is still gated on real activity
     # below (_inactive_activity_rows), so this alone does not resurrect a schedule-only phantom.
-    employees = sb().table("employees").select("id,name,employee_id,pay_rate,home_store,is_active").eq("org_id", org_id).execute().data or []
+    employees = _employees_with_pay_fields(org_id, "id,name,employee_id,pay_rate,home_store,is_active")
 
     emp_map = {e["employee_id"]: e for e in employees}
     inactive_ids = _inactive_ids_from(employees)
@@ -818,6 +818,17 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
     # regrouping of already-computed numbers, never a hours×rate recompute — see
     # payroll_identity.py's module docstring for the full root-cause + presentation-only proof.
     rows = _reconcile_employee_identity(rows, employees)
+    # SALARY PAY-BASIS OVERRIDE (owner directive 2026-07-27, Deliverable 3) — see payroll_salary.py's
+    # module docstring. Runs AFTER the RPC-fast-path/legacy-path convergence above, so it is the ONE
+    # shared point that applies regardless of which hours-aggregation branch ran. try/except: a bad
+    # tenant-settings row or unexpected data must never break the base hourly report.
+    if lo and hi:
+        try:
+            rows = payroll_salary.apply_to_payroll_rows(
+                rows, employees, _tenant_pp_settings(org_id),
+                _date.fromisoformat(lo), _date.fromisoformat(hi) - timedelta(days=1))
+        except Exception:
+            pass
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [r for r in rows if in_keyset(ks, r.get("store"))]
@@ -836,9 +847,17 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     {store_code, hours, amount}."""
     lo, hi = _resolve_range(month, start, end)
     # All employees (active OR not) — a terminated rep who worked this month still earns; rate=0 if unknown.
-    employees = sb().table("employees").select("employee_id,pay_rate,is_active").eq("org_id", org_id).execute().data or []
+    employees = _employees_with_pay_fields(org_id, "employee_id,pay_rate,is_active,home_store")
     rate_map = {e.get("employee_id"): float(e.get("pay_rate") or 0) for e in employees}
     inactive_ids = _inactive_ids_from(employees)
+    # Salary pay-basis (Deliverable 4) — per-(employee, store) hours/$ bookkeeping, gathered ONLY for
+    # employees who are actually salaried (empty set -> zero extra cost for an all-hourly tenant). See
+    # payroll_salary.apply_to_by_store for how these are consumed.
+    salaried_ids = {e.get("employee_id") for e in employees
+                    if e.get("employee_id") and "pay_basis" in e
+                    and payroll_salary.resolve_pay_basis(e)[0] != "hourly"}
+    emp_store_hours: dict = {}
+    emp_store_dollars: dict = {}
 
     by_store = {}
     groups = _payroll_month_groups(org_id, lo, hi)
@@ -855,11 +874,15 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
             store = (g.get("store_code") or "").strip()
             if not store:
                 continue
+            eid = g.get("employee_id")
             hrs = float(g.get("hours_eff_sum") or 0)
-            rate = rate_map.get(g.get("employee_id"), 0.0)
+            rate = rate_map.get(eid, 0.0)
             d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
             d["hours"] += hrs
             d["amount"] += hrs * rate
+            if eid in salaried_ids:
+                payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
+                payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
         for g in tl_groups:
             eid = g.get("employee_id")
             store = (g.get("store_code") or "").strip()
@@ -870,6 +893,9 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
             d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
             d["hours"] += hrs
             d["amount"] += hrs * rate
+            if eid in salaried_ids:
+                payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
+                payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
     else:
         # LEGACY PATH (pre-mig-407 fallback): full row fetch + Python aggregation — UNCHANGED.
         q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
@@ -893,6 +919,9 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
             d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
             d["hours"] += hrs
             d["amount"] += hrs * rate
+            if eid in salaried_ids:
+                payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
+                payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
 
         # UNIVERSAL FALLBACK (2026-07-18, same audit as /payroll) — a clock punch with no matching shift
         # row is real existing platform data this store auto-fill was dropping. ADDITIVE ONLY: a day
@@ -915,12 +944,32 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
                 d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
                 d["hours"] += hrs
                 d["amount"] += hrs * rate
+                if eid in salaried_ids:
+                    payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
+                    payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
 
     # Inactive employees: ALWAYS computed via this ONE shared, phantom-aware path (2026-07-25) — same
     # function /payroll uses, so both endpoints agree byte-for-byte on which of an inactive employee's
     # hours are "real" vs a leftover schedule-only phantom.
     real_shifts, tl_rows = _inactive_activity_rows(org_id, lo, hi, inactive_ids)
     _merge_inactive_into_by_store(by_store, rate_map, real_shifts, tl_rows)
+
+    # SALARY PAY-BASIS OVERRIDE (owner directive 2026-07-27, Deliverable 4) — see
+    # payroll_salary.apply_to_by_store's own docstring for the subtract-hourly/add-derived mechanics.
+    # NOTE (known, documented gap): a salaried employee who is ALSO inactive/terminated mid-period is
+    # excluded from emp_store_hours/emp_store_dollars above (their contribution instead flows through
+    # _merge_inactive_into_by_store, which this hook does not track) — their STORE-level allocation
+    # here still uses the hourly-computed figure. Their overall PAYROLL REPORT total (GET /payroll) is
+    # still correct (that endpoint's override applies uniformly to every merged row regardless of
+    # active status) — only this store-split is narrower in scope. Flagged as a follow-up in
+    # docs/handoffs/people.md rather than silently left unmentioned.
+    if lo and hi and salaried_ids:
+        try:
+            by_store = payroll_salary.apply_to_by_store(
+                by_store, employees, emp_store_hours, emp_store_dollars, _tenant_pp_settings(org_id),
+                _date.fromisoformat(lo), _date.fromisoformat(hi) - timedelta(days=1))
+        except Exception:
+            pass
 
     rows = list(by_store.values())
     for r in rows:
@@ -959,8 +1008,8 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
     if not (employee_id and start and end):
         raise HTTPException(400, "employee_id, start and end are required")
     ids, variant_name = _emp_id_variants(org_id, employee_id)
-    emp_rows = (sb().table("employees").select("employee_id,name,pay_rate,is_active")
-                .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data) or []
+    emp_rows = _employees_with_pay_fields(org_id, "employee_id,name,pay_rate,is_active")
+    emp_rows = [e for e in emp_rows if e.get("employee_id") == employee_id]
     emp = emp_rows[0] if emp_rows else {}
     name = emp.get("name") or variant_name or employee_id
     pay_rate = float(emp.get("pay_rate") or 0)
@@ -1085,9 +1134,38 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
         if not any(in_keyset(ks, d.get("store_code")) for d in out_days):
             raise HTTPException(403, "not in your scope")
 
+    # Salary pay-basis note (Deliverable 3 UX requirement: "salaried — pay not hours-derived" note in
+    # the drill-down). Read-only/display-only here — this endpoint never computes a pay figure other
+    # than the informational salary_derived_pay shown alongside the hours breakdown; the AUTHORITATIVE
+    # figure is always GET /payroll's own row (payroll_salary.apply_to_payroll_rows).
+    salary_meta = {}
+    if "pay_basis" in emp:
+        basis, amount = payroll_salary.resolve_pay_basis(emp)
+        if basis != "hourly":
+            derived = None
+            if amount and amount > 0:
+                try:
+                    derived = payroll_salary.derive_salary_pay(
+                        basis, amount, _tenant_pp_settings(org_id),
+                        _date.fromisoformat(start[:10]), _date.fromisoformat(end[:10]),
+                        payroll_salary.parse_date(emp.get("hire_date")),
+                        payroll_salary.parse_date(emp.get("termination_date")))
+                except Exception:
+                    derived = None
+            salary_meta = {
+                "pay_basis": basis, "pay_amount": amount,
+                "salary_period_pay": (derived or {}).get("period_pay"),
+                "salary_derived_pay": (derived or {}).get("amount"),
+                "salary_prorated": (derived or {}).get("prorated", False),
+                "salary_note": ("Salaried — pay is not derived from these hours; shown for reference only."
+                                 if derived else
+                                 f"pay_basis is '{basis}' but no pay_amount is configured — pay is not derived."),
+            }
+
     return {"employee_id": employee_id, "name": name, "pay_rate": pay_rate, "start": start, "end": end,
             "days": out_days, "total_actual_hours": total_actual, "total_scheduled_hours": total_scheduled,
-            "total_manual_hours_not_in_payroll": round(total_manual_not_in_payroll, 2)}
+            "total_manual_hours_not_in_payroll": round(total_manual_not_in_payroll, 2),
+            **salary_meta}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
