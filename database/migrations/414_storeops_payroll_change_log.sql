@@ -53,3 +53,28 @@ CREATE INDEX IF NOT EXISTS ix_payroll_change_log_org_created
 
 NOTIFY pgrst, 'reload schema';
 SELECT 'Migration 414 complete — storeops.payroll_change_log (append-only manual-hours-edit audit trail)' AS status;
+
+-- ── Gate-1 grant-gap fix (2026-07-27, mod-people payroll-id-canonicalize package, coordinator
+-- finding): this migration already RAN IN PROD (before this fix landed) with NO RLS/GRANT section at
+-- all — storeops.payroll_change_log carries employee names/hours/who-changed-what and shipped with
+-- Postgres's bare default privileges. Two real problems, both missed by scratch-Postgres testing
+-- under a superuser role (which hides grant gaps entirely):
+--   1. No explicit GRANT to service_role — the house convention is EXPLICIT grants, never relying on
+--      ALTER DEFAULT PRIVILEGES (see migration 232's own comment on this exact lesson). Empirically
+--      verified against a real (non-superuser) `service_role` role with no explicit grant: every
+--      INSERT is `permission denied for table payroll_change_log` — meaning in prod, every one of
+--      `_log_payroll_change`'s best-effort writes could have been silently swallowed by its own
+--      try/except (the underlying shift/punch/manual-hours write always succeeds regardless — see
+--      migration 414's own header — but the audit trail itself would have stayed empty).
+--   2. No RLS — this is an APPEND-ONLY AUDIT LOG (names + hours + who-changed-what), not a table any
+--      anon/authenticated PostgREST caller should ever read or write directly (every real read goes
+--      through the org-scoped `GET /storeops/payroll-change-log` backend endpoint).
+-- Hardened to the SAME service-role-only posture as storeops.google_review_config (migration 411's
+-- Gate-1 N1/N2 fix): RLS enabled, anon/authenticated grants revoked, service_role granted explicitly.
+-- Idempotent (ALTER/REVOKE/GRANT are all safe re-applies) — safe to re-run even though 414 already ran
+-- once; re-running this UPDATED file is how the hardening actually takes effect in prod.
+ALTER TABLE storeops.payroll_change_log ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON storeops.payroll_change_log FROM anon, authenticated;
+GRANT ALL ON storeops.payroll_change_log TO service_role;
+
+NOTIFY pgrst, 'reload schema';

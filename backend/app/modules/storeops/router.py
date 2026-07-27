@@ -156,8 +156,42 @@ def set_timeoff_conflict_mode(body: dict, authorization: str = Header(default=""
     return {"ok": True, "mode": mode}
 
 
+def _canonical_shift_employee_id(org_id, raw_id, employees=None):
+    """Resolve a raw `shifts.employee_id` value to the canonical BUSINESS employees.employee_id
+    BEFORE any new/updated storeops.shifts row is written — the 2026-07-27 owner-approved money fix
+    (see payroll_identity.py's module docstring + migration 415 for the full root-cause writeup).
+    Called from every shift-writing path (POST /shifts, the bulk shift-template save/apply, the
+    employee-merge reassignment) so no writer — this one, a future one, or a stale saved template —
+    can create a NEW numeric-id shift regardless of which code path produced it.
+
+    Reuses `business_id_alias_map`'s own ambiguity guard: a raw numeric value that collides with a
+    DIFFERENT employee's own real business employee_id is left UNCHANGED rather than guessed at —
+    the same rule the payroll aggregation (`payroll_identity.reconcile_employee_identity`) and the
+    shift-extension gate (`_emp_id_variants`) already apply. A blank/None id, or one that doesn't
+    resolve to any employee's numeric primary key (already a business id, or simply invalid), passes
+    through unchanged — nothing to reconcile, and never a 500 on a bad/foreign id."""
+    raw = str(raw_id).strip() if raw_id not in (None, "") else ""
+    if not raw:
+        return raw_id
+    if employees is None:
+        try:
+            employees = (sb().table("employees").select("id,employee_id")
+                         .eq("org_id", org_id).execute().data) or []
+        except Exception:
+            return raw_id
+    alias = _business_id_alias_map(employees)
+    return alias.get(raw, raw_id)
+
+
 @router.post("/shifts")
 def create_shift(shift: dict, org_id: str = ORG_ID):
+    # 2026-07-27 money fix (owner-approved): canonicalize the incoming employee_id to the BUSINESS id
+    # before anything below reads it (the time-off check, the hours-budget guard, and the insert
+    # itself) — closes this endpoint as a source of NEW numeric-id shifts, whichever caller hits it.
+    eid_raw = shift.get("employee_id")
+    if eid_raw not in (None, ""):
+        shift = {**shift, "employee_id":
+                 _canonical_shift_employee_id(shift.get("org_id") or org_id, eid_raw)}
     # Check for an APPROVED time-off conflict. Default policy is WARN, not block (see above) — a
     # manager can still schedule over approved time off; the response carries `timeoff_warning` so
     # the caller can surface it non-blockingly. A tenant opted into 'block' keeps the original
@@ -1354,7 +1388,12 @@ def merge_employees(body: dict, org_id: str = ORG_ID):
         raise HTTPException(404, "employee not found")
     dup, tgt = dup[0], tgt[0]
     moved = {"shifts": 0, "time_off": 0}
-    reassign = {"employee_id": str(tgt["id"]), "employee_name": tgt.get("name")}
+    # 2026-07-27 money fix: reassign to the target's BUSINESS employee_id (same identity every other
+    # payroll source uses), not their numeric primary key — the old `str(tgt["id"])` here created a
+    # brand-new numeric-id shift on every merge, the identical bug this whole package fixes elsewhere.
+    # Falls back to the numeric id only if the target somehow has no business id yet (pre-existing,
+    # safe no-op — matches the pre-fix behavior for that edge case only).
+    reassign = {"employee_id": tgt.get("employee_id") or str(tgt["id"]), "employee_name": tgt.get("name")}
     for field, val in (("employee_id", str(dup["id"])), ("employee_name", dup.get("name"))):
         if not val:
             continue
@@ -1557,6 +1596,22 @@ def save_week_as_template(body: dict, org_id: str = ORG_ID):
               .gte("shift_date", week_start).lte("shift_date", we).execute().data) or []
     if not shifts:
         raise HTTPException(400, "No shifts in that week to save as a template.")
+    # 2026-07-27 money fix: canonicalize each shift's employee_id to the business id BEFORE it's
+    # captured into the template, so a leftover numeric-id shift (pre-fix, or pre-migration-415
+    # backfill) never propagates the bug forward every time the template is later applied. Builds a
+    # NEW list of shallow copies rather than mutating the fetched rows in place — this function only
+    # ever READS storeops.shifts here (never writes it back), so the source rows must stay untouched;
+    # a live PostgREST response is a fresh dict per call anyway, but copying keeps that explicit
+    # rather than relying on it (same discipline as update_shift's own "before" snapshot copy).
+    _save_tmpl_employees = sb().table("employees").select("id,employee_id").eq("org_id", org_id).execute().data or []
+    canon_shifts = []
+    for s in shifts:
+        s = dict(s)
+        raw = s.get("employee_id")
+        if raw not in (None, ""):
+            s["employee_id"] = _canonical_shift_employee_id(org_id, raw, employees=_save_tmpl_employees)
+        canon_shifts.append(s)
+    shifts = canon_shifts
     emp_ids = list({str(s.get("employee_id")) for s in shifts if s.get("employee_id")})
     for eid in emp_ids:
         # org_id-scoped: employee_id here isn't guaranteed globally unique (numeric-vs-business-id
@@ -1595,11 +1650,18 @@ def apply_templates(body: dict, org_id: str = ORG_ID):
                 .eq("org_id", org_id).eq("is_deleted", False).gte("shift_date", week_start).lte("shift_date", we).execute().data) or []
     seen = {(e.get("employee_name"), str(e.get("shift_date")), e.get("start_time"), e.get("store_code")) for e in existing}
     added = skipped_off = 0
+    # 2026-07-27 money fix: canonicalize once for the whole batch (not re-fetched per template row).
+    _apply_tmpl_employees = sb().table("employees").select("id,employee_id").eq("org_id", org_id).execute().data or []
     for t in templates:
         target = (ws + timedelta(days=int(t.get("weekday") or 0))).isoformat()
         if (t.get("employee_name"), target, t.get("start_time"), t.get("store_code")) in seen:
             continue
         eid = t.get("employee_id")
+        if eid not in (None, ""):
+            # Guards against a STALE template saved before this fix (or before migration 415's
+            # backfill) still carrying a numeric id — applying it must never create a new
+            # numeric-id shift either.
+            eid = _canonical_shift_employee_id(org_id, eid, employees=_apply_tmpl_employees)
         if eid:
             conflict = (sb().table("time_off_requests").select("id").eq("org_id", org_id).eq("employee_id", str(eid))
                         .eq("status", "approved").lte("start_date", target).gte("end_date", target).limit(1).execute().data)
