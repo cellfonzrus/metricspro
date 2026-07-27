@@ -228,6 +228,181 @@ def closing_rows(date: str = None, store_code: str = None, date_from: str = None
     return q.order("close_date", desc=True).limit(2000).execute().data or []
 
 
+# ── Dashboard detail (retail-ops-13, OWNER DIRECTIVE 2026-07-27): EVERY submitted column, one row per
+#    rep-submission, with the standard filter bar (date range / store / market / rep) + export. READ
+#    ONLY — reuses the exact existing gate/recon helpers (_b2b_day / _rep_b2b / _money_issues) rather
+#    than re-implementing them, so this view can never diverge from the real close-gate math and never
+#    writes anything. Secrecy boundary is preserved: the coarse gate_status (ok/flagged/blocked/
+#    recon_pending) is always included, but the DOLLAR reasons/B2B figures (gate_reasons/b2b_cash/
+#    b2b_card) are populated only for a caller who passes the existing _can_mgmt_review gate — the same
+#    boundary /closing/management and /closing/attempts already enforce, so a rep or DM viewing the main
+#    dashboard still never sees the true system figure, exactly like the 3-try submit flow already keeps
+#    secret today.
+_SUBMISSIONS_MAX_ROWS = 8000
+_SUBMISSIONS_MAX_STATUS_DATES = 45   # bound _b2b_day replays on a very wide date range (mirrors the
+                                     # existing closing_stale_stores provider's "bounded to at most 14" pattern
+
+
+def _row_display_tenders(r: dict) -> dict:
+    """Best-effort per-tender breakdown for ONE submitted row. A row with any t_* column populated
+    (mig103+, both manual and sheet-sourced once the tenant is on the new form) reads those directly.
+    A pre-mig103 sheet_upload row (no t_* at all) falls back to the legacy store_cash/store_cc/
+    epay_cash/epay_cc/other_account split — the EXACT SAME fallback create_row already applies at
+    write time (see POST /row above) — so this is a pure read-time re-derivation, not new math."""
+    has_t = any(r.get(k) is not None for k in
+                ("t_cash", "t_credit", "t_ext_cc", "t_gift", "t_store_acct", "t_zelle", "t_acima"))
+    if has_t:
+        return {"cash": _f(r.get("t_cash")), "credit": _f(r.get("t_credit")), "ext_cc": _f(r.get("t_ext_cc")),
+                "gift": _f(r.get("t_gift")), "store_acct": _f(r.get("t_store_acct")),
+                "zelle": _f(r.get("t_zelle")), "acima": _f(r.get("t_acima"))}
+    return {"cash": round(_f(r.get("store_cash")) + _f(r.get("epay_cash")), 2),
+            "credit": round(_f(r.get("store_cc")) + _f(r.get("epay_cc")), 2),
+            "ext_cc": 0.0, "gift": 0.0, "store_acct": 0.0,
+            "zelle": _f(r.get("other_account")), "acima": 0.0}
+
+
+@router.get("/submissions")
+def closing_submissions(date_from: str = None, date_to: str = None,
+                        authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Every daily_closing row (one per rep-submission) in [date_from, date_to] (inclusive; defaults to
+    the current month), with ALL submitted columns + resolved market + DM-verify status + a re-derived
+    close-gate status badge. Powers the Daily Closing dashboard's detail table."""
+    client = sb()
+    today = _biz_today_iso()
+    if not date_from and not date_to:
+        date_from, date_to = today[:8] + "01", today
+    else:
+        date_to = date_to or today
+        date_from = date_from or (date_to[:8] + "01")
+    if date_from > date_to:
+        date_from, date_to = date_to, date_from
+
+    rows = (client.schema("commcalc").table("daily_closing").select("*").eq("org_id", org_id)
+            .gte("close_date", date_from).lte("close_date", date_to)
+            .order("close_date", desc=True).limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
+    truncated = len(rows) >= _SUBMISSIONS_MAX_ROWS
+
+    # Market resolution (store_code -> market), same union source as GET /closing/stores.
+    try:
+        store_rows = (client.schema("storeops").table("stores").select("store_code,market")
+                      .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        store_rows = []
+    market_by_code = {s.get("store_code"): (s.get("market") or "").strip()
+                      for s in store_rows if s.get("store_code")}
+
+    dates = sorted({r.get("close_date") for r in rows if r.get("close_date")})
+
+    # DM verification, per (store_code, close_date).
+    vers = {}
+    if dates:
+        try:
+            vrows = (client.schema("commcalc").table("daily_closing_verification").select("*")
+                     .eq("org_id", org_id).in_("close_date", dates).execute().data) or []
+        except Exception:
+            vrows = []
+        for v in vrows:
+            vers[(v.get("store_code"), v.get("close_date"))] = v
+
+    # Custom tender/count-field labels (best-effort, ONE extra read each — not per row).
+    from . import count_config, tender_config
+    try:
+        clabels = {d.get("field_key"): (d.get("label") or d.get("field_key"))
+                   for d in count_config.load_count_config(client, org_id)}
+    except Exception:
+        clabels = {}
+    try:
+        _tdefs, _tmaps = tender_config.load_tender_config(client, org_id)
+        tlabels = {d.get("tender_key"): (d.get("label") or d.get("tender_key")) for d in _tdefs}
+    except Exception:
+        tlabels = {}
+
+    can_review = _can_mgmt_review(_caller_perms(client, authorization))
+
+    # Gate-status re-derivation: replay each distinct close_date's B2B day ONCE (cached), capped so a
+    # huge date range can't fire dozens of heavy sales-day queries per row.
+    # Prioritize the MOST RECENT distinct dates when capped (an admin widening the range still gets
+    # today's/this-week's rows computed first; older ones degrade to 'not_computed' rather than guessing).
+    status_dates = sorted(dates, reverse=True)[:_SUBMISSIONS_MAX_STATUS_DATES]
+    status_capped = len(dates) > _SUBMISSIONS_MAX_STATUS_DATES
+    day_cache = {}
+    for d in status_dates:
+        try:
+            day_cache[d] = _b2b_day(client, org_id, d)
+        except Exception:
+            day_cache[d] = None
+
+    out = []
+    for r in rows:
+        code = r.get("store_code")
+        d = r.get("close_date")
+        mkt = market_by_code.get(code) or ""
+        tenders = _row_display_tenders(r)
+        declared_cash = tenders["cash"]
+        declared_credit = round(tenders["credit"] + tenders["ext_cc"], 2)
+
+        gate_status, reasons, b2b_cash, b2b_card = "not_computed", [], None, None
+        day = day_cache.get(d)
+        if day is not None:
+            if not day.get("has_data"):
+                gate_status = "recon_pending"
+            else:
+                repb = _rep_b2b(day, code, r.get("employee_name") or "") if code else None
+                if repb is None or not repb.get("tenders_available", True):
+                    gate_status = "recon_pending"
+                else:
+                    issues = _money_issues(declared_cash, declared_credit, repb["cash"], repb["card"])
+                    blocks = [i["reason"] for i in issues if i["severity"] == "block"]
+                    flags = [i["reason"] for i in issues if i["severity"] == "flag"]
+                    gate_status = "blocked" if blocks else ("flagged" if flags else "ok")
+                    reasons = blocks + flags
+                    b2b_cash, b2b_card = repb["cash"], repb["card"]
+
+        custom_t = r.get("tenders") if isinstance(r.get("tenders"), dict) else {}
+        custom_tenders_display = ", ".join(f"{tlabels.get(k, k)}: {_usd(_f(v))}" for k, v in custom_t.items() if _f(v))
+        row_counts = r.get("counts") if isinstance(r.get("counts"), dict) else {}
+        custom_counts_display = ", ".join(f"{clabels.get(k, k)}: {v}" for k, v in row_counts.items()
+                                          if k not in count_config.STD_FIELD_KEYS)
+
+        ver = vers.get((code, d)) or {}
+        out.append({
+            "id": r.get("id"), "close_date": d, "submitted_at": r.get("submitted_at"),
+            "store_code": code, "store_address": r.get("store_address") or r.get("store_name") or code or "—",
+            "market": mkt or "(no market)",
+            "employee_name": r.get("employee_name"), "source": r.get("source"),
+            "t_cash": tenders["cash"], "t_credit": tenders["credit"], "t_ext_cc": tenders["ext_cc"],
+            "t_gift": tenders["gift"], "t_store_acct": tenders["store_acct"], "t_zelle": tenders["zelle"],
+            "t_acima": tenders["acima"], "custom_tenders": custom_tenders_display,
+            "total_collected": round(sum(tenders.values()), 2),
+            "acc_sale": _f(r.get("acc_sale")),
+            "epay_on_cash": _f(r.get("epay_on_cash")), "epay_on_credit": _f(r.get("epay_on_credit")),
+            "epay_on_acima": _f(r.get("epay_on_acima")),
+            "upgrade_count": _int(r.get("upgrade_count")), "new_line_count": _int(r.get("new_line_count")),
+            "postpaid_count": _int(r.get("postpaid_count")), "custom_counts": custom_counts_display,
+            "expense_amount": _f(r.get("expense_amount")), "expense_description": r.get("expense_description"),
+            "expense_approved": bool(r.get("expense_approved")),
+            "gate_status": gate_status,
+            "gate_reasons": (reasons if can_review else []),
+            "b2b_cash": (b2b_cash if can_review else None), "b2b_card": (b2b_card if can_review else None),
+            "attempts": _int(r.get("attempts")) or 1, "auto_accepted": bool(r.get("auto_accepted")),
+            "mgmt_flag": bool(r.get("mgmt_flag")),
+            "released_at": r.get("released_at"), "released_by": r.get("released_by"),
+            "correction_count": _int(r.get("correction_count")),
+            "dm_verified": bool(ver.get("verified")), "dm_verified_by": ver.get("verified_by"),
+            "dm_verified_at": ver.get("verified_at"),
+            # Reference only — the raw storage path, never a signed URL (no per-row network round trip
+            # to Storage on a list endpoint that can return thousands of rows; nothing in the dashboard
+            # or its exports renders it as a clickable image). In-app photo viewing for a specific
+            # store-day continues to live on /closing/verify and /closing/management, unchanged.
+            "envelope_picture": r.get("envelope_picture"),
+            "remarks": r.get("remarks"),
+        })
+
+    return {"rows": out, "date_from": date_from, "date_to": date_to, "truncated": truncated,
+            "status_capped": status_capped, "status_dates_computed": len(status_dates),
+            "status_dates_total": len(dates), "can_review": can_review}
+
+
 # ── Stores (for the rep submission form's store picker) ────────────────────────────────────
 @router.get("/stores")
 def closing_stores(org_id: str = ORG_ID):
