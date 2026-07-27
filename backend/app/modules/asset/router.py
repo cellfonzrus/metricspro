@@ -69,6 +69,41 @@ def _log_degraded_upload_mode(client, org_id: str, reason: str):
         print(f"[asset upload] failure_log write also failed: {_e}")
 
 
+# settings-audit (2026-07-26): a general-purpose sibling to _log_degraded_upload_mode for the OTHER
+# post-ingest pipeline steps (market backfill / selling-price backfill / flag syncs) — today those
+# only `print()` on failure, so an admin has zero way to learn one degraded short of reading Railway
+# logs. Writing a core.failure_log row makes the SAME failure visible to
+# attention.py's `_p_asset_pipeline_issues` provider (login-popup surfaced) and to /failures.
+# Never raises. Respects storeops.tenants.failure_log_disabled_categories (mig 112) — the same
+# per-tenant opt-out core.router.py's own POST /failures honors — so a tenant that has explicitly
+# muted a category via that admin UI doesn't get it re-surfaced here through a side door.
+def _log_asset_pipeline_issue(client, org_id: str, category: str, message: str):
+    try:
+        t = (client.schema("storeops").table("tenants")
+             .select("failure_log_disabled_categories").eq("org_id", org_id)
+             .limit(1).execute().data) or []
+        disabled = [str(d).strip().lower() for d in ((t[0].get("failure_log_disabled_categories")
+                    if t else None) or [])]
+        if category.strip().lower() in disabled:
+            print(f"[asset upload] {category} logging suppressed by tenant preference org={org_id}")
+            return
+    except Exception:
+        pass   # tenants table / column missing — fail open (still log), never fail open on writing
+    print(f"[asset upload] WARNING org={org_id} [{category}]: {message}")
+    try:
+        client.schema("core").table("failure_log").insert({
+            "org_id": org_id,
+            "category": category,
+            "severity": "warning",
+            "source": "asset/upload",
+            "message": message,
+            "remediation": "Open the Asset Ledger page and re-run the upload; if this keeps "
+                           "happening, share this message with an engineer.",
+        }).execute()
+    except Exception as _e:
+        print(f"[asset upload] failure_log write also failed: {_e}")
+
+
 def _stage_and_swap_ledger(client, org_id: str, rows: list[dict]) -> str:
     """Ingest `rows` into the org-scoped staging table (same 500-row batches as before), then
     atomically swap them into commcalc.asset_ledger via the mig-300 RPC. If any staging batch
@@ -153,23 +188,44 @@ def process_asset_ledger_bytes(file_bytes: bytes, org_id: str) -> dict:
             client.schema("commcalc").table("asset_ledger").insert(rows[i:i + 500]).execute()
         swap_mode = "legacy_direct"
 
-    _backfill_market(client, org_id)
+    # settings-audit (2026-07-26): _backfill_market used to run UNGUARDED — an exception here (e.g.
+    # a transient read error on commcalc.store_mapping) would propagate straight out of this
+    # function and skip selling-price backfill + every flag sync below it, even though the ledger
+    # swap above had already succeeded. Now resilient AND surfaced, matching its four siblings.
+    try:
+        _backfill_market(client, org_id)
+    except Exception as _e:
+        _log_asset_pipeline_issue(
+            client, org_id, "asset_market_backfill_failed",
+            f"Market backfill did not finish on the last upload ({_e}). Some rows may have no "
+            f"market (or a stale one), which drops them out of market-filtered asset reports "
+            f"(Charges Dashboard, RMA, Aging, Owed-Weekly).")
     try:
         _backfill_selling_price(client, org_id)
     except Exception as _e:
-        print(f"selling-price backfill failed (run 009_asset_selling_price.sql?): {_e}")
+        _log_asset_pipeline_issue(
+            client, org_id, "asset_selling_price_backfill_failed",
+            f"Selling-price backfill failed on the last upload (run migration "
+            f"009_asset_selling_price.sql?): {_e}")
     try:
         _sync_appeal_flags(client, org_id)
     except Exception as _e:
-        print(f"appeal flag sync failed: {_e}")
+        _log_asset_pipeline_issue(
+            client, org_id, "asset_appeal_flag_sync_failed",
+            f"Appeal flag sync failed on the last upload — Appeals & Denied Payments flags were "
+            f"not refreshed: {_e}")
     try:
         _sync_rma_flags(client, org_id)
     except Exception as _e:
-        print(f"rma flag sync failed: {_e}")
+        _log_asset_pipeline_issue(
+            client, org_id, "asset_rma_flag_sync_failed",
+            f"RMA flag sync failed on the last upload — RMA flags were not refreshed: {_e}")
     try:
         _sync_undercharge_flags(client, org_id)
     except Exception as _e:
-        print(f"undercharge flag sync failed: {_e}")
+        _log_asset_pipeline_issue(
+            client, org_id, "asset_undercharge_flag_sync_failed",
+            f"Undercharge flag sync failed on the last upload: {_e}")
     return {"rows_imported": len(rows), "swap_mode": swap_mode}
 
 
@@ -2531,4 +2587,10 @@ async def get_marketplace_purchases_filter_options(org_id: str = ORG_ID):
 # endpoint lands under the SAME /api/v1/asset prefix main.py already registers — no main.py change.
 from app.modules.asset.purchase_orders import router as _po_router  # noqa: E402
 router.include_router(_po_router)
+
+# ── settings-audit (2026-07-26) — admin-attention providers (no router; import-time registration
+# only, mirrors the include above). See attention.py's module docstring for what each check does
+# and why it's not a duplicate of the centrally-derived checks in core/import_health.py.
+from app.modules.asset import attention as _asset_attention  # noqa: F401,E402
+
 
