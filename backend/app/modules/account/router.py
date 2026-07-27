@@ -6,6 +6,14 @@ from datetime import datetime, timezone
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.modules.account import coa, engine, autocompute
+# Settings/imports audit (2026-07-26): importing this module REGISTERS the finance domain's checks with
+# platform-core's admin-attention feed (GET /core/attention). It is read-only diagnostics and is fully
+# guarded internally — if core.import_health is unavailable the import is inert, so finance never breaks
+# because core moved. No shared file is touched by this wiring.
+try:                                              # noqa: SIM105 - deliberate belt-and-braces guard
+    from app.modules.account import finance_attention  # noqa: F401
+except Exception:
+    pass
 
 router = APIRouter(prefix="/account", tags=["Account"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
