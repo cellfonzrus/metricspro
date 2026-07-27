@@ -182,7 +182,7 @@ class LiveLoginSession:
     """One persistent browser-backed login session. Owns a single worker thread for its whole life."""
 
     def __init__(self, sid, org_id, row, persist=None, persist_shot=None, pull_fn=None,
-                 persist_pull=None):
+                 persist_pull=None, auto_pull_gate=None):
         self.sid = sid
         self.org_id = org_id
         self.url = row.get("portal_url")
@@ -204,6 +204,11 @@ class LiveLoginSession:
         # Per-source switch (data_source.auto_pull_after_login, mig 242), default ON; a row without the
         # column (pre-migration) reads None → ON.
         self.auto_pull = (row.get("auto_pull_after_login") is not False)
+        # PORTAL COOLDOWN GATE (mig 244). callable() -> portal_backoff.read_state(); when it reports
+        # blocked=True the AUTOMATIC post-login pull is skipped. Only the automatic one: a HUMAN who
+        # explicitly confirms "yes, try anyway" still reaches ▶ Pull now, which has its own confirm gate.
+        # None (every existing caller / test) ⇒ never blocked, i.e. byte-identical behaviour.
+        self.auto_pull_gate = auto_pull_gate
         self._auto_pulled = False
         self._cancel_flag = False                 # set by cancel(); a running pull checks it between reports
 
@@ -882,7 +887,19 @@ class LiveLoginSession:
         self._touch()
         if self.auto_pull and self.pull_fn is not None and not self._auto_pulled:
             self._auto_pulled = True
-            self._handle_pull(page, vp, None)
+            blocked = self._cooldown_state()
+            if blocked.get("blocked"):
+                # The portal has temporarily blocked us (owner report 2026-07-27). Pulling five reports
+                # across several month windows into an active block is exactly how a 30-minute throttle
+                # becomes a day-long ban. The trusted session stays open; ▶ Pull now still works for a
+                # human who confirms.
+                self._set(phase="authenticated",
+                          message=("Signed in — but the portal has temporarily blocked our report "
+                                   "requests, so the automatic pull was skipped. " +
+                                   (blocked.get("_human") or ""))[:400])
+                self._capture(page)
+            else:
+                self._handle_pull(page, vp, None)
         while True:
             self._pump(page)
             with self._lock:
@@ -904,6 +921,24 @@ class LiveLoginSession:
                 self._do_input(page, ctx, vp, cmd[1])
                 continue
             # SUBMIT_CODE / RESEND are meaningless once authenticated — ignore.
+
+    def _cooldown_state(self):
+        """Is this login inside a portal-imposed cooldown right now? Best-effort — a gate that raises,
+        or no gate at all (pre-migration-244 / existing callers), means NOT blocked, so this can never
+        stop a healthy pull."""
+        if self.auto_pull_gate is None:
+            return {"blocked": False}
+        try:
+            st = self.auto_pull_gate() or {}
+        except Exception:
+            return {"blocked": False}
+        try:
+            from app.modules.commcalc import portal_backoff as _pb
+            st = dict(st)
+            st["_human"] = _pb.humanize(st)
+        except Exception:
+            pass
+        return st
 
     def _handle_pull(self, page, vp, result_q):
         """Run the report pull on THIS live authenticated browser (never a cold restore) and hand the
@@ -1181,7 +1216,8 @@ def _prune_locked():
         _SESSIONS.pop(k, None)
 
 
-def start_session(sid, org_id, row, persist=None, persist_shot=None, pull_fn=None, persist_pull=None):
+def start_session(sid, org_id, row, persist=None, persist_shot=None, pull_fn=None, persist_pull=None,
+                  auto_pull_gate=None):
     """Spawn (or REPLACE) the live session for `sid`. Non-blocking — the worker thread drives it.
     `pull_fn` (callable(page) -> pull result) runs the report pull on THIS live browser — automatically
     the moment the login authenticates, and again on every '▶ Pull now'. `persist_pull(result)` records
@@ -1194,7 +1230,8 @@ def start_session(sid, org_id, row, persist=None, persist_shot=None, pull_fn=Non
                 old.cancel()
             except Exception:
                 pass
-        sess = LiveLoginSession(sid, org_id, row, persist, persist_shot, pull_fn, persist_pull)
+        sess = LiveLoginSession(sid, org_id, row, persist, persist_shot, pull_fn, persist_pull,
+                                auto_pull_gate)
         _SESSIONS[sid] = sess
     sess.start()
     return sess

@@ -312,17 +312,49 @@ export default function EmailImportsPage() {
     const text = r?.status || r?.error || (delivered ? 'Pulled.' : 'Nothing imported.')
     return delivered ? `✅ ${text}` : `⚠️ ${text}`
   }
-  async function runSource(s: any) {
+  // ── PORTAL COOLDOWN (mig 244) ─────────────────────────────────────────────────────────────────
+  // Owner report 2026-07-27: VidaPay answered "you have too many requests, and have been temporarily
+  // blocked". A HUMAN may still try during a cooldown — but never by accident. The backend returns
+  // { blocked:true, requires_confirm:true, warning } instead of acting, and the second, deliberate
+  // click re-sends the SAME call with ?confirm=true. Retrying into an active block extends it, which
+  // is exactly what happened on the 27th.
+  function blockTime(v: any): string {
+    if (!v) return 'later'
+    try { return new Date(v).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) } catch { return String(v) }
+  }
+  function confirmBlocked(r: any): boolean {
+    const warn = r?.warning || 'The portal has rate-limited us. Another attempt may extend the block.'
+    return confirm(`⛔ ${warn}\n\n${r?.block_reason || ''}`.trim())
+  }
+  async function runSource(s: any, confirmed = false) {
     setSrcMsg('⏳ Pulling…')
     let zero = false
     try {
-      const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/run`, { method: 'POST', body: '{}' })
+      const q = confirmed ? '?confirm=true' : ''
+      const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/run${q}`, { method: 'POST', body: '{}' })
+      if (r.blocked && r.requires_confirm) {
+        setSrcMsg(`⛔ ${r.error}`)
+        try { const l: any = await api('/api/v1/commcalc/data-sources'); setSources(l.sources || []) } catch { /* keep */ }
+        if (confirmBlocked(r)) return runSource(s, true)
+        return
+      }
       if (r.needs_2fa) { setSrcMsg(`🔒 ${r.error}`); setTwoFa({ source: s, hint: null }) }
       else if (!r.ok) setSrcMsg(`⚠️ ${r.error}`)
       else { setSrcMsg(pullMsg(s, r)); zero = !(r?.delivered !== undefined ? r.delivered : Number(r?.rows_ingested || 0) > 0) }
     } catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)) }
     try { const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) } catch { /* keep list */ }
     if (zero) openPullDiag(s)   // 0 rows ⇒ put the WHY on screen without making anyone hunt for it
+  }
+  // Operator escape hatch: lift a cooldown by hand (import-admin only). Deliberately worded as a last
+  // resort — clearing a cooldown and retrying into a LIVE block is what escalated the 27th.
+  async function clearBlock(s: any) {
+    if (!confirm('Only do this if you KNOW the portal has released us.\n\nIf it is still blocking, the '
+      + 'next attempt re-arms the cooldown for LONGER. Lift it anyway?')) return
+    try {
+      const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/clear-block`, { method: 'POST', body: '{}' })
+      setSrcMsg('✅ ' + (r?.message || 'Cooldown lifted.'))
+    } catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)) }
+    try { const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) } catch { /* keep */ }
   }
   // The durable "what the last pull saw" record (mig 242): every report the pull tried, why each one
   // failed, and the report names this portal's own dropdown offers — the vocabulary to fix Report
@@ -338,10 +370,16 @@ export default function EmailImportsPage() {
   }
   // Interactive portal login: submit the stored 3 creds → land on the 2FA challenge → the operator
   // enters the code from their email/SMS → the authenticated session is saved for scheduled pulls.
-  async function startLogin(s: any) {
+  async function startLogin(s: any, confirmed = false) {
     setAuthBusy(s.id); setSrcMsg('🔐 Signing in…'); setCode('')
     try {
-      const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/login/start`, { method: 'POST', body: '{}' })
+      const q = confirmed ? '?confirm=true' : ''
+      const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/login/start${q}`, { method: 'POST', body: '{}' })
+      if (r.blocked && r.requires_confirm) {
+        setSrcMsg(`⛔ ${r.error}`); setAuthBusy('')
+        if (confirmBlocked(r)) return startLogin(s, true)
+        return
+      }
       if (r.status === 'authenticated') { setSrcMsg('✅ ' + r.message); setTwoFa(null); setAuthBusy('') }
       else if (r.status === 'needs_2fa') { setSrcMsg('📩 ' + r.message); setTwoFa({ source: s, hint: r.two_fa_hint }); setAuthBusy('') }
       else { setSrcMsg('⏳ ' + (r.message || 'Logging in…')); pollLogin(s.id) }   // 'authenticating' → poll the row
@@ -384,11 +422,22 @@ export default function EmailImportsPage() {
   // 🔴 Live login: ONE persistent browser stays open from login through code entry, so the 2FA code is
   // sent ONCE and the operator's code goes into the SAME live page (fixes the "code sent twice" resend).
   // The operator watches a live screenshot stream and submits / resends / cancels against that session.
-  async function startLive(s: any) {
+  async function startLive(s: any, confirmed = false) {
     liveSeqRef.current = 0
     setLive({ source: s }); setLiveCode(''); setLiveBusy(true)
     setLiveState({ phase: 'starting', message: 'Starting the live session…', shot: null, seq: 0 })
-    try { await api(`/api/v1/commcalc/data-sources/${s.id}/live-login/start`, { method: 'POST', body: '{}' }) }
+    try {
+      const q = confirmed ? '?confirm=true' : ''
+      const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/live-login/start${q}`, { method: 'POST', body: '{}' })
+      if (r?.blocked && r?.requires_confirm) {
+        // Do NOT start a browser yet: close the modal, warn, and let a SECOND deliberate click through.
+        setLive(null); setLiveState(null); setLiveBusy(false); setSrcMsg(`⛔ ${r.error}`)
+        try { const l: any = await api('/api/v1/commcalc/data-sources'); setSources(l.sources || []) } catch { /* keep */ }
+        if (confirmBlocked(r)) return startLive(s, true)
+        return
+      }
+      if (r?.blocked) setSrcMsg('⛔ ' + (r?.message || 'The portal has blocked us — the automatic pull is suppressed.'))
+    }
     catch (e: any) { setLiveState({ phase: 'error', message: '❌ ' + (e?.message || e), shot: null }) }
     finally { setLiveBusy(false) }
   }
@@ -478,10 +527,22 @@ export default function EmailImportsPage() {
     }
     const m = map[st] || map.unconfigured
     const exp = s.session_expires_at ? new Date(s.session_expires_at) : null
+    // ⛔ THE COOLDOWN CHIP. A blocked login used to render "✅ Connected" over a misleading error
+    // ("session expired" / "report not listed"), which is precisely what made a human keep retrying
+    // into an active block. `blocked` is computed server-side (_strip_source_pw) so the page never has
+    // to reason about clock skew; pre-migration-244 it is simply absent and nothing renders.
     return (
       <span>
         <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: m.c, background: m.b }}>{m.t}</span>
-        {st === 'authenticated' && exp && <span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 6 }}>until {exp.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
+        {st === 'authenticated' && exp && !s.blocked && <span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 6 }}>until {exp.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
+        {s.blocked && (
+          <div style={{ marginTop: 4, padding: '4px 7px', borderRadius: 6, background: '#fee2e2', border: '1px solid #fecaca', color: '#991b1b', maxWidth: 260, whiteSpace: 'normal' }}>
+            <div style={{ fontWeight: 700, fontSize: 11 }}>⛔ Portal temporarily blocked us — next automatic attempt {blockTime(s.blocked_until)}</div>
+            {s.block_reason && <div style={{ fontSize: 10, marginTop: 2, fontWeight: 400 }}>{s.block_reason}</div>}
+            <div style={{ fontSize: 10, marginTop: 2, fontWeight: 400 }}>Don&apos;t retry — another attempt usually extends the block. Nothing is lost; it imports on the next automatic attempt.</div>
+            <button className="btn btn-secondary" style={{ fontSize: 10, padding: '1px 6px', marginTop: 4 }} onClick={() => clearBlock(s)}>Lift cooldown (only if the portal released us)</button>
+          </div>
+        )}
       </span>
     )
   }

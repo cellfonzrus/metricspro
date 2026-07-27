@@ -7,6 +7,7 @@
 // view. RULE FIVE (§3d) standard filter bar (period/stores/reps) + RULE FOUR (§3c) full export set
 // via ReportShell.
 import { useState, useEffect, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import { api } from '@/lib/client'
 import type { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
@@ -16,11 +17,14 @@ import { currentPeriodFromSettingsResponse, monthRange, rangeLabel, type PayPeri
 
 const ENTRY_POINT_LABEL: Record<string, string> = {
   shift_edit: 'Shift edit (Schedule)',
+  shift_swap: 'Shift swap approval',
   timeclock_override: 'Manager clock-in override',
   manual_hours_add: 'Manual hours added',
   manual_hours_delete: 'Manual hours removed',
   force_clockout_manual: 'Force clock-out (DM "run now")',
   force_clockout_cron: 'Force clock-out (automatic sweep)',
+  clock_out_stale_auto: 'Auto clock-out (stale punch, self-service)',
+  lunch_deduction_config: 'Lunch-deduction setting changed',
   // Salary pay-basis (2026-07-27): PATCH /employees/{id} on any of pay_rate/pay_basis/pay_amount/
   // termination_date (manager-gated) logs here with this ONE entry_point for all four fields.
   pay_basis_change: 'Pay setup change (HR)',
@@ -29,13 +33,15 @@ const FIELD_LABEL: Record<string, string> = {
   scheduled_hours: 'Scheduled hours', actual_hours: 'Actual hours', start_time: 'Start time',
   end_time: 'End time', store_code: 'Store', shift_date: 'Shift date', status: 'Status',
   employee_id: 'Employee', clock_in: 'Clock in', clock_out: 'Clock out', shift_added: 'Shift added',
+  manual_hours: 'Manual hours', lunch_deduction_enabled: 'Lunch deduction enabled',
+  lunch_deduction_minutes: 'Lunch deduction minutes', lunch_deduction_min_shift_hours: 'Lunch min shift hours',
   pay_rate: 'Pay $/hr', pay_basis: 'Pay basis', pay_amount: 'Salary amount', termination_date: 'Termination date',
-  manual_hours: 'Manual hours',
 }
 
 const chip: React.CSSProperties = { padding: '5px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)', cursor: 'pointer' }
 
 export default function PayrollChangeLogPage() {
+  const router = useRouter()
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   const [rangeReady, setRangeReady] = useState(false)
   const [ppSettings, setPpSettings] = useState<PayPeriodSettings | null>(null)
@@ -44,9 +50,27 @@ export default function PayrollChangeLogPage() {
   const [stores, setStores] = useState<any[]>([])
   const [empEmail, setEmpEmail] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
+  // Deep-link from the Time Clock report (?employee_id=&start=&end=) — an EXACT employee_id filter,
+  // deliberately separate from StandardFilterBar's name-based `reps` multi-select (which matches on
+  // display name, not id — a name match would be ambiguous for two people sharing a name). Undoable
+  // via the banner's "Clear" button; the standard filter bar's own controls keep working normally.
+  const [deepLinkEmployeeId, setDeepLinkEmployeeId] = useState('')
+  const [deepLinkName, setDeepLinkName] = useState('')
 
   useEffect(() => {
     let cancelled = false
+    let urlStart = '', urlEnd = '', urlEmp = ''
+    try {
+      const sp = new URLSearchParams(window.location.search)
+      urlStart = sp.get('start') || ''; urlEnd = sp.get('end') || ''; urlEmp = sp.get('employee_id') || ''
+    } catch { /* ignore */ }
+    if (urlEmp) setDeepLinkEmployeeId(urlEmp)
+    if (urlStart && urlEnd) {
+      // Deep-link range wins outright — no need to resolve the tenant's default pay period.
+      setFilt(f => ({ ...f, period: urlStart, periodTo: urlEnd }))
+      setRangeReady(true)
+      return
+    }
     api('/api/v1/core/tenant-settings').then((r: any) => {
       if (cancelled) return
       const cur = currentPeriodFromSettingsResponse(r)
@@ -93,10 +117,19 @@ export default function PayrollChangeLogPage() {
     rep: r => r.employee_name || r.employee_id, repEmail: r => empEmail[r.employee_id],
   }).reps, [items, empEmail])
 
-  const visibleItems = useMemo(() => filterRows(items, filt, {
+  const standardFiltered = useMemo(() => filterRows(items, filt, {
     store: r => r.store_code, market: r => storeMarket[r.store_code] || '',
     rep: r => r.employee_name || r.employee_id, date: r => r.work_date,
   }), [items, filt, storeMarket])
+  const visibleItems = useMemo(() => deepLinkEmployeeId
+    ? standardFiltered.filter(r => String(r.employee_id) === String(deepLinkEmployeeId))
+    : standardFiltered, [standardFiltered, deepLinkEmployeeId])
+
+  useEffect(() => {
+    if (!deepLinkEmployeeId) { setDeepLinkName(''); return }
+    const hit = items.find(r => String(r.employee_id) === String(deepLinkEmployeeId) && r.employee_name)
+    if (hit) setDeepLinkName(hit.employee_name)
+  }, [items, deepLinkEmployeeId])
 
   const periodName = rangeLabel(filt.period || '', filt.periodTo || '')
 
@@ -127,8 +160,9 @@ export default function PayrollChangeLogPage() {
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📜 Payroll Change Log</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Every manual change to a rep's scheduled/actual hours — shift edits, manager clock-in
-          overrides, manual hours adjustments, and force clock-outs — who made it, when, and the
-          before → after values. {periodName}.
+          overrides, manual hours adjustments, force clock-outs, and lunch-deduction setting changes —
+          who made it, when, and the before → after values. {periodName}. Click a row to jump to the
+          Time Clock report for that employee/day.
         </p>
       </div>
 
@@ -143,6 +177,13 @@ export default function PayrollChangeLogPage() {
           </div>
         }
       />
+
+      {deepLinkEmployeeId && (
+        <div className="card" style={{ marginBottom: 12, padding: '8px 14px', fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>🔗 Filtered from Time Clock: <strong>{deepLinkName || deepLinkEmployeeId}</strong> · {periodName}</span>
+          <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setDeepLinkEmployeeId('')}>Clear</button>
+        </div>
+      )}
 
       {!available && (
         <div className="card" style={{ marginBottom: 12, padding: '10px 14px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
@@ -162,6 +203,8 @@ export default function PayrollChangeLogPage() {
         <ReportShell
           title="Payroll Change Log" subtitle={periodName} filename={filename}
           columns={cols} rows={visibleItems} defaultGroupBy="Employee"
+          onRowClick={r => r.employee_id && r.work_date &&
+            router.push(`/storeops/timeclock?employee_id=${encodeURIComponent(r.employee_id)}&start=${r.work_date}&end=${r.work_date}`)}
         />
       )}
     </div>

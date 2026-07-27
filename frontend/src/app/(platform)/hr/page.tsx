@@ -63,6 +63,32 @@ export default function HRPage() {
   // 500 from a PATCH body that includes a not-yet-existing field).
   const salaryFieldsAvailable = emps.some(e => Object.prototype.hasOwnProperty.call(e, 'pay_basis'))
 
+  // ---- lunch-break auto-deduction, per-employee override (owner directive 2026-07-27, Deliverable 3)
+  // ---- SAME permission posture as pay_rate on this same tab (org-scoped only, no extra gate); a
+  // DEDICATED endpoint (PUT /employees/{id}/lunch-config), never folded into the generic pay PATCH, so
+  // a tenant that hasn't run migration 418 yet can never have an unrelated pay-rate save fail because
+  // of it. 'Default' = inherit the tenant-wide setting (⚙ Lunch Break Settings on the Time Clock page).
+  const [lunchEdit, setLunchEdit] = useState<Record<number, { mode: 'default' | 'on' | 'off'; minutes: string; busy?: boolean; msg?: string }>>({})
+  function lunchStateFor(e: any) {
+    return lunchEdit[e.id] || {
+      mode: e.lunch_deduction_enabled === true ? 'on' : e.lunch_deduction_enabled === false ? 'off' : 'default',
+      minutes: e.lunch_deduction_minutes != null ? String(e.lunch_deduction_minutes) : '',
+    }
+  }
+  async function saveLunch(e: any) {
+    const st = lunchStateFor(e)
+    setLunchEdit(s => ({ ...s, [e.id]: { ...st, busy: true, msg: '' } }))
+    try {
+      // 'off'/'default' never send a stale minutes value from a previous 'on' edit — enabled=false/null
+      // already wins (harmless either way), but only 'on' has any business sending a minutes override.
+      const body = { enabled: st.mode === 'default' ? null : st.mode === 'on', minutes: st.mode === 'on' && st.minutes.trim() !== '' ? Number(st.minutes) : null }
+      await api(`/api/v1/storeops/employees/${e.id}/lunch-config`, { method: 'PUT', body: JSON.stringify(body) })
+      setLunchEdit(s => ({ ...s, [e.id]: { ...st, busy: false, msg: '✅' } }))
+    } catch (err: any) {
+      setLunchEdit(s => ({ ...s, [e.id]: { ...st, busy: false, msg: '❌ ' + (err?.message || err) } }))
+    }
+  }
+
   // ---- pay editing (HR owns pay rates; StoreOps no longer shows them) ----
   const setEmpField = (id: number, patch: any) => setEmps(es => es.map(e => e.id === id ? { ...e, ...patch, _dirty: true } : e))
   const setPay = (id: number, v: string) => setEmpField(id, { pay_rate: v })
@@ -216,15 +242,20 @@ export default function HRPage() {
                 </label>
               </div>
               <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
                   <thead><tr style={{ background: 'var(--surface2)' }}>
-                    {['Name', 'Emp ID', 'Home store', 'Role', 'Pay basis', ...(salaryFieldsAvailable ? ['Salary amount', 'Pay $/hr', 'Terminated'] : ['Pay $/hr']), 'Email', 'Phone', ''].map(h => <th key={h} style={th}>{h}</th>)}
+                    {['Name', 'Emp ID', 'Home store', 'Role', 'Pay basis',
+                      ...(salaryFieldsAvailable ? ['Salary amount', 'Pay $/hr', 'Terminated'] : ['Pay $/hr']),
+                      'Lunch (auto-deduct)', 'Email', 'Phone', ''].map(h => <th key={h} style={th}>{h}</th>)}
                   </tr></thead>
                   <tbody>
                     {emps.map((e: any) => {
                       const basis: PayBasis = (salaryFieldsAvailable ? (e.pay_basis || 'hourly') : 'hourly') as PayBasis
                       const isSalaried = salaryFieldsAvailable && basis !== 'hourly'
                       const hasBasisField = salaryFieldsAvailable && Object.prototype.hasOwnProperty.call(e, 'pay_basis')
+                      const ls = lunchStateFor(e)
+                      const lunchDirty = ls.mode !== (e.lunch_deduction_enabled === true ? 'on' : e.lunch_deduction_enabled === false ? 'off' : 'default')
+                        || ls.minutes !== (e.lunch_deduction_minutes != null ? String(e.lunch_deduction_minutes) : '')
                       return (
                       <tr key={e.id}>
                         <td style={{ ...td, fontWeight: 600 }}>{e.name}</td>
@@ -266,13 +297,34 @@ export default function HRPage() {
                               style={{ padding: '4px 6px', borderRadius: 6, border: `1px solid ${e._dirty ? 'var(--accent)' : 'var(--border)'}`, fontSize: 12, background: 'var(--surface)' }} />
                           </td>
                         )}
+                        <td style={td}>
+                          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                            <select value={ls.mode} onChange={ev => setLunchEdit(s => ({ ...s, [e.id]: { ...ls, mode: ev.target.value as any, msg: '' } }))}
+                              style={{ padding: '4px 6px', borderRadius: 6, border: `1px solid ${lunchDirty ? 'var(--accent)' : 'var(--border)'}`, fontSize: 12, background: 'var(--surface)' }}>
+                              <option value="default">Default (tenant)</option>
+                              <option value="on">On</option>
+                              <option value="off">Off</option>
+                            </select>
+                            {ls.mode === 'on' && (
+                              <input type="number" min={0} placeholder="min" value={ls.minutes}
+                                onChange={ev => setLunchEdit(s => ({ ...s, [e.id]: { ...ls, minutes: ev.target.value, msg: '' } }))}
+                                style={{ width: 56, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }} />
+                            )}
+                            {lunchDirty && <button className="btn btn-primary" style={{ fontSize: 11, padding: '3px 8px' }} disabled={ls.busy} onClick={() => saveLunch(e)}>{ls.busy ? '…' : '💾'}</button>}
+                            {ls.msg && <span style={{ fontSize: 11 }}>{ls.msg}</span>}
+                          </div>
+                        </td>
                         <td style={td}>{e.email || '—'}</td>
                         <td style={td}>{e.phone || '—'}</td>
                         <td style={td}>{e._dirty && <button className="btn btn-primary" style={{ fontSize: 12, padding: '3px 10px' }} disabled={rowBusy === e.id} onClick={() => savePay(e)}>{rowBusy === e.id ? '…' : '💾'}</button>}</td>
                       </tr>
                       )
                     })}
-                    {emps.length === 0 && <tr><td style={td} colSpan={9}><span style={{ color: 'var(--text3)' }}>No employees in your area.</span></td></tr>}
+                    {/* Merge note (Gate-1 hand-fix): the salary-basis columns (added 2026-07-27) and
+                        the lunch-deduction column (parallel branch, same day) both bumped the header
+                        count independently — colSpan must match the UNION header row above, not
+                        either side's original count alone. */}
+                    {emps.length === 0 && <tr><td style={td} colSpan={salaryFieldsAvailable ? 12 : 10}><span style={{ color: 'var(--text3)' }}>No employees in your area.</span></td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -285,7 +337,8 @@ export default function HRPage() {
                 <thead><tr style={{ background: 'var(--surface2)' }}>
                   <th style={th}>Employee</th><th style={th}>Store</th><th style={th}>Pay basis</th>
                   <th style={{ ...th, textAlign: 'right' }}>Pay $/hr</th><th style={{ ...th, textAlign: 'right' }}>Sched hrs</th>
-                  <th style={{ ...th, textAlign: 'right' }}>Actual hrs</th><th style={{ ...th, textAlign: 'right' }}>Sched pay</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Actual hrs</th><th style={{ ...th, textAlign: 'right' }}>Lunch (auto)</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Sched pay</th>
                   <th style={{ ...th, textAlign: 'right' }}>Actual pay</th>
                 </tr></thead>
                 <tbody>
@@ -303,12 +356,20 @@ export default function HRPage() {
                       <td style={tdR}>{salaried ? '—' : fmt(r.pay_rate)}</td>
                       <td style={tdR}>{r.scheduled_hours}</td>
                       <td style={tdR}>{r.actual_hours}</td>
+                      {/* Actual hrs above is already NET of this — HONESTY (Deliverable 3): shown as its own line, never a silent subtraction. */}
+                      <td style={tdR}>{r.lunch_deduction_hours ? `− ${Number(r.lunch_deduction_hours).toFixed(2)}` : '—'}</td>
                       <td style={tdR}>{fmt(r.scheduled_pay)}</td>
                       <td style={{ ...tdR, fontWeight: 700 }}>{fmt(r.actual_pay)}</td>
                     </tr>
                     )
                   })}
-                  {payroll.length === 0 && <tr><td style={td} colSpan={8}><span style={{ color: 'var(--text3)' }}>No payroll rows for {period} (need shifts entered).</span></td></tr>}
+                  {/* Merge note (Gate-1 hand-fix, 2nd instance of the same class of bug the reviewer
+                      flagged in the Employees & Pay tab above): "Pay basis" (this branch) + "Lunch
+                      (auto)" (parallel branch) each independently bumped 7->8 columns, so git's line
+                      merge found colSpan={8} on BOTH sides and silently kept it — the union header row
+                      (Employee/Store/Pay basis/Pay $/hr/Sched hrs/Actual hrs/Lunch (auto)/Sched pay/
+                      Actual pay) is actually 9. */}
+                  {payroll.length === 0 && <tr><td style={td} colSpan={9}><span style={{ color: 'var(--text3)' }}>No payroll rows for {period} (need shifts entered).</span></td></tr>}
                 </tbody>
               </table>
             </div>

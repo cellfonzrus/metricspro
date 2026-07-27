@@ -30,6 +30,26 @@ hard-coded — credentials always come from the data_source row (UI config).
 """
 from datetime import datetime, timezone, timedelta
 
+# Portal rate-limit / temporary-block detection + the shared cooldown state (migration 244). A pure
+# leaf module (it imports nothing from commcalc), so a top-level import here cannot create a cycle.
+#
+# The FALLBACK is load-bearing, not defensive noise: this driver is deliberately importable as a
+# STANDALONE FILE (several proof harnesses load it with importlib.spec_from_file_location so they can
+# exercise the Playwright surface without booting the app), and in that mode the `app` package does not
+# exist on sys.path. A bare absolute import here turns every one of those into a ModuleNotFoundError.
+try:
+    from app.modules.commcalc import portal_backoff as _pb
+    from app.modules.commcalc.portal_backoff import PortalRateLimited
+except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
+    import importlib.util as _ilu
+    import os as _osmod
+    _pb_spec = _ilu.spec_from_file_location(
+        "commcalc_portal_backoff",
+        _osmod.path.join(_osmod.path.dirname(_osmod.path.abspath(__file__)), "portal_backoff.py"))
+    _pb = _ilu.module_from_spec(_pb_spec)
+    _pb_spec.loader.exec_module(_pb)
+    PortalRateLimited = _pb.PortalRateLimited
+
 DEFAULT_URL = "https://www.vidapaycrm.com/Main%20Panel.aspx"
 # The observed login host the portal redirects to. Used as a fallback if the configured URL lands
 # on a bot-wall — going straight to the login endpoint sometimes renders the form when the deep
@@ -411,6 +431,63 @@ def _looks_like_cloudflare(page):
 def _looks_like_bot_wall(page):
     body = _page_text(page)
     return any(p in body for p in _BOT_PHRASES)
+
+
+# ── RATE LIMIT / TEMPORARY BLOCK (owner report 2026-07-27: "you have too many requests, and have been
+# temporarily blocked, try again later"). Until now NOTHING in this driver recognised that page: the
+# login reported "could not find the password field" and the pull reported "report not listed", so the
+# next scheduled poll / auto-pull / operator click went straight back at the portal and made it worse.
+# `markers` comes from commcalc.portal_block_marker wherever the caller has a DB client (RULE TWO); the
+# seeded portal_backoff.DEFAULT_MARKERS are the fallback deep in the driver, where there is none.
+def _rate_limit_hit(page, markers=None):
+    """The block dict (reason/marker/retry_after_s) if THIS page is a rate-limit/temporary-block page,
+    else None. Reads the HTML soup AND the visible top-frame text (same belt-and-braces as
+    _looks_like_proxy_error — content() can be flaky on a block commit). Never raises."""
+    for reader in (_page_text, _main_frame_text):
+        try:
+            hit = _pb.detect_block(reader(page), markers=markers)
+        except Exception:
+            hit = None
+        if hit:
+            return hit
+    return None
+
+
+def _response_block(resp, markers=None):
+    """The block dict if a Playwright navigation RESPONSE is a throttle (HTTP 429, or 503 carrying a
+    Retry-After), else None. This is the only place the wire-level signal exists — the body of a 429 is
+    often empty, so page text alone would miss it. Never raises."""
+    if resp is None:
+        return None
+    try:
+        status = resp.status
+    except Exception:
+        return None
+    headers = None
+    try:
+        headers = resp.all_headers()
+    except Exception:
+        try:
+            headers = resp.headers
+        except Exception:
+            headers = None
+    try:
+        return _pb.detect_block(status=status, headers=headers, markers=markers)
+    except Exception:
+        return None
+
+
+def _raise_if_rate_limited(page, resp=None, markers=None, where="The portal"):
+    """Raise PortalRateLimited when the portal is throttling us — checked at BOTH the wire level (the
+    navigation response) and the page level (the block page's own words). The CALLER records the
+    cooldown; nothing here writes. A no-op when the portal is fine."""
+    hit = _response_block(resp, markers=markers) or _rate_limit_hit(page, markers=markers)
+    if not hit:
+        return None
+    raise PortalRateLimited(
+        ("%s is rate-limiting us: %s Waiting is the only fix — retrying now extends the block."
+         % (where, hit.get("reason") or "")).strip()[:400],
+        retry_after_s=hit.get("retry_after_s"), marker=hit.get("marker"), status=hit.get("status"))
 
 
 # The egress PROXY's OWN rejection page. When a plain-http absolute-form request reaches the Decodo
@@ -1217,7 +1294,8 @@ def _strip_call_log(msg):
 
 def _goto_with_retry(page, url, *, timeout=60000, wait_until="domcontentloaded",
                      attempts=3, backoffs=(1.5, 3.0)):
-    """page.goto with a BOUNDED retry on CONNECTION-CLASS failures only. A rotating residential proxy can
+    """page.goto with a BOUNDED retry on CONNECTION-CLASS failures only, RETURNING the navigation
+    Response (or None). A rotating residential proxy can
     hand back a dead exit / severed TLS, so a single navigation dies with net::ERR_CONNECTION_CLOSED even
     though the very next attempt succeeds. SAFE only for a FRESH ENTRY navigation where nothing has been
     clicked/submitted (no 2FA-resend risk) — callers MUST NOT use it for a post-login / post-code (2FA)
@@ -1227,8 +1305,9 @@ def _goto_with_retry(page, url, *, timeout=60000, wait_until="domcontentloaded",
     last = None
     for i in range(attempts):
         try:
-            page.goto(url, timeout=timeout, wait_until=wait_until)
-            return
+            # RETURNED (was: discarded) so the caller can read the WIRE status — an HTTP 429 block
+            # response frequently has no readable body at all, so this is the only honest signal.
+            return page.goto(url, timeout=timeout, wait_until=wait_until)
         except Exception as e:
             last = e
             if not _is_connection_error(e):
@@ -1314,7 +1393,7 @@ def _recover_from_proxy_error(page, attempts=2, dest_url=None):
     return not _is_squid()
 
 
-def _goto_login(page, base_url):
+def _goto_login(page, base_url, markers=None):
     """Navigate to the portal and settle. If it lands on the bot-wall (or the egress squid page) with no
     form, retry straight at the id-server login endpoint (deep links are flagged more often than the login
     URL itself, AND the https id-server is the real pre-auth destination — going there skips the www
@@ -1325,22 +1404,28 @@ def _goto_login(page, base_url):
     the residential proxy is retried, and an exhausted failure surfaces as a clean VidaPayLoginError (never
     a raw Playwright 'Call log:'). Non-connection errors are NOT retried. After each goto we also run
     _recover_from_proxy_error (the http-302→squid hop; GET-only, no resubmit)."""
-    _goto_with_retry(page, base_url, timeout=60000, wait_until="domcontentloaded")
+    resp = _goto_with_retry(page, base_url, timeout=60000, wait_until="domcontentloaded")
+    # RATE-LIMIT GATE #1 — before Cloudflare settling, before the proxy-recovery ladder, before a single
+    # keystroke. A throttled portal must cost exactly ONE navigation, not the up-to-10 page loads the
+    # recovery + bot-wall fallback below can spend (every one of which the portal counts against us).
+    _raise_if_rate_limited(page, resp, markers=markers, where="The portal")
     _wait_settle(page)
     page.wait_for_timeout(2500)
     # PRE-AUTH recovery destination is the https id-server LOGIN_URL (a clean https page with the login
     # form — it never triggers the www returnto→http hop that produces squid).
     _recover_from_proxy_error(page, dest_url=LOGIN_URL)
+    _raise_if_rate_limited(page, markers=markers, where="The portal")
     fr, pw = _wait_for_password(page, timeout_s=20)
     if pw:
         return
     if _looks_like_bot_wall(page) or _looks_like_proxy_error(page):
         try:
-            _goto_with_retry(page, LOGIN_URL, timeout=60000, wait_until="domcontentloaded")
+            resp = _goto_with_retry(page, LOGIN_URL, timeout=60000, wait_until="domcontentloaded")
+            _raise_if_rate_limited(page, resp, markers=markers, where="The portal's login server")
             _wait_settle(page)
             _recover_from_proxy_error(page, dest_url=LOGIN_URL)
             _wait_for_password(page, timeout_s=20)
-        except VidaPayLoginError:
+        except (VidaPayLoginError, PortalRateLimited):
             raise
         except Exception:
             pass
@@ -1510,6 +1595,9 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             login_fr, pw_el = _password_frame(page)
             if not pw_el:
                 diag = _snapshot(page)
+                # A rate-limit page has no password field either. Naming it correctly is what stops an
+                # operator from "fixing" a block by logging in again — which extends it.
+                _raise_if_rate_limited(page, markers=None, where="The portal")
                 if _looks_like_proxy_error(page):
                     raise VidaPayLoginError(
                         _proxy_error_message(page.url, proxy_url, _squid_reported_url(page))
@@ -1531,6 +1619,10 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
                 pass
             page.wait_for_timeout(3500)
             _wait_settle(page)
+            # RATE-LIMIT GATE #2 — the POST-SUBMIT page. A portal that serves the form and then throttles
+            # the sign-in POST lands here; without this it fell through to "Login was rejected —
+            # credentials not accepted", sending the operator to re-type perfectly good credentials.
+            _raise_if_rate_limited(page, markers=None, where="The portal")
             state = _classify(page)
             if state == "proxy_error" and _recover_from_proxy_error(page, dest_url=base_url):
                 state = _classify(page)            # http-302→squid hop recovered (GET-only, no re-submit)
@@ -1990,6 +2082,12 @@ _REPORT_OPTION_HINTS = ("commission details", "daily tx", "fulfillment", "sim as
 # tells them exactly which links the portal actually offers.
 _REPORT_NAV_LABELS = ("reports", "my reports", "reporting", "billing manager", "billing",
                       "commission", "report")
+# REQUEST-VOLUME BUDGET for the Reports navigation (2026-07-27 "too many requests" incident). Each
+# CLICK below is a full page load the portal counts against us; seven labels once meant seven of them
+# fired with nothing in between. Three honest guesses, spaced, is the whole budget — a fourth has never
+# found the menu when the first three did not.
+_MAX_NAV_CLICKS = 3
+_NAV_CLICK_DELAY_MS = 1200
 
 
 def _report_select(frame):
@@ -2094,8 +2192,12 @@ def reports_probe(page):
     return out
 
 
-def _open_reports_page(page):
+def _open_reports_page(page, markers=None):
     """Find the frame holding the Report <select>, navigating there if we aren't on it yet.
+
+    BOUNDED (2026-07-27 rate-limit incident): at most `_MAX_NAV_CLICKS` navigation CLICKS, spaced by
+    `_NAV_CLICK_DELAY_MS`, with the rate-limit gate re-checked between them. Labels that match nothing
+    cost no request and are not counted.
 
     Returns the frame, or **None** when the Reports page could not be reached at all. Returning None
     (instead of the old `or page` fallback) is deliberate: with the fallback, an unreachable Reports
@@ -2106,7 +2208,15 @@ def _open_reports_page(page):
     fr = _report_select_frame(page)
     if fr:
         return fr
+    clicks = 0
     for want in _REPORT_NAV_LABELS:
+        if clicks >= _MAX_NAV_CLICKS:
+            # REQUEST-VOLUME CAP (2026-07-27 incident). Seven labels used to mean up to SEVEN full page
+            # navigations fired back-to-back at a portal that had already declined to show us the
+            # Reports menu. If the first few honest guesses miss, more guesses are not going to find it
+            # — they only add load. Stop and let the caller report an honest "Reports page unreachable"
+            # with the DOM snapshot, which is the actionable outcome anyway.
+            break
         clicked = False
         for f in _frames(page):
             try:
@@ -2116,7 +2226,8 @@ def _open_reports_page(page):
             except Exception:
                 continue
         if not clicked:
-            continue
+            continue                      # nothing clicked ⇒ no request was made ⇒ costs nothing
+        clicks += 1
         try:
             page.wait_for_load_state("networkidle", timeout=20000)
         except Exception:
@@ -2129,6 +2240,16 @@ def _open_reports_page(page):
         fr = _report_select_frame(page)
         if fr:
             return fr
+        # A portal that started throttling MID-NAVIGATION must not eat the remaining clicks: raise now
+        # so the caller stamps the cooldown instead of reporting "Reports page unreachable".
+        _raise_if_rate_limited(page, markers=markers, where="The portal")
+        # PACE the next attempt. Nothing above this line waits between two navigation CLICKS, and an
+        # unspaced burst is what a rate limiter counts hardest.
+        if clicks < _MAX_NAV_CLICKS:
+            try:
+                page.wait_for_timeout(_NAV_CLICK_DELAY_MS)
+            except Exception:
+                pass
     return _report_select_frame(page)
 
 
@@ -2249,6 +2370,20 @@ def _submit_and_export(page, frame, export_pref, timeout_s=300):
     return None, None
 
 
+# The caller's "the Reports navigation was already tried and it failed" sentinel, threaded through the
+# `options` argument (which is otherwise the portal's report-name vocabulary). Keeps the whole pull to a
+# SINGLE navigation ladder instead of one per report — see _pull_all_reports_on_page.
+NAV_EXHAUSTED = "__nav_exhausted__"
+
+
+def _nav_exhausted(options):
+    """True when the caller already spent this pull's navigation budget. PURE."""
+    try:
+        return NAV_EXHAUSTED in (options or [])
+    except Exception:
+        return False
+
+
 def _pull_one_report(page, client, org_id, source_id, carrier_id, source_row, spec, start_dt, end_dt,
                      frame=None, options=None):
     """Drive one report end-to-end across its month windows. Returns a summary dict (never raises).
@@ -2261,7 +2396,11 @@ def _pull_one_report(page, client, org_id, source_id, carrier_id, source_row, sp
     ps = spec.get("param_spec") or {}
     target = spec.get("target_table")
     date_col = ps.get("date_col")
-    if frame is None:
+    if frame is None and not _nav_exhausted(options):
+        # Only ever ONE re-navigation ladder per pull. The caller resolves the Reports frame once and
+        # passes it down; before 2026-07-27 a None frame made EVERY report re-run the whole ladder
+        # (5 reports x up to 7 navigations = ~35 page loads at a portal that had already refused us).
+        # `options` carries the caller's "I already tried and failed" sentinel.
         frame = _open_reports_page(page)
     if frame is None:
         return {"report_key": rk, "target_table": target, "ok": False, "reason": "no_reports_page",
@@ -2269,7 +2408,8 @@ def _pull_one_report(page, client, org_id, source_id, carrier_id, source_row, sp
                           "landed on, so no report could be selected"),
                 "diag": _snapshot(page)}
     if not _select_report(frame, spec.get("display_name")):
-        opts = list(options if options is not None else report_options(page))
+        opts = [o for o in list(options if options is not None else report_options(page))
+                if o != NAV_EXHAUSTED]          # the sentinel is plumbing, never operator-facing copy
         return {"report_key": rk, "target_table": target, "ok": False, "reason": "report_not_listed",
                 "display_name": spec.get("display_name"),
                 "error": ("\u201c%s\u201d is not one of the reports this portal login offers%s"
@@ -2335,10 +2475,20 @@ def _pull_all_reports_on_page(page, client, org_id, source_id=None, carrier_id=N
     end_dt = _dt.now()
     start_dt = end_dt - _td(days=31 * max(1, int(months_back or 1)))
     src = dict(source_row or {})
+    markers = _pb.load_markers(client, org_id, "vidapay")
+    # RATE-LIMIT GATE — checked BEFORE the Reports navigation, because this is the expensive path:
+    # 5 configured reports x up to 3 month-windows x (select postback + submit postback + export) is
+    # ~45–60 heavy report-GENERATION requests, the kind a throttle counts hardest.
+    _raise_if_rate_limited(page, markers=markers, where="The portal")
     # Reach the Reports page ONCE (was: re-navigated inside every report), then capture what the portal
     # really offers so a failure can name the fix instead of saying "calibration needed".
-    frame = _open_reports_page(page)
-    options = report_options(page) if frame is not None else []
+    frame = _open_reports_page(page, markers=markers)
+    if frame is None:
+        # "Reports page unreachable" and "the portal is blocking us" look identical from here. Ask.
+        _raise_if_rate_limited(page, markers=markers, where="The portal")
+    # SENTINEL, not a retry: the navigation budget for this pull is spent, so the reports below report
+    # "Reports page unreachable" from the ONE ladder already run instead of each re-running their own.
+    options = report_options(page) if frame is not None else [NAV_EXHAUSTED]
     probe = reports_probe(page)
     reports = []
     if not specs:
@@ -2347,7 +2497,8 @@ def _pull_all_reports_on_page(page, client, org_id, source_id=None, carrier_id=N
                 "authenticated": True, "delivered": False, "reports": [], "rows_ingested": 0,
                 "months_back": months_back, "reason": "no_reports_configured",
                 "reports_page_reachable": frame is not None, "probe": probe,
-                "calibration": {"portal_report_options": options, "configured": [], "unmatched": []}}
+                "calibration": {"portal_report_options": [o for o in options if o != NAV_EXHAUSTED],
+                                "configured": [], "unmatched": []}}
     stopped = False
     for spec in specs:
         # INTERRUPTIBLE between reports. Five reports × several month-windows × a 300s submit timeout is
@@ -2360,6 +2511,9 @@ def _pull_all_reports_on_page(page, client, org_id, source_id=None, carrier_id=N
                     break
             except Exception:
                 pass
+        # A portal that starts throttling MID-PULL must not be hit by the remaining reports: the gate is
+        # re-checked between reports and aborts the whole pull (the caller then stamps the cooldown).
+        _raise_if_rate_limited(page, markers=markers, where="The portal")
         reports.append(_pull_one_report(page, client, org_id, source_id, carrier_id,
                                         src, spec, start_dt, end_dt, frame=frame, options=options))
     ok_rows = sum(r.get("rows_ingested", 0) for r in reports)
@@ -2396,8 +2550,8 @@ def _pull_all_reports_on_page(page, client, org_id, source_id=None, carrier_id=N
             "rows_ingested": ok_rows, "months_back": months_back, "reason": reason,
             "stopped": stopped,
             "reports_page_reachable": frame is not None, "probe": probe,
-            "calibration": {"portal_report_options": options, "configured": configured,
-                            "unmatched": unmatched}}
+            "calibration": {"portal_report_options": [o for o in options if o != NAV_EXHAUSTED],
+                            "configured": configured, "unmatched": unmatched}}
 
 
 def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrier_id=None,
@@ -2431,7 +2585,12 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
             # resend risk), so a transient connection-class drop through the residential proxy is retried
             # (same guard as _goto_login). A squid proxy-error PAGE (goto succeeds, renders squid) is still
             # caught below by _classify → proxy_error; the retry only covers goto that RAISES a net::ERR_.
-            _goto_with_retry(page, base_url, timeout=60000, wait_until="domcontentloaded")
+            markers = _pb.load_markers(client, org_id, "vidapay")
+            resp = _goto_with_retry(page, base_url, timeout=60000, wait_until="domcontentloaded")
+            # RATE-LIMIT GATE — a throttled portal serves a block page carrying no session markers, so
+            # the old code concluded "the session has expired" and prompted a re-login: the single worst
+            # response to an active block (a fresh headless login is the most expensive request there is).
+            _raise_if_rate_limited(page, resp, markers=markers, where="The portal")
             _wait_settle(page)
             page.wait_for_timeout(2500)
             state = _classify(page)
@@ -2440,6 +2599,7 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
             if state == "proxy_error":
                 raise VidaPayPortalError(_proxy_error_message(page.url, proxy_url, _squid_reported_url(page)))
             if state in ("login", "twofa", "botwall"):
+                _raise_if_rate_limited(page, markers=markers, where="The portal")
                 raise VidaPayAuthError(
                     "The VidaPay session has expired — please re-authenticate (Log in + 2FA).")
             return _pull_all_reports_on_page(page, client, org_id, source_id, carrier_id,
@@ -2526,7 +2686,9 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
             # resend risk), so a transient connection-class drop through the residential proxy is retried
             # (same guard as _goto_login). A squid proxy-error PAGE is still caught below by
             # _looks_like_proxy_error; the retry only covers goto that RAISES a net::ERR_.
-            _goto_with_retry(page, base_url, timeout=60000, wait_until="domcontentloaded")
+            markers = _pb.load_markers(client, org_id, "b2bsoft")
+            resp = _goto_with_retry(page, base_url, timeout=60000, wait_until="domcontentloaded")
+            _raise_if_rate_limited(page, resp, markers=markers, where="The POS portal")
             _wait_settle(page)
             page.wait_for_timeout(2500)
             # http-302→squid hop recovery (v2: https twin, then a direct goto of the https base; GET-only,
@@ -2538,6 +2700,7 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
             u = (page.url or "").lower()
             if page.query_selector("#companyId") or page.query_selector("#TwoFactorCode") \
                     or "/account/login" in u or "twofactor" in u:
+                _raise_if_rate_limited(page, markers=markers, where="The POS portal")
                 raise VidaPayAuthError(
                     "The b2bsoft session has expired — please re-authenticate (Log in + enter the 2FA code).")
             return pull_b2bsoft_on_page(page)

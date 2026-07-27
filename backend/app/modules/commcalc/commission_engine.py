@@ -577,8 +577,53 @@ def _tier_multiplier(plan, qualifying_units):
     return best_mult
 
 
+def _apply_rule_overrides(plans, overrides):
+    """A DEEP COPY of `plans` with each rule's matcher replaced per `overrides`. PURE (no I/O, no mutation
+    of the input). Keys are rule ids (str-compared); a rule id not present is left exactly as loaded.
+
+    Supported per-rule keys: match_field / match_op / match_value / qualifies, plus `disabled: true`
+    which removes the rule entirely (the "what if this rule did not exist" case). An unknown match_field
+    is REJECTED (kept as-is) so a what-if can never model a matcher the engine cannot actually run.
+
+    EVERY rule dict in the result is a fresh object, including the ones NOT overridden (Gate-1 N2). Sharing
+    a non-overridden rule by reference was harmless today — preview() only reads rules — but it hands a
+    what-if caller a live handle on the plan structure the money path loads, and one `rules[i]['amount']=…`
+    in some future caller would silently rewrite a stored rule through the preview path. Copy-on-read
+    removes the sharp edge entirely; the cost is one dict per rule per what-if call."""
+    ov = {str(k): (v or {}) for k, v in (overrides or {}).items()}
+    out = []
+    for p in plans:
+        rules = []
+        for r in (p.get("rules") or []):
+            o = ov.get(str(r.get("id")))
+            if not o:
+                rules.append(dict(r))          # N2: never share a stored rule dict with the caller
+                continue
+            if o.get("disabled"):
+                continue
+            nr = dict(r)
+            if "match_field" in o:
+                mf = str(o.get("match_field") or "any").strip().lower()
+                if mf in MATCH_FIELDS:
+                    nr["match_field"] = mf
+            if "match_op" in o:
+                nr["match_op"] = str(o.get("match_op") or "equals").strip().lower()
+            if "match_value" in o:
+                nr["match_value"] = o.get("match_value")
+            if "qualifies" in o:
+                nr["qualifies"] = bool(o.get("qualifies"))
+            rules.append(nr)
+        # tiers/assignments get the same copy-on-read treatment — a what-if caller must not be able to
+        # reach ANY stored config object through this structure.
+        out.append({**p, "rules": rules,
+                    "tiers": [dict(t) for t in (p.get("tiers") or [])],
+                    "assignments": [dict(a) for a in (p.get("assignments") or [])]})
+    return out
+
+
 # ── preview ────────────────────────────────────────────────────────────────────────────────────
-def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, coverage=False):
+def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, coverage=False,
+            rule_overrides=None):
     """READ-ONLY: apply plan rules to a period's raw_sales. Writes nothing.
 
     Returns {ready, period, by_rep:[...], totals, plans, note}. If plan_id is given, that plan is applied
@@ -613,6 +658,13 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     if not ready:
         return {"ready": False, "period": period, "by_rep": [], "totals": {},
                 "note": "Migration 059_commission_plans.sql not applied — no preview."}
+    # WHAT-IF MATCHER OVERRIDE (read-only; mod-commission 2026-07-27). `rule_overrides` is a
+    # {rule_id -> {match_field?, match_op?, match_value?, qualifies?, disabled?}} map applied to the
+    # IN-MEMORY plan copy only — nothing is written and no other caller passes it, so with the default
+    # None this whole block is skipped and preview() is BYTE-IDENTICAL to before. It exists so a
+    # money-touching rule re-key can be measured (per rep, per line) BEFORE anyone edits the config.
+    if rule_overrides:
+        plans = _apply_rule_overrides(plans, rule_overrides)
     if not plans:
         return {"ready": True, "period": period, "by_rep": [], "totals": {"payout": 0.0, "reps": 0},
                 "note": "No commission plans configured yet."}

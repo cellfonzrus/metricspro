@@ -24,7 +24,7 @@ type Task = {
   documents?: DocFile[]
 }
 type Cat = { id: string; key: string; label: string; tasks: Task[] }
-type Field = { key: string; label: string; sensitive?: boolean }
+type Field = { key: string; label: string; sensitive?: boolean; section?: string }
 type Data = {
   ready: boolean; employee_id: string; employee_name?: string; work_state?: string | null
   needs_work_state?: boolean; categories: Cat[]; progress?: { total: number; done: number }
@@ -297,17 +297,39 @@ export default function EmployeeOnboardingPage() {
         </div>
 
         {/* captured info (from the intake form) */}
-        {(d.intake_submitted || (d.sensitive_on_file && d.sensitive_on_file.length > 0)) && (
+        {/* BUG FIX (2026-07-27, owner report "employee completed all information but no information can
+            be seen at our end"): this card used to gate on d.intake_submitted alone. The root cause
+            (hr/router.py _apply_intake's direct-deposit disclaimer gate) has been fixed to never lose an
+            otherwise-complete submission, but this card must ALSO never go blank while real data exists
+            on the record — belt-and-suspenders honesty for any other path that could leave intake_values
+            populated without the submitted flag having (re)synced. Render whenever there's a submitted
+            flag, a sensitive field on file, OR at least one visible (non-sensitive) captured value. */}
+        {(() => {
+          const visibleValues = (d.intake_fields || []).filter(f => !f.sensitive && (d.intake_values || {})[f.key])
+          const hasSensitive = !!(d.sensitive_on_file && d.sensitive_on_file.length > 0)
+          // Gate-1 fold N2 (2026-07-27): config-driven (not a fragile label-text heuristic) — is
+          // direct deposit even part of this tenant's intake form at all.
+          const ddConfigured = (d.intake_fields || []).some(f => f.section === 'direct_deposit')
+          if (!d.intake_submitted && !hasSensitive && visibleValues.length === 0) return null
+          return (
           <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Captured information {d.intake_submitted && <span style={{ color: '#059669' }}>· submitted</span>}</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Captured information {d.intake_submitted ? <span style={{ color: '#059669' }}>· submitted</span> : <span style={{ color: '#9a3412' }}>· not yet marked submitted (partial — verify with the employee)</span>}</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 8 }}>
-              {(d.intake_fields || []).filter(f => !f.sensitive && (d.intake_values || {})[f.key]).map(f => (
+              {visibleValues.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>No non-sensitive fields captured yet.</div>}
+              {visibleValues.map(f => (
                 <div key={f.key} style={{ fontSize: 12 }}><span style={{ color: 'var(--text3)' }}>{f.label}: </span><b>{(d.intake_values || {})[f.key]}</b></div>
               ))}
             </div>
-            {(d.sensitive_on_file || []).some(l => l.toLowerCase().includes('bank') || l.toLowerCase().includes('routing') || l.toLowerCase().includes('account')) && (
-              <div style={{ marginTop: 8, fontSize: 12, color: d.dd_disclaimer_signed ? '#059669' : '#9a3412' }}>
-                {d.dd_disclaimer_signed ? '✓ Direct-deposit disclaimer initialed by the employee (see History below for the timestamp).' : '⚠️ Direct-deposit disclaimer not yet initialed.'}
+            {/* Gate-1 fold N2: an AFFIRMATIVE chip so HR can chase an outstanding direct-deposit
+                disclaimer without digging into History — fires whenever DD is part of this tenant's
+                form and intake was submitted but the disclaimer isn't signed yet, regardless of
+                whether any bank field was actually captured (post-fix, an unsigned DD section is
+                withheld entirely — see hr/router.py _apply_intake's dd_disclaimer_pending). */}
+            {ddConfigured && d.intake_submitted && (
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: d.dd_disclaimer_signed ? 400 : 700, color: d.dd_disclaimer_signed ? '#059669' : '#9a3412' }}>
+                {d.dd_disclaimer_signed
+                  ? '✓ Direct-deposit disclaimer initialed by the employee (see History below for the timestamp).'
+                  : '⚠️ Bank details not yet provided or initialed — direct deposit is still outstanding for this hire.'}
               </div>
             )}
             {d.sensitive_on_file && d.sensitive_on_file.length > 0 && (
@@ -332,7 +354,8 @@ export default function EmployeeOnboardingPage() {
               </div>
             )}
           </div>
-        )}
+          )
+        })()}
 
         {/* work state + QR access */}
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>

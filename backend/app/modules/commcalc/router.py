@@ -22,6 +22,7 @@ from app.modules.commcalc import installment_engine
 from app.modules.commcalc import commission_engine
 from app.modules.commcalc import plan_options
 from app.modules.commcalc import sale_installment_engine
+from app.modules.commcalc import plan_impact
 from app.modules.commcalc import b2b_sweep
 from app.modules.commcalc import sales_analyzer
 from app.modules.commcalc import sales_recon
@@ -6199,12 +6200,28 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
 
         # Update calc status — keyed on the canonical 'Month YYYY' spelling (see /calculate) so a month
         # has exactly ONE status row regardless of which spelling triggered the calc.
-        client.schema('commcalc').table('calc_status').upsert({
+        _status = {
             'org_id': org_id, 'period': _canon_period(period),
             'calc_status': 'done',
             'calc_finished_at': 'now()',
             'save_errors': save_errors or None,
-        }, on_conflict='org_id,period').execute()
+        }
+        # CALC WARNINGS (mig 243): a SUCCESSFUL calc can still leave real activations paid by NOTHING —
+        # the plan engine has no exclusivity and the multi-month engine has its own trigger, so a rule
+        # that stops matching does not hand its lines to anything else. Diagnostic only: computed AFTER
+        # rep_commissions is written, never able to change a payout, and skipped whole if the column
+        # isn't there yet (the live endpoint /commission-plans/pay-warnings still serves it).
+        try:
+            _warn = plan_impact.calc_warning_payload(client, org_id, period)
+            try:
+                client.schema('commcalc').table('calc_status').select('calc_warnings').limit(1).execute()
+                _status['calc_warnings'] = _warn
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"WARN calc warnings skipped for org {org_id} period {period}: {e}")
+        client.schema('commcalc').table('calc_status').upsert(
+            _status, on_conflict='org_id,period').execute()
 
     except Exception as e:
         try:
@@ -8159,6 +8176,145 @@ async def plan_field_options(months: int = 3, period: str = "", limit: int = 400
         print(f"WARN plan-field-options failed for org {org_id}: {e}")
         return {"ready": False, "note": f"options unavailable: {e}", "vocab": plan_options.vocabulary(),
                 "fields": {}, "facets": None, "periods": []}
+
+
+_OVERRIDE_KEYS = {"match_field", "match_op", "match_value", "qualifies", "disabled"}
+
+
+def _validate_rule_overrides(overrides):
+    """Type-check a what-if override map at the API BOUNDARY and 400 on anything the engine's matcher
+    cannot evaluate (Gate-1 N4).
+
+    `commission_engine._rule_matches` calls `.strip().lower()` on the match value, so a JSON NUMBER or
+    object arrives as an int/dict and raises AttributeError → a 500 on hostile/sloppy input. The same
+    edge exists for a STORED rule written straight to the table, but that is a different (pre-existing)
+    surface and deliberately NOT changed here — coercing stored values would move matching behaviour for
+    live plans. This only governs what a caller may hand the read-only what-if.
+
+    Returns a normalised copy: `match_value` is always a string ('in' also accepts a list of strings and
+    joins it with commas, which is exactly what the engine parses)."""
+    out = {}
+    for rid, ov in overrides.items():
+        if not isinstance(rid, str) or not rid.strip():
+            raise HTTPException(400, "each override key must be a non-empty commission_rule id string")
+        if not isinstance(ov, dict):
+            raise HTTPException(400, f"override for rule {rid} must be an object")
+        unknown = set(ov) - _OVERRIDE_KEYS
+        if unknown:
+            raise HTTPException(400, f"override for rule {rid} has unsupported key(s): "
+                                     f"{', '.join(sorted(unknown))}. Allowed: "
+                                     f"{', '.join(sorted(_OVERRIDE_KEYS))}")
+        clean = {}
+        if "match_field" in ov:
+            mf = ov.get("match_field")
+            if not isinstance(mf, str) or mf.strip().lower() not in commission_engine.MATCH_FIELDS:
+                raise HTTPException(400, f"override for rule {rid}: match_field must be one of "
+                                         f"{', '.join(sorted(commission_engine.MATCH_FIELDS))}")
+            clean["match_field"] = mf.strip().lower()
+        op = None
+        if "match_op" in ov:
+            op = ov.get("match_op")
+            if not isinstance(op, str) or op.strip().lower() not in plan_options.MATCH_OPS:
+                raise HTTPException(400, f"override for rule {rid}: match_op must be one of "
+                                         f"{', '.join(plan_options.MATCH_OPS)}")
+            op = op.strip().lower()
+            clean["match_op"] = op
+        if "match_value" in ov:
+            mv = ov.get("match_value")
+            if isinstance(mv, list):
+                if op != "in":
+                    raise HTTPException(400, f"override for rule {rid}: a list match_value is only "
+                                             f"valid with match_op 'in'")
+                if not all(isinstance(x, str) for x in mv):
+                    raise HTTPException(400, f"override for rule {rid}: match_value list must contain "
+                                             f"only strings")
+                clean["match_value"] = ",".join(x.strip() for x in mv if x.strip())
+            elif mv is None:
+                clean["match_value"] = ""
+            elif isinstance(mv, str):
+                clean["match_value"] = mv
+            else:
+                raise HTTPException(400, f"override for rule {rid}: match_value must be a string "
+                                         f"(or a list of strings with match_op 'in'), got "
+                                         f"{type(mv).__name__}")
+        for flag in ("qualifies", "disabled"):
+            if flag in ov:
+                if not isinstance(ov.get(flag), bool):
+                    raise HTTPException(400, f"override for rule {rid}: {flag} must be true or false")
+                clean[flag] = ov.get(flag)
+        out[rid] = clean
+    return out
+
+
+@router.post("/commission-plans/rule-impact")
+async def commission_rule_impact(body: dict, org_id: str = ORG_ID):
+    """READ-ONLY BLAST RADIUS for a proposed commission-rule matcher change. Writes NOTHING and triggers
+    no calculation — it runs the real engine twice (as configured, and with the proposed matchers applied
+    to an in-memory copy) and returns the difference.
+
+    body: {period (required), overrides: {rule_id: {match_field?, match_op?, match_value?, qualifies?,
+    disabled?}}, rep?}
+
+    Answers the three questions a money-touching rule edit has to answer BEFORE it is made:
+      • which reps move, and by how much;
+      • which sale lines STOP paying (with their tender_type, so a tender-keyed replacement can be sanity
+        checked against the same lines);
+      • whether each freed line would be ENROLLED by a multi-month installment schedule — the plan engine
+        has no exclusivity and the installment engine has its OWN trigger, so "it will just fall through
+        to the multi-month incentive" is TRUE ONLY IF a schedule trigger matches.
+
+    ENROLLED IS NOT PAID: a trigger match only STARTS a chain; months from the schedule's gate_from_month
+    on are still withheld until the paid-residual gate is met, and any month pays $0 if no rate-plan MRC
+    resolves. So `freed_enrolled_by_multimonth` is a CEILING on what might be re-paid, while
+    `freed_no_pay_source` is the hard floor — those lines have no configured source at all."""
+    period = str((body or {}).get("period") or "").strip()
+    if not period:
+        raise HTTPException(400, "period required")
+    require_org(org_id)
+    overrides = (body or {}).get("overrides") or {}
+    if not isinstance(overrides, dict):
+        raise HTTPException(400, "overrides must be an object keyed by rule id")
+    overrides = _validate_rule_overrides(overrides)
+    try:
+        return plan_impact.rule_impact(sb(), org_id, period, overrides,
+                                       only_rep=str((body or {}).get("rep") or "").strip() or None)
+    except Exception as e:
+        print(f"WARN rule-impact failed for org {org_id} period {period}: {e}")
+        raise HTTPException(500, f"rule impact unavailable: {e}")
+
+
+@router.get("/commission-plans/keyword-collisions")
+async def commission_keyword_collisions(period: str, org_id: str = ORG_ID):
+    """READ-ONLY audit of the "a pay-program keyword is also a device MODEL name" bug class.
+
+    Lists every rule / installment trigger that matches an item description (or SKU) with `contains`, the
+    DISTINCT items it actually hits, and whether the same word also occurs as a value of tender_type /
+    department / category / contract_type / trans_type — i.e. the field the rule probably meant. Nothing
+    about any specific keyword is hard-coded; the collision comes from the tenant's own sale lines."""
+    if not str(period or "").strip():
+        raise HTTPException(400, "period required")
+    require_org(org_id)
+    try:
+        return plan_impact.keyword_collision_audit(sb(), org_id, period)
+    except Exception as e:
+        print(f"WARN keyword-collisions failed for org {org_id}: {e}")
+        return {"ready": False, "note": f"audit unavailable: {e}", "rules": []}
+
+
+@router.get("/commission-plans/pay-warnings")
+async def commission_pay_warnings(period: str, org_id: str = ORG_ID):
+    """READ-ONLY: the activations that no commission-plan rule and no multi-month schedule trigger pays,
+    computed LIVE (the same payload a calculation stores in calc_status.calc_warnings)."""
+    if not str(period or "").strip():
+        raise HTTPException(400, "period required")
+    require_org(org_id)
+    try:
+        return plan_impact.calc_warning_payload(sb(), org_id, period) or {
+            "period": period, "counts": {}, "unpaid_activations": [], "unassigned_reps": [],
+            "installment_warnings": []}
+    except Exception as e:
+        print(f"WARN pay-warnings failed for org {org_id}: {e}")
+        return {"period": period, "note": f"warnings unavailable: {e}", "counts": {}}
 
 
 @router.get("/commission-plans/preview")
@@ -15184,6 +15340,15 @@ def _strip_source_pw(row):
     if isinstance(diag, dict):
         row["last_pull_delivered"] = diag.get("delivered")
         row["last_pull_reason"] = diag.get("reason")
+    # Portal cooldown (mig 244) — computed, so the page never has to reason about clock skew. Absent
+    # columns ⇒ blocked False and the chip simply never renders.
+    try:
+        st = _pb().read_state(row)
+        row["blocked"] = st["blocked"]
+        row["blocked_remaining_s"] = st["remaining_s"]
+        row["block_headline"] = _pb().humanize(st) or None
+    except Exception:
+        row["blocked"] = False
     return row
 
 
@@ -15226,6 +15391,75 @@ def _source_stamp(client, sid, org_id, patch, *, success=False):
         _status_update(client, 'data_source', upd, lambda q: q.eq('id', sid).eq('org_id', org_id))
     except Exception as e:
         print(f"WARN data_source status stamp skipped: {e}")
+
+
+# ── PORTAL RATE-LIMIT COOLDOWN (mig 244) ─────────────────────────────────────────────────────────
+# Owner report 2026-07-27: "for vidapay it says you have too many requests, and have been temporarily
+# blocked, try again later". Nothing here recognised a throttle, so every trigger — the scheduled
+# /run-due poll, the automatic post-login pull, an operator clicking Live login again because the error
+# looked like a calibration problem — went straight back at a portal that was already refusing us.
+# These four helpers are the ONLY places the module talks to that state; the logic lives in
+# portal_backoff.py so b2bsoft and any future portal login inherit it unchanged.
+def _pb():
+    from app.modules.commcalc import portal_backoff as _m
+    return _m
+
+
+def _source_cooldown(client, sid, org_id, row=None):
+    """Cooldown state for ONE login. Pre-migration-244 (no blocked_until column) this always reports
+    blocked=False, so every gate below is inert and behaviour is unchanged."""
+    try:
+        return _pb().guard(client, sid, org_id, row=row)
+    except Exception:
+        return {"blocked": False}
+
+
+def _blocked_payload(state, extra=None):
+    """The 409-shaped body a gated endpoint returns while a portal cooldown is active. `requires_confirm`
+    is what makes the UI demand a SECOND, deliberate click — a human retry into an active block is the
+    thing that turns a 30-minute throttle into a day-long ban."""
+    pb = _pb()
+    until = state.get("blocked_until")
+    body = {"ok": False, "blocked": True, "requires_confirm": True,
+            "blocked_until": (until.isoformat() if until else None),
+            "remaining_s": state.get("remaining_s"),
+            "block_reason": state.get("reason"),
+            "consecutive_failures": state.get("consecutive_failures"),
+            "warning": pb.confirm_warning(state),
+            "error": pb.humanize(state)}
+    body.update(extra or {})
+    return body
+
+
+def _later_iso(a, b):
+    """The LATER of two timestamps, as an ISO string. Both sides here are UTC ISO today, so a bare
+    max() happens to work — but one datetime slipping in from either producer would raise TypeError
+    and 500 the whole /run-due sweep for every tenant. Parse, compare, fall back to `a`. PURE."""
+    if not b:
+        return a
+    if not a:
+        return b
+    try:
+        pa, pb = _pb()._ts(a), _pb()._ts(b)
+        if pa is None:
+            return b
+        if pb is None:
+            return a
+        return (b if pb > pa else a) if isinstance(a, str) else (a if pa > pb else b)
+    except Exception:
+        return a
+
+
+def _source_reschedule(client, sid, org_id, next_run_at):
+    """Move ONLY next_run_at. Used when /run-due SKIPS a blocked login: the skip must not be recorded as
+    an attempt (no last_attempt_at, no failure count, no status rewrite — a block is not a delivery and
+    not a try), but next_run_at still has to advance or import_audit.sched_silent would report the
+    scheduler as dead. Best-effort, org-scoped."""
+    try:
+        (client.schema("commcalc").table("data_source").update({"next_run_at": next_run_at})
+         .eq("id", sid).eq("org_id", org_id).execute())
+    except Exception as e:
+        print(f"WARN data_source reschedule skipped: {e}")
 
 
 def _pull_diag_payload(res):
@@ -15295,6 +15529,13 @@ def _record_pull_result(client, sid, org_id, res, *, source="portal-pull"):
                                           or (res or {}).get("error") or "ok")[:600],
                        "auth_status": "authenticated"},
                       success=delivered)
+    except Exception:
+        pass
+    # Cooldown bookkeeping (mig 244): delivered ⇒ clear the block and reset the failure counter (this is
+    # the RECOVERY path); a detected rate-limit ⇒ escalating cooldown honouring Retry-After; any other
+    # non-delivering outcome ⇒ count the failure without starting a cooldown. Never raises.
+    try:
+        _pb().record_outcome(client, sid, org_id, res, delivered=delivered)
     except Exception:
         pass
     try:
@@ -15429,9 +15670,13 @@ def test_proxy(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/data-sources/{sid}/run")
-async def run_data_source(sid: str, org_id: str = ORG_ID):
+async def run_data_source(sid: str, org_id: str = ORG_ID, confirm: bool = False):
     """Pull now from this login. Dispatches to the processor's scraper when one is wired; until
-    then the row records an honest status and the data path is the email sweep / manual upload."""
+    then the row records an honest status and the data path is the email sweep / manual upload.
+
+    COOLDOWN (mig 244): if the portal has temporarily blocked us, this returns blocked/requires_confirm
+    instead of pulling. A human MAY override with ?confirm=true — the UI asks first, because another
+    attempt during an active block typically extends it."""
     require_org(org_id)
     client = sb()
     rows = (client.schema("commcalc").table("data_source").select("*")
@@ -15439,6 +15684,9 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
     if not rows:
         raise HTTPException(404, "unknown data source")
     src_row = rows[0]
+    cool = _source_cooldown(client, sid, org_id, row=src_row)
+    if cool.get("blocked") and not confirm:
+        return _blocked_payload(cool, {"needs_2fa": False})
     proc = (src_row.get("processor") or "").strip().lower()
     handler = _SOURCE_SCRAPERS.get(proc)
     if not handler:
@@ -15479,7 +15727,13 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
                        "auth_status": "needs_2fa", "auth_message": str(e)[:300]}, success=False)
         return {"ok": False, "needs_2fa": True, "error": str(e)}
     except Exception as e:
+        # A rate-limit raised out of the driver is NOT a generic 500: stamp the escalating cooldown and
+        # tell the operator to wait, rather than surfacing an error that invites an immediate retry.
+        plan = _pb().record_outcome(client, sid, org_id, None, delivered=False, exc=e, row=src_row)
         _source_stamp(client, sid, org_id, {"last_status": f"error: {str(e)[:180]}"}, success=False)
+        if plan:
+            return _blocked_payload(_source_cooldown(client, sid, org_id),
+                                    {"error": str(e)[:400], "just_blocked": True})
         raise HTTPException(500, f"pull failed: {e}")
 
 
@@ -15966,7 +16220,7 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
         rows = q.execute().data or []
     except Exception as e:
         return {"ok": False, "error": f"data_source not ready (mig 083/084/207?): {e}", "ran": []}
-    ran = []
+    ran, skipped = [], []
     for s in rows:
         proc = (s.get("processor") or "").strip().lower()
         handler = _SOURCE_SCRAPERS.get(proc)
@@ -15974,19 +16228,39 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
         nxt = _vip_next_run(s.get("frequency") or "daily", None, None, s.get("hour"), "America/New_York")
         if not handler:
             continue
+        # ── COOLDOWN (mig 244) ───────────────────────────────────────────────────────────────────
+        # A portal that has temporarily blocked us must not be contacted AT ALL by the scheduler. This
+        # poll can run every 30 minutes, and a headless login/pull into an active block is the single
+        # most reliable way to extend it. The skip is NOT an attempt: last_attempt_at, last_status and
+        # consecutive_failures are all left alone (a block is neither a delivery nor a try). Only
+        # next_run_at moves — past the cooldown — so the scheduler stays honest AND stays away.
+        cool = _source_cooldown(client, s["id"], oid, row=s)
+        if cool.get("blocked"):
+            until = cool.get("blocked_until")
+            resume = _later_iso(nxt, until.isoformat()) if until else nxt
+            _source_reschedule(client, s["id"], oid, resume)
+            skipped.append({"id": s["id"], "skipped": "portal_blocked", "until": resume,
+                            "remaining_s": cool.get("remaining_s")})
+            continue
         try:
             res = await handler(oid, s)
             _source_stamp(client, s["id"], oid,
                           {"last_status": str((res or {}).get("status") or "ok"),
                            "auth_status": "authenticated", "next_run_at": nxt,
                            "last_run_at": now.isoformat()}, success=_pull_delivered(res))
+            _pb().record_outcome(client, s["id"], oid, res, delivered=_pull_delivered(res), row=s)
             ran.append({"id": s["id"], "ok": True, "status": (res or {}).get("status")})
         except Exception as e:
+            plan = _pb().record_outcome(client, s["id"], oid, None, delivered=False, exc=e, row=s)
+            # A block pushes next_run_at past the cooldown so the very next poll doesn't walk into it.
+            nxt2 = _later_iso(nxt, plan["blocked_until"]) if plan else nxt
             _source_stamp(client, s["id"], oid,
-                          {"last_status": f"error: {str(e)[:160]}", "next_run_at": nxt,
+                          {"last_status": f"error: {str(e)[:160]}", "next_run_at": nxt2,
                            "last_run_at": now.isoformat()}, success=False)
-            ran.append({"id": s["id"], "ok": False, "error": str(e)[:200]})
-    return {"ok": True, "ran": ran, "count": len(ran)}
+            ran.append({"id": s["id"], "ok": False, "error": str(e)[:200],
+                        "blocked_until": (plan or {}).get("blocked_until")})
+    return {"ok": True, "ran": ran, "count": len(ran),
+            "skipped_blocked": skipped, "skipped_count": len(skipped)}
 
 
 def _do_portal_login(sid: str, org_id: str):
@@ -16003,6 +16277,23 @@ def _do_portal_login(sid: str, org_id: str):
     s = rows[0]
     _login_fn = vp.begin_login_b2bsoft if (s.get("processor") or "").lower() in ("b2bsoft", "b2b") else vp.begin_login
     now = datetime.now(timezone.utc)
+
+    def _note_login_failure(exc, message):
+        """Stamp the failure AND, when the portal is throttling us, the escalating cooldown. A headless
+        login is the most expensive request this module makes; capping it to ONE per cooldown window is
+        what the cooldown is for."""
+        plan = None
+        try:
+            plan = _pb().record_outcome(client, sid, org_id, None, delivered=False, exc=exc, row=s)
+        except Exception:
+            plan = None
+        if plan:
+            message = (_pb().humanize(_source_cooldown(client, sid, org_id)) + " " + message)[:400]
+        _source_stamp(client, sid, org_id,
+                      {"auth_status": "error", "auth_message": message[:400],
+                       "last_run_at": now.isoformat()}, success=False)
+        _store_login_shot(client, sid, org_id, getattr(exc, "screenshot_b64", None))
+
     try:
         res = _login_fn(s.get("portal_url"), s.get("account_id"), s.get("username"),
                         s.get("password"), s.get("proxy_url"))
@@ -16010,16 +16301,10 @@ def _do_portal_login(sid: str, org_id: str):
         msg = str(e)
         if "egress" in msg.lower() or "waf" in msg.lower():
             msg += vp.egress_hint(s.get("proxy_url"))   # which IP did we actually go out from?
-        _source_stamp(client, sid, org_id,
-                      {"auth_status": "error", "auth_message": msg[:400],
-                       "last_run_at": now.isoformat()}, success=False)
-        _store_login_shot(client, sid, org_id, getattr(e, "screenshot_b64", None))
+        _note_login_failure(e, msg)
         return
     except Exception as e:
-        _source_stamp(client, sid, org_id,
-                      {"auth_status": "error", "auth_message": ("Login crashed: " + str(e))[:400],
-                       "last_run_at": now.isoformat()}, success=False)
-        _store_login_shot(client, sid, org_id, getattr(e, "screenshot_b64", None))
+        _note_login_failure(e, "Login crashed: " + str(e))
         return
     if res.get("status") == "authenticated":
         # Signed in ≠ imported. This is an ATTEMPT stamp: the feed only goes green when a Pull
@@ -16057,11 +16342,16 @@ def _do_portal_login(sid: str, org_id: str):
 
 
 @router.post("/data-sources/{sid}/login/start")
-async def data_source_login_start(sid: str, background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+async def data_source_login_start(sid: str, background_tasks: BackgroundTasks, org_id: str = ORG_ID,
+                                  confirm: bool = False):
     """Phase 1 of the interactive portal login. The Playwright login (slow through a residential proxy)
     runs in the BACKGROUND, so this returns instantly with auth_status='authenticating'; the UI then polls
     the row until it flips to needs_2fa / authenticated / error. This fixes the 'Failed to fetch' a
-    synchronous, gateway-timeout-exceeding login used to throw."""
+    synchronous, gateway-timeout-exceeding login used to throw.
+
+    COOLDOWN (mig 244): a fresh headless login is the most expensive request this module makes, so it is
+    the one thing that must NEVER happen automatically during a portal block. Human override with
+    ?confirm=true, exactly like the live login."""
     require_org(org_id)
     client = sb()
     rows = (client.schema("commcalc").table("data_source").select("*")
@@ -16071,6 +16361,9 @@ async def data_source_login_start(sid: str, background_tasks: BackgroundTasks, o
     s = rows[0]
     if not (s.get("password") and (s.get("username") or s.get("account_id"))):
         raise HTTPException(400, "Enter the Account ID, User ID and Password on this login first, then Log in.")
+    cool = _source_cooldown(client, sid, org_id, row=s)
+    if cool.get("blocked") and not confirm:
+        return _blocked_payload(cool, {"status": "blocked"})
     now = datetime.now(timezone.utc)
     _source_stamp(client, sid, org_id,
                   {"auth_status": "authenticating", "auth_message": "Logging in…",
@@ -16169,8 +16462,23 @@ def _live_persist(client, sid, org_id):
         # live_login stamps last_run_at when it stops (error/cancelled) and when it authenticates —
         # neither imported anything, so both are recorded as ATTEMPTS. A live-session PULL that really
         # lands rows is stamped success=True by run_data_source, not here.
+        upd = dict(updates or {})
+        # COOLDOWN (mig 244): the live session's own failure message carries the portal's block wording
+        # (vidapay_sweep._raise_if_rate_limited embeds the matched marker), so a live login killed by a
+        # throttle stamps the same escalating cooldown the scheduled path does — otherwise the operator
+        # would simply click 🔴 Live login again and deepen the block.
         try:
-            _source_stamp(client, sid, org_id, dict(updates or {}), success=False)
+            if str(upd.get("auth_status") or "").lower() == "error":
+                hit = _pb().detect_block(str(upd.get("auth_message") or ""),
+                                         markers=_pb().load_markers(client, org_id, None))
+                if hit:
+                    _pb().apply_block(client, sid, org_id, hit)
+                    upd["auth_message"] = (_pb().humanize(_source_cooldown(client, sid, org_id))
+                                           + " " + str(upd.get("auth_message") or ""))[:400]
+        except Exception:
+            pass
+        try:
+            _source_stamp(client, sid, org_id, upd, success=False)
         except Exception:
             pass
     return _p
@@ -16280,15 +16588,25 @@ def data_source_pull_diagnostic(sid: str, org_id: str = ORG_ID):
 
 
 @router.post("/data-sources/{sid}/live-login/start")
-def live_login_start(sid: str, org_id: str = ORG_ID):
+def live_login_start(sid: str, org_id: str = ORG_ID, confirm: bool = False):
     """Spawn (or replace) the persistent live-login session for this source. Non-blocking — a worker
-    thread drives the login to the 2FA code screen; the UI polls /live-login/state (~1s) to watch it."""
+    thread drives the login to the 2FA code screen; the UI polls /live-login/state (~1s) to watch it.
+
+    COOLDOWN (mig 244). A HUMAN is allowed to log in during a portal cooldown — sometimes that is the
+    only way to see what the portal is actually showing — but NOT by accident: without ?confirm=true
+    this returns blocked/requires_confirm and the page must warn ("the portal rate-limited us until
+    ~HH:MM — another attempt may extend the block") and take a second, deliberate click. The AUTOMATIC
+    post-login pull stays suppressed for the whole cooldown regardless of the confirm (auto_pull_gate),
+    so a human look at the login screen never turns into 5 reports x N months of traffic."""
     require_org(org_id)
     from app.modules.commcalc import live_login
     client = sb()
     s = _live_source_row(client, sid, org_id)
     if not (s.get("password") and (s.get("username") or s.get("account_id"))):
         raise HTTPException(400, "Enter the Account ID, User ID and Password on this login first, then start the live login.")
+    cool = _source_cooldown(client, sid, org_id, row=s)
+    if cool.get("blocked") and not confirm:
+        return _blocked_payload(cool, {"phase": "blocked"})
     now = datetime.now(timezone.utc)
     _source_stamp(client, sid, org_id,
                   {"auth_status": "authenticating", "auth_message": "Live login in progress…",
@@ -16297,13 +16615,33 @@ def live_login_start(sid: str, org_id: str = ORG_ID):
     sess = live_login.start_session(sid, org_id, s, _live_persist(client, sid, org_id),
                                     _live_persist_shot(client, sid, org_id),
                                     _live_pull(client, org_id, s),
-                                    _live_pull_persist(client, org_id, sid))
+                                    _live_pull_persist(client, org_id, sid),
+                                    auto_pull_gate=lambda: _source_cooldown(client, sid, org_id))
     auto = (s.get("auto_pull_after_login") is not False)
-    return {"ok": True, "phase": sess.snapshot_phase(), "auto_pull": auto,
+    blocked_now = bool(cool.get("blocked"))
+    return {"ok": True, "phase": sess.snapshot_phase(), "auto_pull": auto and not blocked_now,
+            "blocked": blocked_now, "block_reason": cool.get("reason"),
             "message": ("Live session starting — watch it below. The 2FA code is sent ONCE to this same "
                         "live browser; enter it here when the code box appears."
-                        + (" As soon as you're signed in, this login's reports are pulled automatically."
-                           if auto else ""))}
+                        + (" ⛔ The portal has temporarily blocked us, so the automatic report pull is "
+                           "suppressed until the cooldown ends." if blocked_now else
+                           (" As soon as you're signed in, this login's reports are pulled automatically."
+                            if auto else "")))}
+
+
+@router.post("/data-sources/{sid}/clear-block")
+def clear_source_block(sid: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """OPERATOR ESCAPE HATCH: lift this login's portal cooldown by hand (import-admin only).
+
+    Use it when you KNOW the block is over (e.g. the portal support desk lifted it) — not as a way to
+    keep retrying. Clearing a cooldown and immediately retrying into a live block is what escalated the
+    2026-07-27 incident in the first place, so the counter is reset too and the next real block starts
+    the ladder again from its first step."""
+    require_org(org_id)
+    _require_import_admin(authorization, org_id)
+    _pb().clear_block(sb(), sid, org_id)
+    return {"ok": True, "message": ("Cooldown lifted. If the portal is still blocking us the very next "
+                                    "attempt will re-arm it, longer than before — wait it out instead.")}
 
 
 @router.get("/data-sources/{sid}/live-login/state")

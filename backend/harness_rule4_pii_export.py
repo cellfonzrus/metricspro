@@ -15,9 +15,15 @@ harness_multifile_docs.py) and the REAL shipped frontend source (read as text so
 silently drift from the shipped code, same technique the multifile-docs harness used for ZIP naming):
 
   1. `onboarding_compliance_documents` (the endpoint feeding /hr/compliance's new TABLE-view export)
-     reads ONLY `storeops.employee_onboarding` — never `employee_onboarding_profile` (the Fernet-
-     encrypted intake table) — so no SSN/bank/routing VALUE can reach this export's row shape, by
-     construction, not by a runtime mask.
+     reads `storeops.employee_onboarding` for document metadata. OWNER DIRECTIVE 2026-07-27 (the two
+     compliance-repository date filters) added a SECOND, narrow read of `employee_onboarding_profile`
+     — but ONLY for `work_state`/`docs_sent_at`/`invited_at` (the "request sent" provenance), never
+     `intake_data` (the Fernet-encrypted column on that same table, still off-limits). This harness now
+     proves the NARROWER, still-rigorous invariant: the `.select(...)` call against that table never
+     requests `intake_data` or `*`, AND — behaviorally, not just by source inspection — even when a
+     fetched profile row's `intake_data` carries a live-looking SSN/bank value, it never appears
+     anywhere in the function's response (belt-and-suspenders: proves the column-scoping actually
+     holds at runtime, not just that the source text looks right).
   2. Every row that function actually returns (built from a realistic fixture, including a document
      literally labeled "Social Security Card") contains ONLY the expected non-sensitive keys — no
      key name matching ssn/bank/routing/account/dob/intake ever appears.
@@ -116,10 +122,18 @@ fake.store["onboarding_task"] = [
     {"org_id": ORG, "id": "dd_form", "category_id": "cat1", "label": "Direct Deposit / Bank Form", "sort_order": 2, "is_active": True},
 ]
 fake.store["employees"] = [{"org_id": ORG, "employee_id": "emp-1", "name": "Jose Utero", "email": "jose@x.com"}]
+# The profile row this endpoint now legitimately reads for request-sent provenance — deliberately ALSO
+# carries a live-looking intake_data SSN/bank value (a real row on this table would), so the behavioral
+# check below proves that value never reaches the response even though the row itself is fetched.
+fake.store["employee_onboarding_profile"] = [
+    {"org_id": ORG, "employee_id": "emp-1", "work_state": "IL",
+     "docs_sent_at": "2026-06-28", "invited_at": "2026-06-20",
+     "intake_data": {"ssn": "123-45-6789", "bank_account": "000111222", "bank_routing": "021000021"}},
+]
 # A realistic employee_onboarding row for each task — includes a multi-file `documents` list (mig 402
-# shape) and a signature — but NEVER any field carrying an actual SSN/bank VALUE (that lives only in
-# `employee_onboarding_profile.intake_data`, a table this fixture deliberately does not create at all,
-# to prove the function under test doesn't need it).
+# shape) and a signature — but NEVER any field carrying an actual SSN/bank VALUE (that only ever lives
+# in `employee_onboarding_profile.intake_data`, seeded above specifically to prove it doesn't leak
+# through even though the row it lives on IS now fetched for its non-sensitive columns).
 fake.store["employee_onboarding"] = [
     {"org_id": ORG, "employee_id": "emp-1", "task_id": "ss_card", "status": "verified",
      "document_path": None, "document_name": None,
@@ -139,15 +153,23 @@ SENSITIVE_KEY_RE = re.compile(r"ssn|social.?security|bank|routing|account.?num|d
 EXPECTED_KEYS = {
     "employee_id", "employee_name", "employee_email", "task_id", "document_label", "category",
     "status", "verified_by", "file_id", "file_index", "file_count", "document_name",
-    "has_document", "has_signature_page", "signed_at", "signed_name",
+    "has_document", "has_signature_page", "signed_at", "signed_name", "request_sent_at",
 }
 
-# ── 1. Structural check: the function's OWN source never selects the encrypted intake table ────────
+# ── 1. Structural check: the function's OWN source never selects the encrypted intake column ───────
 src = inspect.getsource(hr.onboarding_compliance_documents)
 check("1a: reads storeops.employee_onboarding", '"employee_onboarding"' in src or "'employee_onboarding'" in src, src[:200])
-check("1b: never reads employee_onboarding_profile (the Fernet-encrypted intake table)",
-      "employee_onboarding_profile" not in src, "found employee_onboarding_profile in the function source")
-check("1c: never selects raw intake_data", "intake_data" not in src, "found intake_data in the function source")
+# 2026-07-27: this endpoint now legitimately reads employee_onboarding_profile too (request-sent
+# provenance) — assert the NARROW invariant instead of a blanket "never touches the table": the
+# specific .select(...) call for that table is neither "*" nor mentions intake_data.
+prof_select_m = re.search(r'\.table\("employee_onboarding_profile"\)\s*\n?\s*\.select\("([^"]*)"\)', src)
+check("1b: employee_onboarding_profile IS read now (request-sent provenance) — found the .select(...) call",
+      prof_select_m is not None, src)
+prof_select_cols = prof_select_m.group(1) if prof_select_m else ""
+check("1b2: that select() is column-scoped, not '*'", prof_select_cols != "*" and prof_select_cols != "", prof_select_cols)
+check("1b3: that select() never requests intake_data", "intake_data" not in prof_select_cols, prof_select_cols)
+check("1c: never selects raw intake_data ANYWHERE in the function (belt-and-suspenders on top of 1b3)",
+      "intake_data" not in src, "found intake_data in the function source")
 
 # ── 2. Behavioral check: call the REAL function, inspect every returned row ─────────────────────────
 resp = hr.onboarding_compliance_documents(org_id=ORG, q="", employee_id="")
@@ -169,6 +191,17 @@ ss_rows = [r for r in resp["documents"] if r["task_id"] == "ss_card"]
 check("2f: SS-card task produced 2 file rows (both files, per multi-file mig 402)", len(ss_rows) == 2, ss_rows)
 check("2g: SS-card rows carry the LABEL 'Social Security Card', not an SSN value",
       all(r["document_label"] == "Social Security Card" for r in ss_rows), ss_rows)
+# 2h/2i: the SEEDED intake_data SSN/bank values never appear ANYWHERE in the response, even though the
+# profile row carrying them WAS fetched (belt-and-suspenders: proves the narrow .select() actually
+# holds at runtime, not just that the source text looks right).
+resp_str = repr(resp)
+check("2h: the seeded intake_data SSN never appears anywhere in the response", "123-45-6789" not in resp_str, resp_str[:300])
+check("2i: the seeded intake_data bank_account/routing never appear anywhere in the response",
+      "000111222" not in resp_str and "021000021" not in resp_str, resp_str[:300])
+# 2j: and the profile read isn't a no-op either — the legitimate new field IS populated, proving this
+# isn't vacuously passing because the fetch silently failed/was skipped.
+check("2j: request_sent_at IS populated from the profile's docs_sent_at (the read genuinely happened)",
+      all(r.get("request_sent_at") == "2026-06-28" for r in resp["documents"]), resp["documents"])
 
 # ── 3. Frontend cross-check: /hr/compliance's new ExportColumn[] (read as text, source-parity) ──────
 fe_path = "../frontend/src/app/(platform)/hr/compliance/page.tsx"

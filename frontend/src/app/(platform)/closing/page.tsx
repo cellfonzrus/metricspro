@@ -1,8 +1,9 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import SubmissionsTable from './_lib/SubmissionsTable'
 
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const th: React.CSSProperties = { textAlign: 'right', padding: '7px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }
@@ -18,16 +19,22 @@ export default function ClosingDashboard() {
   const [market, setMarket] = useState('')
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState<'store' | 'rep'>('store')
+  const [tab, setTab] = useState<'detail' | 'store' | 'rep'>('detail')
   const [readiness, setReadiness] = useState<any>(null)   // self-diagnostic (2026-07-16), best-effort
+  // Anti-clobber: only the LATEST in-flight rollup request may land (a fast period/market change used
+  // to let a slower, stale response overwrite a newer one — the timeclock last-response-wins race class).
+  const reqRef = useRef(0)
 
   useEffect(() => { if (user?.market && permissions?.scope === 'market') setMarket(user.market) }, [user, permissions])
 
   const load = useCallback(() => {
     if (!period) return
+    const myReq = ++reqRef.current
     setLoading(true)
     api(`/api/v1/closing/rollup?period=${period}${market ? `&market=${encodeURIComponent(market)}` : ''}`)
-      .then(setData).catch(console.error).finally(() => setLoading(false))
+      .then(d => { if (reqRef.current === myReq) setData(d) })
+      .catch(console.error)
+      .finally(() => { if (reqRef.current === myReq) setLoading(false) })
   }, [period, market])
   useEffect(() => { load() }, [load])
   // Surface config/data gaps (no stores mapped, no B2B sales source, no X-report ever, module not
@@ -94,14 +101,16 @@ export default function ClosingDashboard() {
 
           {/* Tabs */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-            {(['store', 'rep'] as const).map(x => (
+            {(['detail', 'store', 'rep'] as const).map(x => (
               <button key={x} className={`btn ${tab === x ? 'btn-primary' : 'btn-secondary'}`} style={{ fontSize: 13 }} onClick={() => setTab(x)}>
-                {x === 'store' ? '🏬 By store' : '🧑 By rep'}
+                {x === 'detail' ? '🧾 All submissions' : x === 'store' ? '🏬 By store' : '🧑 By rep'}
               </button>
             ))}
           </div>
 
-          {tab === 'store' ? (
+          {tab === 'detail' ? (
+            <SubmissionsTable />
+          ) : tab === 'store' ? (
             <Table
               head={['Store', 'Market', 'Days', 'Cash', 'Credit', 'Accessory', 'Other', 'Upg', 'New', 'Post']}
               rows={byStore}

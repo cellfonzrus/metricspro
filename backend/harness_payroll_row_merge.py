@@ -16,6 +16,15 @@ agent/people/payroll-onerow-audit):
   4) MANUAL-EDIT AUDIT LOG — every write path that alters punches/hours (PATCH /shifts/{id},
      POST /timeclock/override, POST/DELETE /manual-hours, the force-clockout sweep) appends to
      storeops.payroll_change_log (migration 414); GET /payroll-change-log lists it, org+store scoped.
+  5) (2026-07-27, "run the payroll money fix" — owner-approved, Section I below) THE ACTUAL IDENTITY
+     FIX: every shift-writing path now stores the BUSINESS employee_id going forward (schedule page +
+     server-side `_canonical_shift_employee_id` defense-in-depth on POST /shifts, the bulk
+     shift-template save/apply, and the employee-merge reassignment), and migration 415 backfills
+     EXISTING numeric-id shift rows the same way (ambiguous numeric ids skipped, never guessed).
+     Proves the write-side fix, a Python mirror of the migration's backfill logic (idempotent,
+     ambiguity-guarded), and that the double-count actually DISAPPEARS (not just merges into one row)
+     for a canonical dataset once a shift's employee_id matches its timelog rows — hours drop to true
+     worked hours and /payroll-by-store prices the shift-derived contribution at the real rate.
 
 Run: `python3 harness_payroll_row_merge.py` from backend/.
 """
@@ -179,6 +188,9 @@ class FakeQuery:
     def insert(self, payload):
         self._mode = "insert"; self._payload = payload; return self
 
+    def upsert(self, payload, on_conflict=None):
+        self._mode = "upsert"; self._payload = payload; self._on_conflict = on_conflict; return self
+
     def update(self, payload):
         self._mode = "update"; self._payload = payload; return self
 
@@ -212,6 +224,24 @@ class FakeQuery:
                 row.setdefault("id", f"row{len(rows) + len(out) + 1}")
                 out.append(row)
             rows.extend(out)
+            return Result(out)
+        if self._mode == "upsert":
+            payload = self._payload if isinstance(self._payload, list) else [self._payload]
+            conflict_keys = [k.strip() for k in (self._on_conflict or "").split(",") if k.strip()]
+            out = []
+            for p in payload:
+                row = dict(p)
+                match = None
+                if conflict_keys:
+                    match = next((r for r in rows
+                                  if all(str(r.get(k)) == str(row.get(k)) for k in conflict_keys)), None)
+                if match is not None:
+                    match.update(row)
+                    out.append(match)
+                else:
+                    row.setdefault("id", f"row{len(rows) + len(out) + 1}")
+                    rows.append(row)
+                    out.append(row)
             return Result(out)
         matched = [r for r in rows if self._matches(r)]
         if self._mode == "update":
@@ -799,6 +829,410 @@ check("H3d confirmed: a same-day (non-stale) clock-out logs NOTHING to the chang
       len(log_rows()) == fresh_before, log_rows()[fresh_before:])
 
 print(f"[Section H] {len(PASS)} passed, {len(FAIL)} failed so far")
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# SECTION I — 2026-07-27 "run the payroll money fix" (owner-approved). THE WRITE-SIDE FIX + THE
+# BACKFILL (migration 415). Every shift-writing path now stores/re-keys the BUSINESS employee_id, so
+# the already-shipped `reconcile_employee_identity` + the mig-407 RPC's own no-double-count anti-join
+# + `/payroll-by-store`'s rate_map lookup all start matching for real. Nothing in this section changes
+# hours×rate math — identity only, per AGENT_CONTRACT's money-touching rule.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+# ── I1-I4: _canonical_shift_employee_id() pure unit tests (no DB — explicit `employees=` list) ─────
+check("I1 canonicalizes a numeric id to the business id",
+      R._canonical_shift_employee_id(ORG, "45", employees=EMPLOYEES) == "E45",
+      R._canonical_shift_employee_id(ORG, "45", employees=EMPLOYEES))
+check("I2 an id that's ALREADY the business id passes through unchanged",
+      R._canonical_shift_employee_id(ORG, "E45", employees=EMPLOYEES) == "E45",
+      R._canonical_shift_employee_id(ORG, "E45", employees=EMPLOYEES))
+check("I3 blank/None ids pass through unchanged (nothing to reconcile, never a crash)",
+      R._canonical_shift_employee_id(ORG, None, employees=EMPLOYEES) is None
+      and R._canonical_shift_employee_id(ORG, "", employees=EMPLOYEES) == "",
+      (R._canonical_shift_employee_id(ORG, None, employees=EMPLOYEES),
+       R._canonical_shift_employee_id(ORG, "", employees=EMPLOYEES)))
+check("I4 an AMBIGUOUS numeric id (also someone else's real business id) is left UNCHANGED, never "
+      "guessed — same N1-class guard as business_id_alias_map/_emp_id_variants",
+      R._canonical_shift_employee_id(ORG, "42", employees=COLLIDE_EMPLOYEES) == "42",
+      R._canonical_shift_employee_id(ORG, "42", employees=COLLIDE_EMPLOYEES))
+
+# ── I5-I8: POST /shifts (create_shift) canonicalizes server-side — defense in depth beyond the
+# schedule page's own fix, so no caller (this one, a future one, or a bad client) can create a NEW
+# numeric-id shift. Also proves the time-off-conflict check now uses the CANONICAL id (a real,
+# accuracy side-benefit of fixing identity earlier in the function, not a new money/formula change).
+reset()
+fake.seed("storeops", "time_off_requests", [
+    {"id": 1, "org_id": ORG, "employee_id": "E45", "status": "approved",
+     "start_date": "2026-07-06", "end_date": "2026-07-06"},
+])
+created = R.create_shift({"employee_id": "45", "employee_name": "Priya Rep", "store_code": "S1",
+                          "shift_date": "2026-07-06", "start_time": "09:00", "end_time": "17:00",
+                          "scheduled_hours": 8.0}, org_id=ORG)
+check("I5 POST /shifts stores the CANONICAL business id even when the caller sent the numeric id "
+      "(server-side defense-in-depth)", created.get("employee_id") == "E45", created)
+check("I6 ...and that's really what landed in the table, not just the response echo",
+      fake.store[("storeops", "shifts")][-1]["employee_id"] == "E45", fake.store[("storeops", "shifts")])
+check("I7 the time-off conflict check now correctly fires against a BUSINESS-keyed time_off_requests "
+      "row (E45)", created.get("timeoff_warning") is not None, created)
+# a shift for an employee who ISN'T in a time-off conflict, still with a numeric-id payload
+created2 = R.create_shift({"employee_id": "46", "employee_name": "Solo Kiosk", "store_code": "S1",
+                           "shift_date": "2026-07-07", "start_time": "09:00", "end_time": "17:00",
+                           "scheduled_hours": 8.0}, org_id=ORG)
+check("I8 a second employee's numeric-id payload is ALSO canonicalized (E46, not 46)",
+      created2.get("employee_id") == "E46", created2)
+
+# ── I7b-I7d: Gate-1 REDO N1 (MUST) — the admin Time Off page (storeops/timeoff/page.tsx) STILL
+# writes time_off_requests keyed by the employee's NUMERIC id (a separate, not-yet-backfilled-until-
+# migration-415 table) — canonicalizing the SHIFT's own employee_id must NOT stop matching those
+# numeric-keyed rows. Reproduces the reviewer's exact repro: a numeric-keyed conflict row for the
+# SAME employee, with the shift payload arriving in EITHER id form.
+reset()
+fake.seed("storeops", "time_off_requests", [
+    {"id": 2, "org_id": ORG, "employee_id": "45", "status": "approved",   # NUMERIC-keyed (admin page bug)
+     "start_date": "2026-07-06", "end_date": "2026-07-06"},
+])
+created_numeric_conflict = R.create_shift(
+    {"employee_id": "45", "employee_name": "Priya Rep", "store_code": "S1", "shift_date": "2026-07-06",
+     "start_time": "09:00", "end_time": "17:00", "scheduled_hours": 8.0}, org_id=ORG)
+check("I7b Gate-1 REDO N1: create_shift's own employee_id is canonicalized to E45 as always "
+      "(the shift-writing fix itself is unaffected)",
+      created_numeric_conflict.get("employee_id") == "E45", created_numeric_conflict)
+check("I7c Gate-1 REDO N1: the time-off warning STILL FIRES even though time_off_requests carries "
+      "the NUMERIC id '45' — this is the exact regression the reviewer caught (canonicalizing eid "
+      "alone would have silently stopped matching this row)",
+      created_numeric_conflict.get("timeoff_warning") is not None, created_numeric_conflict)
+# Negative control: a DIFFERENT employee, no conflict of either id form, must never warn.
+reset()
+fake.seed("storeops", "time_off_requests", [
+    {"id": 3, "org_id": ORG, "employee_id": "45", "status": "approved",
+     "start_date": "2026-07-06", "end_date": "2026-07-06"},   # Priya's, not Solo Kiosk's
+])
+created_no_conflict = R.create_shift(
+    {"employee_id": "46", "employee_name": "Solo Kiosk", "store_code": "S1", "shift_date": "2026-07-06",
+     "start_time": "09:00", "end_time": "17:00", "scheduled_hours": 8.0}, org_id=ORG)
+check("I7d negative control: an unrelated employee's shift on the SAME date never warns just because "
+      "_emp_id_variants resolves broadly — no false positive",
+      created_no_conflict.get("timeoff_warning") is None, created_no_conflict)
+
+# ── I9-I11: bulk shift-template APPLY canonicalizes even a STALE template row saved before this fix
+# (or before migration 415's backfill) ever ran — applying an old template can never resurrect a
+# numeric-id shift.
+reset()
+fake.store[("storeops", "shift_templates")] = [
+    {"id": "tmpl1", "org_id": ORG, "employee_id": "45", "employee_name": "Priya Rep",
+     "store_code": "S1", "weekday": 0, "start_time": "09:00", "end_time": "17:00", "scheduled_hours": 8.0},
+]
+applied = R.apply_templates({"week_start": "2026-07-06"}, org_id=ORG)
+check("I9 apply_templates reports 1 shift added from the stale numeric-id template",
+      applied.get("added") == 1, applied)
+new_shift = next((s for s in fake.store[("storeops", "shifts")] if s.get("shift_date") == "2026-07-06"), None)
+check("I10 the NEWLY CREATED shift carries the canonical business id (E45), not the template's stale "
+      "numeric '45'", new_shift is not None and new_shift.get("employee_id") == "E45", new_shift)
+check("I11 employee_name on the new shift is still correct (Priya Rep)",
+      new_shift is not None and new_shift.get("employee_name") == "Priya Rep", new_shift)
+
+# ── I11b: Gate-1 REDO N1 (MUST) — apply_templates' OWN time-off conflict check (the second call
+# site the reviewer flagged) must ALSO still match a NUMERIC-keyed time_off_requests row after eid
+# is canonicalized, correctly skipping (not creating) the blocked day.
+reset()
+fake.store[("storeops", "shift_templates")] = [
+    {"id": "tmpl2", "org_id": ORG, "employee_id": "45", "employee_name": "Priya Rep",
+     "store_code": "S1", "weekday": 0, "start_time": "09:00", "end_time": "17:00", "scheduled_hours": 8.0},
+]
+fake.seed("storeops", "time_off_requests", [
+    {"id": 4, "org_id": ORG, "employee_id": "45", "status": "approved",   # NUMERIC-keyed (admin page bug)
+     "start_date": "2026-07-06", "end_date": "2026-07-06"},
+])
+applied_blocked = R.apply_templates({"week_start": "2026-07-06"}, org_id=ORG)
+check("I11b Gate-1 REDO N1: apply_templates correctly SKIPS the numeric-id-conflicting day (0 added, "
+      "1 skipped_timeoff) — canonicalizing the template's eid did not blind this check to the "
+      "admin page's still-numeric-keyed time-off row",
+      applied_blocked.get("added") == 0 and applied_blocked.get("skipped_timeoff") == 1, applied_blocked)
+
+# ── I12-I14: save-week-as-template canonicalizes BEFORE saving — a template built from an
+# already-numeric-id shift (e.g. one created before this fix, or an unbackfilled row) is captured
+# clean, so applying it later can never propagate the bug forward.
+reset()
+fake.store[("storeops", "shifts")] = [
+    {"id": 1, "org_id": ORG, "employee_id": "45", "employee_name": "Priya Rep", "store_code": "S1",
+     "shift_date": "2026-07-06", "start_time": "09:00", "end_time": "17:00", "scheduled_hours": 8.0,
+     "actual_hours": 0.0, "status": "scheduled", "is_deleted": False},
+]
+saved = R.save_week_as_template({"week_start": "2026-07-06"}, org_id=ORG)
+check("I12 save-week reports 1 template entry saved", saved.get("saved") == 1, saved)
+tmpl_row = fake.store[("storeops", "shift_templates")][0] if fake.store.get(("storeops", "shift_templates")) else None
+check("I13 the SAVED TEMPLATE carries the canonical business id (E45), not the source shift's "
+      "numeric '45'", tmpl_row is not None and tmpl_row.get("employee_id") == "E45", tmpl_row)
+check("I14 save_week_as_template only READS storeops.shifts (never writes it back) — the source row "
+      "is correctly left UNTOUCHED (still the raw numeric '45'); a real PostgREST select() would "
+      "return a fresh dict per call anyway, so this also guards against ever accidentally mutating a "
+      "row the fake client happens to alias by reference (the same class of harness-only artifact "
+      "Section E's own history note already flagged for update_shift)",
+      fake.store[("storeops", "shifts")][0]["employee_id"] == "45", fake.store[("storeops", "shifts")])
+
+# ── I15-I17: employee-merge reassigns to the TARGET's business id, not their numeric primary key ───
+reset()
+fake.seed("storeops", "employees", fake.store[("storeops", "employees")] + [
+    {"id": 200, "org_id": ORG, "employee_id": "E200", "name": "Dup Rep", "home_store": "S1",
+     "pay_rate": 20.0, "is_active": True},
+])
+fake.store[("storeops", "shifts")] = [
+    {"id": 1, "org_id": ORG, "employee_id": "200", "employee_name": "Dup Rep", "store_code": "S1",
+     "shift_date": "2026-07-06", "start_time": "09:00", "end_time": "17:00", "scheduled_hours": 8.0,
+     "actual_hours": 0.0, "status": "scheduled", "is_deleted": False},
+]
+merge_result = R.merge_employees({"dup_id": "200", "target_id": "45"}, org_id=ORG)
+check("I15 merge reports 1 shift moved", merge_result["moved"]["shifts"] == 1, merge_result)
+moved_shift = fake.store[("storeops", "shifts")][0]
+check("I16 the reassigned shift carries the TARGET's business employee_id (E45), NOT their numeric "
+      "primary key ('45') — the old bug here created a brand-new numeric-id shift on every merge",
+      moved_shift.get("employee_id") == "E45", moved_shift)
+check("I17 employee_name was also updated to the target's name",
+      moved_shift.get("employee_name") == "Priya Rep", moved_shift)
+
+# ── I17b-I17c: Gate-1 REDO N1 root-cause forward-fix — POST /time-off (create_time_off) also
+# canonicalizes server-side now, defense-in-depth matching the shift writers (the frontend fix is in
+# storeops/timeoff/page.tsx, not exercised by this backend-only harness).
+reset()
+tor = R.create_time_off({"employee_id": "45", "start_date": "2026-07-20", "end_date": "2026-07-21",
+                         "type": "PTO", "status": "approved"}, org_id=ORG)
+check("I17b POST /time-off stores the CANONICAL business id even when sent the numeric id",
+      tor.get("employee_id") == "E45", tor)
+check("I17c ...and that's really what's in the table, not just the response echo",
+      fake.store[("storeops", "time_off_requests")][-1]["employee_id"] == "E45",
+      fake.store[("storeops", "time_off_requests")])
+
+print(f"[Section I: writers] {len(PASS)} passed, {len(FAIL)} failed so far")
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# SECTION I (cont'd) — migration 415's BACKFILL logic, mirrored in pure Python (no live Postgres
+# connection available in this sandbox — see docs/handoffs/people.md for the SEPARATE empirical
+# scratch-Postgres 16 verification of the actual SQL, run via docker). This mirror implements the
+# IDENTICAL rule the migration's SQL CTE does: business_id_alias_map()'s own ambiguity guard, applied
+# PER ORG (a numeric id is only ever compared within the SAME org's roster).
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+from collections import defaultdict  # noqa: E402
+
+
+def migration_415_backfill_mirror(shifts, employees):
+    """Pure-Python mirror of database/migrations/415_storeops_shifts_employee_id_backfill.sql's
+    backfill DO block: re-keys each row's employee_id to the org's alias-mapped business id when
+    unambiguous, leaves it untouched (and counts it) when ambiguous. Table-agnostic — takes any list
+    of dicts with org_id/employee_id (shifts OR time_off_requests; the real migration shares the same
+    alias_map across both tables, this mirror does too by construction). Returns
+    (new_rows_list, updated_count, skipped_ambiguous_count)."""
+    emps_by_org = defaultdict(list)
+    for e in employees:
+        emps_by_org[e.get("org_id")].append(e)
+    alias_by_org = {org: business_id_alias_map(rows) for org, rows in emps_by_org.items()}
+
+    def ambiguous_numeric_ids(org):
+        """Gate-1 REDO N2 fix (2026-07-27): an employee whose OWN business employee_id happens to
+        equal their OWN numeric id (business_id_alias_map's own harmless "nothing to reconcile"
+        no-op case) must NEVER be reported as ambiguous — only a numeric id that collides with a
+        DIFFERENT employee's real business id is genuinely ambiguous. Mirrors the SQL fix's
+        `AND e2.id <> e.id` exactly."""
+        rows = emps_by_org.get(org, [])
+        ambiguous = set()
+        for e in rows:
+            if e.get("id") is None:
+                continue
+            numeric_s = str(e.get("id")).strip()
+            for e2 in rows:
+                if e2.get("id") == e.get("id"):
+                    continue   # self-match — not ambiguous
+                if str(e2.get("employee_id") or "").strip() == numeric_s:
+                    ambiguous.add(numeric_s)
+                    break
+        return ambiguous
+
+    updated = skipped = 0
+    out = []
+    for s in shifts:
+        s = dict(s)
+        raw = s.get("employee_id")
+        org = s.get("org_id")
+        if raw not in (None, ""):
+            alias = alias_by_org.get(org, {})
+            raw_s = str(raw).strip()
+            if raw_s in alias:
+                s["employee_id"] = alias[raw_s]
+                updated += 1
+            elif raw_s in ambiguous_numeric_ids(org):
+                skipped += 1
+        out.append(s)
+    return out, updated, skipped
+
+
+# ── I18-I21: the backfill mirror on a small multi-org, multi-case fixture ───────────────────────────
+ORG_B = "org-pm-2"
+backfill_employees = EMPLOYEES + [
+    {"id": 45, "org_id": ORG, "employee_id": "E45", "name": "Priya Rep", "pay_rate": 22.0},
+    {"id": 46, "org_id": ORG, "employee_id": "E46", "name": "Solo Rep", "pay_rate": 18.0},
+] + COLLIDE_EMPLOYEES  # Alice (id 42/E42) + Bob (id 77/business "42") — no org_id set below, add it:
+backfill_employees = [dict(e, org_id=e.get("org_id") or ORG) for e in backfill_employees]
+# A second org's roster, reusing the SAME numeric id "45" for an UNRELATED employee, to prove
+# org-scoping — this must never bleed into org ORG's own resolution.
+backfill_employees.append({"id": 45, "org_id": ORG_B, "employee_id": "Z45", "name": "Other Org Person", "pay_rate": 30.0})
+
+backfill_shifts = [
+    {"id": 1, "org_id": ORG, "employee_id": "45", "employee_name": "Priya Rep"},   # -> E45 (unambiguous)
+    {"id": 2, "org_id": ORG, "employee_id": "E46", "employee_name": "Solo Rep"},   # already canonical, untouched
+    {"id": 3, "org_id": ORG, "employee_id": "42", "employee_name": "Bob B"},       # AMBIGUOUS -> left as-is
+    {"id": 4, "org_id": ORG, "employee_id": None, "employee_name": "Unassigned"},  # blank -> untouched, no crash
+    {"id": 5, "org_id": ORG_B, "employee_id": "45", "employee_name": "Other Org Person"},  # -> Z45, ORG_B only
+]
+fixed_shifts, n_updated, n_skipped = migration_415_backfill_mirror(backfill_shifts, backfill_employees)
+check("I18 exactly 2 rows re-keyed (org ORG's '45'->E45, org ORG_B's '45'->Z45 — SAME raw numeric "
+      "id, DIFFERENT orgs, each resolved against its OWN roster)", n_updated == 2, (n_updated, fixed_shifts))
+check("I19 exactly 1 row skipped as ambiguous (Bob's shift, raw '42')", n_skipped == 1, n_skipped)
+by_id = {s["id"]: s for s in fixed_shifts}
+check("I20a shift 1 re-keyed to E45", by_id[1]["employee_id"] == "E45", by_id[1])
+check("I20b shift 2 (already canonical E46) is byte-identical, untouched", by_id[2]["employee_id"] == "E46", by_id[2])
+check("I20c shift 3 (ambiguous '42') is LEFT UNCHANGED, not guessed at either direction",
+      by_id[3]["employee_id"] == "42", by_id[3])
+check("I20d shift 4 (blank employee_id) passes through with no crash, still None",
+      by_id[4]["employee_id"] is None, by_id[4])
+check("I20e shift 5 in ORG_B correctly resolves against ORG_B's OWN roster (Z45), proving org-scoping "
+      "— NOT E45 (which is what ORG's roster would have produced for the same raw '45')",
+      by_id[5]["employee_id"] == "Z45", by_id[5])
+
+# ── I21: IDEMPOTENCY — running the backfill a second time on its own output changes NOTHING ─────────
+_, n_updated2, n_skipped2 = migration_415_backfill_mirror(fixed_shifts, backfill_employees)
+check("I21a second run updates 0 rows (every re-keyable row is already canonical)", n_updated2 == 0, n_updated2)
+check("I21b second run still correctly reports the SAME 1 ambiguous row (nothing silently 'fixed' by "
+      "a repeat run, nothing silently dropped from the report either)", n_skipped2 == 1, n_skipped2)
+
+# ── I21c-I21g: Gate-1 REDO N2 fix — reproduces the reviewer's EXACT repro (preview said 2, the old
+# DO block said 3 on identical data) at the pure-mirror level: Carol (numeric 103 / business E103),
+# Zach (numeric 200 / business "103" — an all-digit business id that COLLIDES with Carol's numeric
+# pk), a genuinely ambiguous row raw-keyed "103" (could be Carol's numeric-id-bug OR Zach's real
+# identity — must stay skipped), Zach's OWN row raw-keyed "200" (unambiguous — re-keys to "103"),
+# and Quinn, a SELF-MATCH employee (numeric 999 == business "999") whose row must be BOTH untouched
+# AND never reported as ambiguous (the second N2 sub-bug).
+n2_employees = [
+    {"id": 103, "org_id": ORG, "employee_id": "E103", "name": "Carol Y", "pay_rate": 18.0},
+    {"id": 200, "org_id": ORG, "employee_id": "103", "name": "Zach Z", "pay_rate": 20.0},
+    {"id": 999, "org_id": ORG, "employee_id": "999", "name": "Quinn Q", "pay_rate": 17.0},
+]
+n2_shifts = [
+    {"id": 10, "org_id": ORG, "employee_id": "200", "employee_name": "Zach Z"},        # -> "103" (N2 trap)
+    {"id": 11, "org_id": ORG, "employee_id": "103", "employee_name": "Ambiguous Row"},  # genuinely ambiguous
+    {"id": 12, "org_id": ORG, "employee_id": "999", "employee_name": "Quinn Q"},        # self-match, untouched
+]
+n2_fixed, n2_updated, n2_skipped = migration_415_backfill_mirror(n2_shifts, n2_employees)
+n2_by_id = {s["id"]: s for s in n2_fixed}
+check("I21c exactly 1 row re-keyed (Zach's own '200' -> his real business id '103')",
+      n2_updated == 1, (n2_updated, n2_fixed))
+check("I21d exactly 1 row skipped as ambiguous — NOT 2 (the reviewer's 'preview said 2, DO block "
+      "said 3' class of over-count: Zach's freshly-re-keyed row must NOT also be counted, even "
+      "though it now happens to read the same all-digit string '103' as the genuinely ambiguous row)",
+      n2_skipped == 1, (n2_skipped, n2_fixed))
+check("I21e Zach's row is now correctly '103' (his real business id, all-digit)",
+      n2_by_id[10]["employee_id"] == "103", n2_by_id[10])
+check("I21f the genuinely ambiguous row is untouched, still raw '103'",
+      n2_by_id[11]["employee_id"] == "103", n2_by_id[11])
+check("I21g Quinn's SELF-MATCH row ('999'==own numeric==own business id) is untouched (nothing to "
+      "reconcile) — this is the SECOND N2 sub-bug: a self-match must never be labeled ambiguous",
+      n2_by_id[12]["employee_id"] == "999", n2_by_id[12])
+# A second run on Zach's already-canonical org must still report Zach's OWN row (raw now "103")
+# as ambiguous-LOOKING going forward — an inherent, unavoidable string-collision limitation (Zach's
+# real business id IS the same string as the ambiguous case), not a bug; documented honestly rather
+# than hidden. Proves the report is HONEST (same count preview would show), not that it drops to 0.
+_, n2_updated_2nd, n2_skipped_2nd = migration_415_backfill_mirror(n2_fixed, n2_employees)
+check("I21h second run: 0 further updates (idempotent)", n2_updated_2nd == 0, n2_updated_2nd)
+check("I21i second run: now correctly reports 2 ambiguous-looking rows (Zach's own, now-canonical "
+      "'103' row + the original ambiguous row) — an honest, inherent consequence of Zach's real "
+      "business id sharing a string with Carol's numeric pk, not a re-introduction of the N2 bug "
+      "(the DO block's own RAISE NOTICE count matches this exactly on a real-Postgres re-run, see "
+      "docs/handoffs/people.md)", n2_skipped_2nd == 2, n2_skipped_2nd)
+
+# ── I21j-I21k: the SAME mirror applied to a time_off_requests-shaped fixture (Gate-1 REDO N1
+# extension) — table-agnostic by construction, no code change needed to reuse it here.
+tor_rows = [
+    {"id": 900, "org_id": ORG, "employee_id": "45"},   # Priya's numeric-id-bug time-off row
+    {"id": 901, "org_id": ORG, "employee_id": "E46"},  # already canonical
+]
+tor_fixed, tor_updated, tor_skipped = migration_415_backfill_mirror(tor_rows, backfill_employees)
+check("I21j time_off_requests mirror: 1 row re-keyed (numeric '45' -> 'E45')",
+      tor_updated == 1 and tor_fixed[0]["employee_id"] == "E45", tor_fixed)
+check("I21k time_off_requests mirror: the already-canonical row is untouched",
+      tor_fixed[1]["employee_id"] == "E46", tor_fixed)
+
+print(f"[Section I: backfill mirror] {len(PASS)} passed, {len(FAIL)} failed so far")
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# SECTION I (cont'd) — END-TO-END: apply the backfill to a REAL fake-client fixture (the identical
+# Priya scenario from Section B) and prove the double-count actually DISAPPEARS through the shipped
+# get_payroll()/get_payroll_by_store() handlers — not just merges into one inflated row.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+reset()
+fake.store[("storeops", "shifts")] = [
+    {"id": i + 1, "org_id": ORG, "employee_id": "45", "employee_name": "Priya Rep", "store_code": "S1",
+     "shift_date": f"2026-07-{6 + i:02d}", "scheduled_hours": 8.0, "actual_hours": 0.0,
+     "start_time": "09:00", "end_time": "17:00", "status": "scheduled", "is_deleted": False}
+    for i in range(5)
+]
+fake.store[("storeops", "timelog")] = [
+    {"id": f"t{i+1}", "org_id": ORG, "employee_id": "E45", "employee_name": "Priya Rep", "store_code": "S1",
+     "clock_in": f"2026-07-{6 + i:02d}T13:00:00", "clock_out": f"2026-07-{6 + i:02d}T21:30:00",
+     "hours": 8.5, "work_date": f"2026-07-{6 + i:02d}", "device": "kiosk", "created_at": f"2026-07-{6+i:02d}T21:30:01"}
+    for i in range(5)
+]
+employees_now = fake.store[("storeops", "employees")]
+
+# BEFORE the backfill (identical setup to Section B): actual_hours is the DOUBLE-COUNTED 82.5h.
+rows_before = R.get_payroll(start="2026-07-06", end="2026-07-10", authorization=AUTH, org_id=ORG)
+priya_before = next(r for r in rows_before if r["name"] == "Priya Rep")
+check("I22 CONTROL (matches Section B exactly): before the backfill, actual_hours is the "
+      "double-counted 82.5h (40h scheduled-fallback + 42.5h real punches, summed)",
+      priya_before["actual_hours"] == 82.5, priya_before)
+by_store_before = R.get_payroll_by_store(start="2026-07-06", end="2026-07-10", authorization=AUTH, org_id=ORG)
+s1_before = next(s for s in by_store_before["stores"] if s["store_code"] == "S1")
+check("I22b CONTROL: /payroll-by-store's S1 amount before the backfill is priced ONLY off the punch "
+      "(the shift-derived $0 rate_map miss) — 42.5h * $22 = $935, NOT the shift's real 40h*$22=$880",
+      s1_before["amount"] == 935.0, s1_before)
+
+# Apply the mig-415 backfill mirror to the fake DB's shift rows IN PLACE (the actual migration
+# re-keys the real column value on the real table — this is the harness-equivalent action).
+fixed, upd, skip = migration_415_backfill_mirror(fake.store[("storeops", "shifts")], employees_now)
+fake.store[("storeops", "shifts")] = fixed
+check("I23 backfill re-keyed all 5 of Priya's shift rows (numeric '45' -> business 'E45')",
+      upd == 5 and skip == 0, (upd, skip))
+check("I23b every shift row now carries the canonical id", all(s["employee_id"] == "E45" for s in fixed), fixed)
+
+# AFTER the backfill: the EXISTING (unchanged) no-double-count rule in get_payroll's legacy path now
+# actually fires, because shift_days is finally keyed the SAME way the timelog rows are.
+rows_after = R.get_payroll(start="2026-07-06", end="2026-07-10", authorization=AUTH, org_id=ORG)
+priya_after = next(r for r in rows_after if r["name"] == "Priya Rep")
+check("I24 THE DOUBLE-COUNT IS GONE (not just merged into one row): actual_hours drops from 82.5h to "
+      "40h — the true, un-inflated worked hours under this system's existing shift-covers-the-day "
+      "rule (inflation removal, not a pay cut — nothing about pay_rate or the hours*rate formula "
+      "changed)", priya_after["actual_hours"] == 40.0, priya_after)
+check("I24b scheduled_hours is unchanged (40h) — this was never part of the double-count",
+      priya_after["scheduled_hours"] == 40.0, priya_after)
+check("I24c pay_rate is still the real rate ($22/hr) — unaffected by this fix, as expected",
+      priya_after["pay_rate"] == 22.0, priya_after)
+check("I24d employee_id is the canonical business id both before and after (the ONE ROW PER REP "
+      "presentation fix from the earlier package already guaranteed this)",
+      priya_before["employee_id"] == "E45" and priya_after["employee_id"] == "E45",
+      (priya_before, priya_after))
+
+by_store_after = R.get_payroll_by_store(start="2026-07-06", end="2026-07-10", authorization=AUTH, org_id=ORG)
+s1_after = next(s for s in by_store_after["stores"] if s["store_code"] == "S1")
+check("I25 /payroll-by-store NOW prices the shift-derived contribution at the REAL rate: 40h * $22 = "
+      "$880 (was $935 priced off the punch overlay at the wrong $0-shift-rate mix before the fix) — "
+      "the previously-mispriced Store Expenses 'Employee Salaries' push is now correct",
+      s1_after["amount"] == 880.0, s1_after)
+check("I25b store hours also drop to the true 40h (was 82.5h)", s1_after["hours"] == 40.0, s1_after)
+
+# ── I26: reconcile_employee_identity's residual guard is STILL EXACTLY CORRECT for an employee who
+# needs NO aliasing at all post-canonicalization (the common case once migration 415 + the write
+# fix are both live) — proves this package didn't disturb the earlier one-row-per-rep fix.
+check("I26 with the shift already canonical, reconcile_employee_identity is a byte-identical no-op "
+      "for Priya's row (still exactly 1 row, still the SAME dict shape reconcile always produced)",
+      len([r for r in rows_after if r["name"] == "Priya Rep"]) == 1, rows_after)
+
+print(f"[Section I: end-to-end] {len(PASS)} passed, {len(FAIL)} failed so far")
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

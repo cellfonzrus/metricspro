@@ -37,6 +37,12 @@ from app.modules.storeops.payroll_identity import (
     reconcile_employee_identity as _reconcile_employee_identity,
 )
 from app.modules.storeops import payroll_salary
+from app.modules.storeops.lunch_deduction import (
+    get_lunch_config as _lunch_get_config,
+    get_tenant_lunch_config as _lunch_get_tenant_config,
+    compute_lunch_deduction_from_rows as _lunch_compute_from_rows,
+    period_lunch_deduction as _lunch_period_deduction,
+)
 
 try:
     from zoneinfo import ZoneInfo
@@ -157,8 +163,45 @@ def set_timeoff_conflict_mode(body: dict, authorization: str = Header(default=""
     return {"ok": True, "mode": mode}
 
 
+def _canonical_shift_employee_id(org_id, raw_id, employees=None):
+    """Resolve a raw employee_id value to the canonical BUSINESS employees.employee_id BEFORE any
+    new/updated storeops row that carries an employee_id foreign-key-by-string is written — the
+    2026-07-27 owner-approved money fix (see payroll_identity.py's module docstring + migration 415
+    for the full root-cause writeup). Table-agnostic (despite the name, kept for history/grep
+    continuity): called from every shift-writing path (POST /shifts, the bulk shift-template
+    save/apply, the employee-merge reassignment) AND, since the Gate-1 REDO N1 fix, `POST /time-off`
+    too (storeops/timeoff/page.tsx's admin picker had the identical numeric-id bug, poisoning
+    time_off_requests instead of shifts) — so no writer, this one, a future one, or a stale saved
+    template, can create a NEW numeric-id row regardless of which code path produced it.
+
+    Reuses `business_id_alias_map`'s own ambiguity guard: a raw numeric value that collides with a
+    DIFFERENT employee's own real business employee_id is left UNCHANGED rather than guessed at —
+    the same rule the payroll aggregation (`payroll_identity.reconcile_employee_identity`) and the
+    shift-extension gate (`_emp_id_variants`) already apply. A blank/None id, or one that doesn't
+    resolve to any employee's numeric primary key (already a business id, or simply invalid), passes
+    through unchanged — nothing to reconcile, and never a 500 on a bad/foreign id."""
+    raw = str(raw_id).strip() if raw_id not in (None, "") else ""
+    if not raw:
+        return raw_id
+    if employees is None:
+        try:
+            employees = (sb().table("employees").select("id,employee_id")
+                         .eq("org_id", org_id).execute().data) or []
+        except Exception:
+            return raw_id
+    alias = _business_id_alias_map(employees)
+    return alias.get(raw, raw_id)
+
+
 @router.post("/shifts")
 def create_shift(shift: dict, org_id: str = ORG_ID):
+    # 2026-07-27 money fix (owner-approved): canonicalize the incoming employee_id to the BUSINESS id
+    # before anything below reads it (the time-off check, the hours-budget guard, and the insert
+    # itself) — closes this endpoint as a source of NEW numeric-id shifts, whichever caller hits it.
+    eid_raw = shift.get("employee_id")
+    if eid_raw not in (None, ""):
+        shift = {**shift, "employee_id":
+                 _canonical_shift_employee_id(shift.get("org_id") or org_id, eid_raw)}
     # Check for an APPROVED time-off conflict. Default policy is WARN, not block (see above) — a
     # manager can still schedule over approved time off; the response carries `timeoff_warning` so
     # the caller can surface it non-blockingly. A tenant opted into 'block' keeps the original
@@ -167,8 +210,18 @@ def create_shift(shift: dict, org_id: str = ORG_ID):
     sdate = shift.get("shift_date")
     timeoff_warning = None
     if eid and sdate:
+        # Gate-1 REDO N1 fix (2026-07-27, MUST): the admin Time Off page still writes
+        # time_off_requests keyed by the employee's NUMERIC id (storeops/timeoff/page.tsx — a
+        # separate, not-yet-backfilled table; migration 415 now also backfills it, but an admin can
+        # create a new numeric-keyed row again at any time until that page's own write is fixed).
+        # Canonicalizing `eid` above (correct for the SHIFT's own identity) would otherwise silently
+        # STOP matching those numeric-keyed rows — before this fix, the shift side's OWN numeric-id
+        # bug accidentally kept this lookup "working" by symmetry; fixing the shift side alone would
+        # have broken it. Check BOTH id forms via the same ambiguity-guarded variant lookup the
+        # shift-extension gate already uses, so a block-mode tenant never silently loses enforcement.
+        lookup_ids, _ = _emp_id_variants(shift.get("org_id") or org_id, eid)
         conflict = (sb().table("time_off_requests").select("id").eq("org_id", org_id)
-                    .eq("employee_id", str(eid)).eq("status", "approved")
+                    .in_("employee_id", list(lookup_ids)).eq("status", "approved")
                     .lte("start_date", sdate).gte("end_date", sdate)
                     .limit(1).execute().data)
         if conflict:
@@ -251,6 +304,13 @@ def get_time_off(employee_id: str = None, authorization: str = Header(default=""
 def create_time_off(request: dict, org_id: str = ORG_ID):
     if not (request.get("employee_id") and request.get("start_date") and request.get("end_date")):
         raise HTTPException(400, "employee_id, start_date and end_date are required")
+    # Gate-1 REDO N1 fix (2026-07-27, defense in depth): canonicalize to the BUSINESS employee_id
+    # server-side too, so no caller (the fixed timeoff page, a future one, or a bad client) can
+    # create a NEW numeric-id time_off_requests row — same posture as _canonical_shift_employee_id
+    # on the shift-writing paths. Reuses the identical helper/ambiguity guard (the function itself is
+    # table-agnostic — it just resolves a raw id to the canonical business id for an org's roster).
+    request = {**request, "employee_id":
+               _canonical_shift_employee_id(request.get("org_id") or org_id, request.get("employee_id"))}
     status = str(request.get("status") or "pending").lower()
     if status not in ("pending", "approved", "denied"):
         status = "pending"
@@ -830,6 +890,35 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
     real_shifts, tl_rows = _inactive_activity_rows(org_id, lo, hi, inactive_ids)
     _merge_inactive_into_payroll(summary, store_hours, emp_map, real_shifts, tl_rows)
 
+    # LUNCH-BREAK AUTO-DEDUCTION (owner directive 2026-07-27, Deliverable 3) — subtracts from ACTUAL
+    # hours only (scheduled_hours/scheduled_pay untouched), keyed off storeops.timelog.employee_id
+    # (ALWAYS the business id, per payroll_identity.py's root-cause writeup) so it always lands on the
+    # correct `summary` bucket here, BEFORE the numeric-id/business-id merge below sums it forward.
+    # `actual_pay` below is computed FROM the netted actual_hours, so hourly pay = (hours - deduction) x
+    # rate automatically. EQUIVALENCE (byte-identical to base until migration 418 runs): `summary` rows
+    # gain a `lunch_deduction_hours` key ONLY inside the `available` branch below — never added at all
+    # (not even as a 0.0) when the feature is unavailable, so an existing exact-JSON-shape assertion
+    # elsewhere in the test suite (and any caller diffing the raw response) sees a byte-identical
+    # payload pre-migration. Never lets a failure here break payroll itself.
+    try:
+        _lunch = _lunch_period_deduction(org_id, lo, hi, sb())
+        if _lunch.get("available"):
+            for r in summary.values():
+                r.setdefault("lunch_deduction_hours", 0.0)
+                # HONESTY (no-silent-caps doctrine): a pathological org+range with more than
+                # lunch_deduction.LUNCH_TIMELOG_FETCH_LIMIT closed punches would otherwise silently
+                # under-deduct (fail-safe direction: pays MORE, never less) — flag it explicitly
+                # instead, same additive-only-when-relevant convention as lunch_deduction_hours itself.
+                if _lunch.get("limit_hit"):
+                    r["lunch_deduction_data_capped"] = True
+            for _eid, _ded in _lunch["by_employee"].items():
+                if _eid in summary:
+                    _applied = min(_ded, summary[_eid]["actual_hours"])   # negative-hours guard
+                    summary[_eid]["actual_hours"] = round(summary[_eid]["actual_hours"] - _applied, 2)
+                    summary[_eid]["lunch_deduction_hours"] = round(summary[_eid]["lunch_deduction_hours"] + _applied, 2)
+    except Exception:
+        pass
+
     rows = list(summary.values())
     for r in rows:
         eid = r["employee_id"]
@@ -1005,6 +1094,41 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
         except Exception as e:
             _warn_salary_override_failed(response, org_id, "GET /payroll-by-store", e)
 
+    # LUNCH-BREAK AUTO-DEDUCTION (2026-07-27, Deliverable 3) — the SAME guarded per-(employee, day)
+    # result /payroll uses, attributed to the store of that day's marked punch, so the Store Expenses
+    # "Employee Salaries" auto-fill stays in step with /payroll's own netted total instead of silently
+    # overstating labor cost by the deducted amount. Clamped against the STORE's total hours (a valid,
+    # if loose, upper bound — one employee's own deduction can never exceed their own contribution to
+    # that store's total, which is <= the store total). Byte-identical no-op until migration 418 runs.
+    #
+    # Gate-1 merge hand-fix (2026-07-27): a SALARIED employee's `by_store[store]["amount"]` no longer
+    # means "hours × pay_rate" once the salary override above has run — it's their derived-salary
+    # allocation. Subtracting an HOURS-based lunch deduction dollar figure (`_applied * _rate`) from
+    # that would either double-subtract (the salary override already fully replaced their hourly
+    # contribution) or corrupt a salary figure with an hourly concept. Salaried employees are
+    # completely skipped here — their pay is never hours-derived, so lunch deduction never touches it
+    # in the by-store view (their DISPLAYED hours reduction still happens correctly on GET /payroll,
+    # which computes lunch BEFORE the salary override does a full overwrite of actual_pay — see that
+    # endpoint's own lunch-deduction comment).
+    try:
+        _lunch = _lunch_period_deduction(org_id, lo, hi, sb())
+        if _lunch.get("available"):
+            for (_eid, _store), _ded in _lunch["by_employee_store"].items():
+                if _eid in salaried_ids:
+                    continue
+                if not _store or _store not in by_store:
+                    continue
+                _rate = rate_map.get(_eid, 0.0)
+                _applied = min(_ded, by_store[_store]["hours"])   # negative-hours guard
+                by_store[_store]["hours"] -= _applied
+                by_store[_store]["amount"] -= _applied * _rate
+            # HONESTY (no-silent-caps doctrine) — see get_payroll's identical comment.
+            if _lunch.get("limit_hit"):
+                for r in by_store.values():
+                    r["lunch_deduction_data_capped"] = True
+    except Exception:
+        pass
+
     rows = list(by_store.values())
     for r in rows:
         r["hours"] = round(r["hours"], 2)
@@ -1068,6 +1192,31 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
     except Exception:
         edits = []
     edited_source_ids = {(e.get("source_table"), str(e.get("source_id"))) for e in edits if e.get("source_id")}
+
+    # LUNCH-BREAK AUTO-DEDUCTION (owner directive 2026-07-27, Deliverable 3) — the SAME
+    # compute_lunch_deduction_from_rows() /payroll uses, fed the SAME `timelog` rows this endpoint
+    # already fetched (no second query) so the two reconcile EXACTLY. Merges across id variants (in
+    # practice always just one — timelog.employee_id is always the business id) keyed by work_date.
+    lunch_by_day: dict = {}
+    lunch_available = False
+    try:
+        _tenant_cfg, _overrides, lunch_available = _lunch_get_config(org_id, sb())
+        if lunch_available:
+            _lunch_result = _lunch_compute_from_rows(timelog, _tenant_cfg, _overrides)
+            for _d in _lunch_result["days"]:
+                if _d.get("employee_id") not in ids:
+                    continue
+                _wd = _d["work_date"]
+                _acc = lunch_by_day.setdefault(_wd, {"deduct_hours": 0.0, "applied": False,
+                                                      "skip_reason": None, "minutes_configured": _d.get("minutes_configured", 0)})
+                if _d.get("applied"):
+                    _acc["deduct_hours"] = round(_acc["deduct_hours"] + _d["deduct_hours"], 2)
+                    _acc["applied"] = True
+                elif not _acc["applied"] and _acc["skip_reason"] is None:
+                    _acc["skip_reason"] = _d.get("skip_reason")
+    except Exception:
+        lunch_by_day = {}
+        lunch_available = False
 
     days: dict = {}
 
@@ -1160,11 +1309,29 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
         total_manual_not_in_payroll += hrs
 
     out_days = [days[d] for d in sorted(days)]
+    total_lunch_deduction = 0.0
     for r in out_days:
         r["actual_hours"] = round(r["actual_hours"], 2)
         r["scheduled_hours"] = round(r["scheduled_hours"], 2)
+        # Lunch deduction is applied HERE — after the shift/punch/(informational)manual composition
+        # above, so `actual_hours` below reconciles EXACTLY to /payroll's own row (which nets the SAME
+        # per-day amount off the SAME basis — see get_payroll's own lunch-deduction block). HONESTY:
+        # never a silent subtraction — `lunch_deduction_hours`/`applied`/`skip_reason` are their own
+        # explicit fields, the frontend renders them as a visible "− 0:30 lunch (auto)" line.
+        # EQUIVALENCE: these three keys are only added to a day row when the feature is genuinely
+        # available (migration 418 ran) — never fabricated as a bare 0.0/False/None triplet, so the
+        # response stays byte-identical to a pre-lunch-deduction caller until then.
+        if lunch_available:
+            ld = lunch_by_day.get(r["work_date"])
+            applied_hours = min(ld["deduct_hours"], r["actual_hours"]) if (ld and ld["applied"]) else 0.0  # negative-hours guard
+            r["actual_hours"] = round(max(0.0, r["actual_hours"] - applied_hours), 2)
+            r["lunch_deduction_hours"] = round(applied_hours, 2)
+            r["lunch_deduction_applied"] = applied_hours > 0
+            r["lunch_deduction_skip_reason"] = None if applied_hours > 0 else (ld.get("skip_reason") if ld else None)
+            total_lunch_deduction += applied_hours
     total_actual = round(sum(r["actual_hours"] for r in out_days), 2)
     total_scheduled = round(sum(r["scheduled_hours"] for r in out_days), 2)
+    total_lunch_deduction = round(total_lunch_deduction, 2)
 
     ks = scope_keyset(authorization, org_id)
     if ks is not None and out_days:
@@ -1199,10 +1366,13 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
                                  f"pay_basis is '{basis}' but no pay_amount is configured — pay is not derived."),
             }
 
-    return {"employee_id": employee_id, "name": name, "pay_rate": pay_rate, "start": start, "end": end,
-            "days": out_days, "total_actual_hours": total_actual, "total_scheduled_hours": total_scheduled,
-            "total_manual_hours_not_in_payroll": round(total_manual_not_in_payroll, 2),
-            **salary_meta}
+    out = {"employee_id": employee_id, "name": name, "pay_rate": pay_rate, "start": start, "end": end,
+           "days": out_days, "total_actual_hours": total_actual, "total_scheduled_hours": total_scheduled,
+           "total_manual_hours_not_in_payroll": round(total_manual_not_in_payroll, 2)}
+    if lunch_available:
+        out["total_lunch_deduction_hours"] = total_lunch_deduction
+    out.update(salary_meta)
+    return out
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1541,7 +1711,12 @@ def merge_employees(body: dict, org_id: str = ORG_ID):
         raise HTTPException(404, "employee not found")
     dup, tgt = dup[0], tgt[0]
     moved = {"shifts": 0, "time_off": 0}
-    reassign = {"employee_id": str(tgt["id"]), "employee_name": tgt.get("name")}
+    # 2026-07-27 money fix: reassign to the target's BUSINESS employee_id (same identity every other
+    # payroll source uses), not their numeric primary key — the old `str(tgt["id"])` here created a
+    # brand-new numeric-id shift on every merge, the identical bug this whole package fixes elsewhere.
+    # Falls back to the numeric id only if the target somehow has no business id yet (pre-existing,
+    # safe no-op — matches the pre-fix behavior for that edge case only).
+    reassign = {"employee_id": tgt.get("employee_id") or str(tgt["id"]), "employee_name": tgt.get("name")}
     for field, val in (("employee_id", str(dup["id"])), ("employee_name", dup.get("name"))):
         if not val:
             continue
@@ -1747,6 +1922,22 @@ def save_week_as_template(body: dict, org_id: str = ORG_ID):
               .gte("shift_date", week_start).lte("shift_date", we).execute().data) or []
     if not shifts:
         raise HTTPException(400, "No shifts in that week to save as a template.")
+    # 2026-07-27 money fix: canonicalize each shift's employee_id to the business id BEFORE it's
+    # captured into the template, so a leftover numeric-id shift (pre-fix, or pre-migration-415
+    # backfill) never propagates the bug forward every time the template is later applied. Builds a
+    # NEW list of shallow copies rather than mutating the fetched rows in place — this function only
+    # ever READS storeops.shifts here (never writes it back), so the source rows must stay untouched;
+    # a live PostgREST response is a fresh dict per call anyway, but copying keeps that explicit
+    # rather than relying on it (same discipline as update_shift's own "before" snapshot copy).
+    _save_tmpl_employees = sb().table("employees").select("id,employee_id").eq("org_id", org_id).execute().data or []
+    canon_shifts = []
+    for s in shifts:
+        s = dict(s)
+        raw = s.get("employee_id")
+        if raw not in (None, ""):
+            s["employee_id"] = _canonical_shift_employee_id(org_id, raw, employees=_save_tmpl_employees)
+        canon_shifts.append(s)
+    shifts = canon_shifts
     emp_ids = list({str(s.get("employee_id")) for s in shifts if s.get("employee_id")})
     for eid in emp_ids:
         # org_id-scoped: employee_id here isn't guaranteed globally unique (numeric-vs-business-id
@@ -1785,13 +1976,25 @@ def apply_templates(body: dict, org_id: str = ORG_ID):
                 .eq("org_id", org_id).eq("is_deleted", False).gte("shift_date", week_start).lte("shift_date", we).execute().data) or []
     seen = {(e.get("employee_name"), str(e.get("shift_date")), e.get("start_time"), e.get("store_code")) for e in existing}
     added = skipped_off = 0
+    # 2026-07-27 money fix: canonicalize once for the whole batch (not re-fetched per template row).
+    _apply_tmpl_employees = sb().table("employees").select("id,employee_id").eq("org_id", org_id).execute().data or []
     for t in templates:
         target = (ws + timedelta(days=int(t.get("weekday") or 0))).isoformat()
         if (t.get("employee_name"), target, t.get("start_time"), t.get("store_code")) in seen:
             continue
         eid = t.get("employee_id")
+        if eid not in (None, ""):
+            # Guards against a STALE template saved before this fix (or before migration 415's
+            # backfill) still carrying a numeric id — applying it must never create a new
+            # numeric-id shift either.
+            eid = _canonical_shift_employee_id(org_id, eid, employees=_apply_tmpl_employees)
         if eid:
-            conflict = (sb().table("time_off_requests").select("id").eq("org_id", org_id).eq("employee_id", str(eid))
+            # Gate-1 REDO N1 fix — same reasoning as create_shift above: check BOTH id forms so a
+            # numeric-keyed admin Time Off row (still possible until that page's own write is fixed)
+            # is never silently missed just because `eid` here is now correctly canonicalized.
+            lookup_ids, _ = _emp_id_variants(org_id, eid)
+            conflict = (sb().table("time_off_requests").select("id").eq("org_id", org_id)
+                        .in_("employee_id", list(lookup_ids))
                         .eq("status", "approved").lte("start_date", target).gte("end_date", target).limit(1).execute().data)
             if conflict:
                 skipped_off += 1
@@ -2452,7 +2655,20 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
 
 @router.get("/timeclock/list")
 def timeclock_list(start: str = "", end: str = "", employee_id: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Timelog entries for a date range (+ optional employee). Newest first."""
+    """Timelog entries for a date range (+ optional employee). Newest first.
+
+    RULE ONE: date bounds are INCLUSIVE both ends (`.gte`/`.lte` on `work_date`, which is stored per
+    BUSINESS_TZ at punch time — see docs/handoffs/people.md's timeclock filter-bug fix) — a caller
+    passing start=07-09&end=07-22 gets exactly those 14 calendar days, never a punch outside the range.
+
+    Owner directive 2026-07-27 (Deliverable 3, lunch-break auto-deduction): each punch that belongs to
+    a day where the double-deduction-guarded auto lunch deduction applies (lunch_deduction.py) carries
+    `lunch_deduction_hours` — attached to exactly ONE punch per qualifying day (the day's last, by
+    clock_in) so summing it across the visible rows never double-counts. This NEVER mutates the punch's
+    own `hours` field (HONESTY: an explicit line, never a silent subtraction). EQUIVALENCE: the field
+    is added to every row ONLY when migration 418 has actually run (see lunch_deduction.py's DEGRADE
+    docstring) — never fabricated as a bare 0.0 on a tenant that's never heard of this feature, so the
+    response is byte-identical (same KEYS, not just the same values) to before this feature existed."""
     q = sb().table("timelog").select("*").eq("org_id", org_id)
     if employee_id:
         q = q.eq("employee_id", employee_id)
@@ -2466,6 +2682,23 @@ def timeclock_list(start: str = "", end: str = "", employee_id: str = "", author
         rows = [e for e in rows if str(e.get("employee_id")) in eids]
     for e in rows:
         e["selfie_url"] = _signed_selfie(e.get("selfie_path"))
+    if start and end:
+        try:
+            hi = (_date.fromisoformat(str(end)[:10]) + timedelta(days=1)).isoformat()
+            ded = _lunch_period_deduction(org_id, str(start)[:10], hi, sb())
+            if ded.get("available"):
+                for e in rows:
+                    e["lunch_deduction_hours"] = 0.0
+                    # HONESTY (no-silent-caps doctrine) — see get_payroll's identical comment.
+                    if ded.get("limit_hit"):
+                        e["lunch_deduction_data_capped"] = True
+                marked = {(d["employee_id"], d["work_date"]): d for d in ded["days"] if d.get("applied")}
+                for e in rows:
+                    d = marked.get((e.get("employee_id"), str(e.get("work_date") or "")[:10]))
+                    if d and d.get("marked_punch_id") == e.get("id"):
+                        e["lunch_deduction_hours"] = d["deduct_hours"]
+        except Exception:
+            pass   # never let the lunch-deduction overlay break the punches list itself
     return rows
 
 
@@ -2538,6 +2771,110 @@ def timeclock_config(authorization: str = Header(default=""), org_id: str = ORG_
     # clamp to the same safe band the setter enforces
     thr = max(0.45, min(0.72, thr))
     return {"face_match_threshold": thr}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# LUNCH-BREAK AUTO-DEDUCTION CONFIG (owner directive 2026-07-27, Deliverable 3): a tenant-wide default
+# {enabled, minutes, min_shift_hours} + a per-employee override {enabled, minutes} — see
+# lunch_deduction.py for the full design (guard, precedence, degrade). RULE TWO: config table + admin
+# UI, universal for every tenant, nothing hard-coded.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+@router.get("/timeclock/lunch-config")
+def get_lunch_config_endpoint(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The tenant's lunch-deduction default + roster of per-employee overrides, for the Time Clock
+    page's settings panel and the HR Employees & Pay tab. Any signed-in caller may read (matches
+    GET /timeclock/config's posture). `available=False` (owner's stated default shown for reference
+    only) whenever migration 418 hasn't run — see lunch_deduction.py DEGRADE."""
+    tenant_cfg, overrides, available = _lunch_get_config(org_id, sb())
+    return {"available": available, "tenant": tenant_cfg,
+            "employee_overrides": [{"employee_id": eid, **v} for eid, v in overrides.items()]}
+
+
+@router.put("/timeclock/lunch-config")
+def set_lunch_config_endpoint(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin only (matches PUT /timeoff-conflict-mode's posture — a tenant-wide toggle, not a
+    single row edit). Body: {enabled?, minutes?, min_shift_hours?} — only provided keys change."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    before, _ = _lunch_get_tenant_config(org_id, sb())
+    upd = {}
+    if "enabled" in body:
+        upd["lunch_deduction_enabled"] = bool(body["enabled"])
+    if "minutes" in body:
+        try:
+            upd["lunch_deduction_minutes"] = max(0, int(body["minutes"]))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "minutes must be a non-negative integer")
+    if "min_shift_hours" in body:
+        try:
+            upd["lunch_deduction_min_shift_hours"] = max(0.0, float(body["min_shift_hours"]))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "min_shift_hours must be a non-negative number")
+    if not upd:
+        raise HTTPException(400, "no valid fields to update")
+    try:
+        sb().table("tenants").update(upd).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save the setting — is migration 418 applied?")
+    who = _who_for_log(authorization, org_id)
+    field_map = {"lunch_deduction_enabled": "enabled", "lunch_deduction_minutes": "minutes",
+                 "lunch_deduction_min_shift_hours": "min_shift_hours"}
+    for col, key in field_map.items():
+        if col in upd and str(before.get(key)) != str(upd[col]):
+            _log_payroll_change(org_id, field=col, entry_point="lunch_deduction_config",
+                                 before=before.get(key), after=upd[col], source_table="tenants",
+                                 who=who, reason="tenant default")
+    after, _ = _lunch_get_tenant_config(org_id, sb())
+    return {"ok": True, "tenant": after}
+
+
+@router.put("/employees/{emp_id}/lunch-config")
+def set_employee_lunch_config(emp_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Per-employee lunch-deduction override. Isolated from the generic PATCH /employees/{emp_id}
+    (EMP_FIELDS) so a tenant that hasn't run migration 418 yet can NEVER 500 an unrelated name/pay_rate/
+    home_store edit — this endpoint's own failure is caught and reported on its own. Same permission
+    posture as pay_rate edits on that same endpoint (org-scoped only, no extra manager gate — pay is
+    already editable from the same HR page this control lives on). Body: {enabled: bool|null, minutes:
+    int|null} — null explicitly clears the override back to "inherit the tenant default"."""
+    row = {}
+    if "enabled" in body:
+        row["lunch_deduction_enabled"] = None if body["enabled"] is None else bool(body["enabled"])
+    if "minutes" in body:
+        if body["minutes"] is None:
+            row["lunch_deduction_minutes"] = None
+        else:
+            try:
+                row["lunch_deduction_minutes"] = max(0, int(body["minutes"]))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "minutes must be a non-negative integer or null")
+    if not row:
+        raise HTTPException(400, "no valid fields to update")
+    try:
+        _before_raw = (sb().table("employees").select("employee_id,name,lunch_deduction_enabled,lunch_deduction_minutes")
+                       .eq("id", emp_id).eq("org_id", org_id).limit(1).execute().data or [None])[0]
+        # Explicit copy BEFORE the update — a real PostgREST round-trip always returns a fresh dict, but
+        # a test double (or any future client implementation) that aliases select() results by
+        # reference would otherwise have this "before" snapshot silently mutated by the .update() call
+        # below, making every diff compare a row to itself (the exact class of bug already caught once
+        # in update_shift/save_week_as_template — see docs/handoffs/people.md).
+        before = dict(_before_raw) if _before_raw is not None else None
+        r = sb().table("employees").update(row).eq("id", emp_id).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save the setting — is migration 418 applied?")
+    if not r.data:
+        raise HTTPException(404, "employee not found")
+    saved = r.data[0]
+    if before is not None:
+        who = _who_for_log(authorization, org_id)
+        for col in ("lunch_deduction_enabled", "lunch_deduction_minutes"):
+            if col in row and str(before.get(col)) != str(saved.get(col)):
+                _log_payroll_change(org_id, field=col, entry_point="lunch_deduction_config",
+                                     employee_id=before.get("employee_id"), employee_name=before.get("name"),
+                                     before=before.get(col), after=saved.get(col), source_table="employees",
+                                     source_id=emp_id, who=who, reason="per-employee override")
+    return {"ok": True, "employee_id": saved.get("employee_id"),
+            "lunch_deduction_enabled": saved.get("lunch_deduction_enabled"),
+            "lunch_deduction_minutes": saved.get("lunch_deduction_minutes")}
 
 
 # ── face recognition (face-api.js 128-float descriptors) ──────────────────────────────────────

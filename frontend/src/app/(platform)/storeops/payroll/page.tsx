@@ -160,6 +160,10 @@ export default function PayrollPage() {
     // ONE ROW PER REP (2026-07-27): /payroll now returns a single, merged row per employee — this
     // column just displays it.
     { header: 'Actual Hrs', field: 'actual_hours', type: 'number', get: r => r.actual_hours.toFixed(1) },
+    // Lunch-break auto-deduction (owner directive 2026-07-27, Deliverable 3) — HONESTY: an explicit
+    // line, never folded silently into Actual Hrs (which is already the NET/post-deduction figure —
+    // see GET /payroll). 0 for the common case (feature off, or no day qualified this period).
+    { header: 'Lunch (auto)', field: 'lunch_deduction_hours', type: 'number', get: r => r.lunch_deduction_hours ? `− ${Number(r.lunch_deduction_hours).toFixed(2)}` : '' },
     // Net = actual − scheduled, SIGNED (owner directive 2026-07-27). ▲/▼ is the "highlighted" cue
     // requested — text-based so it renders identically on screen AND in every export (RULE FOUR).
     { header: 'Net (Actual − Sched)', field: 'variance', type: 'number', get: r => {

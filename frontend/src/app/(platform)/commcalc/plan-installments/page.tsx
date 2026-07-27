@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, Fragment } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
-import { PlanOptions, MatchValuePicker, FALLBACK_VOCAB, countMatches, OptionsSourceNote } from '../_lib/planMatch'
+import { PlanOptions, MatchValuePicker, MatchEvidence, FALLBACK_VOCAB, countMatches, OptionsSourceNote } from '../_lib/planMatch'
 import EntityPicker from '@/components/EntityPicker'
 
 // SALE-TRIGGERED multi-month rep pay (commission-0 doctrine, mig 201; edit + m1-gate mig 210). A schedule
@@ -546,6 +546,10 @@ export default function PlanInstallmentsPage() {
                     : `${triggerCount.lines.toLocaleString()} sale line${triggerCount.lines === 1 ? '' : 's'} would trigger this schedule`}
                 </span>
               )}
+              {/* the model-name guard (owner 2026-07-27): a `contains` trigger on the item description
+                  also catches device MODEL names — show WHAT it matches and whether the same word is a
+                  value of another field (e.g. the financing tender). */}
+              <MatchEvidence opts={planOpts} rule={{ match_field: draft.trigger_match_field, match_op: draft.trigger_match_op, match_value: draft.trigger_match_value }} />
             </label>
           )}
           <label style={{ fontSize: 12 }}>Effective from (cutover)<input type="date" style={{ ...sel, width: '100%' }} value={draft.effective_from} onChange={e => setDraft({ ...draft, effective_from: e.target.value })} /></label>
