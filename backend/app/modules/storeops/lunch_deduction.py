@@ -68,12 +68,20 @@ DEFAULT_TENANT_LUNCH_CONFIG = {"enabled": True, "minutes": 30, "min_shift_hours"
 
 
 def _parse_dt(s):
+    """Parse an ISO timestamp, always returning a TZ-AWARE datetime (naive -> assumed UTC). Every real
+    storeops.timelog clock_in/clock_out is a TIMESTAMPTZ (always arrives tz-aware over PostgREST), so
+    this normalization is unreachable in production — but a naive input (e.g. a hand-built test fixture,
+    or any future caller) would otherwise raise TypeError the moment it's compared/subtracted against an
+    aware one (sort key fallback at `_day_deduction`'s `ordered_all`, or the gap subtraction below),
+    which the caller's try/except turns into a fail-safe "skip this day" (pays MORE, never less) rather
+    than a crash — normalizing here means that fallback path is never even exercised for this reason."""
     if not s:
         return None
     try:
-        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
     except Exception:
         return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
 def get_tenant_lunch_config(org_id, sb_client):
@@ -202,7 +210,7 @@ def compute_lunch_deduction_from_rows(timelog_rows, tenant_cfg, overrides):
             key = (eid, result["store_code"])
             by_employee_store[key] = round(by_employee_store.get(key, 0.0) + result["deduct_hours"], 2)
     return {"available": True, "tenant_config": tenant_cfg, "by_employee": by_employee,
-            "by_employee_store": by_employee_store, "days": days_out}
+            "by_employee_store": by_employee_store, "days": days_out, "limit_hit": False}
 
 
 def get_lunch_config(org_id, sb_client):
@@ -213,18 +221,37 @@ def get_lunch_config(org_id, sb_client):
     return tenant_cfg, overrides, (t_ok and e_ok)
 
 
+# Generous headroom over the legacy /payroll timelog fallback's own 20,000-row cap (that comment's own
+# words: "No current tenant is near 20k punches/month") — NOT unbounded (a single unbounded org-wide
+# query is its own risk), but sized so hitting it is a genuine anomaly worth flagging, not routine.
+LUNCH_TIMELOG_FETCH_LIMIT = 50000
+
+
 def period_lunch_deduction(org_id, lo, hi, sb_client):
     """Convenience one-shot: fetch config + closed timelog rows for [lo, hi) (SAME half-open bounds as
     `_resolve_range`/`_payroll_month_groups`) and compute. Prefer `compute_lunch_deduction_from_rows`
     directly when the caller already has a `timelog` fetch to reuse (e.g. the actual-hours-detail
-    drill-down) — avoids a second identical query."""
+    drill-down) — avoids a second identical query.
+
+    HONESTY (no-silent-caps doctrine): the fetch is bounded (`LUNCH_TIMELOG_FETCH_LIMIT`) — a
+    pathological org+range with MORE rows than that would silently under-deduct (fail-safe: pays MORE,
+    never less) if this weren't flagged. The returned dict's `limit_hit` is True whenever the fetch
+    returned exactly the cap (a strong signal, not proof, of truncation — PostgREST gives no total-count
+    without a separate query) — router.py callers surface this as an explicit
+    `lunch_deduction_data_capped` field wherever they already add lunch fields (never fabricated when
+    `limit_hit` is False, same additive-only-when-relevant convention as `lunch_deduction_hours`
+    itself)."""
     tenant_cfg, overrides, available = get_lunch_config(org_id, sb_client)
-    empty = {"available": False, "tenant_config": tenant_cfg, "by_employee": {}, "by_employee_store": {}, "days": []}
+    empty = {"available": False, "tenant_config": tenant_cfg, "by_employee": {}, "by_employee_store": {},
+             "days": [], "limit_hit": False}
     if not available or not (lo and hi):
         return empty
     try:
         rows = (sb_client.table("timelog").select("id,employee_id,work_date,store_code,clock_in,clock_out,hours")
-                .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
+                .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi)
+                .limit(LUNCH_TIMELOG_FETCH_LIMIT).execute().data) or []
     except Exception:
         return empty
-    return compute_lunch_deduction_from_rows(rows, tenant_cfg, overrides)
+    result = compute_lunch_deduction_from_rows(rows, tenant_cfg, overrides)
+    result["limit_hit"] = len(rows) >= LUNCH_TIMELOG_FETCH_LIMIT
+    return result

@@ -159,6 +159,22 @@ check("A12 E1 uses the tenant default (30min=0.5h)", r["by_employee"].get("E1") 
 check("A12b E2's PER-EMPLOYEE override (45min=0.75h) applies INSTEAD of the tenant's 30min",
       r["by_employee"].get("E2") == 0.75, r["by_employee"])
 
+# A13 (Gate-1 N2): a MIXED naive/aware clock_in/clock_out pair — real storeops.timelog values are
+# always TIMESTAMPTZ (arrive tz-AWARE over PostgREST, so this is unreachable in production), but
+# _parse_dt normalizes any naive input to UTC anyway so a hand-built fixture (or any future caller)
+# can never raise TypeError comparing/subtracting a naive datetime against an aware one.
+rows_mixed_tz = [
+    {"id": "t1", "employee_id": "E1", "work_date": "2026-07-06", "store_code": "S1",
+     "clock_in": "2026-07-06T09:00:00+00:00", "clock_out": "2026-07-06T13:00:00", "hours": 4.0},  # aware -> naive
+    {"id": "t2", "employee_id": "E1", "work_date": "2026-07-06", "store_code": "S1",
+     "clock_in": "2026-07-06T13:00:00", "clock_out": "2026-07-06T17:00:00+00:00", "hours": 4.0},   # naive -> aware
+]
+r = compute_lunch_deduction_from_rows(rows_mixed_tz, TENANT_DEFAULT, {})
+check("A13 a mixed naive/aware clock_in/clock_out pair never raises TypeError and computes the SAME "
+      "gapless-merge/deduction result as an all-naive or all-aware equivalent (8h continuous -> 0.5h deducted)",
+      r["days"][0]["applied"] is True and r["days"][0]["deduct_hours"] == 0.5
+      and r["days"][0]["worked_hours"] == 8.0, r["days"][0])
+
 print(f"[Section A] {len(PASS)} passed, {len(FAIL)} failed so far")
 
 
@@ -579,6 +595,48 @@ check("F5 org isolation: a different org's punch never leaks in", "other_org" no
 check("F6 exactly the 2 in-range rows, nothing more/less", ids == {"in1", "in2"}, ids)
 
 print(f"[Section F] {len(PASS)} passed, {len(FAIL)} failed so far")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# SECTION G — Gate-1 N3 (HONESTY, no-silent-caps doctrine): period_lunch_deduction's bounded timelog
+# fetch flags `limit_hit` when the fetch returns exactly the cap (a strong signal of truncation), and
+# router.py's 3 wired read endpoints surface it as an explicit `lunch_deduction_data_capped` field
+# rather than silently under-deducting with no trace.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+import app.modules.storeops.lunch_deduction as LD  # noqa: E402
+
+reset(MIGRATED_TENANT)
+fake.store[("storeops", "timelog")] = [
+    {"id": "g1", "org_id": ORG, "employee_id": "E1", "employee_name": "Continuous Carl", "store_code": "S1",
+     "clock_in": "2026-07-06T09:00:00", "clock_out": "2026-07-06T16:00:00", "hours": 7.0, "work_date": "2026-07-06"},
+    {"id": "g2", "org_id": ORG, "employee_id": "E4", "employee_name": "ShortDay Sam", "store_code": "S1",
+     "clock_in": "2026-07-06T09:00:00", "clock_out": "2026-07-06T13:00:00", "hours": 4.0, "work_date": "2026-07-06"},
+]
+_real_limit = LD.LUNCH_TIMELOG_FETCH_LIMIT
+LD.LUNCH_TIMELOG_FETCH_LIMIT = 2   # artificially tiny cap so the 2 seeded rows exactly hit it
+try:
+    capped = R._lunch_period_deduction(ORG, "2026-07-06", "2026-07-07", fake)
+    check("G1 fetch returning EXACTLY the (artificially tiny) cap -> limit_hit=True", capped["limit_hit"] is True, capped)
+    pay_capped = {r["employee_id"]: r for r in R.get_payroll(start="2026-07-06", end="2026-07-06", authorization=AUTH, org_id=ORG)}
+    check("G2 /payroll surfaces lunch_deduction_data_capped=True on rows when the cap was hit",
+          pay_capped["E1"].get("lunch_deduction_data_capped") is True, pay_capped["E1"])
+    tc_capped = R.timeclock_list(start="2026-07-06", end="2026-07-06", authorization=AUTH, org_id=ORG)
+    check("G3 /timeclock/list ALSO surfaces the capped flag on its rows",
+          all(r.get("lunch_deduction_data_capped") is True for r in tc_capped), tc_capped)
+    by_store_capped = R.get_payroll_by_store(start="2026-07-06", end="2026-07-06", authorization=AUTH, org_id=ORG)["stores"]
+    check("G4 /payroll-by-store ALSO surfaces the capped flag",
+          all(r.get("lunch_deduction_data_capped") is True for r in by_store_capped), by_store_capped)
+finally:
+    LD.LUNCH_TIMELOG_FETCH_LIMIT = _real_limit
+
+# Under the (real) limit -> no flag anywhere (EQUIVALENCE: never fabricated when not actually capped).
+not_capped = R._lunch_period_deduction(ORG, "2026-07-06", "2026-07-07", fake)
+check("G5 fetch returning FEWER rows than the cap -> limit_hit=False", not_capped["limit_hit"] is False, not_capped)
+pay_not_capped = {r["employee_id"]: r for r in R.get_payroll(start="2026-07-06", end="2026-07-06", authorization=AUTH, org_id=ORG)}
+check("G6 /payroll never adds lunch_deduction_data_capped when the cap wasn't hit (additive-only-when-relevant)",
+      "lunch_deduction_data_capped" not in pay_not_capped["E1"], pay_not_capped["E1"])
+
+print(f"[Section G] {len(PASS)} passed, {len(FAIL)} failed so far")
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

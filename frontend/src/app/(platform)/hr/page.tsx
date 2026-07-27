@@ -64,7 +64,9 @@ export default function HRPage() {
     const st = lunchStateFor(e)
     setLunchEdit(s => ({ ...s, [e.id]: { ...st, busy: true, msg: '' } }))
     try {
-      const body = { enabled: st.mode === 'default' ? null : st.mode === 'on', minutes: st.minutes.trim() === '' ? null : Number(st.minutes) }
+      // 'off'/'default' never send a stale minutes value from a previous 'on' edit — enabled=false/null
+      // already wins (harmless either way), but only 'on' has any business sending a minutes override.
+      const body = { enabled: st.mode === 'default' ? null : st.mode === 'on', minutes: st.mode === 'on' && st.minutes.trim() !== '' ? Number(st.minutes) : null }
       await api(`/api/v1/storeops/employees/${e.id}/lunch-config`, { method: 'PUT', body: JSON.stringify(body) })
       setLunchEdit(s => ({ ...s, [e.id]: { ...st, busy: false, msg: '✅' } }))
     } catch (err: any) {

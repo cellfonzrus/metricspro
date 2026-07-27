@@ -800,6 +800,12 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
         if _lunch.get("available"):
             for r in summary.values():
                 r.setdefault("lunch_deduction_hours", 0.0)
+                # HONESTY (no-silent-caps doctrine): a pathological org+range with more than
+                # lunch_deduction.LUNCH_TIMELOG_FETCH_LIMIT closed punches would otherwise silently
+                # under-deduct (fail-safe direction: pays MORE, never less) — flag it explicitly
+                # instead, same additive-only-when-relevant convention as lunch_deduction_hours itself.
+                if _lunch.get("limit_hit"):
+                    r["lunch_deduction_data_capped"] = True
             for _eid, _ded in _lunch["by_employee"].items():
                 if _eid in summary:
                     _applied = min(_ded, summary[_eid]["actual_hours"])   # negative-hours guard
@@ -941,6 +947,10 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
                 _applied = min(_ded, by_store[_store]["hours"])   # negative-hours guard
                 by_store[_store]["hours"] -= _applied
                 by_store[_store]["amount"] -= _applied * _rate
+            # HONESTY (no-silent-caps doctrine) — see get_payroll's identical comment.
+            if _lunch.get("limit_hit"):
+                for r in by_store.values():
+                    r["lunch_deduction_data_capped"] = True
     except Exception:
         pass
 
@@ -2390,6 +2400,9 @@ def timeclock_list(start: str = "", end: str = "", employee_id: str = "", author
             if ded.get("available"):
                 for e in rows:
                     e["lunch_deduction_hours"] = 0.0
+                    # HONESTY (no-silent-caps doctrine) — see get_payroll's identical comment.
+                    if ded.get("limit_hit"):
+                        e["lunch_deduction_data_capped"] = True
                 marked = {(d["employee_id"], d["work_date"]): d for d in ded["days"] if d.get("applied")}
                 for e in rows:
                     d = marked.get((e.get("employee_id"), str(e.get("work_date") or "")[:10]))
