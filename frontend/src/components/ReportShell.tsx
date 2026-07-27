@@ -52,7 +52,7 @@ function ymd(v: any): string {
   return s
 }
 
-export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick, totals, stickyHeader, defaultGroupBy, collapsibleGroups, defaultCollapsed, groupPersistKey }: {
+export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick, rowStyle, totals, stickyHeader, defaultGroupBy, collapsibleGroups, defaultCollapsed, groupPersistKey }: {
   title: string
   subtitle?: string
   filename?: string
@@ -62,6 +62,12 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   right?: React.ReactNode                   // extra toolbar content (page-specific controls)
   children?: React.ReactNode                // optional custom body ABOVE the table (charts, tiles…)
   onRowClick?: (row: any) => void           // makes each data row clickable (e.g. drill into a transaction)
+  rowStyle?: (row: any) => React.CSSProperties | undefined   // opt-in per-row highlight (e.g. an
+                                            // over-limit/anomaly tint) — undefined/omitted => no
+                                            // style, byte-identical to every existing consumer.
+                                            // Screen-only (never affects export, which stays
+                                            // pure data — RULE FOUR's "what you see" is the DATA,
+                                            // and any highlight-worthy fact belongs in a column too).
   totals?: boolean                          // opt-in: a pinned TOTAL row (sum of money+numeric cols over
                                             // ALL filtered rows) — shown on screen AND in every export.
                                             // Off by default so other reports are unchanged.
@@ -280,7 +286,8 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
           <thead><tr>{cols.map(c => <th key={key(c)} style={{ ...th, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', whiteSpace: 'nowrap', ...thPos }}>{c.header}<ResizeHandle onDown={e => cw.start(key(c), e)} onReset={() => cw.reset(key(c))} /></th>)}</tr></thead>
           <tbody>
             {!groups && filtered.map((r, i) => (
-              <tr key={i} onClick={onRowClick ? () => onRowClick(r) : undefined} style={onRowClick ? { cursor: 'pointer' } : undefined}
+              <tr key={i} onClick={onRowClick ? () => onRowClick(r) : undefined}
+                style={{ ...(onRowClick ? { cursor: 'pointer' } : undefined), ...(rowStyle ? rowStyle(r) : undefined) }}
                 className={onRowClick ? 'rs-clickable' : undefined}>
                 {cols.map(c => <td key={key(c)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left' }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
             ))}
@@ -309,7 +316,8 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
                   </tr>
                 )}
                 {(!collapsibleGroups || !collapsed) && rs.map((r, i) => (
-                  <tr key={g + i} onClick={onRowClick ? () => onRowClick(r) : undefined} style={onRowClick ? { cursor: 'pointer' } : undefined}
+                  <tr key={g + i} onClick={onRowClick ? () => onRowClick(r) : undefined}
+                    style={{ ...(onRowClick ? { cursor: 'pointer' } : undefined), ...(rowStyle ? rowStyle(r) : undefined) }}
                     className={onRowClick ? 'rs-clickable' : undefined}>
                     {cols.map(c => <td key={key(c)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left' }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
                 ))}

@@ -6,6 +6,7 @@ import ReportShell from '@/components/ReportShell'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { currentPeriodFromSettingsResponse, monthRange, rangeLabel, stepPeriod, type PayPeriodSettings } from '../lib/pay-period'
+import ActualHoursDrilldown from '../payroll/ActualHoursDrilldown'
 
 const chip: React.CSSProperties = { padding: '5px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)', cursor: 'pointer' }
 
@@ -20,6 +21,13 @@ export default function StoreOpsReportsPage() {
   const [stores, setStores] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [view, setView] = useState<'employee' | 'store'>('employee')
+  // 2026-07-27 owner directive — same Deliverable 2/3/4 additions as the Payroll Report (shared data
+  // source, GET /storeops/payroll): drill-down modal, over-limit highlighting (display only, reuses
+  // storeops.hours_budget), manual-edit marker (storeops.payroll_change_log, migration 414).
+  const [drill, setDrill] = useState<{ employee_id: string; name?: string } | null>(null)
+  const [overAlone, setOverAlone] = useState<Set<string>>(new Set())
+  const [overStores, setOverStores] = useState<Set<string>>(new Set())
+  const [editedEmpIds, setEditedEmpIds] = useState<Set<string>>(new Set())
 
   // Owner directive 2026-07-25: default the range to the tenant's OWN pay period (migration 085
   // config, resolved server-side — never re-derived here, see ../lib/pay-period.ts). Degrades to the
@@ -50,6 +58,17 @@ export default function StoreOpsReportsPage() {
       api('/api/v1/storeops/stores').catch(() => []),
     ]).then(([p, s]) => { setRows(p || []); setStores(s || []) })
       .catch(console.error).finally(() => setLoading(false))
+    api(`/api/v1/storeops/payroll/over-hours?start=${start}&end=${end}`).then((r: any) => {
+      const alone = new Set<string>(), st = new Set<string>()
+      for (const wk of (r?.weeks || [])) {
+        if (wk.over) st.add(wk.store_code)
+        for (const e of (wk.employees || [])) if (e.over_alone) alone.add(e.employee_id)
+      }
+      setOverAlone(alone); setOverStores(st)
+    }).catch(() => { setOverAlone(new Set()); setOverStores(new Set()) })
+    api(`/api/v1/storeops/payroll-change-log?start=${start}&end=${end}`).then((r: any) => {
+      setEditedEmpIds(new Set<string>((r?.items || []).map((it: any) => it.employee_id).filter(Boolean)))
+    }).catch(() => setEditedEmpIds(new Set()))
   }
   useEffect(() => {
     if (!rangeReady || !filt.period || !filt.periodTo) return
@@ -103,10 +122,25 @@ export default function StoreOpsReportsPage() {
     { header: 'Pay $/hr', get: r => r.pay_rate, money: true },
     { header: 'Sched Hrs', get: r => Math.round((r.scheduled_hours || 0) * 10) / 10, align: 'right' },
     { header: 'Actual Hrs', get: r => Math.round((r.actual_hours || 0) * 10) / 10, align: 'right' },
-    { header: 'Hrs Var', get: r => Math.round(((r.actual_hours || 0) - (r.scheduled_hours || 0)) * 10) / 10, align: 'right' },
+    // Net = actual − scheduled, SIGNED (owner directive 2026-07-27) — ▲/▼ highlighted cue.
+    { header: 'Net (Actual − Sched)', get: r => {
+        const v = (r.actual_hours || 0) - (r.scheduled_hours || 0)
+        const sign = v > 0.05 ? '▲ +' : v < -0.05 ? '▼ ' : '— '
+        return `${sign}${v.toFixed(1)}`
+      } },
     { header: 'Sched Pay', get: r => r.scheduled_pay, money: true },
     { header: 'Actual Pay', get: r => r.actual_pay, money: true },
     { header: 'Shifts', get: r => r.shifts, align: 'right' },
+    // Flags (2026-07-27, Deliverables 3+4) — own column, own explanation, see payroll/page.tsx's
+    // identical column for the full rationale (kept out of the numeric hour columns on purpose).
+    { header: 'Flags', get: r => {
+        const f: string[] = []
+        if (editedEmpIds.has(r.employee_id)) f.push('✎ edited')
+        if (overAlone.has(r.employee_id) || overStores.has(r.store)) f.push('⚠ over weekly limit')
+        // Gate-1 N6 — see payroll/page.tsx's identical column for the full rationale.
+        if ((r.scheduled_hours || 0) > 0.05 && !(r.scheduled_pay > 0) && (r.pay_rate || 0) > 0) f.push('ℹ sched pay incl. a $0-rate portion')
+        return f.join(' · ')
+      } },
   ]
   const storeCols: ExportColumn[] = [
     { header: 'Store', get: r => r.store, role: 'store' },
@@ -151,9 +185,16 @@ export default function StoreOpsReportsPage() {
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📋 StoreOps Reports — Hours & Payroll</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Scheduled vs actual hours and pay, per employee and per store. {periodName}.</p>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📋 StoreOps Reports — Hours & Payroll</h1>
+          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Scheduled vs actual hours and pay, per employee and per store. {periodName}.
+            {(overAlone.size > 0 || overStores.size > 0) && (
+              <span style={{ color: '#dc2626', fontWeight: 600 }}> · ⚠ hours over the configured weekly limit this period (highlighted below)</span>
+            )}
+          </p>
+        </div>
+        <a href="/storeops/payroll-change-log" className="btn" style={{ fontSize: 13 }}>📜 Payroll Change Log</a>
       </div>
 
       <StandardFilterBar
@@ -198,11 +239,18 @@ export default function StoreOpsReportsPage() {
       ) : (
         <ReportShell
           title={`StoreOps Hours & Payroll — ${periodName}`}
-          subtitle={view === 'employee' ? 'By employee' : 'By store'}
+          subtitle={view === 'employee' ? 'By employee · click a row for the day-by-day actual-hours breakdown' : 'By store'}
           filename={filename}
           columns={view === 'employee' ? empCols : storeCols}
           rows={view === 'employee' ? visibleRows : (byStore as any[])}
+          onRowClick={view === 'employee' ? (r => r.employee_id && setDrill({ employee_id: r.employee_id, name: r.name })) : undefined}
+          rowStyle={view === 'employee' ? (r => (overAlone.has(r.employee_id) || overStores.has(r.store)) ? { background: 'rgba(220,38,38,0.07)' } : undefined) : undefined}
         />
+      )}
+
+      {drill && (
+        <ActualHoursDrilldown employeeId={drill.employee_id} name={drill.name}
+          start={filt.period || ''} end={filt.periodTo || ''} onClose={() => setDrill(null)} />
       )}
     </div>
   )
