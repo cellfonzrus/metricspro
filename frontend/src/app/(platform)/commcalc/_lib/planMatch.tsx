@@ -294,6 +294,82 @@ export function MatchWarnings({ opts, rules, stats, index, windowLabel }: {
           ⚠ {num(x.n)} of them also match {ruleName(x.s)} — both rules pay on those lines
         </div>
       ))}
+      {/* the model-name guard — see MatchEvidence */}
+      <MatchEvidence opts={opts} rule={rule} />
+    </div>
+  )
+}
+
+/** The fields a description/SKU keyword is most often CONFUSED with — checked for the same word. */
+const COLLISION_FIELDS = ['tender_type', 'department', 'category', 'contract_type', 'trans_type']
+
+/** Distinct values of `col` among the facet rows this rule matches, biggest first. */
+function matchedValues(opts: PlanOptions | null, rule: MatchRule, col: string): { value: string; lines: number }[] {
+  const fx = opts?.facets
+  if (!fx || !fx.columns.includes(col)) return []
+  const acc = new Map<string, number>()
+  for (const row of fx.rows) {
+    const r = rowReader(fx, row)
+    if (!matchesFacet(r.get, rule, r.ct)) continue
+    const v = r.get(col)
+    if (!v) continue
+    acc.set(v, (acc.get(v) || 0) + r.lines)
+  }
+  return [...acc.entries()].map(([value, lines]) => ({ value, lines })).sort((a, b) => b.lines - a.lines)
+}
+
+/**
+ * THE MODEL-NAME GUARD (owner ruling 2026-07-27 — the "edge" reclassification).
+ *
+ * A `contains` pattern on the item description matches on WORDING, so a word chosen to name a PAY
+ * PROGRAM also catches every device whose MODEL name happens to contain it: a rule meaning the Edge
+ * device-FINANCING program matched "Motorola Edge 2025" and paid $25 per handset line. The editor
+ * showed a line COUNT, which looked healthy — it never showed WHAT was matched.
+ *
+ * So this shows two things, both computed from the facet payload already in the browser (no request):
+ *   • the actual item descriptions the pattern hits — the operator sees the model name immediately;
+ *   • whether the same word is ALSO a real value of another match field (tender_type / department /
+ *     category / contract_type / trans_type) — usually the field the rule meant to key on.
+ * Nothing about any particular keyword is hard-coded; both come from the tenant's own data.
+ */
+export function MatchEvidence({ opts, rule, max = 4 }: { opts: PlanOptions | null; rule: MatchRule; max?: number }) {
+  const f = norm(rule?.match_field || 'any')
+  const op = norm(rule?.match_op || 'equals')
+  const pattern = norm(rule?.match_value || '')
+  const isPattern = op === 'contains' && !!pattern && (f === 'product_desc' || f === 'sku')
+  const items = useMemo(() => (isPattern ? matchedValues(opts, rule, 'product_desc') : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [opts, f, op, pattern])
+  const collisions = useMemo(() => {
+    if (!isPattern) return []
+    const out: { field: string; values: { value: string; lines: number }[] }[] = []
+    for (const cf of COLLISION_FIELDS) {
+      const vals = (opts?.fields?.[cf]?.values || [])
+        .filter(v => norm(v.value).includes(pattern))
+        .map(v => ({ value: v.value, lines: v.lines || 0 }))
+      if (vals.length) out.push({ field: cf, values: vals.slice(0, 3) })
+    }
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opts, f, op, pattern])
+  if (!isPattern || (!items.length && !collisions.length)) return null
+  const shown = items.slice(0, max)
+  const more = items.length - shown.length
+  return (
+    <div style={{ fontSize: 10.5, lineHeight: 1.5, marginTop: 2 }}>
+      {shown.length > 0 && (
+        <div style={{ color: 'var(--text3)' }}>
+          matches {items.length === 1 ? 'this item' : `${num(items.length)} different items`}:{' '}
+          {shown.map(x => `“${x.value}” (${num(x.lines)})`).join(', ')}{more > 0 ? ` +${num(more)} more` : ''}
+        </div>
+      )}
+      {collisions.map(c => (
+        <div key={c.field} style={{ color: '#b45309' }}>
+          ⚠ “{rule.match_value}” is also a value of <b>{c.field}</b>{' '}
+          ({c.values.map(v => `“${v.value}”${v.lines ? ` · ${num(v.lines)} lines` : ''}`).join(', ')}) —
+          if this rule means that, match on {c.field} instead of the item description.
+        </div>
+      ))}
     </div>
   )
 }

@@ -22,6 +22,7 @@ from app.modules.commcalc import installment_engine
 from app.modules.commcalc import commission_engine
 from app.modules.commcalc import plan_options
 from app.modules.commcalc import sale_installment_engine
+from app.modules.commcalc import plan_impact
 from app.modules.commcalc import b2b_sweep
 from app.modules.commcalc import sales_analyzer
 from app.modules.commcalc import sales_recon
@@ -6199,12 +6200,28 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
 
         # Update calc status — keyed on the canonical 'Month YYYY' spelling (see /calculate) so a month
         # has exactly ONE status row regardless of which spelling triggered the calc.
-        client.schema('commcalc').table('calc_status').upsert({
+        _status = {
             'org_id': org_id, 'period': _canon_period(period),
             'calc_status': 'done',
             'calc_finished_at': 'now()',
             'save_errors': save_errors or None,
-        }, on_conflict='org_id,period').execute()
+        }
+        # CALC WARNINGS (mig 243): a SUCCESSFUL calc can still leave real activations paid by NOTHING —
+        # the plan engine has no exclusivity and the multi-month engine has its own trigger, so a rule
+        # that stops matching does not hand its lines to anything else. Diagnostic only: computed AFTER
+        # rep_commissions is written, never able to change a payout, and skipped whole if the column
+        # isn't there yet (the live endpoint /commission-plans/pay-warnings still serves it).
+        try:
+            _warn = plan_impact.calc_warning_payload(client, org_id, period)
+            try:
+                client.schema('commcalc').table('calc_status').select('calc_warnings').limit(1).execute()
+                _status['calc_warnings'] = _warn
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"WARN calc warnings skipped for org {org_id} period {period}: {e}")
+        client.schema('commcalc').table('calc_status').upsert(
+            _status, on_conflict='org_id,period').execute()
 
     except Exception as e:
         try:
@@ -8159,6 +8176,72 @@ async def plan_field_options(months: int = 3, period: str = "", limit: int = 400
         print(f"WARN plan-field-options failed for org {org_id}: {e}")
         return {"ready": False, "note": f"options unavailable: {e}", "vocab": plan_options.vocabulary(),
                 "fields": {}, "facets": None, "periods": []}
+
+
+@router.post("/commission-plans/rule-impact")
+async def commission_rule_impact(body: dict, org_id: str = ORG_ID):
+    """READ-ONLY BLAST RADIUS for a proposed commission-rule matcher change. Writes NOTHING and triggers
+    no calculation — it runs the real engine twice (as configured, and with the proposed matchers applied
+    to an in-memory copy) and returns the difference.
+
+    body: {period (required), overrides: {rule_id: {match_field?, match_op?, match_value?, qualifies?,
+    disabled?}}, rep?}
+
+    Answers the three questions a money-touching rule edit has to answer BEFORE it is made:
+      • which reps move, and by how much;
+      • which sale lines STOP paying (with their tender_type, so a tender-keyed replacement can be sanity
+        checked against the same lines);
+      • whether each freed line is picked up by a multi-month installment schedule — the plan engine has no
+        exclusivity and the installment engine has its OWN trigger, so "it will just fall through to the
+        multi-month incentive" is TRUE ONLY IF a schedule trigger matches. `freed_paying_nothing` counts
+        the ones that would pay $0 from every configured source."""
+    period = str((body or {}).get("period") or "").strip()
+    if not period:
+        raise HTTPException(400, "period required")
+    require_org(org_id)
+    overrides = (body or {}).get("overrides") or {}
+    if not isinstance(overrides, dict):
+        raise HTTPException(400, "overrides must be an object keyed by rule id")
+    try:
+        return plan_impact.rule_impact(sb(), org_id, period, overrides,
+                                       only_rep=str((body or {}).get("rep") or "").strip() or None)
+    except Exception as e:
+        print(f"WARN rule-impact failed for org {org_id} period {period}: {e}")
+        raise HTTPException(500, f"rule impact unavailable: {e}")
+
+
+@router.get("/commission-plans/keyword-collisions")
+async def commission_keyword_collisions(period: str, org_id: str = ORG_ID):
+    """READ-ONLY audit of the "a pay-program keyword is also a device MODEL name" bug class.
+
+    Lists every rule / installment trigger that matches an item description (or SKU) with `contains`, the
+    DISTINCT items it actually hits, and whether the same word also occurs as a value of tender_type /
+    department / category / contract_type / trans_type — i.e. the field the rule probably meant. Nothing
+    about any specific keyword is hard-coded; the collision comes from the tenant's own sale lines."""
+    if not str(period or "").strip():
+        raise HTTPException(400, "period required")
+    require_org(org_id)
+    try:
+        return plan_impact.keyword_collision_audit(sb(), org_id, period)
+    except Exception as e:
+        print(f"WARN keyword-collisions failed for org {org_id}: {e}")
+        return {"ready": False, "note": f"audit unavailable: {e}", "rules": []}
+
+
+@router.get("/commission-plans/pay-warnings")
+async def commission_pay_warnings(period: str, org_id: str = ORG_ID):
+    """READ-ONLY: the activations that no commission-plan rule and no multi-month schedule trigger pays,
+    computed LIVE (the same payload a calculation stores in calc_status.calc_warnings)."""
+    if not str(period or "").strip():
+        raise HTTPException(400, "period required")
+    require_org(org_id)
+    try:
+        return plan_impact.calc_warning_payload(sb(), org_id, period) or {
+            "period": period, "counts": {}, "unpaid_activations": [], "unassigned_reps": [],
+            "installment_warnings": []}
+    except Exception as e:
+        print(f"WARN pay-warnings failed for org {org_id}: {e}")
+        return {"period": period, "note": f"warnings unavailable: {e}", "counts": {}}
 
 
 @router.get("/commission-plans/preview")
