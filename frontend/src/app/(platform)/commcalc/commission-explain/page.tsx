@@ -35,7 +35,11 @@ const PLAN_COLS: ExportColumn[] = [
   { header: 'Line $', get: r => r.amount, money: true },
 ]
 const INST_COLS: ExportColumn[] = [
-  { header: 'IMEI', get: r => r.imei }, { header: 'Product', get: r => r.product },
+  { header: 'IMEI', get: r => r.imei },
+  // ONE line, always the same shape: DEVICE — RATE PLAN — MRC (owner 2026-07-27). The engine resolves
+  // both halves of the activation, so this column never flips between the phone and the rate plan.
+  { header: 'Device — Rate plan', get: r => r.product },
+  { header: 'Category', get: r => r.device_category },
   { header: 'Month', get: r => r.month_index, type: 'number' },
   { header: 'Pay Period', get: r => r.pay_period, role: 'month' },
   { header: 'Status', get: r => r.status_label }, { header: 'Reason', get: r => r.hold_detail },
@@ -105,7 +109,9 @@ export default function CommissionExplainPage() {
   const instRows = useMemo(() => {
     const out: any[] = []
     for (const d of (mm?.devices || [])) for (const i of (d.installments || []))
-      out.push({ imei: d.imei, product: d.product, month_index: i.month_index, pay_period: i.pay_period,
+      out.push({ imei: d.imei, product: i.label || d.label || d.product,
+        device_category: i.device_category || d.device_category,
+        month_index: i.month_index, pay_period: i.pay_period,
         status_label: REASON_LABEL[i.hold_reason] || i.status, hold_detail: i.hold_detail, amount: i.amount,
         withheld_amount: i.withheld_amount, mrc_at_pay: i.mrc_at_pay, ma_says_paid: d.ma_says_paid })
     return out
@@ -284,20 +290,23 @@ function DeviceCard({ d }: { d: any }) {
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
         <div style={{ fontSize: 13 }}>
-          <b>IMEI {d.imei || '—'}</b>{d.mdn ? ` · MDN ${d.mdn}` : ''}{d.product ? ` · ${d.product}` : ''}
+          <b>IMEI {d.imei || '—'}</b>{d.mdn ? ` · MDN ${d.mdn}` : ''}
+          {(d.label || d.product) ? ` · ${d.label || d.product}` : ''}
+          {d.device_category ? ` · ${d.device_category}` : ''}
           {d.contract_type ? ` · ${d.contract_type}` : ''}{d.sale_period ? ` · sold ${d.sale_period}` : ''}
         </div>
         {d.held_but_ma_paid && <span className="badge" style={{ background: '#fef3c7', color: '#92400e' }}>MA paid · in-app held</span>}
       </div>
       <table style={{ width: '100%', fontSize: 12, marginTop: 6 }}>
         <thead><tr style={{ background: 'var(--surface2)' }}>
-          {['Month', 'Pay period', 'Status', 'Paid', 'Held', 'MRC', 'raw_mi match', 'Reason'].map(h =>
+          {['Month', 'Device — Rate plan', 'Pay period', 'Status', 'Paid', 'Held', 'MRC', 'raw_mi match', 'Reason'].map(h =>
             <th key={h} style={{ textAlign: 'left', padding: '3px 6px', color: 'var(--text2)', fontSize: 10 }}>{h}</th>)}
         </tr></thead>
         <tbody>
           {d.installments.map((i: any, k: number) => (
             <tr key={k} style={{ borderTop: '1px solid var(--border)' }}>
               <td style={{ padding: '3px 6px' }}>M{i.month_index}</td>
+              <td style={{ padding: '3px 6px', fontSize: 11 }} title={i.label || ''}>{i.label || d.label || '—'}</td>
               <td style={{ padding: '3px 6px' }}>{i.pay_period}</td>
               <td style={{ padding: '3px 6px', color: reasonColor(i.hold_reason), fontWeight: 600 }}>{REASON_LABEL[i.hold_reason] || i.status}</td>
               <td style={{ padding: '3px 6px' }}>{i.status === 'paid' ? fmt(i.amount) : '—'}</td>
@@ -344,7 +353,8 @@ function MaTable({ rows }: { rows: any[] }) {
 
 function DeviceStory({ dev }: { dev: any }) {
   const instRows = (dev.installments || []).map((i: any) => ({
-    imei: dev.imei, product: '', month_index: i.month_index, pay_period: i.pay_period,
+    imei: dev.imei, product: i.label || '', device_category: i.device_category,
+    month_index: i.month_index, pay_period: i.pay_period,
     status_label: REASON_LABEL[i.hold_reason] || i.status, hold_detail: i.hold_detail, amount: i.amount,
     withheld_amount: i.withheld_amount, mrc_at_pay: i.mrc_at_pay, ma_says_paid: dev.ma_says_paid,
   }))

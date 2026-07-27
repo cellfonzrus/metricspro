@@ -251,7 +251,14 @@ def base_store(org=LUXE, sales=None, **extra):
          "plan_installment_schedule": [sched_3mr(org)], "plan_installment_line": sched_lines(org),
          "raw_sales": list(sales or []), "daily_sales_feed": [], "raw_mi": [], "raw_ma_commission": [],
          "store_mapping": [], "employees": [], "product_mrc": [], "carrier_category_map": [],
-         "flag_rules": [], "commission_org_config": [], "item_mapping": [],
+         # mig 245 (2026-07-27): this harness proves MRC/chain semantics, NOT device-category
+         # qualification — so it pins EVERY category to "included", i.e. the pre-245 behaviour. The
+         # category gate has its own harness (installment_category_qualification_proof.py).
+         "flag_rules": [],
+         "commission_org_config": [{"org_id": org, "installment_category_qualification":
+                                    {"phone": True, "tablet": True, "home_internet": True,
+                                     "sim": True, "accessory": True, "unknown": True}}],
+         "item_mapping": [],
          "carrier": [{"id": "c-total", "org_id": org, "name": "Total Wireless", "code": "Total",
                       "is_default": True}],
          "installment_gate_source_config": [], "sale_installment_ledger": []}

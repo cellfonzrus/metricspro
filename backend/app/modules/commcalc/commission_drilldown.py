@@ -309,11 +309,26 @@ def explain_rep(client, org_id, period, rep, carrier_mode="plan"):
                 d["product"] = sl.get("product_desc"); d["contract_type"] = sl.get("contract_type")
                 d["ext_price"] = round(safe_float(sl.get("ext_price")), 2)
                 d["gp"] = round(safe_float(sl.get("gp")), 2)
+            # ONE CONSISTENT LABEL (owner 2026-07-27): the engine resolves BOTH halves of the activation
+            # (device line + rate-plan line), so the card no longer shows "whichever line the serial/MDN
+            # index happened to hit first" — that is what made some rows show the phone and others the
+            # rate plan. Falls back to the sale-line lookup when the engine did not supply one.
+            d["device_product"] = r.get("device_product") or None
+            d["plan_product"] = r.get("plan_product") or None
+            d["device_category"] = r.get("device_category") or None
+            d["label"] = (r.get("display_label")
+                          or sie.installment_label(d.get("device_product") or d.get("product"),
+                                                   d.get("plan_product"), None) or d.get("product"))
         mi_row = sie._match_mi({"mdn": r.get("mdn"), "serial_1": r.get("serial_1")}, mi_idx)
         code, text = _installment_reason(r, mi_row)
         paid = str(r.get("status") or "") == "paid"
         wa = 0.0 if paid else withheld_by_dev.get(ser_n, withheld_by_dev.get(mdn_n))  # None if unknown
         d["installments"].append({
+            "label": (r.get("display_label")
+                      or sie.installment_label(r.get("device_product"), r.get("plan_product"),
+                                               r.get("mrc_at_pay"))),
+            "device_product": r.get("device_product"), "plan_product": r.get("plan_product"),
+            "device_category": r.get("device_category"),
             "month_index": r.get("month_index"), "pay_period": r.get("pay_period"),
             "sale_period": r.get("sale_period"), "amount": safe_float(r.get("amount")),
             "withheld_amount": wa,
@@ -482,6 +497,22 @@ def device_story(client, org_id, imei, period=None):
                 mi_cache[pp] = {"mdn": {}, "serial": {}}
         return mi_cache[pp]
 
+    # ONE CONSISTENT LABEL for stored rows too (owner 2026-07-27). The persisted ledger carries no
+    # display columns on purpose (money columns only), so derive device + rate plan from the sale lines
+    # already read for this IMEI: the device line is the one carrying the serial, the rate-plan line is
+    # the one that identifies as a plan and carries no device serial.
+    _dev_p = next((s.get("product") for s in (out["sale_lines"] or []) if s.get("imei")), None)
+    _plan_p = None
+    try:
+        _pm = sie._norm_plan_matcher(sie.DEFAULT_PLAN_LINE_MATCHER)
+        _plan_p = next((s.get("product") for s in (out["sale_lines"] or [])
+                        if not s.get("imei")
+                        and sie._line_is_plan_line({"product_desc": s.get("product"),
+                                                    "department": s.get("department"),
+                                                    "category": s.get("category")}, _pm)), None)
+    except Exception:
+        _plan_p = None
+
     inst = []
     for r in led:
         mi_row = sie._match_mi({"mdn": r.get("mdn"), "serial_1": r.get("serial_1")}, _mi_for(r.get("pay_period")))
@@ -491,7 +522,14 @@ def device_story(client, org_id, imei, period=None):
         # withheld_amount: 0.0 when paid; the would-be $ when known (live period); None when unknown
         # (a stored row from a period we didn't live-recompute). Same None-means-unknown convention as
         # explain_rep, so the frontend renders "—" for unknown and "$0.00" only for a genuine zero.
-        inst.append({"month_index": r.get("month_index"), "pay_period": r.get("pay_period"),
+        inst.append({"label": (r.get("display_label")
+                               or sie.installment_label(r.get("device_product") or _dev_p,
+                                                        r.get("plan_product") or _plan_p,
+                                                        r.get("mrc_at_pay"))),
+                     "device_product": r.get("device_product") or _dev_p,
+                     "plan_product": r.get("plan_product") or _plan_p,
+                     "device_category": r.get("device_category"),
+                     "month_index": r.get("month_index"), "pay_period": r.get("pay_period"),
                      "sale_period": r.get("sale_period"), "amount": safe_float(r.get("amount")),
                      "withheld_amount": (0.0 if paid else live_withheld.get(wk)),
                      "status": r.get("status"), "paid": bool(r.get("paid_gate_met")),

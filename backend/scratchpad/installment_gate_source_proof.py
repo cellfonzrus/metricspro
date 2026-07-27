@@ -40,6 +40,17 @@ PASS = 0
 FAIL = 0
 
 
+
+# mig 245 (2026-07-27): the engine now stamps four DISPLAY-ONLY keys on every ledger row (device +
+# rate-plan product, the one-line label, the resolved device category). They carry no money, so the
+# "byte-identical to the pre-change engine" claims below compare the MONEY shape with them removed.
+_DISPLAY_KEYS = ("device_category", "device_product", "plan_product", "display_label")
+
+
+def _no_display(rows):
+    return [{k: v for k, v in r.items() if k not in _DISPLAY_KEYS} for r in (rows or [])]
+
+
 def check(name, cond, extra=""):
     global PASS, FAIL
     if cond:
@@ -363,8 +374,8 @@ for label, cfg_on in (("with mig-223 seeds", True), ("mig-223 ABSENT (code defau
     new_res = NEW.compute_sale_installments(FakeClient(boost_store(cfg_on)), HOUSE, "June 2026")
     check(f"[{label}] by_rep identical", old_res["by_rep"] == new_res["by_rep"], f"{old_res['by_rep']} vs {new_res['by_rep']}")
     check(f"[{label}] totals identical", old_res["totals"] == new_res["totals"], f"{old_res['totals']} vs {new_res['totals']}")
-    check(f"[{label}] ledger identical (row-for-row)", old_res["ledger"] == new_res["ledger"],
-          "LEDGER DIFF")
+    check(f"[{label}] ledger identical (row-for-row)",
+          _no_display(old_res["ledger"]) == _no_display(new_res["ledger"]), "LEDGER DIFF")
     check(f"[{label}] flags identical", old_res["flags"] == new_res["flags"], "FLAGS DIFF")
     # the Boost ledger must carry NONE of the new MA keys
     newkeys = set().union(*[set(r.keys()) for r in new_res["ledger"]]) if new_res["ledger"] else set()
@@ -460,7 +471,8 @@ try:
                                            "June 2026")
         ko = OLD.compute_sale_installments(FakeClient(mk()), HOUSE if label == "BOOST" else LUXE,
                                            "June 2026")
-        check(f"kill-switch ON: [{label}] ledger == pre-change engine", kn["ledger"] == ko["ledger"], "DIFF")
+        check(f"kill-switch ON: [{label}] ledger == pre-change engine",
+              _no_display(kn["ledger"]) == _no_display(ko["ledger"]), "DIFF")
         check(f"kill-switch ON: [{label}] by_rep == pre-change", kn["by_rep"] == ko["by_rep"], f"{kn['by_rep']} vs {ko['by_rep']}")
         check(f"kill-switch ON: [{label}] totals == pre-change", kn["totals"] == ko["totals"], f"{kn['totals']} vs {ko['totals']}")
         check(f"kill-switch ON: [{label}] NO MA keys leak",
