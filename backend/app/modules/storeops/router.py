@@ -157,12 +157,15 @@ def set_timeoff_conflict_mode(body: dict, authorization: str = Header(default=""
 
 
 def _canonical_shift_employee_id(org_id, raw_id, employees=None):
-    """Resolve a raw `shifts.employee_id` value to the canonical BUSINESS employees.employee_id
-    BEFORE any new/updated storeops.shifts row is written — the 2026-07-27 owner-approved money fix
-    (see payroll_identity.py's module docstring + migration 415 for the full root-cause writeup).
-    Called from every shift-writing path (POST /shifts, the bulk shift-template save/apply, the
-    employee-merge reassignment) so no writer — this one, a future one, or a stale saved template —
-    can create a NEW numeric-id shift regardless of which code path produced it.
+    """Resolve a raw employee_id value to the canonical BUSINESS employees.employee_id BEFORE any
+    new/updated storeops row that carries an employee_id foreign-key-by-string is written — the
+    2026-07-27 owner-approved money fix (see payroll_identity.py's module docstring + migration 415
+    for the full root-cause writeup). Table-agnostic (despite the name, kept for history/grep
+    continuity): called from every shift-writing path (POST /shifts, the bulk shift-template
+    save/apply, the employee-merge reassignment) AND, since the Gate-1 REDO N1 fix, `POST /time-off`
+    too (storeops/timeoff/page.tsx's admin picker had the identical numeric-id bug, poisoning
+    time_off_requests instead of shifts) — so no writer, this one, a future one, or a stale saved
+    template, can create a NEW numeric-id row regardless of which code path produced it.
 
     Reuses `business_id_alias_map`'s own ambiguity guard: a raw numeric value that collides with a
     DIFFERENT employee's own real business employee_id is left UNCHANGED rather than guessed at —
@@ -200,8 +203,18 @@ def create_shift(shift: dict, org_id: str = ORG_ID):
     sdate = shift.get("shift_date")
     timeoff_warning = None
     if eid and sdate:
+        # Gate-1 REDO N1 fix (2026-07-27, MUST): the admin Time Off page still writes
+        # time_off_requests keyed by the employee's NUMERIC id (storeops/timeoff/page.tsx — a
+        # separate, not-yet-backfilled table; migration 415 now also backfills it, but an admin can
+        # create a new numeric-keyed row again at any time until that page's own write is fixed).
+        # Canonicalizing `eid` above (correct for the SHIFT's own identity) would otherwise silently
+        # STOP matching those numeric-keyed rows — before this fix, the shift side's OWN numeric-id
+        # bug accidentally kept this lookup "working" by symmetry; fixing the shift side alone would
+        # have broken it. Check BOTH id forms via the same ambiguity-guarded variant lookup the
+        # shift-extension gate already uses, so a block-mode tenant never silently loses enforcement.
+        lookup_ids, _ = _emp_id_variants(shift.get("org_id") or org_id, eid)
         conflict = (sb().table("time_off_requests").select("id").eq("org_id", org_id)
-                    .eq("employee_id", str(eid)).eq("status", "approved")
+                    .in_("employee_id", list(lookup_ids)).eq("status", "approved")
                     .lte("start_date", sdate).gte("end_date", sdate)
                     .limit(1).execute().data)
         if conflict:
@@ -284,6 +297,13 @@ def get_time_off(employee_id: str = None, authorization: str = Header(default=""
 def create_time_off(request: dict, org_id: str = ORG_ID):
     if not (request.get("employee_id") and request.get("start_date") and request.get("end_date")):
         raise HTTPException(400, "employee_id, start_date and end_date are required")
+    # Gate-1 REDO N1 fix (2026-07-27, defense in depth): canonicalize to the BUSINESS employee_id
+    # server-side too, so no caller (the fixed timeoff page, a future one, or a bad client) can
+    # create a NEW numeric-id time_off_requests row — same posture as _canonical_shift_employee_id
+    # on the shift-writing paths. Reuses the identical helper/ambiguity guard (the function itself is
+    # table-agnostic — it just resolves a raw id to the canonical business id for an org's roster).
+    request = {**request, "employee_id":
+               _canonical_shift_employee_id(request.get("org_id") or org_id, request.get("employee_id"))}
     status = str(request.get("status") or "pending").lower()
     if status not in ("pending", "approved", "denied"):
         status = "pending"
@@ -1663,7 +1683,12 @@ def apply_templates(body: dict, org_id: str = ORG_ID):
             # numeric-id shift either.
             eid = _canonical_shift_employee_id(org_id, eid, employees=_apply_tmpl_employees)
         if eid:
-            conflict = (sb().table("time_off_requests").select("id").eq("org_id", org_id).eq("employee_id", str(eid))
+            # Gate-1 REDO N1 fix — same reasoning as create_shift above: check BOTH id forms so a
+            # numeric-keyed admin Time Off row (still possible until that page's own write is fixed)
+            # is never silently missed just because `eid` here is now correctly canonicalized.
+            lookup_ids, _ = _emp_id_variants(org_id, eid)
+            conflict = (sb().table("time_off_requests").select("id").eq("org_id", org_id)
+                        .in_("employee_id", list(lookup_ids))
                         .eq("status", "approved").lte("start_date", target).gte("end_date", target).limit(1).execute().data)
             if conflict:
                 skipped_off += 1
