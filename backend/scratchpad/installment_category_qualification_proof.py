@@ -492,6 +492,35 @@ check("the built-ins remain as the fallback tail when a tenant adds ONE rule (no
                                  "match_op": "word", "match_value": "tab", "priority": 5,
                                  "source": "tenant"}]))[0] == "sim")
 
+# ── Gate-1 N3 (2026-07-27): TWO TENANT RULES AT THE SAME PRIORITY MUST NOT TIE-BREAK ON DB ORDER ──
+# normalize_rules keeps a stable sort on (priority, tenant-first, ARRIVAL INDEX), so whichever rule the
+# loader yields first WINS. Unordered, that is physical row order — i.e. a rep's pay could change
+# because Postgres returned two rows the other way round. load_category_rules now orders by
+# priority, created_at, id (and re-sorts in Python, so a client that ignores .order() is still
+# deterministic). Proven by handing the SAME two rules to the loader in BOTH insertion orders.
+_tie = [{"id": "r-b", "org_id": LUXE, "category_key": "phone", "match_field": "product_desc",
+         "match_op": "word", "match_value": "tab", "priority": 7, "created_at": "2026-07-02T00:00:00Z"},
+        {"id": "r-a", "org_id": LUXE, "category_key": "home_internet", "match_field": "product_desc",
+         "match_op": "word", "match_value": "tab", "priority": 7, "created_at": "2026-07-01T00:00:00Z"}]
+_cats = []
+for _perm in (_tie, list(reversed(_tie))):
+    _st = store_for(LUXE, [], rules=[dict(r) for r in _perm])
+    _rules = ICAT.load_category_rules(FakeClient(_st), LUXE)
+    _cats.append(ICAT.resolve_line_category({"product_desc": TABLET_DEV}, _rules)[0])
+check("N3: two tenant rules at the SAME priority resolve identically in BOTH DB return orders "
+      f"(got {_cats})", _cats[0] == _cats[1] and len(set(_cats)) == 1, _cats)
+check("N3: …and the winner is the OLDEST rule (created_at tie-break), not whichever row came back first",
+      _cats[0] == "home_internet", _cats)
+check("N3: the loader still returns the tenant's rules when created_at/id are absent "
+      "(ordered read falls back, nothing is lost)",
+      any(r.get("source") == "tenant" for r in ICAT.load_category_rules(
+          FakeClient(store_for(LUXE, [], rules=[{"id": "r1", "org_id": LUXE, "category_key": "phone",
+                                                 "match_field": "product_desc", "match_op": "word",
+                                                 "match_value": "tab", "priority": 5}])), LUXE)))
+check("N3: a missing rules table still degrades to the built-ins only (no crash from the ordered read)",
+      all(r.get("source") == "builtin" for r in ICAT.load_category_rules(
+          FakeClient(store_for(LUXE, [], missing=("installment_category_rule",))), LUXE)))
+
 print("\n   … the PRODUCT CATALOG (migs 230/231) is honoured when the tenant has uploaded one")
 cat_store = store_for(sales=[line(LUXE, "CT1", "TW GIZMO 5G", serial="356111222333444", ext=99.0,
                                   dept="BrandedHandset"),

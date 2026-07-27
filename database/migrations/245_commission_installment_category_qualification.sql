@@ -71,6 +71,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS installment_category_rule_uq
 COMMENT ON TABLE commcalc.installment_category_rule IS
   'Per-tenant device-category rules for multi-month qualification. Evaluated BEFORE the built-in rules; the built-ins remain as the fallback tail so one tenant rule can never make everything "unknown".';
 
+-- ── 4. SECURITY — service-role only (Gate-1 N2, 2026-07-27) ──────────────────────────────────────
+-- WHY THIS BLOCK EXISTS: a NEW table in commcalc inherits NOTHING. Migration 002's
+-- `GRANT ALL ON ALL TABLES IN SCHEMA commcalc TO anon, authenticated` is a ONE-TIME grant over the
+-- tables that existed then, and no ALTER DEFAULT PRIVILEGES is relied on anywhere in this repo
+-- (mig 232 says so explicitly). So without this block the table ships with **no RLS and no grants** —
+-- exactly the shape migration 414 shipped in the people band, which is the lesson being applied here.
+--
+-- WHY service-role-ONLY rather than the older `open_all` + GRANT-to-anon pattern (migs 230/717):
+-- this is tenant PAY CONFIGURATION — the rules decide which activations earn a multi-month payout —
+-- so it belongs with the agency config tables, not with the openly-granted reference tables. The
+-- precedent is migration 220, which locked all six commcalc.agency_* tables to service-role only and
+-- is LIVE; `agency.py` reads `agency_link` through PostgREST against it, which proves the backend
+-- connects as service_role (`database.py`: `SUPABASE_SERVICE_KEY or SUPABASE_KEY`). This block also
+-- adds the EXPLICIT `GRANT ... TO service_role` that migration 220 left implicit.
+--
+-- Idempotent: safe to re-run, and safe to run on a database where the table already exists.
+ALTER TABLE commcalc.installment_category_rule ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS open_all ON commcalc.installment_category_rule;  -- undo any prior open policy
+REVOKE ALL ON commcalc.installment_category_rule FROM anon, authenticated;
+GRANT USAGE ON SCHEMA commcalc TO service_role;
+GRANT ALL ON commcalc.installment_category_rule TO service_role;
+
 NOTIFY pgrst, 'reload schema';
 
 SELECT 'Migration 245 complete — multi-month device-category qualification '

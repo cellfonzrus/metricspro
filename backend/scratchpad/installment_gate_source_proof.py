@@ -457,11 +457,34 @@ check("DEV_B month2 (July pay) WITHHELD (no June spiff_m2)",
 # 5b. L2 KILL SWITCH — INSTALLMENT_GATE_LEGACY=1 ⇒ byte-identical to pre-change engine for BOTH modes
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n── 5b. L2 kill switch (INSTALLMENT_GATE_LEGACY) ──")
-# sanity FIRST: with the switch OFF, the MA org DIVERGES from the pinned pre-change engine (fix is active)
+# sanity FIRST: with the switch OFF, the MA org must differ from the pinned pre-change engine — but only
+# in a way that MEANS something.
+#
+# ⚠️ 2026-07-27 (Gate-1 N1, agent/commission/multimonth-category-config): this pair of checks became
+# VACUOUS once mig 223 merged, because OLD is loaded from merge-base(HEAD, origin/main) — which now
+# already contains the very gate fix these lines were written to demonstrate. Two consequences:
+#   · the old `off_new["ledger"] != off_old["ledger"]` passed on ADDITIVE METADATA ALONE (the
+#     multimonth-category package stamps device_category/device_product/plan_product/display_label on
+#     every row), i.e. it would have gone green even if the gate fix had been reverted;
+#   · `off_old["totals"]["paid"] == 0` is now EXPECTED TO FAIL — the "pre-change" engine is the fixed
+#     engine, so of course it pays.
+# Rewritten to compare the MONEY SHAPE (with the display-only keys dropped) and to say out loud which
+# world we are in, so neither line can ever be green for the wrong reason again.
 off_new = NEW.compute_sale_installments(FakeClient(luxe_store()), LUXE, "June 2026")
 off_old = OLD.compute_sale_installments(FakeClient(luxe_store()), LUXE, "June 2026")
-check("switch OFF: MA org DIVERGES from pre-change engine (fix live)", off_new["ledger"] != off_old["ledger"])
-check("switch OFF: pre-change engine pays $0 (all withheld)", off_old["totals"]["paid"] == 0, off_old["totals"])
+_off_money_same = (_no_display(off_new["ledger"]) == _no_display(off_old["ledger"])
+                   and off_new["by_rep"] == off_old["by_rep"]
+                   and off_new["totals"] == off_old["totals"])
+_gate_shipped = off_old["totals"]["paid"] != 0
+check("switch OFF: the MA-org difference vs the pinned engine is MONEY, not just added keys "
+      f"({'gate fix already in main → money identical, difference is display-only' if _gate_shipped else 'gate fix NOT yet in main → money must diverge'})",
+      _off_money_same if _gate_shipped else not _off_money_same,
+      f"money_same={_off_money_same} old_totals={off_old['totals']} new_totals={off_new['totals']}")
+check("switch OFF: display-only keys are the ONLY ledger delta once the gate fix is in main"
+      if _gate_shipped else "switch OFF: pre-change engine pays $0 (all withheld)",
+      (set().union(*[set(r) for r in off_new["ledger"]], set())
+       - set().union(*[set(r) for r in off_old["ledger"]], set())) <= set(_DISPLAY_KEYS)
+      if _gate_shipped else off_old["totals"]["paid"] == 0, off_old["totals"])
 
 os.environ["INSTALLMENT_GATE_LEGACY"] = "1"
 try:

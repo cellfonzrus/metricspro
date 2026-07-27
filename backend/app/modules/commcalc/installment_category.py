@@ -325,13 +325,37 @@ def qualification_for(sched, org_qual):
 # ── loaders (the only I/O in this module; every one degrades to the code default) ───────────────────
 def load_category_rules(client, org_id):
     """The org's own installment_category_rule rows + the built-in tail. Missing table (migration 245
-    not applied) → built-ins only. Never raises."""
+    not applied) → built-ins only. Never raises.
+
+    ORDERED, and the ordering is LOAD-BEARING (Gate-1 N3, 2026-07-27). `normalize_rules` keeps a
+    stable sort on (priority, tenant-before-builtin, ARRIVAL INDEX), so two tenant rules at the SAME
+    priority are tie-broken by the order this function returns them in. Unordered, that is whatever
+    Postgres felt like — which would make a rep's pay depend on physical row order. Sorting by
+    `priority` then `created_at` then `id` makes the tie-break deterministic AND identical to what the
+    admin UI lists (`GET /plan-installments/category-qualification` orders by priority), so what the
+    operator sees is the order the money is decided in.
+
+    `created_at`/`id` may not exist on a hand-made table, so the ordered read falls back to the plain
+    read rather than losing the tenant's rules entirely."""
     rows = []
     try:
-        rows = (client.schema("commcalc").table("installment_category_rule").select("*")
-                .eq("org_id", org_id).limit(2000).execute().data) or []
+        q = (client.schema("commcalc").table("installment_category_rule").select("*")
+             .eq("org_id", org_id))
+        try:
+            rows = (q.order("priority").order("created_at").order("id")
+                    .limit(2000).execute().data) or []
+        except Exception:
+            rows = (client.schema("commcalc").table("installment_category_rule").select("*")
+                    .eq("org_id", org_id).limit(2000).execute().data) or []
     except Exception:
         rows = []
+    # Belt-and-braces: sort in Python too, so a client/stub that ignores .order() still yields a
+    # deterministic evaluation order. PURE given the rows.
+    try:
+        rows.sort(key=lambda r: (int(r.get("priority") if r.get("priority") is not None else 100),
+                                 str(r.get("created_at") or ""), str(r.get("id") or "")))
+    except Exception:
+        pass
     for r in rows:
         r["source"] = "tenant"
     return effective_rules(rows)
