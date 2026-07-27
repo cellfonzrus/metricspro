@@ -31,6 +31,10 @@ from app.modules.storeops.payroll_expenses import (
     gross_payroll_cells as payex_gross_payroll_cells,
     gross_payroll_ledger_rows as payex_gross_payroll_ledger_rows,
 )
+from app.modules.storeops.payroll_identity import (
+    business_id_alias_map as _business_id_alias_map,
+    reconcile_employee_identity as _reconcile_employee_identity,
+)
 
 try:
     from zoneinfo import ZoneInfo
@@ -184,14 +188,30 @@ def create_shift(shift: dict, org_id: str = ORG_ID):
     return out
 
 @router.patch("/shifts/{shift_id}")
-def update_shift(shift_id: int, updates: dict, org_id: str = ORG_ID):
+def update_shift(shift_id: int, updates: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Update a shift. org_id-scoped so a foreign (guessable BIGSERIAL) shift_id is a no-op instead
-    of a cross-tenant write — this previously took NO org filter at all."""
+    of a cross-tenant write — this previously took NO org filter at all.
+
+    2026-07-27 (Deliverable 4, Payroll Change Log): a "before" fetch + field diff is logged for every
+    hour-relevant field a DM correction touches (scheduled_hours/actual_hours/times/store/date/status).
+    Logging is best-effort (`_log_payroll_change`/`_who_for_log` never raise) — a logging failure or a
+    pre-migration-414 table NEVER blocks the shift update itself."""
     updates = {k: v for k, v in updates.items() if k not in ("org_id", "id")}
+    # dict(...) snapshot: a fake/mocked client's select() can return the SAME row object the update
+    # below mutates in place (a real PostgREST response never aliases like this, but the diff logic
+    # must be correct regardless of the client implementation underneath it) — take an independent
+    # copy of "before" so the change-log diff is never accidentally comparing a row to itself.
+    before = dict((sb().table("shifts").select("*").eq("id", shift_id).eq("org_id", org_id)
+                   .limit(1).execute().data or [{}])[0])
     r = sb().table("shifts").update(updates).eq("id", shift_id).eq("org_id", org_id).execute()
     if not r.data:
         raise HTTPException(404, "shift not found")
-    return r.data[0]
+    after = r.data[0]
+    try:
+        _log_shift_edit(org_id, before, after, _who_for_log(authorization, org_id))
+    except Exception:
+        pass
+    return after
 
 @router.delete("/shifts/{shift_id}")
 def delete_shift(shift_id: int, org_id: str = ORG_ID):
@@ -480,6 +500,105 @@ def _merge_inactive_into_by_store(by_store, rate_map, real_shifts, timelog_rows)
         d["amount"] += hrs * rate
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# PAYROLL CHANGE LOG (owner directive 2026-07-27, Deliverable 4): "track and highlight any changes
+# done by the DM to fix the hours manually" — an append-only audit trail (migration 414,
+# storeops.payroll_change_log) covering every write path that alters punches/hours: shift edits
+# (PATCH /shifts/{id}), manager clock-in overrides (POST /timeclock/override), manual hours
+# adjustments (POST/DELETE /manual-hours), and the force-clockout sweep (both the manager "run now"
+# button and the pg_cron auto-sweep). Best-effort throughout: a missing table (pre-migration-414)
+# never blocks the underlying write — the log call always happens AFTER the real write succeeds and
+# is wrapped in try/except.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _who_for_log(authorization, org_id=ORG_ID):
+    """Best-effort {email, role, employee_id} for audit attribution — NEVER raises (a shift edit or
+    manual-hours entry must still succeed even if identity resolution fails), unlike
+    `_require_manager` which is a hard gate. Returns {} when the caller can't be resolved."""
+    try:
+        from app.modules.core.router import _uid_from_token
+        uid = _uid_from_token(authorization)
+        if not uid:
+            return {}
+        rows = (sb().table("app_users").select("org_id,email,role,employee_id")
+                .eq("auth_id", uid).limit(1).execute().data) or []
+        return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+def _log_payroll_change(org_id, *, field, entry_point, employee_id=None, employee_name=None,
+                         store_code=None, work_date=None, before=None, after=None,
+                         source_table=None, source_id=None, who=None, reason=None):
+    """Append ONE row to storeops.payroll_change_log. `who` = a dict from `_who_for_log` (or
+    `_require_manager`'s return, which carries the same email/role keys) — pass {} or None for a
+    system-triggered change (e.g. the pg_cron force-clockout sweep). Never raises: a missing
+    migration/table degrades to "no log row written", never a 500 on the real payroll write."""
+    try:
+        row = {
+            "org_id": org_id, "employee_id": employee_id, "employee_name": employee_name,
+            "store_code": store_code, "work_date": (str(work_date)[:10] if work_date else None),
+            "field": field, "before_value": (None if before is None else str(before)),
+            "after_value": (None if after is None else str(after)),
+            "entry_point": entry_point, "source_table": source_table, "source_id": (str(source_id) if source_id else None),
+            "changed_by_email": (who or {}).get("email") or "system",
+            "changed_by_role": (who or {}).get("role") or ("system" if not who else None),
+            "reason": reason,
+        }
+        sb().table("payroll_change_log").insert(row).execute()
+    except Exception as e:
+        print(f"WARN payroll_change_log insert failed (is migration 414 applied?): {e}")
+
+
+_SHIFT_LOGGED_FIELDS = ("scheduled_hours", "actual_hours", "start_time", "end_time",
+                        "store_code", "shift_date", "status", "employee_id")
+
+
+def _log_shift_edit(org_id, before, after, who):
+    """Diff a shift PATCH's hour-relevant fields and log ONE row per changed field. `before`/`after`
+    are the full shift rows (pre- and post-update)."""
+    if not before or not after:
+        return
+    for f in _SHIFT_LOGGED_FIELDS:
+        bv, av = before.get(f), after.get(f)
+        if str(bv or "") == str(av or ""):
+            continue
+        _log_payroll_change(
+            org_id, field=f, entry_point="shift_edit",
+            employee_id=after.get("employee_id") or before.get("employee_id"),
+            employee_name=after.get("employee_name") or before.get("employee_name"),
+            store_code=after.get("store_code") or before.get("store_code"),
+            work_date=after.get("shift_date") or before.get("shift_date"),
+            before=bv, after=av, source_table="shifts", source_id=after.get("id") or before.get("id"),
+            who=who)
+
+
+@router.get("/payroll-change-log")
+def payroll_change_log(start: str = "", end: str = "", employee_id: str = "", store_code: str = "",
+                        entry_point: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The Payroll Change Log page's data source — every manual hours/punch correction in range,
+    newest first. RULE FIVE core filters (period/store/rep) all supported; degrades to an empty list
+    pre-migration-414 (never a 500)."""
+    try:
+        q = sb().table("payroll_change_log").select("*").eq("org_id", org_id)
+        if start:
+            q = q.gte("work_date", start)
+        if end:
+            q = q.lte("work_date", end)
+        if employee_id:
+            q = q.eq("employee_id", employee_id)
+        if store_code:
+            q = q.eq("store_code", store_code)
+        if entry_point:
+            q = q.eq("entry_point", entry_point)
+        rows = q.order("created_at", desc=True).limit(5000).execute().data or []
+    except Exception:
+        return {"items": [], "available": False}
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
+    return {"items": rows, "available": True}
+
+
 @router.get("/payroll")
 def get_payroll(month: str = None, start: str = None, end: str = None,
                  authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -651,6 +770,11 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
                       else (emp_map.get(eid, {}).get("home_store") or ""))
         r["scheduled_pay"] = round(r["scheduled_hours"] * r["pay_rate"], 2)
         r["actual_pay"]    = round(r["actual_hours"] * r["pay_rate"], 2)
+    # ONE ROW PER REP (owner directive 2026-07-27) — collapse the numeric-id-vs-business-id duplicate
+    # rows a Schedule-created shift + a kiosk punch otherwise produce for the SAME employee. Pure
+    # regrouping of already-computed numbers, never a hours×rate recompute — see
+    # payroll_identity.py's module docstring for the full root-cause + presentation-only proof.
+    rows = _reconcile_employee_identity(rows, employees)
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [r for r in rows if in_keyset(ks, r.get("store"))]
@@ -763,6 +887,210 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     if ks is not None:
         rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
     return {"month": month, "stores": sorted(rows, key=lambda x: x["store_code"])}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# ACTUAL-HOURS DRILL-DOWN (owner directive 2026-07-27, Deliverable 2): "need a drill down for the
+# payroll hours showing as actual" — clicking a rep's Actual Hrs on the report opens this.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+@router.get("/payroll/actual-hours-detail")
+def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
+                                 authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Day-by-day composition behind a rep's Actual Hrs figure: each day's shift + punch pairs (in/
+    out, store, source), which were manually edited/overridden (cross-referenced against
+    storeops.payroll_change_log, migration 414), and day subtotals that reconcile EXACTLY to
+    `/payroll`'s own total for this employee/range — including faithfully reproducing (never
+    silently "fixing") the SAME per-source no-double-count rule `/payroll` itself applies, so this
+    is a genuine explanation of the displayed number, not a different, prettier one. See
+    payroll_identity.py's module docstring + docs/handoffs/people.md Deliverable 3 for the root
+    cause: a Schedule-created shift stores the employee's NUMERIC id while a kiosk punch stores their
+    BUSINESS id, so `/payroll`'s own no-double-count dedup (which compares those raw ids) silently
+    never fires for most employees — a day with both a shift AND a punch counts BOTH, additively.
+    This endpoint surfaces that explicitly per day (`double_counted: true` + a plain-language note)
+    instead of hiding it, which is exactly what lets a manager tell "real long shift" apart from
+    "counted twice" at a glance.
+
+    `employee_id` is the CANONICAL business id (what a merged /payroll row carries) — resolved to
+    every id VARIANT a shift might carry via the SAME `_emp_id_variants()` helper the shift-
+    extension/force-clockout gate already uses (org_id from the query param, RULE ONE)."""
+    if not (employee_id and start and end):
+        raise HTTPException(400, "employee_id, start and end are required")
+    ids, variant_name = _emp_id_variants(org_id, employee_id)
+    emp_rows = (sb().table("employees").select("employee_id,name,pay_rate,is_active")
+                .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data) or []
+    emp = emp_rows[0] if emp_rows else {}
+    name = emp.get("name") or variant_name or employee_id
+    pay_rate = float(emp.get("pay_rate") or 0)
+    is_inactive = emp.get("is_active") is False
+
+    shifts = (sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
+              .gte("shift_date", start).lte("shift_date", end)
+              .in_("employee_id", list(ids)).execute().data) or []
+    timelog = (sb().table("timelog").select("*").eq("org_id", org_id)
+               .gte("work_date", start).lte("work_date", end)
+               .in_("employee_id", list(ids)).execute().data) or []
+    manual = (sb().table("manual_hours").select("*").eq("org_id", org_id)
+              .gte("work_date", start).lte("work_date", end)
+              .in_("employee_id", list(ids)).execute().data) or []
+    try:
+        edits = (sb().table("payroll_change_log").select("source_table,source_id,work_date").eq("org_id", org_id)
+                 .gte("work_date", start).lte("work_date", end)
+                 .in_("employee_id", list(ids)).limit(2000).execute().data) or []
+    except Exception:
+        edits = []
+    edited_source_ids = {(e.get("source_table"), str(e.get("source_id"))) for e in edits if e.get("source_id")}
+
+    days: dict = {}
+
+    def day(d, store=None):
+        row = days.setdefault(d, {"work_date": d, "store_code": None, "shift": None, "punches": [],
+                                  "manual": [], "actual_hours": 0.0, "scheduled_hours": 0.0,
+                                  "edited": False, "double_counted": False, "note": None})
+        if store and not row["store_code"]:
+            row["store_code"] = store
+        return row
+
+    # Shift contribution — a day covered by a shift ALWAYS gets the shift's own eff value added to
+    # `/payroll`'s bucket for whichever raw id that shift row carries. `matches_business_id` is
+    # exactly the test that determines whether THIS shift lands in the SAME aggregation bucket as
+    # the employee's timelog rows (both `/payroll`'s legacy Python `shift_days` set and mig-407's SQL
+    # anti-join key off raw employee_id equality) — reproducing it here is what makes the dedup below
+    # match `/payroll` instead of silently being "more correct" than the number it's explaining.
+    shift_days_same_bucket = set()
+    for s in shifts:
+        d = str(s.get("shift_date") or "")[:10]
+        if not d:
+            continue
+        row = day(d, s.get("store_code"))
+        sched = float(s.get("scheduled_hours") or 0)
+        act = float(s.get("actual_hours") or 0)
+        matches_business_id = str(s.get("employee_id")) == str(employee_id)
+        if is_inactive:
+            eff = act if act > 0 else 0.0       # phantom (act==0) shift never counts for an inactive rep
+            counted = act > 0
+        else:
+            eff = act if act > 0 else sched      # active-path act==0->scheduled fallback
+            counted = True
+        row["scheduled_hours"] += sched if (not is_inactive or act > 0) else 0.0
+        row["actual_hours"] += eff
+        row["shift"] = {"id": s.get("id"), "start_time": s.get("start_time"), "end_time": s.get("end_time"),
+                        "scheduled_hours": sched, "actual_hours": act, "effective_hours": eff,
+                        "status": s.get("status"), "store_code": s.get("store_code"), "counted": counted,
+                        "edited": ("shifts", str(s.get("id"))) in edited_source_ids}
+        if row["shift"]["edited"]:
+            row["edited"] = True
+        if matches_business_id and counted:
+            shift_days_same_bucket.add(d)
+
+    for t in timelog:
+        d = str(t.get("work_date") or "")[:10]
+        if not d:
+            continue
+        row = day(d, t.get("store_code"))
+        closed = bool(t.get("clock_out") and t.get("hours") is not None)
+        hrs = float(t.get("hours") or 0) if closed else 0.0
+        counted = closed and d not in shift_days_same_bucket
+        edited = ("timelog", str(t.get("id"))) in edited_source_ids
+        row["punches"].append({"id": t.get("id"), "clock_in": t.get("clock_in"), "clock_out": t.get("clock_out"),
+                               "hours": t.get("hours"), "store_code": t.get("store_code"),
+                               "device": t.get("device"), "face_match_pct": t.get("face_match_pct"),
+                               "counted": counted, "edited": edited})
+        if edited:
+            row["edited"] = True
+        if counted:
+            row["actual_hours"] += hrs
+        if closed and row.get("shift") is not None and row["shift"].get("counted") and d not in shift_days_same_bucket:
+            # the shift exists but landed in a DIFFERENT raw-id bucket than this punch (the common,
+            # buggy case) -> both counted -> flag it plainly.
+            row["double_counted"] = True
+            row["note"] = (f"{row['shift']['effective_hours']:.1f}h from the schedule AND "
+                            f"{hrs:.1f}h from a separate clock punch both counted this day — see "
+                            f"Deliverable 3 (payroll investigation) in docs/handoffs/people.md.")
+
+    for m in manual:
+        d = str(m.get("work_date") or "")[:10]
+        if not d:
+            continue
+        row = day(d)
+        hrs = float(m.get("hours") or 0)
+        edited = ("manual_hours", str(m.get("id"))) in edited_source_ids
+        row["manual"].append({"id": m.get("id"), "hours": hrs, "reason": m.get("reason"), "edited": edited})
+        row["actual_hours"] += hrs
+        row["edited"] = True   # a manual_hours row is a manual adjustment by definition
+
+    out_days = [days[d] for d in sorted(days)]
+    for r in out_days:
+        r["actual_hours"] = round(r["actual_hours"], 2)
+        r["scheduled_hours"] = round(r["scheduled_hours"], 2)
+    total_actual = round(sum(r["actual_hours"] for r in out_days), 2)
+    total_scheduled = round(sum(r["scheduled_hours"] for r in out_days), 2)
+
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None and out_days:
+        if not any(in_keyset(ks, d.get("store_code")) for d in out_days):
+            raise HTTPException(403, "not in your scope")
+
+    return {"employee_id": employee_id, "name": name, "pay_rate": pay_rate, "start": start, "end": end,
+            "days": out_days, "total_actual_hours": total_actual, "total_scheduled_hours": total_scheduled}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# WEEKLY HOURS OVER-LIMIT HIGHLIGHTING (owner directive 2026-07-27, Deliverable 3): "need to track...
+# a lot of employees ... are showing over 80 hours but their limit has been set for 78 per store per
+# week" — the limit ALREADY EXISTS as storeops.hours_budget.weekly_hours (migration 087, the SAME
+# config `/hours-budgets` + the Schedule page's create-shift guard already read — RULE TWO: reuse,
+# don't invent a parallel setting), but until now it was read ONLY at schedule-CREATE time
+# (`_enforce_hours_budget`, above) to block a new SCHEDULED shift from exceeding it — nothing in the
+# payroll/report code path ever compared it to ACTUAL clocked hours. This endpoint is read-only,
+# DISPLAY-ONLY: it flags a (store, work-week) whose ACTUAL hours exceed the budget; it never blocks
+# scheduling or changes any pay figure.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+@router.get("/payroll/over-hours")
+def payroll_over_hours(start: str, end: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Per (store, work-week) actual hours vs. the store's configured weekly hours budget, for every
+    week that overlaps [start, end]. Also flags any INDIVIDUAL employee whose own actual hours that
+    week already exceed the store's whole-team budget (the sharpest anomaly signal — one person
+    alone consuming the entire store's weekly allowance). Read-only; org-scoped; degrades to `budget:
+    null` (never flagged) for a store with no budget configured."""
+    if not (start and end):
+        raise HTTPException(400, "start and end are required")
+    budgets = {b["store_code"]: float(b.get("weekly_hours") or 0)
+               for b in (sb().table("hours_budget").select("store_code,weekly_hours").eq("org_id", org_id).execute().data or [])
+               if b.get("weekly_hours") is not None}
+    weeks = []
+    cur = start
+    guard = 0
+    while cur <= end and guard < 60:
+        ws, we = _work_week_bounds(org_id, cur)
+        if not weeks or weeks[-1][0] != ws:
+            weeks.append((ws, we))
+        cur = (_date.fromisoformat(we) + timedelta(days=1)).isoformat()
+        guard += 1
+    ks = scope_keyset(authorization, org_id)
+    out = []
+    for ws, we in weeks:
+        rows = get_payroll(start=ws, end=we, authorization=authorization, org_id=org_id)
+        by_store: dict = {}
+        for r in rows:
+            st = r.get("store") or ""
+            if not st:
+                continue
+            d = by_store.setdefault(st, {"store_code": st, "actual_hours": 0.0, "employees": []})
+            ah = round(float(r.get("actual_hours") or 0), 2)
+            d["actual_hours"] += ah
+            d["employees"].append({"employee_id": r.get("employee_id"), "name": r.get("name"), "actual_hours": ah})
+        for st, d in by_store.items():
+            budget = budgets.get(st)
+            if ks is not None and not in_keyset(ks, st):
+                continue
+            d["actual_hours"] = round(d["actual_hours"], 2)
+            d["weekly_hours_limit"] = budget
+            d["over"] = budget is not None and d["actual_hours"] > budget + 1e-6
+            for e in d["employees"]:
+                e["over_alone"] = budget is not None and e["actual_hours"] > budget + 1e-6
+            d["employees"].sort(key=lambda e: -e["actual_hours"])
+            out.append({"week_start": ws, "week_end": we, **d})
+    return {"weeks": out}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1640,6 +1968,15 @@ def clock_in_override(body: dict, authorization: str = Header(default=""), org_i
             sb().table("shifts").insert({"org_id": org_id, "employee_id": employee_id, "employee_name": name,
                 "store_code": store_code, "shift_date": work_date, "status": "scheduled", "is_deleted": False,
                 "notes": f"added via clock-in override by {mgr.get('email')}"}).execute()
+            # Deliverable 4 (Payroll Change Log): this override ADDS an unscheduled shift on the
+            # employee's behalf — a manual change to their payroll, log it (best-effort).
+            try:
+                _log_payroll_change(org_id, field="shift_added", entry_point="timeclock_override",
+                                     employee_id=employee_id, employee_name=name, store_code=store_code,
+                                     work_date=work_date, before=None, after=store_code,
+                                     source_table="shifts", who=mgr)
+            except Exception:
+                pass
     except Exception:
         pass
     selfie_path = _upload_selfie(org_id, employee_id, body.get("selfie"))
@@ -1650,6 +1987,13 @@ def clock_in_override(body: dict, authorization: str = Header(default=""), org_i
            "notes": f"manager override: {mgr.get('email')}"}
     r = sb().table("timelog").insert(row).execute()
     saved = r.data[0] if r.data else row
+    try:
+        _log_payroll_change(org_id, field="clock_in", entry_point="timeclock_override",
+                             employee_id=employee_id, employee_name=name, store_code=store_code,
+                             work_date=work_date, before=None, after=_fmt_time(saved.get("clock_in"), org_id),
+                             source_table="timelog", source_id=saved.get("id"), who=mgr)
+    except Exception:
+        pass
     return {"success": True, "override_by": mgr.get("email"),
             "data": {"time": _fmt_time(saved.get("clock_in"), org_id), "entry_id": saved.get("id"), "store_code": store_code}}
 
@@ -2046,9 +2390,14 @@ def _scheduled_end_for_punch(org_id, punch):
     return _biz_dt_utc(wdate, end_hhmm, org_id)
 
 
-def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN):
+def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN, actor=None):
     """Close every open punch whose scheduled shift end (+ grace) has passed, stamping the clock-out
-    at the SCHEDULED END (paid hours = scheduled). Punches with no scheduled shift are left open."""
+    at the SCHEDULED END (paid hours = scheduled). Punches with no scheduled shift are left open.
+
+    `actor` = a manager dict (from `_require_manager`) when a DM clicked "run now", or None for the
+    unattended pg_cron sweep — either way every punch this closes stamps hours away from a raw
+    clock-in/out diff, so it's logged to the Payroll Change Log (Deliverable 4, 2026-07-27) with the
+    appropriate entry_point so the two triggers stay distinguishable on that page."""
     client = sb()
     q = client.table("timelog").select("*").is_("clock_out", "null")
     if org_id:
@@ -2077,6 +2426,15 @@ def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN):
             ).eq("id", p["id"]).execute()
             closed.append({"employee_id": p.get("employee_id"), "store_code": p.get("store_code"),
                            "clock_out": end_dt.isoformat(), "hours": hours})
+            try:
+                _log_payroll_change(
+                    oid, field="clock_out", entry_point=("force_clockout_manual" if actor else "force_clockout_cron"),
+                    employee_id=p.get("employee_id"), employee_name=p.get("employee_name"),
+                    store_code=p.get("store_code"), work_date=p.get("work_date"),
+                    before=None, after=f"{end_dt.isoformat()} ({hours}h, auto at scheduled end)",
+                    source_table="timelog", source_id=p.get("id"), who=actor)
+            except Exception:
+                pass
         except Exception:
             pass
     return {"closed": len(closed), "detail": closed}
@@ -2096,7 +2454,7 @@ def force_clockout_run_now(authorization: str = Header(default=""), org_id: str 
     """Manual trigger for the caller's tenant (admin/manager) — same logic as the cron, for testing
     or an ad-hoc sweep."""
     mgr = _require_manager(authorization, org_id)
-    return _do_force_clockout(org_id=(mgr.get("org_id") or org_id))
+    return _do_force_clockout(org_id=(mgr.get("org_id") or org_id), actor=mgr)
 
 
 # ── Shift-extension request → DM approval workflow ─────────────────────────────────────────────
@@ -2491,7 +2849,7 @@ def list_manual_hours(employee_id: str = "", start: str = "", end: str = "", aut
 
 
 @router.post("/manual-hours")
-def add_manual_hours(body: dict, org_id: str = ORG_ID):
+def add_manual_hours(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     employee_id = (body.get("employee_id") or "").strip()
     reason = (body.get("reason") or "").strip()
     if not employee_id or not reason:
@@ -2502,12 +2860,33 @@ def add_manual_hours(body: dict, org_id: str = ORG_ID):
            "work_date": body.get("work_date") or datetime.now(timezone.utc).date().isoformat(),
            "hours": float(body.get("hours")), "reason": reason, "added_by": body.get("added_by")}
     r = sb().table("manual_hours").insert(row).execute()
-    return r.data[0] if r.data else row
+    saved = r.data[0] if r.data else row
+    # Deliverable 4 (Payroll Change Log): a manual-hours adjustment IS a manual change to payroll
+    # hours by definition — log it (best-effort, never blocks the write above).
+    try:
+        who = _who_for_log(authorization, org_id)
+        _log_payroll_change(org_id, field="manual_hours", entry_point="manual_hours_add",
+                             employee_id=employee_id, work_date=row["work_date"],
+                             before=None, after=row["hours"], source_table="manual_hours",
+                             source_id=saved.get("id"), who=who, reason=reason)
+    except Exception:
+        pass
+    return saved
 
 
 @router.delete("/manual-hours/{mid}")
-def delete_manual_hours(mid: str, org_id: str = ORG_ID):
+def delete_manual_hours(mid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    before = (sb().table("manual_hours").select("*").eq("org_id", org_id).eq("id", mid)
+              .limit(1).execute().data or [{}])[0]
     sb().table("manual_hours").delete().eq("org_id", org_id).eq("id", mid).execute()
+    try:
+        who = _who_for_log(authorization, org_id)
+        _log_payroll_change(org_id, field="manual_hours", entry_point="manual_hours_delete",
+                             employee_id=before.get("employee_id"), work_date=before.get("work_date"),
+                             before=before.get("hours"), after=None, source_table="manual_hours",
+                             source_id=mid, who=who, reason=before.get("reason"))
+    except Exception:
+        pass
     return {"ok": True}
 
 

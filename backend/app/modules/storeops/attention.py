@@ -172,3 +172,56 @@ def register(register_provider):
                       f"stable connection so enrollment can complete, or check Timeclock for the raw "
                       f"punch history.",
                       len(missing), "/storeops/timeclock", "Review time clock")]
+
+    @register_provider("storeops_weekly_hours_over_limit",
+                       label="Stores over their configured weekly hours limit",
+                       group="other", cost="heavy")
+    def _p_weekly_hours_over_limit(client, org_id, ctx):
+        """PENDING REVIEW (heavy — scans timelog): owner directive 2026-07-27 (payroll rework,
+        Deliverable 3) — luxelink stores configured with a weekly hours budget
+        (storeops.hours_budget, migration 087, the SAME setting the Schedule page's create-shift
+        guard reads) were showing employees with ACTUAL clocked hours well past it. The budget is
+        enforced ONLY at schedule-CREATE time (storeops/router.py `_enforce_hours_budget`) — nothing
+        ever compared it to real clocked hours, so a store can silently run over budget an entire pay
+        cycle with no signal anywhere. This is a cheap 7-day proxy (raw closed timelog punches, not
+        the full /payroll merge-and-dedupe aggregation); the Payroll Report's own precise,
+        drill-down-backed version is `GET /storeops/payroll/over-hours` — this item is just the
+        login-popup nudge to go look there. No finding at all for a tenant with no budgets
+        configured (default NULL = no limit, never flagged)."""
+        try:
+            budgets = {b["store_code"]: float(b.get("weekly_hours") or 0)
+                       for b in (client.schema("storeops").table("hours_budget")
+                                 .select("store_code,weekly_hours").eq("org_id", org_id)
+                                 .execute().data or [])
+                       if b.get("weekly_hours") is not None}
+        except Exception:
+            return []
+        if not budgets:
+            return []
+        now = ctx.get("now") or datetime.now(timezone.utc)
+        since = (now - timedelta(days=7)).date().isoformat()
+        try:
+            tl = (client.schema("storeops").table("timelog")
+                  .select("store_code,hours,clock_out,work_date")
+                  .eq("org_id", org_id).gte("work_date", since).limit(20000).execute().data) or []
+        except Exception:
+            return []
+        totals = {}
+        for t in tl:
+            if not (t.get("clock_out") and t.get("hours") is not None):
+                continue
+            st = (t.get("store_code") or "").strip()
+            if not st:
+                continue
+            totals[st] = totals.get(st, 0.0) + float(t.get("hours") or 0)
+        over = sorted(((st, hrs, budgets[st]) for st, hrs in totals.items()
+                       if st in budgets and hrs > budgets[st]), key=lambda x: -x[1])
+        if not over:
+            return []
+        eg = ", ".join(f"{st} ({hrs:.0f}h vs {lim:.0f}h)" for st, hrs, lim in over[:3])
+        return [_item("other", "weekly_hours_over_limit", "warning",
+                      "Stores over their configured weekly hours limit",
+                      f"{len(over)} store(s) had clocked hours over their configured weekly budget "
+                      f"in the last 7 days (e.g. {eg}) — review the Payroll Report's over-limit "
+                      f"highlighting and the Payroll Change Log for manual corrections.",
+                      len(over), "/storeops/payroll", "Review Payroll Report")]

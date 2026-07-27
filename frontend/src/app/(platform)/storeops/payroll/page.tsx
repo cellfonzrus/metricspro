@@ -5,6 +5,7 @@ import ReportShell from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
 import PtoAccrualPanel from './PtoAccrualPanel'
 import PayrollChargebacksPanel from './PayrollChargebacksPanel'
+import ActualHoursDrilldown from './ActualHoursDrilldown'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { currentPeriodFromSettingsResponse, isFullCalendarMonth, monthRange, rangeLabel, stepPeriod, type PayPeriodSettings } from '../lib/pay-period'
@@ -34,6 +35,16 @@ export default function PayrollPage() {
   // 2026-07-22, owner-directed, MONEY-ADJACENT: POSTED payroll chargebacks per employee this period
   // (from PayrollChargebacksPanel — additive display only, never mutates /payroll's own numbers).
   const [chargebacks, setChargebacks] = useState<Record<string, number>>({})
+  // 2026-07-27 owner directive — Deliverable 2 (drill-down) + 3 (over-limit highlighting, DISPLAY
+  // ONLY — never touches pay) + 4 (manual-edit marker). `drill` opens the day-by-day modal for a
+  // clicked row; `overAlone`/`overWeeks` come from GET /payroll/over-hours (reuses the EXISTING
+  // storeops.hours_budget config, RULE TWO — no new setting); `editedEmpIds` comes from
+  // GET /payroll-change-log (migration 414) so an employee with a manual hours correction this
+  // period gets a ✎ marker + a link into the log.
+  const [drill, setDrill] = useState<{ employee_id: string; name?: string } | null>(null)
+  const [overAlone, setOverAlone] = useState<Set<string>>(new Set())
+  const [overStores, setOverStores] = useState<Set<string>>(new Set())
+  const [editedEmpIds, setEditedEmpIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     let cancelled = false
@@ -58,6 +69,20 @@ export default function PayrollPage() {
     setLoading(true)
     api(`/api/v1/storeops/payroll?start=${start}&end=${end}`)
       .then(setRows).catch(console.error).finally(() => setLoading(false))
+    // Deliverable 3: over-limit highlighting (display only). Degrades to empty sets on any error —
+    // a tenant with no storeops.hours_budget configured, or pre-any-migration, just shows no highlight.
+    api(`/api/v1/storeops/payroll/over-hours?start=${start}&end=${end}`).then((r: any) => {
+      const alone = new Set<string>(), stores = new Set<string>()
+      for (const wk of (r?.weeks || [])) {
+        if (wk.over) stores.add(wk.store_code)
+        for (const e of (wk.employees || [])) if (e.over_alone) alone.add(e.employee_id)
+      }
+      setOverAlone(alone); setOverStores(stores)
+    }).catch(() => { setOverAlone(new Set()); setOverStores(new Set()) })
+    // Deliverable 4: manual-edit marker. Degrades to an empty set pre-migration-414 (available:false).
+    api(`/api/v1/storeops/payroll-change-log?start=${start}&end=${end}`).then((r: any) => {
+      setEditedEmpIds(new Set<string>((r?.items || []).map((it: any) => it.employee_id).filter(Boolean)))
+    }).catch(() => setEditedEmpIds(new Set()))
   }
 
   useEffect(() => {
@@ -123,8 +148,27 @@ export default function PayrollPage() {
     { header: 'Pay Rate', field: 'pay_rate', get: r => `$${Number(r.pay_rate).toFixed(2)}/hr` },
     { header: 'Shifts', field: 'shifts', type: 'number', get: r => r.shifts },
     { header: 'Scheduled Hrs', field: 'scheduled_hours', type: 'number', get: r => r.scheduled_hours.toFixed(1) },
+    // ONE ROW PER REP (2026-07-27): /payroll now returns a single, merged row per employee — this
+    // column just displays it.
     { header: 'Actual Hrs', field: 'actual_hours', type: 'number', get: r => r.actual_hours.toFixed(1) },
-    { header: 'Variance', field: 'variance', type: 'number', get: r => (r.actual_hours - r.scheduled_hours).toFixed(1) },
+    // Net = actual − scheduled, SIGNED (owner directive 2026-07-27). ▲/▼ is the "highlighted" cue
+    // requested — text-based so it renders identically on screen AND in every export (RULE FOUR).
+    { header: 'Net (Actual − Sched)', field: 'variance', type: 'number', get: r => {
+        const v = r.actual_hours - r.scheduled_hours
+        const sign = v > 0.05 ? '▲ +' : v < -0.05 ? '▼ ' : '— '
+        return `${sign}${v.toFixed(1)}`
+      } },
+    // Flags (2026-07-27, Deliverables 3+4): ✎ = this employee has a logged manual hours/punch
+    // correction in the active range (storeops.payroll_change_log — see the Payroll Change Log page
+    // for the full before/after); ⚠ = their store-week is over its configured hours_budget limit
+    // (DISPLAY ONLY — never changes pay). Kept as its OWN column (not appended to Actual Hrs) so the
+    // hour columns stay clean numeric-looking values in the export.
+    { header: 'Flags', field: 'flags', get: r => {
+        const f: string[] = []
+        if (editedEmpIds.has(r.employee_id)) f.push('✎ edited')
+        if (overAlone.has(r.employee_id) || overStores.has(r.store)) f.push('⚠ over weekly limit')
+        return f.join(' · ')
+      } },
     { header: 'Scheduled Pay', field: 'scheduled_pay', money: true, get: r => r.scheduled_pay },
     { header: 'Actual Pay', field: 'actual_pay', money: true, get: r => r.actual_pay },
     // Additive-only (2026-07-22): a POSTED payroll chargeback shown as a visible deduction + the
@@ -160,11 +204,18 @@ export default function PayrollPage() {
 
   return (
     <div>
-      <div style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Payroll Report</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          {periodName} · {visibleRows.length} employees{visibleRows.length !== rows.length ? ` (of ${rows.length})` : ''}
-        </p>
+      <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Payroll Report</h1>
+          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+            {periodName} · {visibleRows.length} employees{visibleRows.length !== rows.length ? ` (of ${rows.length})` : ''}
+            {(overAlone.size > 0 || overStores.size > 0) && (
+              <span style={{ color: '#dc2626', fontWeight: 600 }}> · ⚠ {overStores.size || overAlone.size} store-week(s) over their configured weekly hours limit (highlighted below)</span>
+            )}
+          </p>
+        </div>
+        {/* rbac.ts (SHARED — no sidebar entry yet, see docs/handoffs/people.md NEEDS CORE) */}
+        <a href="/storeops/payroll-change-log" className="btn" style={{ fontSize: 13 }}>📜 Payroll Change Log</a>
       </div>
 
       <StandardFilterBar
@@ -230,7 +281,18 @@ export default function PayrollPage() {
           clock in from the /portal, to populate payroll for this period.
         </div>
       ) : (
-        <ReportShell title="Payroll Report" subtitle={periodName} filename={filename} columns={cols} rows={visibleRows} />
+        <ReportShell
+          title="Payroll Report" subtitle={`${periodName} · click a row for the day-by-day actual-hours breakdown`}
+          filename={filename} columns={cols} rows={visibleRows}
+          onRowClick={r => r.employee_id && setDrill({ employee_id: r.employee_id, name: r.name })}
+          rowStyle={r => overAlone.has(r.employee_id) || overStores.has(r.store)
+            ? { background: 'rgba(220,38,38,0.07)' } : undefined}
+        />
+      )}
+
+      {drill && (
+        <ActualHoursDrilldown employeeId={drill.employee_id} name={drill.name}
+          start={filt.period || ''} end={filt.periodTo || ''} onClose={() => setDrill(null)} />
       )}
     </div>
   )

@@ -1,0 +1,127 @@
+'use client'
+// Deliverable 2 (owner directive 2026-07-27): clicking a rep's Actual Hrs row on the Payroll Report
+// / Hours & Payroll pages opens this — the day-by-day composition behind that number: shift vs.
+// punch vs. manual-hours line items, which were manually edited (Payroll Change Log, migration 414),
+// and day subtotals that reconcile EXACTLY to the total shown on the report row (including a plain
+// `double_counted` flag when the underlying data genuinely counts a day twice — see Deliverable 3 —
+// rather than silently hiding it).
+import { useEffect, useState } from 'react'
+import { api, fmt, fmtN } from '@/lib/client'
+
+const BUSINESS_TZ = 'America/New_York'
+const fmtTime = (t: string | null) => {
+  if (!t) return '—'
+  try { return new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: BUSINESS_TZ }) }
+  catch { return t }
+}
+
+export default function ActualHoursDrilldown({ employeeId, name, start, end, onClose }: {
+  employeeId: string; name?: string; start: string; end: string; onClose: () => void
+}) {
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    api(`/api/v1/storeops/payroll/actual-hours-detail?employee_id=${encodeURIComponent(employeeId)}&start=${start}&end=${end}`)
+      .then((r: any) => { if (!cancelled) setData(r) })
+      .catch((e: any) => { if (!cancelled) setErr(e?.message || 'Failed to load') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [employeeId, start, end])
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} className="card" style={{ maxWidth: 820, width: '100%', maxHeight: '85vh', overflow: 'auto', padding: 18 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 18 }}>⏱️ Actual hours — {data?.name || name || employeeId}</h2>
+            <p style={{ margin: '2px 0 0', fontSize: 13, color: 'var(--text2)' }}>{start} → {end}</p>
+          </div>
+          <button className="btn" onClick={onClose}>✕ Close</button>
+        </div>
+
+        {loading ? (
+          <div style={{ padding: 40, textAlign: 'center' }}><div className="spinner" /></div>
+        ) : err ? (
+          <div style={{ color: '#dc2626', fontSize: 13 }}>{err}</div>
+        ) : !data || !data.days?.length ? (
+          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No shifts or punches in range.</div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+              <div className="card" style={{ padding: '8px 14px' }}>
+                <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>Scheduled</div>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtN(data.total_scheduled_hours)}h</div>
+              </div>
+              <div className="card" style={{ padding: '8px 14px' }}>
+                <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>Actual (reconciles to the report row)</div>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtN(data.total_actual_hours)}h</div>
+              </div>
+              {data.pay_rate ? (
+                <div className="card" style={{ padding: '8px 14px' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>Pay rate</div>
+                  <div style={{ fontSize: 18, fontWeight: 700 }}>{fmt(data.pay_rate)}/hr</div>
+                </div>
+              ) : null}
+            </div>
+
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: 'var(--surface2)' }}>
+                  {['Date', 'Store', 'Shift (scheduled → effective)', 'Punches (in → out)', 'Manual', 'Day total'].map(h => (
+                    <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.days.map((d: any) => (
+                  <tr key={d.work_date} style={{ background: d.double_counted ? 'rgba(234,88,12,0.08)' : undefined, borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: '6px 8px', fontWeight: 600 }}>{d.work_date}</td>
+                    <td style={{ padding: '6px 8px' }}>{d.store_code || '—'}</td>
+                    <td style={{ padding: '6px 8px' }}>
+                      {d.shift ? (
+                        <span>
+                          {fmtN(d.shift.scheduled_hours)}h → {fmtN(d.shift.effective_hours)}h
+                          {d.shift.counted === false ? <span style={{ color: 'var(--text3)' }}> (not counted — phantom)</span> : null}
+                          {d.shift.edited ? <span title="Manually edited — see Payroll Change Log" style={{ marginLeft: 4 }}>✎</span> : null}
+                        </span>
+                      ) : '—'}
+                    </td>
+                    <td style={{ padding: '6px 8px' }}>
+                      {d.punches.length === 0 ? '—' : d.punches.map((p: any) => (
+                        <div key={p.id} style={{ opacity: p.counted ? 1 : 0.5 }}>
+                          {fmtTime(p.clock_in)} → {p.clock_out ? fmtTime(p.clock_out) : 'open'}
+                          {p.hours != null ? ` (${fmtN(p.hours)}h)` : ''}
+                          {!p.counted ? <span style={{ color: 'var(--text3)' }}> not counted</span> : null}
+                          {p.edited ? <span title="Manually edited — see Payroll Change Log" style={{ marginLeft: 4 }}>✎</span> : null}
+                        </div>
+                      ))}
+                    </td>
+                    <td style={{ padding: '6px 8px' }}>
+                      {d.manual.length === 0 ? '—' : d.manual.map((m: any) => (
+                        <div key={m.id}>{m.hours > 0 ? '+' : ''}{fmtN(m.hours)}h — {m.reason} ✎</div>
+                      ))}
+                    </td>
+                    <td style={{ padding: '6px 8px', fontWeight: 700 }}>{fmtN(d.actual_hours)}h</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {data.days.some((d: any) => d.double_counted) && (
+              <div className="card" style={{ marginTop: 12, padding: '10px 14px', fontSize: 12, background: 'var(--surface2)' }}>
+                ⚠ Highlighted day(s) counted a scheduled shift AND a separate clock punch on the same
+                day — a known data artifact (schedule-created shift vs. kiosk punch identity mismatch),
+                not necessarily a real double shift. See {' '}
+                <a href="/storeops/payroll-change-log" style={{ color: 'var(--accent)' }}>the Payroll Change Log</a> for any manual corrections on this employee.
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
