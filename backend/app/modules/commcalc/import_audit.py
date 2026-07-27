@@ -54,6 +54,7 @@ DEFAULT_STALE_HOURS = 30.0        # connector_stale_hours — also caps the sche
 SCHED_GRACE_CAP_HOURS = 6.0       # a 30-minute poller has had 12 chances in 6h; longer is not "a blip"
 SCHED_GRACE_FLOOR_HOURS = 2.0
 DEFAULT_ZERO_PRICE_PCT = 0.95     # audit_zero_price_pct — share of $0 Ext Price rows that means "degraded"
+DEFAULT_BLOCK_ALERT_FAILURES = 4  # portal_block_alert_failures — consecutive dud attempts before we shout
 SALES_SAMPLE_ROWS = 5000
 MIN_SAMPLE_ROWS = 50
 
@@ -184,6 +185,28 @@ def _signed_in_never_delivered(s):
     return bool(not s.get("last_run_at") and (s.get("last_attempt_at") or st))
 
 
+def _blocked_detail(name, state, fails):
+    """Plain-language "the portal has blocked us" copy. PURE. Deliberately tells the reader NOT to
+    retry: the 2026-07-27 incident escalated because every error message the module produced pointed a
+    human at an action (re-login, re-map, pull again) that put MORE load on an already-refusing portal."""
+    until = state.get("blocked_until")
+    when = ""
+    if until:
+        try:
+            when = until.strftime("%H:%M UTC on %d %b")
+        except Exception:
+            when = str(until)[:16]
+    mins = int(round((state.get("remaining_s") or 0) / 60.0))
+    return (f"The {name} portal has temporarily blocked us — it answered that we are making too many "
+            f"requests. MetricsPro has stopped contacting it and will try again automatically at "
+            f"{when or 'the end of the cooldown'} (about {mins} minutes). "
+            f"DO NOT press Log in or Pull now in the meantime: another attempt during a block usually "
+            f"makes the portal extend it. Nothing is lost — the reports will import on the next "
+            f"automatic attempt."
+            + (f" The portal said: {state.get('reason')}" if state.get("reason") else "")
+            + (f" ({fails} failed attempts in a row.)" if fails and fails > 1 else ""))
+
+
 @register_provider("commcalc_connectors", label="Imports that cannot run (credentials / login / schedule)",
                    group="import", cost="cheap")
 def p_connectors(client, org_id, ctx):
@@ -196,6 +219,16 @@ def p_connectors(client, org_id, ctx):
     cfg = _org_config(client, org_id)
     stale_h = _num(cfg.get("connector_stale_hours"), DEFAULT_STALE_HOURS)
     sched_grace = max(SCHED_GRACE_FLOOR_HOURS, min(stale_h, SCHED_GRACE_CAP_HOURS))
+    # Portal cooldown (mig 244). Imported lazily and best-effort: pre-migration there are no columns,
+    # read_state() reports blocked=False and this whole branch is inert.
+    try:
+        from app.modules.commcalc import portal_backoff as _pb
+    except Exception:
+        _pb = None
+    try:
+        alert_fails = int(cfg.get("portal_block_alert_failures") or 0) or DEFAULT_BLOCK_ALERT_FAILURES
+    except Exception:
+        alert_fails = DEFAULT_BLOCK_ALERT_FAILURES
     out = []
 
     def sched_silent(row, slug, label, page, what):
@@ -254,7 +287,15 @@ def p_connectors(client, org_id, ctx):
     sources = _rows(client, "data_source", org_id, limit=200,
                     select="id,label,processor,enabled,username,account_id,password,auth_status,"
                            "auth_message,last_status,last_run_at,last_attempt_at,next_run_at,"
-                           "frequency,session_expires_at")
+                           "frequency,session_expires_at,blocked_until,block_reason,"
+                           "consecutive_failures")
+    if not sources:
+        # Pre-migration-244 the SELECT above fails on the unknown columns and _rows returns []. Fall
+        # back to the pre-244 column list so this provider keeps reporting everything it used to.
+        sources = _rows(client, "data_source", org_id, limit=200,
+                        select="id,label,processor,enabled,username,account_id,password,auth_status,"
+                               "auth_message,last_status,last_run_at,last_attempt_at,next_run_at,"
+                               "frequency,session_expires_at")
     procs = set()
     for s in sources:
         proc = (s.get("processor") or "").strip()
@@ -270,9 +311,38 @@ def p_connectors(client, org_id, ctx):
                               "this device. Until then nothing can be pulled from it."),
                              1, "/commcalc/email-imports", "Open Data Imports"))
             continue
+        # ── THE PORTAL BLOCKED US (owner report 2026-07-27) ─────────────────────────────────────
+        # Checked FIRST and terminal for this source: while a cooldown is active every other symptom
+        # on the row (auth_status='error', a zero-row last_status, a past-due next_run_at) is a
+        # CONSEQUENCE of the block, and stacking four alarms on one cause helps nobody. It is also the
+        # only item whose correct instruction is "do nothing".
+        state = _pb.read_state(s, now=now) if _pb is not None else {"blocked": False}
+        if state.get("blocked"):
+            out.append(_item("import", f"commcalc:src_blocked:{s.get('id')}", "error",
+                             f"{name}: the portal has temporarily blocked us",
+                             _blocked_detail(proc or name, state,
+                                             state.get("consecutive_failures")),
+                             1, "/commcalc/email-imports", "See the login"))
+            continue
+        fails = 0
+        try:
+            fails = int(s.get("consecutive_failures") or 0)
+        except Exception:
+            fails = 0
         st, au = (s.get("last_status") or ""), (s.get("auth_status") or "")
         bad = (au.lower() in ("needs_2fa", "error", "authenticating")
                or any(k in st.lower() for k in ("error", "fail", "needs login", "not wired", "403")))
+        if fails >= alert_fails and not bad:
+            # Repeated dud attempts with no error keyword anywhere — the shape that stayed invisible
+            # for weeks. Warning, not error: the login still works, it just keeps delivering nothing.
+            out.append(_item("import", f"commcalc:src_repeat_fail:{s.get('id')}", "warning",
+                             f"{name}: {fails} attempts in a row have imported nothing",
+                             (f"Every recent attempt reached the portal and came back empty. Open Data "
+                              f"Imports → this login → 🔧 What the pull saw to see which report failed "
+                              f"and what the portal's own Reports list offers; correct any mismatched "
+                              f"name on Report mapping. Counting stops the moment one pull imports rows."
+                              + (f" It last reported: {st[:180]}" if st else "")),
+                             fails, "/commcalc/email-imports", "See what the pull saw"))
         if bad:
             sev = "warning" if "not wired" in st.lower() else "error"
             out.append(_item("import", f"commcalc:src:{s.get('id')}", sev,
