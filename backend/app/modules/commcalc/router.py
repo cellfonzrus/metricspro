@@ -8178,6 +8178,74 @@ async def plan_field_options(months: int = 3, period: str = "", limit: int = 400
                 "fields": {}, "facets": None, "periods": []}
 
 
+_OVERRIDE_KEYS = {"match_field", "match_op", "match_value", "qualifies", "disabled"}
+
+
+def _validate_rule_overrides(overrides):
+    """Type-check a what-if override map at the API BOUNDARY and 400 on anything the engine's matcher
+    cannot evaluate (Gate-1 N4).
+
+    `commission_engine._rule_matches` calls `.strip().lower()` on the match value, so a JSON NUMBER or
+    object arrives as an int/dict and raises AttributeError → a 500 on hostile/sloppy input. The same
+    edge exists for a STORED rule written straight to the table, but that is a different (pre-existing)
+    surface and deliberately NOT changed here — coercing stored values would move matching behaviour for
+    live plans. This only governs what a caller may hand the read-only what-if.
+
+    Returns a normalised copy: `match_value` is always a string ('in' also accepts a list of strings and
+    joins it with commas, which is exactly what the engine parses)."""
+    out = {}
+    for rid, ov in overrides.items():
+        if not isinstance(rid, str) or not rid.strip():
+            raise HTTPException(400, "each override key must be a non-empty commission_rule id string")
+        if not isinstance(ov, dict):
+            raise HTTPException(400, f"override for rule {rid} must be an object")
+        unknown = set(ov) - _OVERRIDE_KEYS
+        if unknown:
+            raise HTTPException(400, f"override for rule {rid} has unsupported key(s): "
+                                     f"{', '.join(sorted(unknown))}. Allowed: "
+                                     f"{', '.join(sorted(_OVERRIDE_KEYS))}")
+        clean = {}
+        if "match_field" in ov:
+            mf = ov.get("match_field")
+            if not isinstance(mf, str) or mf.strip().lower() not in commission_engine.MATCH_FIELDS:
+                raise HTTPException(400, f"override for rule {rid}: match_field must be one of "
+                                         f"{', '.join(sorted(commission_engine.MATCH_FIELDS))}")
+            clean["match_field"] = mf.strip().lower()
+        op = None
+        if "match_op" in ov:
+            op = ov.get("match_op")
+            if not isinstance(op, str) or op.strip().lower() not in plan_options.MATCH_OPS:
+                raise HTTPException(400, f"override for rule {rid}: match_op must be one of "
+                                         f"{', '.join(plan_options.MATCH_OPS)}")
+            op = op.strip().lower()
+            clean["match_op"] = op
+        if "match_value" in ov:
+            mv = ov.get("match_value")
+            if isinstance(mv, list):
+                if op != "in":
+                    raise HTTPException(400, f"override for rule {rid}: a list match_value is only "
+                                             f"valid with match_op 'in'")
+                if not all(isinstance(x, str) for x in mv):
+                    raise HTTPException(400, f"override for rule {rid}: match_value list must contain "
+                                             f"only strings")
+                clean["match_value"] = ",".join(x.strip() for x in mv if x.strip())
+            elif mv is None:
+                clean["match_value"] = ""
+            elif isinstance(mv, str):
+                clean["match_value"] = mv
+            else:
+                raise HTTPException(400, f"override for rule {rid}: match_value must be a string "
+                                         f"(or a list of strings with match_op 'in'), got "
+                                         f"{type(mv).__name__}")
+        for flag in ("qualifies", "disabled"):
+            if flag in ov:
+                if not isinstance(ov.get(flag), bool):
+                    raise HTTPException(400, f"override for rule {rid}: {flag} must be true or false")
+                clean[flag] = ov.get(flag)
+        out[rid] = clean
+    return out
+
+
 @router.post("/commission-plans/rule-impact")
 async def commission_rule_impact(body: dict, org_id: str = ORG_ID):
     """READ-ONLY BLAST RADIUS for a proposed commission-rule matcher change. Writes NOTHING and triggers
@@ -8191,10 +8259,14 @@ async def commission_rule_impact(body: dict, org_id: str = ORG_ID):
       • which reps move, and by how much;
       • which sale lines STOP paying (with their tender_type, so a tender-keyed replacement can be sanity
         checked against the same lines);
-      • whether each freed line is picked up by a multi-month installment schedule — the plan engine has no
-        exclusivity and the installment engine has its OWN trigger, so "it will just fall through to the
-        multi-month incentive" is TRUE ONLY IF a schedule trigger matches. `freed_paying_nothing` counts
-        the ones that would pay $0 from every configured source."""
+      • whether each freed line would be ENROLLED by a multi-month installment schedule — the plan engine
+        has no exclusivity and the installment engine has its OWN trigger, so "it will just fall through
+        to the multi-month incentive" is TRUE ONLY IF a schedule trigger matches.
+
+    ENROLLED IS NOT PAID: a trigger match only STARTS a chain; months from the schedule's gate_from_month
+    on are still withheld until the paid-residual gate is met, and any month pays $0 if no rate-plan MRC
+    resolves. So `freed_enrolled_by_multimonth` is a CEILING on what might be re-paid, while
+    `freed_no_pay_source` is the hard floor — those lines have no configured source at all."""
     period = str((body or {}).get("period") or "").strip()
     if not period:
         raise HTTPException(400, "period required")
@@ -8202,6 +8274,7 @@ async def commission_rule_impact(body: dict, org_id: str = ORG_ID):
     overrides = (body or {}).get("overrides") or {}
     if not isinstance(overrides, dict):
         raise HTTPException(400, "overrides must be an object keyed by rule id")
+    overrides = _validate_rule_overrides(overrides)
     try:
         return plan_impact.rule_impact(sb(), org_id, period, overrides,
                                        only_rep=str((body or {}).get("rep") or "").strip() or None)

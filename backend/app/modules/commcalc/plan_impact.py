@@ -119,9 +119,15 @@ def rule_impact(client, org_id, period, overrides, only_rep=None):
     shape `commission_engine.preview(rule_overrides=…)` applies to its in-memory plan copy.
 
     Returns per-rep payout deltas, per-rule matched-line deltas, and — for every line the change STOPS
-    paying — whether a multi-month installment schedule under that rep's plan would pick it up. That last
+    paying — whether a multi-month installment schedule under that rep's plan would ENROL it. That last
     column is the honest answer to "these should qualify for the multi-month incentive instead": it is
     true only if a schedule trigger actually matches the line.
+
+    "ENROLLED" IS NOT "PAID" (Gate-1 N1). A trigger match only STARTS a chain. Every month from the
+    schedule's `gate_from_month` onward is withheld until the paid-residual gate is met, and any month
+    resolves to $0 if no rate-plan MRC can be found. So `freed_enrolled_by_multimonth` is a ceiling on
+    what MIGHT be re-paid, never a promise; `freed_no_pay_source` is the hard floor — those lines have no
+    configured source at all.
     """
     base = commission_engine.preview(client, org_id, period, detail=True, only_rep=only_rep)
     cand = commission_engine.preview(client, org_id, period, detail=True, only_rep=only_rep,
@@ -151,7 +157,7 @@ def rule_impact(client, org_id, period, overrides, only_rep=None):
         row_by_key.setdefault(_join_key(r), r)
 
     by_rep, freed_rows, gained_rows = [], [], []
-    n_freed_covered = n_freed_orphan = 0
+    n_freed_enrolled = n_freed_orphan = n_approx = 0
     for rep in sorted(set(b_rep) | set(c_rep)):
         b, c = b_rep.get(rep) or {}, c_rep.get(rep) or {}
         before = round(safe_float(b.get("total_payout")), 2)
@@ -190,36 +196,56 @@ def rule_impact(client, org_id, period, overrides, only_rep=None):
                 det = b_lines[lk][0]
                 src = row_by_key.get(lk)
                 hit = _multimonth_hit(src, scheds) if src is not None else None
-                for _ in range(lost[lk]):
+                # AMOUNT ATTRIBUTION (Gate-1 N3): a join key can cover several detail rows, and a
+                # pct_price_over_cost / pct_gp rule pays a DIFFERENT amount on each of them (product_id
+                # is not in the key, and the drill-down row does not carry it). Reusing the first row's
+                # amount for every lost occurrence counts right but can drift the displayed SUM. So take
+                # the amounts that actually STOPPED appearing — the before-list minus one occurrence per
+                # surviving after-amount — instead of repeating one value.
+                amts, approx = _lost_amounts(b_lines[lk], c_lines.get(lk, ()), lost[lk])
+                for i in range(lost[lk]):
                     if hit:
-                        n_freed_covered += 1
+                        n_freed_enrolled += 1
                     else:
                         n_freed_orphan += 1
-                    freed_rows.append({
+                    row = {
                         "rep": rep, "rule_id": rid, "rule_label": rb.get("label"),
                         "date": det.get("date"), "trans_id": det.get("trans_id"),
                         "imei": det.get("imei"), "mdn": det.get("mdn"),
                         "product": det.get("product"), "contract_type": det.get("contract_type"),
                         "tender_type": (src or {}).get("tender_type"),
                         "ext_price": det.get("ext_price"), "gp": det.get("gp"),
-                        "lost_amount": round(safe_float(det.get("amount")), 2),
+                        "lost_amount": amts[i],
+                        # ENROLLED, not paid: the trigger only STARTS a chain. Every month from
+                        # `gate_from_month` on is still held until the paid-residual gate is met, and
+                        # even month 1 pays $0 if no rate-plan MRC resolves. Never call this "covered".
                         "multimonth_schedule": ((hit.get("name") or hit.get("id")) if hit else None),
                         "multimonth_trigger": (f"{hit.get('trigger_match_field')} "
                                                f"{hit.get('trigger_match_op')} "
                                                f"{hit.get('trigger_match_value')}") if hit else None,
-                        "pays_nothing_after": not hit,
-                    })
+                        "multimonth_enrolled": bool(hit),
+                        "no_pay_source_after": not hit,
+                    }
+                    if approx:
+                        row["amount_approximate"] = True
+                        n_approx += 1
+                    freed_rows.append(row)
             for lk in sorted(gained):
                 det = c_lines[lk][0]
-                for _ in range(gained[lk]):
-                    gained_rows.append({
+                amts, approx = _lost_amounts(c_lines[lk], b_lines.get(lk, ()), gained[lk])
+                for i in range(gained[lk]):
+                    row = {
                         "rep": rep, "rule_id": rid, "rule_label": rc.get("label"),
                         "date": det.get("date"), "trans_id": det.get("trans_id"),
                         "product": det.get("product"), "contract_type": det.get("contract_type"),
                         "tender_type": (row_by_key.get(lk) or {}).get("tender_type"),
                         "ext_price": det.get("ext_price"), "gp": det.get("gp"),
-                        "gained_amount": round(safe_float(det.get("amount")), 2),
-                    })
+                        "gained_amount": amts[i],
+                    }
+                    if approx:
+                        row["amount_approximate"] = True
+                        n_approx += 1
+                    gained_rows.append(row)
         if before == after and not rule_rows:
             continue
         by_rep.append({"rep": rep, "store": c.get("store") or b.get("store"),
@@ -235,16 +261,21 @@ def rule_impact(client, org_id, period, overrides, only_rep=None):
         "totals": {"before": b_tot, "after": c_tot, "delta": round(c_tot - b_tot, 2),
                    "reps_affected": len(by_rep),
                    "lines_freed": len(freed_rows), "lines_gained": len(gained_rows),
-                   "freed_covered_by_multimonth": n_freed_covered,
-                   "freed_paying_nothing": n_freed_orphan,
+                   "freed_enrolled_by_multimonth": n_freed_enrolled,
+                   "freed_no_pay_source": n_freed_orphan,
+                   "amounts_approximate": n_approx,
                    "sale_lines": (base.get("totals") or {}).get("sale_lines")},
         "by_rep": by_rep,
         "freed_lines": freed_rows[:2000],
         "gained_lines": gained_rows[:2000],
         "note": ("Plan rules have NO exclusivity and the multi-month engine is a SEPARATE additive "
-                 "component: a line that stops matching a rule is only re-paid if an installment "
-                 "schedule's own trigger matches it. `freed_paying_nothing` is the count that would "
-                 "pay $0 from every configured source after this change."),
+                 "component: a line that stops matching a rule is only picked up if an installment "
+                 "schedule's own trigger matches it. `freed_no_pay_source` is the count that would have "
+                 "NO configured source at all after this change. "
+                 "`freed_enrolled_by_multimonth` means the trigger would ENROL the line in a chain — it "
+                 "is NOT a promise of dollars: months from the schedule's gate_from_month on are still "
+                 "held until the paid-residual gate is met, and any month pays $0 if no rate-plan MRC "
+                 "resolves. Enrolled is a floor on visibility, not on pay."),
     }
 
 
@@ -268,6 +299,30 @@ def _detail_index(lines):
     for l in (lines or []):
         out.setdefault(_join_key(l), []).append(l)
     return out
+
+
+def _lost_amounts(before, after, n):
+    """(the n per-line amounts that STOPPED appearing, exact?) for one join key. PURE.
+
+    Several sale lines can share a join key (the key carries no product_id — the drill-down row does not
+    expose one), and a `pct_gp` / `pct_price_over_cost` rule pays a different amount on each. So the lost
+    dollars are the BEFORE amounts minus one occurrence for each amount that survives into AFTER, taken
+    largest-first for determinism. That is exact whenever the surviving lines are a subset of the original
+    ones — the only shape a narrowing/widening matcher change can produce for a single key.
+
+    If the two lists disagree in a way that leaves too few candidates (a matcher that swaps one line for a
+    different one under the SAME key), the caller is told so via the second return value rather than being
+    handed a confident wrong number: the shortfall is filled from the before-list in order and the row is
+    stamped `amount_approximate`."""
+    b = sorted((round(safe_float(l.get("amount")), 2) for l in (before or ())), reverse=True)
+    rem = list(b)
+    for l in (after or ()):
+        a = round(safe_float(l.get("amount")), 2)
+        if a in rem:
+            rem.remove(a)
+    if len(rem) >= n:
+        return rem[:n], False
+    return (rem + b[:n - len(rem)])[:n] if b else [0.0] * n, True
 
 
 # ── 2. CALC WARNINGS: activations that no configured source pays ─────────────────────────────────

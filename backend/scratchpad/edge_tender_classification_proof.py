@@ -312,10 +312,36 @@ check("R4 the GP −$259.99 line still pays a full +$25 (flat_per_unit is sign-b
       any(l["gp"] == -259.99 and l["amount"] == 25.0 for l in edge_rb["lines"]))
 check("R5 the REAL TW-financing sale is NOT matched (false negative)",
       ("5001", "Port with IDV") not in matched)
-check("R6 nothing in the engine code mentions 'edge' — the rule is pure CONFIG",
-      "edge" not in open(os.path.join(os.path.dirname(__file__), "..",
-                                      "app/modules/commcalc/commission_engine.py")).read().lower()
-      .replace("knowledge", ""))
+# R6 must survive prose: a comment or docstring may legitimately use the WORD "edge" (this package's
+# own notes do). What must never exist is EXECUTABLE code keyed on it — a string literal, identifier or
+# attribute. So walk the AST and ignore docstrings/comments entirely.
+def _executable_mentions(path, word):
+    import ast
+    tree = ast.parse(open(path).read())
+    docs = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            body = getattr(node, "body", None) or []
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                docs.add(id(body[0].value))
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs:
+            if word in node.value.lower():
+                hits.append(("str", node.value))
+        elif isinstance(node, ast.Name) and word in node.id.lower():
+            hits.append(("name", node.id))
+        elif isinstance(node, ast.Attribute) and word in node.attr.lower():
+            hits.append(("attr", node.attr))
+    return hits
+
+
+_ENG = os.path.join(os.path.dirname(__file__), "..", "app/modules/commcalc/commission_engine.py")
+_IMP = os.path.join(os.path.dirname(__file__), "..", "app/modules/commcalc/plan_impact.py")
+_hits = _executable_mentions(_ENG, "edge") + _executable_mentions(_IMP, "edge")
+check("R6 no EXECUTABLE code in the engine or plan_impact mentions 'edge' — the rule is pure CONFIG "
+      "(prose is allowed; string literals, names and attributes are not)", _hits == [], _hits)
 
 # ═══ A — THE RE-KEY ══════════════════════════════════════════════════════════════════════════════
 print("\nA — RE-KEY to the financing TENDER (tender_type is already a first-class match field)")
@@ -350,8 +376,8 @@ check("B3 after  = $50 (the financing sale's TWO lines both carry the tender)",
       imp["totals"]["after"] == 50.0, imp["totals"])
 check("B4 delta = −$75 for this rep", imp["totals"]["delta"] == -75.0, imp["totals"])
 check("B5 five lines are freed", imp["totals"]["lines_freed"] == 5, imp["totals"])
-check("C1 with NO schedule, every freed line pays $0 from EVERY source",
-      imp["totals"]["freed_paying_nothing"] == 5 and imp["totals"]["freed_covered_by_multimonth"] == 0,
+check("C1 with NO schedule, every freed line has NO pay source at all",
+      imp["totals"]["freed_no_pay_source"] == 5 and imp["totals"]["freed_enrolled_by_multimonth"] == 0,
       imp["totals"])
 check("C2 each freed row carries its tender so the replacement can be sanity-checked",
       all("tender_type" in r for r in imp["freed_lines"]))
@@ -360,19 +386,22 @@ check("C3 the freed rows name the rule and the lost dollars",
 
 c = FakeClient(lux_store(with_schedule=True))     # a schedule that DOES trigger on these activations
 imp2 = PI.rule_impact(c, LUX, "July 2026", OVR)
-check("C4 with a matching schedule trigger, every freed line IS covered by multi-month",
-      imp2["totals"]["freed_covered_by_multimonth"] == 5 and imp2["totals"]["freed_paying_nothing"] == 0,
+check("C4 with a matching trigger, every freed line is ENROLLED (not yet paid — the gate still applies)",
+      imp2["totals"]["freed_enrolled_by_multimonth"] == 5 and imp2["totals"]["freed_no_pay_source"] == 0,
       imp2["totals"])
-check("C5 the covered rows name the schedule + its trigger",
-      all(r["multimonth_schedule"] and r["multimonth_trigger"] for r in imp2["freed_lines"]))
+check("C5 the enrolled rows name the schedule + its trigger and are flagged enrolled, not paid",
+      all(r["multimonth_schedule"] and r["multimonth_trigger"] and r["multimonth_enrolled"]
+          and r["no_pay_source_after"] is False for r in imp2["freed_lines"]))
+check("C5b the payload says in words that ENROLLED is not PAID",
+      "not a promise of dollars" in imp2["note"] or "NOT a promise of dollars" in imp2["note"])
 
 c = FakeClient(lux_store(with_schedule=True, schedule_trigger=("contract_type", "equals", "upgrade")))
 imp3 = PI.rule_impact(c, LUX, "July 2026", OVR)
 check("C6 a schedule whose trigger does NOT match leaves them orphaned (no silent re-routing)",
-      imp3["totals"]["freed_paying_nothing"] == 5, imp3["totals"])
+      imp3["totals"]["freed_no_pay_source"] == 5, imp3["totals"])
 check("C7 the engine never re-routes by itself — turning the rule OFF entirely is the same story",
       PI.rule_impact(FakeClient(lux_store()), LUX, "July 2026",
-                     {"r-edge": {"disabled": True}})["totals"]["freed_paying_nothing"] == 5)
+                     {"r-edge": {"disabled": True}})["totals"]["freed_no_pay_source"] == 5)
 
 # ═══ D — MULTI-MONTH: one chain per ACTIVATION, on the rate-plan MRC ══════════════════════════════
 print("\nD — MULTI-MONTH: one chain per activation, paid on the rate-plan MRC (mig 233)")
@@ -586,6 +615,98 @@ check("I2 the other tenant's totals are unchanged by luxelink's edit",
       PI.rule_impact(FakeClient(mixed), OTHER, "July 2026", OVR)["totals"]["delta"] == 0.0)
 check("I3 pay_warnings is org-scoped",
       all(g["rep"] != "SAM SMITH" for g in PI.pay_warnings(FakeClient(mixed), LUX, "July 2026")))
+
+# ═══ J — GATE-1 NITS (N2 aliasing, N4 hostile types, N3 amount attribution) ══════════════════════
+print("\nJ — Gate-1 nits: no shared config objects, hostile override types rejected, exact amounts")
+
+# N2 — the returned structure must share NO dict with the loaded plans, even for untouched rules.
+_stored = [{"id": "p", "name": "P",
+            "rules": [{"id": "r1", "match_field": "product_desc", "match_op": "contains",
+                       "match_value": "edge", "amount": 25},
+                      {"id": "r2", "match_field": "any", "amount": 5}],
+            "tiers": [{"id": "t1", "min_count": 30, "multiplier": 1.0}],
+            "assignments": [{"id": "a1", "scope": "default"}]}]
+_res = CE._apply_rule_overrides(_stored, {"r1": {"match_field": "tender_type"}})
+_ids_in = {id(x) for p in _stored for x in (p.get("rules") or []) + (p.get("tiers") or [])
+           + (p.get("assignments") or [])}
+_ids_out = {id(x) for p in _res for x in (p.get("rules") or []) + (p.get("tiers") or [])
+            + (p.get("assignments") or [])}
+check("J1 N2: NO rule/tier/assignment dict is shared with the input (not even untouched ones)",
+      _ids_in.isdisjoint(_ids_out), f"shared={len(_ids_in & _ids_out)}")
+_untouched = next(r for r in _res[0]["rules"] if r["id"] == "r2")
+_untouched["amount"] = 99999
+check("J2 N2: mutating the what-if copy cannot rewrite the stored rule",
+      _stored[0]["rules"][1]["amount"] == 5, _stored[0]["rules"][1]["amount"])
+_res[0]["tiers"][0]["multiplier"] = 0.1
+check("J3 N2: the same holds for tiers", _stored[0]["tiers"][0]["multiplier"] == 1.0)
+
+# N4 — hostile override types are rejected at the boundary with a 400, not a 500.
+from app.modules.commcalc.router import _validate_rule_overrides as VAL
+try:
+    from fastapi import HTTPException as HX
+except Exception:                                     # pragma: no cover
+    HX = Exception
+
+
+def _rejects(ov):
+    try:
+        VAL(ov)
+        return None
+    except HX as e:
+        return getattr(e, "status_code", None)
+
+
+check("J4 N4: a NUMBER match_value is rejected 400 (it used to 500 in _rule_matches)",
+      _rejects({"r1": {"match_value": 25}}) == 400)
+check("J5 N4: an OBJECT match_value is rejected 400", _rejects({"r1": {"match_value": {"a": 1}}}) == 400)
+check("J6 N4: a bad match_field is rejected 400", _rejects({"r1": {"match_field": "nope"}}) == 400)
+check("J7 N4: a bad match_op is rejected 400", _rejects({"r1": {"match_op": "regex"}}) == 400)
+check("J8 N4: a non-bool qualifies is rejected 400", _rejects({"r1": {"qualifies": "yes"}}) == 400)
+check("J9 N4: an unknown override key is rejected 400", _rejects({"r1": {"amount": 5}}) == 400)
+check("J10 N4: a list match_value needs op 'in'", _rejects({"r1": {"match_value": ["a", "b"]}}) == 400)
+check("J11 N4: a list of non-strings is rejected 400",
+      _rejects({"r1": {"match_op": "in", "match_value": ["a", 2]}}) == 400)
+check("J12 N4: a VALID string override passes through unchanged",
+      VAL({"r1": {"match_field": "tender_type", "match_op": "equals", "match_value": TW_FIN}})
+      == {"r1": {"match_field": "tender_type", "match_op": "equals", "match_value": TW_FIN}})
+check("J13 N4: a valid list + op 'in' is normalised to the comma list the engine parses",
+      VAL({"r1": {"match_op": "in", "match_value": ["TW Financing", " Acima Lease "]}})["r1"]
+      ["match_value"] == "TW Financing,Acima Lease")
+check("J14 N4: the proof's own override survives validation unchanged", VAL(OVR) == OVR)
+check("J15 N4: validation does NOT touch stored-rule matching (base behaviour untouched)",
+      CE._rule_matches({"tender_type": "x"},
+                       {"match_field": "tender_type", "match_op": "equals", "match_value": "x"}))
+
+# N3 — per-line amount attribution when one join key covers lines that pay DIFFERENT amounts.
+# Two lines identical on every column the drill-down row carries, but different product_id → a
+# pct_price_over_cost rule pays $20 on one and $5 on the other. The freed rows must report 20 and 5,
+# not 20 and 20.
+st3 = base_store()
+st3["commission_plan"] = [plan(LUX, "p3", "Pct plan")]
+st3["commission_rule"] = [rule(LUX, "p3", "r-pct", label="pct", match_field="product_desc",
+                               match_op="contains", match_value="edge",
+                               payout_kind="pct_price_over_cost", pct=1.0)]
+st3["commission_plan_assignment"] = [assign(LUX, "p3")]
+_a = sale(LUX, REP, "8001", ct="Port with IDV", prod=EDGE_DESC_A, ext=100.0, gp=10.0,
+          date="2026-07-02", mdn="2155558001", serial="801")
+_b = dict(_a)
+_a["product_id"], _b["product_id"] = 1.0, 2.0
+st3["raw_sales"] = [_a, _b]
+st3["raw_catalog"] = [{"org_id": LUX, "product_id": 1.0, "cost": 80.0},
+                      {"org_id": LUX, "product_id": 2.0, "cost": 95.0}]
+imp4 = PI.rule_impact(FakeClient(st3), LUX, "July 2026", {"r-pct": {"disabled": True}})
+_amts = sorted(r["lost_amount"] for r in imp4["freed_lines"])
+check("J16 N3: both lines are counted as freed", len(imp4["freed_lines"]) == 2, imp4["totals"])
+check("J17 N3: the two DIFFERENT per-line amounts are reported exactly ($5 and $20), not duplicated",
+      _amts == [5.0, 20.0], _amts)
+check("J18 N3: their sum equals the rule's whole before-payout",
+      round(sum(_amts), 2) == 25.0, _amts)
+check("J19 N3: nothing is stamped approximate in this exact case",
+      imp4["totals"]["amounts_approximate"] == 0 and
+      not any(r.get("amount_approximate") for r in imp4["freed_lines"]))
+check("J20 N3: the owner's flat-per-unit case is unchanged ($25 each)",
+      all(r["lost_amount"] == 25.0 for r in
+          PI.rule_impact(FakeClient(lux_store()), LUX, "July 2026", OVR)["freed_lines"]))
 
 print(f"\n{'='*78}\n{PASS} passed, {FAIL} failed\n{'='*78}")
 sys.exit(1 if FAIL else 0)

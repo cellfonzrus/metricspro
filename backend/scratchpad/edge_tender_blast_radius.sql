@@ -238,7 +238,9 @@ ORDER BY org_id, total_payout DESC;
 --         "overrides":{"<rule_id from block 1>":
 --            {"match_field":"tender_type","match_op":"equals","match_value":"<real tender>"}}}
 --        → per-rep before/after, every freed line WITH its tender, and per line whether a multi-month
---          schedule actually picks it up (`freed_paying_nothing` = the ones that would pay $0).
+--          schedule would ENROL it. NOTE: enrolled is NOT paid — a trigger only starts a chain, and
+--          each month is still held until the paid-residual gate is met. `freed_no_pay_source` is the
+--          hard floor: lines with no configured source at all.
 --
 --   GET  /api/v1/commcalc/commission-plans/pay-warnings?period=July%202026&org_id=<ORG>
 --        → the activations no rule and no schedule pays.
@@ -274,4 +276,7 @@ ORDER BY org_id, total_payout DESC;
 --    AND id     = '<schedule_id from block 1b>';
 --
 -- (c) VERIFY BEFORE RECALCULATING: re-run block 8's rule-impact with the same values and confirm
---     `freed_paying_nothing` is 0. Only then run Calculate for the period.
+--     `freed_no_pay_source` is 0. Remember that `freed_enrolled_by_multimonth` only means a chain would
+--     START — the paid-residual gate still decides whether those months actually pay, so expect the
+--     re-keyed month to land lower than the flat $25/unit it replaces until residuals arrive.
+--     Only then run Calculate for the period.
