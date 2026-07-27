@@ -15184,6 +15184,15 @@ def _strip_source_pw(row):
     if isinstance(diag, dict):
         row["last_pull_delivered"] = diag.get("delivered")
         row["last_pull_reason"] = diag.get("reason")
+    # Portal cooldown (mig 244) — computed, so the page never has to reason about clock skew. Absent
+    # columns ⇒ blocked False and the chip simply never renders.
+    try:
+        st = _pb().read_state(row)
+        row["blocked"] = st["blocked"]
+        row["blocked_remaining_s"] = st["remaining_s"]
+        row["block_headline"] = _pb().humanize(st) or None
+    except Exception:
+        row["blocked"] = False
     return row
 
 
@@ -15226,6 +15235,75 @@ def _source_stamp(client, sid, org_id, patch, *, success=False):
         _status_update(client, 'data_source', upd, lambda q: q.eq('id', sid).eq('org_id', org_id))
     except Exception as e:
         print(f"WARN data_source status stamp skipped: {e}")
+
+
+# ── PORTAL RATE-LIMIT COOLDOWN (mig 244) ─────────────────────────────────────────────────────────
+# Owner report 2026-07-27: "for vidapay it says you have too many requests, and have been temporarily
+# blocked, try again later". Nothing here recognised a throttle, so every trigger — the scheduled
+# /run-due poll, the automatic post-login pull, an operator clicking Live login again because the error
+# looked like a calibration problem — went straight back at a portal that was already refusing us.
+# These four helpers are the ONLY places the module talks to that state; the logic lives in
+# portal_backoff.py so b2bsoft and any future portal login inherit it unchanged.
+def _pb():
+    from app.modules.commcalc import portal_backoff as _m
+    return _m
+
+
+def _source_cooldown(client, sid, org_id, row=None):
+    """Cooldown state for ONE login. Pre-migration-244 (no blocked_until column) this always reports
+    blocked=False, so every gate below is inert and behaviour is unchanged."""
+    try:
+        return _pb().guard(client, sid, org_id, row=row)
+    except Exception:
+        return {"blocked": False}
+
+
+def _blocked_payload(state, extra=None):
+    """The 409-shaped body a gated endpoint returns while a portal cooldown is active. `requires_confirm`
+    is what makes the UI demand a SECOND, deliberate click — a human retry into an active block is the
+    thing that turns a 30-minute throttle into a day-long ban."""
+    pb = _pb()
+    until = state.get("blocked_until")
+    body = {"ok": False, "blocked": True, "requires_confirm": True,
+            "blocked_until": (until.isoformat() if until else None),
+            "remaining_s": state.get("remaining_s"),
+            "block_reason": state.get("reason"),
+            "consecutive_failures": state.get("consecutive_failures"),
+            "warning": pb.confirm_warning(state),
+            "error": pb.humanize(state)}
+    body.update(extra or {})
+    return body
+
+
+def _later_iso(a, b):
+    """The LATER of two timestamps, as an ISO string. Both sides here are UTC ISO today, so a bare
+    max() happens to work — but one datetime slipping in from either producer would raise TypeError
+    and 500 the whole /run-due sweep for every tenant. Parse, compare, fall back to `a`. PURE."""
+    if not b:
+        return a
+    if not a:
+        return b
+    try:
+        pa, pb = _pb()._ts(a), _pb()._ts(b)
+        if pa is None:
+            return b
+        if pb is None:
+            return a
+        return (b if pb > pa else a) if isinstance(a, str) else (a if pa > pb else b)
+    except Exception:
+        return a
+
+
+def _source_reschedule(client, sid, org_id, next_run_at):
+    """Move ONLY next_run_at. Used when /run-due SKIPS a blocked login: the skip must not be recorded as
+    an attempt (no last_attempt_at, no failure count, no status rewrite — a block is not a delivery and
+    not a try), but next_run_at still has to advance or import_audit.sched_silent would report the
+    scheduler as dead. Best-effort, org-scoped."""
+    try:
+        (client.schema("commcalc").table("data_source").update({"next_run_at": next_run_at})
+         .eq("id", sid).eq("org_id", org_id).execute())
+    except Exception as e:
+        print(f"WARN data_source reschedule skipped: {e}")
 
 
 def _pull_diag_payload(res):
@@ -15295,6 +15373,13 @@ def _record_pull_result(client, sid, org_id, res, *, source="portal-pull"):
                                           or (res or {}).get("error") or "ok")[:600],
                        "auth_status": "authenticated"},
                       success=delivered)
+    except Exception:
+        pass
+    # Cooldown bookkeeping (mig 244): delivered ⇒ clear the block and reset the failure counter (this is
+    # the RECOVERY path); a detected rate-limit ⇒ escalating cooldown honouring Retry-After; any other
+    # non-delivering outcome ⇒ count the failure without starting a cooldown. Never raises.
+    try:
+        _pb().record_outcome(client, sid, org_id, res, delivered=delivered)
     except Exception:
         pass
     try:
@@ -15429,9 +15514,13 @@ def test_proxy(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/data-sources/{sid}/run")
-async def run_data_source(sid: str, org_id: str = ORG_ID):
+async def run_data_source(sid: str, org_id: str = ORG_ID, confirm: bool = False):
     """Pull now from this login. Dispatches to the processor's scraper when one is wired; until
-    then the row records an honest status and the data path is the email sweep / manual upload."""
+    then the row records an honest status and the data path is the email sweep / manual upload.
+
+    COOLDOWN (mig 244): if the portal has temporarily blocked us, this returns blocked/requires_confirm
+    instead of pulling. A human MAY override with ?confirm=true — the UI asks first, because another
+    attempt during an active block typically extends it."""
     require_org(org_id)
     client = sb()
     rows = (client.schema("commcalc").table("data_source").select("*")
@@ -15439,6 +15528,9 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
     if not rows:
         raise HTTPException(404, "unknown data source")
     src_row = rows[0]
+    cool = _source_cooldown(client, sid, org_id, row=src_row)
+    if cool.get("blocked") and not confirm:
+        return _blocked_payload(cool, {"needs_2fa": False})
     proc = (src_row.get("processor") or "").strip().lower()
     handler = _SOURCE_SCRAPERS.get(proc)
     if not handler:
@@ -15479,7 +15571,13 @@ async def run_data_source(sid: str, org_id: str = ORG_ID):
                        "auth_status": "needs_2fa", "auth_message": str(e)[:300]}, success=False)
         return {"ok": False, "needs_2fa": True, "error": str(e)}
     except Exception as e:
+        # A rate-limit raised out of the driver is NOT a generic 500: stamp the escalating cooldown and
+        # tell the operator to wait, rather than surfacing an error that invites an immediate retry.
+        plan = _pb().record_outcome(client, sid, org_id, None, delivered=False, exc=e, row=src_row)
         _source_stamp(client, sid, org_id, {"last_status": f"error: {str(e)[:180]}"}, success=False)
+        if plan:
+            return _blocked_payload(_source_cooldown(client, sid, org_id),
+                                    {"error": str(e)[:400], "just_blocked": True})
         raise HTTPException(500, f"pull failed: {e}")
 
 
@@ -15966,7 +16064,7 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
         rows = q.execute().data or []
     except Exception as e:
         return {"ok": False, "error": f"data_source not ready (mig 083/084/207?): {e}", "ran": []}
-    ran = []
+    ran, skipped = [], []
     for s in rows:
         proc = (s.get("processor") or "").strip().lower()
         handler = _SOURCE_SCRAPERS.get(proc)
@@ -15974,19 +16072,39 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
         nxt = _vip_next_run(s.get("frequency") or "daily", None, None, s.get("hour"), "America/New_York")
         if not handler:
             continue
+        # ── COOLDOWN (mig 244) ───────────────────────────────────────────────────────────────────
+        # A portal that has temporarily blocked us must not be contacted AT ALL by the scheduler. This
+        # poll can run every 30 minutes, and a headless login/pull into an active block is the single
+        # most reliable way to extend it. The skip is NOT an attempt: last_attempt_at, last_status and
+        # consecutive_failures are all left alone (a block is neither a delivery nor a try). Only
+        # next_run_at moves — past the cooldown — so the scheduler stays honest AND stays away.
+        cool = _source_cooldown(client, s["id"], oid, row=s)
+        if cool.get("blocked"):
+            until = cool.get("blocked_until")
+            resume = _later_iso(nxt, until.isoformat()) if until else nxt
+            _source_reschedule(client, s["id"], oid, resume)
+            skipped.append({"id": s["id"], "skipped": "portal_blocked", "until": resume,
+                            "remaining_s": cool.get("remaining_s")})
+            continue
         try:
             res = await handler(oid, s)
             _source_stamp(client, s["id"], oid,
                           {"last_status": str((res or {}).get("status") or "ok"),
                            "auth_status": "authenticated", "next_run_at": nxt,
                            "last_run_at": now.isoformat()}, success=_pull_delivered(res))
+            _pb().record_outcome(client, s["id"], oid, res, delivered=_pull_delivered(res), row=s)
             ran.append({"id": s["id"], "ok": True, "status": (res or {}).get("status")})
         except Exception as e:
+            plan = _pb().record_outcome(client, s["id"], oid, None, delivered=False, exc=e, row=s)
+            # A block pushes next_run_at past the cooldown so the very next poll doesn't walk into it.
+            nxt2 = _later_iso(nxt, plan["blocked_until"]) if plan else nxt
             _source_stamp(client, s["id"], oid,
-                          {"last_status": f"error: {str(e)[:160]}", "next_run_at": nxt,
+                          {"last_status": f"error: {str(e)[:160]}", "next_run_at": nxt2,
                            "last_run_at": now.isoformat()}, success=False)
-            ran.append({"id": s["id"], "ok": False, "error": str(e)[:200]})
-    return {"ok": True, "ran": ran, "count": len(ran)}
+            ran.append({"id": s["id"], "ok": False, "error": str(e)[:200],
+                        "blocked_until": (plan or {}).get("blocked_until")})
+    return {"ok": True, "ran": ran, "count": len(ran),
+            "skipped_blocked": skipped, "skipped_count": len(skipped)}
 
 
 def _do_portal_login(sid: str, org_id: str):
@@ -16003,6 +16121,23 @@ def _do_portal_login(sid: str, org_id: str):
     s = rows[0]
     _login_fn = vp.begin_login_b2bsoft if (s.get("processor") or "").lower() in ("b2bsoft", "b2b") else vp.begin_login
     now = datetime.now(timezone.utc)
+
+    def _note_login_failure(exc, message):
+        """Stamp the failure AND, when the portal is throttling us, the escalating cooldown. A headless
+        login is the most expensive request this module makes; capping it to ONE per cooldown window is
+        what the cooldown is for."""
+        plan = None
+        try:
+            plan = _pb().record_outcome(client, sid, org_id, None, delivered=False, exc=exc, row=s)
+        except Exception:
+            plan = None
+        if plan:
+            message = (_pb().humanize(_source_cooldown(client, sid, org_id)) + " " + message)[:400]
+        _source_stamp(client, sid, org_id,
+                      {"auth_status": "error", "auth_message": message[:400],
+                       "last_run_at": now.isoformat()}, success=False)
+        _store_login_shot(client, sid, org_id, getattr(exc, "screenshot_b64", None))
+
     try:
         res = _login_fn(s.get("portal_url"), s.get("account_id"), s.get("username"),
                         s.get("password"), s.get("proxy_url"))
@@ -16010,16 +16145,10 @@ def _do_portal_login(sid: str, org_id: str):
         msg = str(e)
         if "egress" in msg.lower() or "waf" in msg.lower():
             msg += vp.egress_hint(s.get("proxy_url"))   # which IP did we actually go out from?
-        _source_stamp(client, sid, org_id,
-                      {"auth_status": "error", "auth_message": msg[:400],
-                       "last_run_at": now.isoformat()}, success=False)
-        _store_login_shot(client, sid, org_id, getattr(e, "screenshot_b64", None))
+        _note_login_failure(e, msg)
         return
     except Exception as e:
-        _source_stamp(client, sid, org_id,
-                      {"auth_status": "error", "auth_message": ("Login crashed: " + str(e))[:400],
-                       "last_run_at": now.isoformat()}, success=False)
-        _store_login_shot(client, sid, org_id, getattr(e, "screenshot_b64", None))
+        _note_login_failure(e, "Login crashed: " + str(e))
         return
     if res.get("status") == "authenticated":
         # Signed in ≠ imported. This is an ATTEMPT stamp: the feed only goes green when a Pull
@@ -16057,11 +16186,16 @@ def _do_portal_login(sid: str, org_id: str):
 
 
 @router.post("/data-sources/{sid}/login/start")
-async def data_source_login_start(sid: str, background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+async def data_source_login_start(sid: str, background_tasks: BackgroundTasks, org_id: str = ORG_ID,
+                                  confirm: bool = False):
     """Phase 1 of the interactive portal login. The Playwright login (slow through a residential proxy)
     runs in the BACKGROUND, so this returns instantly with auth_status='authenticating'; the UI then polls
     the row until it flips to needs_2fa / authenticated / error. This fixes the 'Failed to fetch' a
-    synchronous, gateway-timeout-exceeding login used to throw."""
+    synchronous, gateway-timeout-exceeding login used to throw.
+
+    COOLDOWN (mig 244): a fresh headless login is the most expensive request this module makes, so it is
+    the one thing that must NEVER happen automatically during a portal block. Human override with
+    ?confirm=true, exactly like the live login."""
     require_org(org_id)
     client = sb()
     rows = (client.schema("commcalc").table("data_source").select("*")
@@ -16071,6 +16205,9 @@ async def data_source_login_start(sid: str, background_tasks: BackgroundTasks, o
     s = rows[0]
     if not (s.get("password") and (s.get("username") or s.get("account_id"))):
         raise HTTPException(400, "Enter the Account ID, User ID and Password on this login first, then Log in.")
+    cool = _source_cooldown(client, sid, org_id, row=s)
+    if cool.get("blocked") and not confirm:
+        return _blocked_payload(cool, {"status": "blocked"})
     now = datetime.now(timezone.utc)
     _source_stamp(client, sid, org_id,
                   {"auth_status": "authenticating", "auth_message": "Logging in…",
@@ -16169,8 +16306,23 @@ def _live_persist(client, sid, org_id):
         # live_login stamps last_run_at when it stops (error/cancelled) and when it authenticates —
         # neither imported anything, so both are recorded as ATTEMPTS. A live-session PULL that really
         # lands rows is stamped success=True by run_data_source, not here.
+        upd = dict(updates or {})
+        # COOLDOWN (mig 244): the live session's own failure message carries the portal's block wording
+        # (vidapay_sweep._raise_if_rate_limited embeds the matched marker), so a live login killed by a
+        # throttle stamps the same escalating cooldown the scheduled path does — otherwise the operator
+        # would simply click 🔴 Live login again and deepen the block.
         try:
-            _source_stamp(client, sid, org_id, dict(updates or {}), success=False)
+            if str(upd.get("auth_status") or "").lower() == "error":
+                hit = _pb().detect_block(str(upd.get("auth_message") or ""),
+                                         markers=_pb().load_markers(client, org_id, None))
+                if hit:
+                    _pb().apply_block(client, sid, org_id, hit)
+                    upd["auth_message"] = (_pb().humanize(_source_cooldown(client, sid, org_id))
+                                           + " " + str(upd.get("auth_message") or ""))[:400]
+        except Exception:
+            pass
+        try:
+            _source_stamp(client, sid, org_id, upd, success=False)
         except Exception:
             pass
     return _p
@@ -16280,15 +16432,25 @@ def data_source_pull_diagnostic(sid: str, org_id: str = ORG_ID):
 
 
 @router.post("/data-sources/{sid}/live-login/start")
-def live_login_start(sid: str, org_id: str = ORG_ID):
+def live_login_start(sid: str, org_id: str = ORG_ID, confirm: bool = False):
     """Spawn (or replace) the persistent live-login session for this source. Non-blocking — a worker
-    thread drives the login to the 2FA code screen; the UI polls /live-login/state (~1s) to watch it."""
+    thread drives the login to the 2FA code screen; the UI polls /live-login/state (~1s) to watch it.
+
+    COOLDOWN (mig 244). A HUMAN is allowed to log in during a portal cooldown — sometimes that is the
+    only way to see what the portal is actually showing — but NOT by accident: without ?confirm=true
+    this returns blocked/requires_confirm and the page must warn ("the portal rate-limited us until
+    ~HH:MM — another attempt may extend the block") and take a second, deliberate click. The AUTOMATIC
+    post-login pull stays suppressed for the whole cooldown regardless of the confirm (auto_pull_gate),
+    so a human look at the login screen never turns into 5 reports x N months of traffic."""
     require_org(org_id)
     from app.modules.commcalc import live_login
     client = sb()
     s = _live_source_row(client, sid, org_id)
     if not (s.get("password") and (s.get("username") or s.get("account_id"))):
         raise HTTPException(400, "Enter the Account ID, User ID and Password on this login first, then start the live login.")
+    cool = _source_cooldown(client, sid, org_id, row=s)
+    if cool.get("blocked") and not confirm:
+        return _blocked_payload(cool, {"phase": "blocked"})
     now = datetime.now(timezone.utc)
     _source_stamp(client, sid, org_id,
                   {"auth_status": "authenticating", "auth_message": "Live login in progress…",
@@ -16297,13 +16459,33 @@ def live_login_start(sid: str, org_id: str = ORG_ID):
     sess = live_login.start_session(sid, org_id, s, _live_persist(client, sid, org_id),
                                     _live_persist_shot(client, sid, org_id),
                                     _live_pull(client, org_id, s),
-                                    _live_pull_persist(client, org_id, sid))
+                                    _live_pull_persist(client, org_id, sid),
+                                    auto_pull_gate=lambda: _source_cooldown(client, sid, org_id))
     auto = (s.get("auto_pull_after_login") is not False)
-    return {"ok": True, "phase": sess.snapshot_phase(), "auto_pull": auto,
+    blocked_now = bool(cool.get("blocked"))
+    return {"ok": True, "phase": sess.snapshot_phase(), "auto_pull": auto and not blocked_now,
+            "blocked": blocked_now, "block_reason": cool.get("reason"),
             "message": ("Live session starting — watch it below. The 2FA code is sent ONCE to this same "
                         "live browser; enter it here when the code box appears."
-                        + (" As soon as you're signed in, this login's reports are pulled automatically."
-                           if auto else ""))}
+                        + (" ⛔ The portal has temporarily blocked us, so the automatic report pull is "
+                           "suppressed until the cooldown ends." if blocked_now else
+                           (" As soon as you're signed in, this login's reports are pulled automatically."
+                            if auto else "")))}
+
+
+@router.post("/data-sources/{sid}/clear-block")
+def clear_source_block(sid: str, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """OPERATOR ESCAPE HATCH: lift this login's portal cooldown by hand (import-admin only).
+
+    Use it when you KNOW the block is over (e.g. the portal support desk lifted it) — not as a way to
+    keep retrying. Clearing a cooldown and immediately retrying into a live block is what escalated the
+    2026-07-27 incident in the first place, so the counter is reset too and the next real block starts
+    the ladder again from its first step."""
+    require_org(org_id)
+    _require_import_admin(authorization, org_id)
+    _pb().clear_block(sb(), sid, org_id)
+    return {"ok": True, "message": ("Cooldown lifted. If the portal is still blocking us the very next "
+                                    "attempt will re-arm it, longer than before — wait it out instead.")}
 
 
 @router.get("/data-sources/{sid}/live-login/state")
