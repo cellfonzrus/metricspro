@@ -21,7 +21,14 @@ import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 // uses the same shared pick-don't-type primitive (<EntityPicker multi>) directly rather than the full
 // bar, styled to match it. Both date inputs are native <input type="date"> — the raw 'YYYY-MM-DD'
 // value is passed straight through as a query param string, never round-tripped through `new Date()`,
-// so the classic UTC off-by-one class (see lib/client.ts parseLocalDate) never has a chance to bite.
+// so the JS off-by-one class (see lib/client.ts parseLocalDate) never has a chance to bite. Gate-1 N1:
+// both dates are UTC CALENDAR dates (same convention as every other date already shown here) — a
+// separate storage-timezone class (a late-evening America/New_York upload stamps as the next UTC day)
+// is a deliberate, filed follow-up (see docs/handoffs/people.md 2026-07-27 fold), not fixed here,
+// because display/filter/export all agreeing today is more honest than a filter-only fix that would
+// disagree with what the row still visibly shows. "Request sent" is labeled "Packet sent" in the UI
+// (Gate-1 N7) — it's the date the WHOLE onboarding packet was requested, not a per-document event;
+// see the backend docstring for why no such per-document event exists to filter on instead.
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const inp: React.CSSProperties = { padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -183,7 +190,7 @@ export default function CompliancePage() {
     { header: 'Category', field: 'category', get: (d: Doc) => d.category || '' },
     { header: 'Status', field: 'status', get: (d: Doc) => d.status || '' },
     { header: 'On File', field: 'on_file', get: (d: Doc) => d.has_document ? `File: ${d.document_name || ''}` : (d.has_signature_page ? 'Signed online' : 'No file') },
-    { header: 'Request Sent', field: 'request_sent_at', role: 'date', type: 'date', get: (d: Doc) => d.request_sent_at ? String(d.request_sent_at).slice(0, 10) : '(no date recorded)' },
+    { header: 'Packet Sent', field: 'request_sent_at', role: 'date', type: 'date', get: (d: Doc) => d.request_sent_at ? String(d.request_sent_at).slice(0, 10) : '(no date recorded)' },
     { header: 'Submitted', field: 'signed_at', role: 'date', type: 'date', get: (d: Doc) => (d.signed_at || '').slice(0, 10) },
     { header: 'Signed Name', field: 'signed_name', get: (d: Doc) => d.signed_name || '' },
     { header: 'Verified By', field: 'verified_by', get: (d: Doc) => d.verified_by || '' },
@@ -206,10 +213,10 @@ export default function CompliancePage() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
         <EntityPicker multi options={employeeOptions} value={employeeIds} onChange={setEmployeeIds}
           placeholder="Filter by employee(s)…" ariaLabel="Filter by employee" width={280} />
-        <label style={lbl}>Request sent
-          <input type="date" style={inp} value={sentFrom} onChange={e => setSentFrom(e.target.value)} aria-label="Request sent from" />
+        <label style={lbl}>Packet sent
+          <input type="date" style={inp} value={sentFrom} onChange={e => setSentFrom(e.target.value)} aria-label="Packet sent from" />
           <span style={{ color: 'var(--text3)' }}>–</span>
-          <input type="date" style={inp} value={sentTo} onChange={e => setSentTo(e.target.value)} aria-label="Request sent to" />
+          <input type="date" style={inp} value={sentTo} onChange={e => setSentTo(e.target.value)} aria-label="Packet sent to" />
         </label>
         <label style={lbl}>Submitted
           <input type="date" style={inp} value={submittedFrom} onChange={e => setSubmittedFrom(e.target.value)} aria-label="Submitted from" />
@@ -222,7 +229,7 @@ export default function CompliancePage() {
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>
           {loading ? 'Loading…' : `${docs.length} document(s) · ${grouped.length} employee(s)`}
-          {notSubmittedCount > 0 && ` · ${notSubmittedCount} not yet submitted (${notSubmittedEmpCount} employee(s))`}
+          {notSubmittedCount > 0 && ` · ${notSubmittedCount} outstanding item(s) (${notSubmittedEmpCount} employee(s))`}
         </span>
         <div style={{ flex: 1 }} />
         {/* Table-view metadata export (Excel/PDF/Print/Send) — separate from the ZIP below, which
@@ -230,7 +237,7 @@ export default function CompliancePage() {
         <ReportExportBar title="Compliance Document Repository"
           subtitle={anyFilter ? [
             employeeIds.length ? `${employeeIds.length} employee(s)` : '',
-            (sentFrom || sentTo) ? `sent ${sentFrom || '…'} → ${sentTo || '…'}` : '',
+            (sentFrom || sentTo) ? `packet sent ${sentFrom || '…'} → ${sentTo || '…'}` : '',
             (submittedFrom || submittedTo) ? `submitted ${submittedFrom || '…'} → ${submittedTo || '…'}` : '',
           ].filter(Boolean).join(' · ') : undefined}
           columns={cols} rows={docs} />
@@ -244,7 +251,7 @@ export default function CompliancePage() {
           employees/rows just silently vanish. */}
       {(submittedFrom || submittedTo) && notSubmittedCount > 0 && (
         <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 10 }}>
-          ⚠️ {notSubmittedCount} document(s) across {notSubmittedEmpCount} active employee(s) are still not yet submitted —
+          ⚠️ {notSubmittedCount} outstanding item(s) across {notSubmittedEmpCount} active employee(s) haven&apos;t been submitted yet —
           they can&apos;t appear under a submitted-date filter (there&apos;s nothing to date yet), so they&apos;re not counted above.
         </div>
       )}
@@ -255,7 +262,8 @@ export default function CompliancePage() {
       )}
       {(sentFrom || sentTo) && sentUnknownCount > 0 && (
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 10 }}>
-          ℹ️ {sentUnknownCount} employee/document row(s) have no recorded request-sent date (no invite or "Send documents" click on file) and are excluded by this filter.
+          ℹ️ {sentUnknownCount} record(s) — some already-submitted documents, some employees&apos; outstanding items — have no
+          recorded packet-sent date (no invite or &quot;Send documents&quot; click on file) and are excluded by this filter.
         </div>
       )}
 
@@ -266,7 +274,7 @@ export default function CompliancePage() {
             <span style={{ fontSize: 11, color: 'var(--text3)' }}>{eid}{g.email ? ` · ${g.email}` : ''}</span>
             <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {g.docs.length} document(s)</span>
             <span style={{ fontSize: 11, color: 'var(--text3)' }}>
-              · Requested {g.sentAt ? String(g.sentAt).slice(0, 10) : '(no date recorded)'}
+              · Packet sent {g.sentAt ? String(g.sentAt).slice(0, 10) : '(no date recorded)'}
             </span>
             <div style={{ flex: 1 }} />
             <button style={{ ...btn, fontSize: 11, padding: '4px 8px' }} onClick={() => downloadZip(`/api/v1/hr/onboarding/compliance-documents/export?employee_id=${encodeURIComponent(eid)}`, `onboarding-documents-${eid}.zip`, setMsg)}>

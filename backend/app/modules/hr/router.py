@@ -2710,6 +2710,78 @@ async def onboarding_forward_accounting(employee_id: str, body: dict, org_id: st
 # carrying its own file AND (when the item was signed online) its signature page. Bulk "pick up at once"
 # export = one ZIP, organized /EmployeeName/DocumentLabel.ext (+ _signature.png alongside it).
 # ════════════════════════════════════════════════════════════════════════════════════════════════
+def _date_range_ok(ts, dfrom, dto):
+    """Inclusive-both-ends membership of a timestamp's plain YYYY-MM-DD date prefix in [dfrom, dto]
+    (either/both may be blank = no bound on that side). UTC calendar dates — see the "honest framing"
+    note on onboarding_compliance_documents's own docstring (Gate-1 N1, 2026-07-27) for what this
+    does and does not sidestep. Returns True/False, or None when `ts` itself is missing/falsy — the
+    caller distinguishes "confirmed out of range" from "no date on file to judge" (never conflated,
+    never fabricated)."""
+    if not (dfrom or dto):
+        return True
+    if not ts:
+        return None
+    d = str(ts)[:10]
+    if dfrom and d < dfrom:
+        return False
+    if dto and d > dto:
+        return False
+    return True
+
+
+def _compliance_not_submitted_rows(all_tasks, emps, sent_of, has_artifact, resolved_by_status,
+                                    cat_of, id_filter, q, sent_from, sent_to):
+    """Pure (no DB): which ACTIVE employees have an OUTSTANDING active document-producing task
+    (requires_upload or is_fillable — Gate-1 N2: is_active too, a retired task is never outstanding),
+    scoped by the SAME employee_ids/q/sent-range filters `onboarding_compliance_documents` applies to
+    the submitted-documents list, so the count is honest under the currently active filter set.
+
+    A task is resolved (excluded here) when EITHER `(employee_id, task_id)` is in `has_artifact` (a
+    file/signature is on file — it's already in the `documents` list, not owed again here) OR in
+    `resolved_by_status` (status is 'verified'/'na' even with nothing on file — Gate-1 N3: mirrors
+    onboarding_for_employee's own `ok_done = status in ("verified", "na")` and onboarding_doc_status's
+    bucketing, so an in-person-verified or HR-waived item is correctly done, not outstanding forever).
+    Work-state gating (`applies_state`) matches onboarding_for_employee's own rule.
+
+    Returns (rows, sent_unknown_increment) — the second value is how many ACTIVE, filter-matching
+    employees had no request-sent date on file at all (adds to the caller's sent_unknown_count, which
+    already separately tallies unknown-dated rows in the submitted-documents list — one combined,
+    honestly-labeled tally across both listings, not two silently different numbers)."""
+    doc_tasks = [t for t in all_tasks if t.get("is_active", True) and (t.get("requires_upload") or t.get("is_fillable"))]
+    not_submitted = []
+    sent_unknown = 0
+    for eid, emp in emps.items():
+        if not emp.get("is_active", True):
+            continue   # departed hires aren't an actionable "outstanding request" — matches the
+                       # Documents board's own active-roster scope (onboarding_doc_status)
+        if id_filter and eid not in id_filter:
+            continue
+        name = emp.get("name") or eid
+        if q and q.lower() not in f"{name} {eid} {emp.get('email') or ''}".lower():
+            continue
+        prof = sent_of.get(eid) or {}
+        ws = prof.get("work_state")
+        req_sent = prof.get("request_sent_at")
+        ok_sent = _date_range_ok(req_sent, sent_from, sent_to)
+        if ok_sent is None:
+            sent_unknown += 1
+            continue
+        if ok_sent is False:
+            continue
+        for t in doc_tasks:
+            ast = t.get("applies_state")
+            if ast and ast != ws:
+                continue   # not applicable to this employee's work state (same rule as onboarding_for_employee)
+            key = (eid, t["id"])
+            if key in has_artifact or key in resolved_by_status:
+                continue   # already submitted, or resolved by status (verified in person / waived)
+            not_submitted.append({"employee_id": eid, "employee_name": name, "employee_email": emp.get("email"),
+                                  "task_id": t["id"], "document_label": t.get("label") or "Document",
+                                  "category": cat_of.get(t["id"]), "request_sent_at": req_sent})
+    not_submitted.sort(key=lambda d: (d["employee_name"] or "", d["document_label"] or ""))
+    return not_submitted, sent_unknown
+
+
 @router.get("/onboarding/compliance-documents")
 def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_id: str = "",
                                     employee_ids: str = "",
@@ -2727,9 +2799,17 @@ def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_
     OWNER DIRECTIVE 2026-07-27 — two independent, composable (AND), inclusive-both-ends date filters:
       sent_from/sent_to        — when the document REQUEST was sent to the employee.
       submitted_from/submitted_to — when the document/signature was actually submitted.
-    Both compare on the plain YYYY-MM-DD date prefix of the underlying timestamp (never a JS `Date`
-    parse on either side — sidesteps the UTC off-by-one class entirely; the frontend passes the raw
-    <input type=date> value straight through).
+    Both compare on the plain YYYY-MM-DD date prefix of the underlying timestamp — i.e. UTC calendar
+    dates, the SAME convention every other date on this page already uses (`.slice(0, 10)` on the raw
+    ISO string, no timezone math). Honest framing (Gate-1 N1): this sidesteps the JS
+    `new Date("YYYY-MM-DD")` off-by-one class (the frontend passes the raw <input type=date> value
+    straight through, never round-tripped through `Date`) but NOT a separate storage-timezone class —
+    a submission at 9pm America/New_York is stored, filtered, AND DISPLAYED as the next UTC day.
+    Left as-is deliberately: display/filter/export all agree today, so a filter-only timezone fix
+    would CREATE a mismatch against what the row still visibly shows. Filed as a class-wide follow-up
+    in docs/handoffs/people.md (2026-07-27 fold) — derive business-local (America/New_York) dates for
+    display+filter+export TOGETHER across this page and its sibling
+    hr/onboarding/[employeeId]/page.tsx, not a one-off fix here.
 
     Timestamp provenance (audited against mig 077/082 — see docs/handoffs/people.md 2026-07-27 entry):
       - SUBMITTED is stamped per FILE (`documents[].uploaded_at`, mig 402) or per TASK
@@ -2749,8 +2829,11 @@ def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_
     "Not yet submitted" honesty (owner-mandated): a submitted-range filter naturally has nothing to
     show for a task nobody has touched yet — those rows never existed in `documents` to begin with, so
     they would otherwise just silently vanish. `not_submitted` / `not_submitted_count` /
-    `not_submitted_employee_count` report exactly which ACTIVE employees still owe which
-    document-producing task (requires_upload or is_fillable), scoped by the SAME q/employee_ids/
+    `not_submitted_employee_count` report exactly which ACTIVE employees still have an OUTSTANDING
+    document-producing task (requires_upload or is_fillable — deliberately INCLUDES hr-owned tasks like
+    Handbook, since the repository already shows them once HR uploads them; "outstanding", not "the
+    employee owes it" — an hr-owned task is outstanding work on the HIRE's record, not a personal debt),
+    scoped by the SAME q/employee_ids/
     sent-range filters, so the count is honest under the currently active filter set, not just the
     unfiltered whole roster."""
     so = _so()
@@ -2795,18 +2878,33 @@ def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_
     id_filter = {s.strip() for s in employee_ids.split(",") if s.strip()}
     if employee_id:
         id_filter.add(employee_id)
-    has_artifact = set()   # (employee_id, task_id) pairs with SOMETHING on file — feeds not_submitted below
+    # (employee_id, task_id) -> resolved (NOT outstanding), tracked two ways per Gate-1 N3:
+    #   has_artifact       — an actual file/signature is on file (drives the `out` rows below too).
+    #   resolved_by_status — status is 'verified' or 'na' EVEN WITH NO FILE (HR verified an original
+    #                        document in person, or explicitly waived it) — mirrors
+    #                        onboarding_for_employee's own `ok_done = status in ("verified", "na")` and
+    #                        onboarding_doc_status's bucketing (status='na' buckets as 'verified'), so
+    #                        "not yet submitted" doesn't chase a task that IS done by this codebase's
+    #                        own definition of done, forever, just because nothing was ever uploaded.
+    # Computed BEFORE the artifact-less `continue` below so a status-only resolution isn't lost.
+    has_artifact = set()
+    resolved_by_status = set()
     out = []
     for r in rows:
+        eid = r.get("employee_id")
+        tid = r.get("task_id")
+        if r.get("status") in ("verified", "na"):
+            resolved_by_status.add((eid, tid))
         file_list = list(r.get("documents") or [])
         if not file_list and r.get("document_path"):
             # pre-402 row (migration hasn't backfilled it, or the tenant hasn't run 402 at all) — never a
             # regression, this repository still shows it exactly as a single-file row.
             file_list = [{"id": None, "path": r.get("document_path"), "name": r.get("document_name")}]
-        if not file_list and not r.get("signature_path"):
-            continue   # nothing actually on file for this task yet
-        eid = r.get("employee_id")
-        has_artifact.add((eid, r.get("task_id")))
+        has_file = bool(file_list) or bool(r.get("signature_path"))
+        if has_file:
+            has_artifact.add((eid, tid))
+        if not has_file:
+            continue   # nothing actually on file for this task yet -> no row to emit into `out`
         if id_filter and eid not in id_filter:
             continue
         emp = emps.get(eid) or {}
@@ -2816,8 +2914,8 @@ def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_
         req_sent = (sent_of.get(eid) or {}).get("request_sent_at")
         n = len(file_list)
         base = {"employee_id": eid, "employee_name": name, "employee_email": emp.get("email"),
-                "task_id": r.get("task_id"), "document_label": label_of.get(r.get("task_id")) or "Document",
-                "category": cat_of.get(r.get("task_id")), "status": r.get("status"),
+                "task_id": tid, "document_label": label_of.get(tid) or "Document",
+                "category": cat_of.get(tid), "status": r.get("status"),
                 "verified_by": r.get("verified_by"), "request_sent_at": req_sent}
         for i, f in enumerate(file_list):
             out.append({**base, "file_id": f.get("id"), "file_index": (i + 1) if n > 1 else None, "file_count": n,
@@ -2834,29 +2932,17 @@ def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_
     # ── OWNER DIRECTIVE 2026-07-27 — the two date-range filters (composable AND, inclusive both ends,
     # plain YYYY-MM-DD prefix comparison — see docstring). Applied AFTER building `out` so the counts
     # below (unknown/excluded) are computed against the same rows the user is looking at. ─────────────
-    def _in_range(ts, dfrom, dto):
-        if not (dfrom or dto):
-            return True
-        if not ts:
-            return None   # caller distinguishes "unknown" from "out of range"
-        d = str(ts)[:10]
-        if dfrom and d < dfrom:
-            return False
-        if dto and d > dto:
-            return False
-        return True
-
     submitted_unknown_count = 0
     sent_unknown_count = 0
     filtered = []
     for d in out:
-        ok_sub = _in_range(d.get("signed_at"), submitted_from, submitted_to)
+        ok_sub = _date_range_ok(d.get("signed_at"), submitted_from, submitted_to)
         if ok_sub is None:
             submitted_unknown_count += 1
             continue
         if ok_sub is False:
             continue
-        ok_sent = _in_range(d.get("request_sent_at"), sent_from, sent_to)
+        ok_sent = _date_range_ok(d.get("request_sent_at"), sent_from, sent_to)
         if ok_sent is None:
             sent_unknown_count += 1
             continue
@@ -2866,44 +2952,27 @@ def onboarding_compliance_documents(org_id: str = ORG_ID, q: str = "", employee_
     out = filtered
     out.sort(key=lambda d: (d["employee_name"] or "", d["document_label"] or "", d.get("file_index") or 0))
 
-    # ── "Not yet submitted" honesty (owner-mandated) — active-roster employees who still owe a
-    # document-producing task (requires_upload or is_fillable — the only tasks that could ever have
-    # produced a row above), scoped by the SAME employee/q/sent-range filters so the count matches what
-    # the user is currently looking at. A submitted-range filter is NEVER applied here (these rows have
-    # no submission by definition — that is exactly what is being surfaced, not a range they missed). ──
-    doc_tasks = [t for t in all_tasks if t.get("requires_upload") or t.get("is_fillable")]
-    not_submitted = []
-    for eid, emp in emps.items():
-        if not emp.get("is_active", True):
-            continue   # departed hires aren't an actionable "outstanding request" — matches the
-                       # Documents board's own active-roster scope (onboarding_doc_status)
-        if id_filter and eid not in id_filter:
-            continue
-        name = emp.get("name") or eid
-        if q and q.lower() not in f"{name} {eid} {emp.get('email') or ''}".lower():
-            continue
-        prof = sent_of.get(eid) or {}
-        ws = prof.get("work_state")
-        req_sent = prof.get("request_sent_at")
-        ok_sent = _in_range(req_sent, sent_from, sent_to)
-        if ok_sent is None:
-            sent_unknown_count += 1
-            continue
-        if ok_sent is False:
-            continue
-        for t in doc_tasks:
-            ast = t.get("applies_state")
-            if ast and ast != ws:
-                continue   # not applicable to this employee's work state (same rule as onboarding_for_employee)
-            if (eid, t["id"]) in has_artifact:
-                continue   # already submitted — it's in `out` above, not here
-            not_submitted.append({"employee_id": eid, "employee_name": name, "employee_email": emp.get("email"),
-                                  "task_id": t["id"], "document_label": t.get("label") or "Document",
-                                  "category": cat_of.get(t["id"]), "request_sent_at": req_sent})
-    not_submitted.sort(key=lambda d: (d["employee_name"] or "", d["document_label"] or ""))
+    # ── "Not yet submitted" honesty (owner-mandated) — active-roster employees with an outstanding
+    # ACTIVE document-producing task (requires_upload or is_fillable — the only tasks that could ever
+    # have produced a row above; N2 fold: is_active too, a retired task is never "outstanding"),
+    # scoped by the SAME employee/q/sent-range filters so the count matches what the user is currently
+    # looking at. A submitted-range filter is NEVER applied here (these rows have no submission by
+    # definition — that is exactly what is being surfaced, not a range they missed). Completion (N3
+    # fold) is has-an-artifact OR status in (verified, na) — mirrors onboarding_for_employee's own
+    # `ok_done` and onboarding_doc_status's bucketing, so a task HR verified in person (no upload) or
+    # explicitly marked N/A is correctly NOT outstanding forever. ──────────────────────────────────
+    not_submitted, ns_sent_unknown = _compliance_not_submitted_rows(
+        all_tasks, emps, sent_of, has_artifact, resolved_by_status, cat_of,
+        id_filter, q, sent_from, sent_to)
+    sent_unknown_count += ns_sent_unknown
 
+    # Gate-1 N6: the detailed per-row list was computed for counting only and never rendered anywhere
+    # (the page shows counts/banners, not a table) — return the counts, not 500 rows of dead weight.
+    # `_compliance_not_submitted_rows` stays directly callable (module-level, pure) for anything that
+    # DOES need the detail later (a future drill-down UI, or a harness proof) without re-adding it to
+    # this payload.
     resp = {"ready": tmpl.get("ready", True), "documents": out, "count": len(out),
-            "not_submitted": not_submitted[:500], "not_submitted_count": len(not_submitted),
+            "not_submitted_count": len(not_submitted),
             "not_submitted_employee_count": len({d["employee_id"] for d in not_submitted}),
             "submitted_unknown_count": submitted_unknown_count, "sent_unknown_count": sent_unknown_count}
     if not fetch_ok:
