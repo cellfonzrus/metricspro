@@ -13,7 +13,7 @@ import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, date as _date
-from fastapi import APIRouter, Header, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Header, HTTPException, UploadFile, File, Form, Response
 from fastapi.responses import StreamingResponse
 from app.core.database import get_supabase
 from app.core.config import settings
@@ -179,7 +179,8 @@ async def hr_update_employee(emp_id: str, body: dict, authorization: str = Heade
 
 
 @router.get("/compensation")
-def compensation(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def compensation(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID,
+                  response: Response = None):
     """Per-employee total compensation for a period: wages (hours × pay_rate, from shifts) +
     commission (rep_commissions total_payout) − chargeback deductions. Span-scoped to the caller."""
     so, cc = _so(), _cc()
@@ -234,6 +235,7 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
         pass
 
     rows, tot_w, tot_c, tot_cb = [], 0.0, 0.0, 0.0
+    salary_override_failed = False   # Gate-1 N5 — never a silent revert-to-hourly (see below)
     for e in emps:
         rate = float(e.get("pay_rate") or 0)
         hrs = round(hours_by_eid.get(e.get("employee_id"), 0.0), 1)
@@ -251,8 +253,11 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
                         basis, amount, pp_settings, period_lo, period_hi,
                         payroll_salary.parse_date(e.get("hire_date")),
                         payroll_salary.parse_date(e.get("termination_date")))
-                except Exception:
+                except Exception as ex:
                     derived = None
+                    salary_override_failed = True
+                    print(f"WARN salary pay-basis override failed for org {org_id} employee "
+                          f"{e.get('employee_id')} on GET /compensation: {ex}")
                 if derived is not None:
                     wages = derived["amount"]
                     salary_meta = {"pay_basis": basis, "salary_period_pay": derived["period_pay"],
@@ -278,10 +283,20 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
 
     rows.sort(key=lambda r: -r["total_comp"])
     total_comp = round(tot_w + tot_c - tot_cb, 2)
-    return {"period": period, "rows": rows,
-            "totals": {"base_salary": round(tot_w, 2), "commission": round(tot_c, 2),
-                       "chargebacks": round(tot_cb, 2), "total_comp": total_comp,
-                       "annualized": round(total_comp * 12, 2), "employees": len(rows)}}
+    out = {"period": period, "rows": rows,
+           "totals": {"base_salary": round(tot_w, 2), "commission": round(tot_c, 2),
+                      "chargebacks": round(tot_cb, 2), "total_comp": total_comp,
+                      "annualized": round(total_comp * 12, 2), "employees": len(rows)}}
+    # Gate-1 N5 — this endpoint returns a dict (unlike GET /payroll's bare array), so the warning is
+    # additive both as a response key AND a header for consistency with the other two salary surfaces.
+    if salary_override_failed:
+        out["salary_override_warning"] = "one or more employees' salary pay-basis figure could not be computed this period — see server logs"
+        if response is not None:
+            try:
+                response.headers["X-Salary-Override-Warning"] = "salary override failed for one or more employees on GET /compensation"
+            except Exception:
+                pass
+    return out
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

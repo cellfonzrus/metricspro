@@ -197,6 +197,17 @@ STORE["employees"] = [
      "termination_date": None, "is_active": True},
     {"id": "2", "employee_id": "HRL1", "org_id": ORG, "name": "Harry Hourly", "home_store": "Store1",
      "pay_rate": 20.0, "pay_basis": "hourly", "pay_amount": None, "is_active": True},
+    # Gate-1 F1 (MAJOR) repro: a salaried $52k manager with ZERO punches/shifts this period. Reviewer's
+    # exact repro fixture — before the fix, GET /payroll's total for this org was $160 (Harry's hourly
+    # only) while GET /payroll-by-store's total was $1,160 (Harry + Mona's derived $1000), because
+    # apply_to_payroll_rows only overrides an EXISTING row and Mona never got one.
+    {"id": "3", "employee_id": "MGR1", "org_id": ORG, "name": "Mona Manager (zero activity)",
+     "home_store": "Store1", "pay_rate": 0.0, "pay_basis": "annual", "pay_amount": 52000.0,
+     "hire_date": None, "termination_date": None, "is_active": True},
+    # Sub-case: zero activity AND no home_store — the pay must land somewhere VISIBLE ('Unassigned').
+    {"id": "4", "employee_id": "MGR2", "org_id": ORG, "name": "Nadia No-Home (zero activity)",
+     "home_store": None, "pay_rate": 0.0, "pay_basis": "monthly", "pay_amount": 5000.0,
+     "hire_date": None, "termination_date": None, "is_active": True},
 ]
 # Sally worked 30h at Store1 + 10h at Store2 this week (proportional store-split test).
 STORE["shifts"] = [
@@ -271,6 +282,29 @@ check("6e: hourly employee's pay is UNCHANGED hours×rate (40h * $20 = $800)",
 check("6f: hourly employee's row carries NO salary_* keys (byte-identical shape)",
       "pay_basis" not in by_eid["HRL1"] and "salary_note" not in by_eid["HRL1"])
 
+# ── Gate-1 F1 (MAJOR) — the reviewer's exact repro: a zero-activity salaried manager MUST appear in
+# GET /payroll (was silently missing; present in /payroll-by-store and /compensation, disagreeing).
+check("6h: F1 — Mona (zero-activity salaried) IS present in GET /payroll", "MGR1" in by_eid, sorted(by_eid))
+check("6i: Mona's actual_pay == scheduled_pay == her derived monthly-equivalent-of-annual figure ($1000/wk)",
+      by_eid.get("MGR1", {}).get("actual_pay") == 1000.0 and by_eid.get("MGR1", {}).get("scheduled_pay") == 1000.0,
+      by_eid.get("MGR1"))
+check("6j: Mona's hours are 0 (no fabricated activity)",
+      by_eid.get("MGR1", {}).get("actual_hours") == 0.0 and by_eid.get("MGR1", {}).get("scheduled_hours") == 0.0)
+check("6k: Mona's store = her home_store (Store1)", by_eid.get("MGR1", {}).get("store") == "Store1")
+check("6l: F1 sub-case — Nadia (zero-activity, NO home_store) IS present, store='Unassigned' "
+      "(pay must land somewhere visible)",
+      by_eid.get("MGR2", {}).get("store") == "Unassigned" and by_eid.get("MGR2", {}).get("actual_pay") == round(5000 * 12 / 52, 2),
+      by_eid.get("MGR2"))
+# The reviewer's own framing: GET /payroll's grand total must equal GET /payroll-by-store's grand
+# total for the SAME range/org (no chargebacks/PTO in this fixture) — before the F1 fix these
+# diverged ($160 hourly-only vs $1,160 with the zero-activity manager correctly included by-store).
+payroll_total = round(sum(r["actual_pay"] for r in payroll), 2)
+by_store_total_preview = round(sum(s["amount"] for s in
+    router_mod.get_payroll_by_store(start=WEEK_START, end=WEEK_END, authorization="Bearer manager", org_id=ORG)["stores"]), 2)
+check("6m: F1 — GET /payroll's grand total now MATCHES GET /payroll-by-store's grand total "
+      "(both include Mona's + Nadia's derived pay)",
+      payroll_total == by_store_total_preview, (payroll_total, by_store_total_preview))
+
 # Control: remove the salaried employee entirely, prove Harry's row is IDENTICAL either way.
 saved_emps = STORE["employees"]
 STORE["employees"] = [e for e in saved_emps if e["employee_id"] != "SAL1"]
@@ -283,8 +317,9 @@ check("6g: Harry's row is BYTE IDENTICAL whether or not a salaried employee exis
 # ── 4. GET /payroll-by-store integration — proportional split ──────────────────────────────────────
 by_store = router_mod.get_payroll_by_store(start=WEEK_START, end=WEEK_END, authorization="Bearer manager", org_id=ORG)["stores"]
 bs = {r["store_code"]: r for r in by_store}
-check("7a: Sally's derived $1000 split across Store1+Store2 (30h/40h + 10h/40h) sums exactly",
-      round(bs["Store1"]["amount"] + bs["Store2"]["amount"] - bs["Store1"].get("_harry", 0), 2) >= 0)  # sanity no-op guard
+# (Gate-1 N4: the original "7a" check here was a tautology — `>= 0` on a value that's structurally
+# always non-negative, with a `.get("_harry", 0)` key that never existed. Removed; 7b/7c/7d below
+# already prove the real assertions with an actual Sally-less control comparison.)
 # Store1 also carries Harry's $800 hourly — isolate Sally's contribution by comparing to a Sally-less control.
 STORE["employees"] = [e for e in saved_emps if e["employee_id"] != "SAL1"]
 by_store_control = router_mod.get_payroll_by_store(start=WEEK_START, end=WEEK_END, authorization="Bearer manager", org_id=ORG)["stores"]
@@ -298,6 +333,8 @@ check("7c: Store1 (75% of Sally's hours) gets the larger share of her pay", sall
       (sally_store1, sally_store2))
 check("7d: hours per store are UNCHANGED (still hourly basis)", bs["Store1"]["hours"] == 70.0 and bs["Store2"]["hours"] == 10.0,
       (bs["Store1"]["hours"], bs["Store2"]["hours"]))
+check("7e: F1 sub-case — Nadia's (no home_store) zero-activity pay lands in an explicit 'Unassigned' "
+      "by-store bucket, not silently dropped", bs.get("Unassigned", {}).get("amount") == round(5000 * 12 / 52, 2), bs.get("Unassigned"))
 
 # ── 5. GET /compensation (hr) — same shared engine ──────────────────────────────────────────────────
 comp = hr_router_mod.compensation(period="2026-03", authorization="Bearer manager", org_id=ORG)
@@ -314,6 +351,54 @@ try:
 except Exception as e:
     check("9: hr_update_employee's non-manager pay_rate PATCH is rejected (403, gate threaded through)",
           getattr(e, "status_code", None) == 403, e)
+
+# ── 7. Gate-1 F2 (MUST) — termination_date AND pay_rate are gated but must ALSO be change-logged now
+# (placed after every GET /payroll-family check above so mutating Harry's pay_rate/termination_date
+# here can't affect an earlier hours×rate assertion).
+r_term = router_mod.update_employee("2", {"termination_date": "2026-06-30"}, authorization="Bearer manager", org_id=ORG)
+check("F2a: termination_date PATCH succeeds", r_term.get("termination_date") == "2026-06-30", r_term)
+term_log = [r for r in STORE["payroll_change_log"] if r.get("employee_id") == "HRL1" and r.get("field") == "termination_date"]
+check("F2b: termination_date change IS now change-logged (Gate-1 fix — was gated but NOT logged before)",
+      len(term_log) == 1 and term_log[0]["before_value"] is None and term_log[0]["after_value"] == "2026-06-30",
+      term_log)
+
+r_rate = router_mod.update_employee("2", {"pay_rate": 25.0}, authorization="Bearer manager", org_id=ORG)
+check("F2c: pay_rate PATCH succeeds", r_rate.get("pay_rate") == 25.0, r_rate)
+rate_log = [r for r in STORE["payroll_change_log"] if r.get("employee_id") == "HRL1" and r.get("field") == "pay_rate"]
+check("F2d: pay_rate change IS now change-logged ('it IS a pay field' — Gate-1 fix, was pre-existing gated-but-unlogged)",
+      len(rate_log) == 1 and rate_log[0]["before_value"] == "20.0" and rate_log[0]["after_value"] == "25.0",
+      rate_log)
+check("F2e: both new log rows use entry_point='pay_basis_change' (same trail as pay_basis/pay_amount)",
+      term_log[0]["entry_point"] == "pay_basis_change" and rate_log[0]["entry_point"] == "pay_basis_change")
+
+# ── 8. Gate-1 N5 (NIT) — the salary-override try/except must WARN + set a response header on a real
+# failure, never silently revert to hourly with zero signal anywhere.
+import app.modules.storeops.payroll_salary as payroll_salary_mod   # noqa: E402
+from fastapi import Response as _Response                          # noqa: E402
+
+_orig_apply_rows = payroll_salary_mod.apply_to_payroll_rows
+payroll_salary_mod.apply_to_payroll_rows = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("induced N5 failure"))
+resp = _Response()
+try:
+    payroll_n5 = router_mod.get_payroll(start=WEEK_START, end=WEEK_END, authorization="Bearer manager",
+                                         org_id=ORG, response=resp)
+finally:
+    payroll_salary_mod.apply_to_payroll_rows = _orig_apply_rows
+check("N5a: GET /payroll degrades to the base hourly report on an induced salary-override failure "
+      "(never 500s)", isinstance(payroll_n5, list) and any(r["employee_id"] == "HRL1" for r in payroll_n5),
+      type(payroll_n5))
+check("N5b: a response header signals the failure — never silent (Gate-1 fix)",
+      "X-Salary-Override-Warning" in resp.headers, dict(resp.headers))
+
+_orig_derive = payroll_salary_mod.derive_salary_pay
+payroll_salary_mod.derive_salary_pay = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("induced N5 failure (compensation)"))
+try:
+    comp_n5 = hr_router_mod.compensation(period="2026-03", authorization="Bearer manager", org_id=ORG)
+finally:
+    payroll_salary_mod.derive_salary_pay = _orig_derive
+check("N5c: GET /compensation ALSO surfaces the failure — both a body key and a header (it returns a "
+      "dict, so both channels are safe/additive there)",
+      comp_n5.get("salary_override_warning") is not None, comp_n5.get("salary_override_warning"))
 
 # ── Report ───────────────────────────────────────────────────────────────────────────────────────────
 print()

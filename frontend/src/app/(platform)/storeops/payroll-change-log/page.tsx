@@ -21,11 +21,15 @@ const ENTRY_POINT_LABEL: Record<string, string> = {
   manual_hours_delete: 'Manual hours removed',
   force_clockout_manual: 'Force clock-out (DM "run now")',
   force_clockout_cron: 'Force clock-out (automatic sweep)',
+  // Salary pay-basis (2026-07-27): PATCH /employees/{id} on any of pay_rate/pay_basis/pay_amount/
+  // termination_date (manager-gated) logs here with this ONE entry_point for all four fields.
+  pay_basis_change: 'Pay setup change (HR)',
 }
 const FIELD_LABEL: Record<string, string> = {
   scheduled_hours: 'Scheduled hours', actual_hours: 'Actual hours', start_time: 'Start time',
   end_time: 'End time', store_code: 'Store', shift_date: 'Shift date', status: 'Status',
   employee_id: 'Employee', clock_in: 'Clock in', clock_out: 'Clock out', shift_added: 'Shift added',
+  pay_rate: 'Pay $/hr', pay_basis: 'Pay basis', pay_amount: 'Salary amount', termination_date: 'Termination date',
   manual_hours: 'Manual hours',
 }
 

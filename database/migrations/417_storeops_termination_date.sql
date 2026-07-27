@@ -16,10 +16,15 @@
 -- for the full mig-414 no-grant-lesson rationale). Grants are table-level; storeops.employees is
 -- already covered by migration 003's blanket schema grant.
 --
--- What breaks until this runs: nothing on its own — payroll_salary.py reads termination_date via the
--- SAME widened-select-with-fallback pattern as pay_basis/pay_amount (migration 416), so a database
--- with 416 run but not 417 still gets hire-side proration correctly and simply treats every employee
--- as "not yet terminated" (falls back to the period's own end date) until this runs too.
+-- What breaks until this runs: EVERYTHING in the salary pay-basis feature, not just termination-side
+-- proration (Gate-1 N1 correction, 2026-07-27 — an earlier version of this comment incorrectly
+-- claimed 416-alone gives working hire-side proration). payroll_salary.PAY_FIELDS is ONE combined
+-- select string — "pay_basis,pay_amount,hire_date,termination_date" — requested together by every
+-- call site (`_employees_with_pay_fields`); PostgREST/Postgres reject the WHOLE select if ANY named
+-- column is missing, and the try/except around it falls back to the caller's pre-existing column list
+-- ALONE on that failure. So if 416 has run but 417 has NOT, the combined select still fails
+-- (termination_date doesn't exist yet) — pay_basis/pay_amount/hire_date are ALSO unavailable, and the
+-- entire salary feature (not just termination proration) is a no-op until BOTH 416 AND 417 have run.
 ALTER TABLE storeops.employees ADD COLUMN IF NOT EXISTS termination_date DATE;
 
 NOTIFY pgrst, 'reload schema';

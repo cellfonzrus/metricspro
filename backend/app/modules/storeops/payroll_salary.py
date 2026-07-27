@@ -46,17 +46,30 @@ setup-UI's live preview shows ("$52,000/yr = $1,000.00 per weekly period").
 │ proportional to their WORKED HOURS share there (same hourly-basis hours the report already computes  │
 │ — a salaried employee who split time 60/40 between two stores gets their pay split 60/40 too). An     │
 │ employee with ZERO recorded hours anywhere in range (pure salary, never punches/scheduled — plausible │
-│ for e.g. a market manager) attributes 100% to their home_store rather than vanishing from Store        │
-│ Expenses. This is the DOCUMENTED DEFAULT the dispatch asked to implement, flagged owner-confirmable    │
-│ in docs/handoffs/people.md — not the only defensible choice (a flat 100%-home-store rule for every     │
-│ salaried employee regardless of hours would be the other obvious option).                              │
+│ for e.g. a market manager) attributes 100% to their home_store; if even home_store is blank, the      │
+│ whole amount lands in an explicit 'Unassigned' bucket rather than silently vanishing from Store        │
+│ Expenses (Gate-1 F1 fix, 2026-07-27). This is the DOCUMENTED DEFAULT the dispatch asked to implement,  │
+│ flagged owner-confirmable in docs/handoffs/people.md — not the only defensible choice (a flat          │
+│ 100%-home-store rule for every salaried employee regardless of hours would be the other obvious one). │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─ ZERO-ACTIVITY SALARIED EMPLOYEES (Gate-1 F1 fix, 2026-07-27, `synthesize_zero_activity_rows`) ─────┐
+│ A salaried employee who has NO shift and NO punch this period (e.g. a market manager who never        │
+│ clocks in) still earns their salary — GET /payroll's `rows` come from `summary`, which is built ONLY  │
+│ from activity (shifts/timelog), so such an employee had NO row for `apply_to_payroll_rows` to         │
+│ override, and silently vanished from the Payroll Report while still appearing (correctly) in          │
+│ GET /payroll-by-store and GET /compensation, which iterate the full employee roster instead. This      │
+│ function SYNTHESIZES a 0-hours row (store = home_store, or 'Unassigned' if even that is blank) for     │
+│ every salaried employee with a usable pay_amount who has no existing row — called AFTER               │
+│ apply_to_payroll_rows, so the two never disagree on the derived figure (both go through the SAME       │
+│ `_salary_pay_fields` helper).                                                                          │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 HOURLY BYTE-IDENTICAL GUARANTEE: every function below either (a) returns `None`/leaves a row's dict
 UNCHANGED (same object, not even a shallow copy) when `pay_basis == 'hourly'` or the employee's
-`pay_basis` column isn't even present in the row passed in (pre-migration-416 database, or a caller
-that hasn't widened its SELECT), or (b) is simply never called (`by_eid`/`salaried` maps come up empty
-for an all-hourly tenant). A genuinely-hourly employee's row therefore never enters ANY new code
+`pay_basis` column isn't even present in the row passed in (pre-migration-416/417 database, or a
+caller that hasn't widened its SELECT), or (b) is simply never called (`by_eid`/`salaried` maps come up
+empty for an all-hourly tenant). A genuinely-hourly employee's row therefore never enters ANY new code
 branch — the byte-identical claim is structural, not "we tried to leave it alone".
 """
 from decimal import Decimal, ROUND_HALF_UP
@@ -67,7 +80,27 @@ SALARY_BASES = ("weekly", "monthly", "annual")
 
 # The widened-SELECT column list every router.py/hr/router.py call site adds to its base `employees`
 # fields (migrations 416 + 417). Centralized here so there is exactly ONE list to keep in sync.
+#
+# IMPORTANT (Gate-1 N1, 2026-07-27): this is ONE combined select — pay_basis/pay_amount (416) AND
+# hire_date/termination_date (417, hire_date pre-existed 077 but is requested here alongside the
+# other three) all in a SINGLE query string. PostgREST/Postgres reject the WHOLE select if ANY named
+# column is missing, and every call site's try/except (see router.py `_employees_with_pay_fields`)
+# falls back to the caller's base fields ALONE on that failure — meaning if migration 416 has run but
+# 417 has NOT, the combined select still fails (termination_date doesn't exist yet), so pay_basis/
+# pay_amount/hire_date are ALSO unavailable and the ENTIRE salary feature is a no-op. Hire-side
+# proration does NOT "already work" off 416 alone — nothing in this feature is reachable until BOTH
+# 416 AND 417 have run. (This corrects an earlier, incorrect claim in migration 416's own header and
+# in docs/handoffs/people.md's PENDING SQL section that hire-side proration worked off 416 alone.)
 PAY_FIELDS = "pay_basis,pay_amount,hire_date,termination_date"
+
+# Defensive cap on how many pay periods derive_salary_pay will walk for one range (Gate-1 N2,
+# 2026-07-27). The SHORTEST reach is the weekly (7-day) period type: 5000 * 7 = 35,000 days, ~96
+# years — no real payroll report range should ever approach that (biweekly reaches ~192 years at the
+# same period count). This exists only to bound a malformed/absurd date range (never crash, never
+# spin forever), not as a realistic limit. See pay_periods_overlapping's `truncated` return value,
+# propagated into derive_salary_pay's result and surfaced as a salary_note by callers — a truncated
+# calculation is flagged, never silently under-summed.
+MAX_PERIODS_WALKED = 5000
 
 
 def _money(x) -> Decimal:
@@ -137,23 +170,25 @@ def tenant_pay_period_settings(tenant_row):
     return _pp_settings(tenant_row or {})
 
 
-def pay_periods_overlapping(settings, lo: date, hi: date):
+def pay_periods_overlapping(settings, lo: date, hi: date, max_periods: int = MAX_PERIODS_WALKED):
     """Every FULL company pay period ({start,end,payday} ISO strings, from core.router.pay_period_for
     — imported, never reimplemented) that overlaps [lo, hi] inclusive, walking forward period-by-
-    period from the period containing `lo`. Bounded guard (400 iterations ~= 15 years of biweekly
-    periods) so a malformed/inverted range can never spin forever."""
+    period from the period containing `lo`. Returns (periods, truncated) — `truncated` is True only if
+    `max_periods` genuinely wasn't enough to reach `hi` (see MAX_PERIODS_WALKED's docstring — a
+    defensive cap against a malformed/absurd range, not a realistic limit for a real payroll report),
+    so a caller can surface that explicitly rather than silently under-summing a truncated result."""
     from app.modules.core.router import pay_period_for
     out = []
     cur = pay_period_for(settings, lo)
-    guard = 0
-    while guard < 400:
+    n = 0
+    while n < max_periods:
         out.append(cur)
         cur_end = date.fromisoformat(cur["end"])
         if cur_end >= hi:
-            break
+            return out, False
         cur = pay_period_for(settings, cur_end + timedelta(days=1))
-        guard += 1
-    return out
+        n += 1
+    return out, True
 
 
 def derive_salary_pay(pay_basis, pay_amount, settings, lo: date, hi: date,
@@ -161,13 +196,14 @@ def derive_salary_pay(pay_basis, pay_amount, settings, lo: date, hi: date,
     """The period-converted salary pay for [lo, hi] inclusive, calendar-day-prorated against both the
     employee's employment window and the report range itself (see module docstring). Returns None if
     pay_basis is 'hourly' or pay_amount is unusable — callers then leave the row's existing
-    hours×rate figure untouched."""
+    hours×rate figure untouched. Result includes `truncated` (see pay_periods_overlapping) — always
+    False in practice, propagated for defense in depth."""
     period_pay = convert_to_period_pay(pay_basis, pay_amount, settings.get("pay_period_type"))
     if period_pay is None or lo is None or hi is None or lo > hi:
         return None
     period_pay_dec = Decimal(str(period_pay))   # re-Decimal'd for exact per-period proration math below
     plen = period_length_days(settings.get("pay_period_type"))
-    periods = pay_periods_overlapping(settings, lo, hi)
+    periods, truncated = pay_periods_overlapping(settings, lo, hi)
     total = Decimal("0.00")
     detail = []
     any_prorated = False
@@ -186,20 +222,21 @@ def derive_salary_pay(pay_basis, pay_amount, settings, lo: date, hi: date,
                         "period_length_days": plen, "amount": float(amt), "prorated": prorated})
     return {"amount": float(total), "period_pay": period_pay,
             "pay_period_type": settings.get("pay_period_type") or "weekly",
-            "periods": detail, "prorated": any_prorated}
+            "periods": detail, "prorated": any_prorated, "truncated": truncated}
 
 
 def allocate_across_stores(store_hours: dict, total_amount: float, home_store):
     """Proportional-to-worked-hours store allocation (see module docstring). Cents-HALF_UP per store
     with the remainder fixed up on the LAST (smallest-share) store so the allocation sums EXACTLY to
     total_amount — a Store Expenses reconciliation must never be a penny short/over vs. the Payroll
-    Report total for the same employee. Zero recorded hours anywhere -> 100% to home_store (or {} if
-    even that is blank, so the caller adds nothing rather than inventing a store)."""
+    Report total for the same employee. Zero recorded hours anywhere -> 100% to home_store; if even
+    home_store is blank, the whole amount lands in an explicit 'Unassigned' bucket (Gate-1 F1 —
+    the pay must land somewhere visible, never silently vanish)."""
     total = _money(total_amount)
     hours_total = sum(v for v in (store_hours or {}).values() if v)
     if hours_total <= 0:
-        store = (home_store or "").strip()
-        return {store: float(total)} if store else {}
+        store = (home_store or "").strip() or "Unassigned"
+        return {store: float(total)}
     items = sorted(((s, h) for s, h in (store_hours or {}).items() if h and s), key=lambda kv: -kv[1])
     out = {}
     running = Decimal("0.00")
@@ -222,13 +259,52 @@ def accumulate(d: dict, key, subkey, val: float):
     m[subkey] = m.get(subkey, 0.0) + (val or 0.0)
 
 
+def _salary_pay_fields(emp: dict, settings, lo: date, hi: date):
+    """THE single point both apply_to_payroll_rows (existing rows) and synthesize_zero_activity_rows
+    (missing rows) call, so they can never disagree on what a salaried employee's overlay looks like.
+    Returns (basis, overlay) — `overlay` is a dict of fields to merge onto a payroll row:
+      - basis == 'hourly': ({}), caller leaves the row alone entirely.
+      - a non-hourly basis with no usable pay_amount (misconfigured): {pay_basis, pay_amount,
+        salary_note} — no pay/hours fields touched, so the row's EXISTING pay figure (hourly-computed,
+        likely $0 for a never-given-a-rate salaried employee) stands, never silently overwritten.
+      - a non-hourly basis with a usable pay_amount: the full derived overlay (pay_basis, pay_amount,
+        salary_period_pay, salary_pay_period_type, salary_periods, salary_prorated, scheduled_pay,
+        actual_pay — the last two are what actually change what a rep is paid)."""
+    basis, amount = resolve_pay_basis(emp)
+    if basis == "hourly":
+        return basis, {}
+    if amount is None or amount <= 0:
+        return basis, {
+            "pay_basis": basis, "pay_amount": amount,
+            "salary_note": (f"pay_basis is '{basis}' but no pay_amount is configured — showing "
+                             f"the hourly-computed figure (likely $0 with no pay_rate set either) "
+                             f"until a pay_amount is set."),
+        }
+    derived = derive_salary_pay(basis, amount, settings, lo, hi,
+                                 parse_date(emp.get("hire_date")), parse_date(emp.get("termination_date")))
+    if derived is None:
+        return basis, {"pay_basis": basis, "pay_amount": amount}
+    overlay = {
+        "pay_basis": basis, "pay_amount": amount,
+        "salary_period_pay": derived["period_pay"], "salary_pay_period_type": derived["pay_period_type"],
+        "salary_periods": derived["periods"], "salary_prorated": derived["prorated"],
+        "scheduled_pay": derived["amount"], "actual_pay": derived["amount"],
+    }
+    if derived.get("truncated"):
+        overlay["salary_note"] = ("period calculation was truncated (report range spans an unusually "
+                                   "large number of pay periods) — the shown figure may undercount.")
+    return basis, overlay
+
+
 def apply_to_payroll_rows(rows, employees, settings, lo: date, hi: date):
     """GET /payroll's post-aggregation salary override (Deliverable 3). For each row whose canonical
     employee has a non-hourly pay_basis, replaces scheduled_pay/actual_pay with the derived salary
     figure (hours are left exactly as the hourly-basis aggregation already computed — still
-    displayed) and adds pay_basis/salary_* metadata fields. A row for an hourly (or unresolved)
+    displayed) and adds pay_basis/salary_* metadata fields (via `_salary_pay_fields`, the SAME helper
+    `synthesize_zero_activity_rows` uses for a missing row). A row for an hourly (or unresolved)
     employee is returned as the SAME object, unmodified — the structural byte-identical guarantee
-    (see module docstring)."""
+    (see module docstring). Does NOT add a row for a salaried employee with no existing activity —
+    see synthesize_zero_activity_rows, always called immediately after this in router.py."""
     by_eid = {e.get("employee_id"): e for e in (employees or ()) if e.get("employee_id") and "pay_basis" in e}
     if not by_eid or lo is None or hi is None:
         return rows
@@ -238,30 +314,52 @@ def apply_to_payroll_rows(rows, employees, settings, lo: date, hi: date):
         if emp is None:
             out.append(r)
             continue
-        basis, amount = resolve_pay_basis(emp)
+        basis, overlay = _salary_pay_fields(emp, settings, lo, hi)
         if basis == "hourly":
             out.append(r)
             continue
         nr = dict(r)
-        nr["pay_basis"] = basis
-        nr["pay_amount"] = amount
-        if amount is None or amount <= 0:
-            nr["salary_note"] = (f"pay_basis is '{basis}' but no pay_amount is configured — showing "
-                                  f"the hourly-computed figure until a pay_amount is set.")
-            out.append(nr)
-            continue
-        derived = derive_salary_pay(basis, amount, settings, lo, hi,
-                                     parse_date(emp.get("hire_date")), parse_date(emp.get("termination_date")))
-        if derived is None:
-            out.append(nr)
-            continue
-        nr["salary_period_pay"] = derived["period_pay"]
-        nr["salary_pay_period_type"] = derived["pay_period_type"]
-        nr["salary_periods"] = derived["periods"]
-        nr["salary_prorated"] = derived["prorated"]
-        nr["scheduled_pay"] = derived["amount"]
-        nr["actual_pay"] = derived["amount"]
+        nr.update(overlay)
         out.append(nr)
+    return out
+
+
+def synthesize_zero_activity_rows(rows, employees, settings, lo: date, hi: date):
+    """Gate-1 F1 fix (2026-07-27, MAJOR): a salaried employee with NO shift/punch this period has NO
+    row in `rows` for apply_to_payroll_rows to override (GET /payroll's rows come from activity-driven
+    aggregation) — they still earn their salary, and were previously silently missing from the Payroll
+    Report while correctly present in GET /payroll-by-store and GET /compensation (which iterate the
+    full roster). Appends ONE synthesized row (0 hours/shifts, derived period pay via the SAME
+    `_salary_pay_fields` helper apply_to_payroll_rows uses, store = home_store or 'Unassigned' if even
+    that is blank — the pay must land somewhere VISIBLE) per salaried employee with a usable
+    pay_amount who has no existing row. Never touches an existing row. No-op for an all-hourly tenant
+    or a pre-migration database (same `"pay_basis" in e` gate as everywhere else in this module)."""
+    if lo is None or hi is None:
+        return rows
+    existing_ids = {r.get("employee_id") for r in rows if r.get("employee_id")}
+    out = list(rows)
+    for e in employees or ():
+        eid = e.get("employee_id")
+        if not eid or eid in existing_ids or "pay_basis" not in e:
+            continue
+        basis, overlay = _salary_pay_fields(e, settings, lo, hi)
+        if basis == "hourly":
+            continue
+        # A misconfigured (no usable pay_amount) zero-activity employee has nothing to synthesize —
+        # they'd show $0/$0 either way (no hours, no rate basis) and adding a bare row with just a
+        # salary_note but no real figures would be noise, not signal; apply_to_payroll_rows already
+        # never invents a row for them either. Skip.
+        if "scheduled_pay" not in overlay:
+            continue
+        row = {
+            "employee_id": eid, "name": e.get("name") or eid,
+            "store": (e.get("home_store") or "").strip() or "Unassigned",
+            "pay_rate": float(e.get("pay_rate") or 0),
+            "scheduled_hours": 0.0, "actual_hours": 0.0, "shifts": 0,
+            "scheduled_pay": 0.0, "actual_pay": 0.0,
+        }
+        row.update(overlay)
+        out.append(row)
     return out
 
 
@@ -271,11 +369,15 @@ def apply_to_by_store(by_store, employees, emp_store_hours, emp_store_dollars, s
     store bucket it landed in (emp_store_dollars — gathered by router.py's own per-row loops, the
     SAME basis `by_store['hours']`/'amount' already used, so this nets to exactly zero drift for a
     non-salaried tenant), then add the derived period pay back in, allocated across those SAME stores
-    proportional to hours worked there. An employee whose salary can't be derived (misconfigured —
-    pay_basis set but no usable pay_amount) is left COMPLETELY UNTOUCHED here — their original
-    hourly-computed $ stands rather than being zeroed out with nothing to replace it. `hours` in
-    by_store is never modified — still the hourly-basis figure, always displayed (owner directive:
-    "hours columns still display")."""
+    proportional to hours worked there (or 100%/'Unassigned' at zero hours — see
+    allocate_across_stores). An employee whose salary can't be derived (misconfigured — pay_basis set
+    but no usable pay_amount) is left COMPLETELY UNTOUCHED here — their original hourly-computed $
+    stands rather than being zeroed out with nothing to replace it. `hours` in by_store is never
+    modified — still the hourly-basis figure, always displayed (owner directive: "hours columns still
+    display"). Naturally covers a zero-activity salaried employee too (emp_store_hours/dollars are
+    simply empty for them, so allocate_across_stores falls straight to the home_store/'Unassigned'
+    branch) — this endpoint never had GET /payroll's F1 bug, since `salaried` here is built from the
+    full roster, not from activity."""
     salaried = {}
     for e in (employees or ()):
         eid = e.get("employee_id")

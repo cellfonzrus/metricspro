@@ -14,21 +14,32 @@ Proves:
      ("$52,000/yr = $1,000.00 per weekly period"). 'hourly' and non-positive/unparseable amounts ->
      None.
   B. pay_periods_overlapping — walks the correct set of periods for a range exactly one period long,
-     a range spanning several periods, and a range narrower than one period.
+     a range spanning several periods, and a range narrower than one period; returns (periods,
+     truncated) — Gate-1 N2: an artificially small max_periods DOES flip truncated=True (the guard is
+     provably live, not dead code), and the real default (MAX_PERIODS_WALKED, ~96 years at the
+     shortest weekly period length, ~192 years biweekly) is never realistically hit.
   C. derive_salary_pay — exact figure for a report range that IS a whole number of periods (no
      proration); calendar-day proration for a mid-period hire; for a mid-period termination; for
      BOTH in the same period; for a report range that is a full calendar month (not period-aligned,
      so both edges legitimately prorate) — and in every case, the sum of `periods[].amount` foots
-     EXACTLY to the returned `amount` (cents, no drift).
+     EXACTLY to the returned `amount` (cents, no drift); a normal-sized range is never flagged
+     truncated.
   D. allocate_across_stores — proportional multi-store split with an exact-remainder fixup (sums to
      the input to the penny even with a 3-way non-round split); zero-hours-anywhere falls back to
-     100% home_store; zero-hours AND no home_store returns {} (never invents a store).
+     100% home_store; zero-hours AND no/blank home_store falls to an explicit 'Unassigned' bucket
+     (Gate-1 F1 — the pay must land somewhere visible, never silently vanish).
   E. resolve_pay_basis — clamps an unrecognized/blank pay_basis to 'hourly'; a non-numeric/blank
      pay_amount resolves to None (never crashes).
   F. apply_to_payroll_rows — a salaried row's scheduled_pay/actual_pay is overridden to the derived
      figure and hours are untouched; a misconfigured row (pay_basis set, no usable pay_amount) is
      left with its ORIGINAL pay figures plus an explanatory salary_note; a row for an employee not in
      the `employees` list (unmergeable shift) passes through untouched.
+  F+. synthesize_zero_activity_rows — Gate-1 F1 fix (MAJOR): a salaried employee with NO existing
+     payroll row (zero shifts/punches this period) gets ONE synthesized row (0 hours, the derived
+     period pay, store=home_store or 'Unassigned'); a misconfigured or hourly zero-activity employee
+     is NOT synthesized; an employee who already has a row is never duplicated; existing rows are
+     untouched (same objects); the composed router.py wiring (override THEN synthesize) is proven to
+     produce correct figures for BOTH a pre-existing salaried row and a newly-synthesized one together.
   G. apply_to_by_store — a 2-store salaried employee's hourly-computed $ is fully removed and replaced
      by a proportional-to-hours allocation that sums to the derived total; a store untouched by the
      salaried employee is unaffected; a misconfigured salaried employee's contribution is left
@@ -46,9 +57,9 @@ from datetime import date, timedelta
 sys.path.insert(0, ".")
 
 from app.modules.storeops.payroll_salary import (  # noqa: E402
-    PAY_BASES, convert_to_period_pay, period_length_days, tenant_pay_period_settings,
+    PAY_BASES, MAX_PERIODS_WALKED, convert_to_period_pay, period_length_days, tenant_pay_period_settings,
     pay_periods_overlapping, derive_salary_pay, allocate_across_stores, resolve_pay_basis,
-    apply_to_payroll_rows, apply_to_by_store, accumulate, parse_date,
+    apply_to_payroll_rows, apply_to_by_store, synthesize_zero_activity_rows, accumulate, parse_date,
 )
 
 PASS, FAIL = [], []
@@ -88,20 +99,32 @@ check("A11 cents HALF_UP (annual/26 rounds up at .005)",
 check("A12 unknown pay_period_type defaults to weekly-length math (matches core's own default)",
       convert_to_period_pay("annual", 52000, "monthly-typo") == 1000.0)
 
-# ── B. pay_periods_overlapping ──────────────────────────────────────────────────────────────────────
-p_one = pay_periods_overlapping(WEEKLY, date(2026, 3, 2), date(2026, 3, 8))   # exactly one Mon-Sun week
+# ── B. pay_periods_overlapping (now returns (periods, truncated) — Gate-1 N2) ─────────────────────────
+p_one, t_one = pay_periods_overlapping(WEEKLY, date(2026, 3, 2), date(2026, 3, 8))   # exactly one Mon-Sun week
 check("B1 exact one-week range -> exactly 1 period", len(p_one) == 1, p_one)
+check("B1b not truncated", t_one is False)
 check("B2 that period is Mon 3/2 - Sun 3/8", p_one and p_one[0]["start"] == "2026-03-02" and p_one[0]["end"] == "2026-03-08")
 
-p_month = pay_periods_overlapping(WEEKLY, date(2026, 3, 1), date(2026, 3, 31))  # March 2026, not week-aligned
+p_month, t_month = pay_periods_overlapping(WEEKLY, date(2026, 3, 1), date(2026, 3, 31))  # March 2026, not week-aligned
 check("B3 a calendar month spans multiple weekly periods", len(p_month) >= 4, len(p_month))
+check("B3b not truncated", t_month is False)
 check("B4 periods are contiguous (each start = prev end + 1 day)",
       all(date.fromisoformat(p_month[i]["end"]) + timedelta(days=1) == date.fromisoformat(p_month[i + 1]["start"])
           for i in range(len(p_month) - 1)))
 
-p_narrow = pay_periods_overlapping(WEEKLY, date(2026, 3, 4), date(2026, 3, 5))  # 2 days inside one week
+p_narrow, t_narrow = pay_periods_overlapping(WEEKLY, date(2026, 3, 4), date(2026, 3, 5))  # 2 days inside one week
 check("B5 a range narrower than one period -> still exactly 1 period (the containing one)",
       len(p_narrow) == 1 and p_narrow[0]["start"] == "2026-03-02")
+
+# B6/B7 — the truncation guard itself (Gate-1 N2, MUST): a range genuinely bigger than max_periods
+# periods DOES set truncated=True (never silently swallowed), and a tiny max_periods proves the flag
+# actually fires rather than being dead code.
+p_trunc, t_trunc = pay_periods_overlapping(WEEKLY, date(2026, 1, 1), date(2026, 12, 31), max_periods=3)
+check("B6 an artificially small max_periods DOES set truncated=True", t_trunc is True, (len(p_trunc), t_trunc))
+check("B7 a truncated walk still returns exactly max_periods periods (partial data, not none)",
+      len(p_trunc) == 3, p_trunc)
+check("B8 MAX_PERIODS_WALKED default is generous enough for any real payroll range (>= 90 years weekly)",
+      MAX_PERIODS_WALKED * 7 >= 365 * 90, MAX_PERIODS_WALKED)
 
 # ── C. derive_salary_pay ────────────────────────────────────────────────────────────────────────────
 d1 = derive_salary_pay("annual", 52000, WEEKLY, date(2026, 3, 2), date(2026, 3, 8))
@@ -137,6 +160,7 @@ check("C8 hourly basis -> None (caller leaves hours×rate untouched)",
       derive_salary_pay("hourly", 20, WEEKLY, date(2026, 3, 2), date(2026, 3, 8)) is None)
 check("C9 lo > hi -> None (never raises on an inverted range)",
       derive_salary_pay("annual", 52000, WEEKLY, date(2026, 3, 8), date(2026, 3, 2)) is None)
+check("C10 a normal-sized range is never flagged truncated", d1.get("truncated") is False, d1)
 
 # ── D. allocate_across_stores ───────────────────────────────────────────────────────────────────────
 alloc1 = allocate_across_stores({"S1": 30.0, "S2": 20.0, "S3": 10.0}, 1000.0, "S1")
@@ -148,7 +172,10 @@ alloc2 = allocate_across_stores({}, 1234.56, "HOME")
 check("D3 zero hours anywhere -> 100% to home_store", alloc2 == {"HOME": 1234.56}, alloc2)
 
 alloc3 = allocate_across_stores({}, 1234.56, None)
-check("D4 zero hours AND no home_store -> {} (never invents a store)", alloc3 == {})
+check("D4 zero hours AND no home_store -> 'Unassigned' bucket (Gate-1 F1: pay must land somewhere visible)",
+      alloc3 == {"Unassigned": 1234.56}, alloc3)
+alloc3b = allocate_across_stores({}, 1234.56, "   ")   # blank/whitespace home_store, same as None
+check("D4b whitespace-only home_store also falls to 'Unassigned'", alloc3b == {"Unassigned": 1234.56}, alloc3b)
 
 alloc4 = allocate_across_stores({"S1": 1.0 / 3, "S2": 1.0 / 3, "S3": 1.0 / 3}, 100.0, "S1")
 check("D5 an awkward non-round 3-way split still foots exactly (remainder fixup)",
@@ -194,6 +221,48 @@ check("F5 hourly row is the SAME object, untouched (identity, not just equality)
 check("F6 unmergeable/unmatched row passes through untouched (same object)",
       out_f["E9"] is rows_f[3])
 
+# ── F+. synthesize_zero_activity_rows — Gate-1 F1 fix (MAJOR): a salaried employee with NO shift/punch
+# this period must still appear in GET /payroll (was silently missing while present in by-store/comp).
+employees_synth = [
+    {"employee_id": "E1", "pay_basis": "annual", "pay_amount": 52000},          # already has a row (rows_f)
+    {"employee_id": "MGR1", "name": "Manager No-Punches", "pay_basis": "annual", "pay_amount": 52000, "home_store": "S1"},
+    {"employee_id": "MGR2", "name": "Manager No-Home", "pay_basis": "monthly", "pay_amount": 5000, "home_store": None},
+    {"employee_id": "MGR3", "name": "Manager Misconfigured", "pay_basis": "annual", "pay_amount": None},
+    {"employee_id": "REP1", "name": "Hourly No-Punches", "pay_basis": "hourly"},
+]
+synth_out = {r["employee_id"]: r for r in
+             synthesize_zero_activity_rows(rows_f, employees_synth, WEEKLY, date(2026, 3, 2), date(2026, 3, 8))}
+check("F1a a salaried employee with NO existing row is SYNTHESIZED (was the MAJOR bug — missing entirely)",
+      "MGR1" in synth_out, list(synth_out))
+check("F1b synthesized row's actual_pay == scheduled_pay == the derived figure ($52k/yr on weekly -> $1000)",
+      synth_out.get("MGR1", {}).get("actual_pay") == 1000.0 and synth_out.get("MGR1", {}).get("scheduled_pay") == 1000.0,
+      synth_out.get("MGR1"))
+check("F1c synthesized row has 0 hours/shifts (no fabricated activity)",
+      synth_out.get("MGR1", {}).get("scheduled_hours") == 0.0 and synth_out.get("MGR1", {}).get("actual_hours") == 0.0
+      and synth_out.get("MGR1", {}).get("shifts") == 0)
+check("F1d synthesized row's store = home_store", synth_out.get("MGR1", {}).get("store") == "S1")
+check("F1e synthesized row for a NULL-home_store employee falls to 'Unassigned' (pay must land somewhere visible)",
+      synth_out.get("MGR2", {}).get("store") == "Unassigned", synth_out.get("MGR2"))
+check("F1f a misconfigured (no pay_amount) zero-activity employee is NOT synthesized (nothing real to show)",
+      "MGR3" not in synth_out, list(synth_out))
+check("F1g an hourly zero-activity employee is NOT synthesized (matches existing 'no shifts -> no row' behavior)",
+      "REP1" not in synth_out, list(synth_out))
+check("F1h an employee who ALREADY has a row is not duplicated",
+      len([r for r in synthesize_zero_activity_rows(rows_f, employees_synth, WEEKLY, date(2026, 3, 2), date(2026, 3, 8))
+           if r["employee_id"] == "E1"]) == 1)
+check("F1i existing rows are byte-identical (same objects) after synthesis — only APPENDS",
+      all(any(r is orig for r in synthesize_zero_activity_rows(rows_f, employees_synth, WEEKLY, date(2026, 3, 2), date(2026, 3, 8)))
+          for orig in rows_f))
+# The router wires apply_to_payroll_rows THEN synthesize_zero_activity_rows — prove the composed
+# result (what production actually returns) has ALL FIVE employees with correct figures.
+composed = apply_to_payroll_rows(rows_f, employees_f, WEEKLY, date(2026, 3, 2), date(2026, 3, 8))
+composed = synthesize_zero_activity_rows(composed, employees_f + [employees_synth[1]], WEEKLY, date(2026, 3, 2), date(2026, 3, 8))
+composed_by_eid = {r["employee_id"]: r for r in composed}
+check("F1j composed (override THEN synthesize, as router.py wires it): both the pre-existing salaried "
+      "row (E1) and the newly-synthesized zero-activity one (MGR1) show the correct $1000",
+      composed_by_eid["E1"]["actual_pay"] == 1000.0 and composed_by_eid["MGR1"]["actual_pay"] == 1000.0,
+      (composed_by_eid.get("E1"), composed_by_eid.get("MGR1")))
+
 # ── G. apply_to_by_store ────────────────────────────────────────────────────────────────────────────
 employees_g = [{"employee_id": "E1", "pay_basis": "annual", "pay_amount": 52000, "home_store": "S1"},
                {"employee_id": "E9", "pay_basis": "annual", "pay_amount": None, "home_store": "S3"}]
@@ -237,6 +306,12 @@ for trial in range(200):
             for i in range(n_emp)]
     out_rows = apply_to_payroll_rows(rows, employees, settings, lo, hi)
     if not all(out_rows[i] is rows[i] for i in range(n_emp)):
+        h_fail += 1
+        continue
+    # synthesize_zero_activity_rows must add NOTHING for an all-hourly roster (every employee already
+    # has a row above; a hourly employee with no row at all is separately proven a no-op by F1g).
+    synth_rows = synthesize_zero_activity_rows(out_rows, employees, settings, lo, hi)
+    if len(synth_rows) != len(out_rows) or not all(synth_rows[i] is out_rows[i] for i in range(len(out_rows))):
         h_fail += 1
         continue
     by_store = {}

@@ -3,7 +3,7 @@ import base64
 import os
 import requests
 from datetime import datetime, timezone, timedelta, date as _date
-from fastapi import APIRouter, HTTPException, Header, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Response
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.modules.storeops import google_reviews as _gr
@@ -363,12 +363,37 @@ def _tenant_pp_settings(org_id):
     return payroll_salary.tenant_pay_period_settings(rows[0] if rows else {})
 
 
-def _employees_with_pay_fields(org_id, base_fields):
+def _employees_with_pay_fields(org_id, base_fields, eq: dict = None):
+    """`eq` applies additional `.eq(k, v)` filters SERVER-SIDE (Gate-1 N3 — house perf doctrine:
+    filter in the query, not fetch-all-then-filter in Python) — e.g. `{"employee_id": employee_id}`
+    for a single-employee lookup, same as any other org-scoped query in this file."""
+    def _q(fields):
+        q = sb().table("employees").select(fields).eq("org_id", org_id)
+        for k, v in (eq or {}).items():
+            q = q.eq(k, v)
+        return q
     try:
-        return (sb().table("employees").select(f"{base_fields},{payroll_salary.PAY_FIELDS}")
-                .eq("org_id", org_id).execute().data) or []
+        return _q(f"{base_fields},{payroll_salary.PAY_FIELDS}").execute().data or []
     except Exception:
-        return sb().table("employees").select(base_fields).eq("org_id", org_id).execute().data or []
+        return _q(base_fields).execute().data or []
+
+
+def _warn_salary_override_failed(response, org_id, endpoint, exc):
+    """Gate-1 N5 fix (2026-07-27): the salary-override call sites (GET /payroll, /payroll-by-store,
+    hr's /compensation) wrap the whole override in a try/except so a bug there can NEVER break the
+    base hourly report — but a bare `except Exception: pass` makes a real failure silently revert a
+    salaried employee's row to $0-hourly with no signal anywhere, which is the exact failure mode the
+    house doctrine calls out as unacceptable. This (a) always prints a WARN (visible in Railway logs,
+    matching `_log_payroll_change`'s own WARN-on-failure convention) and (b) sets a response header
+    (`X-Salary-Override-Warning`) — never a response BODY field, since GET /payroll returns a bare
+    JSON array and changing that shape would break every existing consumer; a header is the one
+    channel that's genuinely additive regardless of whether the endpoint returns a list or a dict."""
+    print(f"WARN salary pay-basis override failed for org {org_id} on {endpoint}: {exc}")
+    if response is not None:
+        try:
+            response.headers["X-Salary-Override-Warning"] = f"salary override failed on {endpoint}: {str(exc)[:180]}"
+        except Exception:
+            pass
 
 
 def _resolve_range(month, start, end):
@@ -644,7 +669,7 @@ def payroll_change_log(start: str = "", end: str = "", employee_id: str = "", st
 
 @router.get("/payroll")
 def get_payroll(month: str = None, start: str = None, end: str = None,
-                 authorization: str = Header(default=""), org_id: str = ORG_ID):
+                 authorization: str = Header(default=""), org_id: str = ORG_ID, response: Response = None):
     """Returns scheduled vs actual hours per employee for payroll.
 
     Accepts EITHER the legacy `month` ('YYYY-MM', unchanged, still byte-identical) OR an explicit
@@ -821,14 +846,23 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
     # SALARY PAY-BASIS OVERRIDE (owner directive 2026-07-27, Deliverable 3) — see payroll_salary.py's
     # module docstring. Runs AFTER the RPC-fast-path/legacy-path convergence above, so it is the ONE
     # shared point that applies regardless of which hours-aggregation branch ran. try/except: a bad
-    # tenant-settings row or unexpected data must never break the base hourly report.
+    # tenant-settings row or unexpected data must never break the base hourly report — but Gate-1 N5:
+    # never SILENTLY (see _warn_salary_override_failed).
+    #
+    # Gate-1 F1 fix (MAJOR, 2026-07-27): apply_to_payroll_rows only overrides an EXISTING row — a
+    # salaried employee with ZERO activity this period (no shift, no punch) never gets a row from the
+    # activity-driven aggregation above, so they were silently MISSING from this report while still
+    # correctly appearing in GET /payroll-by-store and GET /compensation (which iterate the full
+    # roster, not activity). synthesize_zero_activity_rows appends a 0-hours row for exactly that case
+    # — see its own docstring in payroll_salary.py.
     if lo and hi:
         try:
-            rows = payroll_salary.apply_to_payroll_rows(
-                rows, employees, _tenant_pp_settings(org_id),
-                _date.fromisoformat(lo), _date.fromisoformat(hi) - timedelta(days=1))
-        except Exception:
-            pass
+            pp_settings = _tenant_pp_settings(org_id)
+            lo_d, hi_d = _date.fromisoformat(lo), _date.fromisoformat(hi) - timedelta(days=1)
+            rows = payroll_salary.apply_to_payroll_rows(rows, employees, pp_settings, lo_d, hi_d)
+            rows = payroll_salary.synthesize_zero_activity_rows(rows, employees, pp_settings, lo_d, hi_d)
+        except Exception as e:
+            _warn_salary_override_failed(response, org_id, "GET /payroll", e)
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [r for r in rows if in_keyset(ks, r.get("store"))]
@@ -837,7 +871,7 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
 
 @router.get("/payroll-by-store")
 def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
-                          authorization: str = Header(default=""), org_id: str = ORG_ID):
+                          authorization: str = Header(default=""), org_id: str = ORG_ID, response: Response = None):
     """Per-STORE payroll for a month OR an arbitrary start/end range (same precedence as /payroll —
     see _resolve_range), for the Store Expenses 'Employee Salaries' auto-fill.
 
@@ -968,8 +1002,8 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
             by_store = payroll_salary.apply_to_by_store(
                 by_store, employees, emp_store_hours, emp_store_dollars, _tenant_pp_settings(org_id),
                 _date.fromisoformat(lo), _date.fromisoformat(hi) - timedelta(days=1))
-        except Exception:
-            pass
+        except Exception as e:
+            _warn_salary_override_failed(response, org_id, "GET /payroll-by-store", e)
 
     rows = list(by_store.values())
     for r in rows:
@@ -1008,8 +1042,11 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
     if not (employee_id and start and end):
         raise HTTPException(400, "employee_id, start and end are required")
     ids, variant_name = _emp_id_variants(org_id, employee_id)
-    emp_rows = _employees_with_pay_fields(org_id, "employee_id,name,pay_rate,is_active")
-    emp_rows = [e for e in emp_rows if e.get("employee_id") == employee_id]
+    # Gate-1 N3 fix (2026-07-27): filter server-side (eq=) instead of fetching the whole org roster
+    # and filtering in Python — this endpoint is called once per row-click, but there's no reason to
+    # pay the fetch-all cost when the query can do it (house perf doctrine).
+    emp_rows = _employees_with_pay_fields(org_id, "employee_id,name,pay_rate,is_active",
+                                           eq={"employee_id": employee_id})
     emp = emp_rows[0] if emp_rows else {}
     name = emp.get("name") or variant_name or employee_id
     pay_rate = float(emp.get("pay_rate") or 0)
@@ -1335,6 +1372,10 @@ STORE_FIELDS = ("store_code", "address", "market", "monthly_target", "is_active"
 # edit in the SAME PATCH body (name/email/home_store/...) is unaffected, so this can't break an
 # existing non-pay-editing caller.
 _PAY_GATED_FIELDS = {"pay_rate", "pay_basis", "pay_amount", "termination_date"}
+# The SAME set, also logged to storeops.payroll_change_log on change (Gate-1 F2, 2026-07-27 — every
+# gated field IS a pay field, so every gated field is logged; a tuple, not a set, for a deterministic
+# select-column-list/diff-loop order).
+_PAY_LOGGED_FIELDS = ("pay_rate", "pay_basis", "pay_amount", "termination_date")
 
 
 @router.post("/employees/bulk")
@@ -1414,9 +1455,12 @@ def update_employee(emp_id: str, updates: dict, authorization: str = Header(defa
     write — this previously took NO org filter at all, and it's the pay_rate write path.
 
     MANAGER-GATED for pay fields (see _PAY_GATED_FIELDS) — a genuine security hardening added
-    2026-07-27, not just posture-matching (docs/handoffs/people.md). A pay_basis/pay_amount edit is
-    also best-effort logged to storeops.payroll_change_log (entry_point='pay_basis_change', migration
-    414) so it shows the same ✎ manual-edit trail as an hours correction."""
+    2026-07-27, not just posture-matching (docs/handoffs/people.md). Every field in
+    `_PAY_LOGGED_FIELDS` (pay_rate/pay_basis/pay_amount/termination_date — ALL of the gated fields,
+    since all four are pay-relevant) is best-effort logged to storeops.payroll_change_log
+    (entry_point='pay_basis_change', migration 414) so it shows the same ✎ manual-edit trail as an
+    hours correction. Gate-1 F2 fix (2026-07-27): termination_date and pay_rate were gated but NOT
+    logged before this — both are now in the logged set, same one-liner as pay_basis/pay_amount."""
     row = {k: updates[k] for k in EMP_FIELDS if k in updates}
     if not row:
         raise HTTPException(400, "no valid fields to update")
@@ -1434,9 +1478,10 @@ def update_employee(emp_id: str, updates: dict, authorization: str = Header(defa
         except (TypeError, ValueError):
             row["pay_amount"] = None
     before = None
-    if {"pay_basis", "pay_amount"} & set(row):
-        before_rows = (sb().table("employees").select("id,employee_id,name,pay_basis,pay_amount")
-                       .eq("id", emp_id).eq("org_id", org_id).limit(1).execute().data) or []
+    if set(_PAY_LOGGED_FIELDS) & set(row):
+        before_rows = (sb().table("employees").select(
+            "id,employee_id,name," + ",".join(_PAY_LOGGED_FIELDS))
+            .eq("id", emp_id).eq("org_id", org_id).limit(1).execute().data) or []
         before = before_rows[0] if before_rows else None
     r = sb().table("employees").update(row).eq("id", emp_id).eq("org_id", org_id).execute()
     if not r.data:
@@ -1444,7 +1489,7 @@ def update_employee(emp_id: str, updates: dict, authorization: str = Header(defa
     after = r.data[0]
     if before is not None:
         who = _who_for_log(authorization, org_id)
-        for f in ("pay_basis", "pay_amount"):
+        for f in _PAY_LOGGED_FIELDS:
             if f in row and str(before.get(f) or "") != str(after.get(f) or ""):
                 _log_payroll_change(org_id, field=f, entry_point="pay_basis_change",
                                      employee_id=after.get("employee_id"), employee_name=after.get("name"),
