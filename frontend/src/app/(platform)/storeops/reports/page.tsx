@@ -122,6 +122,10 @@ export default function StoreOpsReportsPage() {
     { header: 'Pay $/hr', get: r => r.pay_rate, money: true },
     { header: 'Sched Hrs', get: r => Math.round((r.scheduled_hours || 0) * 10) / 10, align: 'right' },
     { header: 'Actual Hrs', get: r => Math.round((r.actual_hours || 0) * 10) / 10, align: 'right' },
+    // Lunch-break auto-deduction (owner directive 2026-07-27, Deliverable 3) — HONESTY: an explicit
+    // line, never folded silently into Actual Hrs (which is already the NET/post-deduction figure —
+    // see GET /payroll). 0 for the common case (feature off, or no day qualified this period).
+    { header: 'Lunch (auto)', get: r => r.lunch_deduction_hours ? `− ${Number(r.lunch_deduction_hours).toFixed(2)}` : '' },
     // Net = actual − scheduled, SIGNED (owner directive 2026-07-27) — ▲/▼ highlighted cue.
     { header: 'Net (Actual − Sched)', get: r => {
         const v = (r.actual_hours || 0) - (r.scheduled_hours || 0)

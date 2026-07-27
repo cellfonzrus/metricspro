@@ -145,6 +145,16 @@ def reconcile_employee_identity(rows, employees):
             "scheduled_pay": round(sum(_num(r.get("scheduled_pay")) for _, r in members), 2),
             "actual_pay": round(sum(_num(r.get("actual_pay")) for _, r in members), 2),
         }
+        # Lunch-break auto-deduction (2026-07-27, Deliverable 3): the deducted hours already subtracted
+        # out of the SOURCE rows' own actual_hours above (see router.py get_payroll) — summed here too
+        # so the informational total survives the merge instead of silently vanishing from whichever
+        # bucket carried it (always the timelog/business-id bucket, since storeops.timelog.employee_id
+        # is always the business id). EQUIVALENCE: the key is only added to the merged row when at
+        # least one member actually HAS it (the feature is available) — never fabricated as a bare 0.0
+        # on a caller/fixture that predates this feature, so an exact-JSON-shape assertion elsewhere
+        # stays byte-identical pre-migration-418.
+        if any("lunch_deduction_hours" in r for _, r in members):
+            merged["lunch_deduction_hours"] = round(sum(_num(r.get("lunch_deduction_hours")) for _, r in members), 2)
         # Dominant-store LABEL only (non-monetary) across the merged members — the member with the
         # larger hours weight wins, first-seen tie-break (mirrors the router's own dominant-store
         # convention for a single employee's multi-store hours).
