@@ -249,6 +249,10 @@ try:
           sess._thread.is_alive())
     check("B: the browser was NOT closed after auth", _LAST_BROWSER["b"].closed is False)
     check("B: can_pull() is True (alive + authenticated + pull_fn set)", sess.can_pull() is True)
+    # 2026-07-27 (agent/commission/vidapay-pull-after-login): authenticating now ALSO kicks the pull
+    # automatically — the owner's "signs in but imports nothing" was the designed behaviour of leaving
+    # the trusted session idle until a human pressed a SECOND button. So one pull has already run here.
+    check("B2: authenticating auto-pulled once (no operator click needed)", len(pulled_pages) == 1)
 
     # ▶ Pull now → runs on the live session, returns the pull result, on the SAME live page object.
     live_page = None
@@ -257,7 +261,7 @@ try:
     res = sess.run_pull_blocking(timeout=6)
     check("C: run_pull_blocking returns the live pull result (not None, not a cold restore)",
           isinstance(res, dict) and res.get("rows_ingested") == 7)
-    check("C: exactly one pull ran on the live session", len(pulled_pages) == 1)
+    check("C: the manual ▶ Pull now ran on top of the automatic one", len(pulled_pages) == 2)
     # the page the pull ran on is the same object the session authenticated on (reuse, not fresh ctx)
     check("C: the pull ran on the SAME page the live session holds (no cold restore / no re-nav)",
           pulled_pages and pulled_pages[0].goto_calls == 0)
@@ -267,7 +271,7 @@ try:
 
     # a SECOND pull works on the same still-open session
     res2 = sess.run_pull_blocking(timeout=6)
-    check("D: a second ▶ Pull now reuses the same open session", res2 and len(pulled_pages) == 2)
+    check("D: a second ▶ Pull now reuses the same open session", res2 and len(pulled_pages) == 3)
 
     # CANCEL closes it → browser closes, thread ends, no longer pullable.
     sess.cancel()
@@ -317,7 +321,10 @@ try:
         {"report_key": "ma_commission", "display_name": "Commission Details"},
         {"report_key": "ma_daily_tx", "display_name": "Daily TX"}]
 
-    def _fake_one(page, client, org_id, source_id, carrier_id, source_row, spec, start_dt, end_dt):
+    # 2026-07-27: _pull_one_report gained `frame` + `options` (the Reports page is resolved ONCE per
+    # pull now, and the portal's real report names are passed down for the failure message).
+    def _fake_one(page, client, org_id, source_id, carrier_id, source_row, spec, start_dt, end_dt,
+                  frame=None, options=None):
         seen["pages"].append(page)
         seen["specs"].append(spec.get("report_key"))
         return {"report_key": spec.get("report_key"), "ok": True, "rows_ingested": 5}

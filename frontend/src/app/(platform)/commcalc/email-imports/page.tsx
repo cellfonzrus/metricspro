@@ -49,6 +49,8 @@ export default function EmailImportsPage() {
   const [srcMsg, setSrcMsg] = useState('')
   const [proxyTest, setProxyTest] = useState<any>(null) // { proxy, direct, routed_through_proxy, is_us, summary }
   const [proxyBusy, setProxyBusy] = useState(false)
+  // 🔧 What the pull saw — the per-report outcome + the portal's own report vocabulary (mig 242).
+  const [pullDiag, setPullDiag] = useState<any>(null)
 
   async function testProxy() {
     const px = (srcDraft?.proxy_url || '').trim()
@@ -302,14 +304,37 @@ export default function EmailImportsPage() {
     try { await api(`/api/v1/commcalc/data-sources/${s.id}`, { method: 'DELETE' }); const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) }
     catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)) }
   }
+  // A pull that imported NOTHING is never a ✅. Before 2026-07-27 this rendered
+  // "✅ pulled 0 rows across 0 report(s)" — a green tick on a connector that had never delivered a
+  // single row, which is exactly what the owner reported as "shows logged in but imports nothing".
+  function pullMsg(s: any, r: any) {
+    const delivered = r?.delivered !== undefined ? !!r.delivered : Number(r?.rows_ingested || 0) > 0
+    const text = r?.status || r?.error || (delivered ? 'Pulled.' : 'Nothing imported.')
+    return delivered ? `✅ ${text}` : `⚠️ ${text}`
+  }
   async function runSource(s: any) {
     setSrcMsg('⏳ Pulling…')
+    let zero = false
     try {
       const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/run`, { method: 'POST', body: '{}' })
       if (r.needs_2fa) { setSrcMsg(`🔒 ${r.error}`); setTwoFa({ source: s, hint: null }) }
-      else setSrcMsg(r.ok ? `✅ ${r.status || 'Pulled.'}` : `ℹ️ ${r.error}`)
+      else if (!r.ok) setSrcMsg(`⚠️ ${r.error}`)
+      else { setSrcMsg(pullMsg(s, r)); zero = !(r?.delivered !== undefined ? r.delivered : Number(r?.rows_ingested || 0) > 0) }
     } catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)) }
     try { const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || []) } catch { /* keep list */ }
+    if (zero) openPullDiag(s)   // 0 rows ⇒ put the WHY on screen without making anyone hunt for it
+  }
+  // The durable "what the last pull saw" record (mig 242): every report the pull tried, why each one
+  // failed, and the report names this portal's own dropdown offers — the vocabulary to fix Report
+  // mapping with. Serves the module's own calibration strategy, which until now had no last mile.
+  async function openPullDiag(s: any) {
+    setPullDiag({ id: s.id, label: s.label || s.username || s.processor, loading: true })
+    try {
+      const r: any = await api(`/api/v1/commcalc/data-sources/${s.id}/pull-diagnostic`)
+      setPullDiag({ id: s.id, label: s.label || s.username || s.processor, loading: false, ...r })
+    } catch (e: any) {
+      setPullDiag({ id: s.id, label: s.label || s.username || s.processor, loading: false, note: '❌ ' + (e?.message || e) })
+    }
   }
   // Interactive portal login: submit the stored 3 creds → land on the 2FA challenge → the operator
   // enters the code from their email/SMS → the authenticated session is saved for scheduled pulls.
@@ -730,7 +755,11 @@ export default function EmailImportsPage() {
                   <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.account_id ? `${s.account_id} / ` : ''}{s.username || '—'}{s.has_password ? ' 🔑' : ''}</td>
                   <td style={{ padding: '6px 8px', fontSize: 12 }}>
                     {authBadge(s)}
-                    {s.last_status && <div style={{ color: 'var(--text3)', fontSize: 11, marginTop: 2, maxWidth: 240, whiteSpace: 'normal' }}>{s.last_status}</div>}
+                    {/* "Connected" describes the LOGIN. Whether anything was IMPORTED is a separate
+                        fact, and it is the one that matters — so a 0-row pull is amber here, never a
+                        green success line under a green chip. */}
+                    {s.last_status && <div style={{ color: s.last_pull_delivered === false ? '#9a3412' : 'var(--text3)', background: s.last_pull_delivered === false ? '#fff7ed' : undefined, borderRadius: 6, padding: s.last_pull_delivered === false ? '3px 6px' : undefined, fontSize: 11, marginTop: 2, maxWidth: 240, whiteSpace: 'normal' }}>{s.last_status}</div>}
+                    {s.has_pull_diag && <button className="btn btn-secondary" style={{ fontSize: 11, padding: '1px 7px', marginTop: 4 }} onClick={() => openPullDiag(s)}>🔧 What the pull saw</button>}
                   </td>
                   <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {['vidapay', 'total_access', 'b2bsoft', 'b2b'].includes((s.processor || '').toLowerCase()) && (
@@ -810,6 +839,12 @@ export default function EmailImportsPage() {
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input type="checkbox" checked={!!srcDraft.enabled} onChange={e => setSrcDraft({ ...srcDraft, enabled: e.target.checked })} /> Enabled (auto-pull once the scraper is wired)</label>
+              {/* mig 242 — a signed-in session that expires before anything is pulled is worthless. */}
+              <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }} title="As soon as a live login succeeds, pull this login's reports on that same trusted browser. Turn off only if you want to sign in without importing.">
+                <input type="checkbox" checked={srcDraft.auto_pull_after_login !== false} onChange={e => setSrcDraft({ ...srcDraft, auto_pull_after_login: e.target.checked })} /> Pull reports right after login</label>
+              <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }} title="How many months back each pull covers (each report's own cap still applies).">
+                Months back
+                <input type="number" min={1} max={12} value={srcDraft.months_back ?? 2} onChange={e => setSrcDraft({ ...srcDraft, months_back: Number(e.target.value) || 2 })} style={{ width: 56, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13 }} /></label>
               <div style={{ flex: 1 }} />
               <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setSrcDraft(null)}>Cancel</button>
               <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={saveSource}>💾 Save login</button>
@@ -951,13 +986,39 @@ export default function EmailImportsPage() {
                     {liveFocused ? '⌨ typing here' : 'click to type here'}
                   </div>)}
               </div>
-              {done ? (
-                <div style={{ padding: '10px 12px', borderRadius: 8, background: '#dcfce7', color: '#166534', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontWeight: 700 }}>✅ Signed in — the session is saved and reused until it expires.</span>
-                  <div style={{ flex: 1 }} />
-                  <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={() => closeLive(false)}>Done</button>
-                </div>
-              ) : showCode ? (
+              {done ? (() => {
+                // SIGNED IN IS NOT IMPORTED. The reports are now pulled automatically the moment the
+                // login succeeds (mig 242 auto_pull_after_login), and this block reports THAT outcome —
+                // a 0-row pull is amber with the next step, never a green "session saved" full stop.
+                const p = liveState?.pull || {}
+                const green = p.ran && p.delivered
+                const amber = p.ran && p.delivered === false
+                return (
+                  <div style={{ padding: '10px 12px', borderRadius: 8, background: amber ? '#fff7ed' : '#dcfce7', color: amber ? '#9a3412' : '#166534', fontSize: 13, border: amber ? '1px solid #fdba74' : undefined }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 700 }}>
+                        {green ? `✅ Signed in and imported ${p.rows ?? ''} row(s).`
+                          : amber ? '⚠️ Signed in — but nothing was imported.'
+                            : liveState?.auto_pull === false ? '✅ Signed in — the session is saved (automatic pull is switched off for this login).'
+                              : '✅ Signed in — the session is saved and reused until it expires.'}
+                      </span>
+                      <div style={{ flex: 1 }} />
+                      {(green || amber) && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => live?.source && openPullDiag(live.source)}>🔧 What the pull saw</button>}
+                      <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={() => closeLive(false)}>Done</button>
+                    </div>
+                    {p.ran && p.status && <div style={{ marginTop: 6, fontSize: 12.5, whiteSpace: 'normal' }}>{p.status}</div>}
+                    {amber && (
+                      <div style={{ marginTop: 6, fontSize: 12 }}>
+                        {p.reason === 'report_not_listed' && p.options?.length > 0
+                          ? <>This portal&apos;s Reports list actually offers: <b>{p.options.slice(0, 8).join(', ')}</b>. Put those exact names on <a href="/commcalc/report-mappings">Report mapping</a>, then press ▶ Pull now.</>
+                          : p.reason === 'no_reports_page'
+                            ? <>The pull could not open the portal&apos;s Reports page from where the login landed. Open <b>🔧 What the pull saw</b> — it lists the menu links this login really has.</>
+                            : <>Open <b>🔧 What the pull saw</b> for the per-report detail, or fix the report names on <a href="/commcalc/report-mappings">Report mapping</a>.</>}
+                      </div>
+                    )}
+                  </div>
+                )
+              })() : showCode ? (
                 <div>
                   <input autoFocus inputMode="numeric" value={liveCode} onChange={e => setLiveCode(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') submitLive() }} placeholder="123456"
@@ -980,6 +1041,73 @@ export default function EmailImportsPage() {
               ) : (
                 <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>{ph === 'error' || ph === 'cancelled' ? 'Close this and try again, or use 🔐 Log in as a fallback.' : 'Watch the live screen above — the code box appears here once the portal challenges.'}</div>
               )}
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* ── 🔧 What the pull saw — the last pull's per-report outcome + the portal's own vocabulary ── */}
+      {pullDiag && (() => {
+        const d = pullDiag.diag || null
+        const opts: string[] = (d?.calibration?.portal_report_options || d?.probe?.report_options || [])
+        const navs: any[] = (d?.probe?.nav_links || [])
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }} onClick={() => setPullDiag(null)}>
+            <div className="card" style={{ padding: 18, width: 880, maxWidth: '94vw', maxHeight: '90vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>🔧 What the pull saw — <span style={{ fontWeight: 400 }}>{pullDiag.label}</span></div>
+                {pullDiag.at && <span style={{ color: 'var(--text3)', fontSize: 12 }}>{new Date(pullDiag.at).toLocaleString()}</span>}
+                <div style={{ flex: 1 }} />
+                <a href="/commcalc/report-mappings" className="btn btn-secondary" style={{ fontSize: 12 }}>🗺️ Report mapping</a>
+                <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setPullDiag(null)}>Close</button>
+              </div>
+              {pullDiag.loading ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div> : (<>
+                {pullDiag.note && <div style={{ padding: 10, marginBottom: 10, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13 }}>{pullDiag.note}</div>}
+                {d && (
+                  <div style={{ padding: '10px 12px', borderRadius: 8, marginBottom: 12, fontSize: 13, background: d.delivered ? '#dcfce7' : '#fff7ed', color: d.delivered ? '#166534' : '#9a3412', border: d.delivered ? undefined : '1px solid #fdba74' }}>
+                    <b>{d.delivered ? `✅ Imported ${d.rows_ingested ?? 0} row(s).` : '⚠️ This pull imported nothing.'}</b>
+                    <div style={{ marginTop: 4, whiteSpace: 'normal' }}>{d.status}</div>
+                    {d.reports_page_reachable === false && <div style={{ marginTop: 4 }}>The portal&apos;s <b>Reports page was not reachable</b> from the page this login landed on — see the menu links below.</div>}
+                  </div>
+                )}
+                {opts.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Reports this portal login actually offers ({opts.length})</div>
+                    <p style={{ fontSize: 12, color: 'var(--text2)', margin: '0 0 6px' }}>These are the names in the portal&apos;s own dropdown. A report whose <b>display name</b> on Report mapping is not one of these can never be selected — copy the right name across.</p>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {opts.map((o, i) => <code key={i} style={{ fontSize: 12, background: 'var(--surface2)', padding: '2px 7px', borderRadius: 6 }}>{o}</code>)}
+                    </div>
+                  </div>
+                )}
+                {(d?.reports || []).length > 0 && (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12 }}>
+                    <thead><tr style={{ background: 'var(--surface2)' }}>{['Report', 'Target table', 'Rows', 'Outcome'].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
+                    <tbody>
+                      {d.reports.map((r: any, i: number) => (
+                        <tr key={i} style={{ borderTop: '1px solid var(--border)', fontSize: 12.5 }}>
+                          <td style={{ padding: '6px 8px', fontWeight: 600 }}>{r.report_key}</td>
+                          <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{r.target_table || '—'}</td>
+                          <td style={{ padding: '6px 8px' }}>{r.rows_ingested ?? 0}</td>
+                          <td style={{ padding: '6px 8px', color: r.rows_ingested ? '#166534' : '#9a3412', whiteSpace: 'normal' }}>
+                            {r.rows_ingested ? `imported ${r.months_covered?.length || 0} month(s)` : (r.error || (r.ok ? 'ran, returned no rows' : 'failed'))}
+                            {r.calibration && !r.rows_ingested && <span style={{ color: '#b45309' }}> · params not calibrated yet</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {navs.length > 0 && (
+                  <details>
+                    <summary style={{ fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Menu links this login has ({navs.length})</summary>
+                    <p style={{ fontSize: 12, color: 'var(--text2)', margin: '6px 0' }}>Captured from the signed-in page. If none of these looks like a Reports menu, this login may not have report access at all.</p>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {navs.slice(0, 60).map((l: any, i: number) => <span key={i} style={{ fontSize: 11.5, background: 'var(--surface2)', padding: '2px 7px', borderRadius: 6 }}>{l.t}</span>)}
+                    </div>
+                  </details>
+                )}
+                {d?.probe?.url && <p style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10 }}>Seen at <code>{d.probe.url}</code>{d.probe.title ? ` · “${d.probe.title}”` : ''} · {d.probe.frames || 1} frame(s). No password or field value is ever recorded here.</p>}
+              </>)}
             </div>
           </div>
         )
