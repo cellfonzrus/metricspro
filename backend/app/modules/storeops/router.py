@@ -3,9 +3,10 @@ import base64
 import os
 import requests
 from datetime import datetime, timezone, timedelta, date as _date
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, BackgroundTasks
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.modules.storeops import google_reviews as _gr
 from app.modules.storeops.pto_accrual import (
     DEFAULT_CONFIG as PTO_DEFAULT_CONFIG,
     resolve_effective_config as pto_resolve_effective_config,
@@ -3711,6 +3712,680 @@ def run_payroll_expenses(period: str, authorization: str = Header(default=""), o
             "expense_ledger_rows_written": len(exp_rows), "push": push,
             "gross_cells": gross_cells, "gross_ledger_rows_written": gross_ledger_rows_written,
             "gross_ledger_error": _gross_ledger_error, "gross_push": gross_push}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# GOOGLE REVIEWS (Phase 1) — owner directive 2026-07-27. Pure logic + Google Places HTTP calls live
+# in google_reviews.py (imported as `_gr` above); everything here is auth/scoping glue using this
+# file's OWN caller-identity/span helpers (see the module docstring in google_reviews.py for why the
+# split is this way, not a sub-router like hr/letters.py).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+def _require_google_reviews_admin(authorization, x_active_org, org_id):
+    """Per-setting edit-permission gate (SETTING_AREAS 'google_reviews' pattern) for the Google
+    Reviews CONFIG (api key / target / sweep schedule / place overrides). `google_reviews` is NOT
+    yet in core's SETTING_AREAS registry (filed NEEDS CORE — see the people handoff) — that's fine,
+    `_can_edit_setting` already degrades correctly for an unregistered key (super_admin always yes;
+    a full-scope/'admin' role yes; anyone else no) per its own documented precedence, it just isn't
+    yet toggleable per-ROLE in the Roles UI. Falls back to `_require_manager` when the settings-area
+    path can't resolve the caller at all (RBAC off / no token), so this never blocks a legitimate
+    manager on a resolution hiccup — same posture as commcalc's `_require_import_admin` /
+    hr/letters.py's `_require_letters_admin`."""
+    try:
+        from app.modules.core.router import _can_edit_setting, _resolve_caller, _uid_from_token
+        uid = _uid_from_token(authorization)
+        if uid:
+            caller = _resolve_caller(get_supabase(), uid, x_active_org)
+            if caller and caller.get("org_id"):
+                if not (caller.get("super_admin") or _can_edit_setting(caller, "google_reviews")):
+                    raise HTTPException(403, "You don't have permission to edit Google Reviews settings.")
+                return caller.get("org_id")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    u = _require_manager(authorization, org_id)
+    return u.get("org_id") or org_id
+
+
+def _gr_manager_span(authorization, org_id):
+    """None = UNRESTRICTED (admin/'all'-scope role, or an unresolvable caller) — same fallback
+    posture /employees/visible uses. Otherwise the (possibly empty) list of store_codes the caller's
+    role/org-tree position grants them."""
+    au = _caller_app_user(authorization, org_id)
+    if not au:
+        return None
+    scope = _role_scope(org_id, (au.get("role") or "").strip())
+    if scope == "all":
+        return None
+    return _caller_span_codes(authorization, org_id)
+
+
+def _gr_store_card(client, org_id, store_code, store_row, cfg, employee_id=None):
+    """One store's rating/target/status + recent reviews (+ the caller's own open action plan, when
+    `employee_id` is given). Shared by /google-reviews/my, /google-reviews/dm-dashboard and
+    /google-reviews/store/{store_code}. Never raises — every read degrades to an empty/None default."""
+    try:
+        ov = (client.table("google_review_store").select("*").eq("org_id", org_id)
+              .eq("store_code", store_code).limit(1).execute().data) or []
+    except Exception:
+        ov = []
+    ov0 = ov[0] if ov else {}
+    target = _gr.effective_target(ov0, cfg.get("target_default"))
+    try:
+        snaps = (client.table("google_review_snapshot").select("*").eq("org_id", org_id)
+                 .eq("store_code", store_code).order("fetched_at", desc=True)
+                 .limit(1).execute().data) or []
+    except Exception:
+        snaps = []
+    snap = snaps[0] if snaps else {}
+    rating, review_count = snap.get("rating"), snap.get("review_count")
+    status = _gr.rating_status(rating, target)
+    try:
+        reviews = (client.table("google_review_item").select("*").eq("org_id", org_id)
+                   .eq("store_code", store_code).order("first_seen_at", desc=True)
+                   .limit(10).execute().data) or []
+    except Exception:
+        reviews = []
+    for r in reviews:
+        r["possible_mention"] = bool(r.get("matched_employee_id"))
+    my_plan = None
+    if employee_id:
+        try:
+            plans = (client.table("action_plan").select("*").eq("org_id", org_id)
+                     .eq("store_code", store_code).eq("employee_id", str(employee_id))
+                     .neq("status", "completed").order("created_at", desc=True)
+                     .limit(1).execute().data) or []
+            my_plan = plans[0] if plans else None
+        except Exception:
+            my_plan = None
+    return {"store_code": store_code, "address": store_row.get("address"),
+            "market": store_row.get("market"), "place_id": ov0.get("place_id"),
+            "rating": rating, "review_count": review_count, "target": target, "status": status,
+            "reviews": reviews, "action_plan": my_plan,
+            "fetched_at": snap.get("fetched_at")}
+
+
+def _gr_set_sweep_status(client, org_id, status, detail, mark_run=False):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    row = {"last_attempt_at": now_iso, "last_status": status, "last_detail": (detail or "")[:500]}
+    if mark_run:
+        row["last_run_at"] = now_iso
+    try:
+        client.table("google_review_sweep_config").update(row).eq("org_id", org_id).execute()
+    except Exception:
+        pass
+
+
+def _do_google_reviews_sweep(org_id, store_codes=None):
+    """Background-task body for both /sweep/run-now and /sweep/run-due. Never raises — every failure
+    is recorded on google_review_sweep_config.last_status/last_detail instead."""
+    client = sb()
+    _gr_set_sweep_status(client, org_id, "running", "Sweep in progress…")
+    try:
+        res = _gr.sweep_org(client, org_id, only_store_codes=store_codes)
+    except Exception as e:
+        _gr_set_sweep_status(client, org_id, "error", f"Sweep failed: {e}", mark_run=True)
+        return {"ok": False, "error": str(e)}
+    if res.get("skipped"):
+        _gr_set_sweep_status(client, org_id, "idle", res.get("reason") or "not enabled", mark_run=True)
+        return res
+    stores_res = res.get("stores") or []
+    # Gate-1 N5: a FATAL failure (ok=False, e.g. no place_id resolvable) is a real 'error'; a
+    # non-fatal per-row write failure (ok=True but status='partial' — see sweep_store) is reported
+    # separately so a transient write hiccup never reads as an outright sweep failure.
+    fatal_errs = [s.get("error") for s in stores_res if s.get("error") and not s.get("ok")]
+    partials = [s for s in stores_res if s.get("status") == "partial"]
+    ok_count = len([s for s in stores_res if s.get("ok")])
+    detail = f"OK — {ok_count}/{len(stores_res)} store(s)"
+    if partials:
+        detail += f" · {len(partials)} partial ({'; '.join(p.get('partial_detail') or '' for p in partials)[:200]})"
+    if fatal_errs:
+        detail += f" · {len(fatal_errs)} error(s)"
+    status = "ok"
+    if fatal_errs and ok_count == 0:
+        status = "error"
+    elif fatal_errs or partials:
+        status = "partial"
+    _gr_set_sweep_status(client, org_id, status, detail, mark_run=True)
+    all_notes = [n for s in stores_res for n in (s.get("notifications") or [])]
+    if all_notes:
+        try:
+            from app.modules.notify.channels import email_resend
+            if email_resend.is_configured():
+                import asyncio
+
+                async def _send_all():
+                    for n in all_notes:
+                        try:
+                            await email_resend.send_email(to=n["email"], subject=n["subject"],
+                                                          html=f"<p>{n['body']}</p>")
+                        except Exception:
+                            pass
+                asyncio.run(_send_all())
+        except Exception:
+            pass
+    return res
+
+
+# ── config ───────────────────────────────────────────────────────────────────────────────────────
+@router.get("/google-reviews/config")
+def get_google_reviews_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Masked org config for the admin page — the api_key is NEVER returned raw (has_api_key +
+    a trailing-4-char hint only). Any manager may view; `can_edit` tells the page whether THIS
+    caller may Save (see _require_google_reviews_admin)."""
+    u = _require_manager(authorization, org_id)
+    org_id = u.get("org_id") or org_id
+    cfg = _gr.get_config(sb(), org_id)
+    out = _gr.public_config(cfg)
+    try:
+        _require_google_reviews_admin(authorization, "", org_id)
+        out["can_edit"] = True
+    except HTTPException:
+        out["can_edit"] = False
+    return out
+
+
+@router.put("/google-reviews/config")
+def put_google_reviews_config(body: dict, authorization: str = Header(default=""),
+                              x_active_org: str = Header(default=""), org_id: str = ORG_ID):
+    """api_key is WRITE-ONLY: send it to (re)set it, omit/blank to keep the existing one — same
+    posture as every other credential config (VIP/DLAR/epay sweep configs)."""
+    org_id = _require_google_reviews_admin(authorization, x_active_org, org_id)
+    row = {"org_id": org_id, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if "enabled" in body:
+        row["enabled"] = bool(body["enabled"])
+    if "target_default" in body:
+        row["target_default"] = _gr.clamp_target(body["target_default"])
+    if "notify_on_new_reviews" in body:
+        row["notify_on_new_reviews"] = bool(body["notify_on_new_reviews"])
+    key = (body.get("api_key") or "").strip()
+    if key:
+        row["api_key"] = key
+    try:
+        sb().table("google_review_config").upsert(row, on_conflict="org_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save (run migration 411 first?): {str(e)[:160]}")
+    return _gr.public_config(_gr.get_config(sb(), org_id))
+
+
+@router.get("/google-reviews/sweep-config")
+def get_google_reviews_sweep_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    u = _require_manager(authorization, org_id)
+    org_id = u.get("org_id") or org_id
+    cfg = _gr.get_sweep_config(sb(), org_id)
+    return {k: cfg.get(k) for k in ("enabled", "frequency", "day_of_week", "hour", "timezone",
+                                    "next_run_at", "last_run_at", "last_attempt_at",
+                                    "last_status", "last_detail")}
+
+
+@router.put("/google-reviews/sweep-config")
+def put_google_reviews_sweep_config(body: dict, authorization: str = Header(default=""),
+                                    x_active_org: str = Header(default=""), org_id: str = ORG_ID):
+    org_id = _require_google_reviews_admin(authorization, x_active_org, org_id)
+    cur = _gr.get_sweep_config(sb(), org_id)
+    row = {"org_id": org_id}
+    for k in ("enabled", "frequency", "day_of_week", "hour", "timezone"):
+        if k in body and body[k] is not None:
+            row[k] = body[k]
+    merged = {**cur, **row}
+    row["next_run_at"] = _gr.next_run_at(merged.get("frequency") or "daily", merged.get("day_of_week"),
+                                         merged.get("hour"), merged.get("timezone"))
+    row["updated_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        sb().table("google_review_sweep_config").upsert(row, on_conflict="org_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save (run migration 411 first?): {str(e)[:160]}")
+    return get_google_reviews_sweep_config(authorization=authorization, org_id=org_id)
+
+
+@router.post("/google-reviews/sweep/run-now")
+def post_google_reviews_run_now(background_tasks: BackgroundTasks, body: dict = None,
+                                authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manual 'Refresh now' from the admin/DM page."""
+    u = _require_manager(authorization, org_id)
+    org_id = u.get("org_id") or org_id
+    cfg = _gr.get_config(sb(), org_id)
+    if not cfg.get("api_key"):
+        raise HTTPException(400, "Set the Google Places API key first.")
+    store_codes = (body or {}).get("store_codes") if body else None
+    background_tasks.add_task(_do_google_reviews_sweep, org_id, store_codes)
+    return {"status": "started"}
+
+
+@router.post("/google-reviews/sweep/run-due")
+def post_google_reviews_run_due(background_tasks: BackgroundTasks,
+                                x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint: run every enabled config whose next_run_at has passed. Secret-gated —
+    NEVER an unauthenticated trigger. Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    client = sb()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        due = (client.table("google_review_sweep_config").select("*").eq("enabled", True)
+               .lte("next_run_at", now_iso).execute().data) or []
+    except Exception:
+        due = []
+    for cfgrow in due:
+        oid = cfgrow.get("org_id")
+        if not oid:
+            continue
+        nxt = _gr.next_run_at(cfgrow.get("frequency") or "daily", cfgrow.get("day_of_week"),
+                              cfgrow.get("hour"), cfgrow.get("timezone"))
+        try:
+            client.table("google_review_sweep_config").update({"next_run_at": nxt}).eq("org_id", oid).execute()
+        except Exception:
+            pass
+        background_tasks.add_task(_do_google_reviews_sweep, oid, None)
+    return {"triggered": len(due)}
+
+
+# ── per-store admin overlay (place_id override + target override + auto-resolve) ──────────────────
+@router.get("/google-reviews/stores")
+def list_google_review_stores(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    u = _require_manager(authorization, org_id)
+    org_id = u.get("org_id") or org_id
+    client = sb()
+    cfg = _gr.get_config(client, org_id)
+    try:
+        stores = (client.table("stores").select("store_code,address,market,is_active")
+                  .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        stores = []
+    try:
+        overlay_rows = (client.table("google_review_store").select("*")
+                        .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        overlay_rows = []
+    overlay = {r["store_code"]: r for r in overlay_rows if r.get("store_code")}
+    try:
+        snaps = (client.table("google_review_snapshot")
+                 .select("store_code,rating,review_count,fetched_at")
+                 .eq("org_id", org_id).order("fetched_at", desc=True).limit(3000).execute().data) or []
+    except Exception:
+        snaps = []
+    latest = {}
+    for s in snaps:
+        sc = s.get("store_code")
+        if sc and sc not in latest:
+            latest[sc] = s
+    out = []
+    for s in stores:
+        sc = s.get("store_code")
+        ov = overlay.get(sc) or {}
+        snap = latest.get(sc) or {}
+        target = _gr.effective_target(ov, cfg.get("target_default"))
+        rating = snap.get("rating")
+        out.append({"store_code": sc, "address": s.get("address"), "market": s.get("market"),
+                    "is_active": s.get("is_active"), "place_id": ov.get("place_id"),
+                    "place_id_source": ov.get("place_id_source"),
+                    "resolved_address": ov.get("resolved_address"),
+                    "resolved_display_name": ov.get("resolved_display_name"),
+                    "target_override": ov.get("target_override"), "target": target,
+                    "rating": rating, "review_count": snap.get("review_count"),
+                    "status": _gr.rating_status(rating, target), "fetched_at": snap.get("fetched_at")})
+    return {"stores": out, "target_default": cfg.get("target_default", _gr.DEFAULT_TARGET)}
+
+
+@router.put("/google-reviews/store-config/{store_code}")
+def put_google_review_store_config(store_code: str, body: dict, authorization: str = Header(default=""),
+                                   x_active_org: str = Header(default=""), org_id: str = ORG_ID):
+    """Manual place_id / target overrides (pick-don't-type: store_code comes from the existing store
+    roster the page already renders, never free-typed)."""
+    org_id = _require_google_reviews_admin(authorization, x_active_org, org_id)
+    store_code = (store_code or "").strip()
+    if not store_code:
+        raise HTTPException(400, "store_code is required")
+    row = {"org_id": org_id, "store_code": store_code, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if body.get("clear_target_override"):
+        row["target_override"] = None
+    elif "target_override" in body and body["target_override"] not in (None, ""):
+        row["target_override"] = _gr.clamp_target(body["target_override"])
+    if body.get("clear_place_id"):
+        row["place_id"] = None
+        row["place_id_source"] = "manual"
+    elif (body.get("place_id") or "").strip():
+        row["place_id"] = body["place_id"].strip()
+        row["place_id_source"] = "manual"
+        if body.get("resolved_address"):
+            row["resolved_address"] = body["resolved_address"]
+        if body.get("resolved_display_name"):
+            row["resolved_display_name"] = body["resolved_display_name"]
+    try:
+        sb().table("google_review_store").upsert(row, on_conflict="org_id,store_code").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save (run migration 411 first?): {str(e)[:160]}")
+    return {"ok": True}
+
+
+@router.post("/google-reviews/resolve-place")
+def post_resolve_place(body: dict, authorization: str = Header(default=""),
+                       x_active_org: str = Header(default=""), org_id: str = ORG_ID):
+    """Google Places Text Search on the store's OWN address (from the existing store registry — no
+    free-typed address here). Costs a real Places API call, so it's admin-gated."""
+    org_id = _require_google_reviews_admin(authorization, x_active_org, org_id)
+    store_code = (body.get("store_code") or "").strip()
+    if not store_code:
+        raise HTTPException(400, "store_code is required")
+    client = sb()
+    cfg = _gr.get_config(client, org_id)
+    if not cfg.get("api_key"):
+        raise HTTPException(400, "Set the Google Places API key first.")
+    try:
+        st = (client.table("stores").select("address").eq("org_id", org_id)
+              .eq("store_code", store_code).limit(1).execute().data) or []
+    except Exception:
+        st = []
+    address = (st[0].get("address") if st else None) or (body.get("address") or "").strip()
+    if not address:
+        raise HTTPException(400, "This store has no address on file — add one, or set the place_id manually.")
+    try:
+        row = _gr.resolve_place_for_store(client, org_id, store_code, address, cfg["api_key"])
+    except Exception as e:
+        raise HTTPException(400, f"Google Places lookup failed: {e}")
+    return {"ok": True, **row}
+
+
+# ── read surfaces: employee ('my') + DM/manager dashboard + one-store detail ───────────────────────
+@router.get("/google-reviews/my")
+def my_google_reviews(authorization: str = Header(default="")):
+    """The SIGNED-IN employee's own highlighted rating card(s), one per store they are scheduled at
+    (next 14 days, minus a 2-day lookback) UNION their home store — identity from the token, same
+    self-view rule as every other self-service endpoint here."""
+    org_id, employee_id = _caller_identity(authorization)
+    client = sb()
+    cfg = _gr.get_config(client, org_id)
+    ids, _name = _emp_id_variants(org_id, employee_id)
+    try:
+        emp_row = (client.table("employees").select("home_store").eq("org_id", org_id)
+                   .eq("employee_id", employee_id).limit(1).execute().data) or []
+    except Exception:
+        emp_row = []
+    home_store = ((emp_row[0].get("home_store") if emp_row else "") or "").strip()
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=2)).date().isoformat()
+    upto = (now + timedelta(days=14)).date().isoformat()
+    try:
+        shifts = (client.table("shifts").select("store_code").eq("org_id", org_id)
+                  .in_("employee_id", list(ids)).eq("is_deleted", False)
+                  .gte("shift_date", since).lte("shift_date", upto).execute().data) or []
+    except Exception:
+        shifts = []
+    store_codes = {s.get("store_code") for s in shifts if s.get("store_code")}
+    try:
+        all_stores = (client.table("stores").select("store_code,address,market")
+                      .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        all_stores = []
+    if home_store:
+        hs_upper = home_store.upper()
+        matched = next((s["store_code"] for s in all_stores
+                        if (s.get("store_code") or "").upper() == hs_upper
+                        or (s.get("address") or "").upper() == hs_upper), None)
+        if matched:
+            store_codes.add(matched)
+    store_by_code = {s["store_code"]: s for s in all_stores if s.get("store_code")}
+    out = [_gr_store_card(client, org_id, sc, store_by_code.get(sc) or {"store_code": sc}, cfg,
+                          employee_id=employee_id)
+           for sc in sorted(c for c in store_codes if c)]
+    return {"employee_id": employee_id, "stores": out,
+           "note": ("Showing Google's highlighted reviews — Google Places returns a curated subset "
+                    "(typically ~5), not every review ever left.")}
+
+
+@router.get("/google-reviews/dm-dashboard")
+def google_reviews_dm_dashboard(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Every store under the caller's span (org-tree/market/store manager scope; unrestricted for a
+    full admin — see _gr_manager_span), rating vs target highlighted, with each store's action plans
+    (open + history) for the DM review queue."""
+    u = _require_manager(authorization, org_id)
+    org_id = u.get("org_id") or org_id
+    client = sb()
+    cfg = _gr.get_config(client, org_id)
+    span = _gr_manager_span(authorization, org_id)
+    try:
+        all_stores = (client.table("stores").select("store_code,address,market,is_active")
+                      .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        all_stores = []
+    if span is not None:
+        keyset = {c.upper() for c in span}
+        stores = [s for s in all_stores if (s.get("store_code") or "").upper() in keyset]
+    else:
+        stores = all_stores
+    out = []
+    for s in stores:
+        card = _gr_store_card(client, org_id, s["store_code"], s, cfg)
+        try:
+            plans = (client.table("action_plan").select("*").eq("org_id", org_id)
+                     .eq("store_code", s["store_code"]).order("created_at", desc=True)
+                     .limit(50).execute().data) or []
+        except Exception:
+            plans = []
+        card["action_plans"] = plans
+        card["open_action_plan_count"] = len([p for p in plans if p.get("status") != "completed"])
+        card["is_active"] = s.get("is_active")
+        out.append(card)
+    return {"stores": out, "target_default": cfg.get("target_default", _gr.DEFAULT_TARGET)}
+
+
+@router.get("/google-reviews/store/{store_code}")
+def google_review_store_detail(store_code: str, authorization: str = Header(default=""),
+                               org_id: str = ORG_ID):
+    """One store's card — a manager in span, or an employee scheduled/home there, may view."""
+    client = sb()
+    au = _caller_app_user(authorization, org_id)
+    org_id = (au.get("org_id") if au else None) or org_id
+    allowed = False
+    employee_id = None
+    if au:
+        role = (au.get("role") or "").strip()
+        if role in {"admin", "market_manager", "store_manager", "district_manager",
+                    "regional_manager", "director", "executive"} or _role_scope(org_id, role) != "self":
+            span = _gr_manager_span(authorization, org_id)
+            allowed = span is None or store_code.upper() in {c.upper() for c in span}
+    if not allowed:
+        try:
+            org_id2, eid = _caller_identity(authorization)
+            org_id = org_id2 or org_id
+            employee_id = eid
+            emps = _gr.employees_for_store(client, org_id, store_code)
+            allowed = any(str(e.get("employee_id")) == str(eid) for e in emps)
+        except HTTPException:
+            allowed = False
+    if not allowed:
+        raise HTTPException(403, "You don't have access to this store's reviews.")
+    cfg = _gr.get_config(client, org_id)
+    try:
+        st = (client.table("stores").select("store_code,address,market").eq("org_id", org_id)
+              .eq("store_code", store_code).limit(1).execute().data) or []
+    except Exception:
+        st = []
+    store_row = st[0] if st else {"store_code": store_code}
+    return _gr_store_card(client, org_id, store_code, store_row, cfg, employee_id=employee_id)
+
+
+# ── action plans ─────────────────────────────────────────────────────────────────────────────────
+@router.get("/action-plan-areas")
+def list_action_plan_areas(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    u = _require_manager(authorization, org_id)
+    org_id = u.get("org_id") or org_id
+    try:
+        rows = (sb().table("action_plan_area").select("*").eq("org_id", org_id)
+                .order("area_key").execute().data) or []
+    except Exception:
+        rows = []
+    if not rows:
+        rows = [{"org_id": org_id, "area_key": _gr.DEFAULT_AREA_KEY, "label": "Google Reviews",
+                "enabled": True}]
+    return {"areas": rows}
+
+
+@router.get("/action-plans/mine")
+def my_action_plans(authorization: str = Header(default="")):
+    org_id, employee_id = _caller_identity(authorization)
+    try:
+        rows = (sb().table("action_plan").select("*").eq("org_id", org_id)
+                .eq("employee_id", str(employee_id)).order("created_at", desc=True)
+                .limit(200).execute().data) or []
+    except Exception:
+        rows = []
+    return {"items": rows}
+
+
+@router.get("/action-plans")
+def list_action_plans(status: str = "", store_code: str = "", authorization: str = Header(default=""),
+                      org_id: str = ORG_ID):
+    u = _require_manager(authorization, org_id)
+    org_id = u.get("org_id") or org_id
+    span = _gr_manager_span(authorization, org_id)
+    q = sb().table("action_plan").select("*").eq("org_id", org_id)
+    if status:
+        q = q.eq("status", status)
+    if store_code:
+        q = q.eq("store_code", store_code)
+    try:
+        rows = q.order("created_at", desc=True).limit(500).execute().data or []
+    except Exception:
+        rows = []
+    if span is not None:
+        keyset = {c.upper() for c in span}
+        rows = [r for r in rows if (r.get("store_code") or "").upper() in keyset]
+    return {"items": rows}
+
+
+@router.post("/action-plans/{plan_id}/submit")
+def submit_action_plan(plan_id: str, body: dict, authorization: str = Header(default="")):
+    """Self-service: an employee submits their OWN required action plan. identity from token."""
+    org_id, employee_id = _caller_identity(authorization)
+    plan_text = (body.get("plan_text") or "").strip()
+    if not plan_text:
+        raise HTTPException(400, "plan_text is required")
+    try:
+        rows = (sb().table("action_plan").select("*").eq("id", plan_id).eq("org_id", org_id)
+                .limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    if not rows:
+        raise HTTPException(404, "Unknown action plan.")
+    row = rows[0]
+    if str(row.get("employee_id")) != str(employee_id):
+        raise HTTPException(403, "You can only submit your own action plan.")
+    if not _gr.can_submit(row.get("status")):
+        raise HTTPException(400, f"This plan is already '{row.get('status')}' — it can't be (re)submitted.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    upd = {"status": "submitted", "plan_text": plan_text, "submitted_at": now_iso, "updated_at": now_iso}
+    (sb().table("action_plan").update(upd).eq("id", plan_id).eq("org_id", org_id).execute())
+    return {"ok": True, **row, **upd}
+
+
+@router.post("/action-plans/{plan_id}/push-back")
+def push_back_action_plan(plan_id: str, body: dict, authorization: str = Header(default=""),
+                          org_id: str = ORG_ID):
+    """DM/manager review: send a submitted plan back with comments + a due date."""
+    u = _require_manager(authorization, org_id)
+    org_id = u.get("org_id") or org_id
+    due_date = (body.get("due_date") or "").strip()[:10]
+    dm_comments = (body.get("dm_comments") or "").strip()
+    if not due_date:
+        raise HTTPException(400, "due_date is required")
+    try:
+        rows = (sb().table("action_plan").select("*").eq("id", plan_id).eq("org_id", org_id)
+                .limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    if not rows:
+        raise HTTPException(404, "Unknown action plan.")
+    row = rows[0]
+    if not _gr.can_push_back(row.get("status")):
+        raise HTTPException(400, f"This plan is '{row.get('status')}' — it isn't awaiting review.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    upd = {"status": "pushed_back", "dm_comments": dm_comments, "due_date": due_date,
+          "reviewed_at": now_iso, "reviewed_by": u.get("email") or u.get("employee_id"),
+          "employee_marked_done_at": None, "updated_at": now_iso}
+    (sb().table("action_plan").update(upd).eq("id", plan_id).eq("org_id", org_id).execute())
+    return {"ok": True, **row, **upd}
+
+
+@router.post("/action-plans/{plan_id}/approve")
+def approve_action_plan(plan_id: str, body: dict = None, authorization: str = Header(default=""),
+                        org_id: str = ORG_ID):
+    """DM/manager accepts a submitted plan as-is (optionally with a due date/comments) — moves it
+    straight to in_progress without a 'needs revision' round trip."""
+    u = _require_manager(authorization, org_id)
+    org_id = u.get("org_id") or org_id
+    try:
+        rows = (sb().table("action_plan").select("*").eq("id", plan_id).eq("org_id", org_id)
+                .limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    if not rows:
+        raise HTTPException(404, "Unknown action plan.")
+    row = rows[0]
+    if row.get("status") != "submitted":
+        raise HTTPException(400, f"This plan is '{row.get('status')}' — only a submitted plan can be approved.")
+    body = body or {}
+    due_date = (body.get("due_date") or "").strip()[:10] or None
+    now_iso = datetime.now(timezone.utc).isoformat()
+    upd = {"status": "in_progress", "reviewed_at": now_iso,
+          "reviewed_by": u.get("email") or u.get("employee_id"), "updated_at": now_iso}
+    if due_date:
+        upd["due_date"] = due_date
+    if body.get("dm_comments"):
+        upd["dm_comments"] = body["dm_comments"]
+    (sb().table("action_plan").update(upd).eq("id", plan_id).eq("org_id", org_id).execute())
+    return {"ok": True, **row, **upd}
+
+
+@router.post("/action-plans/{plan_id}/employee-mark-done")
+def employee_mark_action_plan_done(plan_id: str, authorization: str = Header(default="")):
+    """Self-service: the employee says the work is done. Status only advances to in_progress here —
+    it stays there until the DM confirms (dm-confirm-complete), so nothing is silently closed out."""
+    org_id, employee_id = _caller_identity(authorization)
+    try:
+        rows = (sb().table("action_plan").select("*").eq("id", plan_id).eq("org_id", org_id)
+                .limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    if not rows:
+        raise HTTPException(404, "Unknown action plan.")
+    row = rows[0]
+    if str(row.get("employee_id")) != str(employee_id):
+        raise HTTPException(403, "You can only update your own action plan.")
+    if not _gr.can_employee_mark_done(row.get("status")):
+        raise HTTPException(400, f"This plan is '{row.get('status')}' — nothing to mark done yet.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    upd = {"employee_marked_done_at": now_iso, "updated_at": now_iso}
+    if row.get("status") == "pushed_back":
+        upd["status"] = "in_progress"
+    (sb().table("action_plan").update(upd).eq("id", plan_id).eq("org_id", org_id).execute())
+    return {"ok": True, **row, **upd}
+
+
+@router.post("/action-plans/{plan_id}/dm-confirm-complete")
+def dm_confirm_action_plan(plan_id: str, body: dict = None, authorization: str = Header(default=""),
+                           org_id: str = ORG_ID):
+    """DM/manager confirms the employee's completed work — the ONLY path to 'completed' (terminal)."""
+    u = _require_manager(authorization, org_id)
+    org_id = u.get("org_id") or org_id
+    try:
+        rows = (sb().table("action_plan").select("*").eq("id", plan_id).eq("org_id", org_id)
+                .limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    if not rows:
+        raise HTTPException(404, "Unknown action plan.")
+    row = rows[0]
+    if not _gr.can_dm_confirm(row.get("status"), row.get("employee_marked_done_at")):
+        raise HTTPException(400, "This plan hasn't been marked done by the employee yet.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    upd = {"status": "completed", "completed_at": now_iso, "reviewed_at": now_iso,
+          "reviewed_by": u.get("email") or u.get("employee_id"), "updated_at": now_iso}
+    if body and body.get("dm_comments"):
+        upd["dm_comments"] = body["dm_comments"]
+    (sb().table("action_plan").update(upd).eq("id", plan_id).eq("org_id", org_id).execute())
+    return {"ok": True, **row, **upd}
+
 
 
 # ── Admin-attention providers (settings-audit package, 2026-07-26) ────────────────────────────────

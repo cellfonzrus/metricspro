@@ -172,3 +172,57 @@ def register(register_provider):
                       f"stable connection so enrollment can complete, or check Timeclock for the raw "
                       f"punch history.",
                       len(missing), "/storeops/timeclock", "Review time clock")]
+
+    # ── Google Reviews / Action Plans (2026-07-27 package, migrations 411-413) ─────────────────
+    @register_provider("storeops_review_action_plan_stale",
+                       label="Below-target stores with no action plan submitted",
+                       group="other", cost="cheap")
+    def _p_review_action_plan_stale(client, org_id, ctx):
+        """PENDING SETUP: an action_plan row is still 'required' (the employee hasn't submitted a
+        plan yet) more than 5 days after the store's rating first fell below target. Cheap — a
+        single scoped select on a small state-machine table, no timelog/shift scan."""
+        now = ctx.get("now") or datetime.now(timezone.utc)
+        stale_before = (now - timedelta(days=5)).isoformat()
+        try:
+            rows = (client.schema("storeops").table("action_plan")
+                    .select("employee_id,employee_name,store_code,created_at")
+                    .eq("org_id", org_id).eq("area_key", "google_reviews").eq("status", "required")
+                    .lte("created_at", stale_before).limit(2000).execute().data) or []
+        except Exception:
+            return []
+        if not rows:
+            return []
+        eg = ", ".join(sorted({f"{(r.get('employee_name') or r.get('employee_id') or '?')} @ {r.get('store_code') or '?'}"
+                               for r in rows})[:3])
+        return [_item("other", "review_action_plan_stale", "warning",
+                      "Below-target stores with no action plan submitted",
+                      f"{len(rows)} employee/store action plan(s) have been sitting 'required' for "
+                      f"5+ days with nothing submitted (e.g. {eg}) — the store's Google rating is "
+                      f"below its target and no improvement plan is on file yet.",
+                      len(rows), "/storeops/reviews", "Review Google Reviews action plans")]
+
+    @register_provider("storeops_review_action_plan_overdue",
+                       label="Action plans past their DM-set due date",
+                       group="other", cost="cheap")
+    def _p_review_action_plan_overdue(client, org_id, ctx):
+        """PENDING SETUP: a pushed-back/in-progress action plan whose due_date has passed with no DM
+        confirmation of completion yet."""
+        now = ctx.get("now") or datetime.now(timezone.utc)
+        today = now.date().isoformat()
+        try:
+            rows = (client.schema("storeops").table("action_plan")
+                    .select("employee_id,employee_name,store_code,due_date,status")
+                    .eq("org_id", org_id).in_("status", ["pushed_back", "in_progress"])
+                    .lte("due_date", today).limit(2000).execute().data) or []
+        except Exception:
+            return []
+        rows = [r for r in rows if r.get("due_date")]   # a NULL due_date is never "past" — defensive
+        if not rows:
+            return []
+        eg = ", ".join(sorted({f"{(r.get('employee_name') or r.get('employee_id') or '?')} @ {r.get('store_code') or '?'}"
+                               for r in rows})[:3])
+        return [_item("other", "review_action_plan_overdue", "warning",
+                      "Action plans past their DM-set due date",
+                      f"{len(rows)} action plan(s) are past the due date the DM set (e.g. {eg}) with "
+                      f"the work not yet confirmed complete — follow up with the employee/DM.",
+                      len(rows), "/storeops/reviews", "Review Google Reviews action plans")]
