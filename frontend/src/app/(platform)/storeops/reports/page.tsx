@@ -6,6 +6,7 @@ import ReportShell from '@/components/ReportShell'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { currentPeriodFromSettingsResponse, monthRange, rangeLabel, stepPeriod, type PayPeriodSettings } from '../lib/pay-period'
+import { PAY_BASIS_LABEL, type PayBasis } from '../lib/pay-basis'
 import ActualHoursDrilldown from '../payroll/ActualHoursDrilldown'
 
 const chip: React.CSSProperties = { padding: '5px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)', cursor: 'pointer' }
@@ -119,7 +120,9 @@ export default function StoreOpsReportsPage() {
     { header: 'Employee', get: r => r.name, role: 'rep' },
     { header: 'Store', get: r => r.store, role: 'store' },
     { header: 'Market', get: r => r.market },
-    { header: 'Pay $/hr', get: r => r.pay_rate, money: true },
+    // Salary pay-basis (2026-07-27) — see storeops/payroll/page.tsx's identical column for rationale.
+    { header: 'Pay basis', get: (r: any) => r.pay_basis && r.pay_basis !== 'hourly' ? (PAY_BASIS_LABEL[r.pay_basis as PayBasis] || r.pay_basis) : 'Hourly' },
+    { header: 'Pay $/hr', get: (r: any) => r.pay_basis && r.pay_basis !== 'hourly' ? undefined : r.pay_rate, money: true },
     { header: 'Sched Hrs', get: r => Math.round((r.scheduled_hours || 0) * 10) / 10, align: 'right' },
     { header: 'Actual Hrs', get: r => Math.round((r.actual_hours || 0) * 10) / 10, align: 'right' },
     // Net = actual − scheduled, SIGNED (owner directive 2026-07-27) — ▲/▼ highlighted cue.
