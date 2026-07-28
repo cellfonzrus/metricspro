@@ -1,41 +1,71 @@
 'use client'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
-import SubmissionsTable from './_lib/SubmissionsTable'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import type { EntityOption } from '@/components/EntityPicker'
+import type { StandardFilterValue } from '@/lib/standard-filters'
+import ReportShell from '@/components/ReportShell'
+import type { ExportColumn } from '@/lib/export'
+import SubmissionsTable, { monthStart } from './_lib/SubmissionsTable'
 
-const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
-const th: React.CSSProperties = { textAlign: 'right', padding: '7px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }
-const thL: React.CSSProperties = { ...th, textAlign: 'left' }
-const td: React.CSSProperties = { textAlign: 'right', padding: '7px 10px', borderTop: '1px solid var(--border)', fontSize: 13, whiteSpace: 'nowrap' }
-const tdL: React.CSSProperties = { ...td, textAlign: 'left' }
-
-const thisMonth = () => localToday().slice(0, 7)
+const csv = (a: string[]) => (a.length ? a.join(',') : undefined)
 
 export default function ClosingDashboard() {
   const { user, permissions } = useAuth()
-  const [period, setPeriod] = useState(thisMonth())
-  const [market, setMarket] = useState('')
+  // RULE FIVE (§3d), OWNER DIRECTIVE 2026-07-28 (same-day follow-up): ONE standardized filter bar
+  // (date-range + store(s)/market(s)/rep(s)) drives the tiles AND all three tabs — By-store/By-rep
+  // used to have only a month + market select while "All submissions" already had the full bar; that
+  // asymmetry is fixed by lifting the filter state here and passing it down into <SubmissionsTable>.
+  const [filt, setFilt] = useState<StandardFilterValue>(() => ({ period: monthStart(), periodTo: localToday(), stores: [], markets: [], reps: [] }))
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'detail' | 'store' | 'rep'>('detail')
   const [readiness, setReadiness] = useState<any>(null)   // self-diagnostic (2026-07-16), best-effort
-  // Anti-clobber: only the LATEST in-flight rollup request may land (a fast period/market change used
-  // to let a slower, stale response overwrite a newer one — the timeclock last-response-wins race class).
+  // Anti-clobber: only the LATEST in-flight rollup request may land (a fast filter change used to let
+  // a slower, stale response overwrite a newer one — the timeclock last-response-wins race class).
   const reqRef = useRef(0)
 
-  useEffect(() => { if (user?.market && permissions?.scope === 'market') setMarket(user.market) }, [user, permissions])
+  useEffect(() => {
+    const mkt = user?.market
+    if (mkt && permissions?.scope === 'market') setFilt(f => (f.markets.length ? f : { ...f, markets: [mkt] }))
+  }, [user, permissions])
+
+  // Canonical, org-scoped option sources (pick-don't-type §3b) — NEVER derived from the loaded rollup
+  // response (the original bug: an empty/filtered rollup meant empty market options, a circular trap).
+  const [pStores, setPStores] = useState<any[]>([])
+  const [pEmps, setPEmps] = useState<any[]>([])
+  useEffect(() => {
+    api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {})
+    api('/api/v1/storeops/employees?all_company=true').then((r: any) => setPEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
+  }, [])
+  const storeOptions: EntityOption[] = useMemo(
+    () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, sublabel: s.market || undefined })),
+    [pStores])
+  const marketOptions: EntityOption[] = useMemo(() => {
+    const real = Array.from(new Set(pStores.map((s: any) => s.market).filter(Boolean))).sort()
+    return [...real.map((m: string) => ({ id: m, label: m })), { id: '(no market)', label: '(no market)' }]
+  }, [pStores])
+  const repOptions: EntityOption[] = useMemo(
+    () => pEmps.filter((e: any) => (e.name || '').trim()).map((e: any) => ({ id: e.name, label: e.name, sublabel: e.email || undefined })),
+    [pEmps])
 
   const load = useCallback(() => {
-    if (!period) return
+    if (!filt.period) return
     const myReq = ++reqRef.current
     setLoading(true)
-    api(`/api/v1/closing/rollup?period=${period}${market ? `&market=${encodeURIComponent(market)}` : ''}`)
+    const qs = new URLSearchParams()
+    qs.set('date_from', filt.period)
+    qs.set('date_to', filt.periodTo || filt.period)
+    const s = csv(filt.stores); if (s) qs.set('stores', s)
+    const m = csv(filt.markets); if (m) qs.set('markets', m)
+    const r = csv(filt.reps); if (r) qs.set('reps', r)
+    api(`/api/v1/closing/rollup?${qs.toString()}`)
       .then(d => { if (reqRef.current === myReq) setData(d) })
       .catch(console.error)
       .finally(() => { if (reqRef.current === myReq) setLoading(false) })
-  }, [period, market])
+  }, [filt.period, filt.periodTo, filt.stores, filt.markets, filt.reps])
   useEffect(() => { load() }, [load])
   // Surface config/data gaps (no stores mapped, no B2B sales source, no X-report ever, module not
   // entitled) right on the dashboard instead of letting empty tiles/recon speak for themselves.
@@ -44,10 +74,38 @@ export default function ClosingDashboard() {
   const t = data?.totals || {}
   const byStore: any[] = data?.by_store || []
   const byRep: any[] = data?.by_rep || []
-  const markets = Array.from(new Set(byStore.map(s => s.market).filter(Boolean))).sort()
   const cashTotal = (r: any) => (r.store_cash || 0) + (r.epay_cash || 0)
   const cardTotal = (r: any) => (r.store_cc || 0) + (r.epay_cc || 0)
   const cov = data ? `${data.verified_keys}/${data.submitted_keys}` : '—'
+
+  const storeColumns: ExportColumn[] = useMemo(() => [
+    { header: 'Store', field: 'store_address', role: 'store', get: (r: any) => r.store_address || r.store_name || '—' },
+    { header: 'Market', field: 'market', get: (r: any) => r.market },
+    { header: 'Days', field: 'days', type: 'number', get: (r: any) => r.days },
+    { header: 'Cash $', field: 'cash', money: true, get: (r: any) => cashTotal(r) },
+    { header: 'Credit $', field: 'credit', money: true, get: (r: any) => cardTotal(r) },
+    { header: 'Accessory $', field: 'acc_sale', money: true, get: (r: any) => r.acc_sale },
+    { header: 'Other $', field: 'other_account', money: true, get: (r: any) => r.other_account },
+    { header: 'Upgrades #', field: 'upgrade_count', type: 'number', get: (r: any) => r.upgrade_count },
+    { header: 'New Lines #', field: 'new_line_count', type: 'number', get: (r: any) => r.new_line_count },
+    { header: 'Postpaid #', field: 'postpaid_count', type: 'number', get: (r: any) => r.postpaid_count },
+    { header: 'Submissions #', field: 'rows', type: 'number', get: (r: any) => r.rows },
+  ], [])
+
+  const repColumns: ExportColumn[] = useMemo(() => [
+    { header: 'Rep', field: 'employee_name', role: 'rep', get: (r: any) => r.employee_name || '—' },
+    { header: 'Store', field: 'store_address', role: 'store', get: (r: any) => r.store_address || '—' },
+    { header: 'Market', field: 'market', get: (r: any) => r.market },
+    { header: 'Days', field: 'days', type: 'number', get: (r: any) => r.days },
+    { header: 'Cash $', field: 'cash', money: true, get: (r: any) => cashTotal(r) },
+    { header: 'Credit $', field: 'credit', money: true, get: (r: any) => cardTotal(r) },
+    { header: 'Accessory $', field: 'acc_sale', money: true, get: (r: any) => r.acc_sale },
+    { header: 'Other $', field: 'other_account', money: true, get: (r: any) => r.other_account },
+    { header: 'Upgrades #', field: 'upgrade_count', type: 'number', get: (r: any) => r.upgrade_count },
+    { header: 'New Lines #', field: 'new_line_count', type: 'number', get: (r: any) => r.new_line_count },
+    { header: 'Postpaid #', field: 'postpaid_count', type: 'number', get: (r: any) => r.postpaid_count },
+    { header: 'Submissions #', field: 'rows', type: 'number', get: (r: any) => r.rows },
+  ], [])
 
   return (
     <div>
@@ -55,7 +113,7 @@ export default function ClosingDashboard() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧾 Daily Closing</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            Month-to-date closing summaries by store and by rep, with DM verification coverage.
+            Closing summaries by store and by rep, with DM verification coverage.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -74,14 +132,15 @@ export default function ClosingDashboard() {
         </Link>
       )}
 
-      {/* Filters */}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
-        <input type="month" style={sel} value={period} onChange={e => setPeriod(e.target.value)} />
-        <select style={sel} value={market} onChange={e => setMarket(e.target.value)}>
-          <option value="">All markets</option>
-          {markets.map(m => <option key={m as string} value={m as string}>{m as string}</option>)}
-        </select>
-      </div>
+      {/* Filters — RULE FIVE core set (date-range + store(s)/market(s)/rep(s)), canonical org-scoped
+          option sources. Drives the tiles + all 3 tabs below (including "All submissions", which no
+          longer renders its own competing bar — see SubmissionsTable's filterValue prop). */}
+      <StandardFilterBar
+        value={filt} onChange={setFilt}
+        periodMode="range"
+        storeOptions={storeOptions} marketOptions={marketOptions} repOptions={repOptions}
+        storeLabel="Stores…" marketLabel="Markets…" repLabel="Employees…"
+      />
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
@@ -109,29 +168,24 @@ export default function ClosingDashboard() {
           </div>
 
           {tab === 'detail' ? (
-            <SubmissionsTable />
+            <SubmissionsTable filterValue={filt} onFilterChange={setFilt}
+              storeOptions={storeOptions} marketOptions={marketOptions} repOptions={repOptions} />
           ) : tab === 'store' ? (
-            <Table
-              head={['Store', 'Market', 'Days', 'Cash', 'Credit', 'Accessory', 'Other', 'Upg', 'New', 'Post']}
-              rows={byStore}
-              empty="No closing rows for this month yet."
-              render={(r: any) => [
-                <span style={{ fontWeight: 600 }}>{r.store_address || r.store_name || '—'}</span>,
-                r.market || '—', r.days, fmt(cashTotal(r)), fmt(cardTotal(r)), fmt(r.acc_sale), fmt(r.other_account),
-                r.upgrade_count, r.new_line_count, r.postpaid_count,
-              ]}
-            />
+            byStore.length === 0 ? (
+              <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No closing rows for this range yet.</div>
+            ) : (
+              <ReportShell title="Daily Closing — By Store" subtitle={`${filt.period} → ${filt.periodTo}`}
+                filename={`daily-closing-by-store_${filt.period}_${filt.periodTo}`}
+                columns={storeColumns} rows={byStore} stickyHeader totals />
+            )
           ) : (
-            <Table
-              head={['Rep', 'Store', 'Days', 'Cash', 'Credit', 'Accessory', 'Other', 'Upg', 'New', 'Post']}
-              rows={byRep}
-              empty="No rep submissions for this month yet."
-              render={(r: any) => [
-                <span style={{ fontWeight: 600 }}>{r.employee_name || '—'}</span>,
-                r.store_address || '—', r.days, fmt(cashTotal(r)), fmt(cardTotal(r)), fmt(r.acc_sale), fmt(r.other_account),
-                r.upgrade_count, r.new_line_count, r.postpaid_count,
-              ]}
-            />
+            byRep.length === 0 ? (
+              <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No rep submissions for this range yet.</div>
+            ) : (
+              <ReportShell title="Daily Closing — By Rep" subtitle={`${filt.period} → ${filt.periodTo}`}
+                filename={`daily-closing-by-rep_${filt.period}_${filt.periodTo}`}
+                columns={repColumns} rows={byRep} stickyHeader totals />
+            )
           )}
         </>
       )}
@@ -146,21 +200,3 @@ const Tile = ({ label, value, sub }: { label: string; value: string; sub?: strin
     {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
   </div>
 )
-
-function Table({ head, rows, render, empty }: { head: string[]; rows: any[]; render: (r: any) => React.ReactNode[]; empty: string }) {
-  if (!rows.length) return <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>{empty}</div>
-  return (
-    <div className="card table-wrapper" style={{ padding: 0 }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead><tr style={{ background: 'var(--surface2)' }}>
-          {head.map((h, i) => <th key={h} style={i < 2 ? thL : th}>{h}</th>)}
-        </tr></thead>
-        <tbody>
-          {rows.map((r, ri) => (
-            <tr key={ri}>{render(r).map((c, i) => <td key={i} style={i < 2 ? tdL : td}>{c}</td>)}</tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}

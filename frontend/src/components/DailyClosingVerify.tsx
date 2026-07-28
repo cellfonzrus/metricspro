@@ -1,16 +1,52 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { api, apiUpload, fmt, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import type { EntityOption } from '@/components/EntityPicker'
+import type { StandardFilterValue } from '@/lib/standard-filters'
+import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // DM evening verification view — per-store totals, missing-rep check, B2B reconciliation, and
 // the DM's confirm/adjust+sign-off. Shared by /closing/verify (Daily Closing module) and the
 // legacy /storeops/closing route. Source of truth is GET /closing/summary.
+//
+// retail-ops-14 (OWNER DIRECTIVE 2026-07-28): DATA PARITY + RULE FIVE filters + RULE FOUR exports.
+// Root causes fixed (see docs/handoffs/retail-ops.md for the full writeup):
+//   (a) /closing/summary's market filter used to drop any store whose resolved market didn't
+//       EXACTLY match — including every unresolved/blank-market store. A market-scoped DM's own
+//       market auto-applies below (line ~140), so this silently emptied the page for exactly the
+//       callers who use it most. Fixed server-side (bucket-aware "(no market)" matching) — see
+//       `_market_bucket` in closing/router.py.
+//   (b) The page defaulted to today, showing "No closing-sheet rows" with no hint when the latest
+//       submissions were for a prior day. Now auto-resolves to the most recent date WITH rows (via
+//       the existing GET /closing/dates) on first load, with a banner explaining the jump.
+//   (c) Field-level parity: totals/rep-rows now carry ACIMA + the individual tender buckets +
+//       custom tenders (mig 111) + a re-derived close-gate status — all previously visible on the
+//       dashboard's "All submissions" tab but entirely absent here. Reuses the backend's existing
+//       gate helpers verbatim (never re-implements money math); the same money-secrecy boundary
+//       (_can_mgmt_review) that already governs Management Review governs these new fields too.
 const GOOGLE_CLOSING_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1e41A9Ug5jaM_ZQGkQbsGncX7WpIwqe7Tf6BpKUoojqI/edit'
 
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const tin: React.CSSProperties = { ...sel, width: 110 }
 const cell: React.CSSProperties = { padding: '6px 9px', borderBottom: '1px solid var(--border)', fontSize: 13 }
+const NO_MARKET = '(no market)'
+
+const GATE_LABEL: Record<string, string> = {
+  ok: '✅ OK', flagged: '⚠️ Flagged', blocked: '⛔ Blocked',
+  recon_pending: '⏳ Pending',
+}
+const GATE_COLOR: Record<string, React.CSSProperties> = {
+  ok: { background: '#e6f7ec', color: '#16794a' },
+  flagged: { background: '#fef3e2', color: '#b45309' },
+  blocked: { background: '#fde8e8', color: '#b42318' },
+  recon_pending: { background: 'var(--surface2)', color: 'var(--text3)' },
+}
+function GateBadge({ status }: { status?: string | null }) {
+  if (!status || !GATE_LABEL[status]) return null
+  return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 6, ...GATE_COLOR[status] }}>{GATE_LABEL[status]}</span>
+}
 
 type Form = { dm_store_cash: string; dm_store_cc: string; dm_epay_cash: string; dm_epay_cc: string; dm_acc_sale: string; dm_other: string; note: string }
 
@@ -20,18 +56,27 @@ function countVal(r: any, key: string) {
   return key in r ? r[key] : (r.counts?.[key] ?? 0)
 }
 
+// A store-card key must include the DATE now that /closing/summary can return a multi-day range
+// (retail-ops-14) — the same store_code otherwise collides across two different nights.
+function cardKey(s: any): string {
+  return `${s.store_code || s.store_name}__${s.close_date || ''}`
+}
+
+const csv = (a: string[]) => (a.length ? a.join(',') : undefined)
+
 // ── Missed verifications & chargebacks (OWNER DIRECTIVE 2026-07-22) ──────────────────────────
 // A daily_closing that exists but was never DM-verified creates a pending chargeback against the
 // DM's COMMISSION (GET/POST /closing/ops-chargebacks/*). Shown at the top of this page — daily
 // list + cumulative pending/posted total + Post/Waive (management-gated, backend-enforced; this
-// panel only shows the buttons when the server says `can_decide`).
+// panel only shows the buttons when the server says `can_decide`). retail-ops-14: now honors the
+// SAME active filter bar as the rest of the page (previously called with zero filter params).
 const badgeStyle: Record<string, React.CSSProperties> = {
   pending: { background: '#fef3e2', color: '#b45309' },
   posted: { background: '#fbe4e4', color: '#b42318' },
   waived: { background: 'var(--surface2)', color: 'var(--text3)' },
 }
 
-function MissedChargebacksPanel() {
+function MissedChargebacksPanel({ filt }: { filt: StandardFilterValue }) {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<Record<string, boolean>>({})
@@ -40,11 +85,17 @@ function MissedChargebacksPanel() {
 
   const load = useCallback(() => {
     setLoading(true)
-    api('/api/v1/closing/ops-chargebacks/dm-verify')
+    const qs = new URLSearchParams()
+    if (filt.period) qs.set('date_from', filt.period)
+    if (filt.periodTo) qs.set('date_to', filt.periodTo)
+    const s = csv(filt.stores); if (s) qs.set('stores', s)
+    const m = csv(filt.markets); if (m) qs.set('markets', m)
+    const r = csv(filt.reps); if (r) qs.set('reps', r)
+    api(`/api/v1/closing/ops-chargebacks/dm-verify?${qs.toString()}`)
       .then(setData)
       .catch(() => setData(null))
       .finally(() => setLoading(false))
-  }, [])
+  }, [filt.period, filt.periodTo, filt.stores, filt.markets, filt.reps])
   useEffect(() => { load() }, [load])
 
   async function decide(id: string, decision: 'posted' | 'waived') {
@@ -61,7 +112,7 @@ function MissedChargebacksPanel() {
   if (loading && !data) return null   // don't flash an empty banner while the very first load runs
   const rows: any[] = data?.rows || []
   const totals = data?.totals || { pending: 0, posted: 0, waived: 0, to_be_foregone: 0 }
-  if (rows.length === 0) return null  // no missed verifications ever recorded -> no banner at all
+  if (rows.length === 0) return null  // no missed verifications ever recorded (within the active filters) -> no banner at all
 
   return (
     <div className="card" style={{ padding: 14, marginBottom: 16, border: totals.pending > 0 ? '1px solid #f3b4b4' : undefined }}>
@@ -121,31 +172,93 @@ function MissedChargebacksPanel() {
 
 export default function DailyClosingVerify() {
   const { user, permissions } = useAuth()
-  const [date, setDate] = useState(localToday())
+  const today = localToday()
+  // RULE FIVE (§3d): the standard core filter bar — period as a date-RANGE (default From===To, i.e.
+  // today, so the DM's evening single-day workflow is unchanged) + store(s)/market(s)/rep(s) multi.
+  const [filt, setFilt] = useState<StandardFilterValue>({ period: today, periodTo: today, stores: [], markets: [], reps: [] })
   const [dates, setDates] = useState<any[]>([])
-  const [market, setMarket] = useState('')
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [forms, setForms] = useState<Record<string, Form>>({})
   const [open, setOpen] = useState<Record<string, boolean>>({})
   const [upBusy, setUpBusy] = useState(false)
   const [upMsg, setUpMsg] = useState('')
+  const [autoNote, setAutoNote] = useState('')
+  // Anti-clobber: only the LATEST in-flight request may land (the timeclock last-response-wins race
+  // class — a fast filter change firing a 2nd request before a slower 1st one resolves used to let
+  // the stale response land last and silently overwrite newer data).
+  const reqRef = useRef(0)
+  const autoResolvedRef = useRef(false)
 
-  useEffect(() => { if (user?.market && permissions?.scope === 'market') setMarket(user.market) }, [user, permissions])
+  // A market-scoped DM sees their own market pre-selected — same auto-apply the dashboard uses.
+  // Bucket-aware filtering downstream (see closing_summary's `_market_bucket`) means this can no
+  // longer silently empty the page the way the pre-fix exact-string match did.
+  useEffect(() => {
+    const mkt = user?.market
+    if (mkt && permissions?.scope === 'market') setFilt(f => (f.markets.length ? f : { ...f, markets: [mkt] }))
+  }, [user, permissions])
 
-  useEffect(() => { api('/api/v1/closing/dates').then(d => setDates(d || [])).catch(() => {}) }, [])
+  // Root cause (b): default to the most recent date WITH rows instead of silently showing an empty
+  // "today" — GET /closing/dates already exists for exactly this. Runs once; a user's own date pick
+  // afterward is never overridden.
+  useEffect(() => {
+    api('/api/v1/closing/dates').then(d => {
+      const list = Array.isArray(d) ? d : []
+      setDates(list)
+      if (!autoResolvedRef.current) {
+        autoResolvedRef.current = true
+        const hasToday = list.some((x: any) => x.date === today)
+        if (!hasToday && list.length > 0) {
+          setFilt(f => ({ ...f, period: list[0].date, periodTo: list[0].date }))
+          setAutoNote(`Showing ${list[0].date} — the most recent closing date with data (today has none submitted yet).`)
+        }
+      }
+    }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Canonical, org-scoped option sources for the filter bar (pick-don't-type §3b) — NEVER derived
+  // from this page's own (possibly empty/filtered) result set, which was the original circularity
+  // bug: an empty response meant empty market options meant a DM could never even SEE the "(no
+  // market)" bucket to select it back.
+  const [pStores, setPStores] = useState<any[]>([])
+  const [pEmps, setPEmps] = useState<any[]>([])
+  useEffect(() => {
+    api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {})
+    api('/api/v1/storeops/employees?all_company=true').then((r: any) => setPEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
+  }, [])
+  const storeOptions: EntityOption[] = useMemo(
+    () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, sublabel: s.market || undefined })),
+    [pStores])
+  const marketOptions: EntityOption[] = useMemo(() => {
+    const real = Array.from(new Set(pStores.map((s: any) => s.market).filter(Boolean))).sort()
+    // Always offered — an SFID-unresolved daily_closing row has no store_code at all, so it can
+    // never appear in the canonical store roster above; the bucket must still be pickable.
+    return [...real.map((m: string) => ({ id: m, label: m })), { id: NO_MARKET, label: NO_MARKET }]
+  }, [pStores])
+  const repOptions: EntityOption[] = useMemo(
+    () => pEmps.filter((e: any) => (e.name || '').trim()).map((e: any) => ({ id: e.name, label: e.name, sublabel: e.email || undefined })),
+    [pEmps])
 
   const load = useCallback(() => {
-    if (!date) return
+    if (!filt.period) return
+    const myReq = ++reqRef.current
     setLoading(true)
-    api(`/api/v1/closing/summary?date=${date}${market ? `&market=${encodeURIComponent(market)}` : ''}`)
+    const qs = new URLSearchParams()
+    qs.set('date_from', filt.period)
+    qs.set('date_to', filt.periodTo || filt.period)
+    const s = csv(filt.stores); if (s) qs.set('stores', s)
+    const m = csv(filt.markets); if (m) qs.set('markets', m)
+    const r = csv(filt.reps); if (r) qs.set('reps', r)
+    api(`/api/v1/closing/summary?${qs.toString()}`)
       .then(d => {
+        if (reqRef.current !== myReq) return
         setData(d)
         const f: Record<string, Form> = {}
         ;(d?.stores || []).forEach((s: any) => {
           const v = s.verification || {}
           const t = s.totals || {}
-          const k = s.store_code || s.store_name
+          const k = cardKey(s)
           f[k] = {
             dm_store_cash: String(v.dm_store_cash ?? t.store_cash ?? ''),
             dm_store_cc: String(v.dm_store_cc ?? t.store_cc ?? ''),
@@ -158,8 +271,9 @@ export default function DailyClosingVerify() {
         })
         setForms(f)
       })
-      .catch(console.error).finally(() => setLoading(false))
-  }, [date, market])
+      .catch(console.error)
+      .finally(() => { if (reqRef.current === myReq) setLoading(false) })
+  }, [filt.period, filt.periodTo, filt.stores, filt.markets, filt.reps])
   useEffect(() => { load() }, [load])
 
   async function upload(file: File) {
@@ -169,18 +283,18 @@ export default function DailyClosingVerify() {
       const r = await apiUpload('/api/v1/closing/upload', fd)
       setUpMsg(`✅ Loaded ${r.rows_saved} rows across ${r.dates?.length || 0} day(s)${r.unresolved_stores ? ` · ${r.unresolved_stores} rows had an unrecognized SFID` : ''}.`)
       api('/api/v1/closing/dates').then(d => setDates(d || [])).catch(() => {})
-      if (r.dates?.length) setDate(r.dates[0]); else load()
+      if (r.dates?.length) setFilt(f => ({ ...f, period: r.dates[0], periodTo: r.dates[0] })); else load()
     } catch (e: any) { setUpMsg('❌ ' + (e?.message || e)) }
     finally { setUpBusy(false) }
   }
 
   async function verify(s: any) {
-    const k = s.store_code || s.store_name
+    const k = cardKey(s)
     const f = forms[k]
     if (!s.store_code) { alert('This store has no resolved store code (unrecognized SFID) — fix the SFID/store mapping first.'); return }
     try {
       await api('/api/v1/closing/verify', { method: 'POST', body: JSON.stringify({
-        close_date: date, store_code: s.store_code, store_name: s.store_name,
+        close_date: s.close_date, store_code: s.store_code, store_name: s.store_name,
         verified: true, verified_by: user?.full_name || 'DM',
         dm_store_cash: num(f.dm_store_cash), dm_store_cc: num(f.dm_store_cc),
         dm_epay_cash: num(f.dm_epay_cash), dm_epay_cc: num(f.dm_epay_cc),
@@ -205,20 +319,94 @@ export default function DailyClosingVerify() {
 
   function setForm(k: string, patch: Partial<Form>) { setForms(p => ({ ...p, [k]: { ...p[k], ...patch } })) }
 
-  const markets = Array.from(new Set((data?.stores || []).map((s: any) => s.market).filter(Boolean))).sort()
   const stores: any[] = data?.stores || []
   const verifiedCount = stores.filter(s => s.verification?.verified).length
+  const isRange = filt.period !== filt.periodTo
+
+  // ── RULE FOUR exports (§3c) — a non-flat, interactive card page uses ReportExportBar (the shared
+  // component the contract names for exactly this case) instead of ReportShell, which would replace
+  // this whole UI with a generic table. Two sheets: the per-store verification summary, and every
+  // rep row underneath it — what-you-see-is-what-exports (same `stores` the cards below render from,
+  // already filtered by the active bar; the money-secrecy boundary is inherited for free since
+  // gate_reasons/b2b_cash/b2b_card are already blanked server-side for a non-permitted caller). ──
+  const storeColumns: ExportColumn[] = useMemo(() => [
+    { header: 'Date', field: 'close_date', type: 'date', role: 'date', get: (r: any) => r.close_date },
+    { header: 'Store', field: 'store_address', role: 'store', get: (r: any) => r.store_address || r.store_name },
+    { header: 'Market', field: 'market', get: (r: any) => r.market },
+    { header: 'Rep submissions', field: 'rep_count', type: 'number', get: (r: any) => r.totals?.rep_count ?? 0 },
+    { header: 'No closing submitted', field: 'no_closing_submitted', get: (r: any) => r.no_closing_submitted ? 'Yes' : 'No' },
+    { header: 'Missing reps', field: 'missing_reps', get: (r: any) => (r.missing_reps || []).join('; ') },
+    { header: 'Store cash $', field: 'store_cash', money: true, get: (r: any) => r.totals?.store_cash },
+    { header: 'Store CC $', field: 'store_cc', money: true, get: (r: any) => r.totals?.store_cc },
+    { header: 'ePay cash $', field: 'epay_cash', money: true, get: (r: any) => r.totals?.epay_cash },
+    { header: 'ePay CC $', field: 'epay_cc', money: true, get: (r: any) => r.totals?.epay_cc },
+    { header: 'ACIMA $', field: 't_acima', money: true, get: (r: any) => r.totals?.t_acima },
+    { header: 'Accessory sale $', field: 'acc_sale', money: true, get: (r: any) => r.totals?.acc_sale },
+    { header: 'Other (Zelle/CashApp/Gift/Store Acct) $', field: 'other_account', money: true, get: (r: any) => r.totals?.other_account },
+    { header: 'Total collected $', field: 'total_collected', money: true, get: (r: any) => r.totals?.total_collected },
+    { header: 'Custom tenders', field: 'custom_tenders', get: (r: any) => (r.totals?.custom_tenders || []).map((c: any) => `${c.label}: ${fmt(c.value)}`).join('; ') },
+    { header: 'Gate status', field: 'gate_status', get: (r: any) => (r.gate_status && GATE_LABEL[r.gate_status]) || '' },
+    { header: 'Activations var', field: 'act_var', type: 'number', get: (r: any) => r.recon?.act_var },
+    { header: 'Upgrades var', field: 'upg_var', type: 'number', get: (r: any) => r.recon?.upg_var },
+    { header: 'Count discrepancy', field: 'discrepancy', get: (r: any) => r.recon?.discrepancy ? 'Yes' : 'No' },
+    { header: 'Cash recon var $', field: 'cash_var', money: true, get: (r: any) => r.money_recon?.cash?.var },
+    { header: 'Cash recon flag', field: 'cash_flag', get: (r: any) => r.money_recon?.cash?.flag ? 'Yes' : (r.money_recon?.cash?.pending ? 'Pending' : 'No') },
+    { header: 'Credit recon var $', field: 'credit_var', money: true, get: (r: any) => r.money_recon?.credit?.var },
+    { header: 'Credit recon flag', field: 'credit_flag', get: (r: any) => r.money_recon?.credit?.flag ? 'Yes' : (r.money_recon?.credit?.pending ? 'Pending' : 'No') },
+    { header: 'DM verified', field: 'dm_verified', get: (r: any) => r.verification?.verified ? 'Yes' : 'No' },
+    { header: 'DM verified by', field: 'dm_verified_by', get: (r: any) => r.verification?.verified_by },
+  ], [])
+
+  const repColumns: ExportColumn[] = useMemo(() => [
+    { header: 'Date', field: 'close_date', type: 'date', role: 'date', get: (r: any) => r._store_close_date },
+    { header: 'Store', field: 'store_address', role: 'store', get: (r: any) => r._store_address },
+    { header: 'Market', field: 'market', get: (r: any) => r._store_market },
+    { header: 'Employee', field: 'employee_name', role: 'rep', get: (r: any) => r.employee_name },
+    { header: 'Store cash $', field: 'store_cash', money: true, get: (r: any) => r.store_cash },
+    { header: 'Store CC $', field: 'store_cc', money: true, get: (r: any) => r.store_cc },
+    { header: 'ePay cash $', field: 'epay_cash', money: true, get: (r: any) => r.epay_cash },
+    { header: 'ePay CC $', field: 'epay_cc', money: true, get: (r: any) => r.epay_cc },
+    { header: 'ACIMA $', field: 'acima', money: true, get: (r: any) => r._tenders?.acima },
+    { header: 'Gift $', field: 'gift', money: true, get: (r: any) => r._tenders?.gift },
+    { header: 'Store Account $', field: 'store_acct', money: true, get: (r: any) => r._tenders?.store_acct },
+    { header: 'Custom tenders', field: 'custom_tenders', get: (r: any) => r._custom_tenders_display },
+    { header: 'Accessory $', field: 'acc_sale', money: true, get: (r: any) => r.acc_sale },
+    { header: 'Other $', field: 'other_account', money: true, get: (r: any) => r.other_account },
+    { header: 'Custom counts', field: 'custom_counts', get: (r: any) => r._custom_counts_display },
+    { header: 'Expense $', field: 'expense_amount', money: true, get: (r: any) => r.expense_amount },
+    { header: 'Expense approved', field: 'expense_approved', get: (r: any) => r.expense_approved ? 'Yes' : 'No' },
+    { header: 'Gate status', field: 'gate_status', get: (r: any) => (r._gate?.status && GATE_LABEL[r._gate.status]) || '' },
+    { header: 'Gate reason(s)', field: 'gate_reasons', get: (r: any) => (r._gate?.reasons || []).join('; ') },
+  ], [])
+
+  const storeExportRows = stores
+  const repExportRows = useMemo(() => stores.flatMap((s: any) =>
+    (s.reps || []).map((r: any) => ({ ...r, _store_close_date: s.close_date, _store_address: s.store_address || s.store_name, _store_market: s.market }))
+  ), [stores])
 
   return (
     <div>
-      <div style={{ marginBottom: 14 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>✅ DM Closing Verification</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Verify every evening that each store's closing sheet was submitted, confirm the totals, and reconcile against B2B actual sales.
-        </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>✅ DM Closing Verification</h1>
+          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+            Verify every evening that each store's closing sheet was submitted, confirm the totals, and reconcile against B2B actual sales.
+          </p>
+        </div>
+        {!loading && stores.length > 0 && (
+          <ReportExportBar
+            title="Daily Closing — DM Verification"
+            subtitle={isRange ? `${filt.period} → ${filt.periodTo}` : filt.period}
+            filename={`dm-verify_${filt.period}${isRange ? `_${filt.periodTo}` : ''}`}
+            sheets={[
+              { name: 'Store Summary', columns: storeColumns, rows: storeExportRows },
+              { name: 'Rep Rows', columns: repColumns, rows: repExportRows },
+            ]}
+          />
+        )}
       </div>
 
-      <MissedChargebacksPanel />
+      <MissedChargebacksPanel filt={filt} />
 
       {/* Upload */}
       <div className="card" style={{ padding: 14, marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -231,30 +419,47 @@ export default function DailyClosingVerify() {
         {upMsg && <span style={{ fontSize: 13 }}>{upMsg}</span>}
       </div>
 
-      {/* Filters */}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
-        <input type="date" style={sel} value={date} onChange={e => setDate(e.target.value)} />
-        {dates.length > 0 && (
-          <select style={sel} value="" onChange={e => e.target.value && setDate(e.target.value)}>
+      {autoNote && (
+        <div className="card" style={{ padding: '8px 12px', marginBottom: 14, fontSize: 12, background: '#fff8e6', border: '1px solid #f3d98b' }}>
+          ℹ️ {autoNote}
+        </div>
+      )}
+
+      {/* RULE FIVE standardized filter bar — date-range (defaults to a single day) + store(s)/
+          market(s)/rep(s), options from canonical org-scoped sources (never this page's own result
+          set). Drives the store cards, the chargebacks panel, and the exports above. */}
+      <StandardFilterBar
+        value={filt} onChange={setFilt}
+        periodMode="range"
+        storeOptions={storeOptions} marketOptions={marketOptions} repOptions={repOptions}
+        storeLabel="Stores…" marketLabel="Markets…" repLabel="Employees…"
+        right={dates.length > 0 ? (
+          <select style={sel} value="" onChange={e => { if (e.target.value) setFilt(f => ({ ...f, period: e.target.value, periodTo: e.target.value })) }}>
             <option value="">Recent days…</option>
-            {dates.map(d => <option key={d.date} value={d.date}>{d.date} ({d.rows})</option>)}
+            {dates.map((d: any) => <option key={d.date} value={d.date}>{d.date} ({d.rows})</option>)}
           </select>
-        )}
-        <select style={sel} value={market} onChange={e => setMarket(e.target.value)}>
-          <option value="">All markets</option>
-          {markets.map(m => <option key={m as string} value={m as string}>{m as string}</option>)}
-        </select>
-        {!loading && stores.length > 0 && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{verifiedCount}/{stores.length} stores verified</span>}
-      </div>
+        ) : undefined}
+      />
+      {!loading && stores.length > 0 && (
+        <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: -4, marginBottom: 12 }}>
+          {verifiedCount}/{stores.length} store-day{stores.length === 1 ? '' : 's'} verified
+          {isRange && <span> · {filt.period} → {filt.periodTo}</span>}
+        </div>
+      )}
+      {data?.range_capped && (
+        <div className="card" style={{ padding: '8px 12px', marginBottom: 14, fontSize: 12, background: '#fff8e6', border: '1px solid #f3d98b' }}>
+          ⚠️ This range has more days than can be loaded at once — narrowed to the {data.dates_computed} most recent of {data.dates_requested} requested. Narrow the date range to see the rest.
+        </div>
+      )}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : stores.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
-          No closing-sheet rows for {date}. Upload the sheet above (or pick another day).
+          No closing-sheet rows for {isRange ? `${filt.period} → ${filt.periodTo}` : filt.period} matching the active filters. Upload the sheet above, widen the date range, or clear a filter.
         </div>
       ) : stores.map(s => {
-        const k = s.store_code || s.store_name
+        const k = cardKey(s)
         const f = forms[k] || {} as Form
         const t = s.totals || {}
         const ver = s.verification?.verified
@@ -264,16 +469,20 @@ export default function DailyClosingVerify() {
         // Config-driven activation-count fields (mig 501) — from totals.counts, so an un-opted tenant
         // still shows exactly the 3 built-in fields (Upgrades / New Lines / Postpaid).
         const countCols: { key: string; label: string }[] = (t.counts || []).map((c: any) => ({ key: c.field_key, label: c.label }))
+        const customTenderCols: { key: string; label: string }[] = (t.custom_tenders || []).map((c: any) => ({ key: c.key, label: c.label }))
         return (
           <div key={k} className="card" style={{ padding: 16, marginBottom: 14, borderLeft: `4px solid ${ver ? 'var(--green, #16794a)' : recon?.discrepancy ? 'var(--amber, #b45309)' : 'var(--border)'}` }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 700 }}>{s.store_address || s.store_name}</div>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>{s.store_address || s.store_name}{isRange && <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text3)' }}> · {s.close_date}</span>}</div>
                 <div style={{ fontSize: 12, color: 'var(--text3)' }}>{s.market || '—'} · {t.rep_count || 0} rep submission{(t.rep_count || 0) === 1 ? '' : 's'}{typeof s.worked_count === 'number' ? ` · ${s.worked_count} actually worked` : ''}{s.closer ? ` · closer: ${s.closer}` : ''}{s.closing_mode === 'one_closing' ? ' (one closing/store)' : ''}</div>
               </div>
-              {ver
-                ? <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--green, #16794a)' }}>✅ Verified by {s.verification.verified_by}</span>
-                : <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)' }}>Unverified</span>}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <GateBadge status={s.gate_status} />
+                {ver
+                  ? <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--green, #16794a)' }}>✅ Verified by {s.verification.verified_by}</span>
+                  : <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)' }}>Unverified</span>}
+              </div>
             </div>
 
             {s.no_closing_submitted && (
@@ -310,6 +519,9 @@ export default function DailyClosingVerify() {
               <Stat label="ePay CC" value={fmt(t.epay_cc)} />
               <Stat label="Acc sale" value={fmt(t.acc_sale)} />
               <Stat label="Other" value={fmt(t.other_account)} />
+              {!!t.t_acima && <Stat label="ACIMA" value={fmt(t.t_acima)} />}
+              {customTenderCols.map(c => <Stat key={c.key} label={c.label} value={fmt((t.custom_tenders || []).find((x: any) => x.key === c.key)?.value)} />)}
+              {typeof t.total_collected === 'number' && <Stat label="Total collected" value={fmt(t.total_collected)} />}
               {expTotal > 0 && <Stat label="Rep expenses" value={fmt(expTotal)} />}
               {countCols.length > 0
                 ? countCols.map(c => <Stat key={c.key} label={c.label} value={String((t.counts || []).find((x: any) => x.field_key === c.key)?.value ?? 0)} />)
@@ -342,9 +554,9 @@ export default function DailyClosingVerify() {
               <div className="table-wrapper" style={{ marginTop: 8 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead><tr style={{ background: 'var(--surface2)' }}>
-                    {['Employee', 'Store cash', 'Store CC', 'ePay cash', 'ePay CC', 'Acc', 'Other',
+                    {['Employee', 'Store cash', 'Store CC', 'ePay cash', 'ePay CC', 'ACIMA', 'Acc', 'Other', 'Custom tenders',
                       ...(countCols.length > 0 ? countCols.map(c => c.label) : ['Upg', 'New', 'Post']),
-                      'Env', 'Expense', 'Approve exp.'].map((h, i) =>
+                      'Gate', 'Env', 'Expense', 'Approve exp.'].map((h, i) =>
                       <th key={i} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
                   </tr></thead>
                   <tbody>
@@ -355,10 +567,13 @@ export default function DailyClosingVerify() {
                         <td style={cell}>{fmt(r.store_cc)}</td>
                         <td style={cell}>{fmt(r.epay_cash)}</td>
                         <td style={cell}>{fmt(r.epay_cc)}</td>
+                        <td style={cell}>{r._tenders?.acima ? fmt(r._tenders.acima) : '—'}</td>
                         <td style={cell}>{fmt(r.acc_sale)}</td>
                         <td style={cell}>{fmt(r.other_account)}</td>
+                        <td style={cell}>{r._custom_tenders_display || '—'}</td>
                         {(countCols.length > 0 ? countCols : [{ key: 'upgrade_count', label: 'Upg' }, { key: 'new_line_count', label: 'New' }, { key: 'postpaid_count', label: 'Post' }])
                           .map(c => <td key={c.key} style={cell}>{countVal(r, c.key)}</td>)}
+                        <td style={cell}><GateBadge status={r._gate?.status} /></td>
                         <td style={cell}>{(r.envelope_url || r.envelope_picture) ? <a href={r.envelope_url || r.envelope_picture} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>📷</a> : '—'}</td>
                         <td style={cell}>
                           {(Number(r.expense_amount) || 0) > 0

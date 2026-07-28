@@ -93,6 +93,66 @@ def _norm(c) -> str:
     return "".join(ch for ch in str(c).lower() if ch.isalnum())
 
 
+# ── DM-Verify / dashboard filter helpers (retail-ops-14, RULE FIVE parity + de-hard-coded market
+#    bucketing). SAP-configurable: no hard-coded market/store list anywhere — these just normalize
+#    whatever query-string filter the caller sent against whatever market/store/rep strings the org's
+#    OWN data actually has. ──────────────────────────────────────────────────────────────────────
+def _market_bucket(m) -> str:
+    """A store's resolved market, or the explicit '(no market)' bucket for a blank/unresolved one —
+    NEVER an empty string. Filtering must compare against this bucketed value, never the raw string,
+    so an unresolved/blank-market store can only be excluded by an EXPLICIT '(no market)' deselection,
+    never silently dropped by an exact '' != 'Some Market' mismatch (the root cause of DM Verify
+    looking empty for a market-scoped caller — see docs/handoffs/retail-ops.md)."""
+    m = (m or "").strip()
+    return m if m else "(no market)"
+
+
+def _csv_set(s) -> set[str]:
+    return {x.strip() for x in str(s or "").split(",") if x.strip()}
+
+
+def _resolve_market_filter(market, markets):
+    """Combine the legacy singular `market=` param with the new multi-select `markets=` (comma list) —
+    both additive/backward-compatible. Returns None (no filter, nothing dropped) or a CASEFOLDED set to
+    compare against `_market_bucket(...).casefold()`."""
+    s = _csv_set(markets)
+    if not s and market:
+        s = {market}
+    return {m.casefold() for m in s} if s else None
+
+
+def _resolve_store_filter(stores):
+    """None (no filter) or an UPPERCASED set of store_codes. Never applied to an unresolved row (no
+    store_code at all) — that row has no store identity to filter by, and hiding a 'no closing
+    submitted' alert behind an unrelated store pick would recreate the exact silent-drop bug."""
+    s = _csv_set(stores)
+    return {x.upper() for x in s} if s else None
+
+
+def _resolve_rep_filter(reps):
+    """None (no filter) or a CASEFOLDED set of employee names."""
+    s = _csv_set(reps)
+    return {x.casefold() for x in s} if s else None
+
+
+def _date_range_list(d_from: str, d_to: str) -> list[str]:
+    """Every CALENDAR date in [d_from, d_to] inclusive, ascending — not just dates that already have a
+    daily_closing row, because part of the point of the summary view is to surface a store that worked
+    but submitted NOTHING that day."""
+    try:
+        a = dateparser.parse(str(d_from)).date()
+        b = dateparser.parse(str(d_to)).date()
+    except Exception:
+        return [str(d_from)]
+    if a > b:
+        a, b = b, a
+    out, d = [], a
+    while d <= b:
+        out.append(d.isoformat())
+        d += timedelta(days=1)
+    return out
+
+
 # Sheet header → our field. Keyed by normalized header; several aliases per field.
 _FIELD_ALIASES = {
     "submitted_at": ["timestamp"],
@@ -433,25 +493,50 @@ def closing_stores(org_id: str = ORG_ID):
     return out
 
 
-# ── Monthly rollup (dashboard summaries: per-store + per-rep over a YYYY-MM period) ──────────
+# ── Monthly rollup (dashboard summaries: per-store + per-rep over a period) — retail-ops-14
+#    (OWNER DIRECTIVE 2026-07-28): gained date_from/date_to (backward-compatible with period=YYYY-MM,
+#    which still wins if both are sent), stores=/reps= (comma lists, additive to market=/markets=), and
+#    bucket-aware market matching so an unresolved/blank-market store can never be silently dropped by a
+#    market filter (mirrors the /closing/summary fix — same root cause, same "(no market)" bucket). ──
 @router.get("/rollup")
-def closing_rollup(period: str, market: str = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Aggregate daily_closing for a YYYY-MM period into per-store and per-rep money + counts +
-    days-submitted, plus DM verification coverage. Powers the Daily Closing dashboard."""
-    if not period:
-        raise HTTPException(400, "period required (YYYY-MM)")
+def closing_rollup(period: str = None, date_from: str = None, date_to: str = None,
+                   market: str = None, markets: str = None, stores: str = None, reps: str = None,
+                   authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Aggregate daily_closing for a YYYY-MM period OR an explicit [date_from, date_to] range into
+    per-store and per-rep money + counts + days-submitted, plus DM verification coverage. Powers the
+    Daily Closing dashboard (tiles + By-store/By-rep tabs)."""
+    if not period and not date_from and not date_to:
+        raise HTTPException(400, "period (YYYY-MM) or date_from/date_to required")
     client = sb()
-    rows = (client.schema("commcalc").table("daily_closing").select("*")
-            .eq("org_id", org_id).eq("period", period).limit(50000).execute().data) or []
-    stores = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
-    store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
+    q = client.schema("commcalc").table("daily_closing").select("*").eq("org_id", org_id)
+    if period:
+        q = q.eq("period", period)
+    else:
+        d_from = date_from or date_to
+        d_to = date_to or date_from
+        if d_from > d_to:
+            d_from, d_to = d_to, d_from
+        q = q.gte("close_date", d_from).lte("close_date", d_to)
+        date_from, date_to = d_from, d_to
+    rows = (q.limit(50000).execute().data) or []
+    store_rows = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
+    store_meta = {s.get("store_code"): s for s in store_rows if s.get("store_code")}
 
-    # filter by period prefix in Python — "period + '-31'" makes an invalid date (e.g. 2026-06-31)
-    # that Postgres rejects on the date cast. The verification table is small (one row per store/day).
+    market_set = _resolve_market_filter(market, markets)
+    store_set = _resolve_store_filter(stores)
+    rep_set = _resolve_rep_filter(reps)
+
+    # Verification coverage — filter by period prefix (period mode) or the explicit range (range mode).
+    # "period + '-31'" would make an invalid date (e.g. 2026-06-31) that Postgres rejects on the date
+    # cast, so the range compare stays in Python too; the verification table is small either way.
     vers = (client.schema("commcalc").table("daily_closing_verification")
             .select("store_code,close_date,verified").eq("org_id", org_id).execute().data) or []
-    verified_keys = {(v.get("store_code"), str(v.get("close_date"))) for v in vers
-                     if v.get("verified") and str(v.get("close_date") or "").startswith(period)}
+    if period:
+        verified_keys = {(v.get("store_code"), str(v.get("close_date"))) for v in vers
+                         if v.get("verified") and str(v.get("close_date") or "").startswith(period)}
+    else:
+        verified_keys = {(v.get("store_code"), str(v.get("close_date"))) for v in vers
+                         if v.get("verified") and date_from <= str(v.get("close_date") or "") <= date_to}
 
     MONEY = ("store_cash", "store_cc", "epay_cash", "epay_cc", "acc_sale", "other_account")
     COUNT = ("upgrade_count", "new_line_count", "postpaid_count")
@@ -463,20 +548,30 @@ def closing_rollup(period: str, market: str = None, authorization: str = Header(
         return d
 
     by_store, by_rep, grand = {}, {}, blank()
+    kept_rows = []
     for r in rows:
         raw_code = r.get("store_code")
         key = raw_code or f"name:{r.get('store_name') or '—'}"
         meta = store_meta.get(raw_code, {}) if raw_code else {}
-        mk = meta.get("market") or ""
-        if market and mk != market:
+        mk_bucket = _market_bucket(meta.get("market"))
+        if market_set is not None and mk_bucket.casefold() not in market_set:
             continue
+        # A store filter never touches a row whose store didn't resolve to a real storeops.stores
+        # record (no store_code at all, OR a code no longer/not yet in the roster) — it has no store
+        # identity a picker could ever offer, and hiding it behind an unrelated store pick would
+        # recreate the exact silent-drop bug this package fixes.
+        if store_set is not None and meta and raw_code.upper() not in store_set:
+            continue
+        if rep_set is not None and (r.get("employee_name") or "").strip().casefold() not in rep_set:
+            continue
+        kept_rows.append(r)
         s_ = by_store.setdefault(key, {**blank(), "store_code": raw_code,
                                        "store_address": meta.get("address") or r.get("store_address"),
-                                       "store_name": r.get("store_name"), "market": mk})
+                                       "store_name": r.get("store_name"), "market": mk_bucket})
         rep_key = f"{(r.get('employee_name') or '—').strip()}||{key}"
         r_ = by_rep.setdefault(rep_key, {**blank(), "employee_name": (r.get("employee_name") or "—").strip(),
                                          "store_code": raw_code,
-                                         "store_address": meta.get("address") or r.get("store_address"), "market": mk})
+                                         "store_address": meta.get("address") or r.get("store_address"), "market": mk_bucket})
         for agg in (s_, r_, grand):
             for k in MONEY:
                 agg[k] = round(agg[k] + _f(r.get(k)), 2)
@@ -490,7 +585,7 @@ def closing_rollup(period: str, market: str = None, authorization: str = Header(
         d = {k: v for k, v in d.items() if k != "_days"} | {"days": len(d["_days"])}
         return d
 
-    submitted_keys = {(r.get("store_code"), str(r.get("close_date"))) for r in rows if r.get("store_code")}
+    submitted_keys = {(r.get("store_code"), str(r.get("close_date"))) for r in kept_rows if r.get("store_code")}
     bs = sorted((finalize(v) for v in by_store.values()),
                 key=lambda s: str(s.get("store_address") or s.get("store_name") or ""))
     br = sorted((finalize(v) for v in by_rep.values()), key=lambda s: -s.get("rows", 0))
@@ -500,25 +595,53 @@ def closing_rollup(period: str, market: str = None, authorization: str = Header(
         bs = [s for s in bs if in_keyset(ks, s.get("store_code"), s.get("store_address"))]
         br = [s for s in br if in_keyset(ks, s.get("store_code"), s.get("store_address"))]
     return {
-        "period": period, "by_store": bs, "by_rep": br, "totals": finalize(grand),
+        "period": period, "date_from": date_from, "date_to": date_to,
+        "by_store": bs, "by_rep": br, "totals": finalize(grand),
         "verified_keys": len(verified_keys & submitted_keys), "submitted_keys": len(submitted_keys),
     }
 
 
 # ── DM evening verification view: per-store totals + missing reps + B2B recon ─────────────
-@router.get("/summary")
-def closing_summary(date: str, market: str = None, tolerance: float = 1.0, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    if not date:
-        raise HTTPException(400, "date required (YYYY-MM-DD)")
-    client = sb()
+# retail-ops-14 (OWNER DIRECTIVE 2026-07-28): the actual per-date computation is now
+# `_closing_summary_for_date` so `/closing/summary` can call it once per date for an optional
+# date_from/date_to range (the single-`date=` call path is UNCHANGED math, just parameterized —
+# every dollar figure below is byte-identical to before this package). Gained bucket-aware
+# market/store/rep filtering (never silently drops an unresolved/blank-market store — see
+# `_market_bucket`) and additive per-tender detail (ACIMA + the 3 tenders previously invisible here,
+# custom tenders/counts, and a re-derived close-gate status per rep — REUSES `_b2b_day`/`_rep_b2b`/
+# `_money_issues` verbatim, the exact same functions the real close gate and `/closing/submissions`
+# already use, never re-implemented) so the DM Verify page can show everything the dashboard's detail
+# tab shows for the same store/day. The money-secrecy boundary is unchanged: dollar reasons/B2B
+# figures only populate for a `_can_mgmt_review` caller (company-wide/super-admin/explicit grant);
+# a DM/store-scope viewer sees the same coarse status with an empty reasons list, same as
+# /closing/submissions and /closing/management already do.
+_SUMMARY_MAX_RANGE_DATES = 14   # bounded like closing_stale_stores' "at most 14" pattern — this
+                                # endpoint does much heavier per-day work (schedules, timelog, B2B
+                                # money+counts, X-report, verification, + now the gate replay) than
+                                # closing_submissions' single _b2b_day call.
+_GATE_RANK = {"blocked": 4, "flagged": 3, "recon_pending": 2, "not_computed": 1, "ok": 0}
+
+
+def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_set, tolerance, can_review):
+    """One day's DM-Verify per-store summary. Returns a list of store dicts, each tagged
+    close_date=date. market_set/store_set/rep_set (see _resolve_*_filter) are None (unrestricted) or
+    a normalized set narrowing which store CARDS come back — filtering never touches the money math,
+    it only decides which already-computed cards are included."""
     rows = (client.schema("commcalc").table("daily_closing").select("*")
             .eq("org_id", org_id).eq("close_date", date).execute().data) or []
 
     # Configurable activation-count fields (mig 501): empty config -> the hardcoded 3 fields
     # (upgrade_count/new_line_count/postpaid_count), so an un-opted tenant is byte-identical.
-    from . import count_config
+    from . import count_config, tender_config
     _cdefs = count_config.load_count_config(client, org_id)
     _ckeys, _clabels, _crclass = count_config.count_axis(_cdefs)
+    # Configurable tender labels (mig 111) — for the custom-tenders display string only (same source
+    # /closing/submissions already uses); never affects the close gate.
+    try:
+        _tdefs, _tmaps = tender_config.load_tender_config(client, org_id)
+        tlabels = {d.get("tender_key"): (d.get("label") or d.get("tender_key")) for d in _tdefs}
+    except Exception:
+        tlabels = {}
 
     # Store + market context.
     stores = (client.schema("storeops").table("stores")
@@ -589,6 +712,45 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
             .eq("org_id", org_id).eq("close_date", date).execute().data) or []
     ver_by_store = {v.get("store_code"): v for v in vers}
 
+    # Close-gate replay (READ ONLY, reuses the exact existing helpers — never redefined): lets each rep
+    # row carry the SAME block/flag/ok/recon_pending status the real 3-try close gate and
+    # /closing/submissions already compute, instead of DM Verify's own separate (and less precise, no
+    # block-vs-flag distinction) money_recon tolerance check below. A failure here degrades to
+    # "not_computed" per rep, never breaks the rest of the page.
+    try:
+        day_data = _b2b_day(client, org_id, date)
+    except Exception as e:
+        print("closing summary gate-status _b2b_day failed:", e)
+        day_data = None
+
+    def _tender_and_gate(code, rp):
+        dt = _row_display_tenders(rp)
+        d_cash, d_credit = dt["cash"], round(dt["credit"] + dt["ext_cc"], 2)
+        gate_status, gate_reasons, g_cash, g_card = "not_computed", [], None, None
+        if day_data is not None:
+            if not day_data.get("has_data"):
+                gate_status = "recon_pending"
+            else:
+                repb = _rep_b2b(day_data, code, (rp.get("employee_name") or ""))
+                if repb is None or not repb.get("tenders_available", True):
+                    gate_status = "recon_pending"
+                else:
+                    issues = _money_issues(d_cash, d_credit, repb["cash"], repb["card"], tolerance)
+                    blocks = [i["reason"] for i in issues if i["severity"] == "block"]
+                    flags = [i["reason"] for i in issues if i["severity"] == "flag"]
+                    gate_status = "blocked" if blocks else ("flagged" if flags else "ok")
+                    gate_reasons = blocks + flags
+                    g_cash, g_card = repb["cash"], repb["card"]
+        return dt, {"status": gate_status, "reasons": (gate_reasons if can_review else []),
+                    "b2b_cash": (g_cash if can_review else None), "b2b_card": (g_card if can_review else None)}
+
+    def _rep_custom_displays(rp):
+        ct = rp.get("tenders") if isinstance(rp.get("tenders"), dict) else {}
+        ct_display = ", ".join(f"{tlabels.get(k, k)}: {_usd(_f(v))}" for k, v in ct.items() if _f(v))
+        rc = rp.get("counts") if isinstance(rp.get("counts"), dict) else {}
+        rc_display = ", ".join(f"{_clabels.get(k, k)}: {v}" for k, v in rc.items() if k not in count_config.STD_FIELD_KEYS)
+        return ct_display, rc_display
+
     # Group rows by store (code if resolved, else name).
     groups = {}
     for r in rows:
@@ -600,7 +762,16 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
         code = None if key.startswith("name:") else key
         meta = store_meta.get(code, {}) if code else {}
         mkt = meta.get("market") or ""
-        if market and mkt != market:
+        mkt_bucket = _market_bucket(mkt)
+        # Bucket-aware: an unresolved/blank-market store is NEVER silently dropped by a market filter —
+        # it can only be excluded if the caller explicitly deselects the "(no market)" bucket.
+        if market_set is not None and mkt_bucket.casefold() not in market_set:
+            continue
+        # A store filter never touches a row whose store didn't resolve to a real storeops.stores
+        # record (no store_code at all, OR a code no longer/not yet in the roster) — it has no store
+        # identity a picker could ever offer, and hiding a "did this even close" alert behind an
+        # unrelated store pick would recreate the exact silent-drop bug this package fixes.
+        if store_set is not None and meta and code.upper() not in store_set:
             continue
         totals = {
             "store_cash": round(sum(_f(r["store_cash"]) for r in reps), 2),
@@ -618,6 +789,30 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
             "counts": [{"field_key": k, "label": _clabels.get(k, k),
                         "value": sum(count_config.row_value(r, k) for r in reps)} for k in _ckeys],
         }
+        # Per-tender breakdown (mig 111/103) — ADDITIVE, byte-identical legacy fields above untouched.
+        # Includes ACIMA, which was previously invisible on this page entirely (it's excluded from
+        # store_cash/store_cc/other_account on write — see create_row — because it's financing, not
+        # cash/card collected; it still needs to be VISIBLE to a DM verifying the night's totals).
+        _rep_computed = [_tender_and_gate(code, rp) for rp in reps]
+        _tender_rows = [dt for dt, _g in _rep_computed]
+        totals["t_cash"] = round(sum(t["cash"] for t in _tender_rows), 2)
+        totals["t_credit"] = round(sum(t["credit"] for t in _tender_rows), 2)
+        totals["t_ext_cc"] = round(sum(t["ext_cc"] for t in _tender_rows), 2)
+        totals["t_gift"] = round(sum(t["gift"] for t in _tender_rows), 2)
+        totals["t_store_acct"] = round(sum(t["store_acct"] for t in _tender_rows), 2)
+        totals["t_zelle"] = round(sum(t["zelle"] for t in _tender_rows), 2)
+        totals["t_acima"] = round(sum(t["acima"] for t in _tender_rows), 2)
+        totals["total_collected"] = round(sum(sum(t.values()) for t in _tender_rows), 2)
+        _custom_sum = {}
+        for r in reps:
+            ct = r.get("tenders") if isinstance(r.get("tenders"), dict) else {}
+            for k, v in ct.items():
+                _custom_sum[k] = _custom_sum.get(k, 0.0) + _f(v)
+        totals["custom_tenders"] = [{"key": k, "label": tlabels.get(k, k), "value": round(v, 2)}
+                                    for k, v in _custom_sum.items() if v]
+        rep_gate_statuses = [g["status"] for _dt, g in _rep_computed]
+        store_gate_status = max(rep_gate_statuses, key=lambda s: _GATE_RANK.get(s, 0)) if rep_gate_statuses else None
+
         submitted_names = {(r.get("employee_name") or "").strip().lower() for r in reps}
         submitted_set = {sn for sn in submitted_names if sn}
         scheduled = sched_by_store.get(code, set()) if code else set()
@@ -656,6 +851,13 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
             if not any(_name_match(nm, c) for c in clocked):
                 cross_login.append({"salesperson": nm, "logins": sorted(logins.get(nm, set()))})
         cross_login.sort(key=lambda x: x["salesperson"])
+
+        # A rep filter narrows which STORE CARDS show (any selected rep submitted, worked, or is
+        # missing here) — it never changes which rep ROWS contribute to the store totals above.
+        if rep_set is not None:
+            involved_cf = {n.casefold() for n in submitted_display} | {n.casefold() for n in worked} | {n.casefold() for n in missing}
+            if not (involved_cf & rep_set):
+                continue
 
         bb = b2b.get(code, {}) if code else {}
         # Sum by recon_class (config-driven, mig 501) instead of the 2 hardcoded field names — with an
@@ -730,12 +932,18 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
                                            "tenant. Shown as pending, not flagged.")
             money_recon["any_flag"] = any(money_recon[k].get("flag") for k in ("accessory", "cash", "credit"))
 
+        out_reps = []
+        for rp, (dt, g) in zip(reps, _rep_computed):
+            ct_display, rc_display = _rep_custom_displays(rp)
+            out_reps.append({**rp, "envelope_url": _signed_envelope(rp.get("envelope_picture")),
+                             "_tenders": dt, "_gate": g,
+                             "_custom_tenders_display": ct_display, "_custom_counts_display": rc_display})
+
         out.append({
             "store_code": code, "store_name": (reps[0].get("store_name") or code or "—"),
             "store_address": meta.get("address") or reps[0].get("store_address"),
-            # Sign each rep's private-bucket envelope path (raw path 404s as a relative href).
-            "market": mkt, "reps": [{**rp, "envelope_url": _signed_envelope(rp.get("envelope_picture"))} for rp in reps],
-            "totals": totals,
+            "market": mkt_bucket, "close_date": date, "reps": out_reps,
+            "totals": totals, "gate_status": store_gate_status,
             "scheduled_count": len(scheduled), "missing_reps": missing,
             "worked_reps": sorted(worked), "worked_count": len(worked),
             "scheduled_no_show": scheduled_no_show, "worked_unscheduled": worked_unscheduled,
@@ -753,7 +961,10 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
             continue
         meta = store_meta.get(code, {})
         mkt = meta.get("market") or ""
-        if market and mkt != market:
+        mkt_bucket = _market_bucket(mkt)
+        if market_set is not None and mkt_bucket.casefold() not in market_set:
+            continue
+        if store_set is not None and meta and code.upper() not in store_set:
             continue
         clocked = set(ww.get("clocked_in", set()))
         sold = set(ww.get("sold", set()))
@@ -763,6 +974,11 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
         scheduled = sched_by_store.get(code, set())
         closer = closer_by_store.get(code)
         owes = ({closer} if closer else worked) if closing_mode == "one_closing" else worked
+        missing_here = sorted({n for n in owes if n})
+        if rep_set is not None:
+            involved_cf = {n.casefold() for n in worked} | {n.casefold() for n in missing_here}
+            if not (involved_cf & rep_set):
+                continue
         logins = ww.get("logins", {})
         cross_login = sorted(
             [{"salesperson": nm, "logins": sorted(logins.get(nm, set()))}
@@ -770,8 +986,8 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
             key=lambda x: x["salesperson"])
         out.append({
             "store_code": code, "store_name": meta.get("address") or code, "store_address": meta.get("address"),
-            "market": mkt, "reps": [], "totals": None,
-            "scheduled_count": len(scheduled), "missing_reps": sorted({n for n in owes if n}),
+            "market": mkt_bucket, "close_date": date, "reps": [], "totals": None, "gate_status": None,
+            "scheduled_count": len(scheduled), "missing_reps": missing_here,
             "worked_reps": sorted(worked), "worked_count": len(worked),
             "scheduled_no_show": sorted({nm for nm in scheduled if not any(_name_match(nm, w) for w in worked)}),
             "worked_unscheduled": sorted({nm for nm in worked if not any(_name_match(nm, s) for s in scheduled)}),
@@ -780,12 +996,59 @@ def closing_summary(date: str, market: str = None, tolerance: float = 1.0, autho
             "verification": ver_by_store.get(code), "recon": None, "money_recon": None,
         })
 
+    return out
+
+
+@router.get("/summary")
+def closing_summary(date: str = None, date_from: str = None, date_to: str = None,
+                    market: str = None, markets: str = None, stores: str = None, reps: str = None,
+                    tolerance: float = 1.0, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """DM evening verification view. `date=YYYY-MM-DD` (the historical single-day call, UNCHANGED
+    shape/math) OR `date_from`/`date_to` for an optional multi-day range (retail-ops-14, OWNER
+    DIRECTIVE 2026-07-28 — the DM's evening workflow stays single-day by default; range mode is an
+    additive capability for catching up on several nights at once, bounded to
+    _SUMMARY_MAX_RANGE_DATES). `markets=`/`stores=`/`reps=` are comma-separated multi-selects
+    (additive to the legacy singular `market=`); market matching is bucket-aware — see
+    `_market_bucket` — so an unresolved/blank-market store is never silently dropped. No date at all
+    (e.g. a "Clear filters" reset on the frontend's standard filter bar) degrades to TODAY rather than
+    a 400 — matches the doctrine every other RULE-FIVE page follows (a cleared filter falls back to a
+    sane default, never an error)."""
+    if not date and not date_from and not date_to:
+        date = _biz_today_iso()
+    client = sb()
+    is_range = bool(date_from or date_to)
+    if is_range:
+        d_from = date_from or date_to
+        d_to = date_to or date_from
+        all_dates = _date_range_list(d_from, d_to)
+        range_capped = len(all_dates) > _SUMMARY_MAX_RANGE_DATES
+        dates = all_dates[-_SUMMARY_MAX_RANGE_DATES:] if range_capped else all_dates
+    else:
+        dates = [date]
+        all_dates = dates
+        range_capped = False
+
+    market_set = _resolve_market_filter(market, markets)
+    store_set = _resolve_store_filter(stores)
+    rep_set = _resolve_rep_filter(reps)
+    can_review = _can_mgmt_review(_caller_perms(client, authorization))
+
+    out = []
+    for d in dates:
+        out.extend(_closing_summary_for_date(client, org_id, d, market_set, store_set, rep_set, tolerance, can_review))
+
+    # Stable two-pass sort: store_address ascending WITHIN each date, dates descending overall — for a
+    # single-day call (all rows share one close_date) this is byte-identical to the historical
+    # store_address-only sort.
     out.sort(key=lambda s: str(s.get("store_address") or s.get("store_name") or ""))
+    out.sort(key=lambda s: str(s.get("close_date") or ""), reverse=True)
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         out = [s for s in out if in_keyset(ks, s.get("store_code"), s.get("store_address"))]
-    return {"date": date, "stores": out}
+    return {"date": date, "dates": dates, "range": is_range, "stores": out,
+           "dates_requested": len(all_dates), "dates_computed": len(dates), "range_capped": range_capped,
+           "can_review": can_review}
 
 
 # ── DM verification upsert ────────────────────────────────────────────────────────────────
@@ -2407,10 +2670,15 @@ def put_ops_chargeback_policy(payload: dict, authorization: str = Header(default
 
 
 @router.get("/ops-chargebacks/dm-verify")
-def get_missed_dm_verifies(lookback_days: int = 14, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def get_missed_dm_verifies(lookback_days: int = 14, date_from: str = None, date_to: str = None,
+                           market: str = None, markets: str = None, stores: str = None, reps: str = None,
+                           authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Runs the missed-DM-verification sweep, then returns every missed_dm_verify chargeback
     (pending/posted/waived) scoped to the caller's store span, plus cumulative totals. Powers the
-    'Missed verifications & chargebacks' panel at the top of the DM Verify page."""
+    'Missed verifications & chargebacks' panel at the top of the DM Verify page. `date_from`/`date_to`/
+    `markets`/`stores`/`reps` (retail-ops-14, OWNER DIRECTIVE 2026-07-28) let the panel honor the SAME
+    active filter bar as the rest of the page — bucket-aware market matching, same as /closing/summary,
+    so an unresolved/blank-market store's missed-verify row is never silently dropped."""
     require_org(org_id)
     client = sb()
     rows = ops_chargebacks.detect_missed_dm_verifies(org_id, lookback_days=lookback_days)
@@ -2419,6 +2687,25 @@ def get_missed_dm_verifies(lookback_days: int = 14, authorization: str = Header(
     # across commission cycles, not a second missed-verification incident; counting both would
     # double the totals on this per-incident panel.
     rows = [r for r in rows if not r.get("parent_id")]
+    if date_from:
+        rows = [r for r in rows if str(r.get("incident_date") or "") >= date_from]
+    if date_to:
+        rows = [r for r in rows if str(r.get("incident_date") or "") <= date_to]
+    store_set = _resolve_store_filter(stores)
+    rep_set = _resolve_rep_filter(reps)
+    market_set = _resolve_market_filter(market, markets)
+    if store_set is not None:
+        rows = [r for r in rows if (r.get("store_code") or "").upper() in store_set]
+    if rep_set is not None:
+        rows = [r for r in rows if (r.get("employee_name") or "").strip().casefold() in rep_set]
+    if market_set is not None:
+        try:
+            _store_rows = (client.schema("storeops").table("stores").select("store_code,market")
+                          .eq("org_id", org_id).execute().data) or []
+            _mkt_by_code = {s.get("store_code"): _market_bucket(s.get("market")) for s in _store_rows if s.get("store_code")}
+        except Exception:
+            _mkt_by_code = {}
+        rows = [r for r in rows if _mkt_by_code.get(r.get("store_code"), "(no market)").casefold() in market_set]
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)
     if ks is not None:

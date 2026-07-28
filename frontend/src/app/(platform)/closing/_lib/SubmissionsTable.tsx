@@ -4,6 +4,7 @@ import { api, localToday } from '@/lib/client'
 import ReportShell from '@/components/ReportShell'
 import { ExportColumn } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
+import type { EntityOption } from '@/components/EntityPicker'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 
 // EVERY submitted daily-closing column, one row per rep-submission (OWNER DIRECTIVE 2026-07-27).
@@ -17,17 +18,40 @@ import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterVa
 // dashboard; the DOLLAR reasons (`gate_reasons`) are populated by the backend ONLY for a company-wide
 // caller (same _can_mgmt_review boundary /closing/management already enforces) — a market/store-scope
 // viewer here sees the same badge with an empty reasons list, never the true B2B figure.
+//
+// retail-ops-14 (OWNER DIRECTIVE 2026-07-28, same-day follow-up): the Daily Closing dashboard's
+// By-store/By-rep tabs had NO date-range/store/rep filters at all (month + market only) while this
+// tab already had the full standard bar — that asymmetry is the owner's complaint. This component now
+// OPTIONALLY accepts its filter state (and canonical option lists) as props so the PARENT dashboard can
+// render ONE shared <StandardFilterBar> that drives every tab, instead of two competing filter rows.
+// Passing no props preserves the original fully-self-contained behavior (own bar, own data-derived
+// options) for any other embedding.
+export const monthStart = () => localToday().slice(0, 8) + '01'
+
 const GATE_LABEL: Record<string, string> = {
   ok: '✅ OK', flagged: '⚠️ Flagged', blocked: '⛔ Blocked',
   recon_pending: '⏳ Pending', not_computed: '— (range too wide)',
 }
 
-const monthStart = () => localToday().slice(0, 8) + '01'
-
-export default function SubmissionsTable() {
-  // Own date-range filter (independent of the dashboard's month/market pickers above) — string-only
-  // state throughout (no `new Date(...)` round-trip), so there's no UTC off-by-one to introduce.
-  const [filt, setFilt] = useState<StandardFilterValue>(() => ({ ...emptyStandardFilter(monthStart()), periodTo: localToday() }))
+export default function SubmissionsTable({
+  filterValue, onFilterChange, storeOptions: storeOptionsProp, marketOptions: marketOptionsProp, repOptions: repOptionsProp,
+}: {
+  /** When provided (by a parent that renders its OWN <StandardFilterBar>), this component skips
+   *  rendering its own bar and uses the parent's filter state directly. Omit for standalone use. */
+  filterValue?: StandardFilterValue
+  onFilterChange?: (v: StandardFilterValue) => void
+  /** Canonical option overrides (e.g. the parent's org-scoped /closing/stores + roster fetch) — win
+   *  over this component's own data-derived options when given. */
+  storeOptions?: string[] | EntityOption[]
+  marketOptions?: string[] | EntityOption[]
+  repOptions?: EntityOption[]
+} = {}) {
+  // Own date-range filter (independent of any parent) — string-only state throughout (no
+  // `new Date(...)` round-trip), so there's no UTC off-by-one to introduce. Only used when the
+  // parent doesn't drive filtering (filterValue omitted).
+  const [internalFilt, setInternalFilt] = useState<StandardFilterValue>(() => ({ ...emptyStandardFilter(monthStart()), periodTo: localToday() }))
+  const filt = filterValue ?? internalFilt
+  const setFilt = onFilterChange ?? setInternalFilt
   const [rawRows, setRawRows] = useState<any[]>([])
   const [meta, setMeta] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -50,12 +74,16 @@ export default function SubmissionsTable() {
   }, [filt.period, filt.periodTo])
   useEffect(() => { load() }, [load])
 
-  // Store(s) / market / rep(s) picker options — from the already org-scoped, already date-filtered
-  // rows just loaded (pick-don't-type §3b; never references data outside the tenant or the range).
+  // Store(s) / market / rep(s) picker options — canonical props win when the parent supplies them;
+  // otherwise fall back to the already org-scoped, already date-filtered rows just loaded (pick-don't-
+  // type §3b; never references data outside the tenant or the range) — the original standalone behavior.
   const acc = useMemo(() => ({
     store: (r: any) => r.store_address, market: (r: any) => r.market, rep: (r: any) => r.employee_name,
   }), [])
-  const opts = useMemo(() => optionsFromRows(rawRows, acc), [rawRows, acc])
+  const dataOpts = useMemo(() => optionsFromRows(rawRows, acc), [rawRows, acc])
+  const storeOpts = storeOptionsProp ?? dataOpts.stores
+  const marketOpts = marketOptionsProp ?? dataOpts.markets
+  const repOpts = repOptionsProp ?? dataOpts.reps
   // Store/market/rep narrowing happens client-side over the server-returned (date-range-scoped) rows —
   // the SAME rows feed the table AND every export (what-you-see-is-what-exports, §3c).
   const rows = useMemo(() => filterRows(rawRows, filt, acc), [rawRows, filt, acc])
@@ -111,12 +139,14 @@ export default function SubmissionsTable() {
 
   return (
     <div>
-      <StandardFilterBar
-        value={filt} onChange={setFilt}
-        periodMode="range"
-        storeOptions={opts.stores} marketOptions={opts.markets} repOptions={opts.reps}
-        storeLabel="Stores…" marketLabel="Markets…" repLabel="Employees…"
-      />
+      {!filterValue && (
+        <StandardFilterBar
+          value={filt} onChange={setFilt}
+          periodMode="range"
+          storeOptions={storeOpts} marketOptions={marketOpts} repOptions={repOpts}
+          storeLabel="Stores…" marketLabel="Markets…" repLabel="Employees…"
+        />
+      )}
 
       {(meta?.status_capped || meta?.truncated) && (
         <div className="card" style={{ padding: '8px 12px', marginBottom: 10, fontSize: 12, background: '#fff8e6', border: '1px solid #f3d98b' }}>
