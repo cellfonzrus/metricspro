@@ -351,6 +351,13 @@ def synthesize_zero_activity_rows(rows, employees, settings, lo: date, hi: date)
         # never invents a row for them either. Skip.
         if "scheduled_pay" not in overlay:
             continue
+        # Gate-1 optional (b), 2026-07-28: a PAST-terminated employee (termination_date entirely
+        # before this report range) with no activity derives to a permanent $0.00 — never useful, and
+        # would otherwise show up on every future payroll run forever. Skip (a future-hire's $0 row,
+        # by contrast, is left alone — that's a real "hasn't started yet" signal, not noise).
+        term = parse_date(e.get("termination_date"))
+        if term and term < lo and overlay.get("actual_pay") == 0:
+            continue
         row = {
             "employee_id": eid, "name": e.get("name") or eid,
             "store": (e.get("home_store") or "").strip() or "Unassigned",

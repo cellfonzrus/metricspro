@@ -229,6 +229,14 @@ employees_synth = [
     {"employee_id": "MGR2", "name": "Manager No-Home", "pay_basis": "monthly", "pay_amount": 5000, "home_store": None},
     {"employee_id": "MGR3", "name": "Manager Misconfigured", "pay_basis": "annual", "pay_amount": None},
     {"employee_id": "REP1", "name": "Hourly No-Punches", "pay_basis": "hourly"},
+    # Gate-1 optional (b): a PAST-terminated employee (well before this 2026-03-02..08 range) with
+    # zero activity derives to a permanent $0.00 — must be skipped, not synthesized every period forever.
+    {"employee_id": "TERM1", "name": "Terminated Long Ago", "pay_basis": "annual", "pay_amount": 52000,
+     "home_store": "S1", "termination_date": "2025-01-01"},
+    # Control: a FUTURE-hire (not yet started) is a real, useful "hasn't started" $0 signal — must
+    # still be left alone (only the PAST-terminated case is suppressed).
+    {"employee_id": "FUT1", "name": "Future Hire", "pay_basis": "annual", "pay_amount": 52000,
+     "home_store": "S1", "hire_date": "2026-06-01"},
 ]
 synth_out = {r["employee_id"]: r for r in
              synthesize_zero_activity_rows(rows_f, employees_synth, WEEKLY, date(2026, 3, 2), date(2026, 3, 8))}
@@ -253,6 +261,12 @@ check("F1h an employee who ALREADY has a row is not duplicated",
 check("F1i existing rows are byte-identical (same objects) after synthesis — only APPENDS",
       all(any(r is orig for r in synthesize_zero_activity_rows(rows_f, employees_synth, WEEKLY, date(2026, 3, 2), date(2026, 3, 8)))
           for orig in rows_f))
+check("F1k optional (b) — a PAST-terminated zero-activity employee is NOT synthesized "
+      "(would otherwise be a permanent $0.00 row on every future run)",
+      "TERM1" not in synth_out, list(synth_out))
+check("F1l optional (b) control — a FUTURE-hire zero-activity employee is STILL synthesized "
+      "(a real $0 'hasn't started yet' signal, not suppressed)",
+      "FUT1" in synth_out and synth_out["FUT1"]["actual_pay"] == 0.0, synth_out.get("FUT1"))
 # The router wires apply_to_payroll_rows THEN synthesize_zero_activity_rows — prove the composed
 # result (what production actually returns) has ALL FIVE employees with correct figures.
 composed = apply_to_payroll_rows(rows_f, employees_f, WEEKLY, date(2026, 3, 2), date(2026, 3, 8))

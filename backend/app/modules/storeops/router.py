@@ -1077,15 +1077,49 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     real_shifts, tl_rows = _inactive_activity_rows(org_id, lo, hi, inactive_ids)
     _merge_inactive_into_by_store(by_store, rate_map, real_shifts, tl_rows)
 
+    # Gate-1 D1 fix (2026-07-28, MODERATE money): _merge_inactive_into_by_store above writes an
+    # INACTIVE employee's real-activity hourly $ straight into by_store, but never into
+    # emp_store_hours/emp_store_dollars (those two dicts are only fed by the active-path loops
+    # earlier, which explicitly SKIP inactive employee ids). For an inactive employee who is ALSO
+    # salaried, that left apply_to_by_store below with NOTHING to subtract for them — so it ADDED
+    # their full derived salary ON TOP of the hourly figure just written above, overstating the store
+    # total by hours × their (possibly stale) pay_rate (repro: $52k salaried, is_active=false, one 8h
+    # punch at a leftover $20/hr rate -> by-store showed $1,160 against /payroll's correct $1,000, a
+    # +$160 = 8h×$20 overstatement). Mirrors the SAME hrs computation _merge_inactive_into_by_store
+    # itself uses (real_shifts is pre-filtered to actual_hours>0; tl_rows is always real, never
+    # phantom) so the two stay in exact agreement — this is bookkeeping only, not a second source of
+    # truth for the hours themselves.
+    for s in real_shifts:
+        eid = s.get("employee_id")
+        if eid not in salaried_ids:
+            continue
+        store = (s.get("store_code") or "").strip()
+        if not store:
+            continue
+        sched = float(s.get("scheduled_hours") or 0)
+        act = float(s.get("actual_hours") or 0)
+        hrs = act if act > 0 else sched   # act is always >0 here (real_shifts is pre-filtered)
+        rate = rate_map.get(eid, 0.0)
+        payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
+        payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
+    for t in tl_rows:
+        eid = t.get("employee_id")
+        if eid not in salaried_ids:
+            continue
+        store = (t.get("store_code") or "").strip()
+        if not store:
+            continue
+        hrs = float(t.get("hours") or 0)
+        rate = rate_map.get(eid, 0.0)
+        payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
+        payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
+
     # SALARY PAY-BASIS OVERRIDE (owner directive 2026-07-27, Deliverable 4) — see
     # payroll_salary.apply_to_by_store's own docstring for the subtract-hourly/add-derived mechanics.
-    # NOTE (known, documented gap): a salaried employee who is ALSO inactive/terminated mid-period is
-    # excluded from emp_store_hours/emp_store_dollars above (their contribution instead flows through
-    # _merge_inactive_into_by_store, which this hook does not track) — their STORE-level allocation
-    # here still uses the hourly-computed figure. Their overall PAYROLL REPORT total (GET /payroll) is
-    # still correct (that endpoint's override applies uniformly to every merged row regardless of
-    # active status) — only this store-split is narrower in scope. Flagged as a follow-up in
-    # docs/handoffs/people.md rather than silently left unmentioned.
+    # With the D1 fix immediately above, an inactive-AND-salaried employee's real-activity hourly $ is
+    # now tracked in emp_store_hours/emp_store_dollars exactly like the active path, so this call nets
+    # them correctly (subtract the real hourly $, add the derived salary allocated proportional to
+    # those same hours) instead of adding the derived salary on top of an untouched hourly figure.
     if lo and hi and salaried_ids:
         try:
             by_store = payroll_salary.apply_to_by_store(
@@ -1649,9 +1683,24 @@ def update_employee(emp_id: str, updates: dict, authorization: str = Header(defa
             row["pay_amount"] = None
     before = None
     if set(_PAY_LOGGED_FIELDS) & set(row):
-        before_rows = (sb().table("employees").select(
-            "id,employee_id,name," + ",".join(_PAY_LOGGED_FIELDS))
-            .eq("id", emp_id).eq("org_id", org_id).limit(1).execute().data) or []
+        try:
+            before_rows = (sb().table("employees").select(
+                "id,employee_id,name," + ",".join(_PAY_LOGGED_FIELDS))
+                .eq("id", emp_id).eq("org_id", org_id).limit(1).execute().data) or []
+        except Exception:
+            # Gate-1 NIT-A fix (2026-07-28, MUST): the widened select above names ALL of
+            # _PAY_LOGGED_FIELDS unconditionally, including pay_basis/pay_amount/termination_date
+            # (migrations 416/417) — PostgREST fails the WHOLE select if any named column doesn't
+            # exist yet. Pre-migration, that meant an ORDINARY pay_rate edit (a field that predates
+            # this feature entirely) 500'd in the deploy-before-SQL window. Degrade to a select of
+            # just the fields that already existed (pay_rate always did) — same widened-select-with-
+            # fallback convention _employees_with_pay_fields already uses for every READ path; this
+            # is the matching guard for the EDIT path.
+            try:
+                before_rows = (sb().table("employees").select("id,employee_id,name,pay_rate")
+                               .eq("id", emp_id).eq("org_id", org_id).limit(1).execute().data) or []
+            except Exception:
+                before_rows = []
         before = before_rows[0] if before_rows else None
     r = sb().table("employees").update(row).eq("id", emp_id).eq("org_id", org_id).execute()
     if not r.data:
@@ -1756,14 +1805,19 @@ def bulk_payscale(body: dict, authorization: str = Header(default=""), org_id: s
     """Bulk set pay rates from a list. Body: {rows:[{employee_id|name, pay_rate}]}.
     Matches by employee_id, else exact name (case-insensitive). Reports unmatched/bad rows.
     MANAGER-GATED (2026-07-27) — same posture as the single-row PATCH's pay-field gate
-    (_PAY_GATED_FIELDS, Deliverable 6)."""
+    (_PAY_GATED_FIELDS, Deliverable 6). Gate-1 D2 fix (2026-07-28, MODERATE audit): a bulk upload
+    previously rewrote every rate with ZERO change-log trail (unlike the single-row PATCH, which logs
+    via _log_payroll_change) — a DM could silently mass-edit pay with no ✎ audit marker anywhere.
+    Each successfully-updated row now logs the SAME way, entry_point='bulk_payscale', best-effort
+    (a log-write failure never blocks the actual rate update, matching every other hook's posture)."""
     _require_manager(authorization, org_id)
     rows = body.get("rows") or body.get("employees") or []
     if not isinstance(rows, list) or not rows:
         raise HTTPException(400, "rows[] required")
-    emps = sb().table("employees").select("id,employee_id,name").eq("org_id", org_id).execute().data or []
+    emps = sb().table("employees").select("id,employee_id,name,pay_rate").eq("org_id", org_id).execute().data or []
     by_eid = {str(e.get("employee_id")): e for e in emps if e.get("employee_id")}
     by_name = {(e.get("name") or "").strip().lower(): e for e in emps}
+    who = _who_for_log(authorization, org_id)
     updated, errors = 0, []
     for i, rw in enumerate(rows):
         try:
@@ -1776,8 +1830,14 @@ def bulk_payscale(body: dict, authorization: str = Header(default=""), org_id: s
         if not match:
             errors.append({"row": i + 1, "error": "employee not found", "ref": eid or rw.get("name")})
             continue
+        before_rate = match.get("pay_rate")
         sb().table("employees").update({"pay_rate": rate}).eq("id", match["id"]).eq("org_id", org_id).execute()
         updated += 1
+        if str(before_rate or "") != str(rate):
+            _log_payroll_change(org_id, field="pay_rate", entry_point="bulk_payscale",
+                                 employee_id=match.get("employee_id"), employee_name=match.get("name"),
+                                 before=before_rate, after=rate,
+                                 source_table="employees", source_id=match.get("id"), who=who)
     return {"updated": updated, "errors": errors, "total": len(rows)}
 
 

@@ -28,6 +28,8 @@ const ENTRY_POINT_LABEL: Record<string, string> = {
   // Salary pay-basis (2026-07-27): PATCH /employees/{id} on any of pay_rate/pay_basis/pay_amount/
   // termination_date (manager-gated) logs here with this ONE entry_point for all four fields.
   pay_basis_change: 'Pay setup change (HR)',
+  // Gate-1 D2 (2026-07-28): bulk_payscale (HR's "Upload pay rates" template) now logs the same way.
+  bulk_payscale: 'Bulk pay-rate upload (HR)',
 }
 const FIELD_LABEL: Record<string, string> = {
   scheduled_hours: 'Scheduled hours', actual_hours: 'Actual hours', start_time: 'Start time',

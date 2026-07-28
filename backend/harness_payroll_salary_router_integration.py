@@ -208,6 +208,20 @@ STORE["employees"] = [
     {"id": "4", "employee_id": "MGR2", "org_id": ORG, "name": "Nadia No-Home (zero activity)",
      "home_store": None, "pay_rate": 0.0, "pay_basis": "monthly", "pay_amount": 5000.0,
      "hire_date": None, "termination_date": None, "is_active": True},
+    # Gate-1 D1 (MODERATE money) repro: a salaried $52k employee who is INACTIVE (is_active=false) but
+    # has REAL activity this period (an 8h punch) at a leftover/stale hourly pay_rate ($20). Before the
+    # fix: /payroll = $1,000 (correct, the merged-inactive-payroll path already fed through the salary
+    # override uniformly) but /payroll-by-store = $1,160 ($1,000 derived + $160 = 8h×$20 stale-hourly,
+    # because _merge_inactive_into_by_store's hourly $ was never tracked into emp_store_dollars for
+    # apply_to_by_store to subtract, so it ADDED the derived salary ON TOP instead of replacing it).
+    {"id": "5", "employee_id": "INAC1", "org_id": ORG, "name": "Ivan Inactive-Salaried",
+     "home_store": "Store1", "pay_rate": 20.0, "pay_basis": "annual", "pay_amount": 52000.0,
+     "hire_date": None, "termination_date": None, "is_active": False},
+    # Gate-1 optional (b) repro: a PAST-terminated salaried employee, terminated well before this
+    # report range, with zero activity — must NOT get a permanent $0.00 synthesized row.
+    {"id": "6", "employee_id": "TERM1", "org_id": ORG, "name": "Tara Terminated (long ago)",
+     "home_store": "Store1", "pay_rate": 0.0, "pay_basis": "annual", "pay_amount": 52000.0,
+     "hire_date": None, "termination_date": "2025-01-01", "is_active": False},
 ]
 # Sally worked 30h at Store1 + 10h at Store2 this week (proportional store-split test).
 STORE["shifts"] = [
@@ -218,7 +232,12 @@ STORE["shifts"] = [
     {"id": 103, "org_id": ORG, "employee_id": "HRL1", "store_code": "Store1", "shift_date": "2026-03-03",
      "scheduled_hours": 40, "actual_hours": 40, "is_deleted": False},
 ]
-STORE["timelog"] = []
+STORE["timelog"] = [
+    # Ivan's (INAC1) 8h punch — the D1 repro. Closed punch, real activity, at his home store.
+    {"id": "tl1", "org_id": ORG, "employee_id": "INAC1", "store_code": "Store1", "work_date": "2026-03-04",
+     "clock_in": "2026-03-04T09:00:00Z", "clock_out": "2026-03-04T17:00:00Z", "hours": 8.0,
+     "employee_name": "Ivan Inactive-Salaried"},
+]
 STORE["manual_hours"] = []
 STORE["payroll_change_log"] = []
 WEEK_START, WEEK_END = "2026-03-02", "2026-03-08"   # exactly one Mon-Sun weekly period
@@ -305,6 +324,16 @@ check("6m: F1 — GET /payroll's grand total now MATCHES GET /payroll-by-store's
       "(both include Mona's + Nadia's derived pay)",
       payroll_total == by_store_total_preview, (payroll_total, by_store_total_preview))
 
+# ── Gate-1 D1 (MODERATE money) — inactive-AND-salaried WITH real activity (Ivan/INAC1, an 8h punch
+# at a stale $20/hr rate). His /payroll figure was already correct pre-fix (the merged-inactive-
+# payroll path feeds the SAME uniform salary override); the bug was specifically in by-store.
+check("6n: D1 — Ivan (inactive, salaried, WITH an 8h punch) IS present in GET /payroll",
+      "INAC1" in by_eid, sorted(by_eid))
+check("6o: Ivan's actual_pay is the derived $1000 (NOT 8h × his stale $20/hr rate = $160)",
+      by_eid.get("INAC1", {}).get("actual_pay") == 1000.0, by_eid.get("INAC1"))
+check("6p: optional (b) — Tara (past-terminated 2025-01-01, zero activity in this 2026-03 week) is "
+      "NOT synthesized as a permanent $0.00 row", "TERM1" not in by_eid, sorted(by_eid))
+
 # Control: remove the salaried employee entirely, prove Harry's row is IDENTICAL either way.
 saved_emps = STORE["employees"]
 STORE["employees"] = [e for e in saved_emps if e["employee_id"] != "SAL1"]
@@ -331,10 +360,27 @@ check("7b: Sally's total store-split contribution sums EXACTLY to her derived $1
       round(sally_store1 + sally_store2, 2) == 1000.0, (sally_store1, sally_store2))
 check("7c: Store1 (75% of Sally's hours) gets the larger share of her pay", sally_store1 > sally_store2,
       (sally_store1, sally_store2))
-check("7d: hours per store are UNCHANGED (still hourly basis)", bs["Store1"]["hours"] == 70.0 and bs["Store2"]["hours"] == 10.0,
+check("7d: hours per store are UNCHANGED (still hourly basis) — Store1 = Sally 30h + Harry 40h + "
+      "Ivan(D1 repro) 8h = 78h", bs["Store1"]["hours"] == 78.0 and bs["Store2"]["hours"] == 10.0,
       (bs["Store1"]["hours"], bs["Store2"]["hours"]))
 check("7e: F1 sub-case — Nadia's (no home_store) zero-activity pay lands in an explicit 'Unassigned' "
       "by-store bucket, not silently dropped", bs.get("Unassigned", {}).get("amount") == round(5000 * 12 / 52, 2), bs.get("Unassigned"))
+
+# ── Gate-1 D1 (MODERATE money) — THE reviewer's exact repro, isolated via a control that removes
+# ONLY Ivan (everyone else, including Mona who ALSO lands at Store1, stays in both runs so the
+# isolation is clean). Before the fix: Ivan's isolated Store1 contribution was $1,160.00
+# ($1,000 derived + $160 = 8h × his stale $20/hr rate, added on TOP instead of replacing it).
+STORE["employees"] = [e for e in saved_emps if e["employee_id"] != "INAC1"]
+by_store_no_ivan = router_mod.get_payroll_by_store(start=WEEK_START, end=WEEK_END, authorization="Bearer manager", org_id=ORG)["stores"]
+STORE["employees"] = saved_emps
+bs_no_ivan = {r["store_code"]: r for r in by_store_no_ivan}
+ivan_store1_contribution = round(bs["Store1"]["amount"] - bs_no_ivan["Store1"]["amount"], 2)
+check("D1: Ivan's isolated Store1 by-store contribution is EXACTLY $1,000.00 (the reviewer's repro "
+      "must balance $1,000 = $1,000 — was $1,160.00 before this fix, a +$160 = 8h×$20 overstatement)",
+      ivan_store1_contribution == 1000.00, ivan_store1_contribution)
+check("D1b: Ivan's by-store contribution EQUALS his GET /payroll figure exactly (both endpoints agree)",
+      ivan_store1_contribution == by_eid.get("INAC1", {}).get("actual_pay"),
+      (ivan_store1_contribution, by_eid.get("INAC1", {}).get("actual_pay")))
 
 # ── 5. GET /compensation (hr) — same shared engine ──────────────────────────────────────────────────
 comp = hr_router_mod.compensation(period="2026-03", authorization="Bearer manager", org_id=ORG)
@@ -370,6 +416,75 @@ check("F2d: pay_rate change IS now change-logged ('it IS a pay field' — Gate-1
       rate_log)
 check("F2e: both new log rows use entry_point='pay_basis_change' (same trail as pay_basis/pay_amount)",
       term_log[0]["entry_point"] == "pay_basis_change" and rate_log[0]["entry_point"] == "pay_basis_change")
+
+# ── Gate-1 D2 (MODERATE audit) — bulk_payscale must ALSO write a change-log row per updated employee
+# (before this fix: zero ✎ audit trail for a bulk upload, unlike the single-row PATCH). Harry's
+# pay_rate is 25.0 at this point (from F2c above).
+bulk_log_before = len(STORE["payroll_change_log"])
+r_bulk = router_mod.bulk_payscale({"rows": [{"employee_id": "HRL1", "pay_rate": 30.0}]},
+                                   authorization="Bearer manager", org_id=ORG)
+check("D2a: bulk_payscale succeeds (manager)", r_bulk.get("updated") == 1, r_bulk)
+bulk_log = [r for r in STORE["payroll_change_log"] if r.get("employee_id") == "HRL1"
+            and r.get("entry_point") == "bulk_payscale"]
+check("D2b: bulk_payscale writes a change-log row (was ZERO trail before this fix)",
+      len(bulk_log) == 1 and bulk_log[0]["field"] == "pay_rate", bulk_log)
+check("D2c: before/after captured correctly ($25.00 -> $30.00)",
+      bulk_log and bulk_log[0]["before_value"] == "25.0" and bulk_log[0]["after_value"] == "30.0", bulk_log)
+check("D2d: a SECOND identical bulk_payscale call (no actual change) writes NO additional row "
+      "(before==after skip, same convention as the single-row PATCH)",
+      router_mod.bulk_payscale({"rows": [{"employee_id": "HRL1", "pay_rate": 30.0}]},
+                                authorization="Bearer manager", org_id=ORG) and
+      len([r for r in STORE["payroll_change_log"] if r.get("employee_id") == "HRL1"
+           and r.get("entry_point") == "bulk_payscale"]) == 1)
+
+# ── Gate-1 NIT-A (MUST, deploy-window) — update_employee's before-select names ALL of
+# _PAY_LOGGED_FIELDS (pay_rate,pay_basis,pay_amount,termination_date) in ONE combined select; a real
+# pre-migration-416/417 Postgres/PostgREST genuinely REJECTS that whole query (unknown column), which
+# this schemaless fake client doesn't do by default (see harness_payroll_salary_router_integration.py's
+# own FakeQuery — matches the documented "schemaless, never raises for an unrecognized dict key"
+# limitation noted elsewhere in this codebase). To actually exercise the try/except fallback path
+# (not just its downstream effect), wrap the fake client so a select naming 'termination_date' raises
+# — precisely simulating the real 416/417-absent failure — and prove the code recovers via its
+# narrower fallback (id,employee_id,name,pay_rate) rather than 500ing on an everyday pay_rate edit.
+class _Pre416Wrapper:
+    def __init__(self, inner):
+        self._inner = inner
+
+    def schema(self, name):
+        return self
+
+    def table(self, name):
+        q = self._inner.table(name)
+        if name == "employees":
+            orig_select = q.select
+
+            def _select(cols):
+                if "termination_date" in cols:
+                    raise Exception('column employees.termination_date does not exist')
+                return orig_select(cols)
+            q.select = _select
+        return q
+
+    def rpc(self, fn, params):
+        return self._inner.rpc(fn, params)
+
+
+STORE["employees"].append({"id": "9", "employee_id": "PRE416", "org_id": ORG, "name": "Priya Pre-Migration",
+                            "home_store": "Store1", "pay_rate": 18.0, "is_active": True})
+_orig_get_supabase = router_mod.get_supabase
+router_mod.get_supabase = lambda: _Pre416Wrapper(FAKE_CLIENT)
+try:
+    r_pre416 = router_mod.update_employee("9", {"pay_rate": 19.0}, authorization="Bearer manager", org_id=ORG)
+finally:
+    router_mod.get_supabase = _orig_get_supabase
+check("NIT-A: an ordinary pay_rate edit survives a REAL 'termination_date does not exist' select "
+      "failure (pre-migration-416/417 simulated exactly, not just its downstream effect) — never a "
+      "500 in the deploy-before-SQL window",
+      r_pre416.get("pay_rate") == 19.0, r_pre416)
+pre416_log = [r for r in STORE["payroll_change_log"] if r.get("employee_id") == "PRE416"]
+check("NIT-A(b): the fallback select still captures enough to log the pay_rate change correctly",
+      len(pre416_log) == 1 and pre416_log[0]["field"] == "pay_rate"
+      and pre416_log[0]["before_value"] == "18.0" and pre416_log[0]["after_value"] == "19.0", pre416_log)
 
 # ── 8. Gate-1 N5 (NIT) — the salary-override try/except must WARN + set a response header on a real
 # failure, never silently revert to hourly with zero signal anywhere.
