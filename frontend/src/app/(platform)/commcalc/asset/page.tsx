@@ -243,6 +243,7 @@ export default function AssetPage() {
           <a className="btn" href="/commcalc/asset/owed-weekly" style={{ textDecoration: 'none' }}>📅 Weekly Owed to Distributor</a>
           <a className="btn" href="/commcalc/asset/aging" style={{ textDecoration: 'none' }}>⏳ Inventory Aging</a>
           <a className="btn" href="/commcalc/asset/on-inventory" style={{ textDecoration: 'none' }}>🏪 On-Inventory by Store</a>
+          <a className="btn" href="/commcalc/asset/oninv-3way-recon" style={{ textDecoration: 'none' }}>🔍 3-Way Rebate Recon</a>
           <a className="btn" href="/commcalc/asset/dashboard" style={{ textDecoration: 'none' }}>🧾 Charges</a>
           <a className="btn" href="/commcalc/asset/charges/rma" style={{ textDecoration: 'none' }}>🔁 RMA</a>
           <a className="btn" href="/commcalc/asset/borrowed" style={{ textDecoration: 'none' }}>💸 Borrowed Money</a>
@@ -471,9 +472,11 @@ export default function AssetPage() {
             </div>
           )}
 
-          {/* Recon callout */}
+          {/* Recon callout (2026-07-28: built — was "coming next") */}
           <div style={{ background: '#fefce8', border: '1px solid #fde047', borderRadius: 10, padding: '14px 18px', fontSize: 13, color: '#92400e' }}>
-            <strong>🔍 3-Way Rebate Reconciliation coming next:</strong> Cross-match Carrier payments → Distributor reimbursements → open balance to flag missing credits and over-billed devices.
+            <strong>🔍 3-Way Rebate Reconciliation:</strong> cross-matches On-Inventory devices against the Distributor
+            rebate on each ledger row and the ePay commission history per IMEI, to flag missing-phone candidates,
+            conflicting evidence, and true unsold stock. <a href="/commcalc/asset/oninv-3way-recon" style={{ color: '#92400e', fontWeight: 700 }}>Open the report →</a>
           </div>
         </>
       )}

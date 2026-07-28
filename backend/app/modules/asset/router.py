@@ -2593,4 +2593,11 @@ router.include_router(_po_router)
 # and why it's not a duplicate of the centrally-derived checks in core/import_health.py.
 from app.modules.asset import attention as _asset_attention  # noqa: F401,E402
 
+# ── On-Inventory 3-Way Rebate Recon (2026-07-28, OWNER DIRECTIVE, mig 310) — own file (same
+# precedent as purchase_orders.py above) so this router.py diff stays a 2-line mount; every endpoint
+# lands under the SAME /api/v1/asset prefix. Self-registers its own admin-attention provider at
+# import time — see oninv_recon.py's module docstring for why that's not done via attention.py.
+from app.modules.asset.oninv_recon import router as _oninv_recon_router  # noqa: E402
+router.include_router(_oninv_recon_router)
+
 
