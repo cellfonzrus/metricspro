@@ -2090,6 +2090,175 @@ _MAX_NAV_CLICKS = 3
 _NAV_CLICK_DELAY_MS = 1200
 
 
+# ── report-name matching, invisible-character-proof (owner report 2026-07-28) ────────────────────
+# THE BUG THIS KILLS. The pull failed with a SELF-CONTRADICTING message:
+#   "Activation SIM Assignment Report is not one of the reports this portal login offers
+#    - it offers: -- SELECT --, Activation SIM Assignment Report, ..."
+# The wanted name is printed INSIDE the list of offered names. Exactly two mechanisms produce that,
+# and the old comparison (`(o.inner_text() or "").strip().lower() == target`, plus a loose substring
+# fallback) could neither tell them apart nor SHOW either of them:
+#   (1) an INVISIBLE character difference - a NO-BREAK SPACE (U+00A0), a zero-width space (U+200B),
+#       a soft hyphen, or an en/em dash inside the portal's own option text. Every one of those
+#       renders identically to a plain space/hyphen, so the printed list looks byte-for-byte like the
+#       configured name while the bytes differ. `str.strip()` removes a LEADING/TRAILING nbsp but
+#       nothing removed an INTERNAL one.
+#   (2) the printed list was captured at a DIFFERENT PAGE STATE than the state the selection was
+#       attempted in (once, before any report ran) - so it described a dropdown that was no longer on
+#       screen. _select_report_detail now re-reads the LIVE options at attempt time and reports a
+#       missing dropdown as its own outcome instead of blaming the report name.
+# Both sides are normalised before comparison, and every failure carries repr() + codepoint
+# forensics, so an invisible-character mismatch can never again read as a contradiction.
+_CHAR_FIXES = {
+    # exotic spaces -> plain space (NFKC already folds most of these; belt AND braces)
+    "\u00a0": " ", "\u1680": " ", "\u2000": " ", "\u2001": " ", "\u2002": " ", "\u2003": " ",
+    "\u2004": " ", "\u2005": " ", "\u2006": " ", "\u2007": " ", "\u2008": " ", "\u2009": " ",
+    "\u200a": " ", "\u202f": " ", "\u205f": " ", "\u3000": " ",
+    # zero-width / invisible formatting -> gone (NFKC does NOT remove these)
+    "\u200b": "", "\u200c": "", "\u200d": "", "\u2060": "", "\ufeff": "", "\u00ad": "",
+    # every dash variant -> ASCII hyphen ("MA \u2013 Commission Details" vs "MA - Commission Details")
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-", "\u2015": "-",
+    "\u2212": "-", "\uff0d": "-",
+    # smart quotes -> straight
+    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201c": '"', "\u201d": '"',
+}
+
+
+def _norm_label(s):
+    """NFKC-normalise, fold every invisible/dash/quote variant, collapse whitespace runs, casefold.
+    PURE. This is the ONLY comparison basis for report names - both sides always go through it."""
+    try:
+        import unicodedata
+        t = unicodedata.normalize("NFKC", str(s if s is not None else ""))
+    except Exception:
+        t = str(s if s is not None else "")
+    for ch, rep in _CHAR_FIXES.items():
+        if ch in t:
+            t = t.replace(ch, rep)
+    t = " ".join(t.split())          # collapses doubled/tab/newline whitespace too
+    return t.strip().casefold()
+
+
+def _squash_label(s):
+    """_norm_label with every non-alphanumeric character dropped - the punctuation-insensitive tier
+    ("MA - Commission Details" == "MA Commission Details" == "MA_Commission_Details"). PURE."""
+    return "".join(ch for ch in _norm_label(s) if ch.isalnum())
+
+
+def _is_placeholder_option(s):
+    """True for the dropdown's own '-- SELECT --' / 'Choose a report' row, which must never be
+    selected NOR offered as the nearest candidate. PURE."""
+    q = _squash_label(s)
+    return (not q) or q.startswith("select") or q.startswith("choose") or q.startswith("pleaseselect")
+
+
+def label_forensics(s):
+    """repr() + a codepoint listing of every non-ASCII/invisible character in `s`. This is what makes
+    an invisible mismatch VISIBLE in the operator's diagnostic. PURE, credential-free (report names
+    only)."""
+    t = str(s if s is not None else "")
+    odd = []
+    try:
+        import unicodedata
+        for ch in t:
+            o = ord(ch)
+            if o < 32 or o > 126:
+                odd.append("U+%04X %s" % (o, unicodedata.name(ch, "?")))
+    except Exception:
+        pass
+    return {"text": t[:120], "repr": repr(t)[:200], "odd_chars": odd[:10],
+            "normalized": _norm_label(t)[:120]}
+
+
+def nearest_label(wanted, options):
+    """(closest option, 0..1 similarity) over NORMALISED text - for the failure message. PURE."""
+    try:
+        import difflib
+    except Exception:
+        return (None, 0.0)
+    w = _norm_label(wanted)
+    best, score = None, 0.0
+    for o in (options or []):
+        if _is_placeholder_option(o):
+            continue
+        try:
+            r = difflib.SequenceMatcher(None, w, _norm_label(o)).ratio()
+        except Exception:
+            continue
+        if r > score:
+            best, score = o, r
+    return (best, round(score, 3))
+
+
+def match_report_option(wanted, options, aliases=()):
+    """PURE. Match a configured report display name against the portal's own option list.
+
+    Tiered, exact-first, so a deliberate name always wins over a fuzzy one:
+      1. `exact`       - byte equality after a plain .strip() (the pre-existing behaviour)
+      2. `normalized`  - equality after _norm_label (kills nbsp / zero-width / dash / case / spacing)
+      3. `punctuation` - equality after _squash_label (kills every separator difference)
+      4. `contains`    - normalised containment, ONLY when exactly one option qualifies and the name
+                         is long enough to be meaningful (an ambiguous containment is a FAILURE, not
+                         a coin flip - pulling the WRONG report into a money table is worse than
+                         pulling none).
+    `aliases` (config: param_spec.name_aliases) are tried after the primary name, same ladder.
+    Returns (index, tier) on success, or (-1, reason) with reason in
+    no_options|no_name|ambiguous|not_listed."""
+    opts = list(options or [])
+    if not opts:
+        return -1, "no_options"
+    wants = [w for w in ([wanted] + list(aliases or [])) if str(w if w is not None else "").strip()]
+    if not wants:
+        return -1, "no_name"
+    cand = [i for i, o in enumerate(opts) if not _is_placeholder_option(o)]
+    if not cand:
+        return -1, "no_options"
+    for w in wants:                                                   # 1. exact
+        ws = str(w).strip()
+        for i in cand:
+            if str(opts[i] if opts[i] is not None else "").strip() == ws:
+                return i, "exact"
+    for w in wants:                                                   # 2. normalised
+        nw = _norm_label(w)
+        if not nw:
+            continue
+        for i in cand:
+            if _norm_label(opts[i]) == nw:
+                return i, "normalized"
+    for w in wants:                                                   # 3. punctuation-insensitive
+        sw = _squash_label(w)
+        if not sw:
+            continue
+        for i in cand:
+            if _squash_label(opts[i]) == sw:
+                return i, "punctuation"
+    ambiguous = False
+    for w in wants:                                                   # 4. guarded containment
+        nw = _norm_label(w)
+        if len(nw) < 6:            # a short name must not swallow a whole menu
+            continue
+        hits = [i for i in cand
+                if nw in _norm_label(opts[i]) or (_norm_label(opts[i]) and _norm_label(opts[i]) in nw)]
+        if len(hits) == 1:
+            return hits[0], "contains"
+        if len(hits) > 1:
+            ambiguous = True
+    return -1, ("ambiguous" if ambiguous else "not_listed")
+
+
+def _spec_aliases(spec):
+    """Alternate display names for one report, from CONFIG (param_spec.name_aliases, or spec.aliases).
+    RULE TWO: a tenant whose portal spells a report differently adds an alias on Report mapping - no
+    code change, no per-carrier branch. Absent key => (). PURE."""
+    try:
+        ps = (spec or {}).get("param_spec") or {}
+        al = ps.get("name_aliases") or (spec or {}).get("aliases") or []
+        if isinstance(al, str):
+            al = [al]
+        return [str(a) for a in al if str(a or "").strip()][:8]
+    except Exception:
+        return []
+
+
 def _report_select(frame):
     """The visible <select> in `frame` that holds the report list, or None."""
     try:
@@ -2253,121 +2422,600 @@ def _open_reports_page(page, markers=None):
     return _report_select_frame(page)
 
 
-def _select_report(frame, display_name):
-    """Select the report by its display name in the Report <select> and wait for the ASP.NET postback
-    that renders that report's parameter fields. Returns True if selected."""
-    target = (display_name or "").strip().lower()
-    for s in frame.query_selector_all("select"):
+def _visible_safe(el):
+    try:
+        return bool(el.is_visible())
+    except Exception:
+        return False
+
+
+def _select_report_detail(frame, display_name, aliases=()):
+    """Select `display_name` in the report <select> and wait for the ASP.NET postback that renders
+    that report's parameter fields. Returns an HONEST dict - never a bare False:
+
+        {ok, tier, matched, options, reason, match_debug}
+
+    `options` are read from the LIVE DOM **at the moment of the attempt** (not the list captured once
+    before the pull started). That distinction is the whole point: printing a stale capture next to a
+    live failure is what produced the self-contradicting 2026-07-28 message.
+
+    reason (when ok is False):
+      report_select_missing - there is no report dropdown on the page RIGHT NOW. A page-state failure
+                              (e.g. the previous report's results replaced the form), NOT a wrong
+                              name. Reporting it as "wrong name" sent the operator to Report mapping
+                              to fix something that was already correct.
+      report_not_listed     - the dropdown is there and the name genuinely is not among its options
+                              (compared normalised, so invisible characters are ruled out first).
+      ambiguous             - the name matched several options by containment; refusing is correct."""
+    out = {"ok": False, "wanted": display_name, "options": [], "tier": None,
+           "matched": None, "reason": None, "match_debug": None}
+    try:
+        selects = [s for s in frame.query_selector_all("select") if _visible_safe(s)]
+    except Exception:
+        selects = []
+    primary = None
+    try:
+        primary = _report_select(frame)
+    except Exception:
+        primary = None
+    ordered = ([primary] if primary is not None else []) + [s for s in selects if s is not primary]
+    if not ordered:
+        out["reason"] = "report_select_missing"
+        return out
+    seen, first_reason = [], None
+    for s in ordered:
         try:
-            if not s.is_visible():
-                continue
-            for o in s.query_selector_all("option"):
-                t = (o.inner_text() or "").strip().lower()
-                if t == target or (target and (target in t or t in target)) and t:
-                    val = o.get_attribute("value")
-                    if val is not None:
-                        s.select_option(value=val)
-                    else:
-                        s.select_option(label=(o.inner_text() or "").strip())
-                    try:
-                        frame.page.wait_for_load_state("networkidle", timeout=20000)
-                    except Exception:
-                        pass
-                    frame.page.wait_for_timeout(1500)
-                    return True
+            opt_els = list(s.query_selector_all("option"))
+            texts = [(o.inner_text() or "") for o in opt_els]
         except Exception:
             continue
-    return False
+        if not texts:
+            continue
+        if not seen:
+            seen = [t.strip()[:120] for t in texts if t.strip()]
+        idx, tier = match_report_option(display_name, texts, aliases)
+        if idx < 0:
+            first_reason = first_reason or tier
+            continue
+        o = opt_els[idx]
+        try:
+            val = o.get_attribute("value")
+            if val is not None:
+                s.select_option(value=val)
+            else:
+                s.select_option(label=(texts[idx] or "").strip())
+        except Exception:
+            first_reason = first_reason or "select_failed"
+            continue
+        try:
+            frame.page.wait_for_load_state("networkidle", timeout=20000)
+        except Exception:
+            pass
+        try:
+            frame.page.wait_for_timeout(1500)
+        except Exception:
+            pass
+        out.update(ok=True, tier=tier, matched=(texts[idx] or "").strip()[:120],
+                   options=(seen or [t.strip()[:120] for t in texts if t.strip()])[:60], reason=None)
+        if tier != "exact":
+            # The name only matched AFTER normalisation => the portal's text carries characters the
+            # operator cannot see. Record it, so "why is my name different?" is never a mystery.
+            out["match_debug"] = {"tier": tier, "wanted": label_forensics(display_name),
+                                  "matched": label_forensics(texts[idx])}
+        return out
+    near, score = nearest_label(display_name, seen)
+    out["options"] = seen[:60]
+    out["reason"] = first_reason if first_reason in ("ambiguous", "no_name") else "report_not_listed"
+    if first_reason == "no_options" or not seen:
+        out["reason"] = "report_select_missing"
+    out["match_debug"] = {"compared": "NFKC + invisible-char fold + whitespace collapse + casefold",
+                          "wanted": label_forensics(display_name),
+                          "nearest_offered": label_forensics(near) if near else None,
+                          "similarity": score,
+                          "aliases_tried": list(aliases or [])}
+    return out
+
+
+def _select_report(frame, display_name):
+    """Back-compatible boolean wrapper over _select_report_detail (callers/proofs that only need
+    'did it select?')."""
+    try:
+        return bool(_select_report_detail(frame, display_name).get("ok"))
+    except Exception:
+        return False
+
+
+# ── param-field driving ─────────────────────────────────────────────────────────────────────────
+# Three defects fixed here (owner report 2026-07-28, "the reports ran but returned nothing"):
+#  (i)   NO CHANGE EVENT. The old code did `el.click(); el.fill(""); el.type(val, delay=8)`.
+#        Playwright's `type()` dispatches key + `input` events but NEVER `change`, and `change` on a
+#        text input otherwise fires only on blur - which never happened, because the next action was
+#        a click on Submit somewhere else in the DOM... on an ASP.NET page whose date box is a
+#        jQuery/AJAX datepicker that COMMITS its value on `change`. The server then ran the report
+#        with its DEFAULT range (typically today) instead of the requested month => "ran, no rows".
+#        Values are now committed with input+change+jQuery change+blur, and READ BACK to confirm.
+#  (ii)  START AND END COLLIDING. `_find_input(want=toks)` matches ANY token, so a field named
+#        "End Date" (toks: end, date) matched the *StartDate* input - "date" is in its name and it
+#        comes first in the DOM. Both boundaries were written into the SAME box, collapsing the
+#        window to a single day. Fields are now scored, the opposite role is disqualified, and an
+#        element already used by another field is never reused.
+#  (iii) HIDDEN FIELDS UNREACHABLE. Static params (SessionId) are usually `input[type=hidden]`, but
+#        the finder required `is_visible()` - so `kinds=(... ,"hidden")` could never match anything
+#        and SessionId was never sent. Hidden elements are now allowed and set via evaluate().
+_ROLE_WORDS = {"start": ("start", "from", "begin", "beginning", "startdate", "fromdate"),
+               "end": ("end", "to", "thru", "through", "till", "until", "enddate", "todate")}
+
+
+def _hay_words(hay):
+    """Split a name/id/placeholder soup into lowercase words, breaking camelCase too
+    ('txtStartDate_ctl00' -> ['txt','start','date','ctl','00']). PURE."""
+    import re
+    return [w.lower() for w in re.findall(r"[A-Za-z][a-z]*|[A-Z]+(?![a-z])|\d+", str(hay or ""))]
+
+
+def _el_key(el):
+    try:
+        return ((el.get_attribute("name") or ""), (el.get_attribute("id") or ""))
+    except Exception:
+        return ("", "")
+
+
+def _find_param_input(scope, kinds, name_toks, role=None, used=(), allow_hidden=False):
+    """The best input in `scope` for ONE param field. Scored, not first-match: an all-token hit beats
+    a single-token hit, the field's ROLE (start vs end) beats both, and a candidate carrying the
+    OPPOSITE role's word is disqualified outright so the end date can never land in the start box.
+    `used` holds the (name,id) keys already consumed by earlier fields. PURE-ish (DOM reads only)."""
+    try:
+        handles = scope.query_selector_all("input, textarea")
+    except Exception:
+        return None
+    opp = _ROLE_WORDS["end"] if role == "start" else (_ROLE_WORDS["start"] if role == "end" else ())
+    mine = _ROLE_WORDS.get(role or "", ())
+    best, best_score = None, 0
+    for h in handles:
+        try:
+            vis = _visible_safe(h)
+            if not vis and not allow_hidden:
+                continue
+            typ = (h.get_attribute("type") or "text").lower()
+            if kinds and typ not in kinds:
+                continue
+            if _el_key(h) in used:
+                continue
+            hay = " ".join(filter(None, [
+                h.get_attribute("name"), h.get_attribute("id"), h.get_attribute("placeholder"),
+                h.get_attribute("aria-label"), h.get_attribute("autocomplete"),
+                h.get_attribute("title")])).lower()
+            words = _hay_words(hay)
+            has_mine = any(w in words for w in mine)
+            if opp and any(w in words for w in opp) and not has_mine:
+                continue                        # this is the OTHER end of the range - never take it
+            score = 0
+            if name_toks and all(t in hay for t in name_toks):
+                score += 5
+            elif name_toks and any(t in hay for t in name_toks):
+                score += 1
+            if has_mine:
+                score += 4
+            if "date" in words:
+                score += 1
+            if vis:
+                score += 1
+            if score > best_score:
+                best, best_score = h, score
+        except Exception:
+            continue
+    return best if best_score > 0 else None
+
+
+def _commit_value(el, page=None):
+    """Fire the events an ASP.NET / jQuery-datepicker field needs to actually COMMIT a typed value.
+    This is the difference between the portal running the month we asked for and the month it
+    defaults to. No request is made here - dispatching events is local to the page."""
+    try:
+        el.evaluate("""e => {
+            const fire = n => { try { e.dispatchEvent(new Event(n, {bubbles:true})); } catch(_) {} };
+            fire('input'); fire('change'); fire('keyup');
+            try { if (window.jQuery) window.jQuery(e).trigger('change').trigger('blur'); } catch(_) {}
+            try { if (e.blur) e.blur(); } catch(_) {}
+            fire('blur');
+        }""")
+    except Exception:
+        pass
+    if page is not None:
+        try:
+            page.wait_for_timeout(250)      # let an AutoPostBack settle; TIME, not a new request
+        except Exception:
+            pass
+
+
+def _read_back(el):
+    """The element's CURRENT value, so we can prove what was actually submitted. None when unknown
+    (e.g. the element was detached by a postback)."""
+    for get in (lambda: el.input_value(),
+                lambda: el.evaluate("e => e.value"),
+                lambda: el.get_attribute("value")):
+        try:
+            v = get()
+            if v is not None:
+                return str(v)
+        except Exception:
+            continue
+    return None
 
 
 def _fill_param_fields(frame, fields, win_start, win_end, source_row):
-    """Fill each param field per its spec: date fields get the month-window boundary formatted; static
-    fields (Account_ID/SessionId) come from the data_source row; select fields pick the configured
-    literal. Heuristic finders (by name/id/label/placeholder) so it survives small DOM drift."""
+    """Fill each param field per its spec and CONFIRM it took. Returns a per-field report:
+        [{name, kind, role, found, visible, value|value_len, committed, readback_ok}, ...]
+    Date/select values are echoed (a date is not a secret); static values NEVER are - only their
+    length - because they carry the account/session id."""
     from app.modules.commcalc import report_pull as rp
-    filled = []
+    out, used = [], []
+    page = getattr(frame, "page", None)
     for f in (fields or []):
         name = f.get("name") or ""
         kind = f.get("kind")
+        role = f.get("role")
         toks = [w for w in name.lower().replace("_", " ").split() if len(w) > 1]
+        rec = {"name": name, "kind": kind, "role": role, "found": False}
         try:
             if kind == "date":
                 fmt = f.get("format") or "%m/%d/%Y"
-                val = (win_start if f.get("role") == "start" else win_end).strftime(fmt)
-                el = _find_input(frame, kinds=("text", "date", "datetime-local"), want=toks) \
-                    or _find_input(frame, kinds=("text",), want=("date", "start", "end"))
-                if el:
-                    el.click(); el.fill(""); el.type(val, delay=8); filled.append(name)
+                val = (win_start if role == "start" else win_end).strftime(fmt)
+                rec["value"] = val
+                el = (_find_param_input(frame, ("text", "date", "datetime-local"), toks, role, used)
+                      or _find_param_input(frame, ("text",), ("date",), role, used))
+                if el is None:
+                    out.append(rec)
+                    continue
+                if any(_el_key(el)):        # anonymous inputs share the ("","") key - never dedupe on it
+                    used.append(_el_key(el))
+                rec.update(found=True, visible=_visible_safe(el))
+                try:
+                    el.click()
+                except Exception:
+                    pass
+                try:
+                    el.fill(val)                 # fill() replaces + fires input/change
+                except Exception:
+                    try:
+                        el.evaluate("(e,v)=>{e.value=v;}", val)
+                    except Exception:
+                        pass
+                _commit_value(el, page)
+                back = _read_back(el)
+                rec["readback_ok"] = (back is not None and back.strip() == val.strip())
+                rec["committed"] = True
             elif kind == "select":
-                lit = (f.get("literal") or "").strip().lower()
-                for s in frame.query_selector_all("select"):
-                    if not s.is_visible():
+                lit = (f.get("literal") or "").strip()
+                rec["value"] = lit
+                for s in (frame.query_selector_all("select") or []):
+                    if not _visible_safe(s):
                         continue
                     hay = ((s.get_attribute("name") or "") + (s.get_attribute("id") or "")).lower()
                     if not (any(t in hay for t in toks) or lit):
                         continue
+                    picked = False
                     for o in s.query_selector_all("option"):
-                        if (o.inner_text() or "").strip().lower() == lit:
+                        if _norm_label(o.inner_text()) == _norm_label(lit):
                             v = o.get_attribute("value")
                             s.select_option(value=v) if v is not None else s.select_option(label=o.inner_text())
-                            filled.append(name)
+                            picked = True
                             break
-            else:  # static
+                    if picked:
+                        rec.update(found=True, visible=True, committed=True)
+                        _commit_value(s, page)
+                        break
+            else:  # static (Account_ID / SessionId - value never echoed)
                 val = rp.resolve_static(f.get("source"), source_row)
+                rec["value_len"] = len(val or "")
                 if val == "" and f.get("optional"):
+                    rec["skipped"] = "optional and blank"
+                    out.append(rec)
                     continue
-                el = _find_input(frame, kinds=("text", "number", "hidden"), want=toks) \
-                    or _find_input(frame, kinds=("text", "number"), want=("account", "session"))
-                if el:
-                    try:
+                el = (_find_param_input(frame, ("text", "number", "hidden"), toks, None, used,
+                                        allow_hidden=True)
+                      or _find_param_input(frame, ("text", "number", "hidden"),
+                                           ("account", "session"), None, used, allow_hidden=True))
+                if el is None:
+                    out.append(rec)
+                    continue
+                if any(_el_key(el)):
+                    used.append(_el_key(el))
+                vis = _visible_safe(el)
+                rec.update(found=True, visible=vis)
+                try:
+                    if vis:
                         el.fill(str(val))
-                    except Exception:
+                    else:
                         el.evaluate("(e,v)=>{e.value=v;}", str(val))
-                    filled.append(name)
-        except Exception:
-            continue
-    return filled
+                except Exception:
+                    try:
+                        el.evaluate("(e,v)=>{e.value=v;}", str(val))
+                    except Exception:
+                        pass
+                _commit_value(el, page)
+                back = _read_back(el)
+                rec["readback_ok"] = (back is not None and back.strip() == str(val).strip())
+                rec["committed"] = True
+        except Exception as e:
+            rec["error"] = str(e)[:120]
+        out.append(rec)
+    return out
 
 
-def _submit_and_export(page, frame, export_pref, timeout_s=300):
-    """Click Submit, wait (up to the report's timeout) for results, then click the preferred
-    'Export to: CSV|Excel' link and capture the download. Returns (bytes, filename)."""
-    _click_submit(frame, ("submit", "run", "view report", "generate", "search", "go"))
+# ── running a report + waiting for its results ──────────────────────────────────────────────────
+# Run-control labels. Matched WORD-wise for short tokens: "go" as a substring lives inside "logout",
+# and _click_submit has no sign-out guard - clicking that would end the session mid-pull.
+_RUN_LABELS = ("submit", "run report", "run", "view report", "view", "generate report", "generate",
+               "search", "display", "get report", "show", "go")
+_RUN_LABELS_LINK = ("submit", "run report", "run", "view report", "generate report", "generate",
+                    "search", "get report")     # anchors: stricter (never a bare "go"/"view")
+_RUN_NEVER = _NAV_NEVER + ("export", "reset", "clear", "cancel", "back", "print", "help", "close",
+                           "home", "new search")
+# An explicit "the portal says there is nothing" marker. Seeing one of these is a REAL empty result;
+# seeing NOTHING is a scrape failure. Before 2026-07-28 both were reported as "returned no rows".
+_EMPTY_MARKERS = ("no records found", "no record found", "no records", "no data found", "no data",
+                  "no rows", "0 records", "no results", "no result found", "nothing to display",
+                  "there are no records", "no matching records", "no transactions",
+                  "no report data", "returned no data", "no items to display")
+# Bounded wait for the results region. TIME, never extra requests: we poll the DOM we already have.
+_RESULTS_WAIT_S = 90          # default budget per window; param_spec.results_wait_s overrides
+_RESULTS_POLL_MS = 1500
+_EXPORT_GRACE_S = 20          # once data rows are visible, how long to keep looking for the export
+_EXPORT_SETTLE_S = 30         # an export control that pre-dates the run: wait this long for the
+                              # results to actually move before clicking it (stale-download guard)
+
+
+def _label_words(el):
     try:
-        page.wait_for_load_state("networkidle", timeout=min(timeout_s, 300) * 1000)
+        raw = ((el.get_attribute("value") or "") + " " + (el.inner_text() or "")).strip()
     except Exception:
-        pass
-    page.wait_for_timeout(2000)
-    pref = (export_pref or "csv").lower()
-    order = ("csv", "excel") if pref == "csv" else ("excel", "csv")
-    for want in order:
-        for f in _frames(page):
+        raw = ""
+    if not raw:
+        try:
+            raw = (el.get_attribute("title") or el.get_attribute("aria-label") or "")
+        except Exception:
+            raw = ""
+    return _norm_label(raw)
+
+
+def _label_matches(label, token):
+    """Match a run-control label against one token. WORD-wise for short single words ("go", "run",
+    "view", "show"), substring for long or multi-word ones ("submit", "view report"). Substring
+    matching on a short word is how "go" finds "logout" and "view" finds "overview" - i.e. how a
+    scraper clicks the control that ends its own session. PURE."""
+    if not label or not token:
+        return False
+    if " " in token or len(token) >= 5:
+        return token in label
+    return token in label.split()
+
+
+def _click_run(frame, page=None):
+    """Click the report's Run/Submit control. Returns the label clicked, or None.
+
+    Buttons/inputs FIRST, then plain `<a>` LINKS - the SAME gap that broke the Reports navigation on
+    2026-07-27: this portal builds controls as ASP.NET LinkButtons (`<a href="javascript:__doPostBack
+    (...)">Submit</a>`), and `_click_submit`'s selector (button, input[type=submit|button],
+    a[role=button]) matches none of those. A report that is never actually submitted looks exactly
+    like a report that returned no rows - which is what the operator was told."""
+    try:
+        btns = frame.query_selector_all("button, input[type=submit], input[type=button], a[role=button]")
+    except Exception:
+        btns = []
+    try:
+        links = frame.query_selector_all("a[href], a")
+    except Exception:
+        links = []
+    for cands, toks in ((btns, _RUN_LABELS), (links, _RUN_LABELS_LINK)):
+        for c in cands:
             try:
-                cands = f.query_selector_all("a, button, input[type=button], input[type=submit]")
+                if not _visible_safe(c):
+                    continue
+                label = _label_words(c)
+                if not label or any(bad in label for bad in _RUN_NEVER):
+                    continue
+                if any(_label_matches(label, t) for t in toks):
+                    c.click()
+                    return label[:60]
             except Exception:
                 continue
-            for c in cands:
-                try:
-                    if not c.is_visible():
-                        continue
-                    label = ((c.get_attribute("value") or c.inner_text() or "") + " " +
-                             (c.get_attribute("href") or "")).strip().lower()
-                    if want in label and ("export" in label or want in label):
-                        with page.expect_download(timeout=120000) as dl:
-                            c.click()
-                        d = dl.value
-                        import tempfile, os
-                        path = d.path()
-                        with open(path, "rb") as fh:
-                            content = fh.read()
-                        try:
-                            os.unlink(path)
-                        except Exception:
-                            pass
-                        return content, (d.suggested_filename or ("export." + want))
-                except Exception:
+    return None
+
+
+def _grid_row_count(page):
+    """How many table/grid rows are currently rendered, across frames. A DOM read - no request.
+
+    RAW count on purpose: a classic ASP.NET page is FULL of layout tables, so an absolute count says
+    nothing. The caller takes a BASELINE before submitting and treats only the DELTA as results -
+    otherwise a page whose chrome contains 30 <tr>s would look like a populated grid instantly and
+    every report would be mis-reported as "results rendered but nothing downloadable"."""
+    n = 0
+    for f in _frames(page):
+        try:
+            c = f.evaluate(
+                "() => document.querySelectorAll('table tr').length"
+                " + document.querySelectorAll('div.jqx-grid-cell').length"
+                " + document.querySelectorAll('[role=row]').length")
+            n += int(c or 0)
+        except Exception:
+            continue
+    return n
+
+
+def _empty_marker(page):
+    """The portal's OWN 'no records' phrase if it is on screen, else None. A DOM read - no request."""
+    txt = _all_frames_text(page)
+    if not txt:
+        return None
+    for m in _EMPTY_MARKERS:
+        if m in txt:
+            return m
+    return None
+
+
+def _find_export_control(page, order):
+    """(element, want, label) for the best export control on screen, else (None, None, None).
+    Format-specific controls win; a generic Export/Download control is the fallback (a portal whose
+    link is just 'Export' used to be invisible to us)."""
+    generic = None
+    for f in _frames(page):
+        try:
+            cands = f.query_selector_all("a, button, input[type=button], input[type=submit]")
+        except Exception:
+            continue
+        for c in cands:
+            try:
+                if not _visible_safe(c):
                     continue
-    return None, None
+                label = ((c.get_attribute("value") or c.inner_text() or "") + " " +
+                         (c.get_attribute("href") or "")).strip().lower()
+                if not label:
+                    continue
+                for want in order:
+                    if want in label:
+                        return c, want, label[:60]
+                if generic is None and ("export" in label or "download" in label):
+                    generic = (c, order[0], label[:60])
+            except Exception:
+                continue
+    return generic if generic else (None, None, None)
+
+
+def _wait_for_results(page, order, budget_s, poll_ms=_RESULTS_POLL_MS, base_rows=0,
+                      export_was_present=False):
+    """BOUNDED wait for the report results to render, then report WHICH of the four things happened.
+
+    THE PRIME SUSPECT this fixes: an ASP.NET/jqx grid populates ASYNCHRONOUSLY. The old code waited
+    for `networkidle` (which resolves immediately when the page is already idle at call time) plus a
+    flat 2s, then looked for the export link ONCE. Reading an empty grid too early is
+    INDISTINGUISHABLE from a genuinely empty result - and it was reported as the latter.
+
+    Waits are TIME (page.wait_for_timeout between DOM reads), never extra requests: nothing here
+    navigates, reloads or re-submits. Returns
+        {state, waited_s, rows_seen, marker, export_label}
+    with state in export_ready | empty | no_export_link | timeout."""
+    import time as _t
+    budget = max(5, int(budget_s or _RESULTS_WAIT_S))
+    polls = max(2, int(budget * 1000 / max(250, poll_ms)))
+    started = _t.time()
+    # A portal that shows "Export to: CSV" on the EMPTY form as well would otherwise be exported
+    # instantly - i.e. downloaded before the grid finished populating, which is the very race this
+    # function exists to close. When the control pre-existed the run we first wait for the results to
+    # change (or for the portal's own empty-state), and only then click it.
+    settle = min(budget, _EXPORT_SETTLE_S) if export_was_present else 0
+    rows_at, rows_seen = None, 0
+    marker = None
+    for _ in range(polls):
+        el, want, label = _find_export_control(page, order)
+        ready = el is not None
+        if ready and settle and not (rows_seen or marker) and (_t.time() - started) < settle:
+            ready = False                        # pre-existing export: hold until results move
+        if ready:
+            return {"state": "export_ready", "element": el, "want": want, "export_label": label,
+                    "waited_s": round(_t.time() - started, 1), "rows_seen": rows_seen,
+                    "marker": marker,
+                    "stale_export_risk": bool(export_was_present and not (rows_seen or marker))}
+        rows = max(0, _grid_row_count(page) - int(base_rows or 0))
+        if rows > rows_seen:
+            rows_seen = rows
+        marker = marker or _empty_marker(page)
+        if marker and not rows_seen:
+            # The portal EXPLICITLY said there is nothing. That is a real answer, not a failure.
+            return {"state": "empty", "marker": marker, "rows_seen": 0,
+                    "waited_s": round(_t.time() - started, 1)}
+        if rows_seen:
+            # Results ARE on screen but no export control (yet). Give it a short grace, then say so -
+            # "the grid rendered but nothing was downloadable" is a scrape gap, not an empty month.
+            rows_at = rows_at if rows_at is not None else _t.time()
+            if _t.time() - rows_at > _EXPORT_GRACE_S:
+                return {"state": "no_export_link", "rows_seen": rows_seen, "marker": marker,
+                        "waited_s": round(_t.time() - started, 1)}
+        try:
+            page.wait_for_timeout(poll_ms)
+        except Exception:
+            pass
+        if _t.time() - started > budget:
+            break
+    if rows_seen:
+        return {"state": "no_export_link", "rows_seen": rows_seen, "marker": marker,
+                "waited_s": round(_t.time() - started, 1)}
+    return {"state": "timeout", "rows_seen": 0, "marker": marker,
+            "waited_s": round(_t.time() - started, 1)}
+
+
+class ExportOutcome(tuple):
+    """A plain `(content, filename)` 2-tuple - every existing caller and test double keeps working -
+    carrying the honest per-window detail on `.detail`."""
+
+    def __new__(cls, content, filename, detail=None):
+        t = super().__new__(cls, (content, filename))
+        t.detail = dict(detail or {})
+        return t
+
+
+def _submit_and_export(page, frame, export_pref, timeout_s=_RESULTS_WAIT_S):
+    """Run the report and download its export. Returns ExportOutcome(content, filename, detail) -
+    a 2-tuple whose `.detail` says WHAT HAPPENED:
+
+        not_submitted  - no Run/Submit control could be found or clicked (nothing was ever run)
+        empty          - the portal displayed an explicit "no records" state (a REAL empty result)
+        no_export_link - results rendered, but nothing downloadable was offered (scrape gap)
+        timeout        - nothing rendered within the budget (SCRAPE FAILURE, not "no data")
+        export_failed  - the export control was clicked but the download never arrived
+        exported       - bytes in hand
+
+    `timeout_s` is the RESULTS-WAIT budget (the caller derives it from param_spec.results_wait_s,
+    capped by submit_timeout_s)."""
+    pref = (export_pref or "csv").lower()
+    order = ("csv", "excel") if pref == "csv" else ("excel", "csv")
+    # BEFORE the run: how much table chrome this page already has, and whether an export control is
+    # already on screen. Both are needed to tell "the results arrived" from "the page always looked
+    # like this" - the two states the old single read could not distinguish.
+    base_rows = _grid_row_count(page)
+    export_was_present = _find_export_control(page, order)[0] is not None
+    label = _click_run(frame, page)
+    if not label:
+        return ExportOutcome(None, None, {
+            "state": "not_submitted",
+            "note": ("no Run/Submit control was found on the report form, so the report was never "
+                     "actually run")})
+    try:
+        # Capped deliberately: the bounded poll below is the real wait now, and a page that keeps a
+        # long-poll/XHR open would otherwise burn the whole budget here doing nothing.
+        page.wait_for_load_state("networkidle", timeout=20000)
+    except Exception:
+        pass
+    res = _wait_for_results(page, order, timeout_s, base_rows=base_rows,
+                            export_was_present=export_was_present)
+    res["submit_label"] = label
+    st = res.get("state")
+    if st != "export_ready":
+        res.pop("element", None)
+        return ExportOutcome(None, None, res)
+    c = res.pop("element", None)
+    want = res.get("want") or pref
+    try:
+        with page.expect_download(timeout=120000) as dl:
+            c.click()
+        d = dl.value
+        import os
+        path = d.path()
+        with open(path, "rb") as fh:
+            content = fh.read()
+        try:
+            os.unlink(path)
+        except Exception:
+            pass
+        res["state"] = "exported"
+        res["bytes"] = len(content or b"")
+        return ExportOutcome(content, (d.suggested_filename or ("export." + want)), res)
+    except Exception as e:
+        res["state"] = "export_failed"
+        res["note"] = ("the export control (%s) was clicked but no download arrived: %s"
+                       % (res.get("export_label") or want, str(e)[:120]))
+        return ExportOutcome(None, None, res)
 
 
 # The caller's "the Reports navigation was already tried and it failed" sentinel, threaded through the
@@ -2382,6 +3030,64 @@ def _nav_exhausted(options):
         return NAV_EXHAUSTED in (options or [])
     except Exception:
         return False
+
+
+# Window states that mean "this report did not produce data for a reason that will repeat" - the
+# report stops iterating months (fewer heavy requests at a paced portal) and reports the failure.
+_HARD_WINDOW_STATES = ("not_submitted", "timeout", "no_export_link", "export_failed")
+# state -> (report reason, operator-facing sentence). The SPLIT that did not exist before
+# 2026-07-28: an explicitly empty portal answer is NOT the same event as a grid that never rendered,
+# and only one of the two means "there is no data".
+_STATE_REASONS = {
+    "not_submitted": ("run_control_missing",
+                      "the report's Run/Submit control could not be found, so the report was never "
+                      "actually run - nothing was submitted to the portal"),
+    "timeout": ("results_never_rendered",
+                "the report WAS submitted but its results never rendered within %(wait)ss - a scrape "
+                "timeout, NOT an empty result: the portal may well have data for this window"),
+    "no_export_link": ("export_link_missing",
+                       "the results rendered but no CSV/Excel export control was offered, so nothing "
+                       "could be downloaded"),
+    "export_failed": ("export_download_failed",
+                      "the export control was clicked but the download never arrived"),
+    "reselect_failed": ("report_select_missing",
+                        "the report dropdown disappeared before this month could be run"),
+    "window_error": ("window_error", "the month window failed while being run"),
+}
+
+
+def _report_verdict(windows, rows_ingested, wait_s):
+    """PURE. Turn the per-window states into ONE honest report-level verdict.
+
+    The lie this removes: every report used to return ok=True regardless, so a report that was never
+    submitted, or whose grid never rendered, was aggregated into "the reports ran but returned
+    nothing for the last 2 month(s)" - indistinguishable from a portal that genuinely has no data."""
+    ws = list(windows or [])
+    exported = [w for w in ws if w.get("state") == "exported"]
+    empties = [w for w in ws if w.get("state") == "empty"]
+    hard = [w for w in ws if w.get("state") in _HARD_WINDOW_STATES
+            or w.get("state") in ("reselect_failed", "window_error")]
+    if exported:
+        if rows_ingested:
+            return {"ok": True, "outcome": ("imported %d row(s) from %d month(s)"
+                                            % (rows_ingested, len(exported)))}
+        return {"ok": True, "empty_confirmed": True,
+                "outcome": ("the portal produced an export for %d month(s) and it contained no data "
+                            "rows - a real empty result" % len(exported))}
+    if empties and not hard:
+        return {"ok": True, "empty_confirmed": True,
+                "outcome": ("the portal ran this report and displayed its own \u201cno records\u201d "
+                            "message for %d month(s) (%s) - a real empty result, not a scraping "
+                            "problem" % (len(empties), (empties[0].get("marker") or "no records")))}
+    if hard:
+        reason, sentence = _STATE_REASONS.get(hard[0].get("state"), ("pull_failed", "the report failed"))
+        return {"ok": False, "reason": reason,
+                "outcome": sentence % {"wait": wait_s},
+                "error": sentence % {"wait": wait_s}}
+    if not ws:
+        return {"ok": False, "reason": "no_windows",
+                "outcome": "no month window was in range for this report"}
+    return {"ok": True, "outcome": "the report ran and returned no rows"}
 
 
 def _pull_one_report(page, client, org_id, source_id, carrier_id, source_row, spec, start_dt, end_dt,
@@ -2407,15 +3113,46 @@ def _pull_one_report(page, client, org_id, source_id, carrier_id, source_row, sp
                 "error": ("the portal's Reports page could not be opened from the page this login "
                           "landed on, so no report could be selected"),
                 "diag": _snapshot(page)}
-    if not _select_report(frame, spec.get("display_name")):
-        opts = [o for o in list(options if options is not None else report_options(page))
-                if o != NAV_EXHAUSTED]          # the sentinel is plumbing, never operator-facing copy
-        return {"report_key": rk, "target_table": target, "ok": False, "reason": "report_not_listed",
+    aliases = _spec_aliases(spec)
+    sel = _select_report_detail(frame, spec.get("display_name"), aliases)
+    if not sel.get("ok"):
+        captured = [o for o in list(options or []) if o != NAV_EXHAUSTED]
+        live = list(sel.get("options") or [])
+        opts = live or captured or [o for o in report_options(page) if o != NAV_EXHAUSTED]
+        dbg = sel.get("match_debug") or {}
+        wrep = ((dbg.get("wanted") or {}).get("repr") or repr(spec.get("display_name") or ""))
+        near = dbg.get("nearest_offered") or {}
+        if sel.get("reason") == "report_select_missing":
+            # NOT a naming problem: the dropdown was not on the page at this report's turn.
+            err = ("the portal's report dropdown was not on the page when this report's turn came, so "
+                   "%s was never offered for selection. That is a page-state problem (the previous "
+                   "report's results replaced the form), not a wrong report name."
+                   % (spec.get("display_name") or rk))
+        elif sel.get("reason") == "ambiguous":
+            err = ("\u201c%s\u201d matches SEVERAL of this portal's report names, so nothing was "
+                   "selected (guessing could pull the wrong report into %s). Use the exact name from "
+                   "the list: %s" % (spec.get("display_name") or rk, target, ", ".join(opts[:12])))
+        else:
+            err = ("\u201c%s\u201d is not one of the reports this portal login offers%s"
+                   % (spec.get("display_name") or rk,
+                      (" \u2014 it offers: " + ", ".join(opts[:12])) if opts else ""))
+            # THE ANTI-CONTRADICTION CLAUSE. If the wanted name LOOKS present in that list, the
+            # difference is invisible - so print the bytes of both sides. Compared after NFKC +
+            # nbsp/zero-width/dash folding, so this can only ever fire on a genuine difference.
+            err += (" \u2014 compared after normalising invisible characters: wanted %s, closest "
+                    "offered %s%s." % (wrep, (near.get("repr") or "\u2014"),
+                                       ((" " + ", ".join(near.get("odd_chars") or []))
+                                        if near.get("odd_chars") else "")))
+        return {"report_key": rk, "target_table": target, "ok": False,
+                "reason": sel.get("reason") or "report_not_listed",
                 "display_name": spec.get("display_name"),
-                "error": ("\u201c%s\u201d is not one of the reports this portal login offers%s"
-                          % (spec.get("display_name") or rk,
-                             (" \u2014 it offers: " + ", ".join(opts[:12])) if opts else "")),
+                "outcome": err, "error": err,
                 "portal_options": opts[:20],
+                "portal_options_captured": captured[:20],
+                # True ⇒ the dropdown CHANGED between the pre-pull capture and this attempt: the
+                # second mechanism behind the self-contradicting message.
+                "options_changed": bool(live and captured and live != captured),
+                "match_debug": dbg,
                 "diag": _snapshot(page)}
     # month iteration, capped at the report's max_months_back and VidaPay's ≤1-year hard limit
     max_back = min(int(ps.get("max_months_back") or 12), 12)
@@ -2427,16 +3164,36 @@ def _pull_one_report(page, client, org_id, source_id, carrier_id, source_row, sp
     range_start = max(start_dt, _dt(y, m, 1))
     wins = rp.month_windows(range_start, end_dt, ps.get("interval_months", 1)) if ps.get("iterate_months") \
         else [(range_start, end_dt)]
-    total, months, win_diag = 0, [], None
+    # The results-wait budget: config first (param_spec.results_wait_s), capped by the report's own
+    # submit timeout. A wait is TIME, not requests - nothing here re-navigates or re-submits.
+    wait_s = min(int(ps.get("results_wait_s") or _RESULTS_WAIT_S),
+                 int(ps.get("submit_timeout_s") or 300))
+    total, months, win_diag, windows = 0, [], None, []
     for (ws, we) in wins:
+        wrec = {"window": ws.strftime("%Y-%m"),
+                "requested": [ws.strftime("%Y-%m-%d"), we.strftime("%Y-%m-%d")]}
         try:
-            _select_report(frame, spec.get("display_name"))     # each postback resets the form
-            _fill_param_fields(frame, ps.get("fields"), ws, we, source_row)
-            content, fn = _submit_and_export(page, frame, spec.get("export_pref"),
-                                             ps.get("submit_timeout_s", 300))
+            resel = _select_report_detail(frame, spec.get("display_name"), aliases)
+            if not resel.get("ok"):
+                wrec.update(state="reselect_failed", note=(resel.get("reason") or "not selectable"))
+                windows.append(wrec)
+                break            # the form is gone; the remaining windows would fail identically
+            fields = _fill_param_fields(frame, ps.get("fields"), ws, we, source_row)
+            wrec["fields"] = fields
+            res = _submit_and_export(page, frame, spec.get("export_pref"), wait_s)
+            content, fn = (res[0], res[1])
+            det = dict(getattr(res, "detail", None) or {})
+            state = det.get("state") or ("exported" if content is not None else "unknown")
+            wrec.update({k: v for k, v in det.items() if k != "element"})
+            wrec["state"] = state
             if content is None:
-                win_diag = win_diag or {"window": ws.strftime("%Y-%m"), "note": "no export produced",
-                                        "diag": _snapshot(page)}
+                windows.append(wrec)
+                win_diag = win_diag or {"window": wrec["window"], "state": state,
+                                        "note": det.get("note"), "diag": _snapshot(page)}
+                if state in _HARD_WINDOW_STATES:
+                    # The same failure will repeat for every remaining window, and each retry is
+                    # another heavy report-GENERATION request at a portal we are pacing. Stop here.
+                    break
                 continue
             rows = rp.parse_export_bytes(content, fn)
             mapped = rp.apply_column_map(rows, spec, org_id, source_id, carrier_id)
@@ -2444,12 +3201,23 @@ def _pull_one_report(page, client, org_id, source_id, carrier_id, source_row, sp
                                       date_col=date_col, win_start=ws, win_end=we)
             total += n
             months.append(ws.strftime("%Y-%m"))
+            wrec.update(state="exported", rows_in_export=len(rows), rows_ingested=n)
+            windows.append(wrec)
         except Exception as e:
-            win_diag = win_diag or {"window": ws.strftime("%Y-%m"), "error": str(e)[:200],
+            wrec.update(state="window_error", error=str(e)[:200])
+            windows.append(wrec)
+            win_diag = win_diag or {"window": wrec["window"], "error": str(e)[:200],
                                     "diag": _snapshot(page)}
             continue
-    out = {"report_key": rk, "target_table": target, "ok": True,
-           "rows_ingested": total, "months_covered": months}
+    out = {"report_key": rk, "target_table": target,
+           "rows_ingested": total, "months_covered": months, "windows": windows[:12]}
+    if sel.get("tier") and sel.get("tier") != "exact":
+        # Selected only AFTER normalising invisible characters - surfaced so the operator learns the
+        # portal's real spelling instead of wondering why it "sometimes" works.
+        out["name_match"] = {"tier": sel.get("tier"), "matched": sel.get("matched"),
+                             "debug": sel.get("match_debug")}
+    verdict = _report_verdict(windows, total, wait_s)
+    out.update(verdict)
     if ps.get("calibration"):
         out["calibration"] = True
         out["diag"] = _snapshot(page)   # pin the un-screenshotted SIM/PR params from this
@@ -2518,20 +3286,30 @@ def _pull_all_reports_on_page(page, client, org_id, source_id=None, carrier_id=N
                                         src, spec, start_dt, end_dt, frame=frame, options=options))
     ok_rows = sum(r.get("rows_ingested", 0) for r in reports)
     ok_reports = [r["report_key"] for r in reports if r.get("ok") and r.get("rows_ingested")]
-    calib = [r["report_key"] for r in reports if not r.get("ok") or r.get("calibration")]
+    calib = [r["report_key"] for r in reports
+             if r.get("calibration") or r.get("reason") in ("report_not_listed", "ambiguous")]
+    # SCRAPE FAILURES vs a portal that genuinely has nothing. Before 2026-07-28 both landed in the
+    # same sentence ("the reports ran but returned nothing"), which is why a pull that never
+    # submitted a single report read as "there is no data".
+    failed = [r for r in reports if not r.get("ok")
+              and r.get("reason") not in ("report_not_listed", "ambiguous")]
+    empty_ok = [r for r in reports if r.get("ok") and r.get("empty_confirmed")]
     configured = [(s.get("display_name") or s.get("report_key") or "") for s in specs]
     unmatched = [r.get("display_name") or r.get("report_key")
-                 for r in reports if r.get("reason") == "report_not_listed"]
+                 for r in reports if r.get("reason") in ("report_not_listed", "ambiguous")]
     delivered = ok_rows > 0
     if delivered:
         status = (f"imported {ok_rows} rows across {len(ok_reports)} report(s): "
                   f"{', '.join(ok_reports)}"
-                  + (f"; still uncalibrated: {', '.join(calib)}" if calib else ""))
+                  + (f"; still uncalibrated: {', '.join(calib)}" if calib else "")
+                  + (("; %d report(s) could not be scraped: " % len(failed)
+                      + ", ".join("%s (%s)" % (r.get("report_key"), r.get("reason")) for r in failed))
+                     if failed else ""))
         reason = None
     elif frame is None:
         reason = "no_reports_page"
         status = ("\u26a0\ufe0f imported 0 rows \u2014 signed in fine, but the portal's Reports page "
-                  "could not be opened, so no report could be run. Open \ud83d\udd27 What the pull saw "
+                  "could not be opened, so no report could be run. Open \U0001f527 What the pull saw "
                   "to see the menu this login actually has.")
     elif unmatched and len(unmatched) == len(reports):
         reason = "report_not_listed"
@@ -2539,6 +3317,22 @@ def _pull_all_reports_on_page(page, client, org_id, source_id=None, carrier_id=N
                   "this portal's Reports list%s. Fix the names at Report mapping."
                   % (len(reports),
                      (" (it offers: " + ", ".join(options[:8]) + ")") if options else ""))
+    elif failed:
+        # HONEST: a report that was never submitted, or whose grid never rendered, is a SCRAPE
+        # FAILURE. Saying "returned nothing" about it invents a fact about the portal's data.
+        reason = (failed[0].get("reason") or "pull_failed")
+        status = ("\u26a0\ufe0f imported 0 rows \u2014 %d report(s) could not be scraped: %s. "
+                  "This is a scraping failure, NOT a statement that the portal has no data. "
+                  "Open \U0001f527 What the pull saw for the per-report detail."
+                  % (len(failed),
+                     "; ".join("%s \u2014 %s" % (r.get("report_key"), r.get("outcome") or r.get("reason"))
+                               for r in failed[:4])))
+    elif empty_ok and len(empty_ok) == len([r for r in reports if r.get("ok")]):
+        # Every report that ran said, in the portal's own words, that it has no records.
+        reason = "portal_reported_empty"
+        status = ("imported 0 rows \u2014 the portal ran %d report(s) and reported no records for the "
+                  "last %s month(s). That is the portal's own answer, not a scraping problem."
+                  % (len(empty_ok), months_back))
     else:
         reason = "no_rows"
         status = ("\u26a0\ufe0f imported 0 rows \u2014 the reports ran but returned nothing for the "

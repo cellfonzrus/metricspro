@@ -794,8 +794,13 @@ pf_vp = R._live_pull(FakeSB(), "orgA", {"id": "s1", "processor": "vidapay", "car
                                         "months_back": 1})
 p_vp = portal_with_link_nav()
 out_vp = with_specs(SPECS, lambda: pf_vp(p_vp))
+# 2026-07-28: this fake portal has a Submit button that changes nothing — no grid, no export link.
+# Since the results-wait fix that is no longer "no_rows" (a claim about the PORTAL'S DATA) but
+# 'results_never_rendered' (a claim about OUR SCRAPE), which is the honest reading of this fixture.
+# See vidapay_report_calibration_proof.py for the exhaustive coverage of the four outcomes.
 check("a vidapay live session still runs the MA report pull",
-      out_vp.get("reason") in ("no_rows", "report_not_listed", None) and "reports" in out_vp)
+      out_vp.get("reason") in ("no_rows", "report_not_listed", "results_never_rendered", None)
+      and "reports" in out_vp)
 
 print("[8] contract compliance — routes, org param, secrets")
 import inspect                                                                        # noqa: E402

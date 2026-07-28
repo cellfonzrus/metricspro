@@ -139,7 +139,8 @@ export default function ReportMappingsPage() {
               <div style={{ padding: '12px 14px' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 10, marginBottom: 12 }}>
                   <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Display name (dropdown label)<br />
-                    <input style={{ ...inp, marginTop: 4 }} value={d.display_name} onChange={e => setEdit(p => ({ ...p, [rep.report_key]: { ...d, display_name: e.target.value } }))} /></label>
+                    <input style={{ ...inp, marginTop: 4 }} value={d.display_name} onChange={e => setEdit(p => ({ ...p, [rep.report_key]: { ...d, display_name: e.target.value } }))} />
+                    <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--text3)' }}>Matched against the portal&apos;s own dropdown after normalising invisible characters (no-break spaces, zero-width spaces, en/em dashes, double spaces, case) — so a name that <i>looks</i> right now <i>is</i> right. Add <code>&quot;name_aliases&quot;: [&quot;other spelling&quot;]</code> to the parameter spec for a portal that renames it.</span></label>
                   <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Target table<br />
                     <input style={{ ...inp, marginTop: 4 }} value={d.target_table} onChange={e => setEdit(p => ({ ...p, [rep.report_key]: { ...d, target_table: e.target.value } }))} /></label>
                   <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Export<br />
@@ -167,6 +168,9 @@ export default function ReportMappingsPage() {
                 <button className="btn btn-secondary" style={{ fontSize: 12, marginBottom: 12 }} onClick={() => setEdit(p => ({ ...p, [rep.report_key]: { ...d, rows: [...d.rows, { src: '', col: '', type: 'text' }] } }))}>＋ Add column</button>
 
                 <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', margin: '4px 0 6px' }}>Parameter spec (advanced — how the page is driven + month iteration)</div>
+                <p style={{ fontSize: 11.5, color: 'var(--text3)', margin: '0 0 6px' }}>
+                  Keys: <code>fields</code> (what to type on the portal form) · <code>iterate_months</code>/<code>interval_months</code>/<code>max_months_back</code> · <code>results_wait_s</code> (how long to wait for the results grid to populate before calling it a scrape timeout — default 90s; the wait costs time, never extra requests) · <code>name_aliases</code> (alternate dropdown spellings) · <code>generic</code>/<code>calibration</code>.
+                </p>
                 <textarea style={{ width: '100%', minHeight: 150, padding: 8, borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, fontFamily: 'monospace' }}
                   value={d.param_spec} onChange={e => setEdit(p => ({ ...p, [rep.report_key]: { ...d, param_spec: e.target.value } }))} />
 

@@ -1074,7 +1074,13 @@ export default function EmailImportsPage() {
                           ? <>This portal&apos;s Reports list actually offers: <b>{p.options.slice(0, 8).join(', ')}</b>. Put those exact names on <a href="/commcalc/report-mappings">Report mapping</a>, then press ▶ Pull now.</>
                           : p.reason === 'no_reports_page'
                             ? <>The pull could not open the portal&apos;s Reports page from where the login landed. Open <b>🔧 What the pull saw</b> — it lists the menu links this login really has.</>
-                            : <>Open <b>🔧 What the pull saw</b> for the per-report detail, or fix the report names on <a href="/commcalc/report-mappings">Report mapping</a>.</>}
+                            : ['results_never_rendered', 'run_control_missing', 'export_link_missing', 'export_download_failed', 'report_select_missing'].includes(p.reason)
+                              /* NOT a naming problem and NOT "the portal has no data" — the reports could not be
+                                 scraped. Sending the operator to Report mapping here is what wasted a day. */
+                              ? <>The portal <b>was reached and the reports were selected</b>, but their results could not be scraped (<code>{p.reason}</code>). This is <b>not</b> a statement that the portal has no data, and the report names are fine. Open <b>🔧 What the pull saw</b> for the per-report detail.</>
+                              : p.reason === 'portal_reported_empty'
+                                ? <>The portal ran the reports and displayed its own “no records” message — there genuinely is nothing to import for this window.</>
+                                : <>Open <b>🔧 What the pull saw</b> for the per-report detail, or fix the report names on <a href="/commcalc/report-mappings">Report mapping</a>.</>}
                       </div>
                     )}
                   </div>
@@ -1144,17 +1150,32 @@ export default function EmailImportsPage() {
                   <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12 }}>
                     <thead><tr style={{ background: 'var(--surface2)' }}>{['Report', 'Target table', 'Rows', 'Outcome'].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
                     <tbody>
-                      {d.reports.map((r: any, i: number) => (
+                      {d.reports.map((r: any, i: number) => {
+                        // HONESTY (2026-07-28): a report that was never submitted, or whose grid never
+                        // rendered, is NOT "ran, returned no rows" — the backend now sends the exact
+                        // outcome sentence, and match_debug carries the repr() of both names so an
+                        // invisible-character mismatch is visible instead of self-contradicting.
+                        const md = r.match_debug || (r.name_match || {}).debug || null
+                        const tone = r.rows_ingested ? '#166534' : (r.ok ? 'var(--text2)' : '#9a3412')
+                        return (
                         <tr key={i} style={{ borderTop: '1px solid var(--border)', fontSize: 12.5 }}>
                           <td style={{ padding: '6px 8px', fontWeight: 600 }}>{r.report_key}</td>
                           <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{r.target_table || '—'}</td>
                           <td style={{ padding: '6px 8px' }}>{r.rows_ingested ?? 0}</td>
-                          <td style={{ padding: '6px 8px', color: r.rows_ingested ? '#166534' : '#9a3412', whiteSpace: 'normal' }}>
-                            {r.rows_ingested ? `imported ${r.months_covered?.length || 0} month(s)` : (r.error || (r.ok ? 'ran, returned no rows' : 'failed'))}
+                          <td style={{ padding: '6px 8px', color: tone, whiteSpace: 'normal' }}>
+                            {r.rows_ingested ? `imported ${r.months_covered?.length || 0} month(s)` : (r.outcome || r.error || (r.ok ? 'ran, returned no rows' : 'failed'))}
                             {r.calibration && !r.rows_ingested && <span style={{ color: '#b45309' }}> · params not calibrated yet</span>}
+                            {r.name_match?.tier && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>name matched the portal’s <b>{r.name_match.tier}</b> spelling <code>{r.name_match.matched}</code> (invisible characters normalised)</div>}
+                            {md?.wanted?.repr && (
+                              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3, fontFamily: 'ui-monospace, monospace' }}>
+                                wanted {md.wanted.repr}{md.wanted.odd_chars?.length ? ` [${md.wanted.odd_chars.join(', ')}]` : ''}
+                                {md.nearest_offered?.repr && <> · closest offered {md.nearest_offered.repr}{md.nearest_offered.odd_chars?.length ? ` [${md.nearest_offered.odd_chars.join(', ')}]` : ''}{typeof md.similarity === 'number' ? ` · ${Math.round(md.similarity * 100)}% alike` : ''}</>}
+                              </div>
+                            )}
+                            {r.options_changed && <div style={{ fontSize: 11, color: '#b45309', marginTop: 3 }}>⚠ the portal’s report list CHANGED between the start of the pull and this report’s turn — the page state moved, the name may be fine.</div>}
                           </td>
                         </tr>
-                      ))}
+                      )})}
                     </tbody>
                   </table>
                 )}

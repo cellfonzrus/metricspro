@@ -291,6 +291,21 @@ def dict_rows(rows):
 # column_map: source-header -> dest column (+type). param_spec: how to drive the page + iterate.
 #   static field source 'account_id'/'session_id'  -> the data_source.account_id (Account_ID == SessionId)
 #   date field   role 'start'/'end' + format        -> the month window boundary, formatted
+#
+# DISPLAY NAMES — RE-VERIFIED 2026-07-28 against the vocabulary the owner's own portal enumerated
+# ("MA - Commission Details", "MA Daily Tx SubMA", "MA - Marketplace Handset Fulfillment Orders",
+# "Activation SIM Assignment Report", "PR Activation Details"). All five below match the portal
+# EXACTLY, including the SubMA variant — the 2026-07-28 "not one of the reports this portal offers"
+# failures were NOT name drift but an invisible-character comparison bug in the driver
+# (vidapay_sweep._select_report). No default was changed; the matching was fixed instead.
+#
+# OPTIONAL param_spec keys the driver honours (absent ⇒ default; all editable per report/tenant at
+# /commcalc/report-mappings, RULE TWO):
+#   results_wait_s  how long to wait for the results grid to populate before declaring a SCRAPE
+#                   TIMEOUT (default 90, capped by submit_timeout_s). The wait is TIME — it polls the
+#                   DOM already loaded and never issues another request.
+#   name_aliases    alternate dropdown spellings tried after display_name (a portal that renames a
+#                   report is a config edit, never a code change).
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _N = "num"
 _D = "date"
