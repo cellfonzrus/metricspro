@@ -545,16 +545,34 @@ check("F7 it REJECTS a match_field the engine cannot run (keeps the stored one)"
 check("F8 disabled=true removes the rule entirely",
       CE._apply_rule_overrides(_plans_in, {"r": {"disabled": True}})[0]["rules"] == [])
 
-# sale-installment engine untouched
+# sale-installment engine untouched — on the MONEY SHAPE. The multimonth-category-config package
+# (migs 245-247, merged after this proof shipped) adds purely-additive material: top-level
+# `category_guard`, `chain_guard.hardware_guard`, and four display-only row keys. Strip those before
+# comparing so this stays a real differential on money fields (same pattern as
+# installment_edit_m1gate_proof._drop_additive).
+def _strip_additive_sie(res):
+    out = dict(res)
+    out.pop("category_guard", None)
+    if isinstance(out.get("chain_guard"), dict):
+        cg = dict(out["chain_guard"])
+        cg.pop("hardware_guard", None)
+        out["chain_guard"] = cg
+    out["ledger"] = [{k: v for k, v in r.items()
+                      if k not in ("device_category", "device_product", "plan_product", "display_label")}
+                     for r in (out.get("ledger") or [])]
+    return out
+
 sie_ident = True
 for nm, store, org in MATRIX:
-    a = OLD_SIE.compute_sale_installments(FakeClient(copy.deepcopy(store)), org, "July 2026",
-                                          persist=False)
-    b = SIE.compute_sale_installments(FakeClient(copy.deepcopy(store)), org, "July 2026", persist=False)
+    a = _strip_additive_sie(OLD_SIE.compute_sale_installments(FakeClient(copy.deepcopy(store)), org,
+                                                              "July 2026", persist=False))
+    b = _strip_additive_sie(SIE.compute_sale_installments(FakeClient(copy.deepcopy(store)), org,
+                                                          "July 2026", persist=False))
     if a != b:
         sie_ident = False
         print(f"      SIE diff at {nm}")
-check("F9 compute_sale_installments is byte-identical to the pre-change engine (no mig-233 regression)",
+check("F9 compute_sale_installments money shape identical to the pre-change engine (additive "
+      "category/display keys stripped — no mig-233 regression)",
       sie_ident)
 
 # ═══ G — WARNINGS ════════════════════════════════════════════════════════════════════════════════

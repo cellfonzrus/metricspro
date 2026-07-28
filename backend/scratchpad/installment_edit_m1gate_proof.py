@@ -168,6 +168,13 @@ def _drop_additive(res):
     out = dict(res)
     out.pop("chain_guard", None)
     out.pop("warnings", None)
+    # mig 245 (2026-07-27) adds the same KIND of purely-additive material: one top-level key
+    # (`category_guard`) and four DISPLAY-ONLY row keys. No money field moves — dropping them here is
+    # exactly what makes the byte-identity claim below a real differential on the money shape.
+    out.pop("category_guard", None)
+    out["ledger"] = [{k: v for k, v in r.items()
+                      if k not in ("device_category", "device_product", "plan_product", "display_label")}
+                     for r in (out.get("ledger") or [])]
     return out
 
 

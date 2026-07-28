@@ -13,3 +13,4 @@ _PENDING_MIGRATIONS_*.sql
 .metricspro_token
 *.pem
 *.key
+.worktrees/

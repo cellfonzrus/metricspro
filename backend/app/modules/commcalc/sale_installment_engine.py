@@ -46,6 +46,7 @@ from app.modules.commcalc.commission_engine import (
     _load_plans, _resolve_plan_for, _read_sales, _read_store_market, _rule_matches, _norm_mdn,
     _read_employee_roles, _canon_person,
 )
+from app.modules.commcalc import installment_category as icat
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -207,20 +208,41 @@ def _to_f(tok):
         return None
 
 
+_DURATION_RX = re.compile(r"^\s*[0-9]{1,3}\s*(?:mo\b|mo\.|month)", re.I)
+
+
+def _is_duration_token(s, m):
+    """True when the '<n> month' the monthly matcher just found is a DURATION, not a price.
+
+    OWNER TABLET REPRO 2026-07-27: "… - Promo $279.99, 6 Month Plan Required" made extract_mrc_monthly
+    return **6.00** — the promo's term length read as a monthly charge, which then outranked the real
+    rate-plan line (rank 1 beats rank 2). A token is a duration when it carries NEITHER a '$' NOR a '/'
+    (so "$25/mo" and "25/mo" are untouched), is a bare integer glued to a month noun, AND the text
+    states a real $ amount somewhere else — i.e. the sentence already said what the money is. PURE."""
+    tok = s[m.start():m.end()]
+    if "$" in tok or "/" in tok:
+        return False
+    if not _DURATION_RX.match(tok):
+        return False
+    return bool(_ANY_DOLLAR.search(s[:m.start()] + s[m.end():]))
+
+
 def extract_mrc_monthly(desc):
     """The MONTHLY-KEYWORD-ANCHORED half of extract_mrc_from_desc: a $ amount that the text itself calls
     a recurring/monthly charge ("$25/mo", "MRC $30", "$50 per month"). This is a STRUCTURAL rate-plan
     signal — a hardware price is never written this way — so it is trusted on ANY line. None if absent.
-    PURE (no I/O)."""
+    A bare "<n> month" TERM LENGTH is rejected (see _is_duration_token). PURE (no I/O)."""
     s = "" if desc is None else str(desc)
     if not s.strip():
         return None
     for rx in (_MONTHLY_AFTER, _MONTHLY_BEFORE):
-        m = rx.search(s)
-        if m:
+        for m in rx.finditer(s):
             v = _to_f(m.group(1))
-            if v and v > 0:
-                return round(v, 2)
+            if not (v and v > 0):
+                continue
+            if rx is _MONTHLY_AFTER and _is_duration_token(s, m):
+                continue
+            return round(v, 2)
     return None
 
 
@@ -240,6 +262,48 @@ def extract_mrc_bare(desc):
         v = _to_f(m.group(1))
         if v and v > 0:
             return round(v, 2)
+    return None
+
+
+_PLAN_ANCHOR_WINDOW = 48
+
+
+def extract_mrc_bare_anchored(desc, kws=None):
+    """extract_mrc_bare, except that when a description carries SEVERAL $ amounts, the one CLOSEST to a
+    rate-plan word wins instead of the first one.
+
+    OWNER TABLET REPRO 2026-07-27: "Samsung Galaxy Tab A11+ 5G TO - Promo $279.99, Min $50 tablet plan
+    w/6 months of service" → the first $ is the DEVICE PROMO PRICE and the plan-adjacent $ is the plan's
+    monthly minimum. Used only on a HARDWARE line that has already been demoted below every real
+    rate-plan line — never for the ordinary single-$ case, which is byte-identical to extract_mrc_bare.
+    PURE (no I/O)."""
+    s = "" if desc is None else str(desc)
+    if not s.strip():
+        return None
+    hits = list(_ANY_DOLLAR.finditer(s))
+    if not hits:
+        return None
+    if len(hits) > 1 and kws:
+        anchors = []
+        for k in kws:
+            rx = _KW_RX_CACHE.get(k)
+            if rx is None:
+                rx = _KW_RX_CACHE[k] = re.compile(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])", re.I)
+            anchors.extend(mm.start() for mm in rx.finditer(s))
+        if anchors:
+            best, best_gap = None, None
+            for h in hits:
+                v = _to_f(h.group(1))
+                if not (v and v > 0):
+                    continue
+                gap = min(abs(a - h.start()) for a in anchors)
+                if gap <= _PLAN_ANCHOR_WINDOW and (best_gap is None or gap < best_gap):
+                    best, best_gap = v, gap
+            if best is not None:
+                return round(best, 2)
+    v = _to_f(hits[0].group(1))
+    if v and v > 0:
+        return round(v, 2)
     return None
 
 
@@ -350,15 +414,77 @@ def _trigger_rank(line, matcher):
             str(line.get("salesperson") or ""))
 
 
-def _mrc_candidate(line, catalog, carrier_id, matcher, acc=None, ccmap=None):
+DEFAULT_HARDWARE_LINE_MATCHER = {"departments": [], "categories": []}
+
+
+def _norm_hw(m, enabled=True):
+    """Normalize the tenant's HARDWARE-line matcher into lowercased sets + the guard switch. PURE."""
+    m = m or {}
+    return {"enabled": bool(enabled),
+            "departments": {str(x).strip().lower() for x in (m.get("departments") or []) if str(x).strip()},
+            "categories": {str(x).strip().lower() for x in (m.get("categories") or []) if str(x).strip()}}
+
+
+def _line_is_hardware(line, matcher, hw):
+    """True if this sale line is a DEVICE line — the thing whose $ is a PRICE, never a monthly charge.
+
+    OWNER TABLET RECURRENCE 2026-07-27: mig 233 bounded the bare-$ prefill to lines that "identify as a
+    rate-plan line", but a tablet's DEVICE line identifies as one, because its promo text contains the
+    whole word "plan" ("… Promo $279.99, Min $50 tablet plan w/6 months of service"). Wording alone can
+    therefore never separate the two halves of an activation. STRUCTURE can: the rate-plan/airtime line
+    carries the MDN and a blank Serial 1, the device line carries the IMEI (mig-233's own ledger
+    evidence, 31/31 July chains).
+
+    Order: the tenant's explicit hardware departments/categories → an EXEMPTION for a department/category
+    the tenant has declared to be its rate-plan line (so a POS that stamps Serial 1 on the airtime line
+    is not penalised) → the structural IMEI test. An ICCID (SIM) is NOT hardware for this purpose: a SIM
+    line carries no price worth mistaking for an MRC. PURE."""
+    if not hw or not hw.get("enabled", True):
+        return False
+    dept = str(line.get("department") or "").strip().lower()
+    cat = str(line.get("category") or "").strip().lower()
+    if dept and dept in (hw.get("departments") or set()):
+        return True
+    if cat and cat in (hw.get("categories") or set()):
+        return True
+    if dept and dept in ((matcher or {}).get("departments") or set()):
+        return False
+    if cat and cat in ((matcher or {}).get("categories") or set()):
+        return False
+    return icat.serial_kind(line.get("serial_1")) == "imei"
+
+
+def _is_own_price(line, amount):
+    """True when `amount` IS this line's own price (Ext Price or Unit Price, to the cent, incl. the
+    qty-multiple). A device line's description repeats its price; that number can never be an MRC. PURE."""
+    a = round(safe_float(amount), 2)
+    if a <= 0:
+        return False
+    for k in ("ext_price", "unit_price", "price", "retail_price"):
+        v = round(safe_float(line.get(k)), 2)
+        if v and abs(v - a) < 0.01:
+            return True
+        if v and a > 0 and abs(v % a) < 0.01 and v >= a:      # qty 2 x $279.99 = $559.98
+            return True
+    return False
+
+
+def _mrc_candidate(line, catalog, carrier_id, matcher, acc=None, ccmap=None, hw=None):
     """(rank, mrc, source) — how good a RATE-PLAN MRC source this one line is. LOWER RANK WINS. PURE.
 
-      0  product_mrc CATALOG hit (user-confirmed; authoritative, mirrors _line_amount's first choice)
-      1  the description is structurally monthly ("$25/mo", "MRC $30") — trusted on any line
-      2  the line matches the tenant's rate-plan matcher AND carries a bare $ amount ("… Plan $65")
-      3  the line matches the matcher but carries no $ at all           → (0.0, 'none')
-      4  the line is not identifiable as a rate plan                    → (0.0, 'none')
-      9  the line's CLASS can never be a rate plan (accessory / bill payment / rebate) → (0.0, 'none')
+      0    product_mrc CATALOG hit (user-confirmed; authoritative, mirrors _line_amount's first choice)
+      1    the description is structurally monthly ("$25/mo", "MRC $30") on a NON-hardware line
+      2    a NON-hardware line matches the tenant's rate-plan matcher AND carries a bare $ ("… Plan $65")
+      2.4  structurally monthly, but written on a HARDWARE (device) line — usable, never preferred
+      2.6  a HARDWARE line whose PLAN-ADJACENT $ is provably not its own price ("Min $50 tablet plan")
+      3    the line matches the matcher but carries no $ at all              → (0.0, 'none')
+      4    the line is not identifiable as a rate plan                       → (0.0, 'none')
+      9    the line can NEVER be a rate plan: its class is accessory/bill-payment/rebate, OR it is a
+           hardware line whose only $ is its own price                       → (0.0, 'none')
+
+    The 2.4/2.6 rungs are the 2026-07-27 tablet fix: a device line may still donate an MRC when NOTHING
+    better exists, but it can never beat a real rate-plan line and can never donate its own PRICE. With
+    `hw=None` (no hardware guard) the ladder is byte-identical to mig 233.
 
     Ranks 3/4/9 deliberately resolve to $0 rather than to the line's PRICE: paying 5% of a $575 handset
     because its description happened to contain a $ amount is exactly the bug this fixes. An activation
@@ -373,10 +499,22 @@ def _mrc_candidate(line, catalog, carrier_id, matcher, acc=None, ccmap=None):
                 return 9, 0.0, "none"
         except Exception:
             pass
+    is_hw = _line_is_hardware(line, matcher, hw)
     monthly = extract_mrc_monthly(line.get("product_desc"))
     if monthly:
-        return 1, round(safe_float(monthly), 2), "prefill"
+        # NO price-equality veto here on purpose: "$45/mo" is the text calling itself a monthly charge,
+        # and a rate-plan line's Ext Price legitimately EQUALS its MRC (the first month is what was rung).
+        # The veto below exists only for a BARE $ on a hardware line, where the $ is a price tag.
+        return (2.4 if is_hw else 1), round(safe_float(monthly), 2), "prefill"
     if _line_is_plan_line(line, matcher):
+        if is_hw:
+            bare = extract_mrc_bare_anchored(line.get("product_desc"),
+                                             (matcher or {}).get("product_keywords") or set())
+            if bare and _is_own_price(line, bare):
+                return 9, 0.0, "none"
+            if bare:
+                return 2.6, round(safe_float(bare), 2), "prefill"
+            return 3, 0.0, "none"
         bare = extract_mrc_bare(line.get("product_desc"))
         if bare:
             return 2, round(safe_float(bare), 2), "prefill"
@@ -402,6 +540,46 @@ def _load_plan_line_config(client, org_id):
     if _chain_legacy_forced():
         basis = "trigger_line"
     return basis, _norm_plan_matcher(stored or DEFAULT_PLAN_LINE_MATCHER)
+
+
+def _load_hardware_guard(client, org_id):
+    """The tenant's HARDWARE-line guard (mig 246): (enabled, normalized matcher-ish dict). Defaults to
+    ON with empty department/category sets — i.e. the structural IMEI test only. Degrades to the default
+    when the migration isn't applied. The INSTALLMENT_CHAIN_LEGACY kill switch turns it OFF with
+    everything else. Never raises."""
+    enabled, stored = True, None
+    try:
+        rows = (client.schema("commcalc").table("commission_org_config")
+                .select("installment_mrc_hardware_guard,hardware_line_matcher")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        if rows:
+            v = rows[0].get("installment_mrc_hardware_guard")
+            if v is not None:
+                enabled = bool(v)
+            stored = rows[0].get("hardware_line_matcher")
+    except Exception:
+        pass
+    if _chain_legacy_forced():
+        enabled = False
+    return _norm_hw(stored or DEFAULT_HARDWARE_LINE_MATCHER, enabled)
+
+
+# ── ONE CONSISTENT MULTI-MONTH ROW LABEL (owner directive 2026-07-27, deliverable 3) ───────────────
+def installment_label(device_product, plan_product, mrc=None):
+    """The single display string every multi-month surface uses: DEVICE — RATE PLAN — MRC $x.
+
+    OWNER 2026-07-27: "some items are picking the phones some are picking the rate plans, it should show
+    the phones and rate plan in one line and be consistently displayed to avoid confusion." An activation
+    is TWO lines (device + plan) and every surface used to show whichever one it happened to look up
+    first. Presentation only — no money reads this. PURE."""
+    dev = str(device_product or "").strip()
+    pln = str(plan_product or "").strip()
+    parts = [p for p in (dev, pln) if p]
+    if not parts:
+        return ""
+    if mrc is not None and safe_float(mrc) > 0:
+        parts.append(f"MRC ${safe_float(mrc):,.2f}")
+    return " — ".join(parts)
 
 
 # ── CLASSIFIER: reuse existing config to label a line (PURE given the config) ──────────────────────
@@ -458,6 +636,11 @@ def classify_line(row, acc_sets=None, ccmap_rules=None):
 
 
 # ── PAID GATE: match a sold line to raw_mi for the PAY period + check active/paying (PURE) ──────────
+def repU_cat(rep):
+    """by_rep's key shape for the exclusion accounting (so a blast-radius table lines up with pay)."""
+    return str(rep or "").strip().upper()
+
+
 def _mi_index(mi_rows):
     """Index raw_mi rows for one period by normalized MDN and by normalized device serial (the two
     reliable per-line/per-subscriber keys). Returns {'mdn':{...}, 'serial':{...}}."""
@@ -851,7 +1034,8 @@ def _acc_sets(client, org_id):
 
 
 # ── main compute ────────────────────────────────────────────────────────────────────────────────
-def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_source_override=None):
+def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_source_override=None,
+                              _config_override=None):
     """Sale-triggered installments that LAND in `pay_period`. Read-only unless persist=True.
     Returns {pay_period, by_rep:{REPUPPER:amount}, ledger:[...], flags:[...], totals, schedules, note}.
 
@@ -882,7 +1066,28 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
     # ONE CHAIN PER ACTIVATION + rate-plan MRC basis (mig 233). Both default ON; 'trigger_line' (or the
     # INSTALLMENT_CHAIN_LEGACY env) restores the pre-fix per-line resolution.
     mrc_basis, plan_matcher = _load_plan_line_config(client, org_id)
+    hw_guard = _load_hardware_guard(client, org_id)
     chain_legacy = _chain_legacy_forced()
+    # DEVICE-CATEGORY QUALIFICATION (mig 245; owner 2026-07-27). Which device categories a multi-month
+    # schedule pays on — per schedule, else per org, else the owner's defaults (all but TABLET + SIM).
+    # Every loader degrades to the code default, so this works with no migration applied.
+    cat_rules = icat.load_category_rules(client, org_id)
+    org_qual = icat.load_org_qualification(client, org_id)
+    cat_lookup = icat.build_catalog_category_lookup(client, org_id)
+    # READ-ONLY A/B OVERRIDE (never used by a calculate — only by the category-impact preview, which
+    # runs this engine twice to show the operator the exact per-rep delta BEFORE anything is recomputed).
+    qual_override = None
+    if _config_override:
+        if "hardware_guard" in _config_override:
+            hw_guard = _norm_hw(hw_guard, bool(_config_override.get("hardware_guard")))
+        if _config_override.get("qualification") is not None:
+            qual_override = icat.normalize_qualification(_config_override.get("qualification"))
+
+    def _is_acc_row(r):
+        try:
+            return classify_line(r, acc, ccmap) == "accessory"
+        except Exception:
+            return False
     store_market = _read_store_market(client, org_id)
     role_by_rep = _read_employee_roles(client, org_id)   # {_canon_person(name) -> role} for scope='role'
 
@@ -962,6 +1167,9 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
     n_paid = n_withheld = 0
     n_dedup = n_mrc_unresolved = n_mrc_ambiguous = 0
     total_amt = 0.0
+    cat_counts, cat_excluded, cat_sources = {}, {}, set()
+    n_cat_excluded = n_cat_unknown = 0
+    cat_excluded_amt = 0.0
 
     for sale_period in sale_periods:
         s_idx = _period_index(sale_period)
@@ -1164,12 +1372,14 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                                    "Activated Mobile Number on each line.")})
             # MRC BASIS (mig 233): a %-of-MRC installment is paid on the ACTIVATION'S RATE-PLAN line —
             # never on a device/hardware line's price. 'trigger_line' = the pre-fix per-line resolution.
+            _chain_lines = _mrc_pool(_ck)
             _mrc_override, _mrc_line = None, None
             if (mrc_basis == "plan_line"
                     and str(iline.get("payout_kind") or "flat").strip().lower() == "pct_mrc"):
                 _cs = []
-                for _cl in _mrc_pool(_ck):
-                    _rk, _mv, _ms = _mrc_candidate(_cl, catalog, carrier_id, plan_matcher, acc, ccmap)
+                for _cl in _chain_lines:
+                    _rk, _mv, _ms = _mrc_candidate(_cl, catalog, carrier_id, plan_matcher, acc, ccmap,
+                                                   hw_guard)
                     _cs.append(((_rk, str(_cl.get("product_desc") or ""), str(_cl.get("sku") or ""),
                                  str(_cl.get("serial_1") or ""), str(_cl.get("mdn") or "")),
                                 _rk, _mv, _ms, _cl))
@@ -1210,6 +1420,75 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 amount, mrc, mrc_src = _line_amount(line, iline, catalog, carrier_id, _mrc_override)
             else:
                 amount, mrc, mrc_src = _line_amount(line, iline, catalog, carrier_id)
+
+            # ── DEVICE-CATEGORY QUALIFICATION (mig 245; owner 2026-07-27) ──────────────────────
+            # "the tablet dont qualify for the monthly payout." Resolved on the WHOLE activation (a
+            # tablet sale carries a tablet line, a tablet-plan line and a SIM line), then checked
+            # against this schedule's / this org's / the owner's default include-exclude set. A
+            # non-qualifying activation emits NO installment at all: no pay, no ledger row and no
+            # withheld flag — it is not held pending residual, it simply does not qualify. It is
+            # NEVER silent: every excluded chain is counted with its dollars in `category_guard` and
+            # summarised in `warnings`, which is what the operator reads after Run Calculation.
+            _qual, _qsrc = ((qual_override, "override") if qual_override is not None
+                            else icat.qualification_for(sched, org_qual))
+            cat_sources.add(_qsrc)
+            _cat, _cev = icat.resolve_chain_category(_chain_lines or [line], cat_rules,
+                                                     catalog_cat_of=cat_lookup,
+                                                     is_accessory=_is_acc_row)
+            _cc = cat_counts.setdefault(_cat, {"chains": 0, "amount": 0.0, "qualifies": bool(_qual.get(_cat, True))})
+            _cc["chains"] += 1
+            _cc["amount"] = round(_cc["amount"] + safe_float(amount), 2)
+            if _cat == "unknown":
+                n_cat_unknown += 1
+                if len(warnings) < 200:
+                    warnings.append({
+                        "type": "category_unknown", "sale_period": sale_period,
+                        "month_index": month_index, "rep": rep, "store": store,
+                        "trans_id": str(line.get("trans_id") or "").strip(),
+                        "imei": _norm_mdn(line.get("serial_1")), "amount": round(safe_float(amount), 2),
+                        "paid": bool(_qual.get("unknown", True)),
+                        "products": (_cev or {}).get("products") or [],
+                        "detail": ("This activation's device category could not be determined from its "
+                                   "Department / Category / product wording, so the multi-month "
+                                   "include-exclude list could not be applied. It "
+                                   + ("STILL PAID (the default for an unclassifiable activation). "
+                                      if _qual.get("unknown", True) else "did NOT pay. ")
+                                   + "Map it under Plan Installments → Qualifying categories.")})
+            if not _qual.get(_cat, True):
+                n_cat_excluded += 1
+                cat_excluded_amt = round(cat_excluded_amt + safe_float(amount), 2)
+                _ex = cat_excluded.setdefault(_cat, {"chains": 0, "amount": 0.0, "reps": {},
+                                                     "examples": []})
+                _ex["chains"] += 1
+                _ex["amount"] = round(_ex["amount"] + safe_float(amount), 2)
+                _ex["reps"][repU_cat(rep)] = round(_ex["reps"].get(repU_cat(rep), 0.0)
+                                                   + safe_float(amount), 2)
+                if len(_ex["examples"]) < 8:
+                    _ex["examples"].append({
+                        "trans_id": str(line.get("trans_id") or "").strip(),
+                        "imei": _norm_mdn(line.get("serial_1")), "mdn": mdn,
+                        "rep": rep, "month_index": month_index,
+                        "amount": round(safe_float(amount), 2), "mrc": round(safe_float(mrc), 2),
+                        "product": (_cev or {}).get("product"),
+                        "matched_field": (_cev or {}).get("matched_field"),
+                        "matched_value": (_cev or {}).get("matched_value")})
+                continue
+
+            # ONE consistent row label (owner 2026-07-27 deliverable 3): DEVICE + RATE PLAN together,
+            # on every surface, whichever half the chain's identity happened to come from.
+            _dev_line = next((r for r in _dev_order(_chain_lines or [line])
+                              if icat.serial_kind(r.get("serial_1")) == "imei"), None)
+            _plan_disp = None
+            if _mrc_line is not None and not _line_is_hardware(_mrc_line, plan_matcher, hw_guard):
+                _plan_disp = _mrc_line
+            if _plan_disp is None:
+                _plan_disp = next((r for r in (_chain_lines or [line])
+                                   if _line_is_plan_line(r, plan_matcher)
+                                   and not _line_is_hardware(r, plan_matcher, hw_guard)), None)
+            device_product = str((_dev_line or {}).get("product_desc") or "")[:200]
+            plan_product = str((_plan_disp or {}).get("product_desc") or "")[:200]
+            if not device_product and not plan_product:
+                device_product = str(line.get("product_desc") or "")[:200]
 
             gate_mode = (sched.get("gate_mode") or "paid_residual").strip().lower()
             gate_from = int(sched.get("gate_from_month") or 1)
@@ -1310,6 +1589,10 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                               "description": desc2, "coaching_note": coach2})
 
             ledger_row = {
+                "device_category": _cat, "device_product": device_product,
+                "plan_product": plan_product,
+                "display_label": installment_label(device_product, plan_product,
+                                                   mrc if str(iline.get("payout_kind") or "").strip().lower() == "pct_mrc" else None),
                 "org_id": org_id, "trans_id": str(line.get("trans_id") or "").strip(),
                 "mdn": mdn, "serial_1": serial, "plan_id": plan.get("id"),
                 "schedule_id": sched.get("id"), "store": store, "epay_salesperson": rep,
@@ -1346,6 +1629,64 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 ledger_row["chain_lines_merged"] = len(_cands)
             ledger.append(ledger_row)
 
+    # SAME DEVICE, SAME MONTH, TWICE (owner 2026-07-27: IMEI 358662802056452 appears twice at $2.75).
+    # The chain guard (mig 233) collapses duplicate LINES of one activation, but two chains can still
+    # land on one device+month legitimately-looking ways: TWO ACTIVE SCHEDULES on the same plan (each
+    # pays its own installment — real double pay, and _persist can only store one of the two rows), a
+    # multi-subscriber transaction where the second subscriber BORROWED the only device serial on the
+    # receipt, or the same device genuinely sold twice in the month (return + resale). We do not guess
+    # which — we NAME it, with the trans/schedule/MDN evidence, so the operator can tell in one look.
+    _dev_month = {}
+    for _r in ledger:
+        _k = (_norm_mdn(_r.get("serial_1")), int(_r.get("month_index") or 0))
+        if _k[0]:
+            _dev_month.setdefault(_k, []).append(_r)
+    for (_ser, _mi), _rs in sorted(_dev_month.items()):
+        if len(_rs) < 2:
+            continue
+        _scheds = {str(x.get("schedule_id") or "") for x in _rs}
+        _txs = {str(x.get("trans_id") or "") for x in _rs}
+        _mdns = {str(x.get("mdn") or "") for x in _rs}
+        if len(_scheds) > 1:
+            _why = ("two DIFFERENT installment schedules both pay this device — the rep is paid twice, "
+                    "and only one of the two rows can be stored in the ledger (they share its unique "
+                    "key). Deactivate the duplicate schedule under Plan Installments.")
+        elif len(_txs) > 1:
+            _why = ("this device appears on two different transactions in the period (e.g. a return and "
+                    "a re-sale). Both chains pay unless one is voided/returned in the POS export.")
+        else:
+            _why = ("one transaction produced two subscriber chains that resolved to the SAME device "
+                    "serial — the second subscriber's lines carry no serial of their own, so the "
+                    "receipt's only IMEI was borrowed. If these are two real lines the pay is right and "
+                    "only the display repeats; if not, the POS export must carry Serial 1 per line.")
+        warnings.append({
+            "type": "duplicate_device_month", "imei": _ser, "month_index": _mi,
+            "rows": len(_rs), "rep": _rs[0].get("epay_salesperson"),
+            "amount": round(sum(safe_float(x.get("amount")) for x in _rs), 2),
+            "trans_ids": sorted(_txs), "mdns": sorted(_mdns), "schedules": sorted(_scheds),
+            "label": _rs[0].get("display_label"),
+            "detail": f"Device {_ser} has {len(_rs)} month-{_mi} installments in {pay_period}: {_why}"})
+
+    # SUMMARY warnings — appended AFTER the per-chain cap so a big month can never hide the headline.
+    for _k, _v in sorted(cat_excluded.items()):
+        warnings.append({
+            "type": "category_excluded", "category": _k,
+            "category_label": icat.CATEGORY_LABELS.get(_k, _k),
+            "chains": _v["chains"], "amount": round(_v["amount"], 2),
+            "by_rep": _v["reps"], "examples": _v["examples"],
+            "detail": (f"{_v['chains']} {icat.CATEGORY_LABELS.get(_k, _k).lower()} activation(s) did NOT "
+                       f"pay a multi-month installment (${_v['amount']:,.2f} not paid) because "
+                       f"'{icat.CATEGORY_LABELS.get(_k, _k)}' is unchecked under Plan Installments → "
+                       f"Qualifying categories. Tick it to include them again.")})
+    if n_cat_unknown:
+        warnings.append({
+            "type": "category_unknown_summary", "chains": n_cat_unknown,
+            "paid": bool(icat.normalize_qualification(
+                {k: v for k, v in org_qual.items() if k in icat.CATEGORY_KEYS}).get("unknown", True)),
+            "detail": (f"{n_cat_unknown} activation(s) could not be classified into a device category. "
+                       f"They were treated per the 'Could not be classified' switch. Add a rule under "
+                       f"Plan Installments → Qualifying categories so they stop being guesses.")})
+
     _persisted = None
     if persist:
         _persisted = _persist(client, org_id, pay_period, ledger)
@@ -1361,7 +1702,19 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             # percentage of a device price) or ambiguous.
             "chain_guard": {"deduped": n_dedup, "mrc_unresolved": n_mrc_unresolved,
                             "mrc_ambiguous": n_mrc_ambiguous, "mrc_basis": mrc_basis,
+                            "hardware_guard": bool(hw_guard.get("enabled")),
                             "ledger_rows_dropped": _persisted.get("dropped", 0) if _persisted else 0},
+            # DEVICE-CATEGORY QUALIFICATION (mig 245) — kept OUT of `totals` so that dict stays
+            # byte-identical for every existing consumer/harness.
+            "category_guard": {"excluded_chains": n_cat_excluded,
+                               "excluded_amount": round(cat_excluded_amt, 2),
+                               "unknown_chains": n_cat_unknown,
+                               "by_category": cat_counts, "excluded": cat_excluded,
+                               "config_source": sorted(cat_sources),
+                               "qualification": {k: bool(v) for k, v in
+                                                 icat.normalize_qualification(
+                                                     {k2: v2 for k2, v2 in org_qual.items()
+                                                      if k2 in icat.CATEGORY_KEYS}).items()}},
             "warnings": warnings,
             "note": None}
 

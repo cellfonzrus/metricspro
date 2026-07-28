@@ -5632,7 +5632,7 @@ def _commission_org_config(client, org_id):
     byte-identical), installment_mrc_basis 'plan_line' (the multi-month MRC comes from the activation's
     rate-plan line — the engine's own default, so the read degrading changes nothing)."""
     default = {"pay_disabled": False, "residual_visibility": "all", "plan_ct_resolution": "raw",
-               "installment_mrc_basis": "plan_line"}
+               "installment_mrc_basis": "plan_line", "installment_mrc_hardware_guard": True}
     try:
         rows = (client.schema('commcalc').table('commission_org_config').select('*')
                 .eq('org_id', org_id).limit(1).execute().data) or []
@@ -5643,10 +5643,14 @@ def _commission_org_config(client, org_id):
     r = rows[0]
     _ctr = str(r.get("plan_ct_resolution") or "raw").strip().lower()
     _mb = str(r.get("installment_mrc_basis") or "plan_line").strip().lower()
+    _hg = r.get("installment_mrc_hardware_guard")
     return {"pay_disabled": bool(r.get("pay_disabled")),
             "residual_visibility": (r.get("residual_visibility") or "all").strip().lower(),
             "plan_ct_resolution": _ctr if _ctr in ("raw", "mapped") else "raw",
-            "installment_mrc_basis": _mb if _mb in ("plan_line", "trigger_line") else "plan_line"}
+            "installment_mrc_basis": _mb if _mb in ("plan_line", "trigger_line") else "plan_line",
+            # mig 246 — TRUE unless the tenant explicitly turned the structural device-price guard off
+            # (the column is absent before the migration → the engine's own default, TRUE).
+            "installment_mrc_hardware_guard": True if _hg is None else bool(_hg)}
 
 
 def _can_view_carrier_residual(authorization, org_id):
@@ -5730,7 +5734,7 @@ def _has_any_pay_source(client, org_id, period):
     return False
 
 
-def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost'):
+def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', notices=None):
     """ADDITIVE layer of the new configurable payout engines on top of the standard (Boost) calc.
 
     BOOST-SAFE: with no commcalc.payout_schedule and no commcalc.commission_plan, the installment + plan
@@ -5763,6 +5767,45 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost'):
             for rep, amt in (sr.get("by_rep") or {}).items():
                 if rep:
                     sale_inst_by_rep[str(rep).strip().upper()] = safe_float(amt)
+            # OPERATOR-VISIBLE NOTICES (mig 245/247): the owner reads these after a Run Calculation.
+            # Anything the multi-month engine chose NOT to pay — an excluded device category, an
+            # activation it could not classify, an activation with no identifiable rate-plan line, a
+            # device paid twice in one month — is stated here with its dollars. Never a silent zero.
+            if notices is not None:
+                _cg = sr.get("category_guard") or {}
+                for _k, _v in sorted((_cg.get("excluded") or {}).items()):
+                    notices.append({
+                        "type": "category_excluded", "severity": "info", "category": _k,
+                        "chains": _v.get("chains"), "amount": _v.get("amount"),
+                        "message": (f"{_v.get('chains')} {_k.replace('_', ' ')} activation(s) did not pay a "
+                                    f"multi-month installment (${safe_float(_v.get('amount')):,.2f}) — "
+                                    f"that category is unchecked under Plan Installments → Qualifying "
+                                    f"device categories."),
+                        "by_rep": _v.get("reps") or {}})
+                if _cg.get("unknown_chains"):
+                    notices.append({
+                        "type": "category_unknown", "severity": "warning",
+                        "chains": _cg.get("unknown_chains"),
+                        "message": (f"{_cg.get('unknown_chains')} multi-month activation(s) could not be "
+                                    f"classified into a device category — add a rule under Plan "
+                                    f"Installments → Qualifying device categories.")})
+                _ch = sr.get("chain_guard") or {}
+                if _ch.get("mrc_unresolved"):
+                    notices.append({
+                        "type": "mrc_unresolved", "severity": "warning",
+                        "chains": _ch.get("mrc_unresolved"),
+                        "message": (f"{_ch.get('mrc_unresolved')} multi-month activation(s) had no "
+                                    f"identifiable rate-plan line, so their %-of-MRC installment paid $0 "
+                                    f"instead of a percentage of a device price. Confirm the plan under "
+                                    f"Plan Installments → MRC mapping.")})
+                _dups = [w for w in (sr.get("warnings") or []) if w.get("type") == "duplicate_device_month"]
+                if _dups:
+                    notices.append({
+                        "type": "duplicate_device_month", "severity": "warning", "chains": len(_dups),
+                        "imeis": [d.get("imei") for d in _dups[:8]],
+                        "message": (f"{len(_dups)} device(s) received TWO installments for the same month "
+                                    f"(e.g. {', '.join([str(d.get('imei')) for d in _dups[:3]])}). Check "
+                                    f"Plan Installments for a duplicate active schedule.")})
         except Exception:
             sale_inst_by_rep = {}
         plan_by_rep = {}
@@ -5903,6 +5946,9 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
     # read below (including commission_engine's) comes from the database.
     _invalidate_accessory_config(org_id)
     save_errors = []
+    # Operator-visible NOTICES for this run (mig 245/247) — what the multi-month engine deliberately did
+    # NOT pay, with the dollars. Surfaced on the CommCalc dashboard after a successful calculation.
+    calc_notices = []
     
     try:
         # Load all data
@@ -6007,7 +6053,7 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
         # Boost-safe: with no schedule/plan configured this returns comms byte-identical (see helper).
         # Applied BEFORE the delete so the zero-wipe guard below inspects the FINAL rows while the
         # existing snapshot is still intact.
-        comms = _apply_new_engines(client, org_id, period, comms, carrier_mode)
+        comms = _apply_new_engines(client, org_id, period, comms, carrier_mode, notices=calc_notices)
 
         # R1 UNCONFIGURED-TENANT REFUSAL (commission-0 §7b decision 7, doctrine): a non-Boost tenant with
         # REAL sales but NOTHING configured to pay from must not silently produce a $0 (or accidental)
@@ -6222,6 +6268,17 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
             print(f"WARN calc warnings skipped for org {org_id} period {period}: {e}")
         client.schema('commcalc').table('calc_status').upsert(
             _status, on_conflict='org_id,period').execute()
+
+        # OPERATOR NOTICES — written in their OWN upsert on purpose (mig 247). A column that does not
+        # exist yet fails the whole statement, and folding it into the stamp above would take the calc's
+        # completion status down with it (the mig-241/242 lesson). Best-effort, never raises.
+        try:
+            client.schema('commcalc').table('calc_status').upsert({
+                'org_id': org_id, 'period': _canon_period(period),
+                'calc_notices': calc_notices or None,
+            }, on_conflict='org_id,period').execute()
+        except Exception:
+            pass
 
     except Exception as e:
         try:
@@ -6762,6 +6819,12 @@ async def put_commission_settings(body: dict, authorization: str = Header(defaul
     if "installment_mrc_basis" in body:
         mb = (body.get("installment_mrc_basis") or "plan_line").strip().lower()
         row["installment_mrc_basis"] = mb if mb in ("plan_line", "trigger_line") else "plan_line"
+    # mig 246 — MONEY: with the guard ON (default) a DEVICE line (IMEI / a configured hardware
+    # department) can never donate its own price as a multi-month MRC — the 2026-07-27 tablet bug
+    # ($14.00 = 5% of a $279.99 promo price). Turning it OFF restores that behaviour and can INCREASE
+    # pay on the next Calculate. Same admin gate as the rest of this endpoint.
+    if "installment_mrc_hardware_guard" in body:
+        row["installment_mrc_hardware_guard"] = bool(body.get("installment_mrc_hardware_guard"))
     try:
         client = sb()
         client.schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
@@ -6831,7 +6894,25 @@ def _installment_head(body, org_id):
         "eligible_sale_periods": [str(pp).strip() for pp in (body.get("eligible_sale_periods") or []) if str(pp).strip()],
         "is_active": bool(body.get("is_active", True)),
         "notes": body.get("notes"),
+        # mig 245 — per-schedule device-category include/exclude. None/absent = inherit the org
+        # setting (which itself falls back to the engine defaults: everything but TABLET + SIM).
+        "qualifying_categories": _qualifying_categories(body.get("qualifying_categories")),
     }
+
+
+def _qualifying_categories(v):
+    """Normalize a per-schedule qualifying-categories payload to {key: bool} or None (= inherit).
+    Accepts a dict or a list of included keys; unknown keys are dropped (mig 245)."""
+    from app.modules.commcalc.installment_category import CATEGORY_KEYS
+    if v is None or v == "" or v == [] or v == {}:
+        return None
+    if isinstance(v, (list, tuple, set)):
+        want = {str(x).strip().lower() for x in v}
+        return {k: (k in want) for k in CATEGORY_KEYS}
+    if isinstance(v, dict):
+        out = {k: bool(v[k]) for k in CATEGORY_KEYS if k in v}
+        return out or None
+    return None
 
 
 def _installment_lines(body, sid, org_id):
@@ -6867,9 +6948,14 @@ def _write_installment_schedule(client, org_id, body, sid, changed_by):
     try:
         new_sid = _do(head)
     except Exception:
-        # mig 210 not applied → m1_gate / updated_by columns absent. Retry mig-201-compatible.
-        h2 = {k: v for k, v in head.items() if k not in ("m1_gate", "updated_by")}
-        new_sid = _do(h2)
+        # mig 210/245 not applied → m1_gate / updated_by / qualifying_categories columns absent.
+        # Retry mig-201-compatible (the engine still applies the category defaults from code).
+        h2 = {k: v for k, v in head.items()
+              if k not in ("m1_gate", "updated_by", "qualifying_categories")}
+        try:
+            new_sid = _do(h2)
+        except Exception:
+            new_sid = _do({k: v for k, v in head.items() if k != "qualifying_categories"})
     if not new_sid:
         raise HTTPException(500, "could not save installment schedule header")
 
@@ -6925,45 +7011,6 @@ async def save_plan_installment(body: dict, authorization: str = Header(default=
     except Exception as e:
         raise HTTPException(500, f"could not save installment schedule (is migration 201 applied?): {e}")
     return {"id": sid, "saved": True}
-
-
-@router.put("/plan-installments/{sid}")
-async def update_plan_installment(sid: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """EDIT an existing sale-triggered schedule + its month lines (money config → admin-only). Same body
-    shape as POST (minus id). RECOMPUTE SEMANTICS: the edit takes effect from the NEXT POST /calculate
-    onward — it does NOT retroactively rewrite pay. sale_installment_ledger rows already written for PAST
-    pay periods are IMMUTABLE unless the operator explicitly re-runs POST /calculate for that period (and
-    even then, a paid month only re-derives from the edited schedule if that period is recomputed). Every
-    edit is captured in commcalc.plan_installment_schedule_audit (before/after + who/when)."""
-    require_org(org_id)
-    _require_commission_admin(authorization, org_id)
-    if not body.get("plan_id"):
-        raise HTTPException(400, "plan_id is required.")
-    client = sb()
-    exists = _installment_snapshot(client, org_id, sid)
-    if exists is None:
-        raise HTTPException(404, "installment schedule not found for this tenant (or migration 201 not applied).")
-    try:
-        _write_installment_schedule(client, org_id, body, sid, _caller_uid(authorization))
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, f"could not update installment schedule: {e}")
-    return {"id": sid, "saved": True, "updated": True}
-
-
-@router.delete("/plan-installments/{sid}")
-async def delete_plan_installment(sid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    require_org(org_id)
-    _require_commission_admin(authorization, org_id)
-    client = sb()
-    before = _installment_snapshot(client, org_id, sid)
-    try:
-        client.schema('commcalc').table('plan_installment_schedule').delete().eq('id', sid).eq('org_id', org_id).execute()
-    except Exception as e:
-        raise HTTPException(500, f"delete failed: {e}")
-    _installment_audit(client, org_id, sid, "delete", before, None, _caller_uid(authorization))
-    return {"deleted": True}
 
 
 @router.get("/plan-installments/{sid}/audit")
@@ -7135,6 +7182,267 @@ async def put_plan_line_matcher(body: dict, authorization: str = Header(default=
     except Exception as e:
         raise HTTPException(500, f"could not save the rate-plan line matcher (is migration 233 applied?): {e}")
     return {"saved": True, "is_default": matcher is None}
+
+
+# ── DEVICE-CATEGORY QUALIFICATION (mig 245): which activations qualify for multi-month pay ────────
+@router.get("/plan-installments/category-qualification")
+async def get_category_qualification(period: str = "", org_id: str = ORG_ID):
+    """The tenant's multi-month device-category include/exclude set + the classification rules behind it.
+
+    Returns the ORG-level qualification (falling back to the engine defaults — everything ON except
+    TABLET and SIM), each schedule's own override, the tenant's rules, the BUILT-IN rules (read-only, so
+    the operator can see what is deciding), and the real Department/Category/product vocabulary of the
+    period's own sales for pick-don't-type editing (§3b). Read-only."""
+    require_org(org_id)
+    from app.modules.commcalc import installment_category as icat
+    from collections import Counter
+    client = sb()
+    stored, ready = None, True
+    try:
+        rows = (client.schema('commcalc').table('commission_org_config')
+                .select('installment_category_qualification')
+                .eq('org_id', org_id).limit(1).execute().data) or []
+        if rows:
+            stored = rows[0].get('installment_category_qualification')
+    except Exception:
+        ready = False          # migration 245 not applied — the engine still uses the code defaults
+    qual = icat.normalize_qualification(stored)
+    tenant_rules, rules_ready = [], True
+    try:
+        tenant_rules = (client.schema('commcalc').table('installment_category_rule').select('*')
+                        .eq('org_id', org_id).order('priority').limit(2000).execute().data) or []
+    except Exception:
+        rules_ready = False
+    scheds = []
+    try:
+        scheds = (client.schema('commcalc').table('plan_installment_schedule')
+                  .select('*').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        scheds = []
+    depts, cats, prods = [], [], []
+    try:
+        q = (client.schema('commcalc').table('raw_sales').select('department,category,product_desc')
+             .eq('org_id', org_id))
+        if period:
+            q = q.in_('period', _pvariants(period))
+        rs = q.limit(50000).execute().data or []
+        depts = [d for d, _ in Counter(str(r.get('department') or '').strip()
+                                       for r in rs if str(r.get('department') or '').strip()).most_common()]
+        cats = [c for c, _ in Counter(str(r.get('category') or '').strip()
+                                      for r in rs if str(r.get('category') or '').strip()).most_common()]
+        prods = [p for p, _ in Counter(str(r.get('product_desc') or '').strip()
+                                       for r in rs if str(r.get('product_desc') or '').strip()).most_common(400)]
+    except Exception:
+        pass
+    return {
+        "qualification": {k: bool(qual.get(k)) for k in icat.CATEGORY_KEYS},
+        "is_default": stored is None,
+        "defaults": dict(icat.DEFAULT_QUALIFICATION),
+        "categories": [{"key": k, "label": icat.CATEGORY_LABELS[k]} for k in icat.CATEGORY_KEYS],
+        "ready": ready, "rules_ready": rules_ready,
+        "rules": tenant_rules,
+        "builtin_rules": icat.DEFAULT_CATEGORY_RULES,
+        "match_fields": list(icat.MATCH_FIELDS), "match_ops": list(icat.MATCH_OPS),
+        "schedules": [{"id": s.get("id"), "name": s.get("name"), "plan_id": s.get("plan_id"),
+                       "qualifying_categories": s.get("qualifying_categories")} for s in scheds],
+        "departments": depts, "categories_seen": cats, "products": prods,
+    }
+
+
+@router.put("/plan-installments/category-qualification")
+async def put_category_qualification(body: dict, authorization: str = Header(default=""),
+                                     org_id: str = ORG_ID):
+    """Admin-only. Save the tenant's multi-month device-category include/exclude set (mig 245).
+    body: {qualification:{phone:true,tablet:false,...}} — OR {reset:true} to revert to the engine
+    defaults (stored NULL -> tablet + SIM excluded).
+
+    MONEY: unticking a category stops every multi-month chain of that category from paying on the NEXT
+    Run Calculation (nothing moves now). Ticking one back on resumes it. Excluded chains are always
+    reported in the Calculate/preview warnings — never a silent zero."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    from app.modules.commcalc import installment_category as icat
+    qual = None
+    if not body.get("reset"):
+        q = body.get("qualification") if isinstance(body.get("qualification"), (dict, list)) else body
+        qual = {k: bool(v) for k, v in icat.normalize_qualification(q).items() if k in icat.CATEGORY_KEYS}
+    row = {"org_id": org_id, "installment_category_qualification": qual,
+           "updated_by": _caller_uid(authorization), "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    try:
+        sb().schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not save qualifying categories (is migration 245 applied?): {e}")
+    return {"saved": True, "is_default": qual is None,
+            "qualification": qual or dict(icat.DEFAULT_QUALIFICATION)}
+
+
+@router.post("/plan-installments/category-rules")
+async def save_category_rule(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Admin-only. Add/replace ONE tenant classification rule (mig 245).
+    body: {id?, category_key, match_field, match_op, match_value, priority?, is_active?, note?}.
+    Tenant rules are evaluated BEFORE the built-ins; the built-ins remain as the fallback tail."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    from app.modules.commcalc import installment_category as icat
+    ck = str(body.get("category_key") or "").strip().lower()
+    if ck not in icat.CATEGORY_KEYS or ck == "unknown":
+        raise HTTPException(400, "category_key must be one of "
+                                 f"{[k for k in icat.CATEGORY_KEYS if k != 'unknown']}")
+    mf = str(body.get("match_field") or "product_desc").strip().lower()
+    mo = str(body.get("match_op") or "contains").strip().lower()
+    if mf not in icat.MATCH_FIELDS:
+        raise HTTPException(400, f"match_field must be one of {list(icat.MATCH_FIELDS)}")
+    if mo not in icat.MATCH_OPS:
+        raise HTTPException(400, f"match_op must be one of {list(icat.MATCH_OPS)}")
+    mv = str(body.get("match_value") or "").strip()
+    if not mv:
+        raise HTTPException(400, "match_value is required (pick a real Department / Category / product value).")
+    row = {"org_id": org_id, "category_key": ck, "match_field": mf, "match_op": mo, "match_value": mv,
+           "priority": int(body.get("priority") or 50), "is_active": bool(body.get("is_active", True)),
+           "note": body.get("note"), "updated_by": _caller_uid(authorization),
+           "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    client = sb()
+    try:
+        if body.get("id"):
+            (client.schema('commcalc').table('installment_category_rule').update(row)
+             .eq('id', body["id"]).eq('org_id', org_id).execute())
+            return {"saved": True, "id": body["id"]}
+        r = client.schema('commcalc').table('installment_category_rule').insert(row).execute()
+        return {"saved": True, "id": (r.data or [{}])[0].get("id")}
+    except Exception as e:
+        raise HTTPException(500, f"could not save the category rule (is migration 245 applied?): {e}")
+
+
+@router.delete("/plan-installments/category-rules/{rid}")
+async def delete_category_rule(rid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Admin-only. Delete ONE tenant classification rule (the built-in rules cannot be deleted — they are
+    the fallback tail; override one with a higher-priority tenant rule instead)."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    try:
+        (sb().schema('commcalc').table('installment_category_rule').delete()
+         .eq('id', rid).eq('org_id', org_id).execute())
+    except Exception as e:
+        raise HTTPException(500, f"delete failed: {e}")
+    return {"deleted": True}
+
+
+@router.get("/plan-installments/category-impact/{period}")
+async def category_impact(period: str, org_id: str = ORG_ID):
+    """READ-ONLY BLAST RADIUS for a pay period: what the current include/exclude set + the device-price
+    MRC guard change, per rep, WITHOUT recomputing anything.
+
+    Runs the installment engine THREE times in memory, so the two moving parts can be told apart:
+      B = every category included AND the device-price guard off  (the pre-2026-07-27 behaviour),
+      C = every category included, guard ON                        (B + only the MRC corrections),
+      A = the settings exactly as they stand                       (what the next Run Calculation pays).
+    Per rep: before (B) → mrc_corrected (C) → now (A), with both deltas. Plus the per-category
+    breakdown, the excluded chains with examples, and every activation whose MRC moved off a device
+    price. Writes nothing; never triggers a calculate."""
+    require_org(org_id)
+    from app.modules.commcalc import installment_category as icat
+    client = sb()
+    try:
+        _all = {k: True for k in icat.CATEGORY_KEYS}
+        cur = sale_installment_engine.compute_sale_installments(client, org_id, period, persist=False)
+        base = sale_installment_engine.compute_sale_installments(
+            client, org_id, period, persist=False,
+            _config_override={"hardware_guard": False, "qualification": _all})
+        mrconly = sale_installment_engine.compute_sale_installments(
+            client, org_id, period, persist=False,
+            _config_override={"hardware_guard": True, "qualification": _all})
+    except Exception as e:
+        raise HTTPException(500, f"category impact failed: {type(e).__name__}: {e}")
+    reps = sorted(set(cur.get("by_rep") or {}) | set(base.get("by_rep") or {})
+                  | set(mrconly.get("by_rep") or {}))
+    rows = []
+    for r in reps:
+        a = safe_float((cur.get("by_rep") or {}).get(r))
+        b = safe_float((base.get("by_rep") or {}).get(r))
+        c = safe_float((mrconly.get("by_rep") or {}).get(r))
+        rows.append({"rep": r, "now": round(a, 2), "before": round(b, 2),
+                     "mrc_corrected": round(c, 2),
+                     "delta_mrc": round(c - b, 2), "delta_category": round(a - c, 2),
+                     "delta": round(a - b, 2)})
+    rows.sort(key=lambda x: x["delta"])
+
+    def _key(x):
+        return (str(x.get("trans_id") or ""), str(x.get("mdn") or ""), int(x.get("month_index") or 0))
+
+    base_by = {_key(x): x for x in (base.get("ledger") or [])}
+    mrc_moves = []
+    # the MRC comparison uses run C (all categories included), so a correction is still REPORTED for an
+    # activation that the category switches then exclude — otherwise the tablet fix would be invisible.
+    for x in (mrconly.get("ledger") or []):
+        y = base_by.get(_key(x))
+        if not y:
+            continue
+        if round(safe_float(x.get("mrc_at_pay")), 2) != round(safe_float(y.get("mrc_at_pay")), 2):
+            mrc_moves.append({"rep": x.get("epay_salesperson"), "trans_id": x.get("trans_id"),
+                              "imei": x.get("serial_1"), "month_index": x.get("month_index"),
+                              "label": x.get("display_label"),
+                              "mrc_now": round(safe_float(x.get("mrc_at_pay")), 2),
+                              "mrc_before": round(safe_float(y.get("mrc_at_pay")), 2),
+                              "amount_now": round(safe_float(x.get("amount")), 2),
+                              "amount_before": round(safe_float(y.get("amount")), 2),
+                              "category": x.get("device_category"),
+                              "still_paid": bool(next((True for z in (cur.get("ledger") or [])
+                                                       if _key(z) == _key(x)), False))})
+    mrc_moves.sort(key=lambda m: (m["amount_now"] - m["amount_before"]))
+    return {"period": period, "org_id": org_id,
+            "totals": {"now": round(safe_float((cur.get("totals") or {}).get("amount")), 2),
+                       "before": round(safe_float((base.get("totals") or {}).get("amount")), 2),
+                       "mrc_corrected": round(safe_float((mrconly.get("totals") or {}).get("amount")), 2),
+                       "delta": round(safe_float((cur.get("totals") or {}).get("amount"))
+                                      - safe_float((base.get("totals") or {}).get("amount")), 2)},
+            "by_rep": rows, "category_guard": cur.get("category_guard"),
+            "warnings": cur.get("warnings"), "chain_guard": cur.get("chain_guard"),
+            "mrc_moves": mrc_moves[:200], "mrc_moves_count": len(mrc_moves)}
+
+
+# ── PARAMETRIZED schedule EDIT/DELETE — REGISTERED LAST ON PURPOSE (routing bug fixed 2026-07-27).
+# FastAPI matches routes in REGISTRATION ORDER, so `PUT /plan-installments/{sid}` declared before the
+# literal `/plan-installments/activation-matcher` and `/plan-installments/plan-line-matcher` SWALLOWED
+# them: a save of either matcher bound sid="activation-matcher" / "plan-line-matcher" and 400'd with
+# "plan_id is required" — i.e. the mig-210 and mig-233 matcher editors could never be saved from the
+# UI. Every literal /plan-installments/... route must stay ABOVE this block.
+@router.put("/plan-installments/{sid}")
+async def update_plan_installment(sid: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """EDIT an existing sale-triggered schedule + its month lines (money config → admin-only). Same body
+    shape as POST (minus id). RECOMPUTE SEMANTICS: the edit takes effect from the NEXT POST /calculate
+    onward — it does NOT retroactively rewrite pay. sale_installment_ledger rows already written for PAST
+    pay periods are IMMUTABLE unless the operator explicitly re-runs POST /calculate for that period (and
+    even then, a paid month only re-derives from the edited schedule if that period is recomputed). Every
+    edit is captured in commcalc.plan_installment_schedule_audit (before/after + who/when)."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    if not body.get("plan_id"):
+        raise HTTPException(400, "plan_id is required.")
+    client = sb()
+    exists = _installment_snapshot(client, org_id, sid)
+    if exists is None:
+        raise HTTPException(404, "installment schedule not found for this tenant (or migration 201 not applied).")
+    try:
+        _write_installment_schedule(client, org_id, body, sid, _caller_uid(authorization))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"could not update installment schedule: {e}")
+    return {"id": sid, "saved": True, "updated": True}
+
+
+@router.delete("/plan-installments/{sid}")
+async def delete_plan_installment(sid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    client = sb()
+    before = _installment_snapshot(client, org_id, sid)
+    try:
+        client.schema('commcalc').table('plan_installment_schedule').delete().eq('id', sid).eq('org_id', org_id).execute()
+    except Exception as e:
+        raise HTTPException(500, f"delete failed: {e}")
+    _installment_audit(client, org_id, sid, "delete", before, None, _caller_uid(authorization))
+    return {"deleted": True}
 
 
 # ── Classification-first MRC MAPPING (§7b decision 1): classify imported plan lines + prefill $ MRC ──

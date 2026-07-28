@@ -20,6 +20,14 @@ type Sched = {
   gate_mode: string; gate_from_month: number; m1_gate: string; clawback_enabled: boolean
   effective_from?: string; effective_to?: string; eligible_sale_periods?: string[]
   is_active: boolean; lines?: Line[]
+  qualifying_categories?: Record<string, boolean> | null   // mig 245 — null = inherit the tenant setting
+}
+type CatCfg = {
+  qualification: Record<string, boolean>; is_default: boolean; defaults: Record<string, boolean>
+  categories: { key: string; label: string }[]; ready: boolean; rules_ready: boolean
+  rules: any[]; builtin_rules: any[]; match_fields: string[]; match_ops: string[]
+  schedules: { id: string; name?: string; qualifying_categories?: any }[]
+  departments: string[]; categories_seen: string[]; products: string[]
 }
 type Matcher = { departments: string[]; categories: string[]; product_keywords: string[]; value_field: string; min_amount: any }
 
@@ -46,6 +54,7 @@ const blankSched = (): Sched => ({
   trigger_match_value: '', gate_mode: 'paid_residual', gate_from_month: 1, m1_gate: 'inherit', clawback_enabled: false,
   effective_from: '', effective_to: '', eligible_sale_periods: [], is_active: true,
   lines: [blankLine(1), blankLine(2), blankLine(3)],
+  qualifying_categories: null,
 })
 
 // pick-don't-type chip editor: add from a dropdown of EXISTING values (RULE THREE), or a free keyword box.
@@ -101,6 +110,11 @@ export default function PlanInstallmentsPage() {
   const [bulkCat, setBulkCat] = useState('')                       // one category → all selected
   const [conflicts, setConflicts] = useState<any[]>([])            // cross-menu guard result
   const [preview, setPreview] = useState<any>(null)
+  const [catCfg, setCatCfg] = useState<CatCfg | null>(null)          // mig 245 qualifying categories
+  const [catDraft, setCatDraft] = useState<Record<string, boolean>>({})
+  const [ruleDraft, setRuleDraft] = useState<any>({ category_key: 'tablet', match_field: 'product_desc', match_op: 'word', match_value: '', priority: 50 })
+  const [showBuiltins, setShowBuiltins] = useState(false)
+  const [impact, setImpact] = useState<any>(null)
   const [audit, setAudit] = useState<{ sid: string; rows: any[] } | null>(null)
   const [showAdvMatcher, setShowAdvMatcher] = useState(false)
   const [msg, setMsg] = useState('')
@@ -111,12 +125,13 @@ export default function PlanInstallmentsPage() {
 
   async function load() {
     try {
-      const [pl, sc, st, mt, plm] = await Promise.all([
+      const [pl, sc, st, mt, plm, cq] = await Promise.all([
         api(`/api/v1/commcalc/commission-plans?org_id=${ORG_ID}`),
         api(`/api/v1/commcalc/plan-installments?org_id=${ORG_ID}`),
         api(`/api/v1/commcalc/commission-settings?org_id=${ORG_ID}`),
         api(`/api/v1/commcalc/plan-installments/activation-matcher?org_id=${ORG_ID}`),
         api(`/api/v1/commcalc/plan-installments/plan-line-matcher?org_id=${ORG_ID}`),
+        api(`/api/v1/commcalc/plan-installments/category-qualification?org_id=${ORG_ID}&period=${encodeURIComponent(period || '')}`).catch(() => null),
       ])
       setPlans(pl?.plans || [])
       setScheds(sc?.schedules || [])
@@ -124,6 +139,7 @@ export default function PlanInstallmentsPage() {
       setSettings(st || { pay_disabled: false, residual_visibility: 'all' })
       if (mt?.matcher) { setMatcher(mt.matcher); setMatcherOpts({ departments: mt.departments || [], categories: mt.categories || [], value_fields: mt.value_fields || ['ext_price', 'gp'], is_default: !!mt.is_default }) }
       if (plm?.matcher) { setPlanLine(plm.matcher); setPlanLineOpts({ departments: plm.departments || [], categories: plm.categories || [], is_default: !!plm.is_default, ready: plm.ready !== false }) }
+      if (cq?.qualification) { setCatCfg(cq); setCatDraft({ ...cq.qualification }) }
     } catch (e: any) { setMsg(e.message) }
     // read-only; never blocks the page (the picker degrades to the engine's field list + free text)
     try {
@@ -222,6 +238,43 @@ export default function PlanInstallmentsPage() {
       setMsg(reset ? 'Reset to the default rate-plan line matcher. Run Calculation to apply it.'
                    : 'Rate-plan line matcher saved. Nothing changes until you Run Calculation.')
       load()
+    } catch (e: any) { setMsg(e.message) }
+  }
+
+  // MONEY CONFIG (mig 245): which device categories earn a multi-month installment. Saving changes
+  // nothing until the next Run Calculation — and every excluded activation is reported in the preview
+  // warnings, so an unticked box can never turn into a silent zero.
+  async function saveCategories(reset = false) {
+    setMsg('')
+    try {
+      const body = reset ? { reset: true } : { qualification: catDraft }
+      await api(`/api/v1/commcalc/plan-installments/category-qualification?org_id=${ORG_ID}`, { method: 'PUT', body: JSON.stringify(body) })
+      setMsg(reset ? 'Reset to the defaults (tablets + SIM excluded). Applies on the next Run Calculation.'
+        : 'Qualifying categories saved. Applies on the next Run Calculation — run the impact check below first.')
+      load()
+    } catch (e: any) { setMsg(e.message) }
+  }
+
+  async function saveRule() {
+    setMsg('')
+    if (!ruleDraft.match_value) { setMsg('Pick a value for the rule (Department / Category / product wording).'); return }
+    try {
+      await api(`/api/v1/commcalc/plan-installments/category-rules?org_id=${ORG_ID}`, { method: 'POST', body: JSON.stringify(ruleDraft) })
+      setRuleDraft({ ...ruleDraft, match_value: '' })
+      load()
+    } catch (e: any) { setMsg(e.message) }
+  }
+
+  async function delRule(id: string) {
+    try { await api(`/api/v1/commcalc/plan-installments/category-rules/${id}?org_id=${ORG_ID}`, { method: 'DELETE' }); load() }
+    catch (e: any) { setMsg(e.message) }
+  }
+
+  async function runImpact() {
+    setMsg('')
+    try {
+      const r = await api(`/api/v1/commcalc/plan-installments/category-impact/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+      setImpact(r)
     } catch (e: any) { setMsg(e.message) }
   }
 
@@ -330,6 +383,18 @@ export default function PlanInstallmentsPage() {
           <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}> Commission Plans → Plan coverage</a> first.
         </p>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6 }}>
+          <input type="checkbox" checked={settings.installment_mrc_hardware_guard !== false}
+            onChange={e => setSettings({ ...settings, installment_mrc_hardware_guard: e.target.checked })} />
+          A <b>device line can never donate its own price</b> as a monthly charge (recommended)
+        </label>
+        <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 12px', maxWidth: 760 }}>
+          A handset/tablet line carries an IMEI and a PRICE; the rate-plan line carries the mobile number
+          and the MONTHLY charge. With this on, a promo description like
+          <i> "Galaxy Tab … Promo $279.99, Min $50 tablet plan"</i> can no longer be paid as if $279.99
+          were the monthly charge (that paid <b>5% × $279.99 = $14.00</b> per tablet in July 2026). Turning
+          it off restores the old behaviour and <b>increases pay</b> on the next Run Calculation.
+        </p>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6 }}>
           Multi-month %-of-MRC is paid on:
           <select style={sel} value={settings.installment_mrc_basis || 'plan_line'}
             onChange={e => setSettings({ ...settings, installment_mrc_basis: e.target.value })}>
@@ -424,6 +489,176 @@ export default function PlanInstallmentsPage() {
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn btn-primary" onClick={() => saveMatcher(false)}>Save matcher</button>
           <button className="btn" onClick={() => saveMatcher(true)}>Reset to default</button>
+        </div>
+      </div>
+
+      {/* ── Qualifying device categories (mig 245, owner directive 2026-07-27) ─────────── */}
+      <div className="card" style={{ marginBottom: 20 }} id="categories">
+        <div style={{ fontWeight: 600, marginBottom: 6 }}>Qualifying device categories</div>
+        <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 12px', maxWidth: 820 }}>
+          Which activations earn a multi-month installment at all. Untick a category and those chains stop
+          paying from the <b>next Run Calculation</b> — nothing moves right now. Every excluded activation
+          is listed in the preview + Run-Calculation warnings with the dollars involved, so an unticked box
+          can never become a silent zero.
+        </p>
+        {catCfg && !catCfg.ready && (
+          <div style={{ marginBottom: 10, padding: '8px 10px', borderLeft: '3px solid var(--amber)', background: 'var(--surface2)', fontSize: 12 }}>
+            Migration 245 isn't applied yet, so these boxes can't be saved. The engine is already using the
+            defaults below (tablets + SIM excluded).
+          </div>
+        )}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, marginBottom: 10 }}>
+          {(catCfg?.categories || []).map(c => (
+            <label key={c.key} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}>
+              <input type="checkbox" checked={catDraft[c.key] !== false}
+                onChange={e => setCatDraft({ ...catDraft, [c.key]: e.target.checked })} />
+              {c.label}
+              {catCfg?.defaults?.[c.key] === false && <span className="badge" style={{ background: 'var(--surface2)', color: 'var(--text3)', fontSize: 10 }}>off by default</span>}
+            </label>
+          ))}
+        </div>
+        {catDraft.sim === false && (
+          <div style={{ marginBottom: 10, padding: '8px 10px', borderLeft: '3px solid var(--amber)', background: 'var(--surface2)', fontSize: 12, maxWidth: 820 }}>
+            <b>Heads up on SIM:</b> a BYOD activation whose receipt has only a SIM kit + a rate plan (the
+            customer brought their own phone) is classified as <b>SIM</b> — so unticking this also stops
+            those real activations from paying. A SIM sold <i>with</i> a handset stays a phone. Run the
+            impact check below to see exactly whose pay moves.
+          </div>
+        )}
+        {catDraft.unknown === false && (
+          <div style={{ marginBottom: 10, padding: '8px 10px', borderLeft: '3px solid var(--amber)', background: 'var(--surface2)', fontSize: 12, maxWidth: 820 }}>
+            With "Could not be classified" unticked, an activation we cannot categorise pays nothing. It is
+            still reported in the warnings — but consider adding a rule below instead.
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          <button className="btn btn-primary" onClick={() => saveCategories(false)}>Save categories</button>
+          <button className="btn" onClick={() => saveCategories(true)}>Reset to defaults</button>
+          <button className="btn" onClick={runImpact}>Check impact for {period}</button>
+          {catCfg?.is_default && <span style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>using the built-in defaults</span>}
+        </div>
+
+        {impact && (
+          <div style={{ marginBottom: 14, fontSize: 12 }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+              Impact for {impact.period} — read-only, nothing was recalculated
+            </div>
+            <div style={{ color: 'var(--text2)', marginBottom: 6 }}>
+              Before this release <b>{fmt(impact.totals?.before || 0)}</b> → with corrected monthly
+              charges <b>{fmt(impact.totals?.mrc_corrected || 0)}</b> → with your category ticks{' '}
+              <b>{fmt(impact.totals?.now || 0)}</b> · change{' '}
+              <b style={{ color: (impact.totals?.delta || 0) < 0 ? 'var(--red)' : 'var(--green)' }}>{fmt(impact.totals?.delta || 0)}</b>
+              {impact.mrc_moves_count ? ` · ${impact.mrc_moves_count} activation(s) had their monthly charge corrected` : ''}
+            </div>
+            <table>
+              <thead><tr><th>Rep</th><th style={{ textAlign: 'right' }}>Before</th><th style={{ textAlign: 'right' }}>Monthly-charge fix</th><th style={{ textAlign: 'right' }}>Category ticks</th><th style={{ textAlign: 'right' }}>Now</th><th style={{ textAlign: 'right' }}>Total change</th></tr></thead>
+              <tbody>
+                {(impact.by_rep || []).map((r: any) => (
+                  <tr key={r.rep}>
+                    <td>{r.rep}</td>
+                    <td style={{ textAlign: 'right' }}>{fmt(r.before)}</td>
+                    <td style={{ textAlign: 'right', color: r.delta_mrc < 0 ? 'var(--red)' : 'var(--text3)' }}>{fmt(r.delta_mrc)}</td>
+                    <td style={{ textAlign: 'right', color: r.delta_category < 0 ? 'var(--red)' : 'var(--text3)' }}>{fmt(r.delta_category)}</td>
+                    <td style={{ textAlign: 'right' }}>{fmt(r.now)}</td>
+                    <td style={{ textAlign: 'right', color: r.delta < 0 ? 'var(--red)' : r.delta > 0 ? 'var(--green)' : 'var(--text3)' }}>{fmt(r.delta)}</td>
+                  </tr>
+                ))}
+                {(impact.by_rep || []).length === 0 && <tr><td colSpan={6} style={{ color: 'var(--text3)' }}>No multi-month pay in this period.</td></tr>}
+              </tbody>
+            </table>
+            {(impact.mrc_moves || []).length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontWeight: 600, marginBottom: 3 }}>Corrected monthly charges</div>
+                {(impact.mrc_moves || []).slice(0, 12).map((m: any, i: number) => (
+                  <div key={i} style={{ color: 'var(--text2)' }}>
+                    {m.rep} · M{m.month_index} · {m.label || m.imei} — MRC {fmt(m.mrc_before)} → {fmt(m.mrc_now)}
+                    {' '}({fmt(m.amount_before)} → {fmt(m.amount_now)})
+                    {m.still_paid === false ? <span style={{ color: 'var(--text3)' }}> · excluded by category, so it pays $0</span> : null}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* how the category is decided — tenant rules first, built-ins as the tail */}
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 13 }}>How a sale's category is decided</div>
+          <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px', maxWidth: 820 }}>
+            Your rules are checked first, then the product catalog, then the POS Department / Category /
+            product wording, then the serial's own shape (an IMEI means a device, an ICCID means a SIM).
+            An activation's category is the <b>strongest</b> signal any of its lines carries, so a tablet
+            sold with a SIM kit is a tablet and a case never out-votes the handset.
+          </p>
+          {catCfg && !catCfg.rules_ready && (
+            <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--text3)' }}>
+              (Rule table not created yet — run migration 245. The built-in rules below are in force.)
+            </div>
+          )}
+          {(catCfg?.rules || []).length > 0 && (
+            <table style={{ marginBottom: 8 }}>
+              <thead><tr><th>Category</th><th>Field</th><th>Op</th><th>Value</th><th>Priority</th><th></th></tr></thead>
+              <tbody>
+                {(catCfg?.rules || []).map((r: any) => (
+                  <tr key={r.id}>
+                    <td>{r.category_key}</td><td>{r.match_field}</td><td>{r.match_op}</td>
+                    <td>{r.match_value}</td><td>{r.priority}</td>
+                    <td><button className="btn" onClick={() => delRule(r.id)}>Delete</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <label style={{ fontSize: 12 }}>Category
+              <select style={{ ...sel, width: 150 }} value={ruleDraft.category_key}
+                onChange={e => setRuleDraft({ ...ruleDraft, category_key: e.target.value })}>
+                {(catCfg?.categories || []).filter(c => c.key !== 'unknown').map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+              </select>
+            </label>
+            <label style={{ fontSize: 12 }}>Field
+              <select style={{ ...sel, width: 160 }} value={ruleDraft.match_field}
+                onChange={e => setRuleDraft({ ...ruleDraft, match_field: e.target.value, match_value: '' })}>
+                {(catCfg?.match_fields || []).map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+            </label>
+            <label style={{ fontSize: 12 }}>Op
+              <select style={{ ...sel, width: 110 }} value={ruleDraft.match_op}
+                onChange={e => setRuleDraft({ ...ruleDraft, match_op: e.target.value })}>
+                {(catCfg?.match_ops || []).map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </label>
+            <label style={{ fontSize: 12 }}>Value
+              {/* RULE THREE §3b — the values come from THIS tenant's own sale lines. */}
+              <EntityPicker width={260} allowCreate clearable
+                ariaLabel="Category rule value"
+                placeholder={ruleDraft.match_field === 'serial_kind' ? 'imei / iccid…' : 'pick a real value…'}
+                options={(ruleDraft.match_field === 'department' ? (catCfg?.departments || [])
+                  : ruleDraft.match_field === 'category' ? (catCfg?.categories_seen || [])
+                    : ruleDraft.match_field === 'serial_kind' ? ['imei', 'iccid']
+                      : (catCfg?.products || [])).map(v => ({ id: v, label: v }))}
+                value={ruleDraft.match_value || ''} createLabel={v => `Use “${v}”`}
+                onChange={v => setRuleDraft({ ...ruleDraft, match_value: v || '' })} />
+            </label>
+            <label style={{ fontSize: 12 }}>Priority
+              <input type="number" style={{ ...sel, width: 80 }} value={ruleDraft.priority}
+                onChange={e => setRuleDraft({ ...ruleDraft, priority: Number(e.target.value) || 50 })} />
+            </label>
+            <button className="btn btn-primary" onClick={saveRule}>Add rule</button>
+          </div>
+          <button className="btn" style={{ fontSize: 12, marginTop: 10 }} onClick={() => setShowBuiltins(s => !s)}>
+            {showBuiltins ? '▲ Hide' : '▼ Show'} the {(catCfg?.builtin_rules || []).length} built-in rules
+          </button>
+          {showBuiltins && (
+            <table style={{ marginTop: 8 }}>
+              <thead><tr><th>Category</th><th>Field</th><th>Op</th><th>Value</th><th>Priority</th></tr></thead>
+              <tbody>
+                {(catCfg?.builtin_rules || []).map((r: any, i: number) => (
+                  <tr key={i}><td>{r.category_key}</td><td>{r.match_field}</td><td>{r.match_op}</td><td>{r.match_value}</td><td>{r.priority}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 
@@ -552,6 +787,27 @@ export default function PlanInstallmentsPage() {
               <MatchEvidence opts={planOpts} rule={{ match_field: draft.trigger_match_field, match_op: draft.trigger_match_op, match_value: draft.trigger_match_value }} />
             </label>
           )}
+          <label style={{ fontSize: 12, gridColumn: '1 / -1' }}>Qualifying device categories for THIS schedule
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginTop: 4 }}>
+              <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 12 }}>
+                <input type="radio" checked={!draft.qualifying_categories}
+                  onChange={() => setDraft({ ...draft, qualifying_categories: null })} />
+                Use the tenant setting above
+              </label>
+              <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 12 }}>
+                <input type="radio" checked={!!draft.qualifying_categories}
+                  onChange={() => setDraft({ ...draft, qualifying_categories: { ...(catCfg?.qualification || {}) } })} />
+                Just for this schedule:
+              </label>
+              {draft.qualifying_categories && (catCfg?.categories || []).map(c => (
+                <label key={c.key} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12 }}>
+                  <input type="checkbox" checked={draft.qualifying_categories?.[c.key] !== false}
+                    onChange={e => setDraft({ ...draft, qualifying_categories: { ...(draft.qualifying_categories || {}), [c.key]: e.target.checked } })} />
+                  {c.label}
+                </label>
+              ))}
+            </div>
+          </label>
           <label style={{ fontSize: 12 }}>Effective from (cutover)<input type="date" style={{ ...sel, width: '100%' }} value={draft.effective_from} onChange={e => setDraft({ ...draft, effective_from: e.target.value })} /></label>
           <label style={{ fontSize: 12 }}>Effective to<input type="date" style={{ ...sel, width: '100%' }} value={draft.effective_to} onChange={e => setDraft({ ...draft, effective_to: e.target.value })} /></label>
           <label style={{ fontSize: 12 }}>Eligible sale months (overrides dates)
@@ -693,7 +949,18 @@ export default function PlanInstallmentsPage() {
               {anyActivation ? ` · activation-payment qualified ${(preview.ledger || []).filter((l: any) => l.gate_kind === 'activation_payment' && l.paid_gate_met).length}` : ''}
               {preview.note ? ` · ${preview.note}` : ''}
               {(preview.chain_guard?.deduped || 0) > 0 ? ` · ${preview.chain_guard.deduped} duplicate line(s) of an activation merged into their chain` : ''}
+              {(preview.category_guard?.excluded_chains || 0) > 0
+                ? ` · ${preview.category_guard.excluded_chains} activation(s) excluded by category (${fmt(preview.category_guard.excluded_amount || 0)} not paid)` : ''}
             </div>
+            {preview.category_guard && Object.keys(preview.category_guard.by_category || {}).length > 0 && (
+              <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--text2)' }}>
+                {Object.entries(preview.category_guard.by_category || {}).map(([k, v]: any) => (
+                  <span key={k} style={{ marginRight: 12 }}>
+                    {k}: {v.chains} · {fmt(v.amount || 0)} {v.qualifies ? '' : '(excluded)'}
+                  </span>
+                ))}
+              </div>
+            )}
             {(preview.warnings || []).length > 0 && (
               <div style={{ marginBottom: 10, padding: '8px 10px', borderLeft: '3px solid var(--amber)', background: 'var(--surface2)', fontSize: 12 }}>
                 <b>{preview.warnings.length} activation(s) need attention</b>
@@ -711,11 +978,14 @@ export default function PlanInstallmentsPage() {
               </div>
             )}
             <table>
-              <thead><tr><th>Rep</th><th>MDN</th><th>IMEI</th><th>Sale mo</th><th>Month</th><th>Kind</th><th>MRC</th><th style={{ textAlign: 'right' }}>$</th><th>Gate</th></tr></thead>
+              <thead><tr><th>Rep</th><th>Device — Rate plan</th><th>Category</th><th>MDN</th><th>IMEI</th><th>Sale mo</th><th>Month</th><th>Kind</th><th>MRC</th><th style={{ textAlign: 'right' }}>$</th><th>Gate</th></tr></thead>
               <tbody>
                 {(preview.ledger || []).slice(0, 40).map((l: any, i: number) => (
                   <tr key={i}>
-                    <td>{l.epay_salesperson}</td><td>{l.mdn}</td><td style={{ fontSize: 11 }}>{l.serial_1 || '—'}</td>
+                    <td>{l.epay_salesperson}</td>
+                    <td style={{ fontSize: 11 }} title={l.display_label || ''}>{l.display_label || '—'}</td>
+                    <td style={{ fontSize: 11 }}>{l.device_category || '—'}</td>
+                    <td>{l.mdn}</td><td style={{ fontSize: 11 }}>{l.serial_1 || '—'}</td>
                     <td>{l.sale_period}</td><td>M{l.month_index}</td>
                     <td>{l.payout_kind}</td>
                     <td style={{ fontSize: 11 }} title={l.mrc_from_product || ''}>

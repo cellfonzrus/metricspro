@@ -30,6 +30,7 @@ export default function CommCalcDashboard() {
   // plan rules have no exclusivity and the multi-month engine has its own trigger, so a rule that stops
   // matching does not hand its lines to anything else. Read-only; never blocks anything.
   const [calcWarn, setCalcWarn] = useState<any>(null)
+  const [calcNotices, setCalcNotices] = useState<any[]>([])   // mig 247 — what the calc did NOT pay
 
   useEffect(() => {
     loadData()
@@ -59,6 +60,11 @@ export default function CommCalcDashboard() {
           setCalcWarn((live?.counts?.unpaid_activations || live?.counts?.unassigned_reps) ? live : null)
         } catch { setCalcWarn(null) }
       }
+      // WHAT THIS CALCULATION DID NOT PAY (mig 247). A successful run that deliberately skipped
+      // activations — an unticked device category, an activation we could not classify, one with no
+      // identifiable rate-plan line — used to have NO channel at all: save_errors is only rendered on a
+      // failed calc. The owner reads this panel after every recalculation.
+      setCalcNotices(Array.isArray(status?.calc_notices) ? status.calc_notices : [])
     } catch (e) {
       console.error(e)
     }
@@ -108,6 +114,30 @@ export default function CommCalcDashboard() {
           ⚡ Run Calculation
         </button>
       </div>
+
+      {/* WHAT THIS CALCULATION DID NOT PAY (mig 247) — excluded device categories, unclassifiable
+          activations, unresolved monthly charges, duplicate device-months. Shown after a SUCCESSFUL
+          run: a deliberate non-payment must be as visible as a failure. */}
+      {calcNotices.length > 0 && (
+        <div className="card" style={{ borderLeft: '4px solid var(--amber)', background: 'var(--surface2)', marginBottom: 24 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>What this calculation did not pay</div>
+          <ul style={{ margin: '0 0 6px 18px', padding: 0, fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
+            {calcNotices.map((n: any, i: number) => (
+              <li key={i}>
+                {n.message}
+                {n.by_rep && Object.keys(n.by_rep).length > 0 && (
+                  <span style={{ color: 'var(--text3)' }}>
+                    {' '}({Object.entries(n.by_rep).map(([r, v]: any) => `${r} ${fmt(v)}`).join(' · ')})
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+          <a href="/commcalc/plan-installments#categories" style={{ color: 'var(--accent)', fontSize: 13 }}>
+            Review qualifying device categories →
+          </a>
+        </div>
+      )}
 
       {/* Calc refused / error banner — surfaces the R1 unconfigured-tenant guard with a fix link */}
       {calcError && (

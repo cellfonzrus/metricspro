@@ -212,7 +212,10 @@ export default function ReportsPage() {
   const instLineRows = useMemo(() => {
     const out: any[] = []
     for (const d of (explainMm?.devices || [])) for (const i of (d.installments || []))
-      out.push({ imei: d.imei, mdn: d.mdn, product: d.product, month_index: i.month_index,
+      // ONE consistent label (owner 2026-07-27): DEVICE — RATE PLAN — MRC, resolved by the engine, so
+      // this drill never shows the phone on one row and the rate plan on the next.
+      out.push({ imei: d.imei, mdn: d.mdn, product: i.label || d.label || d.product,
+        device_category: i.device_category || d.device_category, month_index: i.month_index,
         pay_period: i.pay_period, status_label: INST_REASON_LABEL[i.hold_reason] || i.status,
         hold_detail: i.hold_detail, amount: i.amount, withheld_amount: i.withheld_amount,
         mrc_at_pay: i.mrc_at_pay, ma_says_paid: d.ma_says_paid, paid: i.status === 'paid' })
@@ -841,14 +844,15 @@ export default function ReportsPage() {
                         <div style={{ overflowX: 'auto' }}>
                           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                             <thead><tr style={{ background: 'var(--surface2)' }}>
-                              {['IMEI', 'Product', 'Month', 'Pay period', 'Status / hold reason', 'MA says paid', 'Paid $', 'Held $', 'MRC'].map(h =>
+                              {['IMEI', 'Device — Rate plan', 'Category', 'Month', 'Pay period', 'Status / hold reason', 'MA says paid', 'Paid $', 'Held $', 'MRC'].map(h =>
                                 <th key={h} style={{ textAlign: ['Paid $', 'Held $', 'MRC'].includes(h) ? 'right' : 'left', padding: '5px 8px', fontSize: 10, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{h}</th>)}
                             </tr></thead>
                             <tbody>
                               {instLineRows.map((r: any, i: number) => (
                                 <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
                                   <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{r.imei || r.mdn || '—'}</td>
-                                  <td style={{ padding: '5px 8px' }}>{r.product || '—'}</td>
+                                  <td style={{ padding: '5px 8px' }} title={r.product || ''}>{r.product || '—'}</td>
+                                  <td style={{ padding: '5px 8px' }}>{r.device_category || '—'}</td>
                                   <td style={{ padding: '5px 8px' }}>M{r.month_index}</td>
                                   <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>{r.pay_period || '—'}</td>
                                   <td style={{ padding: '5px 8px', color: r.paid ? 'var(--green)' : 'var(--red)' }}>
