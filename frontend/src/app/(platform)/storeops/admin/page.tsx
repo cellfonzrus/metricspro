@@ -17,6 +17,43 @@ function isDirty(row: any, orig: any, fields: string[]) {
   return fields.some(f => String(row[f] ?? '') !== String(orig[f] ?? ''))
 }
 
+// RULE THREE (pick-don't-type, 2026-07-28 owner directive): market is a dropdown over the org's
+// existing markets (sourced from BOTH storeops.stores.market and commcalc.store_mapping.market —
+// see GET /storeops/markets — so the two vocabularies can't diverge silently), with an explicit
+// "+ New market" affordance revealed on demand for a genuinely new one. The server normalizes on
+// save (btrim + case-insensitive match to an existing market -> canonical casing; a brand-new
+// value is kept as typed), so this component just carries a plain string either way. Defined at
+// module scope (not inside the page component) so its "adding" toggle state survives page re-renders.
+const NEW_MARKET_SENTINEL = '__new_market__'
+function MarketField({ value, options, onChange, width = 110 }:
+  { value: string; options: string[]; onChange: (v: string) => void; width?: number }) {
+  const v = String(value || '').trim()
+  const matched = options.find(o => o.toLowerCase() === v.toLowerCase())
+  const [adding, setAdding] = useState(!!v && !matched)
+  if (adding) {
+    return (
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        <input style={{ ...sel, width }} placeholder="New market name" value={value || ''}
+          onChange={e => onChange(e.target.value)} autoFocus />
+        {options.length > 0 &&
+          <button type="button" title="Choose an existing market instead" onClick={() => setAdding(false)}
+            style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--text3)', padding: 0 }}>▾</button>}
+      </div>
+    )
+  }
+  return (
+    <select style={{ ...sel, width }} value={matched || ''}
+      onChange={e => {
+        if (e.target.value === NEW_MARKET_SENTINEL) { setAdding(true); onChange('') }
+        else onChange(e.target.value)
+      }}>
+      <option value="">— Unassigned —</option>
+      {options.map(o => <option key={o} value={o}>{o}</option>)}
+      <option value={NEW_MARKET_SENTINEL}>➕ New market…</option>
+    </select>
+  )
+}
+
 export default function StoreOpsAdminPage() {
   const [tab, setTab] = useState<'employees' | 'stores'>('employees')
   const [emps, setEmps] = useState<any[]>([])
@@ -33,18 +70,21 @@ export default function StoreOpsAdminPage() {
   const [upBusy, setUpBusy] = useState(false)
   const [newEmp, setNewEmp] = useState<any>({ name: '', employee_id: '', home_store: '', email: '', phone: '' })
   const [newStore, setNewStore] = useState<any>({ store_code: '', address: '', market: '', monthly_target: '' })
+  const [markets, setMarkets] = useState<string[]>([])   // RULE THREE dropdown options (GET /storeops/markets)
 
   async function loadAll() {
     setLoading(true)
     try {
-      const [e, s] = await Promise.all([
+      const [e, s, mk] = await Promise.all([
         api('/api/v1/storeops/employees?include_inactive=true').catch(() => []),
         api('/api/v1/storeops/stores').catch(() => []),
+        api('/api/v1/storeops/markets').catch(() => ({ markets: [] })),
       ])
       const eList = (e || []).map((x: any) => ({ ...x }))
       const sList = (s || []).map((x: any) => ({ ...x }))
       setEmps(eList)
       setStores(sList)
+      setMarkets(mk?.markets || [])
       setOrigEmps(Object.fromEntries(eList.map((x: any) => [x.id, { ...x }])))
       setOrigStores(Object.fromEntries(sList.map((x: any) => [x.id, { ...x }])))
       setRowMsg({})
@@ -152,6 +192,10 @@ export default function StoreOpsAdminPage() {
     } catch (err: any) { setMsg('Delete failed: ' + (err?.message || err)) }
   }
 
+  async function refreshMarkets() {
+    try { const mk = await api('/api/v1/storeops/markets'); setMarkets(mk?.markets || []) } catch { /* best-effort */ }
+  }
+
   async function saveStore(s: any) {
     setMsg('')
     const key = `store-${s.id}`
@@ -164,6 +208,7 @@ export default function StoreOpsAdminPage() {
       setOrigStores(o => ({ ...o, [s.id]: { ...s } }))
       setMsg(`Saved ${s.store_code}`)
       flashRow(key, '✓ saved')
+      refreshMarkets()
     } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)); flashRow(key, '✗ failed') }
     finally { setRowBusy(b => ({ ...b, [key]: false })) }
   }
@@ -202,6 +247,7 @@ export default function StoreOpsAdminPage() {
     }
     setMsg(`Saved ${ok} store(s)${fail ? ` · ${fail} failed (see row)` : ''}.`)
     setBulkBusy(false)
+    refreshMarkets()
   }
 
   async function addStore() {
@@ -380,7 +426,7 @@ export default function StoreOpsAdminPage() {
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
               <input style={{ ...sel, width: 120 }} placeholder="Store code *" value={newStore.store_code} onChange={e => setNewStore({ ...newStore, store_code: e.target.value })} />
               <input style={{ ...sel, width: 220 }} placeholder="Address" value={newStore.address} onChange={e => setNewStore({ ...newStore, address: e.target.value })} />
-              <input style={{ ...sel, width: 110 }} placeholder="Market" value={newStore.market} onChange={e => setNewStore({ ...newStore, market: e.target.value })} />
+              <MarketField width={130} value={newStore.market} options={markets} onChange={v => setNewStore({ ...newStore, market: v })} />
               <input style={{ ...sel, width: 120 }} type="number" placeholder="Monthly target" value={newStore.monthly_target} onChange={e => setNewStore({ ...newStore, monthly_target: e.target.value })} />
               <button className="btn btn-primary" onClick={addStore}>➕ Add</button>
             </div>
@@ -416,7 +462,7 @@ export default function StoreOpsAdminPage() {
                   <tr key={s.id} style={{ opacity: s.is_active ? 1 : 0.5 }}>
                     <td style={cell}><input style={{ ...sel, width: 110 }} value={s.store_code || ''} onChange={ev => setStore(s.id, { store_code: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 220 }} value={s.address || ''} onChange={ev => setStore(s.id, { address: ev.target.value })} /></td>
-                    <td style={cell}><input style={{ ...sel, width: 110 }} value={s.market || ''} onChange={ev => setStore(s.id, { market: ev.target.value })} /></td>
+                    <td style={cell}><MarketField width={130} value={s.market} options={markets} onChange={v => setStore(s.id, { market: v })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 110 }} type="number" value={s.monthly_target ?? ''} onChange={ev => setStore(s.id, { monthly_target: ev.target.value })} /></td>
                     <td style={cell}>
                       <input type="checkbox" checked={!!s.is_active} disabled={!!rowBusy[key]}

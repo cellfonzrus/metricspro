@@ -1841,6 +1841,58 @@ def bulk_payscale(body: dict, authorization: str = Header(default=""), org_id: s
     return {"updated": updated, "errors": errors, "total": len(rows)}
 
 
+def _collect_markets(org_id: str):
+    """Distinct markets for the org's pick-don't-type dropdown (RULE THREE), sourced from BOTH
+    storeops.stores.market AND commcalc.store_mapping.market — the two vocabularies this page's
+    data flows to/from (stores propagate into store_mapping via _sync_store_mapping /
+    _sync_store_mapping_update) — so they can't silently diverge. Deduped case-insensitively;
+    canonical casing = the most-common variant seen (ties → alphabetically-first). Blanks
+    excluded. Best-effort per source: a read failure on one source never blanks the other."""
+    from collections import Counter
+    raw = []
+    try:
+        raw += [row.get("market") for row in
+                (sb().table("stores").select("market").eq("org_id", org_id).execute().data or [])]
+    except Exception as e:
+        print(f"WARN _collect_markets stores read failed: {e}")
+    try:
+        raw += [row.get("market") for row in
+                (get_supabase().schema("commcalc").table("store_mapping").select("market")
+                 .eq("org_id", org_id).execute().data or [])]
+    except Exception as e:
+        print(f"WARN _collect_markets store_mapping read failed: {e}")
+    variants = {}
+    for v in raw:
+        s = str(v or "").strip()
+        if not s:
+            continue
+        variants.setdefault(s.lower(), Counter())[s] += 1
+    canonical = [sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+                 for counts in variants.values()]
+    canonical.sort(key=lambda s: s.lower())
+    return canonical
+
+
+def _canonicalize_market(value, canonical_markets):
+    """btrim + case-insensitive match to an existing market -> saves the canonical casing.
+    A genuinely new (non-matching) value is kept as-typed (btrimmed) — that's the "create new"
+    path. Empty stays empty (Unassigned is explicit and allowed)."""
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    for m in canonical_markets:
+        if m.lower() == s.lower():
+            return m
+    return s
+
+
+@router.get("/markets")
+def list_markets(org_id: str = ORG_ID):
+    """Distinct market options for the StoreOps Admin Stores editor dropdown (RULE THREE:
+    pick-don't-type). Org-scoped; see _collect_markets for sourcing/dedupe rules."""
+    return {"markets": _collect_markets(org_id)}
+
+
 def _sync_store_mapping(org_id, stores):
     """Mirror StoreOps-created stores into commcalc.store_mapping so a new store PROPAGATES everywhere
     that reads the mapping (Daily Closing, Assets, Targets, recons, …). Insert-if-absent by store_code.
@@ -1876,12 +1928,15 @@ def bulk_create_stores(body: dict, org_id: str = ORG_ID):
     existing = {str(s.get("store_code")).strip().upper() for s in
                 (sb().table("stores").select("store_code").eq("org_id", org_id).execute().data or [])
                 if s.get("store_code")}
+    canonical_markets = _collect_markets(org_id)   # RULE THREE: normalize once for the whole batch
     to_insert, skipped = [], 0
     for s in rows_in:
         row = {k: s[k] for k in STORE_FIELDS if k in s}
         code = str(row.get("store_code") or "").strip()
         if not code or code.upper() in existing:
             skipped += 1; continue
+        if "market" in row:
+            row["market"] = _canonicalize_market(row["market"], canonical_markets)
         row["org_id"] = org_id
         if row.get("is_active") is None:
             row["is_active"] = True
@@ -1901,6 +1956,8 @@ def create_store(store: dict, org_id: str = ORG_ID):
     row = {k: store[k] for k in STORE_FIELDS if k in store}
     if not (row.get("store_code") or "").strip():
         raise HTTPException(400, "store_code required")
+    if "market" in row:
+        row["market"] = _canonicalize_market(row["market"], _collect_markets(org_id))
     row["org_id"] = org_id
     if row.get("is_active") is None:
         row["is_active"] = True
@@ -1947,6 +2004,8 @@ def update_store(store_id: int, updates: dict, org_id: str = ORG_ID):
     row = {k: updates[k] for k in STORE_FIELDS if k in updates}
     if not row:
         raise HTTPException(400, "no valid fields to update")
+    if "market" in row:
+        row["market"] = _canonicalize_market(row["market"], _collect_markets(org_id))
     r = sb().table("stores").update(row).eq("id", store_id).eq("org_id", org_id).execute()
     if not r.data:
         raise HTTPException(404, "store not found")
