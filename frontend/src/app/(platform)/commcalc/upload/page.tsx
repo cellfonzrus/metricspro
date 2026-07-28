@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { ORG_ID, api, apiUpload } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
-import { readUploadOutcome } from '../_lib/uploadGuard'
+import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 
 const FILE_TYPES = [
@@ -73,6 +73,8 @@ export default function UploadPage() {
   const [uploading, setUploading] = useState<string | null>(null)
   const [statuses, setStatuses] = useState<Record<string, 'idle'|'uploading'|'done'|'error'|'warn'>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})
+  // Full interpreted outcome per file type — drives the amber "what the importer actually saw" panel.
+  const [outcomes, setOutcomes] = useState<Record<string, UploadOutcome | null>>({})
   const [history, setHistory] = useState<UploadRecord[]>([])
   const [showHistory, setShowHistory] = useState(false)
 
@@ -131,15 +133,18 @@ export default function UploadPage() {
       const data = await apiUpload(
         `/api/v1/commcalc/upload/${fileType}?${!rowDated ? 'period=' + encodeURIComponent(period) + '&' : ''}org_id=${ORG_ID}`,
         form)
-      // A price-guard refusal (saved:0, skipped:'price_guard') or a shrink warning comes back HTTP-200 —
-      // surface it honestly instead of a green "✅ 0 rows saved" that looks like a broken upload.
-      const o = readUploadOutcome(data, 'rows')
+      // A price-guard refusal (saved:0, skipped:'price_guard'), an X-report that parsed nothing
+      // (saved:0, skipped:'header_not_found'|…), or a shrink warning all come back HTTP-200 — surface
+      // them honestly instead of a green "✅ 0 rows saved" that looks (or lies) like a clean upload.
+      const o = readUploadOutcome(data, fileType === 'x_report' ? 'tender row(s)' : 'rows')
       setStatuses(s => ({ ...s, [fileType]: o.tone === 'ok' ? 'done' : 'warn' }))
       setMessages(m => ({ ...m, [fileType]: (o.tone === 'ok' ? '✅ ' : '⚠️ ') + o.text }))
+      setOutcomes(p => ({ ...p, [fileType]: o }))
       loadHistory()
     } catch (e: any) {
       setStatuses(s => ({ ...s, [fileType]: 'error' }))
       setMessages(m => ({ ...m, [fileType]: `❌ ${e.message}` }))
+      setOutcomes(p => ({ ...p, [fileType]: null }))
     }
     setUploading(null)
   }
@@ -282,6 +287,9 @@ export default function UploadPage() {
                   )}
                   {prior && status !== 'done' && <div style={{ marginTop: 8, fontSize: 12, color: '#15803d' }}>✓ Uploaded {fmtWhen(prior.uploaded_at)} · {prior.rows_saved.toLocaleString()} rows{PERIODLESS.has(id) && prior.period ? ` · ${prior.period}` : ''}</div>}
                   {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? '#16a34a' : status === 'warn' ? '#b45309' : '#dc2626' }}>{msg}</div>}
+                  {/* Honest amber panel: WHY an upload saved 0 rows (X-report parser forensics,
+                      price-guard refusal, shrink warning). Renders nothing on a clean save. */}
+                  <UploadGuardBanner outcome={outcomes[id] || null} />
                 </div>
               </div>
             </div>
