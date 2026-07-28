@@ -21,11 +21,12 @@ type Row = {
   physically_missing?: boolean; investigation_remark?: string
 }
 type Bucket = { count: number; owed: number; rows: Row[] }
-type ByModel = { device_model: string; under45: number; warn: number; missed: number; zero: number; total: number; owed: number }
+type ByModel = { device_model: string; under45: number; warn: number; missed: number; zero: number; unknown_age: number; total: number; owed: number }
 type Aging = {
   today: string; data_as_of: string|null
   buckets: { under45: Bucket; warn: Bucket; missed: Bucket }
   zero_inventory: { count: number; rows: Row[] }
+  unknown_age: { count: number; owed: number; rows: Row[] }
   totals: {
     flagged_count: number; flagged_owed: number
     total_amount: number; total_amount_column: string; total_phones_outstanding: number
@@ -34,6 +35,11 @@ type Aging = {
   by_model_meta: { total_models: number; shown: number; omitted: number }
   bucket_basis: string
 }
+// Display-level variant merging (2026-07-28 owner-driven addition) — a "store" picker option can
+// represent MULTIPLE raw asset_ledger.store spelling variants ("116-36 Springfield Blvd" +
+// "11636 Springfield Blvd"); picking it expands to all its `variants` joined into the existing
+// comma-separated `store` query param (the multi-select filter already built this package).
+type StoreGroup = { key: string; display: string; variants: string[]; also_seen_as: string[]; market: string | null; row_count: number }
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
@@ -106,7 +112,7 @@ function ByModelTable({ rows, meta }: { rows: ByModel[]; meta: { total_models: n
       <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
         <thead>
           <tr style={{ background: 'var(--surface2)' }}>
-            {['Device Model','Under 45','45–60 WARN','Over 60 MISSED','$0 Owed','Total Phones','Owed'].map((h,i) => (
+            {['Device Model','Under 45','45–60 WARN','Over 60 MISSED','Unknown Age','$0 Owed','Total Phones','Owed'].map((h,i) => (
               <th key={h} style={{ textAlign: i===0?'left':'right', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
             ))}
           </tr>
@@ -118,6 +124,7 @@ function ByModelTable({ rows, meta }: { rows: ByModel[]; meta: { total_models: n
               <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right' }}>{m.under45}</td>
               <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'#d97706', fontWeight:600 }}>{m.warn}</td>
               <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'#dc2626', fontWeight:600 }}>{m.missed}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'#6b7280' }}>{m.unknown_age}</td>
               <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'var(--text3)' }}>{m.zero}</td>
               <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', fontWeight:700 }}>{m.total}</td>
               <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right' }}>{fmt(m.owed)}</td>
@@ -136,13 +143,15 @@ function ByModelTable({ rows, meta }: { rows: ByModel[]; meta: { total_models: n
 
 export default function AgingPage() {
   const [market, setMarket] = useState('')
-  const [selStores, setSelStores] = useState<string[]>([])
+  const [selStoreKeys, setSelStoreKeys] = useState<string[]>([])
   const [markets, setMarkets] = useState<string[]>([])
   const [stores, setStores] = useState<{store:string;market:string}[]>([])
+  const [storeGroups, setStoreGroups] = useState<StoreGroup[]>([])
   const [noMarketCount, setNoMarketCount] = useState(0)
   const [data, setData] = useState<Aging | null>(null)
   const [loading, setLoading] = useState(true)
   const [showZero, setShowZero] = useState(false)
+  const [showUnknownAge, setShowUnknownAge] = useState(false)
   const [showByModel, setShowByModel] = useState(true)
   const [month, setMonth] = useState(0)  // 0 = all time (legacy quick-pick, kept alongside date range)
   const [year, setYear] = useState(new Date().getFullYear())
@@ -154,18 +163,27 @@ export default function AgingPage() {
 
   useEffect(() => {
     api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
-      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]); setNoMarketCount(d.no_market_count||0) })
+      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]); setNoMarketCount(d.no_market_count||0); setStoreGroups(d.store_groups||[]) })
       .catch(console.error)
       .finally(() => setFilterOptionsLoaded(true))
   }, [])
-  useEffect(() => { load() }, [market, selStores, month, year, dateFrom, dateTo])
+  useEffect(() => { load() }, [market, selStoreKeys, month, year, dateFrom, dateTo])
+
+  // Display-level variant merging (2026-07-28): fall back to 1:1 groups from the plain `stores`
+  // list if `store_groups` hasn't loaded yet (or an older backend), so the picker still works —
+  // just without the spelling-variant merge.
+  const groupSource: StoreGroup[] = storeGroups.length ? storeGroups
+    : stores.map(s => ({ key: s.store, display: s.store, variants: [s.store], also_seen_as: [], market: s.market, row_count: 0 }))
+  const keyToVariants = new Map(groupSource.map(g => [g.key, g.variants]))
+  const keyToDisplay = new Map(groupSource.map(g => [g.key, g.display]))
 
   async function load() {
     setLoading(true)
     try {
       const qs = new URLSearchParams({ org_id: ORG_ID })
       if (market) qs.set('market', market)
-      if (selStores.length) qs.set('store', selStores.join(','))
+      const storeParam = selStoreKeys.flatMap(k => keyToVariants.get(k) || [k]).join(',')
+      if (storeParam) qs.set('store', storeParam)
       if (month) { qs.set('month', String(month)); qs.set('year', String(year)) }
       if (dateFrom) qs.set('date_from', dateFrom)
       if (dateTo) qs.set('date_to', dateTo)
@@ -174,17 +192,17 @@ export default function AgingPage() {
     setLoading(false)
   }
 
-  // When market changes, drop any selected store no longer in the visible set (mirrors owed-weekly).
+  // When market changes, drop any selected store group no longer in the visible set (mirrors owed-weekly).
   function onMarketChange(v: string) {
     setMarket(v)
     const allowed = new Set(
-      (v === NO_MARKET_VALUE ? stores.filter(s => !s.market)
-        : v ? stores.filter(s => s.market === v) : stores).map(s => s.store)
+      (v === NO_MARKET_VALUE ? groupSource.filter(g => !g.market)
+        : v ? groupSource.filter(g => g.market === v) : groupSource).map(g => g.key)
     )
-    setSelStores(prev => prev.filter(s => allowed.has(s)))
+    setSelStoreKeys(prev => prev.filter(k => allowed.has(k)))
   }
-  const visibleStores = market === NO_MARKET_VALUE ? stores.filter(s => !s.market)
-    : market ? stores.filter(s => s.market === market) : stores
+  const visibleGroups = market === NO_MARKET_VALUE ? groupSource.filter(g => !g.market)
+    : market ? groupSource.filter(g => g.market === market) : groupSource
   const selStyle = { padding:'6px 10px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, background:'var(--surface)' }
   const staleDays = data?.data_as_of ? daysSince(data.data_as_of) : null
   const isStale = staleDays !== null && staleDays > 3
@@ -203,8 +221,9 @@ export default function AgingPage() {
       { header:'Distributor Invoice #', get:r=>r.vip_invoice_number },
       { header:'Distributor Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
     ]
+    const selStoreLabels = selStoreKeys.map(k => keyToDisplay.get(k) || k)
     const filterParts = [market === NO_MARKET_VALUE ? '(no market)' : market || null,
-                         selStores.length ? selStores.join(', ') : null,
+                         selStoreLabels.length ? selStoreLabels.join(', ') : null,
                          (dateFrom || dateTo) ? `${dateFrom||'…'} to ${dateTo||'…'}` : null]
       .filter(Boolean)
     const filterLabel = filterParts.join(' · ') || 'All markets'
@@ -216,11 +235,13 @@ export default function AgingPage() {
       metric: '45–60 Day WARN', value: `${data.buckets.warn.count} devices / ${fmt(data.buckets.warn.owed)}`,
     }, {
       metric: 'Over 60 Day MISSED', value: `${data.buckets.missed.count} devices / ${fmt(data.buckets.missed.owed)}`,
+    }, {
+      metric: 'Unknown Age (owed>0, no acquired date)', value: `${data.unknown_age.count} devices / ${fmt(data.unknown_age.owed)}`,
     }] : []
     return {
       title: 'Inventory Aging — Sell Before 60 Days',
       subtitle: `${filterLabel}${data?.data_as_of ? ` · data as of ${data.data_as_of}, aged to ${data.today}` : ''}`,
-      filename: `inventory-aging${selStores.length===1?'-'+selStores[0].replace(/[^a-z0-9]+/gi,'-').toLowerCase():''}`,
+      filename: `inventory-aging${selStoreLabels.length===1?'-'+selStoreLabels[0].replace(/[^a-z0-9]+/gi,'-').toLowerCase():''}`,
       sheets: [
         { name:'Summary', rows: summaryRows, columns: [
           { header:'Metric', get:(r:any)=>r.metric }, { header:'Value', get:(r:any)=>r.value },
@@ -230,6 +251,7 @@ export default function AgingPage() {
           { header:'Under 45', get:(r:any)=>r.under45, align:'right' },
           { header:'45-60 WARN', get:(r:any)=>r.warn, align:'right' },
           { header:'Over 60 MISSED', get:(r:any)=>r.missed, align:'right' },
+          { header:'Unknown Age', get:(r:any)=>r.unknown_age, align:'right' },
           { header:'$0 Owed', get:(r:any)=>r.zero, align:'right' },
           { header:'Total Phones', get:(r:any)=>r.total, align:'right' },
           { header:'Owed', get:(r:any)=>r.owed, money:true },
@@ -252,7 +274,7 @@ export default function AgingPage() {
           </p>
         </div>
         {data && <ExportButtons payload={buildPayload} />}
-        {data && <SendReportButton reportKey="inventory_aging" filters={{ ...(selStores.length?{store:selStores.join(',')}:{}), ...(market?{market}:{}), ...(month?{month, year}:{}), ...(dateFrom?{date_from:dateFrom}:{}), ...(dateTo?{date_to:dateTo}:{}) }} />}
+        {data && <SendReportButton reportKey="inventory_aging" filters={{ ...(selStoreKeys.length?{store:selStoreKeys.flatMap(k => keyToVariants.get(k) || [k]).join(',')}:{}), ...(market?{market}:{}), ...(month?{month, year}:{}), ...(dateFrom?{date_from:dateFrom}:{}), ...(dateTo?{date_to:dateTo}:{}) }} />}
       </div>
 
       {/* Stale data banner */}
@@ -270,8 +292,9 @@ export default function AgingPage() {
           {markets.map(m => <option key={m} value={m}>{m}</option>)}
           {noMarketCount > 0 && <option value={NO_MARKET_VALUE}>(no market) — {noMarketCount}</option>}
         </select>
-        <MultiSelect allLabel="All stores" value={selStores} onChange={setSelStores}
-          options={visibleStores.map(s => ({ value: s.store }))} width={190} />
+        <MultiSelect allLabel="All stores" value={selStoreKeys} onChange={setSelStoreKeys}
+          options={visibleGroups.map(g => ({ value: g.key, label: g.display + (g.also_seen_as.length ? ` (+${g.also_seen_as.length} variant${g.also_seen_as.length>1?'s':''})` : '') }))}
+          width={220} searchable />
         <label style={{ fontSize:12, color:'var(--text3)' }}>Acquired</label>
         <select style={selStyle} value={month} onChange={e => setMonth(+e.target.value)} title="Quick month pick (acquired_date)">
           <option value={0}>All time</option>
@@ -286,9 +309,9 @@ export default function AgingPage() {
         <input type="date" style={selStyle} value={dateFrom} onChange={e => setDateFrom(e.target.value)} title="Acquired from" />
         <span style={{ fontSize:12, color:'var(--text3)' }}>to</span>
         <input type="date" style={selStyle} value={dateTo} onChange={e => setDateTo(e.target.value)} title="Acquired to" />
-        {(market || selStores.length || month || dateFrom || dateTo) && (
+        {(market || selStoreKeys.length || month || dateFrom || dateTo) && (
           <button className="btn btn-secondary" style={{ fontSize:12, padding:'4px 10px' }}
-            onClick={() => { setMarket(''); setSelStores([]); setMonth(0); setDateFrom(''); setDateTo('') }}>✕ Clear</button>
+            onClick={() => { setMarket(''); setSelStoreKeys([]); setMonth(0); setDateFrom(''); setDateTo('') }}>✕ Clear</button>
         )}
         {data?.data_as_of && <span style={{ marginLeft:'auto', fontSize:12, color:'var(--text3)' }}>Data as of {data.data_as_of} · aged to {data.today}</span>}
       </div>
@@ -392,6 +415,23 @@ export default function AgingPage() {
               </div>
             )}
           </div>
+
+          {/* Unknown age (Gate-1 NIT-1): owed>0 but no usable acquired_date — real outstanding
+              inventory that used to be silently dropped from every total here; now explicit. */}
+          {data.unknown_age.count > 0 && (
+            <div className="card" style={{ padding:0, marginTop:20 }}>
+              <div onClick={() => setShowUnknownAge(!showUnknownAge)}
+                   style={{ padding:'14px 18px', fontWeight:600, fontSize:14, cursor:'pointer', display:'flex', justifyContent:'space-between' }}>
+                <span>{showUnknownAge ? '▾' : '▸'} Unknown Age — no acquired date ({data.unknown_age.count})</span>
+                <span style={{ fontWeight:400, color:'var(--text3)', fontSize:12 }}>{fmt(data.unknown_age.owed)} — counted in totals, not bucketed</span>
+              </div>
+              {showUnknownAge && (
+                <div style={{ borderTop:'1px solid var(--border)' }}>
+                  <RowTable rows={data.unknown_age.rows} accent="var(--text2)" />
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

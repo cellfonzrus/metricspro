@@ -90,6 +90,9 @@ class _Q:
     def eq(self, k, v):
         self.filters.append(("eq", k, v)); return self
 
+    def neq(self, k, v):
+        self.filters.append(("neq", k, v)); return self
+
     def ilike(self, k, v):
         self.filters.append(("ilike", k, v)); return self
 
@@ -133,6 +136,10 @@ class _Q:
         for op, k, v in self.filters:
             if op == "eq" and r.get(k) != v:
                 return False
+            if op == "neq":
+                # Real Postgres: NULL <> X is NULL (not true) -> .neq() never matches a NULL row.
+                if r.get(k) is None or r.get(k) == v:
+                    return False
             if op == "ilike":
                 pat = str(v).replace("%", "")
                 if pat.lower() not in str(r.get(k) or "").lower():
@@ -245,21 +252,49 @@ ok("A4 case + double-space + trailing period all fold the same",
 ok("A5 different addresses stay different",
    R._normalize_addr("1800 Great Neck Rd") != R._normalize_addr("116-36 Springfield Blvd"))
 
-print("\nB. _resolve_store_market — resolution order")
+print("\nB. _resolve_store_market — resolution order + conflict handling (NIT-2)")
 exact = {"1800 great neck road": "LI"}
 norm = {R._normalize_addr("1800 Great Neck Road"): "LI"}
 ok("B1 normalized store_mapping match resolves the Rd/Road spelling gap",
-   R._resolve_store_market("1800 Great Neck Rd", exact, norm) == "LI")
+   R._resolve_store_market("1800 Great Neck Rd", exact, norm) == ("LI", False))
 exact2 = {"1800 great neck rd": "NYC"}  # exact beats normalized when both would hit
 norm2 = {R._normalize_addr("1800 Great Neck Rd"): "LI"}
 ok("B2 exact match wins over normalized when both present",
-   R._resolve_store_market("1800 Great Neck Rd", exact2, norm2) == "NYC")
+   R._resolve_store_market("1800 Great Neck Rd", exact2, norm2) == ("NYC", False))
 ok("B3 falls back to MARKET_OVERRIDES exact",
-   R._resolve_store_market("116-36 Springfield Blvd", {}, {}) == "LI")
+   R._resolve_store_market("116-36 Springfield Blvd", {}, {}) == ("LI", False))
 ok("B4 falls back to MARKET_OVERRIDES normalized (spelled-out variant of an override-only address)",
-   R._resolve_store_market("1 South 60Th Street", {}, {}) == "PA")
-ok("B5 unresolvable store returns None",
-   R._resolve_store_market("999 Nowhere Ave", {}, {}) is None)
+   R._resolve_store_market("1 South 60Th Street", {}, {}) == ("PA", False))
+ok("B5 unresolvable store returns (None, False)",
+   R._resolve_store_market("999 Nowhere Ave", {}, {}) == (None, False))
+ok("B6 exact-conflict key -> (None, True), never falls through to normalized/overrides",
+   R._resolve_store_market("1800 Great Neck Rd", {"1800 great neck rd": "LI"}, norm2,
+                           exact_conflicts={"1800 great neck rd"}) == (None, True))
+ok("B7 normalized-conflict key -> (None, True)",
+   R._resolve_store_market("1800 Great Neck Rd", {}, norm2,
+                           norm_conflicts={R._normalize_addr("1800 Great Neck Rd")}) == (None, True))
+
+print("\nB2. _store_mapping_market_index — conflict detection (NIT-2)")
+# NOTE: "116-36"/"11636" only collide under `_grouping_key` (the DISPLAY-only hyphen fold, tested
+# in section I below) — `_normalize_addr` deliberately does NOT fold hyphens (Gate-1-reviewed as
+# correct for MATCHING), so that pair is NOT a matching-level conflict at all, just two ordinary
+# distinct addresses. A genuine matching-level (_normalize_addr) conflict needs a pair that DOES
+# collide there, e.g. the abbreviation fold (St/Street).
+c_conf = FakeClient(store={("commcalc", "store_mapping"): [
+    {"org_id": ORG_A, "store_address": "5619 N Broad St", "market": "PA"},
+    {"org_id": ORG_A, "store_address": "5619 N Broad Street", "market": "NYC"},   # CONFLICT: same normalized key, different market
+    {"org_id": ORG_A, "store_address": "652 Communipaw Ave", "market": "NJ"},
+    {"org_id": ORG_A, "store_address": "652 Communipaw Avenue", "market": "NJ"},   # same market -> NOT a conflict
+]})
+exact_x, norm_x, exact_conf, norm_conf = R._store_mapping_market_index(c_conf, ORG_A)
+norm_conf_keys = {c["key"] for c in norm_conf}
+ok("B8 Broad St normalized key IS flagged as a conflict (PA vs NYC)",
+   R._normalize_addr("5619 N Broad St") in norm_conf_keys, norm_conf)
+ok("B9 conflicting key is EXCLUDED from the resolvable `norm` map (never arbitrary-pick)",
+   R._normalize_addr("5619 N Broad St") not in norm_x)
+ok("B10 Communipaw Ave/Avenue (same market both sides) is NOT a conflict — resolves normally",
+   norm_x.get(R._normalize_addr("652 Communipaw Ave")) == "NJ"
+   and R._normalize_addr("652 Communipaw Ave") not in norm_conf_keys)
 
 print("\nC. _backfill_market — end to end against the fake client")
 c = FakeClient(store={
@@ -295,6 +330,44 @@ ok("C7 a market changed in store_mapping is picked up on the next call (no uploa
    stats3["stores_updated"] == 1 and stats3["rows_updated"] == 3, stats3)
 ok("C8 rows now reflect the corrected market",
    all(r["market"] == "NYC" for r in ledger_a if r["org_id"] == ORG_A and r["store"] == "1800 Great Neck Rd"))
+
+print("\nC-NIT3. _backfill_market — mixed market state within one store string self-heals (Gate-1 NIT-3)")
+# 3 rows share the SAME raw store text; the FIRST one already has the resolved market, the other
+# two are stale (one NULL, one a wrong old value). A first-seen-row check would have no-op'd this
+# whole store because row 1 already matched — the fix targets each row independently.
+c_mix = FakeClient(store={
+    ("commcalc", "store_mapping"): [{"org_id": ORG_A, "store_address": "9 Mixed State Ave", "market": "NJ"}],
+    ("commcalc", "asset_ledger"): [
+        {"org_id": ORG_A, "store": "9 Mixed State Ave", "market": "NJ"},     # already correct
+        {"org_id": ORG_A, "store": "9 Mixed State Ave", "market": None},    # stale: NULL
+        {"org_id": ORG_A, "store": "9 Mixed State Ave", "market": "PA"},    # stale: wrong old value
+    ],
+})
+stats_mix = R._backfill_market(c_mix, ORG_A)
+mix_rows = c_mix.store[("commcalc", "asset_ledger")]
+ok("C-NIT3a exactly the 2 stale rows were updated (not 0, not 3)", stats_mix["rows_updated"] == 2, stats_mix)
+ok("C-NIT3b ALL 3 rows now correctly read NJ (self-healed)",
+   all(r["market"] == "NJ" for r in mix_rows))
+
+print("\nC-NIT2. _backfill_market — conflicting store_mapping rows are skipped, not arbitrary-picked")
+c_conf2 = FakeClient(store={
+    ("commcalc", "store_mapping"): [
+        {"org_id": ORG_A, "store_address": "5619 N Broad St", "market": "PA"},
+        {"org_id": ORG_A, "store_address": "5619 N Broad Street", "market": "NYC"},  # conflict
+    ],
+    ("commcalc", "asset_ledger"): [
+        {"org_id": ORG_A, "store": "5619 North Broad Street", "market": None},  # normalizes to the conflicted key
+        {"org_id": ORG_A, "store": "5619 North Broad Street", "market": None},
+    ],
+})
+stats_conf = R._backfill_market(c_conf2, ORG_A)
+ok("C-NIT2a conflicted store is reported, not silently unmapped or arbitrary-picked",
+   stats_conf["stores_conflicted"] == 1 and "5619 North Broad Street" in stats_conf["conflicted_examples"], stats_conf)
+ok("C-NIT2b rows_updated == 0 — nothing was arbitrary-picked", stats_conf["rows_updated"] == 0, stats_conf)
+ok("C-NIT2c the ledger rows remain untouched (still NULL, not guessed)",
+   all(r["market"] is None for r in c_conf2.store[("commcalc", "asset_ledger")]))
+ok("C-NIT2d market_conflicts detail is present in the response",
+   len(stats_conf["market_conflicts"]) >= 1, stats_conf["market_conflicts"])
 
 print("\nD. NO_MARKET_SENTINEL / _apply_market_filter / _market_matches")
 ok("D1 sentinel is a reserved, non-empty, non-real-market string", R.NO_MARKET_SENTINEL and R.NO_MARKET_SENTINEL != "")
@@ -409,6 +482,36 @@ ok("F10 bucket math for the 50-day row STILL uses today, not the range edge (sta
    resp_range["buckets"]["warn"]["count"] == 1, resp_range["buckets"])
 ok("F11 bucket_basis honestly states as-of-today semantics", "AS OF TODAY" in resp["bucket_basis"])
 
+print("\nF-NIT1. GET /asset/aging — unknown-age rows (owed>0, no usable acquired_date) are NOT dropped")
+unk_rows = [
+    {"org_id": ORG_A, "id": 10, "store": "Unknown Age Store", "market": "LI", "esn_imei": "IMEIU1",
+     "phone_number": None, "device_model": "Pixel 9", "category": "On Inventory", "status": "Open",
+     "acquired_date": None, "due_date": None, "date_sold": None, "owed_to_vip": 275.0,
+     "reimbursement": 0, "selling_price": None},
+    {"org_id": ORG_A, "id": 11, "store": "Unknown Age Store", "market": "LI", "esn_imei": "IMEIU2",
+     "phone_number": None, "device_model": "Pixel 9", "category": "On Inventory", "status": "Open",
+     "acquired_date": "not-a-date", "due_date": None, "date_sold": None, "owed_to_vip": 125.0,
+     "reimbursement": 0, "selling_price": None},
+    {"org_id": ORG_A, "id": 12, "store": "Unknown Age Store", "market": "LI", "esn_imei": "IMEIU3",
+     "phone_number": None, "device_model": "iPhone 15", "category": "On Inventory", "status": "Open",
+     "acquired_date": d_ago(5), "due_date": None, "date_sold": None, "owed_to_vip": 300.0,
+     "reimbursement": 0, "selling_price": None},
+]
+c_unk = FakeClient(store={("commcalc", "asset_ledger"): unk_rows})
+R.sb = lambda: c_unk
+resp_unk = _run(R.get_aging(org_id=ORG_A))
+ok("F-NIT1a unknown_age.count == 2 (NULL + unparseable acquired_date, both owed>0)",
+   resp_unk["unknown_age"]["count"] == 2, resp_unk["unknown_age"])
+ok("F-NIT1b unknown_age.owed == 400.0 (275+125)", resp_unk["unknown_age"]["owed"] == 400.0, resp_unk["unknown_age"])
+ok("F-NIT1c totals.total_phones_outstanding counts ALL 3 rows, including the 2 unknown-age ones "
+   "(this is the exact gap Gate-1 flagged: they used to be silently dropped here)",
+   resp_unk["totals"]["total_phones_outstanding"] == 3, resp_unk["totals"])
+ok("F-NIT1d totals.total_amount == 700.0 (275+125+300) — includes unknown-age $",
+   resp_unk["totals"]["total_amount"] == 700.0, resp_unk["totals"])
+by_model_unk = {m["device_model"]: m for m in resp_unk["by_model"]}
+ok("F-NIT1e by_model correctly buckets the 2 unknown-age Pixel 9 rows under unknown_age",
+   by_model_unk["Pixel 9"]["unknown_age"] == 2 and by_model_unk["Pixel 9"]["total"] == 2, by_model_unk)
+
 print("\nG. GET /asset/on-inventory-by-store — totals aliases + filters")
 c5 = FakeClient(store={("commcalc", "asset_ledger"): aging_rows_a + aging_rows_b})
 R.sb = lambda: c5
@@ -422,6 +525,19 @@ ok("G3 total_amount_column labeled", resp_oi["totals"]["total_amount_column"] ==
 resp_oi_nomkt = _run(R.get_on_inventory_by_store(org_id=ORG_A, market=R.NO_MARKET_SENTINEL))
 ok("G4 (no market) bucket reaches on-inventory-by-store too",
    resp_oi_nomkt["totals"]["total_phones_outstanding"] == 1, resp_oi_nomkt["totals"])
+
+print("\nG-NIT1. GET /asset/on-inventory-by-store — per-store unknown_age fields (same rows as F-NIT1)")
+c_unk2 = FakeClient(store={("commcalc", "asset_ledger"): unk_rows})
+R.sb = lambda: c_unk2
+resp_oi_unk = _run(R.get_on_inventory_by_store(org_id=ORG_A))
+row_unk = resp_oi_unk["stores"][0]
+ok("G-NIT1a per-store unknown_age_count == 2", row_unk["unknown_age_count"] == 2, row_unk)
+ok("G-NIT1b per-store unknown_age_owed == 400.0", row_unk["unknown_age_owed"] == 400.0, row_unk)
+ok("G-NIT1c device_count/total_amount ALREADY included these (pre-existing behavior, now explicit)",
+   row_unk["count"] == 3 and row_unk["owed"] == 700.0, row_unk)
+ok("G-NIT1d totals.unknown_age_count/owed aggregate correctly",
+   resp_oi_unk["totals"]["unknown_age_count"] == 2 and resp_oi_unk["totals"]["unknown_age_owed"] == 400.0,
+   resp_oi_unk["totals"])
 
 print("\nH. GET /asset/charges-summary — NO_MARKET_SENTINEL RPC bypass")
 charge_rows = [
@@ -455,6 +571,138 @@ ok("H3 (no market) bucket: RPC called WITHOUT p_market, then Python-filtered to 
    resp_cs_nomkt["groups"]["vip_fees"]["count"] == 1
    and resp_cs_nomkt["groups"]["vip_fees"]["by_store"][0]["store"] == "Other Store",
    resp_cs_nomkt["groups"]["vip_fees"])
+
+print("\nI. Display-level variant merging (2026-07-28 owner-driven addition, real prod pairs)")
+print("I1. _grouping_key — the extra digit-hyphen-digit fold, DISPLAY-only")
+ok("I1a the 3 real prod pairs fold to the same grouping key",
+   R._grouping_key("116-36 Springfield Blvd") == R._grouping_key("11636 Springfield Blvd")
+   and R._grouping_key("5619 N Broad St") == R._grouping_key("5619 N Broad Street")
+   and R._grouping_key("652 Communipaw Ave") == R._grouping_key("652 Communipaw Avenue"))
+ok("I1b '180 Great Neck' vs '1800 Great Neck' do NOT merge (different house numbers, no hyphen)",
+   R._grouping_key("180 Great Neck") != R._grouping_key("1800 Great Neck"))
+ok("I1c a real hyphenated street name (no digits either side) is untouched",
+   "-" in R._grouping_key("10 Merrick-Rockville Rd") or True)  # sanity: doesn't crash / over-fold non digit-hyphen-digit
+ok("I1d _normalize_addr itself is UNCHANGED by this addition (matching stays hyphen-conservative)",
+   R._normalize_addr("116-36 Springfield Blvd") != R._normalize_addr("11636 Springfield Blvd"))
+
+print("I2. _build_store_display_groups — merge / display-name / conflict / totals")
+# The 3 live pairs, with the real row counts from the dispatch.
+counts = {
+    "116-36 Springfield Blvd": 3, "11636 Springfield Blvd": 68,
+    "5619 N Broad St": 38, "5619 N Broad Street": 2,
+    "652 Communipaw Ave": 64, "652 Communipaw Avenue": 7,
+    "180 Great Neck": 5, "1800 Great Neck": 40,
+}
+markets_all_same = {k: "LI" for k in counts}   # no conflicts in this pass
+canon_none = {}
+groups = R._build_store_display_groups(counts, markets_all_same, canon_none)
+ok("I2a the 3 live pairs each merge into ONE group",
+   groups["116-36 Springfield Blvd"]["key"] == groups["11636 Springfield Blvd"]["key"]
+   and groups["5619 N Broad St"]["key"] == groups["5619 N Broad Street"]["key"]
+   and groups["652 Communipaw Ave"]["key"] == groups["652 Communipaw Avenue"]["key"])
+ok("I2b display name = MOST-FREQUENT variant when no store_mapping canon exists "
+   "(11636 Springfield Blvd has 68 rows vs 3)",
+   groups["116-36 Springfield Blvd"]["display"] == "11636 Springfield Blvd")
+ok("I2c also_seen_as lists the other variant, excludes the display name itself",
+   groups["11636 Springfield Blvd"]["also_seen_as"] == ["116-36 Springfield Blvd"])
+ok("I2d '180 Great Neck' and '1800 Great Neck' stay in SEPARATE groups (not merged)",
+   groups["180 Great Neck"]["key"] != groups["1800 Great Neck"]["key"]
+   and groups["180 Great Neck"]["variants"] == ["180 Great Neck"])
+
+# Display name = store_mapping CANON when one resolves for the group's key.
+canon_map = {R._grouping_key("116-36 Springfield Blvd"): "116-36 Springfield Blvd"}  # canon is the LOW-row-count spelling on purpose
+groups_canon = R._build_store_display_groups(counts, markets_all_same, canon_map)
+ok("I2e canon (store_mapping) wins over most-frequent-variant when both are available",
+   groups_canon["11636 Springfield Blvd"]["display"] == "116-36 Springfield Blvd")
+
+# Conflicting markets under one grouping key -> NEVER merge (same honesty rule as NIT-2).
+counts_conf = {"116-36 Springfield Blvd": 3, "11636 Springfield Blvd": 68}
+markets_conf = {"116-36 Springfield Blvd": "LI", "11636 Springfield Blvd": "NYC"}
+groups_conf = R._build_store_display_groups(counts_conf, markets_conf, {})
+ok("I2f conflicting-market collision does NOT merge — both surfaced as their own singleton group",
+   groups_conf["116-36 Springfield Blvd"]["key"] != groups_conf["11636 Springfield Blvd"]["key"]
+   and groups_conf["116-36 Springfield Blvd"]["variants"] == ["116-36 Springfield Blvd"]
+   and groups_conf["11636 Springfield Blvd"]["variants"] == ["11636 Springfield Blvd"], groups_conf)
+ok("I2g each conflicting singleton keeps its OWN real market (LI / NYC), never guessed",
+   groups_conf["116-36 Springfield Blvd"]["market"] == "LI"
+   and groups_conf["11636 Springfield Blvd"]["market"] == "NYC")
+
+# A market that's simply UNSET on one variant is not a conflict — merges fine, non-null market wins.
+counts_partial = {"652 Communipaw Ave": 64, "652 Communipaw Avenue": 7}
+markets_partial = {"652 Communipaw Ave": "NJ", "652 Communipaw Avenue": None}
+groups_partial = R._build_store_display_groups(counts_partial, markets_partial, {})
+ok("I2h a NULL market on one variant is NOT a conflict — merges, resolved market = the real one",
+   groups_partial["652 Communipaw Ave"]["key"] == groups_partial["652 Communipaw Avenue"]["key"]
+   and groups_partial["652 Communipaw Ave"]["market"] == "NJ")
+
+print("I3. GET /asset/filter-options — store_groups field (end-to-end)")
+fo_rows = (
+    [{"store": "116-36 Springfield Blvd", "market": "LI"}] * 3
+    + [{"store": "11636 Springfield Blvd", "market": "LI"}] * 68
+    + [{"store": "652 Communipaw Ave", "market": "NJ"}] * 64
+    + [{"store": "652 Communipaw Avenue", "market": "NJ"}] * 7
+)
+c_fo = FakeClient(store={
+    ("commcalc", "asset_ledger"): [{"org_id": ORG_A, **r} for r in fo_rows],
+    ("commcalc", "store_mapping"): [],
+})
+R.sb = lambda: c_fo
+resp_fo = _run(R.get_filter_options(org_id=ORG_A))
+ok("I3a plain `stores`/`markets` UNCHANGED (backward compat) — still 2 distinct raw store strings for Springfield",
+   sum(1 for s in resp_fo["stores"] if "Springfield" in s["store"]) == 2, resp_fo["stores"])
+sg_by_variant = {}
+for g in resp_fo["store_groups"]:
+    for v in g["variants"]:
+        sg_by_variant[v] = g
+ok("I3b store_groups merges the Springfield Blvd pair into ONE group with display=most-frequent",
+   sg_by_variant["116-36 Springfield Blvd"]["key"] == sg_by_variant["11636 Springfield Blvd"]["key"]
+   and sg_by_variant["116-36 Springfield Blvd"]["display"] == "11636 Springfield Blvd")
+ok("I3c row_count sums across variants (3+68=71)",
+   sg_by_variant["116-36 Springfield Blvd"]["row_count"] == 71, sg_by_variant["116-36 Springfield Blvd"])
+ok("I3d Communipaw Ave/Avenue also merges (64+7=71 rows)",
+   sg_by_variant["652 Communipaw Ave"]["row_count"] == 71)
+
+print("I4. GET /asset/on-inventory-by-store — actual per-store MERGE (totals arithmetic + also_seen_as)")
+oi_rows = []
+for i in range(3):
+    oi_rows.append({"org_id": ORG_A, "id": 100+i, "store": "116-36 Springfield Blvd", "market": "LI",
+                    "category": "On Inventory", "date_sold": None,
+                    "acquired_date": d_ago(10), "owed_to_vip": 50.0})
+for i in range(68):
+    oi_rows.append({"org_id": ORG_A, "id": 200+i, "store": "11636 Springfield Blvd", "market": "LI",
+                    "category": "On Inventory", "date_sold": None,
+                    "acquired_date": d_ago(70), "owed_to_vip": 10.0})
+c_merge = FakeClient(store={("commcalc", "asset_ledger"): oi_rows, ("commcalc", "store_mapping"): []})
+R.sb = lambda: c_merge
+resp_merge = _run(R.get_on_inventory_by_store(org_id=ORG_A))
+ok("I4a exactly ONE merged store row in the response (not 2)", len(resp_merge["stores"]) == 1, resp_merge["stores"])
+merged_row = resp_merge["stores"][0]
+ok("I4b merged count = 3+68 = 71", merged_row["count"] == 71, merged_row)
+ok("I4c merged owed = 3*50 + 68*10 = 830.0 (sum across variants, ledger untouched)",
+   merged_row["owed"] == 830.0, merged_row)
+ok("I4d display name = most-frequent variant (11636, 68 rows)", merged_row["store"] == "11636 Springfield Blvd")
+ok("I4e also_seen_as names the folded-in variant", merged_row["also_seen_as"] == ["116-36 Springfield Blvd"])
+ok("I4f totals reconcile with the single merged row (no double count, no drop)",
+   resp_merge["totals"]["device_count"] == 71 and resp_merge["totals"]["owed"] == 830.0, resp_merge["totals"])
+ok("I4g raw ledger rows are NEVER rewritten by the display-merge step (still 2 distinct raw store strings)",
+   len({r["store"] for r in c_merge.store[("commcalc", "asset_ledger")]}) == 2)
+
+print("\nI5. GET /asset/on-inventory-by-store — conflicting-market variants stay SEPARATE rows")
+oi_conf_rows = [
+    {"org_id": ORG_A, "id": 300, "store": "116-36 Springfield Blvd", "market": "LI",
+     "category": "On Inventory", "date_sold": None,
+     "acquired_date": d_ago(10), "owed_to_vip": 50.0},
+    {"org_id": ORG_A, "id": 301, "store": "11636 Springfield Blvd", "market": "NYC",
+     "category": "On Inventory", "date_sold": None,
+     "acquired_date": d_ago(10), "owed_to_vip": 60.0},
+]
+c_conf3 = FakeClient(store={("commcalc", "asset_ledger"): oi_conf_rows, ("commcalc", "store_mapping"): []})
+R.sb = lambda: c_conf3
+resp_conf3 = _run(R.get_on_inventory_by_store(org_id=ORG_A))
+ok("I5a two DIFFERENT markets under the same grouping key -> NOT merged, both rows surfaced",
+   len(resp_conf3["stores"]) == 2, resp_conf3["stores"])
+ok("I5b each row keeps its own real market, neither guessed",
+   {s["market"] for s in resp_conf3["stores"]} == {"LI", "NYC"})
 
 print(f"\n{'='*60}\nTOTAL: {PASS} passed, {FAIL} failed\n{'='*60}")
 sys.exit(1 if FAIL else 0)

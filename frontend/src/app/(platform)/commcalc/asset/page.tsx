@@ -199,7 +199,12 @@ export default function AssetPage() {
       const stillGap = d.stores_unmapped > 0
         ? ` · ${d.stores_unmapped} store(s) still unmapped${d.unmapped_examples?.length ? ` (e.g. ${d.unmapped_examples.slice(0,3).join(', ')})` : ''}`
         : ''
-      setUploadMsg(`✅ Re-synced markets: ${d.stores_updated} store(s) / ${d.rows_updated.toLocaleString()} row(s) updated${stillGap}`)
+      // NIT-2: conflicting store_mapping rows (same address, different markets) are deliberately
+      // SKIPPED rather than arbitrary-picked — surfaced here so an admin knows to fix the data.
+      const conflictMsg = d.stores_conflicted > 0
+        ? ` · ⚠️ ${d.stores_conflicted} store(s) skipped — conflicting markets in Settings → Stores${d.conflicted_examples?.length ? ` (e.g. ${d.conflicted_examples.slice(0,3).join(', ')})` : ''}, fix the duplicate row(s) and re-sync`
+        : ''
+      setUploadMsg(`✅ Re-synced markets: ${d.stores_updated} store(s) / ${d.rows_updated.toLocaleString()} row(s) updated${stillGap}${conflictMsg}`)
       await loadSummary()
     } catch (e: any) {
       setUploadMsg(`❌ ${e.message}`)

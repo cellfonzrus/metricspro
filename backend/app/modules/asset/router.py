@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from datetime import datetime, timezone
+import re
 from app.core.database import get_supabase
 
 router = APIRouter()
@@ -279,12 +280,14 @@ _ADDR_WORD_FOLD = {
 
 
 def _normalize_addr(s: str) -> str:
-    """Loose, honest address key for store-text matching (see comment above MARKET_OVERRIDES).
+    """Loose, honest address key for store-text MATCHING (see comment above MARKET_OVERRIDES).
     NOT a geocoder — just case/whitespace/punctuation folding plus a small, fixed, visible
     street-suffix/direction abbreviation map. Two addresses that fold to the same key are treated
     as the same store; anything it can't resolve is left for MARKET_OVERRIDES or the market-gap
-    attention item, never silently guessed at."""
-    import re
+    attention item, never silently guessed at. Gate-1-reviewed as conservative-and-correct for
+    MATCHING specifically (no hyphen folding) — do not add a hyphen fold here; that's
+    `_grouping_key` below, a DISPLAY-only extension used for report rollups, never for deciding a
+    store's market."""
     s = (s or "").strip().lower()
     s = re.sub(r"[.,#]", " ", s)          # "Rd." / "Rd," / "Ste #3" -> plain separators
     s = re.sub(r"\s+", " ", s).strip()
@@ -292,24 +295,67 @@ def _normalize_addr(s: str) -> str:
     return " ".join(words)
 
 
+def _grouping_key(s: str) -> str:
+    """DISPLAY-ONLY grouping key for per-store REPORTS (on-inventory-by-store, the store picker on
+    Aging, and GET /filter-options' `store_groups`) — 2026-07-28 owner-driven addition, built on
+    real prod examples of fragmented per-store totals: "116-36 Springfield Blvd"(3 rows) +
+    "11636 Springfield Blvd"(68 rows), "5619 N Broad St"(38) + "5619 N Broad Street"(2), "652
+    Communipaw Ave"(64) + "652 Communipaw Avenue"(7).
+
+    Extends `_normalize_addr` with exactly ONE additional, targeted fold: a digit-HYPHEN-digit
+    house-number token ("116-36" -> "11636", the Queens-style hyphenated house-number convention)
+    collapses to plain digits. General hyphens elsewhere are untouched. This is DELIBERATELY not
+    folded into `_normalize_addr` itself — Gate-1 confirmed that function's current conservatism is
+    correct for deciding a store's MARKET, and a hyphen fold there could theoretically merge two
+    genuinely different addresses that happen to share a hyphenated-number shape. Grouping for
+    DISPLAY is a lower-stakes operation (worst case: two rows shown together with a correct,
+    summed total and an honest "also seen as" annotation — never a wrong market, never a rewritten
+    ledger row) so the extra fold is safe to apply only here."""
+    return re.sub(r"(\d+)-(\d+)", r"\1\2", _normalize_addr(s))
+
+
 def _store_mapping_market_index(client, org_id: str):
-    """(exact addr(lower,strip) -> market, normalized addr -> market) from store_mapping — the
-    live canon, read fresh on every call so a market edited AFTER the last upload is picked up the
-    moment someone calls _backfill_market again (manually via /resync-market, or the next upload)."""
+    """(exact addr(lower,strip) -> market, normalized addr -> market, exact_conflicts,
+    norm_conflicts) from store_mapping — the live canon, read fresh on every call so a market
+    edited AFTER the last upload is picked up the moment someone calls _backfill_market again
+    (manually via /resync-market, or the next upload).
+
+    2026-07-28 fix (Gate-1 NIT-2): a matching key (exact OR normalized) with TWO OR MORE
+    store_mapping rows disagreeing on market is a genuine data-quality conflict, not something to
+    arbitrary-pick a winner for. Such a key is EXCLUDED from the returned `exact`/`norm` maps
+    entirely and instead listed in `exact_conflicts`/`norm_conflicts` (each:
+    `{"key":..., "markets": {market: [addresses...]}}`) so `_backfill_market` can skip those stores
+    and report them rather than silently (and arbitrarily) picking whichever row the query happened
+    to return first."""
     sm = client.schema("commcalc").table("store_mapping") \
         .select("store_address,market").eq("org_id", org_id).execute().data or []
-    exact, norm = {}, {}
+    exact_candidates: dict = {}
+    norm_candidates: dict = {}
     for m in sm:
         mk = m.get("market")
         if not mk:
             continue
-        a = (m.get("store_address") or "").strip().lower()
-        if a:
-            exact[a] = mk
-        na = _normalize_addr(m.get("store_address"))
-        if na:
-            norm.setdefault(na, mk)   # first store_mapping row wins on a normalized collision
-    return exact, norm
+        addr = (m.get("store_address") or "").strip()
+        if not addr:
+            continue
+        ek = addr.lower()
+        exact_candidates.setdefault(ek, {}).setdefault(mk, []).append(addr)
+        nk = _normalize_addr(addr)
+        if nk:
+            norm_candidates.setdefault(nk, {}).setdefault(mk, []).append(addr)
+
+    def _split(candidates):
+        resolved, conflicts = {}, []
+        for key, by_market in candidates.items():
+            if len(by_market) == 1:
+                resolved[key] = next(iter(by_market))
+            else:
+                conflicts.append({"key": key, "markets": by_market})
+        return resolved, conflicts
+
+    exact, exact_conflicts = _split(exact_candidates)
+    norm, norm_conflicts = _split(norm_candidates)
+    return exact, norm, exact_conflicts, norm_conflicts
 
 
 _MARKET_OVERRIDES_NORM = None  # lazily built once per process; MARKET_OVERRIDES is a static dict
@@ -322,15 +368,29 @@ def _market_overrides_norm() -> dict:
     return _MARKET_OVERRIDES_NORM
 
 
-def _resolve_store_market(store: str, exact: dict, norm: dict) -> str | None:
+def _resolve_store_market(store: str, exact: dict, norm: dict,
+                          exact_conflicts=frozenset(), norm_conflicts=frozenset()):
     """One store's market: exact store_mapping match, then normalized store_mapping match, then
-    exact MARKET_OVERRIDES, then normalized MARKET_OVERRIDES. First hit wins."""
+    exact MARKET_OVERRIDES, then normalized MARKET_OVERRIDES. First hit wins.
+
+    Returns (market_or_None, conflicted_bool). `exact_conflicts`/`norm_conflicts` are sets of KEYS
+    (not the full detail — see `_store_mapping_market_index`). If the store's exact or normalized
+    key is a known conflict, resolution STOPS there and returns (None, True) — it never silently
+    falls through to a lower-priority source on an ambiguous key, and never arbitrary-picks."""
     if not store:
-        return None
-    return (exact.get(store.strip().lower())
-            or norm.get(_normalize_addr(store))
-            or MARKET_OVERRIDES.get(store)
-            or _market_overrides_norm().get(_normalize_addr(store)))
+        return None, False
+    ek = store.strip().lower()
+    if ek in exact_conflicts:
+        return None, True
+    if ek in exact:
+        return exact[ek], False
+    nk = _normalize_addr(store)
+    if nk in norm_conflicts:
+        return None, True
+    if nk in norm:
+        return norm[nk], False
+    ov = MARKET_OVERRIDES.get(store) or _market_overrides_norm().get(nk)
+    return (ov, False) if ov else (None, False)
 
 
 def _backfill_market(client, org_id: str) -> dict:
@@ -341,24 +401,30 @@ def _backfill_market(client, org_id: str) -> dict:
     on demand) — it always re-reads store_mapping fresh, so a market that was only just set/edited
     (in Settings -> Stores, or via StoreOps Admin propagating into store_mapping) gets picked up
     without needing a full ledger re-upload. Returns stats instead of nothing so a caller (the
-    resync endpoint) can tell the admin what actually changed."""
-    exact, norm = _store_mapping_market_index(client, org_id)
+    resync endpoint) can tell the admin what actually changed.
 
-    # Distinct asset stores + a per-store row count (so the resync summary can say how many ROWS
-    # were affected, not just how many distinct store strings).
-    counts: dict = {}
+    2026-07-28 fix (Gate-1 NIT-3): each resolved store's UPDATE is scoped to rows where
+    `market IS DISTINCT FROM <resolved>` (implemented as two disjoint queries — IS NULL, and
+    IS NOT NULL AND != resolved — since PostgREST/SQL `.neq()` never matches NULL) rather than a
+    single first-seen-row comparison. A store with a MIXED market state across its own rows (some
+    already correct, some stale from a bug/partial-resync before this fix existed) now self-heals
+    every stale row instead of no-op'ing the whole store because the first row happened to already
+    match. Still idempotent: if every row already matches, both scoped queries touch zero rows."""
+    exact, norm, exact_conflicts, norm_conflicts = _store_mapping_market_index(client, org_id)
+    exact_conflict_keys = {c["key"] for c in exact_conflicts}
+    norm_conflict_keys = {c["key"] for c in norm_conflicts}
+
+    # Distinct asset stores.
+    stores: set = set()
     page = 0; PAGE = 1000
     while True:
         start = page * PAGE
         chunk = client.schema("commcalc").table("asset_ledger") \
-            .select("store,market").eq("org_id", org_id) \
+            .select("store").eq("org_id", org_id) \
             .range(start, start + PAGE - 1).execute().data or []
         for r in chunk:
-            s = r.get("store")
-            if not s:
-                continue
-            d = counts.setdefault(s, {"rows": 0, "current_market": r.get("market")})
-            d["rows"] += 1
+            if r.get("store"):
+                stores.add(r["store"])
         if len(chunk) < PAGE:
             break
         page += 1
@@ -367,25 +433,98 @@ def _backfill_market(client, org_id: str) -> dict:
 
     updated_stores, updated_rows = [], 0
     unmapped_stores = []
-    for store, d in counts.items():
-        market = _resolve_store_market(store, exact, norm)
-        if market:
-            if market != d["current_market"]:
-                client.schema("commcalc").table("asset_ledger") \
-                    .update({"market": market}).eq("org_id", org_id).eq("store", store).execute()
-                updated_stores.append({"store": store, "market": market, "rows": d["rows"]})
-                updated_rows += d["rows"]
-        else:
+    conflict_stores = []
+    for store in stores:
+        market, conflicted = _resolve_store_market(store, exact, norm, exact_conflict_keys, norm_conflict_keys)
+        if conflicted:
+            conflict_stores.append(store)
+            continue
+        if not market:
             unmapped_stores.append(store)
+            continue
+        # WHERE market IS DISTINCT FROM <market>, as two disjoint scoped updates (NIT-3).
+        resp_null = client.schema("commcalc").table("asset_ledger") \
+            .update({"market": market}).eq("org_id", org_id).eq("store", store) \
+            .is_("market", "null").execute()
+        resp_diff = client.schema("commcalc").table("asset_ledger") \
+            .update({"market": market}).eq("org_id", org_id).eq("store", store) \
+            .neq("market", market).execute()
+        n = len(resp_null.data or []) + len(resp_diff.data or [])
+        if n:
+            updated_stores.append({"store": store, "market": market, "rows": n})
+            updated_rows += n
 
     return {
-        "distinct_stores": len(counts),
+        "distinct_stores": len(stores),
         "stores_updated": len(updated_stores),
         "rows_updated": updated_rows,
         "updated": updated_stores,
         "stores_unmapped": len(unmapped_stores),
         "unmapped_examples": sorted(unmapped_stores)[:10],
+        "stores_conflicted": len(conflict_stores),
+        "conflicted_examples": sorted(conflict_stores)[:10],
+        "market_conflicts": (exact_conflicts + norm_conflicts)[:10],
     }
+
+
+def _canon_by_grouping_key(client, org_id: str) -> dict:
+    """grouping_key -> ONE canonical commcalc.store_mapping.store_address, for the DISPLAY-name
+    step of `_build_store_display_groups`. When more than one distinct store_mapping address folds
+    to the same grouping key (a store_mapping data-quality question of its own, not this helper's
+    job to adjudicate), picks the alphabetically-first deterministically rather than guessing."""
+    sm = client.schema("commcalc").table("store_mapping") \
+        .select("store_address").eq("org_id", org_id).execute().data or []
+    by_key: dict = {}
+    for m in sm:
+        addr = (m.get("store_address") or "").strip()
+        if addr:
+            by_key.setdefault(_grouping_key(addr), set()).add(addr)
+    return {k: sorted(v)[0] for k, v in by_key.items()}
+
+
+def _build_store_display_groups(store_counts: dict, store_markets: dict, canon_by_key: dict) -> dict:
+    """DISPLAY-LEVEL variant merging for per-store reports (2026-07-28 owner-driven addition, real
+    prod examples: "116-36 Springfield Blvd"+"11636 Springfield Blvd", "5619 N Broad St"+"...
+    Street", "652 Communipaw Ave"+"...Avenue"). Groups raw asset_ledger store strings by
+    `_grouping_key` (see its docstring — a DISPLAY-only extra fold on top of `_normalize_addr`,
+    never used for market matching). `commcalc.asset_ledger.store` is NEVER rewritten — this only
+    shapes what a report/picker SHOWS.
+
+    Honesty rule (same as the market-matching conflict fix, NIT-2): a group whose members carry
+    CONFLICTING non-null markets is NEVER merged — each such store is returned as its own singleton
+    group instead, so two genuinely different stores that happen to share a grouping key are always
+    surfaced separately, never silently combined.
+
+    Args:
+      store_counts:  {raw_store: row_count} — used only as a "most frequent variant" tie-break when
+                     there's no unambiguous store_mapping canonical name for the group.
+      store_markets: {raw_store: market_or_None} — the store's OWN currently-resolved market (e.g.
+                     read straight off asset_ledger.market post-backfill; no re-derivation here).
+      canon_by_key:  from `_canon_by_grouping_key` — preferred display name when available.
+
+    Returns {raw_store: {"key","display","variants","also_seen_as","market"}}, one entry per raw
+    store text in `store_counts`, so a caller can look up any row's group directly."""
+    by_key: dict = {}
+    for store in store_counts:
+        by_key.setdefault(_grouping_key(store), []).append(store)
+
+    result: dict = {}
+    for key, members in by_key.items():
+        member_markets = {store_markets.get(s) for s in members if store_markets.get(s)}
+        if len(members) > 1 and len(member_markets) > 1:
+            # Conflicting non-null markets under one grouping key -> never merge (NIT-2 honesty rule).
+            for store in members:
+                result[store] = {"key": f"{key}::{store}", "display": store, "variants": [store],
+                                 "also_seen_as": [], "market": store_markets.get(store)}
+            continue
+        variants = sorted(set(members))
+        canon = canon_by_key.get(key)
+        display = canon if canon else max(variants, key=lambda s: (store_counts.get(s, 0), s))
+        market = next(iter(member_markets)) if member_markets else None
+        for store in members:
+            result[store] = {"key": key, "display": display, "variants": variants,
+                             "also_seen_as": [v for v in variants if v != display], "market": market}
+    return result
 
 
 def _store_canon_map(client, org_id: str) -> dict:
@@ -618,20 +757,45 @@ async def get_filter_options(org_id: str = ORG_ID):
             break
     markets = set()
     store_to_market = {}
+    store_counts: dict = {}
     no_market_count = 0
     for r in rows:
+        s = r.get("store")
         if r.get("market"):
             markets.add(r["market"])
-        elif r.get("store"):
+        elif s:
             no_market_count += 1
-        if r.get("store"):
-            store_to_market[r["store"]] = r.get("market")
+        if s:
+            store_to_market[s] = r.get("market")
+            store_counts[s] = store_counts.get(s, 0) + 1
     stores = [{"store": k, "market": v} for k, v in store_to_market.items()]
     stores.sort(key=lambda x: x["store"])
+
+    # store_groups (2026-07-28 owner-driven addition): DISPLAY-level variant merging, additive —
+    # `stores`/`markets` above are UNCHANGED (every existing single-select picker keeps working
+    # byte-identically). Only Aging and On-Inventory (the two pages with multi-select + comma-
+    # joined .in_() store filtering already built this package) adopt `store_groups`; a group's
+    # `variants` list is exactly what the frontend joins with commas into the existing `store` param
+    # when that group is picked — no new backend filtering logic needed for the picker itself.
+    # Best-effort: a grouping bug must never break the stores/markets response other pages depend on.
+    try:
+        canon_by_key = _canon_by_grouping_key(client, org_id)
+        grouped = _build_store_display_groups(store_counts, store_to_market, canon_by_key)
+        seen_keys, store_groups = set(), []
+        for s in stores:
+            g = grouped.get(s["store"])
+            if not g or g["key"] in seen_keys:
+                continue
+            seen_keys.add(g["key"])
+            store_groups.append({**g, "row_count": sum(store_counts.get(v, 0) for v in g["variants"])})
+        store_groups.sort(key=lambda g: g["display"])
+    except Exception:
+        store_groups = []
+
     # "(no market)" bucket (2026-07-27 fix): tell the caller how many rows have no market so a
     # report page can offer an explicit "(no market)" option (value NO_MARKET_SENTINEL) in its
     # market picker instead of those rows being unreachable from every market filter.
-    return {"markets": sorted(markets), "stores": stores,
+    return {"markets": sorted(markets), "stores": stores, "store_groups": store_groups,
             "no_market_count": no_market_count, "no_market_value": NO_MARKET_SENTINEL}
 
 
@@ -1271,7 +1435,11 @@ async def get_aging(
         "warn":    {"count": 0, "owed": 0.0, "rows": []},   # 45-60
         "missed":  {"count": 0, "owed": 0.0, "rows": []},   # >60
     }
-    zero_rows = []  # plain On Inventory, $0 owed
+    zero_rows = []          # plain On Inventory, $0 owed
+    unknown_age_rows = []   # owed>0 but acquired_date is NULL/unparseable — can't bucket by age,
+                             # but it's REAL outstanding inventory (Gate-1 NIT-1: these used to be
+                             # silently dropped from every total here while on-inventory-by-store
+                             # counted them — an explicit bucket now keeps the two reconciling).
 
     for r in rows:
         owed = float(r.get("owed_to_vip") or 0)
@@ -1282,7 +1450,8 @@ async def get_aging(
         d = days_aged(r)
         r["days_aged"] = d
         if d is None:
-            r["_bucket"] = None
+            r["_bucket"] = "unknown_age"
+            unknown_age_rows.append(r)
             continue
         if d < 45:
             b = "under45"
@@ -1298,15 +1467,17 @@ async def get_aging(
     for b in buckets.values():
         b["owed"] = round(b["owed"], 2)
         b["rows"].sort(key=lambda x: (x.get("days_aged") or 0), reverse=True)
+    unknown_age_owed = round(sum(float(r.get("owed_to_vip") or 0) for r in unknown_age_rows), 2)
 
     # Attach VIP invoice # + date to every device row we return (in place).
     zero_returned = zero_rows[:500]
+    unknown_age_returned = unknown_age_rows[:500]
     _attach_vip_invoices(client, org_id,
                          buckets["under45"]["rows"] + buckets["warn"]["rows"]
-                         + buckets["missed"]["rows"] + zero_returned)
+                         + buckets["missed"]["rows"] + zero_returned + unknown_age_returned)
     _attach_investigation(client, org_id,
                           buckets["under45"]["rows"] + buckets["warn"]["rows"]
-                          + buckets["missed"]["rows"] + zero_returned)
+                          + buckets["missed"]["rows"] + zero_returned + unknown_age_returned)
 
     # data freshness: max FileDate from raw_row
     fd = None
@@ -1317,25 +1488,31 @@ async def get_aging(
         if fd:
             fd = str(fd)[:10]
 
-    # ── Footer totals (2026-07-28 addition): total $ amount + total phones outstanding, over
-    # EVERY filtered row (the 3 aged buckets AND the $0 zero-inventory rows — "outstanding" means
-    # "still unsold on this filter", not just the ones with billing risk). $ column choice:
-    # owed_to_vip — the SAME column every other asset report (Charges Dashboard, RMA, Owed-Weekly)
-    # already treats as the device's $ value/exposure. selling_price (retail sale price) and
-    # reimbursement/commissions don't apply to an unsold on-inventory device the way owed_to_vip
-    # does, so this is the one honest choice, not a guess — labeled explicitly in the response so
-    # the column is never ambiguous to whoever reads it.
-    all_rows = buckets["under45"]["rows"] + buckets["warn"]["rows"] + buckets["missed"]["rows"] + zero_rows
+    # ── Footer totals (2026-07-28 addition, NIT-1 2026-07-28): total $ amount + total phones
+    # outstanding, over EVERY filtered row — the 3 aged buckets, the $0 zero-inventory rows, AND
+    # the unknown-age rows ("outstanding" means "still unsold on this filter", not just the ones
+    # with billing risk or a known age — an owed>0 row with no usable acquired_date is still real
+    # outstanding inventory, and on-inventory-by-store already counts it in ITS totals, so aging
+    # must too or the two reports silently disagree). $ column choice: owed_to_vip — the SAME
+    # column every other asset report (Charges Dashboard, RMA, Owed-Weekly) already treats as the
+    # device's $ value/exposure. selling_price (retail sale price) and reimbursement/commissions
+    # don't apply to an unsold on-inventory device the way owed_to_vip does, so this is the one
+    # honest choice, not a guess — labeled explicitly in the response so the column is never
+    # ambiguous to whoever reads it.
+    all_rows = (buckets["under45"]["rows"] + buckets["warn"]["rows"] + buckets["missed"]["rows"]
+               + zero_rows + unknown_age_rows)
     total_amount = round(sum(float(r.get("owed_to_vip") or 0) for r in all_rows), 2)
     total_phones_outstanding = len(all_rows)
 
     # ── Per-device-model breakdown (2026-07-28 addition): count of phones per model, split by
-    # aging bucket, honoring every active filter above (same `all_rows`, not a fresh query).
+    # aging bucket (incl. unknown_age), honoring every active filter above (same `all_rows`, not a
+    # fresh query).
     model_map: dict = {}
     for r in all_rows:
         model = r.get("device_model") or "(unknown model)"
         d = model_map.setdefault(model, {"device_model": model, "under45": 0, "warn": 0,
-                                         "missed": 0, "zero": 0, "total": 0, "owed": 0.0})
+                                         "missed": 0, "zero": 0, "unknown_age": 0,
+                                         "total": 0, "owed": 0.0})
         b = r.get("_bucket") or "zero"
         if b not in d:
             b = "zero"
@@ -1353,6 +1530,8 @@ async def get_aging(
         "data_as_of": fd,
         "buckets": buckets,
         "zero_inventory": {"count": len(zero_rows), "rows": zero_returned},
+        "unknown_age": {"count": len(unknown_age_rows), "owed": unknown_age_owed,
+                        "rows": unknown_age_returned},
         "totals": {
             "flagged_count": sum(b["count"] for b in buckets.values()),
             "flagged_owed": round(sum(b["owed"] for b in buckets.values()), 2),
@@ -1365,7 +1544,8 @@ async def get_aging(
                           "omitted": max(0, by_model_total - len(by_model_shown))},
         "bucket_basis": ("acquired_date / date range narrows which devices are INCLUDED; the "
                          "aging bucket (<45 / 45-60 / >60 days) is always computed AS OF TODAY, "
-                         "not the filter range."),
+                         "not the filter range. Rows with owed_to_vip > 0 but no usable "
+                         "acquired_date land in 'unknown_age', not silently dropped."),
         "filters": {"store": store or None, "market": market or None, "month": month, "year": year,
                     "date_from": date_from or None, "date_to": date_to or None},
     }
@@ -1605,7 +1785,8 @@ async def get_on_inventory_by_store(
                 "under45_count": 0, "under45_owed": 0.0,
                 "warn_count": 0, "warn_owed": 0.0,
                 "missed_count": 0, "missed_owed": 0.0,
-                "zero_count": 0}
+                "zero_count": 0,
+                "unknown_age_count": 0, "unknown_age_owed": 0.0}   # NIT-1: explicit, not silently folded
 
     by_store: dict = {}
     for r in rows:
@@ -1621,6 +1802,8 @@ async def get_on_inventory_by_store(
         row["owed"] += owed
         d = days_aged(r.get("acquired_date"))
         if d is None:
+            row["unknown_age_count"] += 1
+            row["unknown_age_owed"] += owed
             continue
         if d < 45:
             bk = "under45"
@@ -1633,9 +1816,39 @@ async def get_on_inventory_by_store(
 
     stores = []
     for v in by_store.values():
-        for k in ("owed", "under45_owed", "warn_owed", "missed_owed"):
+        for k in ("owed", "under45_owed", "warn_owed", "missed_owed", "unknown_age_owed"):
             v[k] = round(v[k], 2)
         stores.append(v)
+
+    # ── DISPLAY-LEVEL variant merging (2026-07-28 owner-driven addition, real prod examples:
+    # "116-36 Springfield Blvd"(3)+"11636 Springfield Blvd"(68), "5619 N Broad St"(38)+"...
+    # Street"(2), "652 Communipaw Ave"(64)+"...Avenue"(7)). Sums every numeric field across raw
+    # spelling variants of the same real store into ONE row; ledger data (asset_ledger.store) is
+    # NEVER rewritten — this is a response-shaping step only, after all the per-store math above.
+    # Never merges a group whose members carry CONFLICTING markets (NIT-2 honesty rule) — best
+    # effort, a grouping bug must never break the underlying per-store report.
+    NUMERIC_INT = ("count", "under45_count", "warn_count", "missed_count", "zero_count", "unknown_age_count")
+    NUMERIC_MONEY = ("owed", "under45_owed", "warn_owed", "missed_owed", "unknown_age_owed")
+    try:
+        store_counts_for_group = {s["store"]: s["count"] for s in stores}
+        store_markets_for_group = {s["store"]: s["market"] for s in stores}
+        canon_by_key = _canon_by_grouping_key(client, org_id)
+        grouped = _build_store_display_groups(store_counts_for_group, store_markets_for_group, canon_by_key)
+        merged: dict = {}
+        for s in stores:
+            g = grouped.get(s["store"]) or {"key": s["store"], "display": s["store"],
+                                            "variants": [s["store"]], "also_seen_as": [], "market": s["market"]}
+            m = merged.setdefault(g["key"], {"store": g["display"], "market": g["market"],
+                                             "also_seen_as": g["also_seen_as"],
+                                             **{k: 0 for k in NUMERIC_INT}, **{k: 0.0 for k in NUMERIC_MONEY}})
+            for k in NUMERIC_INT:
+                m[k] += s.get(k, 0)
+            for k in NUMERIC_MONEY:
+                m[k] = round(m[k] + s.get(k, 0.0), 2)
+        stores = list(merged.values())
+    except Exception:
+        pass  # display grouping is best-effort; fall back to the un-merged per-raw-store list
+
     stores.sort(key=lambda x: x["owed"], reverse=True)
 
     # data freshness: max FileDate from raw_row (same signal the Aging report uses)
@@ -1662,6 +1875,8 @@ async def get_on_inventory_by_store(
         "missed_owed": round(sum(s["missed_owed"] for s in stores), 2),
         "warn_owed": round(sum(s["warn_owed"] for s in stores), 2),
         "zero_count": sum(s["zero_count"] for s in stores),
+        "unknown_age_count": sum(s["unknown_age_count"] for s in stores),
+        "unknown_age_owed": round(sum(s["unknown_age_owed"] for s in stores), 2),
         "total_amount": total_amount,
         "total_amount_column": "owed_to_vip",
         "total_phones_outstanding": device_count,
@@ -1670,7 +1885,9 @@ async def get_on_inventory_by_store(
         "today": today.isoformat(), "data_as_of": fd, "stores": stores, "totals": totals,
         "bucket_basis": ("acquired_date / date range narrows which devices are INCLUDED; the "
                          "aging bucket (<45 / 45-60 / >60 days) is always computed AS OF TODAY, "
-                         "not the filter range."),
+                         "not the filter range. Rows with owed_to_vip > 0 but no usable "
+                         "acquired_date land in unknown_age_count/owed per store, not silently "
+                         "dropped (device_count/total_amount already include them)."),
         "filters": {"store": store or None, "market": market or None, "month": month, "year": year,
                     "date_from": date_from or None, "date_to": date_to or None},
     }
