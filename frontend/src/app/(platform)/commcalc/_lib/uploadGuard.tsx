@@ -17,12 +17,95 @@ export interface UploadOutcome {
   text: string        // one-line honest summary (already carries the right emoji-free wording)
   reason?: string     // the specific guard/shrink reason, when present
   saved: number
+  details?: string[]  // per-sheet / per-column forensics (X-report), rendered as a list in the banner
+  title?: string      // banner heading override — 'refused, data protected' is wrong for a parse miss
+}
+
+// ── X-REPORT (POS tenders) ──────────────────────────────────────────────────────────────────────
+// Owner live bug 2026-07-28: a real B2B Soft X-Report uploaded through Data Imports rendered
+// "✅ Saved 0 rows." — green, zero rows, zero explanation. The backend now returns a machine-readable
+// `skipped` reason + a human `note` + `xreport_diag`; this maps them to an amber banner that names
+// the reason, the per-sheet outcome and the tender labels it did not recognize.
+const XREPORT_ZERO_FIX: Record<string, string> = {
+  no_sheets_matched:
+    'The file had no readable rows at all. Re-run the X-Report for ONE day and upload the .xlsx it produces.',
+  header_not_found:
+    "No sheet carried the tender header we look for ('Tender Types' … 'Net' … 'Refunds' or 'Sub Net'). " +
+    'The closest-looking rows are listed below — if your export words that header differently, send those ' +
+    'exact cells to the commission owner so the parser can learn the wording.',
+  all_labels_unmatched:
+    'The tender matrix was found, but none of its tender labels are recognized. Map the labels listed below ' +
+    'under Closing → Tender Config (the x_report leg), then upload the same file again.',
+  no_flat_columns:
+    "This file isn't shaped like an X-Report: it needs a store column (Store / Location / Site / Register), " +
+    'a tender column (Tender Type / Payment Type / Media) and an amount column (Amount / Total / Net).',
+  all_upserts_failed:
+    'The tender rows parsed correctly but the database rejected EVERY write — see the error below. ' +
+    'Nothing was stored.',
+}
+
+/** Per-sheet / per-column forensics from the backend's `xreport_diag`, as display lines. */
+function xreportDetails(r: any): string[] {
+  const d = r?.xreport_diag
+  if (!d) return []
+  const out: string[] = []
+  const path = d.parser_path === 'multi_sheet' ? 'multi-sheet workbook (one sheet per store)'
+    : d.parser_path === 'flat' ? 'flat single-sheet columns' : 'neither parser matched'
+  out.push(`Parser used: ${path}. Sheets read: ${d.sheets_read ?? 0}; tender header found on ${d.headers_found ?? 0}.`)
+  for (const s of (Array.isArray(d.sheets) ? d.sheets : []).slice(0, 12)) {
+    if (s.outcome === 'rows' || s.outcome === 'no_labels_matched') {
+      out.push(
+        `Sheet "${s.sheet}": header at row ${s.header_row} (${s.header_wording}) — ` +
+        `${s.matched} tender row(s) matched, ${s.skipped} skipped` +
+        (s.skipped_labels?.length ? `: ${s.skipped_labels.join(', ')}` : '') + '.')
+    } else if (s.outcome === 'header_not_found') {
+      const near = [s.closest_row, ...(s.closest_row?.others || [])].filter(Boolean).slice(0, 2)
+      out.push(
+        `Sheet "${s.sheet}" (${s.rows} rows): no tender header found.` +
+        (near.length ? ` Closest row(s) — ${near.map((n: any) => `row ${n.row}: ${(n.cells || []).join(' | ')}`).join(' ;; ')}` : ''))
+    } else {
+      out.push(`Sheet "${s.sheet}": empty.`)
+    }
+  }
+  if (d.unmatched_labels?.length) {
+    out.push(`Tender labels NOT recognized (nothing was ingested for these): ${d.unmatched_labels.join(', ')}. ` +
+      `${d.config_label_count ?? 0} label(s) are mapped for this tenant today.`)
+  }
+  if (d.flat) {
+    out.push(`Flat fallback: ${d.flat.rows} row(s); store column = ${d.flat.store_col || 'NOT FOUND'}, ` +
+      `tender column = ${d.flat.tender_col || 'NOT FOUND'}, amount column = ${d.flat.amount_col || 'NOT FOUND'}. ` +
+      `Columns seen: ${(d.flat.columns || []).join(', ') || '(none)'}.`)
+  }
+  if (d.upsert_attempts) {
+    out.push(`Database writes: ${d.upsert_attempts} attempted, ${d.save_failures || 0} failed` +
+      (d.first_error ? ` — first error: ${d.first_error}` : '') + '.')
+  }
+  return out
 }
 
 /** Interpret a raw /upload* response into a display outcome. Safe on any shape (defensive). */
 export function readUploadOutcome(r: any, unit = 'row(s)'): UploadOutcome {
   const shrink: any[] = Array.isArray(r?.shrink) ? r.shrink : []
-  const saved = Number(r?.saved ?? r?.rows_saved ?? r?.rows ?? r?.count ?? 0) || 0
+  // `tenders` is the X-report's own count — it never returned `saved`, so a GOOD X-report upload
+  // still printed "Saved 0 rows" (the backend now sends both; the fallback keeps older payloads honest).
+  const saved = Number(r?.saved ?? r?.rows_saved ?? r?.rows ?? r?.count ?? r?.tenders ?? 0) || 0
+  if (r?.file_type === 'x_report' && r?.skipped) {
+    const details = xreportDetails(r)
+    const fix = XREPORT_ZERO_FIX[r.skipped as string]
+    if (fix) {
+      const reason = `${r?.note || 'The X-Report saved 0 tender rows.'} — ${fix}`
+      return { tone: 'guard', reason, saved: 0, details,
+               title: `X-Report saved 0 tender rows — ${r.skipped}`,
+               text: `X-Report saved 0 tender rows (${r.skipped}). ${reason}` }
+    }
+    // x_report_partial_save / x_report_unmapped_labels — rows DID land, with a caveat.
+    const reason = (r?.note as string) || 'Some tender rows were not stored.'
+    return { tone: 'warn', reason, saved, details,
+             title: r.skipped === 'x_report_unmapped_labels'
+               ? 'Saved — but some tender labels are unmapped (their dollars are missing from the recon)'
+               : 'Saved — but some tender rows failed to store',
+             text: `Saved ${saved.toLocaleString()} tender row(s), with a warning: ${reason}` }
+  }
   if (r?.skipped === 'price_guard') {
     const reason = (shrink[0]?.reason as string) ||
       'Refused to protect existing data: this file carries far fewer priced (Ext Price) rows than are ' +
@@ -90,9 +173,20 @@ export function UploadGuardBanner({ outcome, style }: { outcome: UploadOutcome |
       }}
     >
       <div style={{ fontWeight: 700, marginBottom: 2 }}>
-        {guard ? '⚠️ Upload refused — existing data protected' : '⚠️ Saved, but with a data warning'}
+        {outcome.title ? `⚠️ ${outcome.title}`
+          : guard ? '⚠️ Upload refused — existing data protected' : '⚠️ Saved, but with a data warning'}
       </div>
       <div>{outcome.reason || outcome.text}</div>
+      {!!outcome.details?.length && (
+        <details style={{ marginTop: 8 }}>
+          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>What the importer actually saw</summary>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {outcome.details.map((d, i) => (
+              <li key={i} style={{ marginBottom: 3, fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }}>{d}</li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   )
 }

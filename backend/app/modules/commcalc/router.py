@@ -84,10 +84,14 @@ def _write_upload_trace(org_id, *, source="manual", filename=None, upload_type=N
     try:
         res = result if isinstance(result, dict) else {}
         tr = res.get("_trace") if isinstance(res.get("_trace"), dict) else {}
-        # rows saved: the sales/daily path returns 'saved'; x_report 'tenants'; inventory 'saved'; custom 'rows'.
+        # rows saved: the sales/daily path returns 'saved'; inventory 'saved'; custom 'rows'.
+        # x_report USED to be read as res['tenants'] — a typo for its real key 'tenders', so an
+        # X-Report ingest traced rows_saved = the STORE count (multi-sheet) or NULL (flat), never the
+        # tender count. It now returns 'saved' directly (fixed 2026-07-28); both spellings stay in the
+        # fallback chain so an older/replayed payload still traces something truthful.
         rows_saved = res.get("saved")
         if rows_saved is None:
-            rows_saved = res.get("tenants", res.get("stores", res.get("rows")))
+            rows_saved = res.get("tenders", res.get("tenants", res.get("stores", res.get("rows"))))
         # DEVICE-ONLY inventory aging: 0 stores ('saved' keeps its store-count meaning) but N per-device
         # rows really were written — report the real count. Guarded by the marker so no other path moves.
         if not rows_saved and res.get("skipped") == "inventory_devices_only":
@@ -96,7 +100,8 @@ def _write_upload_trace(org_id, *, source="manual", filename=None, upload_type=N
         if status is None:
             if error:
                 status = "error"
-            elif res.get("skipped") in ("price_guard_partial", "inventory_devices_only"):
+            elif res.get("skipped") in ("price_guard_partial", "inventory_devices_only",
+                                        "x_report_partial_save", "x_report_unmapped_labels"):
                 # Both are REAL ingests carrying a caveat (some days kept / stores not parsed) — 'partial',
                 # never 'skipped', which would claim nothing was written.
                 status = "partial"
@@ -105,6 +110,11 @@ def _write_upload_trace(org_id, *, source="manual", filename=None, upload_type=N
             else:
                 status = "ok"
         guard = res.get("shrink") or res.get("guarded_dates") or res.get("guard") or res.get("note")
+        # X-report: carry the parser forensics (per-sheet outcome, unrecognized labels, write failures)
+        # onto the trace row so "Where are my rows?" can answer WHY a tender upload saved nothing.
+        if isinstance(res.get("xreport_diag"), dict):
+            guard = {"note": (str(res.get("note"))[:500] if res.get("note") else None),
+                     "xreport_diag": res.get("xreport_diag")}
         row = {
             "org_id": org_id, "source": source, "filename": filename,
             "upload_type": upload_type,
@@ -203,16 +213,80 @@ _XR_TENDERS = {"cash", "check", "credit card", "gift card", "store account",
                "debit card", "credit", "debit", "card",
                "acima", "acima lease", "acima leasing", "acima (lease)", "lease"}
 
+# The header cell that OPENS the tender matrix. B2B Soft writes the plural; other POS builds (and some
+# report-designer variants) write the singular — accepted ONLY when the same row also carries the
+# Net + Refunds/Sub Net signals, so a stray "Tender Type" caption elsewhere can't be mistaken for it.
+_XR_HDR_TENDER_CELLS = ("tender types", "tender type")
+_XR_HDR_REFUND_CELLS = ("refunds", "sub net")
 
-def _parse_xreport(contents: bytes, filename: str, fallback_date: str = None):
-    """Parse the POS 'X-Report' workbook, which is ONE SHEET PER STORE (sheet name = store address),
-    each holding a 'Tendered Amounts' matrix (Tender Types rows × Sales..Net columns). Returns
-    [(store, date_iso, tender_type, net_amount)]. The date is the filename range
-    X-Report_MMDDYYYY-MMDDYYYY — which MUST be a single day (start==end); a multi-day range raises
-    ValueError (an X-Report reconciles ONE day's drawer). With no filename date, uses fallback_date
-    (YYYY-MM-DD, e.g. the day being viewed) else the business-local date.
-    Returns [] if the workbook isn't this format (caller then tries the generic flat parser)."""
+
+def _xr_norm(s):
+    """Fold a POS label to a comparable form: NFKC, invisible/nbsp -> space, whitespace collapsed,
+    casefolded. NO synonym mapping — this only makes two labels that RENDER identically compare equal
+    (an internal U+00A0 in 'Credit  Card' used to silently miss). Same class of defect as the VidaPay
+    report-name match (2026-07-28)."""
+    import unicodedata as _ud
+    t = _ud.normalize("NFKC", str(s or ""))
+    for ch in ("\u00a0", "\u200b", "\u200c", "\u200d", "\ufeff", "\u2007", "\u202f"):
+        t = t.replace(ch, " ")
+    return " ".join(t.split()).casefold()
+
+
+def _xr_header_scan(rows):
+    """Find the DETAILED tender header on one sheet. Returns
+    (hdr_idx, net_col, wording, closest) — hdr_idx None when not found, in which case `closest` is
+    {'row': i, 'cells': [...verbatim...], 'others': [...]} describing the rows that looked MOST like
+    the header (so a wording drift is reported with the ACTUAL cells instead of a silent skip). Up to
+    3 near-misses are kept, because the single best-scoring row is often the section's super-header
+    ('Tendered Amounts') while the row the operator needs to see is the column header beneath it."""
+    scored = []
+    for i, r in enumerate(rows):
+        cells = [str(c).strip() for c in r]
+        low = [_xr_norm(c) for c in cells]
+        tender_cell = next((cells[k] for k, c in enumerate(low) if c in _XR_HDR_TENDER_CELLS), None)
+        net_cols = [k for k, c in enumerate(low) if c == "net"]
+        refund_cell = next((cells[k] for k, c in enumerate(low) if c in _XR_HDR_REFUND_CELLS), None)
+        if tender_cell is not None and net_cols and refund_cell is not None:
+            wording = f"{tender_cell} + Net + {refund_cell}"
+            return i, max(net_cols), wording, None
+        # not the header — score how close it looked, for the honest "closest row" diagnostic
+        filled = [c for c in cells if c and c.lower() != "nan"]
+        score = (3 if any("tender" in c for c in low) else 0) + \
+                (2 if net_cols else (1 if any("net" in c for c in low) else 0)) + \
+                (1 if any(("refund" in c or "sub net" in c) for c in low) else 0) + \
+                (1 if len(filled) >= 3 else 0)          # a header row is WIDE; a caption is one cell
+        if score > 0:
+            scored.append((score, i, {"row": i, "cells": filled[:12], "score": score}))
+    if not scored:
+        return None, None, None, None
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    top = [t[2] for t in scored[:3]]
+    closest = dict(top[0])
+    closest["others"] = top[1:]
+    return None, None, None, closest
+
+
+def _parse_xreport_detail(contents: bytes, filename: str, fallback_date: str = None,
+                          extra_labels=None):
+    """`_parse_xreport` + a full DIAGNOSTIC of what the parser saw. Returns (rows, diag).
+
+    HONESTY CONTRACT (2026-07-28): this parser used to return [] for every shape mismatch, with no
+    trace of WHY — a header wording drift, an unknown tender label, or a non-workbook file all looked
+    identical to the caller, which then reported a green "Saved 0 rows". `diag` names the outcome of
+    every sheet: header found at row N (and which wording matched), or not found (with the closest
+    row's cells VERBATIM); tender rows matched vs skipped, with the skipped labels verbatim.
+
+    Behaviour change (deliberate): an unrecognized tender label no longer ABORTS the sheet. It is
+    SKIPPED and RECORDED; the block still ends on a blank / section-boundary row exactly as before,
+    so the scan can never run into a later section of the sheet.
+
+    `extra_labels` extends the recognized vocabulary (RULE TWO — the tenant's own
+    commcalc.closing_tender_map labels); it never replaces the built-ins."""
     import re as _re
+    diag = {"sheets_read": 0, "workbook_error": None, "sheets": [], "headers_found": 0,
+            "tender_rows_matched": 0, "tender_rows_skipped": 0, "duplicate_label_rows": 0,
+            "unmatched_labels": [],
+            "date": None, "builtin_label_count": len(_XR_TENDERS), "config_label_count": 0}
     m = _re.search(r'(\d{2})(\d{2})(\d{4})\s*-\s*(\d{2})(\d{2})(\d{4})', filename or "")
     if m:
         if (m.group(1), m.group(2), m.group(3)) != (m.group(4), m.group(5), m.group(6)):
@@ -230,32 +304,231 @@ def _parse_xreport(contents: bytes, filename: str, fallback_date: str = None):
                 ZoneInfo(settings.BUSINESS_TZ or "America/New_York")).date().isoformat()
         except Exception:
             date_iso = datetime.now(timezone.utc).date().isoformat()
+    diag["date"] = date_iso
+    known = {_xr_norm(t) for t in _XR_TENDERS}
+    known.discard("")
+    for lab in (extra_labels or []):
+        n = _xr_norm(lab)
+        if n:
+            known.add(n)
+            diag["config_label_count"] += 1
     try:
         sheets = pd.read_excel(io.BytesIO(contents), sheet_name=None, header=None, dtype=str)
-    except Exception:
-        return []
+    except Exception as e:
+        diag["workbook_error"] = str(e)[:200]
+        return [], diag
     out = []
+    seen_unmatched = []
     for sheet_name, df in sheets.items():
         store = str(sheet_name).strip()
         rows = df.fillna('').values.tolist()
-        hdr_idx, net_col = None, None
-        for i, r in enumerate(rows):
-            low = [str(c).strip().lower() for c in r]
-            # the DETAILED tender header (not the super-header) carries 'refunds'/'sub net' + 'net'
-            if "tender types" in low and "net" in low and ("refunds" in low or "sub net" in low):
-                hdr_idx = i
-                net_col = max(j for j, c in enumerate(low) if c == "net")
-                break
-        if hdr_idx is None:
+        diag["sheets_read"] += 1
+        sd = {"sheet": store, "rows": len(rows), "outcome": None, "header_row": None,
+              "header_wording": None, "matched": 0, "skipped": 0, "skipped_labels": [],
+              "closest_row": None}
+        if not rows:
+            sd["outcome"] = "empty_sheet"
+            diag["sheets"].append(sd)
             continue
+        hdr_idx, net_col, wording, closest = _xr_header_scan(rows)
+        if hdr_idx is None:
+            sd["outcome"] = "header_not_found"
+            sd["closest_row"] = closest
+            diag["sheets"].append(sd)
+            continue
+        diag["headers_found"] += 1
+        sd["header_row"] = hdr_idx
+        sd["header_wording"] = wording
+        seen_labels = set()
         for r in rows[hdr_idx + 1:]:
             cells = [str(c).strip() for c in r]
-            label = (cells[0].lower() if cells else "")
-            if not label or label == "0" or label not in _XR_TENDERS:
-                break   # blank row / next section ends the tender block
+            raw = cells[0] if cells else ""
+            label = _xr_norm(raw)
+            if not label or label in ("0", "nan", "none"):
+                break   # blank row / next section ends the tender block (unchanged)
+            if label not in known:
+                # UNKNOWN LABEL: skip this row and KEEP READING (it used to `break`, silently losing
+                # every tender row below it). Nothing is written for an unmapped label — it is
+                # REPORTED so the tenant can map it under Closing -> Tender Config.
+                sd["skipped"] += 1
+                diag["tender_rows_skipped"] += 1
+                if raw not in sd["skipped_labels"] and len(sd["skipped_labels"]) < 25:
+                    sd["skipped_labels"].append(raw)
+                if raw not in seen_unmatched and len(seen_unmatched) < 50:
+                    seen_unmatched.append(raw)
+                continue
+            if label in seen_labels:
+                # FIRST occurrence wins. Dropping the `break` above means the scan can, on an export
+                # with no blank row before its totals/next section, reach a SECOND row carrying a
+                # tender name — and the caller's {(store,date,tender): amount} dedupe was LAST-wins,
+                # which would overwrite the real drawer figure with a totals figure. Only one row per
+                # (store, tender) ever survived that dedupe, so this loses nothing and can only
+                # protect the matrix row.
+                sd["duplicates"] = sd.get("duplicates", 0) + 1
+                diag["duplicate_label_rows"] += 1
+                continue
+            seen_labels.add(label)
             amt = safe_float(cells[net_col]) if net_col < len(cells) else 0.0
             out.append((store, date_iso, cells[0], amt))
+            sd["matched"] += 1
+            diag["tender_rows_matched"] += 1
+        sd["outcome"] = "rows" if sd["matched"] else "no_labels_matched"
+        diag["sheets"].append(sd)
+    diag["unmatched_labels"] = seen_unmatched
+    return out, diag
+
+
+def _parse_xreport(contents: bytes, filename: str, fallback_date: str = None, extra_labels=None):
+    """Parse the POS 'X-Report' workbook, which is ONE SHEET PER STORE (sheet name = store address),
+    each holding a 'Tendered Amounts' matrix (Tender Types rows × Sales..Net columns). Returns
+    [(store, date_iso, tender_type, net_amount)]. The date is the filename range
+    X-Report_MMDDYYYY-MMDDYYYY — which MUST be a single day (start==end); a multi-day range raises
+    ValueError (an X-Report reconciles ONE day's drawer). With no filename date, uses fallback_date
+    (YYYY-MM-DD, e.g. the day being viewed) else the business-local date.
+    Returns [] if the workbook isn't this format (caller then tries the generic flat parser).
+
+    Thin wrapper over `_parse_xreport_detail` — SIGNATURE + return shape preserved for the external
+    caller (closing.tender_config.classify_sample_file). Use the _detail form when you need to tell
+    the user WHY a file produced nothing."""
+    rows, _diag = _parse_xreport_detail(contents, filename, fallback_date=fallback_date,
+                                        extra_labels=extra_labels)
+    return rows
+
+
+def _xreport_config_labels(client, org_id):
+    """RULE TWO: the tenant's OWN X-report tender vocabulary, read straight from the config table
+    commcalc.closing_tender_map (rows whose `report` is 'x_report' or 'both'). ADDITIVE to the
+    built-in _XR_TENDERS — it never replaces them, and only whole labels are accepted (a
+    match_mode='substring' rule contributes its literal labels, not a substring rule), so no mapping
+    is invented here. Degrades to an empty set when mig 111 hasn't run. Org-scoped read (RULE ONE)."""
+    out = set()
+    try:
+        rows = (client.schema("commcalc").table("closing_tender_map")
+                .select("source_labels,report").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        return out
+    for r in rows:
+        if (r.get("report") or "both") not in ("x_report", "both"):
+            continue
+        for lab in (r.get("source_labels") or []):
+            s = str(lab or "").strip()
+            if s:
+                out.add(s)
     return out
+
+
+# X-report 0-row REASONS (machine-readable; the UI + the sweeps branch on these, never on prose).
+XREPORT_ZERO_REASONS = ("no_sheets_matched", "header_not_found", "all_labels_unmatched",
+                        "no_flat_columns", "all_upserts_failed")
+
+
+def _xreport_outcome(*, saved, path, diag, flat_diag, attempts, save_failures, first_error,
+                     rows_read, stores, date):
+    """Build the X-report upload response. NEVER returns a plain success on 0 saved rows.
+
+    Existing keys (`success`, `file_type`, `tenders`, `stores`, `date`, `format`, `rows_read`, `note`)
+    keep their meaning for every existing consumer; everything else is ADDITIVE:
+      parser_path   'multi_sheet' | 'flat' | 'neither'  — which parser produced the rows
+      saved         the real saved count (the sweeps + upload_trace read `saved`; x_report never
+                    returned it, so every X-Report ingest recorded rows_saved=0 → an email sweep
+                    re-pulled the same attachment forever, and the UI printed "Saved 0 rows" even on
+                    a GOOD upload)
+      skipped       one of XREPORT_ZERO_REASONS when saved==0, 'x_report_partial_save' when some rows
+                    saved and some failed, else absent
+      save_failures / first_error   un-swallowed DB write failures
+      xreport_diag  per-sheet outcomes + the tender labels we did not recognize (verbatim)
+    """
+    diag = diag or {}
+    sheets = diag.get("sheets") or []
+    unmatched = diag.get("unmatched_labels") or []
+    fd = flat_diag or {}
+    res = {
+        'success': bool(saved), 'file_type': 'x_report',
+        'tenders': saved, 'saved': saved, 'stores': stores, 'date': date,
+        'format': ('multi-sheet' if path == 'multi_sheet' else ('flat' if path == 'flat' else None)),
+        'parser_path': path, 'rows_read': rows_read,
+        'save_failures': save_failures, 'first_error': first_error,
+        'xreport_diag': {
+            'parser_path': path,
+            'sheets_read': diag.get("sheets_read", 0),
+            'workbook_error': diag.get("workbook_error"),
+            'headers_found': diag.get("headers_found", 0),
+            'tender_rows_matched': diag.get("tender_rows_matched", 0),
+            'tender_rows_skipped': diag.get("tender_rows_skipped", 0),
+            'duplicate_label_rows': diag.get("duplicate_label_rows", 0),
+            'unmatched_labels': unmatched,
+            'builtin_label_count': diag.get("builtin_label_count", 0),
+            'config_label_count': diag.get("config_label_count", 0),
+            'sheets': sheets[:40],
+            'flat': (fd or None),
+            'upsert_attempts': attempts,
+            'save_failures': save_failures,
+            'first_error': first_error,
+        },
+    }
+    if saved:
+        if save_failures:
+            res['skipped'] = 'x_report_partial_save'
+            res['note'] = (f"Saved {saved} tender row(s), but {save_failures} write(s) FAILED and were "
+                           f"not stored. First error: {first_error}")
+        elif unmatched:
+            # A real ingest with a caveat: rows landed, but some labels on the sheet are unmapped, so
+            # their dollars are MISSING from the recon. Say so — do not render a clean green tick.
+            res['skipped'] = 'x_report_unmapped_labels'
+            res['note'] = (f"Saved {saved} tender row(s) across {stores} store(s). "
+                           f"{len(unmatched)} tender label(s) were NOT recognized and were skipped — "
+                           f"their amounts are missing from the recon: {', '.join(unmatched[:12])}. "
+                           f"Map them under Closing → Tender Config (report 'x_report'), then re-upload.")
+        return res
+
+    # ── saved == 0: name the reason. Ladder is ordered by which diagnosis is most actionable. ──
+    if attempts and save_failures >= attempts:
+        reason = 'all_upserts_failed'
+        note = (f"Parsed {attempts} tender row(s) but EVERY database write failed — nothing was saved. "
+                f"First error: {first_error}. (commcalc.pos_tender_summary needs migration 062's "
+                f"UNIQUE (org_id, close_date, store, tender_type) for this upsert to work.)")
+    elif diag.get("headers_found"):
+        reason = 'all_labels_unmatched'
+        note = (f"Found the tender header on {diag.get('headers_found')} sheet(s), but recognized NONE "
+                f"of the {diag.get('tender_rows_skipped', 0)} tender label(s) on them: "
+                f"{', '.join(unmatched[:15]) or '(none read)'}. Nothing was written. Map these labels "
+                f"under Closing → Tender Config (report 'x_report') and re-upload — "
+                f"{diag.get('config_label_count', 0)} tenant label(s) are mapped today.")
+    elif [s for s in sheets if s.get("outcome") != "empty_sheet"]:
+        _c = next((s.get("closest_row") for s in sheets if s.get("closest_row")), None)
+        _cs = next((s for s in sheets if s.get("closest_row")), None)
+        _near = ([_c] + list(_c.get("others") or [])) if _c else []
+        reason = 'header_not_found'
+        note = (f"Read {diag.get('sheets_read')} sheet(s) "
+                f"({', '.join(str(s.get('sheet')) for s in sheets[:6])}) — none carried a "
+                f"'Tender Types … Net … Refunds/Sub Net' header row, so no tender matrix could be "
+                f"located." +
+                (f" Closest-looking row(s) on '{_cs.get('sheet')}': "
+                 + " ;; ".join(f"row {n.get('row')}: "
+                               f"{' | '.join(str(x) for x in (n.get('cells') or [])) or '(blank)'}"
+                               for n in _near[:2]) + "." if _near else "") +
+                (f" The flat fallback found no tender column either — columns seen: "
+                 f"{', '.join(fd.get('columns') or []) or '(none)'}." if fd else ""))
+    elif fd.get("rows"):
+        reason = 'no_flat_columns'
+        note = (f"This file is not a multi-sheet X-Report workbook"
+                + (f" (could not be read as one: {diag.get('workbook_error')})"
+                   if diag.get("workbook_error") else "")
+                + f", and the flat fallback found no usable columns in its {fd.get('rows')} row(s). "
+                  f"It needs a store column (Store / Location / Site / Register), a tender column "
+                  f"(Tender Type / Payment Type / Media) and an amount column (Amount / Total / Net). "
+                  f"Columns found: {', '.join(fd.get('columns') or []) or '(none)'}.")
+    else:
+        reason = 'no_sheets_matched'
+        note = ((f"Read {diag.get('sheets_read')} sheet(s) but EVERY one was empty — the export "
+                 f"produced no rows at all."
+                 if diag.get("sheets_read") else
+                 "The file produced no sheets and no rows — it is empty, or not a readable "
+                 "Excel/CSV export"
+                 + (f" ({diag.get('workbook_error')})" if diag.get("workbook_error") else "") + "."))
+    res['skipped'] = reason
+    res['note'] = note
+    return res
 
 
 # Row-count guardrail thresholds (user 2026-07-05): flag an ingest that SHRINKS a day/period which
@@ -575,16 +848,32 @@ async def _upload_file_impl(
     # POS "X report": daily takings BY TENDER TYPE per store → commcalc.pos_tender_summary, for the tender
     # reconciliation against the daily closing sheet. Flexible column detection (any POS). Periodless.
     if file_type == 'x_report':
+        # HONEST-OUTCOME CONTRACT (owner live bug 2026-07-28: a real B2B Soft X-Report returned
+        # "✅ Saved 0 rows." — green, zero rows, zero explanation, and pos_tender_summary EMPTY
+        # org-wide). Every 0-row outcome below now returns success:False + a machine-readable
+        # `skipped` reason + a human `note` + `xreport_diag` (which parser ran, per-sheet outcome,
+        # the tender labels we did NOT recognize, and any DB write failures). Same shape as the
+        # inventory_no_stores / inventory_devices_only contract, so the sweeps + upload_trace +
+        # readUploadOutcome all tell the truth without special-casing.
+        #
+        # RULE TWO: the recognized tender vocabulary is EXTENDED (never replaced) from the tenant's own
+        # commcalc.closing_tender_map rows — read straight from the config table here, not imported
+        # from the closing module — so a POS that says "Klarna"/"Financing" ingests with a mapping row
+        # instead of a code change.
+        cfg_labels = _xreport_config_labels(client, org_id)
         # First try the real B2B Soft X-Report: a MULTI-SHEET workbook (one sheet per store, tender
         # matrix), which the generic flat parser below can't read. Falls through if not that shape.
         # A multi-day filename range is rejected (400) — an X-Report reconciles ONE day.
         try:
-            xr = _parse_xreport(contents, fname, fallback_date=close_date or None)
+            xr, xrdiag = _parse_xreport_detail(contents, fname, fallback_date=close_date or None,
+                                               extra_labels=cfg_labels)
         except ValueError as _e:
             raise HTTPException(400, str(_e))
         if xr:
-            saved = 0
+            saved, save_failures, first_error = 0, 0, None
+            attempts = 0
             for (store, d, tender) , amount in {(s, dd, t): a for (s, dd, t, a) in xr}.items():
+                attempts += 1
                 try:
                     client.schema('commcalc').table('pos_tender_summary').upsert(
                         {"org_id": org_id, "close_date": d, "store": store, "tender_type": tender,
@@ -595,8 +884,12 @@ async def _upload_file_impl(
                          "updated_at": datetime.now(timezone.utc).isoformat()},
                         on_conflict="org_id,close_date,store,tender_type").execute()
                     saved += 1
-                except Exception:
-                    pass
+                except Exception as _ue:
+                    # WAS `except Exception: pass` — a TOTAL save failure still returned success with
+                    # tenders:0. Count it and keep the FIRST real error so the caller can show it.
+                    save_failures += 1
+                    if first_error is None:
+                        first_error = str(_ue)[:400]
             try:
                 client.schema('commcalc').table('upload_log').insert(
                     {'org_id': org_id, 'file_type': 'x_report',
@@ -604,9 +897,10 @@ async def _upload_file_impl(
                      'rows_saved': saved}).execute()
             except Exception:
                 pass
-            return {'success': True, 'file_type': 'x_report', 'tenders': saved,
-                    'stores': len({s for (s, _d, _t, _a) in xr}), 'date': (xr[0][1] if xr else None),
-                    'format': 'multi-sheet'}
+            return _xreport_outcome(
+                saved=saved, path='multi_sheet', diag=xrdiag, flat_diag=None, attempts=attempts,
+                save_failures=save_failures, first_error=first_error, rows_read=len(xr),
+                stores=len({s for (s, _d, _t, _a) in xr}), date=(xr[0][1] if xr else None))
         def _pick(r, cands):
             for c in cands:
                 if c in r and str(r.get(c)).strip().lower() not in ("", "nan", "none"):
@@ -654,8 +948,20 @@ async def _upload_file_impl(
             use_date = str(d)[:10] if (d is not None and str(d).strip()) else (current_date or default_date)
             key = (use_store, use_date, str(tender).strip())
             agg[key] = round(agg.get(key, 0.0) + safe_float(amt), 2)
-        saved = 0
+        # What the FLAT fallback actually saw — reported verbatim when nothing ingested, so a column
+        # mismatch is visible instead of being reported as a green zero.
+        _fcols = [str(c) for c in (rows[0].keys() if rows else [])]
+        flat_diag = {
+            'columns': _fcols[:40], 'rows': len(rows), 'aggregated': len(agg),
+            'store_col': next((c for c in STORE_K if c in _fcols), None),
+            'tender_col': next((c for c in TENDER_K if c in _fcols), None),
+            'amount_col': next((c for c in AMT_K if c in _fcols), None),
+            'date_col': next((c for c in DATE_K if c in _fcols), None),
+        }
+        saved, save_failures, first_error = 0, 0, None
+        attempts = 0
         for (store, d, tender), amount in agg.items():
+            attempts += 1
             try:
                 client.schema('commcalc').table('pos_tender_summary').upsert(
                     {"org_id": org_id, "close_date": d, "store": store, "tender_type": tender,
@@ -663,17 +969,21 @@ async def _upload_file_impl(
                      "updated_at": datetime.now(timezone.utc).isoformat()},
                     on_conflict="org_id,close_date,store,tender_type").execute()
                 saved += 1
-            except Exception:
-                pass
+            except Exception as _ue:
+                # WAS `except Exception: pass` — see the multi-sheet loop above.
+                save_failures += 1
+                if first_error is None:
+                    first_error = str(_ue)[:400]
         try:
             client.schema('commcalc').table('upload_log').insert(
                 {'org_id': org_id, 'file_type': 'x_report', 'period': default_date,
                  'filename': getattr(file, 'filename', None), 'rows_saved': saved}).execute()
         except Exception:
             pass
-        return {'success': True, 'file_type': 'x_report', 'tenders': saved, 'rows_read': len(rows),
-                'note': (None if saved else "No tender rows found — the X report needs a store, a tender/"
-                         "payment-type column, and an amount column (run migration 062 if just added).")}
+        return _xreport_outcome(
+            saved=saved, path=('flat' if agg else 'neither'), diag=xrdiag, flat_diag=flat_diag,
+            attempts=attempts, save_failures=save_failures, first_error=first_error,
+            rows_read=len(rows), stores=len({s for (s, _d, _t) in agg}), date=default_date)
 
     # Determine target table
     TABLE_MAP = {
@@ -14872,6 +15182,22 @@ async def _run_email_sweep(org_id, account='default'):
                 rows_saved = int((res or {}).get('devices') or 0)
                 detail = (str((res or {}).get('note')
                               or f"0 stores (no store column) · {rows_saved} device row(s) saved"))[:300]
+            elif (res or {}).get('skipped') in XREPORT_ZERO_REASONS:
+                # HONEST-ZERO for the POS X-Report (owner live bug 2026-07-28). The attachment WAS read
+                # but produced 0 tender rows — a header wording drift, unmapped tender labels, a
+                # non-X-Report shape, or every DB write failing. This used to record status='ok' +
+                # 0 rows: a green ✓ on a file that ingested nothing (pos_tender_summary is EMPTY
+                # org-wide). Record a distinct 'skipped' carrying the parser's own reason. rows_saved
+                # stays 0 so the sweep dedup keeps retrying → it self-heals the moment a tender label
+                # is mapped or the source report is corrected. NOT a money path (tender recon only).
+                status = 'skipped'
+                detail = (str((res or {}).get('note')
+                              or f"X-Report saved 0 tender rows ({(res or {}).get('skipped')})"))[:300]
+            elif (res or {}).get('skipped') in ('x_report_partial_save', 'x_report_unmapped_labels'):
+                # A REAL X-Report ingest with a caveat (some writes failed / some tender labels are
+                # unmapped and therefore missing from the recon). Rows DID land, so status stays 'ok'
+                # (the dedup marks the message done); the caveat rides in `detail`.
+                detail = (str((res or {}).get('note') or ''))[:300]
         except HTTPException as he:
             status, detail = "error", str(he.detail)[:300]
         except Exception as e:
