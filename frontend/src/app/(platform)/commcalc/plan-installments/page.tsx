@@ -383,6 +383,27 @@ export default function PlanInstallmentsPage() {
           <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}> Commission Plans → Plan coverage</a> first.
         </p>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6 }}>
+          Store resolution (market + store-scope plan assignments):
+          <select style={sel} value={settings.store_resolution || 'exact'}
+            onChange={e => setSettings({ ...settings, store_resolution: e.target.value })}>
+            <option value="exact">Exact store_mapping match only (default)</option>
+            <option value="alias">Also resolve through the /store-match alias table</option>
+          </select>
+        </label>
+        <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 12px', maxWidth: 760 }}>
+          A rep&apos;s <b>market</b> is looked up from the raw store string the POS writes on the sale.
+          On the default it must match a <a href="/commcalc/settings" style={{ color: 'var(--accent)' }}>Stores
+          &amp; Markets</a> address (or store code) <b>exactly</b>, so a POS that spells the store even
+          slightly differently leaves the market <b>blank</b> — and a market- or store-scope assignment can
+          then never attach to that rep. Set this to <b>alias</b> and the store string is additionally
+          resolved through the mappings you confirmed at{' '}
+          <a href="/commcalc/store-match" style={{ color: 'var(--accent)' }}>Store matching</a>. It is a
+          strict superset — it can only ATTACH a plan that attaches to nobody today, never detach one —
+          so <b>this can increase pay</b> on the next Run Calculation. See exactly who it would move first:
+          <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}> Commission Plans → Plan
+          coverage</a> previews it per rep regardless of this setting.
+        </p>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6 }}>
           <input type="checkbox" checked={settings.installment_mrc_hardware_guard !== false}
             onChange={e => setSettings({ ...settings, installment_mrc_hardware_guard: e.target.checked })} />
           A <b>device line can never donate its own price</b> as a monthly charge (recommended)

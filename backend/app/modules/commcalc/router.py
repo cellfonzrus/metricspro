@@ -5942,7 +5942,8 @@ def _commission_org_config(client, org_id):
     byte-identical), installment_mrc_basis 'plan_line' (the multi-month MRC comes from the activation's
     rate-plan line — the engine's own default, so the read degrading changes nothing)."""
     default = {"pay_disabled": False, "residual_visibility": "all", "plan_ct_resolution": "raw",
-               "installment_mrc_basis": "plan_line", "installment_mrc_hardware_guard": True}
+               "installment_mrc_basis": "plan_line", "installment_mrc_hardware_guard": True,
+               "store_resolution": "exact"}
     try:
         rows = (client.schema('commcalc').table('commission_org_config').select('*')
                 .eq('org_id', org_id).limit(1).execute().data) or []
@@ -5954,13 +5955,18 @@ def _commission_org_config(client, org_id):
     _ctr = str(r.get("plan_ct_resolution") or "raw").strip().lower()
     _mb = str(r.get("installment_mrc_basis") or "plan_line").strip().lower()
     _hg = r.get("installment_mrc_hardware_guard")
+    # mig 249 — how a rep's raw POS store string is resolved to a market / matched to a store-scope
+    # assignment. 'exact' (default, and the value read when the column is absent) is today's
+    # store_mapping-only lookup, byte-identical.
+    _sr = str(r.get("store_resolution") or "exact").strip().lower()
     return {"pay_disabled": bool(r.get("pay_disabled")),
             "residual_visibility": (r.get("residual_visibility") or "all").strip().lower(),
             "plan_ct_resolution": _ctr if _ctr in ("raw", "mapped") else "raw",
             "installment_mrc_basis": _mb if _mb in ("plan_line", "trigger_line") else "plan_line",
             # mig 246 — TRUE unless the tenant explicitly turned the structural device-price guard off
             # (the column is absent before the migration → the engine's own default, TRUE).
-            "installment_mrc_hardware_guard": True if _hg is None else bool(_hg)}
+            "installment_mrc_hardware_guard": True if _hg is None else bool(_hg),
+            "store_resolution": _sr if _sr in ("exact", "alias") else "exact"}
 
 
 def _can_view_carrier_residual(authorization, org_id):
@@ -7135,6 +7141,14 @@ async def put_commission_settings(body: dict, authorization: str = Header(defaul
     # pay on the next Calculate. Same admin gate as the rest of this endpoint.
     if "installment_mrc_hardware_guard" in body:
         row["installment_mrc_hardware_guard"] = bool(body.get("installment_mrc_hardware_guard"))
+    # mig 249 — MONEY-ADJACENT: 'alias' resolves a rep's raw POS store string through the /store-match
+    # alias table (commcalc.store_aliases → store_code → store_mapping / storeops roster) for their
+    # MARKET, and lets a store-scope assignment also match the resolved store code / canonical address.
+    # It can only ATTACH a plan that today attaches to nobody => pay can go UP on the NEXT Calculate
+    # (this write alone moves nothing). Same admin gate as the rest of this endpoint.
+    if "store_resolution" in body:
+        sr = (body.get("store_resolution") or "exact").strip().lower()
+        row["store_resolution"] = sr if sr in ("exact", "alias") else "exact"
     try:
         client = sb()
         client.schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()

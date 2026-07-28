@@ -16,9 +16,10 @@ What this proves
   D. ASSIGNMENT NEAR-MISS — "assignment exists under '<scope_value>' but names differ".
   E. STORE BRIDGE narrates address hit / code hit / first-token hit / alias hit, and distinguishes
      "unmapped" from "mapped but market blank".
-  G. The ALIAS PREVIEW is honest — it re-runs the REAL _resolve_plan_for with the alias-resolved
-     market/store keys, so it never promises an attachment the pay path would not make. (Making that
-     resolution the PAY path is a separate, money-adjacent package.)
+  F. store_resolution='exact' (default) is byte-identical; 'alias' resolves market via the /store-match
+     alias table AND lets a store-scope assignment match the resolved code/address.
+  G. The ALIAS PREVIEW is honest — it re-runs the REAL _resolve_plan_for, so it never promises an
+     attachment the pay path would not make.
   H. ORPHAN ASSIGNMENTS — assigned to a name nobody sold under (the mirror of the unassigned list; the
      bulk-assign roster shows these as "current plan ✓").
   I. EXCLUDED SELLERS (Part D) — configurable, reported not hidden, and provably money-free.
@@ -27,6 +28,8 @@ What this proves
   K. ORG ISOLATION — org A never sees org B's roster, aliases, assignments, sellers or lines.
   L. DEGRADATION — no mig 248/249 columns, no storeops roster, no store_aliases table: still a full
      answer, never an exception, and never a money change.
+  M. _plan_pay_config's widest-first column probe does NOT lose plan_ct_resolution='mapped' on a
+     pre-mig-249 database (the money-regression this design avoids).
 """
 import copy
 import os
@@ -385,8 +388,44 @@ check("E6 the coverage Stores panel counts what would resolve with alias",
       cov["stores"]["would_resolve_with_alias"] >= 2 and cov["stores"]["mode"] == "exact",
       cov["stores"])
 
+print("\n── F. store_resolution: exact (default) vs alias ──────────────────────────────")
 CFG_EXACT = [cfg(store_resolution="exact")]
 CFG_ALIAS = [cfg(store_resolution="alias")]
+p_exact = CE.preview(base_store(CFG_EXACT), ORG_A, "July 2026")
+p_alias = CE.preview(base_store(CFG_ALIAS), ORG_A, "July 2026")
+check("F1 'exact' is byte-identical to no config at all",
+      p_exact["by_rep"] == money["by_rep"] and p_exact["totals"] == money["totals"])
+check("F2 'alias' attaches the Queens market plan to Ariful (was $0)",
+      p_alias["totals"]["payout"] > 0 and
+      any(r["rep"] == "Islam Khan, Ariful" and r["plan_name"] == "Queens Market Plan"
+          for r in p_alias["by_rep"]), p_alias["by_rep"])
+check("F3 and it pays exactly the 1 'Cases' line x $2",
+      round(p_alias["totals"]["payout"], 2) == 2.0, p_alias["totals"])
+check("F4 'alias' resolves Ariful's market to Queens",
+      any(r["rep"] == "Islam Khan, Ariful" and r["market"] == "Queens" for r in p_alias["by_rep"]))
+check("F5 the NAME-bridge miss is NOT rescued by alias resolution (still unassigned)",
+      by_rep_name(cov_of(base_store(CFG_ALIAS)), "Sri ram, Nivas") is not None)
+# store-scope assignment against the resolved CODE
+ST_SCOPE = copy.deepcopy(ASSIGNS)
+ST_SCOPE[1] = {"id": "a2", "org_id": ORG_A, "plan_id": "p2", "scope": "store",
+               "scope_value": "B-HEM", "priority": 0}
+cs = base_store(CFG_ALIAS)
+cs.store["commission_plan_assignment"] = ST_SCOPE
+p_store = CE.preview(cs, ORG_A, "July 2026")
+check("F6 a store-scope assignment written as the store CODE attaches under 'alias'",
+      any(r["rep"] == "Islam Khan, Ariful" and r["plan_name"] == "Queens Market Plan"
+          for r in p_store["by_rep"]), p_store["by_rep"])
+cs2 = base_store(CFG_EXACT)
+cs2.store["commission_plan_assignment"] = ST_SCOPE
+check("F7 the same store-scope assignment attaches to NOBODY under 'exact' (byte-identical)",
+      CE.preview(cs2, ORG_A, "July 2026")["totals"]["payout"] == 0.0)
+check("F8 _resolve_plan_for with store_keys=None is the unchanged predicate",
+      CE._resolve_plan_for("x", "3560 Nostrand Avenue", "", [{**PLAN_MKT, "rules": [], "tiers": [],
+                                                              "assignments": [ST_SCOPE[1]]}]) is None)
+check("F9 ... and matches once the resolved code is offered as a store key",
+      CE._resolve_plan_for("x", "3560 Nostrand Avenue", "",
+                           [{**PLAN_MKT, "rules": [], "tiers": [], "assignments": [ST_SCOPE[1]]}],
+                           store_keys=["b-hem"]) is not None)
 
 print("\n── G. alias preview is honest (re-runs the REAL resolver) ─────────────────────")
 ap = (by_rep_name(cov, "Islam Khan, Ariful") or {}).get("diagnosis", {}).get("alias_preview") or {}
@@ -394,10 +433,17 @@ check("G1 Ariful's preview says a plan WOULD attach", ap.get("would_attach") is 
 check("G2 it names the plan and the scope",
       ap.get("plan_name") == "Queens Market Plan" and ap.get("scope") == "market", ap)
 ap2 = (by_rep_name(cov, "Sri ram, Nivas") or {}).get("diagnosis", {}).get("alias_preview") or {}
+check("G3 the preview agrees with what 'alias' actually pays",
+      any(r["rep"] == "Islam Khan, Ariful" and r["plan_name"] == ap.get("plan_name")
+          for r in p_alias["by_rep"]))
 check("G4 a rep whose gap is the NAME is told alias would NOT help",
       ap2.get("would_attach") is False, ap2)
 check("G5 the alias preview is computed even though the pay path resolves stores exactly",
       cov["stores"]["mode"] == "exact" and bool(ap))
+
+check("G6 with the tenant already on 'alias' no stale preview is emitted",
+      all(not (x.get("diagnosis") or {}).get("alias_preview")
+          for x in cov_of(base_store(CFG_ALIAS))["unassigned_reps"]))
 
 print("\n── H. orphan assignments (the mirror of the unassigned list) ──────────────────")
 orph = cov.get("orphan_assignments") or []
@@ -551,8 +597,9 @@ no248 = base_store([cfg()],
                                                           "coverage_artifact_hints",
                                                           "store_resolution"]})
 covL = cov_of(no248)
-check("L1 pre-mig-248: coverage still answers in full",
-      covL["unassigned_count"] >= 4 and covL["stores"]["mode"] == "exact")
+check("L1 pre-mig-248/249: coverage still answers in full",
+      covL["unassigned_count"] >= 4 and covL["settings"]["store_resolution"] == "exact"
+      and covL["stores"]["mode"] == "exact")
 check("L2 ... and reports the config as not-ready",
       covL["excluded_config"]["ready"] is False, covL["excluded_config"])
 check("L3 ... and pays exactly what it pays today",
@@ -582,6 +629,25 @@ check("L8 no plans: preview returns the 'no plans configured' note, not a crash"
 check("L9 explorer on a tenant with no plans is honest",
       CE.unmatched_explorer(noplans, ORG_A, "July 2026")["ready"] is True
       or CE.unmatched_explorer(noplans, ORG_A, "July 2026")["note"] is not None)
+
+print("\n── M. the money-regression this design avoids ─────────────────────────────────")
+premig = base_store([cfg(plan_ct_resolution="mapped")],
+                    absent_cols={"commission_org_config": ["store_resolution"]})
+pcfg = CE._plan_pay_config(premig, ORG_A)
+check("M1 pre-mig-249, plan_ct_resolution='mapped' is STILL read (no silent revert to 'raw')",
+      pcfg["plan_ct_resolution"] == "mapped", pcfg)
+check("M2 ... and store_resolution safely defaults to 'exact'",
+      pcfg["store_resolution"] == "exact", pcfg)
+postmig = base_store([cfg(plan_ct_resolution="mapped", store_resolution="alias")])
+check("M3 post-mig both settings read",
+      CE._plan_pay_config(postmig, ORG_A) == {"plan_ct_resolution": "mapped",
+                                              "store_resolution": "alias"})
+check("M4 a garbage store_resolution value degrades to 'exact'",
+      CE._plan_pay_config(base_store([cfg(store_resolution="sideways")]),
+                          ORG_A)["store_resolution"] == "exact")
+check("M5 no commission_org_config table at all → both defaults",
+      CE._plan_pay_config(base_store(absent=["commission_org_config"]), ORG_A)
+      == {"plan_ct_resolution": "raw", "store_resolution": "exact"})
 
 print(f"\n{'='*70}\n{PASS} passed, {FAIL} failed\n{'='*70}")
 sys.exit(1 if FAIL else 0)

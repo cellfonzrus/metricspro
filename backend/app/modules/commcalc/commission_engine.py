@@ -410,17 +410,30 @@ def _read_store_market(client, org_id):
 
 
 def _plan_pay_config(client, org_id):
-    """Per-tenant PAY-path options (mig 232). Today: plan_ct_resolution 'raw' (default, byte-identical) |
-    'mapped'. Degrades to the defaults when the column/table/row is absent — never raises."""
-    out = {"plan_ct_resolution": "raw"}
-    try:
-        rows = (client.schema("commcalc").table("commission_org_config")
-                .select("plan_ct_resolution").eq("org_id", org_id).limit(1).execute().data) or []
-    except Exception:
-        return out
+    """Per-tenant PAY-path options. Today:
+      • plan_ct_resolution (mig 232) 'raw' (default, byte-identical) | 'mapped'
+      • store_resolution   (mig 249) 'exact' (default, byte-identical) | 'alias'
+
+    Degrades to the defaults when the table/row is absent — never raises. The column list is tried
+    WIDEST-FIRST and falls back to the narrow one: a single combined select would make the whole read
+    fail on a pre-mig-249 database and silently revert a tenant's plan_ct_resolution='mapped' back to
+    'raw' — i.e. a MONEY change caused by an unrelated missing column. The fallback keeps mig 232's
+    setting readable on its own."""
+    out = {"plan_ct_resolution": "raw", "store_resolution": "exact"}
+    rows = None
+    for cols in ("plan_ct_resolution,store_resolution", "plan_ct_resolution"):
+        try:
+            rows = (client.schema("commcalc").table("commission_org_config")
+                    .select(cols).eq("org_id", org_id).limit(1).execute().data) or []
+            break
+        except Exception:
+            rows = None
+            continue
     if rows:
         v = str(rows[0].get("plan_ct_resolution") or "raw").strip().lower()
         out["plan_ct_resolution"] = v if v in ("raw", "mapped") else "raw"
+        s = str(rows[0].get("store_resolution") or "exact").strip().lower()
+        out["store_resolution"] = s if s in ("exact", "alias") else "exact"
     return out
 
 
@@ -1156,12 +1169,13 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     store_market = _read_store_market(client, org_id)
     role_by_rep = _read_employee_roles(client, org_id)   # {_canon_person(name) -> role} for scope='role'
 
-    # STORE RESOLUTION. Today the engine resolves a rep's market from commcalc.store_mapping with an
-    # EXACT lower-cased lookup — `_store_res` is always 'exact'. The /store-match alias chain is built
-    # (read-only) when coverage=True purely so the diagnosis can SHOW what it would resolve; a follow-up
-    # package makes that resolution selectable per tenant.
+    # STORE RESOLUTION (mig 249) — MONEY-ADJACENT, config-gated, default OFF. 'exact' keeps today's
+    # store_mapping-only lookup (byte-identical). 'alias' additionally resolves the raw POS store string
+    # through the SHARED /store-match chain (commcalc.store_aliases → store_code → store_mapping /
+    # storeops roster) for the rep's MARKET and for store-scope assignment matching. The bridge is also
+    # built (read-only) whenever coverage=True so the diagnosis can PREVIEW what flipping it would fix.
     _store_res = _pay_cfg.get("store_resolution", "exact")
-    _bridge = _store_bridge(client, org_id) if coverage else None
+    _bridge = _store_bridge(client, org_id) if (_store_res == "alias" or coverage) else None
     # COVERAGE-ONLY reads — never executed on the money path.
     _roster = _read_employee_roster(client, org_id) if coverage else []
     _cov_cfg = _coverage_config(client, org_id) if coverage else {}
@@ -1202,11 +1216,16 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     for key, e in reps.items():
         store = e["store"]
         market = store_market.get(store.lower()) or store_market.get(store.split(" ")[0].lower(), "")
-        # DIAGNOSTIC ONLY here: `_trace` narrates what the market lookup did (and what the /store-match
-        # alias table WOULD resolve). `_skeys` stays None, so `_resolve_plan_for` sees the unchanged
-        # predicate and every payout is BYTE-IDENTICAL.
-        _trace = _store_trace(store_market, _bridge, store) if coverage else None
+        # mig 249: with store_resolution='alias' an unresolved POS store string falls back to the shared
+        # alias chain for its MARKET, and a store-scope assignment may additionally match the resolved
+        # store CODE / canonical ADDRESS. On the default 'exact' `_skeys` stays None and `market` keeps
+        # the exact expression above, so `_resolve_plan_for` and every payout are BYTE-IDENTICAL.
+        _trace = (_store_trace(store_market, _bridge, store)
+                  if (coverage or _store_res == "alias") else None)
         _skeys = None
+        if _store_res == "alias" and _trace:
+            market = market or (_trace.get("alias_market") or "")
+            _skeys = _trace.get("alias_keys") or None
         rep_role = role_by_rep.get(_canon_person(e["name"]))
         resolution = None
         if detail:
