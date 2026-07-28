@@ -1634,29 +1634,56 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
         agg = closing.setdefault(code, {t: 0.0 for t in keys})
         for t in keys:
             agg[t] += _closing_amt(r, t)
-    # (2) X-report — pos_tender_summary raw tender_type → tenant tender (fallback _canon_tender)
-    resolve = _addr_resolver(client, org_id)
-    xrep = {}
-    xrows = (client.schema("commcalc").table("pos_tender_summary")
-             .select("store,tender_type,amount").eq("org_id", org_id).eq("close_date", d).execute().data) or []
-    for r in xrows:
-        canon = resolve_x(r.get("tender_type"))
-        if not canon:
-            continue
-        code = resolve(r.get("store")) or (r.get("store") or "?")
-        agg = xrep.setdefault(code, {t: 0.0 for t in keys})
-        if canon in agg:
-            agg[canon] += _f(r.get("amount"))
-    # (3) sales transactions (same tenant axis + resolver)
-    sales = _sales_tenders_by_store(client, org_id, d, resolve_s, keys)
-    if store:
-        xrep = {k: v for k, v in xrep.items() if k == store}
-        sales = {k: v for k, v in sales.items() if k == store}
-    # store names
+    # store names / resolved-code set — fetched BEFORE the X-report/sales legs so both can tell a
+    # genuinely-resolved store_code apart from a raw/unmatched store string (needed for the "never drop
+    # an unresolved store under a filter" rule below — same value-space class fixed in retail-ops-14 B1).
     sm = (client.schema("commcalc").table("store_mapping").select("store_code,store_address")
           .eq("org_id", org_id).execute().data) or []
     name_by_code = {s.get("store_code"): s.get("store_address") for s in sm if s.get("store_code")}
-    codes = sorted(set(closing) | set(xrep) | set(sales))
+    resolved_codes = set(name_by_code)
+    # (2) X-report — pos_tender_summary raw tender_type → tenant tender (fallback _canon_tender). A raw
+    # label that resolves to NO tender (no tenant-map rule matched AND the hardcoded fallback either
+    # doesn't recognize it or isn't on this tenant's axis) is NEVER dropped — its dollars land in
+    # `xrep_unmapped` (surfaced in the response + UI below) instead of silently vanishing. This closes
+    # the "3-way tender is not pulling in data from x-report" bug class: pos_tender_summary can hold rows
+    # whose raw tender_type isn't in _canon_tender's substring vocabulary (e.g. a bare 'CC'/'Chip'/'Check'
+    # label, or a custom-tender-axis tenant with no explicit map rule yet) — those dollars used to just
+    # disappear from this leg while the dashboard's `_xreport_tenders_by_store` (which reads the
+    # pre-classified tender_class column, never a resolver) kept showing them, exactly the asymmetry that
+    # made this page look broken while pos_tender_summary actually had rows.
+    resolve = _addr_resolver(client, org_id)
+    xrep, xrep_unmapped = {}, {}
+    xrows = (client.schema("commcalc").table("pos_tender_summary")
+             .select("store,tender_type,amount").eq("org_id", org_id).eq("close_date", d).execute().data) or []
+    for r in xrows:
+        code = resolve(r.get("store")) or (r.get("store") or "?")
+        amt = _f(r.get("amount"))
+        canon = resolve_x(r.get("tender_type"))
+        if canon:
+            agg = xrep.setdefault(code, {t: 0.0 for t in keys})
+            if canon in agg:
+                agg[canon] += amt
+        else:
+            u = xrep_unmapped.setdefault(code, {"amount": 0.0, "labels": set()})
+            u["amount"] += amt
+            lbl = str(r.get("tender_type") or "").strip()
+            if lbl:
+                u["labels"].add(lbl)
+    # (3) sales transactions (same tenant axis + resolver)
+    sales = _sales_tenders_by_store(client, org_id, d, resolve_s, keys)
+    if store:
+        # An unresolved store (its pos_tender_summary/raw_sales `store` string never matched
+        # store_mapping, so the dict key here is the raw address/"?" placeholder, not a real store_code)
+        # is NEVER dropped by this filter — a real store_code selection can only ever equal another REAL
+        # store_code, so a raw/unmatched key can't be "the wrong store" the way a resolved code can.
+        # Mirrors the analogous "unresolved row bypasses a filter" rule already applied to
+        # /closing/summary + /closing/rollup (retail-ops-14 B1/NIT-4a).
+        def _keep(k):
+            return k == store or k not in resolved_codes
+        xrep = {k: v for k, v in xrep.items() if _keep(k)}
+        xrep_unmapped = {k: v for k, v in xrep_unmapped.items() if _keep(k)}
+        sales = {k: v for k, v in sales.items() if _keep(k)}
+    codes = sorted(set(closing) | set(xrep) | set(sales) | set(xrep_unmapped))
     stores_out = []
     for code in codes:
         c, x, s = closing.get(code, {}), xrep.get(code, {}), sales.get(code, {})
@@ -1665,15 +1692,25 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
             cv, xv, sv = round(c.get(t, 0), 2), round(x.get(t, 0), 2), round(s.get(t, 0), 2)
             per.append({"tender": t, "label": tlabel.get(t, t), "closing": cv, "x_report": xv, "sales": sv,
                         "match": abs(cv - xv) <= 1 and abs(xv - sv) <= 1 and abs(cv - sv) <= 1})
+        um = xrep_unmapped.get(code)
         stores_out.append({
             "store_code": code, "store_address": name_by_code.get(code) or addr_by_code.get(code) or code,
             "tenders": per,
+            # Additive-only, never touches the byte-identical `tenders`/`totals` comparison above — the
+            # X-report dollars this store had that no rule/fallback could bucket into a known tender,
+            # so recon math for a fully-mapped tenant/day is untouched, but a partial/no-map gap is now
+            # VISIBLE instead of silently reading as "no X-report money at all".
+            "x_report_unmapped": ({"amount": round(um["amount"], 2), "raw_labels": sorted(um["labels"])}
+                                   if um else None),
             "totals": {"closing": round(sum(c.values()), 2), "x_report": round(sum(x.values()), 2),
                        "sales": round(sum(s.values()), 2)}})
     # x_report_ever: has this tenant EVER had ANY X-report imported (vs just missing for THIS day)?
     # Sharpens the honest-empty message below — a tenant that's never had one needs its mailbox rule /
     # b2bsoft schedule checked (config/delivery); a tenant that normally has one just needs today's file.
-    x_report_ever = bool(xrep)
+    # Truth for TODAY is the raw `xrows` fetch (pos_tender_summary actually has rows), never the
+    # post-resolver `xrep` — a day where every raw label happened to be unmapped must still count as
+    # "X-report data exists", or this signal would falsely claim "never imported" for a real delivery.
+    x_report_ever = bool(xrows)
     if not x_report_ever:
         try:
             x_report_ever = bool((client.schema("commcalc").table("pos_tender_summary").select("close_date")
@@ -1720,6 +1757,7 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
             "any_mismatch_flag": bool(bk and bk.get("any_mismatch")),
         }
 
+    x_report_unmapped_total = round(sum(u["amount"] for u in xrep_unmapped.values()), 2)
     note = ("X-report tender amounts include tax; sales-transaction figures are merchandise "
             "(ext price), so small deltas between those two are expected. Bank Deposit is compared "
             f"against the tenant's configured basis ({dep_cfg['match_target'].replace('_', ' ')}).")
@@ -1727,11 +1765,19 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
         note += (" This tenant has NEVER had a POS X-report imported — check (1) the mailbox has an "
                  "*X*Report* -> x_report rule and (2) b2bsoft is actually scheduled to email an "
                  "X-Report for this tenant.")
+    if x_report_unmapped_total:
+        note += (f" ⚠ ${x_report_unmapped_total:,.2f} of X-report tenders used a raw label this "
+                 "tenant's mapping doesn't recognize (see the ⚠ marker per store below) — map it on "
+                 "/closing/tender-config or it will keep showing outside the tender breakdown.")
     return {"date": d, "tenders": [{"key": t, "label": tlabel.get(t, t)} for t in keys],
             "stores": stores_out,
-            "sources_present": {"closing": bool(closing), "x_report": bool(xrep), "sales": bool(sales),
+            # x_report here is RAW presence (any pos_tender_summary row today), not "every row mapped" —
+            # a resolver drop must never flip this badge to "not loaded" when the X-report import itself
+            # actually succeeded (see x_report_unmapped for the drop signal instead).
+            "sources_present": {"closing": bool(closing), "x_report": bool(xrows), "sales": bool(sales),
                                 "bank_deposit": bool(bank_by_store)},
             "x_report_ever": x_report_ever,
+            "x_report_unmapped_total": x_report_unmapped_total,
             "note": note}
 
 

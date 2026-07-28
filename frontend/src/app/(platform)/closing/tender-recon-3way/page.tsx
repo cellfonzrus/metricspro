@@ -84,7 +84,14 @@ export default function TenderRecon3WayPage() {
 
   function buildPayload(): ExportPayload {
     const rows: any[] = []
-    for (const s of stores) for (const t of s.tenders) rows.push({ store: s.store_address, ...t })
+    for (const s of stores) {
+      for (const t of s.tenders) rows.push({ store: s.store_address, ...t })
+      if (s.x_report_unmapped?.amount) rows.push({
+        store: s.store_address, tender: 'unmapped',
+        label: `⚠ Unmapped X-report (${(s.x_report_unmapped.raw_labels || []).join(', ') || 'unlabeled'})`,
+        closing: '', x_report: s.x_report_unmapped.amount, sales: '', match: false,
+      })
+    }
     return {
       title: '3-Way Tender Recon', subtitle: date,
       filename: `tender-recon-3way_${date}`,
@@ -113,7 +120,7 @@ export default function TenderRecon3WayPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <input className="select" type="date" value={date} onChange={e => setDate(e.target.value)} />
-          <label className="btn" style={{ cursor: xrBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
+          <label id="xr-upload-btn" className="btn" style={{ cursor: xrBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}
             title="Upload the POS X-Report for this day. A single-day report only — a date-range file is rejected.">
             {xrBusy ? '⏳ Uploading…' : '⬆ Upload X‑Report'}
             <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={xrBusy}
@@ -123,6 +130,40 @@ export default function TenderRecon3WayPage() {
         </div>
       </div>
       {xrMsg && <div style={{ fontSize: 12, marginBottom: 10, color: xrMsg.startsWith('❌') ? '#b91c1c' : 'var(--text2)' }}>{xrMsg}</div>}
+
+      {!loading && !data?.error && data?.x_report_ever === false && (
+        <div className="card" style={{ padding: '14px 16px', marginBottom: 14, border: '1px solid #f59e0b', background: '#fffbeb' }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: '#92400e', marginBottom: 4 }}>
+            ⚠ No POS X-Report has EVER been imported for this tenant
+          </div>
+          <div style={{ fontSize: 13, color: '#78350f', lineHeight: 1.5 }}>
+            The <strong>POS X-report</strong> column below will read $0 for every store/tender until this is set up —
+            it isn't a bug in the recon, there's simply no X-report data in the system yet. Two things to do:
+          </div>
+          <ol style={{ fontSize: 13, color: '#78350f', margin: '6px 0 0', paddingLeft: 18, lineHeight: 1.6 }}>
+            <li>
+              <strong>Prove the pipe today:</strong> click <a href="#xr-upload-btn" onClick={e => { e.preventDefault(); document.getElementById('xr-upload-btn')?.click() }} style={{ color: '#92400e', fontWeight: 600 }}>⬆ Upload X‑Report</a> above
+              with today's report file (or upload it from <a href="/commcalc/upload" style={{ color: '#92400e', fontWeight: 600 }}>Data Imports</a>, type "X Report (POS tenders)").
+            </li>
+            <li>
+              <strong>Set up automatic daily import:</strong> under <a href="/commcalc/email-imports" style={{ color: '#92400e', fontWeight: 600 }}>Email Imports</a>,
+              confirm the mailbox has a <code>*X-Report*</code> → <code>x_report</code> rule (this is a default rule on a freshly configured mailbox,
+              so if it's missing it may have been edited out), AND confirm with b2bsoft that the X-Report is actually
+              <em> scheduled</em> to be emailed to that inbox daily — that's a separate step from the mailbox rule itself.
+            </li>
+          </ol>
+          <div style={{ fontSize: 12, color: '#92400e', marginTop: 6 }}>
+            See <a href="/closing/readiness" style={{ color: '#92400e', fontWeight: 600 }}>Closing → Readiness</a> for the full per-tenant setup check.
+          </div>
+        </div>
+      )}
+      {!loading && !data?.error && data?.x_report_ever && (data?.x_report_unmapped_total || 0) > 0 && (
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, border: '1px solid #f59e0b', background: '#fffbeb', fontSize: 13, color: '#78350f' }}>
+          ⚠ {fmt(data.x_report_unmapped_total)} of today's X-report tenders used a raw label this tenant's mapping
+          doesn't recognize — see the ⚠ per-store note below. Map it on <a href="/closing/tender-config" style={{ color: '#92400e', fontWeight: 600 }}>Tender Setup</a> so
+          it's bucketed instead of sitting outside the table.
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12, fontSize: 12 }}>
         <Src label="Daily Closing" ok={sp.closing} />
@@ -165,6 +206,11 @@ export default function TenderRecon3WayPage() {
                     </>
                   )}
                   {!s.bank_deposit?.has_deposit && <span> · bank deposit — not recorded</span>}
+                  {s.x_report_unmapped?.amount > 0 && (
+                    <span style={{ color: '#b91c1c', fontWeight: 700 }} title={`Raw label(s): ${(s.x_report_unmapped.raw_labels || []).join(', ')}`}>
+                      {' '}· ⚠ {fmt(s.x_report_unmapped.amount)} unmapped X-report
+                    </span>
+                  )}
                 </span>
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
