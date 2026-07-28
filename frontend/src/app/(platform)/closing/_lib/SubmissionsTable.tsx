@@ -84,9 +84,33 @@ export default function SubmissionsTable({
   const storeOpts = storeOptionsProp ?? dataOpts.stores
   const marketOpts = marketOptionsProp ?? dataOpts.markets
   const repOpts = repOptionsProp ?? dataOpts.reps
+  // A parent-supplied `storeOptions` list is CANONICAL (id = store_code, e.g. from GET
+  // /closing/stores) — a different value-space than this component's own self-sourced options
+  // (id = store_address, from `optionsFromRows` above). `filt.stores` therefore holds store_codes in
+  // parent-driven mode. (Gate-1 finding B1, 2026-07-28: filtering everything — including the export —
+  // through the shared `filterRows`'s address-keyed accessor made ANY store selection compare a code
+  // against an address and match nothing, silently emptying the tab AND its exports.)
+  const usingCanonicalStores = !!storeOptionsProp
   // Store/market/rep narrowing happens client-side over the server-returned (date-range-scoped) rows —
-  // the SAME rows feed the table AND every export (what-you-see-is-what-exports, §3c).
-  const rows = useMemo(() => filterRows(rawRows, filt, acc), [rawRows, filt, acc])
+  // the SAME rows feed the table AND every export (what-you-see-is-what-exports, §3c). Market/rep go
+  // through the shared, platform-core-owned `filterRows` unchanged (their canonical option ids already
+  // agree with what a row carries — a market string, an employee's name). Store is handled separately
+  // immediately below so it can (a) match the right value-space and (b) mirror the backend's own "an
+  // unresolved store is never dropped by a store filter" rule in canonical mode — a bypass the generic
+  // shared filter has no way to express selectively.
+  const rows = useMemo(() => {
+    const afterMarketRep = filterRows(rawRows, filt, { market: acc.market, rep: acc.rep })
+    if (!filt.stores.length) return afterMarketRep
+    const wanted = new Set(filt.stores.map((s: string) => s.trim().toLowerCase()))
+    return afterMarketRep.filter((r: any) => {
+      if (usingCanonicalStores) {
+        const code = String(r.store_code || '').trim()
+        if (!code) return true   // unresolved store (no store_code at all) — never dropped
+        return wanted.has(code.toLowerCase())
+      }
+      return wanted.has(String(r.store_address || '').trim().toLowerCase())
+    })
+  }, [rawRows, filt, acc, usingCanonicalStores])
 
   const columns: ExportColumn[] = useMemo(() => [
     // ── Identity ──

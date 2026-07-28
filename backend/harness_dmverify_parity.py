@@ -432,6 +432,104 @@ try:
 finally:
     oc.detect_missed_dm_verifies = _orig_detect
 
+# ═══════════════════════════ H. Multi-tenant org isolation (Gate-1 NIT-2) ═══════════════════════════
+# OTHER (org 0099) is defined at the top of this file but was never actually exercised end-to-end —
+# add explicit isolation checks on all three endpoints this package extended.
+st = fresh_store(); wire(st)
+st["daily_closing"] = [
+    dc_row(id="house_row", org_id=HOUSE, store_code="S1", close_date="2026-07-15"),
+    dc_row(id="other_row", org_id=OTHER, store_code="S1", close_date="2026-07-15", employee_name="Intruder Rep"),
+]
+st["stores"] = [{"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "Texas"},
+               {"org_id": OTHER, "store_code": "S1", "address": "Other Tenant's S1", "market": "Nowhere"}]
+
+resp_summary = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)
+all_rep_ids = [r["id"] for s in resp_summary["stores"] for r in (s.get("reps") or [])]
+check("H1. /closing/summary — OTHER org's row never surfaces in a HOUSE call",
+      "other_row" not in all_rep_ids and "house_row" in all_rep_ids, str(all_rep_ids))
+resp_summary_other = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=OTHER)
+other_rep_ids = [r["id"] for s in resp_summary_other["stores"] for r in (s.get("reps") or [])]
+check("H2. /closing/summary — OTHER org's own call sees only its own row",
+      other_rep_ids == ["other_row"], str(other_rep_ids))
+
+st2 = fresh_store(); wire(st2)
+st2["daily_closing"] = [
+    dc_row(id="house_p", org_id=HOUSE, store_code="S1", period="2026-07"),
+    dc_row(id="other_p", org_id=OTHER, store_code="S1", period="2026-07", employee_name="Intruder Rep"),
+]
+roll_house = cr.closing_rollup(period="2026-07", authorization=AUTH_NONE, org_id=HOUSE)
+check("H3. /closing/rollup — OTHER org's row never surfaces in a HOUSE call",
+      roll_house["totals"]["rows"] == 1, str(roll_house["totals"]["rows"]))
+roll_other = cr.closing_rollup(period="2026-07", authorization=AUTH_NONE, org_id=OTHER)
+check("H4. /closing/rollup — OTHER org's own call sees only its own row",
+      roll_other["totals"]["rows"] == 1)
+
+CB_ROWS_ISO = [
+    {"id": "cb_house", "org_id": HOUSE, "store_code": "S1", "incident_date": "2026-07-10",
+     "employee_name": "DM House", "status": "pending", "amount": 25.0, "parent_id": None},
+]
+_orig_detect2 = oc.detect_missed_dm_verifies
+# detect_missed_dm_verifies is itself org-scoped by contract (called with org_id) — a fake that only
+# ever returns HOUSE-org rows for a HOUSE call and [] for anyone else proves the ENDPOINT (not just
+# the detector) never asks for/returns another tenant's rows.
+oc.detect_missed_dm_verifies = lambda org_id, lookback_days=14: (list(CB_ROWS_ISO) if org_id == HOUSE else [])
+st3 = fresh_store(); wire(st3)
+try:
+    resp_cb_house = cr.get_missed_dm_verifies(authorization=AUTH_NONE, org_id=HOUSE)
+    check("H5. /closing/ops-chargebacks/dm-verify — HOUSE call gets its own row",
+          [r["id"] for r in resp_cb_house["rows"]] == ["cb_house"])
+    resp_cb_other = cr.get_missed_dm_verifies(authorization=AUTH_NONE, org_id=OTHER)
+    check("H6. /closing/ops-chargebacks/dm-verify — OTHER org call never sees HOUSE's row",
+          resp_cb_other["rows"] == [], str(resp_cb_other["rows"]))
+finally:
+    oc.detect_missed_dm_verifies = _orig_detect2
+
+# ═══════════════════════ I. Gate-1 rework regression checks (B1-adjacent NITs) ═══════════════════════
+# NIT-3: closing_rollup range mode must 400 on a garbage date instead of an uncaught 500.
+st = fresh_store(); wire(st)
+try:
+    cr.closing_rollup(date_from="not-a-date", date_to="also-not-a-date", authorization=AUTH_NONE, org_id=HOUSE)
+    check("I1. rollup range mode rejects a garbage date with a clean HTTPException(400)", False, "did not raise")
+except Exception as e:
+    from fastapi import HTTPException as _HTTPException
+    check("I1. rollup range mode rejects a garbage date with a clean HTTPException(400)",
+          isinstance(e, _HTTPException) and e.status_code == 400, f"{type(e).__name__}: {e}")
+
+# NIT-4a: chargebacks store filter never drops a row with no store_code.
+CB_NO_CODE = [{"id": "cb_nocode", "org_id": HOUSE, "store_code": None, "incident_date": "2026-07-10",
+              "employee_name": "DM Unresolved", "status": "pending", "amount": 25.0, "parent_id": None}]
+_orig_detect3 = oc.detect_missed_dm_verifies
+oc.detect_missed_dm_verifies = lambda org_id, lookback_days=14: list(CB_NO_CODE)
+st = fresh_store(); wire(st)
+try:
+    resp = cr.get_missed_dm_verifies(stores="S1", authorization=AUTH_NONE, org_id=HOUSE)
+    check("I2. chargebacks store filter never drops a row with no store_code",
+          [r["id"] for r in resp["rows"]] == ["cb_nocode"], str(resp["rows"]))
+finally:
+    oc.detect_missed_dm_verifies = _orig_detect3
+
+# NIT-4b: a failed storeops.stores fetch degrades to NOT applying the market filter (never silently
+# empties the panel by defaulting every row into "(no market)").
+CB_REAL_MARKET = [{"id": "cb_tx", "org_id": HOUSE, "store_code": "S1", "incident_date": "2026-07-10",
+                   "employee_name": "DM One", "status": "pending", "amount": 25.0, "parent_id": None}]
+_orig_detect4 = oc.detect_missed_dm_verifies
+oc.detect_missed_dm_verifies = lambda org_id, lookback_days=14: list(CB_REAL_MARKET)
+st = fresh_store(); wire(st)
+fake_client = cr.sb()   # the just-wired FakeClient instance (cr.sb is a lambda closing over it)
+_orig_table = fake_client.table
+def _exploding_table(name):
+    if name == "stores":
+        raise RuntimeError("storeops.stores unreachable (simulated)")
+    return _orig_table(name)
+fake_client.table = _exploding_table
+try:
+    resp = cr.get_missed_dm_verifies(markets="Texas", authorization=AUTH_NONE, org_id=HOUSE)
+    check("I3. a failed storeops.stores fetch degrades to NOT applying the market filter (row still shown)",
+          [r["id"] for r in resp["rows"]] == ["cb_tx"], str(resp["rows"]))
+finally:
+    oc.detect_missed_dm_verifies = _orig_detect4
+    fake_client.table = _orig_table
+
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:

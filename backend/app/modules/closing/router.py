@@ -514,6 +514,15 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
     else:
         d_from = date_from or date_to
         d_to = date_to or date_from
+        # Defensive parse (Gate-1 NIT-3, 2026-07-28) — mirrors _date_range_list's use of dateparser
+        # before ANY value reaches PostgREST: an un-validated garbage string in gte()/lte() against a
+        # date column raises inside the Supabase client (an uncaught 500), not a clean 400. Validate +
+        # normalize to YYYY-MM-DD here so a bad date_from/date_to fails loudly with a real 4xx instead.
+        try:
+            d_from = dateparser.parse(str(d_from)).date().isoformat()
+            d_to = dateparser.parse(str(d_to)).date().isoformat()
+        except Exception:
+            raise HTTPException(400, "date_from/date_to must be valid dates (YYYY-MM-DD)")
         if d_from > d_to:
             d_from, d_to = d_to, d_from
         q = q.gte("close_date", d_from).lte("close_date", d_to)
@@ -2695,7 +2704,9 @@ def get_missed_dm_verifies(lookback_days: int = 14, date_from: str = None, date_
     rep_set = _resolve_rep_filter(reps)
     market_set = _resolve_market_filter(market, markets)
     if store_set is not None:
-        rows = [r for r in rows if (r.get("store_code") or "").upper() in store_set]
+        # Gate-1 NIT-4a (2026-07-28): never drop a row with no store_code at all — same "an unresolved
+        # row has no identity a picker could offer" rule /closing/summary and /closing/rollup apply.
+        rows = [r for r in rows if not r.get("store_code") or (r.get("store_code") or "").upper() in store_set]
     if rep_set is not None:
         rows = [r for r in rows if (r.get("employee_name") or "").strip().casefold() in rep_set]
     if market_set is not None:
@@ -2703,9 +2714,14 @@ def get_missed_dm_verifies(lookback_days: int = 14, date_from: str = None, date_
             _store_rows = (client.schema("storeops").table("stores").select("store_code,market")
                           .eq("org_id", org_id).execute().data) or []
             _mkt_by_code = {s.get("store_code"): _market_bucket(s.get("market")) for s in _store_rows if s.get("store_code")}
+            rows = [r for r in rows if _mkt_by_code.get(r.get("store_code"), "(no market)").casefold() in market_set]
         except Exception:
-            _mkt_by_code = {}
-        rows = [r for r in rows if _mkt_by_code.get(r.get("store_code"), "(no market)").casefold() in market_set]
+            # Gate-1 NIT-4b (2026-07-28): a failed storeops.stores fetch used to leave _mkt_by_code={},
+            # which buckets EVERY row into "(no market)" via the .get(...) default — a market filter for
+            # any REAL market then silently emptied the whole panel even though the true markets were
+            # simply unresolvable. Prefer NOT applying the market filter in this degraded path over a
+            # silent, misleading drop.
+            pass
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)
     if ks is not None:

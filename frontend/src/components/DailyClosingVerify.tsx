@@ -82,8 +82,13 @@ function MissedChargebacksPanel({ filt }: { filt: StandardFilterValue }) {
   const [busy, setBusy] = useState<Record<string, boolean>>({})
   const [msg, setMsg] = useState<Record<string, string>>({})
   const [open, setOpen] = useState(true)
+  // Anti-clobber (Gate-1 NIT-1, 2026-07-28): same latest-wins guard the other two fetches in this
+  // file already use — a fast filter change firing a 2nd request before a slower 1st one resolves
+  // could otherwise let the stale response land last and silently overwrite newer totals/rows.
+  const reqRef = useRef(0)
 
   const load = useCallback(() => {
+    const myReq = ++reqRef.current
     setLoading(true)
     const qs = new URLSearchParams()
     if (filt.period) qs.set('date_from', filt.period)
@@ -92,9 +97,9 @@ function MissedChargebacksPanel({ filt }: { filt: StandardFilterValue }) {
     const m = csv(filt.markets); if (m) qs.set('markets', m)
     const r = csv(filt.reps); if (r) qs.set('reps', r)
     api(`/api/v1/closing/ops-chargebacks/dm-verify?${qs.toString()}`)
-      .then(setData)
-      .catch(() => setData(null))
-      .finally(() => setLoading(false))
+      .then(d => { if (reqRef.current === myReq) setData(d) })
+      .catch(() => { if (reqRef.current === myReq) setData(null) })
+      .finally(() => { if (reqRef.current === myReq) setLoading(false) })
   }, [filt.period, filt.periodTo, filt.stores, filt.markets, filt.reps])
   useEffect(() => { load() }, [load])
 
