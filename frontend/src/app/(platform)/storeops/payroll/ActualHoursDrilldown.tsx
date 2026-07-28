@@ -48,9 +48,30 @@ export default function ActualHoursDrilldown({ employeeId, name, start, end, onC
         ) : err ? (
           <div style={{ color: '#dc2626', fontSize: 13 }}>{err}</div>
         ) : !data || !data.days?.length ? (
-          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No shifts or punches in range.</div>
+          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>
+            No shifts or punches in range.
+            {data?.pay_basis && data.pay_basis !== 'hourly' && (
+              <div style={{ marginTop: 10, fontSize: 12 }}>
+                💰 Salaried ({data.pay_basis}) — pay is not hours-derived.
+                {data.salary_derived_pay != null
+                  ? <> This period's pay: <strong>{fmt(data.salary_derived_pay)}</strong>{data.salary_prorated ? ' (prorated for this range)' : ''}.</>
+                  : (data.salary_note ? ` ${data.salary_note}` : '')}
+              </div>
+            )}
+          </div>
         ) : (
           <>
+            {/* Salary pay-basis (owner directive 2026-07-27, Deliverable 3): "salaried — pay not
+                hours-derived" note — these hours are shown for reference (schedule/attendance
+                composition), the AUTHORITATIVE pay figure is GET /payroll's own derived salary row. */}
+            {data.pay_basis && data.pay_basis !== 'hourly' && (
+              <div className="card" style={{ marginBottom: 12, padding: '10px 14px', fontSize: 12, background: 'var(--surface2)' }}>
+                💰 Salaried ({data.pay_basis}) — pay is <strong>not</strong> derived from these hours.
+                {data.salary_derived_pay != null
+                  ? <> This period's pay: <strong>{fmt(data.salary_derived_pay)}</strong>{data.salary_prorated ? ' (prorated for this range)' : ''}.</>
+                  : (data.salary_note ? ` ${data.salary_note}` : '')}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
               <div className="card" style={{ padding: '8px 14px' }}>
                 <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>Scheduled</div>

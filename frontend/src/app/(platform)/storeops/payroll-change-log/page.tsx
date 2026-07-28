@@ -25,6 +25,11 @@ const ENTRY_POINT_LABEL: Record<string, string> = {
   force_clockout_cron: 'Force clock-out (automatic sweep)',
   clock_out_stale_auto: 'Auto clock-out (stale punch, self-service)',
   lunch_deduction_config: 'Lunch-deduction setting changed',
+  // Salary pay-basis (2026-07-27): PATCH /employees/{id} on any of pay_rate/pay_basis/pay_amount/
+  // termination_date (manager-gated) logs here with this ONE entry_point for all four fields.
+  pay_basis_change: 'Pay setup change (HR)',
+  // Gate-1 D2 (2026-07-28): bulk_payscale (HR's "Upload pay rates" template) now logs the same way.
+  bulk_payscale: 'Bulk pay-rate upload (HR)',
 }
 const FIELD_LABEL: Record<string, string> = {
   scheduled_hours: 'Scheduled hours', actual_hours: 'Actual hours', start_time: 'Start time',
@@ -32,6 +37,7 @@ const FIELD_LABEL: Record<string, string> = {
   employee_id: 'Employee', clock_in: 'Clock in', clock_out: 'Clock out', shift_added: 'Shift added',
   manual_hours: 'Manual hours', lunch_deduction_enabled: 'Lunch deduction enabled',
   lunch_deduction_minutes: 'Lunch deduction minutes', lunch_deduction_min_shift_hours: 'Lunch min shift hours',
+  pay_rate: 'Pay $/hr', pay_basis: 'Pay basis', pay_amount: 'Salary amount', termination_date: 'Termination date',
 }
 
 const chip: React.CSSProperties = { padding: '5px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)', cursor: 'pointer' }

@@ -9,11 +9,16 @@ import ActualHoursDrilldown from './ActualHoursDrilldown'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { currentPeriodFromSettingsResponse, isFullCalendarMonth, monthRange, rangeLabel, stepPeriod, type PayPeriodSettings } from '../lib/pay-period'
+import { PAY_BASIS_LABEL, type PayBasis } from '../lib/pay-basis'
 
 interface PayrollRow {
   employee_id: string; name: string; store: string; pay_rate: number
   scheduled_hours: number; actual_hours: number; shifts: number
   scheduled_pay: number; actual_pay: number
+  // Salary pay-basis (owner directive 2026-07-27, migrations 416/417) — present only for a salaried
+  // employee (pay_basis != 'hourly'); absent/undefined for every hourly row, pre-migration tenant, etc.
+  pay_basis?: PayBasis; pay_amount?: number; salary_period_pay?: number; salary_prorated?: boolean
+  salary_note?: string
 }
 interface StoreRow { store_code: string; address?: string; market?: string }
 
@@ -145,7 +150,11 @@ export default function PayrollPage() {
   const cols: ExportColumn[] = [
     { header: 'Employee', field: 'name', role: 'rep', get: r => r.name },
     { header: 'Store', field: 'store', role: 'store', get: r => r.store },
-    { header: 'Pay Rate', field: 'pay_rate', get: r => `$${Number(r.pay_rate).toFixed(2)}/hr` },
+    // Salary pay-basis (2026-07-27): a salaried rep's "Pay Rate" isn't an hourly figure — show the
+    // basis + period-converted amount instead, so the export never implies a $/hr number that isn't real.
+    { header: 'Pay Rate', field: 'pay_rate', get: r => r.pay_basis && r.pay_basis !== 'hourly'
+        ? `${PAY_BASIS_LABEL[r.pay_basis as PayBasis]} — $${(r.salary_period_pay ?? 0).toFixed(2)}/period`
+        : `$${Number(r.pay_rate).toFixed(2)}/hr` },
     { header: 'Shifts', field: 'shifts', type: 'number', get: r => r.shifts },
     { header: 'Scheduled Hrs', field: 'scheduled_hours', type: 'number', get: r => r.scheduled_hours.toFixed(1) },
     // ONE ROW PER REP (2026-07-27): /payroll now returns a single, merged row per employee — this
@@ -175,7 +184,9 @@ export default function PayrollPage() {
         // shift-derived sub-component was computed at a $0 rate (the id-mismatch's shift bucket
         // never matched emp_map before the merge) — visible inconsistency the owner will ask about,
         // so surface it rather than let it look like a silent data error.
-        if ((r.scheduled_hours || 0) > 0.05 && !(r.scheduled_pay > 0) && (r.pay_rate || 0) > 0) f.push('ℹ sched pay incl. a $0-rate portion')
+        if (!r.pay_basis && (r.scheduled_hours || 0) > 0.05 && !(r.scheduled_pay > 0) && (r.pay_rate || 0) > 0) f.push('ℹ sched pay incl. a $0-rate portion')
+        if (r.salary_prorated) f.push('◔ prorated period')
+        if (r.salary_note) f.push('⚠ ' + r.salary_note)
         return f.join(' · ')
       } },
     { header: 'Scheduled Pay', field: 'scheduled_pay', money: true, get: r => r.scheduled_pay },

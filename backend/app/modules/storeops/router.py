@@ -3,7 +3,7 @@ import base64
 import os
 import requests
 from datetime import datetime, timezone, timedelta, date as _date
-from fastapi import APIRouter, HTTPException, Header, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Response
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.modules.storeops import google_reviews as _gr
@@ -36,6 +36,7 @@ from app.modules.storeops.payroll_identity import (
     business_id_alias_map as _business_id_alias_map,
     reconcile_employee_identity as _reconcile_employee_identity,
 )
+from app.modules.storeops import payroll_salary
 from app.modules.storeops.lunch_deduction import (
     get_lunch_config as _lunch_get_config,
     get_tenant_lunch_config as _lunch_get_tenant_config,
@@ -405,6 +406,56 @@ def reconcile_timeoff_duplicates(org_id: str = ORG_ID):
 # the SAME RPC/legacy paths with NO new migration. `month` stays supported byte-identically (still the
 # only param the harness's month-mode assertions ever pass); start/end are additive and take precedence
 # when both are given, so a caller can never end up with an ambiguous half-range.
+# ── Salary pay-basis (owner directive 2026-07-27, migrations 416/417) ───────────────────────────────
+# See payroll_salary.py's module docstring for the full design. These two helpers are the ONLY I/O
+# this feature needs beyond widening an existing `employees` SELECT: reading the tenant's own
+# pay-period config row (mirrors `_work_week_bounds`'s existing direct-table-read pattern, just below)
+# and widening a base employees SELECT to also carry pay_basis/pay_amount/hire_date/termination_date,
+# degrading to the caller's original field list on a pre-migration database so every salary code path
+# is a silent no-op until both 416 and 417 have run (see payroll_salary.py PAY_FIELDS).
+def _tenant_pp_settings(org_id):
+    try:
+        rows = (sb().table("tenants").select(
+            "work_week_start_dow,pay_period_type,payday_dow,payday_weeks_after,biweekly_anchor,timezone"
+        ).eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    return payroll_salary.tenant_pay_period_settings(rows[0] if rows else {})
+
+
+def _employees_with_pay_fields(org_id, base_fields, eq: dict = None):
+    """`eq` applies additional `.eq(k, v)` filters SERVER-SIDE (Gate-1 N3 — house perf doctrine:
+    filter in the query, not fetch-all-then-filter in Python) — e.g. `{"employee_id": employee_id}`
+    for a single-employee lookup, same as any other org-scoped query in this file."""
+    def _q(fields):
+        q = sb().table("employees").select(fields).eq("org_id", org_id)
+        for k, v in (eq or {}).items():
+            q = q.eq(k, v)
+        return q
+    try:
+        return _q(f"{base_fields},{payroll_salary.PAY_FIELDS}").execute().data or []
+    except Exception:
+        return _q(base_fields).execute().data or []
+
+
+def _warn_salary_override_failed(response, org_id, endpoint, exc):
+    """Gate-1 N5 fix (2026-07-27): the salary-override call sites (GET /payroll, /payroll-by-store,
+    hr's /compensation) wrap the whole override in a try/except so a bug there can NEVER break the
+    base hourly report — but a bare `except Exception: pass` makes a real failure silently revert a
+    salaried employee's row to $0-hourly with no signal anywhere, which is the exact failure mode the
+    house doctrine calls out as unacceptable. This (a) always prints a WARN (visible in Railway logs,
+    matching `_log_payroll_change`'s own WARN-on-failure convention) and (b) sets a response header
+    (`X-Salary-Override-Warning`) — never a response BODY field, since GET /payroll returns a bare
+    JSON array and changing that shape would break every existing consumer; a header is the one
+    channel that's genuinely additive regardless of whether the endpoint returns a list or a dict."""
+    print(f"WARN salary pay-basis override failed for org {org_id} on {endpoint}: {exc}")
+    if response is not None:
+        try:
+            response.headers["X-Salary-Override-Warning"] = f"salary override failed on {endpoint}: {str(exc)[:180]}"
+        except Exception:
+            pass
+
+
 def _resolve_range(month, start, end):
     """(lo, hi) exclusive-upper-bound date strings for payroll aggregation. Precedence: explicit
     start/end (INCLUSIVE on both ends, per RULE ONE-style caller ergonomics — a "Jan 1 to Jan 31" range
@@ -678,7 +729,7 @@ def payroll_change_log(start: str = "", end: str = "", employee_id: str = "", st
 
 @router.get("/payroll")
 def get_payroll(month: str = None, start: str = None, end: str = None,
-                 authorization: str = Header(default=""), org_id: str = ORG_ID):
+                 authorization: str = Header(default=""), org_id: str = ORG_ID, response: Response = None):
     """Returns scheduled vs actual hours per employee for payroll.
 
     Accepts EITHER the legacy `month` ('YYYY-MM', unchanged, still byte-identical) OR an explicit
@@ -689,7 +740,7 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
     # must still be paid their real rate (2026-07-25 fix) — matches /payroll-by-store's existing
     # all-employees rate_map. Row EXISTENCE for an inactive employee is still gated on real activity
     # below (_inactive_activity_rows), so this alone does not resurrect a schedule-only phantom.
-    employees = sb().table("employees").select("id,name,employee_id,pay_rate,home_store,is_active").eq("org_id", org_id).execute().data or []
+    employees = _employees_with_pay_fields(org_id, "id,name,employee_id,pay_rate,home_store,is_active")
 
     emp_map = {e["employee_id"]: e for e in employees}
     inactive_ids = _inactive_ids_from(employees)
@@ -881,6 +932,26 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
     # regrouping of already-computed numbers, never a hours×rate recompute — see
     # payroll_identity.py's module docstring for the full root-cause + presentation-only proof.
     rows = _reconcile_employee_identity(rows, employees)
+    # SALARY PAY-BASIS OVERRIDE (owner directive 2026-07-27, Deliverable 3) — see payroll_salary.py's
+    # module docstring. Runs AFTER the RPC-fast-path/legacy-path convergence above, so it is the ONE
+    # shared point that applies regardless of which hours-aggregation branch ran. try/except: a bad
+    # tenant-settings row or unexpected data must never break the base hourly report — but Gate-1 N5:
+    # never SILENTLY (see _warn_salary_override_failed).
+    #
+    # Gate-1 F1 fix (MAJOR, 2026-07-27): apply_to_payroll_rows only overrides an EXISTING row — a
+    # salaried employee with ZERO activity this period (no shift, no punch) never gets a row from the
+    # activity-driven aggregation above, so they were silently MISSING from this report while still
+    # correctly appearing in GET /payroll-by-store and GET /compensation (which iterate the full
+    # roster, not activity). synthesize_zero_activity_rows appends a 0-hours row for exactly that case
+    # — see its own docstring in payroll_salary.py.
+    if lo and hi:
+        try:
+            pp_settings = _tenant_pp_settings(org_id)
+            lo_d, hi_d = _date.fromisoformat(lo), _date.fromisoformat(hi) - timedelta(days=1)
+            rows = payroll_salary.apply_to_payroll_rows(rows, employees, pp_settings, lo_d, hi_d)
+            rows = payroll_salary.synthesize_zero_activity_rows(rows, employees, pp_settings, lo_d, hi_d)
+        except Exception as e:
+            _warn_salary_override_failed(response, org_id, "GET /payroll", e)
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [r for r in rows if in_keyset(ks, r.get("store"))]
@@ -889,7 +960,7 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
 
 @router.get("/payroll-by-store")
 def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
-                          authorization: str = Header(default=""), org_id: str = ORG_ID):
+                          authorization: str = Header(default=""), org_id: str = ORG_ID, response: Response = None):
     """Per-STORE payroll for a month OR an arbitrary start/end range (same precedence as /payroll —
     see _resolve_range), for the Store Expenses 'Employee Salaries' auto-fill.
 
@@ -899,9 +970,17 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     {store_code, hours, amount}."""
     lo, hi = _resolve_range(month, start, end)
     # All employees (active OR not) — a terminated rep who worked this month still earns; rate=0 if unknown.
-    employees = sb().table("employees").select("employee_id,pay_rate,is_active").eq("org_id", org_id).execute().data or []
+    employees = _employees_with_pay_fields(org_id, "employee_id,pay_rate,is_active,home_store")
     rate_map = {e.get("employee_id"): float(e.get("pay_rate") or 0) for e in employees}
     inactive_ids = _inactive_ids_from(employees)
+    # Salary pay-basis (Deliverable 4) — per-(employee, store) hours/$ bookkeeping, gathered ONLY for
+    # employees who are actually salaried (empty set -> zero extra cost for an all-hourly tenant). See
+    # payroll_salary.apply_to_by_store for how these are consumed.
+    salaried_ids = {e.get("employee_id") for e in employees
+                    if e.get("employee_id") and "pay_basis" in e
+                    and payroll_salary.resolve_pay_basis(e)[0] != "hourly"}
+    emp_store_hours: dict = {}
+    emp_store_dollars: dict = {}
 
     by_store = {}
     groups = _payroll_month_groups(org_id, lo, hi)
@@ -918,11 +997,15 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
             store = (g.get("store_code") or "").strip()
             if not store:
                 continue
+            eid = g.get("employee_id")
             hrs = float(g.get("hours_eff_sum") or 0)
-            rate = rate_map.get(g.get("employee_id"), 0.0)
+            rate = rate_map.get(eid, 0.0)
             d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
             d["hours"] += hrs
             d["amount"] += hrs * rate
+            if eid in salaried_ids:
+                payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
+                payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
         for g in tl_groups:
             eid = g.get("employee_id")
             store = (g.get("store_code") or "").strip()
@@ -933,6 +1016,9 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
             d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
             d["hours"] += hrs
             d["amount"] += hrs * rate
+            if eid in salaried_ids:
+                payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
+                payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
     else:
         # LEGACY PATH (pre-mig-407 fallback): full row fetch + Python aggregation — UNCHANGED.
         q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
@@ -956,6 +1042,9 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
             d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
             d["hours"] += hrs
             d["amount"] += hrs * rate
+            if eid in salaried_ids:
+                payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
+                payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
 
         # UNIVERSAL FALLBACK (2026-07-18, same audit as /payroll) — a clock punch with no matching shift
         # row is real existing platform data this store auto-fill was dropping. ADDITIVE ONLY: a day
@@ -978,6 +1067,9 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
                 d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
                 d["hours"] += hrs
                 d["amount"] += hrs * rate
+                if eid in salaried_ids:
+                    payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
+                    payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
 
     # Inactive employees: ALWAYS computed via this ONE shared, phantom-aware path (2026-07-25) — same
     # function /payroll uses, so both endpoints agree byte-for-byte on which of an inactive employee's
@@ -985,16 +1077,79 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     real_shifts, tl_rows = _inactive_activity_rows(org_id, lo, hi, inactive_ids)
     _merge_inactive_into_by_store(by_store, rate_map, real_shifts, tl_rows)
 
+    # Gate-1 D1 fix (2026-07-28, MODERATE money): _merge_inactive_into_by_store above writes an
+    # INACTIVE employee's real-activity hourly $ straight into by_store, but never into
+    # emp_store_hours/emp_store_dollars (those two dicts are only fed by the active-path loops
+    # earlier, which explicitly SKIP inactive employee ids). For an inactive employee who is ALSO
+    # salaried, that left apply_to_by_store below with NOTHING to subtract for them — so it ADDED
+    # their full derived salary ON TOP of the hourly figure just written above, overstating the store
+    # total by hours × their (possibly stale) pay_rate (repro: $52k salaried, is_active=false, one 8h
+    # punch at a leftover $20/hr rate -> by-store showed $1,160 against /payroll's correct $1,000, a
+    # +$160 = 8h×$20 overstatement). Mirrors the SAME hrs computation _merge_inactive_into_by_store
+    # itself uses (real_shifts is pre-filtered to actual_hours>0; tl_rows is always real, never
+    # phantom) so the two stay in exact agreement — this is bookkeeping only, not a second source of
+    # truth for the hours themselves.
+    for s in real_shifts:
+        eid = s.get("employee_id")
+        if eid not in salaried_ids:
+            continue
+        store = (s.get("store_code") or "").strip()
+        if not store:
+            continue
+        sched = float(s.get("scheduled_hours") or 0)
+        act = float(s.get("actual_hours") or 0)
+        hrs = act if act > 0 else sched   # act is always >0 here (real_shifts is pre-filtered)
+        rate = rate_map.get(eid, 0.0)
+        payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
+        payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
+    for t in tl_rows:
+        eid = t.get("employee_id")
+        if eid not in salaried_ids:
+            continue
+        store = (t.get("store_code") or "").strip()
+        if not store:
+            continue
+        hrs = float(t.get("hours") or 0)
+        rate = rate_map.get(eid, 0.0)
+        payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
+        payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
+
+    # SALARY PAY-BASIS OVERRIDE (owner directive 2026-07-27, Deliverable 4) — see
+    # payroll_salary.apply_to_by_store's own docstring for the subtract-hourly/add-derived mechanics.
+    # With the D1 fix immediately above, an inactive-AND-salaried employee's real-activity hourly $ is
+    # now tracked in emp_store_hours/emp_store_dollars exactly like the active path, so this call nets
+    # them correctly (subtract the real hourly $, add the derived salary allocated proportional to
+    # those same hours) instead of adding the derived salary on top of an untouched hourly figure.
+    if lo and hi and salaried_ids:
+        try:
+            by_store = payroll_salary.apply_to_by_store(
+                by_store, employees, emp_store_hours, emp_store_dollars, _tenant_pp_settings(org_id),
+                _date.fromisoformat(lo), _date.fromisoformat(hi) - timedelta(days=1))
+        except Exception as e:
+            _warn_salary_override_failed(response, org_id, "GET /payroll-by-store", e)
+
     # LUNCH-BREAK AUTO-DEDUCTION (2026-07-27, Deliverable 3) — the SAME guarded per-(employee, day)
     # result /payroll uses, attributed to the store of that day's marked punch, so the Store Expenses
     # "Employee Salaries" auto-fill stays in step with /payroll's own netted total instead of silently
     # overstating labor cost by the deducted amount. Clamped against the STORE's total hours (a valid,
     # if loose, upper bound — one employee's own deduction can never exceed their own contribution to
     # that store's total, which is <= the store total). Byte-identical no-op until migration 418 runs.
+    #
+    # Gate-1 merge hand-fix (2026-07-27): a SALARIED employee's `by_store[store]["amount"]` no longer
+    # means "hours × pay_rate" once the salary override above has run — it's their derived-salary
+    # allocation. Subtracting an HOURS-based lunch deduction dollar figure (`_applied * _rate`) from
+    # that would either double-subtract (the salary override already fully replaced their hourly
+    # contribution) or corrupt a salary figure with an hourly concept. Salaried employees are
+    # completely skipped here — their pay is never hours-derived, so lunch deduction never touches it
+    # in the by-store view (their DISPLAYED hours reduction still happens correctly on GET /payroll,
+    # which computes lunch BEFORE the salary override does a full overwrite of actual_pay — see that
+    # endpoint's own lunch-deduction comment).
     try:
         _lunch = _lunch_period_deduction(org_id, lo, hi, sb())
         if _lunch.get("available"):
             for (_eid, _store), _ded in _lunch["by_employee_store"].items():
+                if _eid in salaried_ids:
+                    continue
                 if not _store or _store not in by_store:
                     continue
                 _rate = rate_map.get(_eid, 0.0)
@@ -1045,8 +1200,11 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
     if not (employee_id and start and end):
         raise HTTPException(400, "employee_id, start and end are required")
     ids, variant_name = _emp_id_variants(org_id, employee_id)
-    emp_rows = (sb().table("employees").select("employee_id,name,pay_rate,is_active")
-                .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data) or []
+    # Gate-1 N3 fix (2026-07-27): filter server-side (eq=) instead of fetching the whole org roster
+    # and filtering in Python — this endpoint is called once per row-click, but there's no reason to
+    # pay the fetch-all cost when the query can do it (house perf doctrine).
+    emp_rows = _employees_with_pay_fields(org_id, "employee_id,name,pay_rate,is_active",
+                                           eq={"employee_id": employee_id})
     emp = emp_rows[0] if emp_rows else {}
     name = emp.get("name") or variant_name or employee_id
     pay_rate = float(emp.get("pay_rate") or 0)
@@ -1214,11 +1372,40 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
         if not any(in_keyset(ks, d.get("store_code")) for d in out_days):
             raise HTTPException(403, "not in your scope")
 
+    # Salary pay-basis note (Deliverable 3 UX requirement: "salaried — pay not hours-derived" note in
+    # the drill-down). Read-only/display-only here — this endpoint never computes a pay figure other
+    # than the informational salary_derived_pay shown alongside the hours breakdown; the AUTHORITATIVE
+    # figure is always GET /payroll's own row (payroll_salary.apply_to_payroll_rows).
+    salary_meta = {}
+    if "pay_basis" in emp:
+        basis, amount = payroll_salary.resolve_pay_basis(emp)
+        if basis != "hourly":
+            derived = None
+            if amount and amount > 0:
+                try:
+                    derived = payroll_salary.derive_salary_pay(
+                        basis, amount, _tenant_pp_settings(org_id),
+                        _date.fromisoformat(start[:10]), _date.fromisoformat(end[:10]),
+                        payroll_salary.parse_date(emp.get("hire_date")),
+                        payroll_salary.parse_date(emp.get("termination_date")))
+                except Exception:
+                    derived = None
+            salary_meta = {
+                "pay_basis": basis, "pay_amount": amount,
+                "salary_period_pay": (derived or {}).get("period_pay"),
+                "salary_derived_pay": (derived or {}).get("amount"),
+                "salary_prorated": (derived or {}).get("prorated", False),
+                "salary_note": ("Salaried — pay is not derived from these hours; shown for reference only."
+                                 if derived else
+                                 f"pay_basis is '{basis}' but no pay_amount is configured — pay is not derived."),
+            }
+
     out = {"employee_id": employee_id, "name": name, "pay_rate": pay_rate, "start": start, "end": end,
            "days": out_days, "total_actual_hours": total_actual, "total_scheduled_hours": total_scheduled,
            "total_manual_hours_not_in_payroll": round(total_manual_not_in_payroll, 2)}
     if lunch_available:
         out["total_lunch_deduction_hours"] = total_lunch_deduction
+    out.update(salary_meta)
     return out
 
 
@@ -1379,8 +1566,20 @@ def decide_payroll_chargeback(cb_id: str, body: dict, authorization: str = Heade
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
 EMP_FIELDS = ("name", "home_store", "role", "pay_rate", "is_active", "email",
-              "phone", "notes", "epay_login", "epay_salesperson", "employee_id")
+              "phone", "notes", "epay_login", "epay_salesperson", "employee_id",
+              "pay_basis", "pay_amount", "termination_date")
 STORE_FIELDS = ("store_code", "address", "market", "monthly_target", "is_active", "phone", "notes")
+
+# Pay-adjacent fields on `employees` (2026-07-27 Deliverable 6): PATCH /employees/{id} previously took
+# NO role gate at all for pay_rate — only org_id scoping. Per the owner dispatch's explicit rule ("if
+# ungated, gate BOTH + note"): editing any of these now requires `_require_manager`. A non-pay field
+# edit in the SAME PATCH body (name/email/home_store/...) is unaffected, so this can't break an
+# existing non-pay-editing caller.
+_PAY_GATED_FIELDS = {"pay_rate", "pay_basis", "pay_amount", "termination_date"}
+# The SAME set, also logged to storeops.payroll_change_log on change (Gate-1 F2, 2026-07-27 — every
+# gated field IS a pay field, so every gated field is logged; a tuple, not a set, for a deterministic
+# select-column-list/diff-loop order).
+_PAY_LOGGED_FIELDS = ("pay_rate", "pay_basis", "pay_amount", "termination_date")
 
 
 @router.post("/employees/bulk")
@@ -1450,23 +1649,72 @@ def create_employee(emp: dict, org_id: str = ORG_ID):
 
 
 @router.patch("/employees/{emp_id}")
-def update_employee(emp_id: str, updates: dict, org_id: str = ORG_ID):
-    """Update an employee (name/role/home_store/pay_rate/active/contact). StoreOps Admin.
+def update_employee(emp_id: str, updates: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Update an employee (name/role/home_store/pay_rate/active/contact/pay_basis/pay_amount).
+    StoreOps Admin + HR (hr_update_employee delegates here).
     emp_id is str (not int) so a UUID or numeric id both work — a typed int rejected UUID ids
     with a 422, which read as 'cannot edit' in the UI.
 
     org_id-scoped so a foreign (guessable BIGSERIAL) emp_id is a no-op instead of a cross-tenant
-    write — this previously took NO org filter at all, and it's the pay_rate write path."""
+    write — this previously took NO org filter at all, and it's the pay_rate write path.
+
+    MANAGER-GATED for pay fields (see _PAY_GATED_FIELDS) — a genuine security hardening added
+    2026-07-27, not just posture-matching (docs/handoffs/people.md). Every field in
+    `_PAY_LOGGED_FIELDS` (pay_rate/pay_basis/pay_amount/termination_date — ALL of the gated fields,
+    since all four are pay-relevant) is best-effort logged to storeops.payroll_change_log
+    (entry_point='pay_basis_change', migration 414) so it shows the same ✎ manual-edit trail as an
+    hours correction. Gate-1 F2 fix (2026-07-27): termination_date and pay_rate were gated but NOT
+    logged before this — both are now in the logged set, same one-liner as pay_basis/pay_amount."""
     row = {k: updates[k] for k in EMP_FIELDS if k in updates}
     if not row:
         raise HTTPException(400, "no valid fields to update")
+    if _PAY_GATED_FIELDS & set(row):
+        _require_manager(authorization, org_id)
     # Clearing the Emp ID must store NULL, not '' (TEXT UNIQUE → '' collides across people).
     if "employee_id" in row and not (row.get("employee_id") or "").strip():
         row["employee_id"] = None
+    if "pay_basis" in row:
+        b = str(row["pay_basis"] or "hourly").strip().lower()
+        row["pay_basis"] = b if b in payroll_salary.PAY_BASES else "hourly"
+    if "pay_amount" in row:
+        try:
+            row["pay_amount"] = float(row["pay_amount"]) if row["pay_amount"] not in (None, "") else None
+        except (TypeError, ValueError):
+            row["pay_amount"] = None
+    before = None
+    if set(_PAY_LOGGED_FIELDS) & set(row):
+        try:
+            before_rows = (sb().table("employees").select(
+                "id,employee_id,name," + ",".join(_PAY_LOGGED_FIELDS))
+                .eq("id", emp_id).eq("org_id", org_id).limit(1).execute().data) or []
+        except Exception:
+            # Gate-1 NIT-A fix (2026-07-28, MUST): the widened select above names ALL of
+            # _PAY_LOGGED_FIELDS unconditionally, including pay_basis/pay_amount/termination_date
+            # (migrations 416/417) — PostgREST fails the WHOLE select if any named column doesn't
+            # exist yet. Pre-migration, that meant an ORDINARY pay_rate edit (a field that predates
+            # this feature entirely) 500'd in the deploy-before-SQL window. Degrade to a select of
+            # just the fields that already existed (pay_rate always did) — same widened-select-with-
+            # fallback convention _employees_with_pay_fields already uses for every READ path; this
+            # is the matching guard for the EDIT path.
+            try:
+                before_rows = (sb().table("employees").select("id,employee_id,name,pay_rate")
+                               .eq("id", emp_id).eq("org_id", org_id).limit(1).execute().data) or []
+            except Exception:
+                before_rows = []
+        before = before_rows[0] if before_rows else None
     r = sb().table("employees").update(row).eq("id", emp_id).eq("org_id", org_id).execute()
     if not r.data:
         raise HTTPException(404, "employee not found")
-    return _ensure_employee_id(r.data[0])
+    after = r.data[0]
+    if before is not None:
+        who = _who_for_log(authorization, org_id)
+        for f in _PAY_LOGGED_FIELDS:
+            if f in row and str(before.get(f) or "") != str(after.get(f) or ""):
+                _log_payroll_change(org_id, field=f, entry_point="pay_basis_change",
+                                     employee_id=after.get("employee_id"), employee_name=after.get("name"),
+                                     before=before.get(f), after=after.get(f),
+                                     source_table="employees", source_id=after.get("id"), who=who)
+    return _ensure_employee_id(after)
 
 
 @router.delete("/employees/{emp_id}")
@@ -1553,15 +1801,23 @@ def merge_employees(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/employees/bulk-payscale")
-def bulk_payscale(body: dict, org_id: str = ORG_ID):
+def bulk_payscale(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Bulk set pay rates from a list. Body: {rows:[{employee_id|name, pay_rate}]}.
-    Matches by employee_id, else exact name (case-insensitive). Reports unmatched/bad rows."""
+    Matches by employee_id, else exact name (case-insensitive). Reports unmatched/bad rows.
+    MANAGER-GATED (2026-07-27) — same posture as the single-row PATCH's pay-field gate
+    (_PAY_GATED_FIELDS, Deliverable 6). Gate-1 D2 fix (2026-07-28, MODERATE audit): a bulk upload
+    previously rewrote every rate with ZERO change-log trail (unlike the single-row PATCH, which logs
+    via _log_payroll_change) — a DM could silently mass-edit pay with no ✎ audit marker anywhere.
+    Each successfully-updated row now logs the SAME way, entry_point='bulk_payscale', best-effort
+    (a log-write failure never blocks the actual rate update, matching every other hook's posture)."""
+    _require_manager(authorization, org_id)
     rows = body.get("rows") or body.get("employees") or []
     if not isinstance(rows, list) or not rows:
         raise HTTPException(400, "rows[] required")
-    emps = sb().table("employees").select("id,employee_id,name").eq("org_id", org_id).execute().data or []
+    emps = sb().table("employees").select("id,employee_id,name,pay_rate").eq("org_id", org_id).execute().data or []
     by_eid = {str(e.get("employee_id")): e for e in emps if e.get("employee_id")}
     by_name = {(e.get("name") or "").strip().lower(): e for e in emps}
+    who = _who_for_log(authorization, org_id)
     updated, errors = 0, []
     for i, rw in enumerate(rows):
         try:
@@ -1574,8 +1830,14 @@ def bulk_payscale(body: dict, org_id: str = ORG_ID):
         if not match:
             errors.append({"row": i + 1, "error": "employee not found", "ref": eid or rw.get("name")})
             continue
+        before_rate = match.get("pay_rate")
         sb().table("employees").update({"pay_rate": rate}).eq("id", match["id"]).eq("org_id", org_id).execute()
         updated += 1
+        if str(before_rate or "") != str(rate):
+            _log_payroll_change(org_id, field="pay_rate", entry_point="bulk_payscale",
+                                 employee_id=match.get("employee_id"), employee_name=match.get("name"),
+                                 before=before_rate, after=rate,
+                                 source_table="employees", source_id=match.get("id"), who=who)
     return {"updated": updated, "errors": errors, "total": len(rows)}
 
 
