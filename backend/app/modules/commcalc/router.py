@@ -15782,12 +15782,37 @@ def _pull_diag_payload(res):
     for r in (res.get("reports") or [])[:12]:
         if not isinstance(r, dict):
             continue
+        # 2026-07-28: the driver now returns WHY a report produced nothing (`outcome`), the repr() of
+        # both report names when a match failed (`match_debug` — an invisible-character mismatch must
+        # never again read as a contradiction), whether the portal's list CHANGED mid-pull
+        # (`options_changed`), and a per-month window trail. This whitelist is what survives onto the
+        # data_source row, so anything omitted here is invisible to "What the pull saw" afterwards.
+        wins = []
+        for w in (r.get("windows") or [])[:6]:
+            if not isinstance(w, dict):
+                continue
+            wins.append({k: w.get(k) for k in
+                         ("window", "requested", "state", "rows_in_export", "rows_ingested",
+                          "rows_seen", "waited_s", "marker", "submit_label", "note")
+                         if w.get(k) is not None})
+            flds = [{k: f.get(k) for k in ("name", "kind", "role", "found", "visible", "value",
+                                           "value_len", "readback_ok")
+                     if f.get(k) is not None}
+                    for f in (w.get("fields") or [])[:10] if isinstance(f, dict)]
+            if flds:
+                wins[-1]["fields"] = flds
         reports.append({
             "report_key": r.get("report_key"), "target_table": r.get("target_table"),
             "ok": bool(r.get("ok")), "rows_ingested": r.get("rows_ingested"),
             "months_covered": (r.get("months_covered") or [])[:12],
             "reason": r.get("reason"), "error": (str(r.get("error"))[:400] if r.get("error") else None),
+            "outcome": (str(r.get("outcome"))[:400] if r.get("outcome") else None),
             "calibration": bool(r.get("calibration")),
+            "empty_confirmed": bool(r.get("empty_confirmed")) or None,
+            "match_debug": r.get("match_debug"), "name_match": r.get("name_match"),
+            "options_changed": r.get("options_changed"),
+            "portal_options": (r.get("portal_options") or [])[:20] or None,
+            "windows": wins or None,
             "window_diag": r.get("window_diag"),
         })
     probe = res.get("probe") or res.get("report_probe") or {}
