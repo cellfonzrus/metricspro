@@ -136,10 +136,14 @@ def _canon_person(s):
     return folded
 
 
-def _assignment_miss_reason(scope, val, rn_canon, rr, sv_store, sv_mkt, scope_value_raw):
+def _assignment_miss_reason(scope, val, rn_canon, rr, sv_store, sv_mkt, scope_value_raw, skeys=None):
     """Plain-language 'why this assignment did NOT attach to the rep', for the drill-down nearest-miss
     list. PURE. It only NARRATES a branch of the SAME predicate `_resolve_plan_for` evaluates — it is
-    never a second matching implementation (the caller passes the exact `ok`; this just explains ¬ok)."""
+    never a second matching implementation (the caller passes the exact `ok`; this just explains ¬ok).
+
+    `skeys` (mig 249, store_resolution='alias') is the EXTRA set of store keys the predicate also
+    accepted for a store-scope assignment (the alias-resolved store_code / canonical address). Default
+    None/empty => the narration string is byte-identical to before."""
     if scope == "employee":
         if not val:
             return "employee assignment has no name"
@@ -153,6 +157,9 @@ def _assignment_miss_reason(scope, val, rn_canon, rr, sv_store, sv_mkt, scope_va
     if scope == "store":
         if not val:
             return "store assignment has no value"
+        if skeys:
+            return (f"store scope '{val}' != rep store '{sv_store or '(none)'}' "
+                    f"(also tried {', '.join(sorted(skeys))})")
         return f"store scope '{val}' != rep store '{sv_store or '(none)'}'"
     if scope == "market":
         if not val:
@@ -161,7 +168,7 @@ def _assignment_miss_reason(scope, val, rn_canon, rr, sv_store, sv_mkt, scope_va
     return f"scope '{scope}' did not match"
 
 
-def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=False):
+def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=False, store_keys=None):
     """Most-specific assignment wins: employee > role > store > market > default. Returns the plan or None.
 
     EMPLOYEE scope_value is matched to the rep's name name-order-insensitively via `_canon_person`
@@ -182,11 +189,18 @@ def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=Fal
     explain=True → returns {"plan", "winner", "considered"} for the drill-down narration (the SINGLE
     source of truth so the narration can never disagree with what pays): `winner` is the winning
     assignment {plan_id, plan_name, scope, scope_value, priority, rank} (None if no plan attached);
-    `considered` is EVERY assignment evaluated, each with matched:bool + a miss `reason`."""
+    `considered` is EVERY assignment evaluated, each with matched:bool + a miss `reason`.
+
+    `store_keys` (mig 249) is an OPTIONAL extra set of already-lower-cased store keys a STORE-scope
+    assignment may also match — the alias-resolved store_code and canonical store_address for the rep's
+    raw POS store string. It is passed ONLY when the tenant set store_resolution='alias'. The default
+    None makes `skeys` empty, so `val in skeys` is always False and the predicate — and therefore every
+    payout — is BYTE-IDENTICAL to before."""
     SCOPE_RANK = {"employee": 4, "role": 3, "store": 2, "market": 1, "default": 0}
     rn_canon = _canon_person(rep_name)
     rr = (rep_role or "").strip().lower()
     sv_store, sv_mkt = (store or "").strip().lower(), (market or "").strip().lower()
+    skeys = {str(k).strip().lower() for k in (store_keys or ()) if str(k or "").strip()}
     best, best_key, best_assign = None, (-1, -1), None
     considered = [] if explain else None
     for p in plans:
@@ -207,7 +221,7 @@ def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=Fal
                 ok = bool(val) and bool(rr) and val == rr
             else:
                 ok = ((scope == "default") or
-                      (scope == "store" and val and val == sv_store) or
+                      (scope == "store" and val and (val == sv_store or val in skeys)) or
                       (scope == "market" and val and val == sv_mkt))
             if explain:
                 considered.append({
@@ -216,7 +230,7 @@ def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=Fal
                     "priority": int(a.get("priority") or 0), "rank": SCOPE_RANK.get(scope, 0),
                     "matched": bool(ok),
                     "reason": None if ok else _assignment_miss_reason(
-                        scope, val, rn_canon, rr, sv_store, sv_mkt, a.get("scope_value")),
+                        scope, val, rn_canon, rr, sv_store, sv_mkt, a.get("scope_value"), skeys),
                 })
             if not ok:
                 continue
@@ -408,6 +422,252 @@ def _plan_pay_config(client, org_id):
         v = str(rows[0].get("plan_ct_resolution") or "raw").strip().lower()
         out["plan_ct_resolution"] = v if v in ("raw", "mapped") else "raw"
     return out
+
+
+# ── COVERAGE IDENTITY BRIDGE (mod-commission 2026-07-28) ─────────────────────────────────────────
+# Everything in this block is reached ONLY from preview(coverage=True) — the coverage=False money path
+# never calls any of it — EXCEPT the alias store resolution, which is gated on the tenant's own
+# store_resolution setting (default 'exact' = today's behaviour, byte-identical).
+#
+# WHY IT EXISTS: the coverage panel listed 15 sellers as "no plan attached" with a BLANK market and no
+# role, while the owner had assigned all of them. Three separate identity bridges silently fail:
+#   1. NAME   — assignments store the ROSTER value (epay_salesperson || name); the engine compares it to
+#               raw_sales.salesperson via _canon_person (comma-flip + casefold, deliberately NOT fuzzy).
+#               "Sri ram, Nivas" vs a roster "Nivas Sriram" is a silent miss, and the bulk-assign UI
+#               still shows "current plan ✓" because it compares roster-side to roster-side.
+#   2. ROLE   — _read_employee_roles keys on the roster NAME column only, so the same miss also erases
+#               the rep's role → a scope='role' assignment can never attach.
+#   3. STORE  — _read_store_market reads commcalc.store_mapping ONLY (exact lower-cased address/code).
+#               The /store-match alias table (commcalc.store_aliases) is never consulted, so a POS store
+#               string that differs from store_mapping.store_address yields a BLANK market and a
+#               store/market-scope assignment can never attach.
+# The helpers below NARRATE all three (Part A) and, behind the store_resolution setting, can BRIDGE the
+# third (Part B). None of them is a new matcher: candidate scoring is a diagnostic hint only, and the
+# "would this attach?" preview re-runs the REAL _resolve_plan_for.
+
+# POS placeholder words that make a "seller" look like a till/terminal rather than a person
+# ("Office, Back"). A HINT ONLY — nothing is hidden or excluded from this list; a tenant confirms real
+# artifacts through commission_org_config.coverage_excluded_sellers (mig 248), and may replace this list
+# through coverage_artifact_hints (SAP rule: no hard-coded roster semantics).
+DEFAULT_ARTIFACT_HINTS = [
+    "office", "back office", "backoffice", "admin", "administrator", "store", "house", "system",
+    "test", "testing", "training", "demo", "sample", "pos", "register", "till", "counter", "kiosk",
+    "cashier", "default", "unknown", "unassigned", "none", "n/a", "na", "employee", "staff", "user",
+]
+
+
+def _name_tokens(s):
+    """Alphanumeric word tokens of a canonicalized person-name. PURE."""
+    return set(re.sub(r"[^a-z0-9]+", " ", _canon_person(s)).split())
+
+
+def _name_squash(s):
+    """A canonicalized person-name with every non-alphanumeric character removed. PURE.
+
+    This is what catches the owner's real case: POS "Sri ram, Nivas" -> "nivas sri ram" -> "nivassriram"
+    and roster "Nivas Sriram" -> "nivassriram" are the SAME string once spacing is discarded. It is used
+    ONLY to rank remediation candidates — never to match a payout."""
+    return re.sub(r"[^a-z0-9]+", "", _canon_person(s))
+
+
+def _name_score(a, b):
+    """0..1 similarity between two person-names, for the "did you mean" list ONLY. PURE.
+    1.0 = identical once punctuation/spacing is discarded; otherwise Jaccard over word tokens."""
+    sa, sb = _name_squash(a), _name_squash(b)
+    if not sa or not sb:
+        return 0.0
+    if sa == sb:
+        return 1.0
+    ta, tb = _name_tokens(a), _name_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return round(len(ta & tb) / float(len(ta | tb)), 3)
+
+
+def _roster_candidates(rep_name, roster, top=3, floor=0.2):
+    """Up to `top` roster rows that RESEMBLE a POS seller name, best first. PURE, diagnostic only.
+    Each entry reports which roster column produced the score so the remediation can be exact."""
+    out = []
+    for e in roster:
+        s_name = _name_score(rep_name, e.get("name"))
+        s_epay = _name_score(rep_name, e.get("epay_salesperson")) if e.get("epay_salesperson") else 0.0
+        score = max(s_name, s_epay)
+        if score < floor:
+            continue
+        out.append({"employee_id": e.get("id"), "name": e.get("name"),
+                    "role": (e.get("role") or "").strip() or None,
+                    "email": (e.get("email") or "").strip() or None,
+                    "epay_salesperson": (e.get("epay_salesperson") or "").strip() or None,
+                    "home_store": (e.get("home_store") or "").strip() or None,
+                    "is_active": bool(e.get("is_active", True)),
+                    "score": score, "matched_on": "epay_salesperson" if s_epay > s_name else "name"})
+    out.sort(key=lambda x: (-x["score"], str(x.get("name") or "")))
+    return out[:top]
+
+
+def _read_employee_roster(client, org_id):
+    """The org's storeops roster rows the coverage diagnosis needs. COVERAGE-ONLY (never called on the
+    money path) — the pay path keeps using _read_employee_roles, which is untouched.
+
+    Ordered by id so candidate ranking is deterministic across runs. Returns [] on any failure (the
+    diagnosis then honestly reports the roster as unavailable instead of blaming the name)."""
+    for cols in ("id,name,role,email,epay_salesperson,home_store,is_active", "id,name,role"):
+        try:
+            return (client.schema("storeops").table("employees").select(cols)
+                    .eq("org_id", org_id).order("id").execute().data) or []
+        except Exception:
+            continue
+    return []
+
+
+def _coverage_config(client, org_id):
+    """Tenant-configurable coverage posture (mig 248) — POS-artifact sellers the owner has confirmed are
+    not commissionable, plus the artifact word list. Its OWN defensive read so a missing column can never
+    disturb _plan_pay_config (which is money-adjacent). Never raises.
+
+    `excluded_sellers` NEVER changes pay: it only moves a $0 seller out of the 'no plan attached' list
+    into a visible 'excluded' note. Nothing is silently hidden."""
+    out = {"excluded_sellers": [], "artifact_hints": list(DEFAULT_ARTIFACT_HINTS), "ready": False}
+    try:
+        rows = (client.schema("commcalc").table("commission_org_config")
+                .select("coverage_excluded_sellers,coverage_artifact_hints")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        return out
+    out["ready"] = True
+    if rows:
+        ex = rows[0].get("coverage_excluded_sellers")
+        if isinstance(ex, list):
+            out["excluded_sellers"] = [str(x).strip() for x in ex if str(x or "").strip()]
+        hints = rows[0].get("coverage_artifact_hints")
+        if isinstance(hints, list) and hints:
+            out["artifact_hints"] = [str(x).strip().lower() for x in hints if str(x or "").strip()]
+    return out
+
+
+def _store_bridge(client, org_id):
+    """The org's store-alias resolution maps, or None if unavailable. Reuses router._store_maps — the
+    SAME chain the Store-Matching UI (/store-match) and the Daily-Targets store resolver already use, so
+    this can never become yet another store resolver. Lazy import (router imports this module).
+
+    Returns {alias_to_code, addr_to_code, so_addr_to_code, code_to:{CODE -> {store_code,address,market}}}."""
+    try:
+        from app.modules.commcalc.router import _store_maps
+        M = _store_maps(client, org_id)
+    except Exception:
+        return None
+    code_to = {}
+    for s in (M.get("stores") or []):
+        c = str(s.get("store_code") or "").strip()
+        if c and c.upper() not in code_to:
+            code_to[c.upper()] = {"store_code": c,
+                                  "address": str(s.get("address") or "").strip(),
+                                  "market": str(s.get("market") or "").strip(),
+                                  "source": s.get("source")}
+    return {"alias_to_code": M.get("alias_to_code") or {},
+            "addr_to_code": M.get("addr_to_code") or {},
+            "so_addr_to_code": M.get("so_addr_to_code") or {},
+            "code_to": code_to}
+
+
+def _store_trace(store_market, bridge, raw_store):
+    """PURE narration of EXACTLY what the engine tried to turn one raw POS store string into a market,
+    plus what the /store-match alias table WOULD resolve it to. Changes nothing.
+
+    `store_market` is _read_store_market's map (lower address AND lower code -> market, '' when the
+    store_mapping row has a blank market) — membership is tested with `in`, not `.get()`, so
+    "row exists, market blank" is reported as its own state instead of as a miss.
+
+    Returns {raw, address_hit, code_hit, first_token, first_token_hit, exact_market, alias, alias_market,
+             alias_keys, status, message}."""
+    raw = str(raw_store or "").strip()
+    low = raw.lower()
+    first = low.split(" ")[0] if low else ""
+    addr_hit = bool(low) and low in store_market
+    tok_hit = bool(first) and first in store_market
+    # EXACTLY the expression preview() evaluates today (`.get(x) or .get(first, "")`).
+    exact_market = (store_market.get(low) or store_market.get(first, "")) if low else ""
+    t = {"raw": raw, "address_hit": addr_hit, "code_hit": bool(low) and low in store_market and not addr_hit,
+         "first_token": first, "first_token_hit": tok_hit,
+         "exact_market": exact_market, "alias": None, "alias_market": "", "alias_keys": [],
+         "status": "resolved" if exact_market else ("mapped_no_market" if (addr_hit or tok_hit) else "unmapped"),
+         "message": ""}
+    if bridge and low:
+        hit, via = None, None
+        code = bridge["alias_to_code"].get(low)
+        if code:
+            via = f"store alias '{raw}'"
+        if not code:
+            code = bridge["addr_to_code"].get(low)
+            if code:
+                via = "store_mapping address"
+        if not code:
+            code = bridge["so_addr_to_code"].get(low)
+            if code:
+                via = "storeops store address"
+        if not code and low.upper() in bridge["code_to"]:
+            code = bridge["code_to"][low.upper()]["store_code"]
+            via = "the raw string already IS a store code"
+        if code:
+            hit = bridge["code_to"].get(str(code).strip().upper())
+        if hit:
+            t["alias"] = {"store_code": hit["store_code"], "address": hit["address"],
+                          "market": hit["market"], "via": via, "source": hit.get("source")}
+            t["alias_market"] = hit["market"]
+            t["alias_keys"] = sorted({k for k in (str(hit["store_code"]).strip().lower(),
+                                                  str(hit["address"]).strip().lower(), low) if k})
+    if t["exact_market"]:
+        t["message"] = f"market '{t['exact_market']}' resolved from commcalc.store_mapping."
+    elif t["status"] == "mapped_no_market":
+        t["message"] = ("a commcalc.store_mapping row exists for this store but its MARKET is blank — "
+                        "set the market in Commission settings → Stores & Markets. A market-scope "
+                        "assignment cannot attach until it is set.")
+    elif t["alias"] and t["alias_market"]:
+        t["message"] = (f"store_mapping has no row for this POS string, but the store-match table "
+                        f"resolves it via {t['alias']['via']} to {t['alias']['store_code']} "
+                        f"({t['alias']['address'] or 'no address'}) in market '{t['alias_market']}' — "
+                        f"this only counts once Store resolution is set to 'alias' (Commission settings).")
+    elif t["alias"]:
+        t["message"] = (f"the store-match table resolves this POS string to "
+                        f"{t['alias']['store_code']}, but that store has NO market set — set it in "
+                        f"Commission settings → Stores & Markets.")
+    else:
+        t["message"] = ("this POS store string resolves to nothing — no commcalc.store_mapping address, "
+                        "no store code, and no /store-match alias. Map it at /commcalc/store-match. "
+                        "Until then the rep's market is blank and no store/market-scope assignment can "
+                        "attach.")
+    return t
+
+
+def _artifact_flag(rep_name, hints, best_score):
+    """Is this 'seller' more likely a POS artifact (a till/back-office login) than a person? A HINT ONLY —
+    nothing is hidden; the owner confirms through the excluded-sellers setting. PURE."""
+    toks = _name_tokens(rep_name)
+    hint_set = {str(h).strip().lower() for h in (hints or []) if str(h or "").strip()}
+    # a hint may be a PHRASE ("back office"): compare the whole canonical name too, not just its words,
+    # so "Office, Back" -> "back office" is recognised without adding the risky single word "back".
+    squashed_hints = {re.sub(r"[^a-z0-9]+", "", h) for h in hint_set}
+    canon, squash = _canon_person(rep_name), _name_squash(rep_name)
+    reasons, suspect, conf = [], False, "low"
+    if canon and (canon in hint_set or squash in squashed_hints):
+        suspect, conf = True, "high"
+        reasons.append(f"'{canon}' is a POS placeholder name, not a person")
+    elif toks and toks <= hint_set:
+        suspect, conf = True, "high"
+        reasons.append("every word in this name is a POS placeholder word "
+                       f"({', '.join(sorted(toks))})")
+    else:
+        hit = sorted(toks & hint_set)
+        short = sorted(t for t in toks if len(t) <= 2)
+        if best_score < 0.34 and (hit or short):
+            suspect = True
+            if hit:
+                reasons.append(f"contains the POS placeholder word(s) {', '.join(hit)}")
+            if short:
+                reasons.append(f"contains a {len(short[0])}-character word ('{short[0]}') — "
+                               f"often a truncated POS entry")
+            reasons.append("and no roster person resembles this name")
+    return {"suspect": suspect, "confidence": conf if suspect else None, "reasons": reasons}
 
 
 def _read_ct_classification_config(client, org_id):
@@ -621,9 +881,175 @@ def _apply_rule_overrides(plans, overrides):
     return out
 
 
+def _unassigned_diagnosis(rep_name, store, market, rep_role, roster, plans, trace, hints, store_res):
+    """Why THIS seller has no plan attached, in terms an operator can act on. PURE + money-free.
+
+    Answers, in order: (1) is the NAME bridge to the storeops roster intact (and if not, who did the
+    owner probably mean)? (2) does an assignment already exist under a DIFFERENT spelling? (3) what did
+    the engine do with the raw POS STORE string, and what would the /store-match alias table resolve it
+    to? (4) does this even look like a person?
+
+    The "would it attach?" preview re-runs the REAL `_resolve_plan_for` with the alias-resolved market /
+    store keys — it is never a second matching implementation, so it cannot promise something the pay
+    path would not do."""
+    rn = _canon_person(rep_name)
+    roster_ok = bool(roster)
+    by_name = [e for e in roster if _canon_person(e.get("name")) == rn]
+    by_epay = [e for e in roster if str(e.get("epay_salesperson") or "").strip()
+               and _canon_person(e.get("epay_salesperson")) == rn]
+    cands = _roster_candidates(rep_name, roster)
+    best = cands[0]["score"] if cands else 0.0
+
+    def _row(e):
+        return {"employee_id": e.get("id"), "name": e.get("name"),
+                "role": (e.get("role") or "").strip() or None,
+                "email": (e.get("email") or "").strip() or None,
+                "epay_salesperson": (e.get("epay_salesperson") or "").strip() or None,
+                "is_active": bool(e.get("is_active", True))}
+
+    nb = {"sales_name": rep_name, "canonical": rn, "candidates": cands, "roster_rows": len(roster)}
+    if not roster_ok:
+        nb["status"] = "roster_unavailable"
+        nb["message"] = ("the storeops employee roster could not be read for this tenant, so neither the "
+                         "rep's ROLE nor a name match can be resolved. Every role-scope assignment is "
+                         "inert until it is readable.")
+        nb["remediation"] = "check the tenant's storeops roster (Admin → Employees)."
+    elif by_name:
+        e = by_name[0]
+        nb["status"] = "name_match"
+        nb["matched"] = _row(e)
+        if not (e.get("role") or "").strip():
+            nb["message"] = (f"the roster DOES have '{e.get('name')}' under this exact name, but that row "
+                             f"has NO job role — so a role-scope assignment can never attach to them.")
+            nb["remediation"] = (f"set a job role on '{e.get('name')}' in the employee roster, or attach "
+                                 f"the plan to them by EMPLOYEE scope.")
+        else:
+            nb["message"] = (f"the roster matches '{e.get('name')}' (role '{(e.get('role') or '').strip()}') "
+                             f"— the name bridge is INTACT, so the missing plan is an assignment problem, "
+                             f"not a spelling problem.")
+            nb["remediation"] = ("assign a plan to this person (employee scope), or add a role-scope "
+                                 f"assignment for '{(e.get('role') or '').strip()}'.")
+    elif by_epay:
+        e = by_epay[0]
+        nb["status"] = "epay_match_only"
+        nb["matched"] = _row(e)
+        nb["message"] = (f"roster row '{e.get('name')}' carries the ePay/POS name "
+                         f"'{(e.get('epay_salesperson') or '').strip()}', which DOES match this seller — so an "
+                         f"employee-scope assignment written from the roster will attach. ROLE resolution, "
+                         f"however, reads the roster NAME column only, so a role-scope assignment still "
+                         f"cannot attach to this seller.")
+        nb["remediation"] = (f"assign the plan by EMPLOYEE scope, or make the roster NAME match the POS "
+                             f"spelling if you want role-scope assignments to cover them.")
+    else:
+        nb["status"] = "no_match"
+        if cands:
+            top = cands[0]
+            nb["message"] = (f"NO roster person's name matches this POS seller. Closest: "
+                             + "; ".join(f"{c['name']}"
+                                         + (f" ({c['role']})" if c.get("role") else "")
+                                         + f" — {int(round(c['score'] * 100))}% match"
+                                         for c in cands) + ".")
+            nb["remediation"] = (f"set {top['name']}'s ePay/POS name (epay_salesperson) to exactly "
+                                 f"'{rep_name}' on the roster so employee-scope assignments attach — then "
+                                 f"RE-APPLY the plan, because an assignment written before the change still "
+                                 f"stores the old spelling.")
+        else:
+            nb["message"] = ("no roster person resembles this POS seller at all — they are either missing "
+                             "from the employee roster, or this is not a person.")
+            nb["remediation"] = ("add them to the employee roster with this exact ePay/POS name, or mark "
+                                 "the seller as not commissionable in Plan-coverage settings.")
+
+    near = []
+    for p in (plans or []):
+        if not p.get("is_active", True):
+            continue
+        for a in (p.get("assignments") or []):
+            if (a.get("scope") or "").strip().lower() != "employee":
+                continue
+            sv = str(a.get("scope_value") or "").strip()
+            if not sv or _canon_person(sv) == rn:
+                continue
+            sc = _name_score(rep_name, sv)
+            if sc >= 0.34:
+                near.append({"plan_id": p.get("id"), "plan_name": p.get("name"), "scope_value": sv,
+                             "score": sc,
+                             "message": (f"plan '{p.get('name')}' is assigned to '{sv}', but this seller "
+                                         f"rings as '{rep_name}' — the engine compares "
+                                         f"'{_canon_person(sv)}' to '{rn}', so it does not attach.")})
+    near.sort(key=lambda x: (-x["score"], str(x.get("scope_value") or "")))
+    near = near[:5]
+
+    alias_preview = None
+    if trace and store_res != "alias":
+        am = market or (trace.get("alias_market") or "")
+        ak = trace.get("alias_keys") or None
+        if (am and am != market) or ak:
+            try:
+                r2 = _resolve_plan_for(rep_name, store, am, plans, rep_role=rep_role, explain=True,
+                                       store_keys=ak)
+                w = (r2 or {}).get("winner")
+            except Exception:
+                w = None
+            via = (trace.get("alias") or {}).get("via") or "the /store-match alias table"
+            alias_preview = {
+                "would_attach": bool(w), "market": am, "store_keys": ak or [],
+                "plan_name": (w or {}).get("plan_name"), "scope": (w or {}).get("scope"),
+                "scope_value": (w or {}).get("scope_value"),
+                "message": ((f"with Store resolution set to 'alias', {via} would give this rep market "
+                             f"'{am}' and plan '{(w or {}).get('plan_name')}' would attach by "
+                             f"{(w or {}).get('scope')} scope.") if w else
+                            (f"even with Store resolution set to 'alias' ({via} → market '{am}') no "
+                             f"assignment would attach — the gap is not the store.")),
+            }
+
+    art = _artifact_flag(rep_name, hints, best)
+
+    if art["suspect"] and art.get("confidence") == "high":
+        concl = ("this looks like a POS terminal / back-office login, not a person — mark it "
+                 "'not a commissionable seller' in Plan-coverage settings to take it off this list.")
+    elif nb["status"] == "no_match" and cands:
+        concl = nb["remediation"]
+    elif near:
+        concl = near[0]["message"] + " Fix the roster/ePay spelling, or re-assign using the POS spelling."
+    elif alias_preview and alias_preview.get("would_attach"):
+        concl = alias_preview["message"]
+    elif nb["status"] in ("no_match", "roster_unavailable"):
+        concl = nb["remediation"]
+    elif trace and trace.get("status") in ("unmapped", "mapped_no_market") and not market:
+        concl = trace.get("message")
+    else:
+        concl = ("the rep resolves fine — no employee / role / store / market / default assignment "
+                 "covers them. Attach a plan on the Commission Plans page.")
+
+    return {"name_bridge": nb, "assignment_near_miss": near, "store_bridge": trace,
+            "alias_preview": alias_preview, "artifact": art, "conclusion": concl}
+
+
+def _unmatched_record(row, why, rep, store, market, plan_name=None):
+    """A compact, MATCHER-COMPATIBLE copy of one sale line that will NOT be paid. PURE.
+
+    It carries every field `_rule_matches` reads, so the "lines not paying" explorer can evaluate REAL
+    plan rules against the record itself (`_rule_matches(record, rule)`) rather than re-implementing rule
+    matching — the definition of "considered for commission" therefore cannot drift from what pays."""
+    out = {"why": why, "rep": rep, "store": store, "market": market, "plan_name": plan_name,
+           "trans_id": str(row.get("trans_id") or "").strip(),
+           "date": str(row.get("trans_date") or "")[:10],
+           "ext_price": round(safe_float(row.get("ext_price")), 2),
+           "gp": round(safe_float(row.get("gp")), 2)}
+    for k in ("contract_type", "tender_type", "department", "category", "product_desc", "sku",
+              "trans_type"):
+        v = row.get(k)
+        out[k] = ("" if v is None else str(v)).strip()
+    # synthetic stamps, present only when preview() built them (rules that use them / 'mapped' tenants)
+    for k in ("accessory", "activation_bucket", "_ct_resolved"):
+        if k in row:
+            out[k] = ("" if row.get(k) is None else str(row.get(k))).strip()
+    return out
+
+
 # ── preview ────────────────────────────────────────────────────────────────────────────────────
 def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, coverage=False,
-            rule_overrides=None):
+            rule_overrides=None, unmatched_detail=False):
     """READ-ONLY: apply plan rules to a period's raw_sales. Writes nothing.
 
     Returns {ready, period, by_rep:[...], totals, plans, note}. If plan_id is given, that plan is applied
@@ -730,6 +1156,22 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     store_market = _read_store_market(client, org_id)
     role_by_rep = _read_employee_roles(client, org_id)   # {_canon_person(name) -> role} for scope='role'
 
+    # STORE RESOLUTION. Today the engine resolves a rep's market from commcalc.store_mapping with an
+    # EXACT lower-cased lookup — `_store_res` is always 'exact'. The /store-match alias chain is built
+    # (read-only) when coverage=True purely so the diagnosis can SHOW what it would resolve; a follow-up
+    # package makes that resolution selectable per tenant.
+    _store_res = _pay_cfg.get("store_resolution", "exact")
+    _bridge = _store_bridge(client, org_id) if coverage else None
+    # COVERAGE-ONLY reads — never executed on the money path.
+    _roster = _read_employee_roster(client, org_id) if coverage else []
+    _cov_cfg = _coverage_config(client, org_id) if coverage else {}
+    _hints = (_cov_cfg or {}).get("artifact_hints") or DEFAULT_ARTIFACT_HINTS
+    _excluded_canon = {_canon_person(x) for x in ((_cov_cfg or {}).get("excluded_sellers") or []) if x}
+    _excluded_reps = []
+    # Part C: every line NOT considered for payout, tagged with WHY. Built only when asked for.
+    _unmatched_rows = [] if (coverage and unmatched_detail) else None
+    _unmatched_excluded_lines = 0
+
     # group lines per rep
     reps = {}  # key (upper rep name) -> {name, store, lines:[...]}
     for r in valid:
@@ -760,22 +1202,29 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     for key, e in reps.items():
         store = e["store"]
         market = store_market.get(store.lower()) or store_market.get(store.split(" ")[0].lower(), "")
+        # DIAGNOSTIC ONLY here: `_trace` narrates what the market lookup did (and what the /store-match
+        # alias table WOULD resolve). `_skeys` stays None, so `_resolve_plan_for` sees the unchanged
+        # predicate and every payout is BYTE-IDENTICAL.
+        _trace = _store_trace(store_market, _bridge, store) if coverage else None
+        _skeys = None
         rep_role = role_by_rep.get(_canon_person(e["name"]))
         resolution = None
         if detail:
-            resolution = _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role, explain=True)
+            resolution = _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role,
+                                           explain=True, store_keys=_skeys)
             plan = forced_plan or resolution.get("plan")
         else:
             # money path: EXACTLY the original lazy short-circuit — when plan_id forces a plan,
             # _resolve_plan_for is never called (so the delta vs the pre-drill engine is exactly zero,
             # incl. the case where a non-numeric assignment field would make the resolver raise).
-            plan = forced_plan or _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role)
+            plan = forced_plan or _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role,
+                                                    store_keys=_skeys)
         if not plan:
             # COVERAGE (mig 232): a seller with real sales and NO plan attached is skipped here — which is
             # exactly how a carrier_mode='plan' tenant ends up with a legitimate-looking $0 for that rep.
             # Record them so the gap is VISIBLE instead of silent. No effect on by_rep/totals.
             if coverage:
-                unassigned.append({
+                _row = {
                     "rep": e["name"], "store": store, "market": market,
                     "role": rep_role or None, "lines": len(e["lines"]),
                     "transactions": len({str(r.get("trans_id") or "").strip() for r in e["lines"]
@@ -783,7 +1232,23 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                     "ext_price": round(sum(safe_float(r.get("ext_price")) for r in e["lines"]), 2),
                     "reason": ("no commission-plan assignment matched this rep "
                                "(employee > role > store > market > default all missed)"),
-                })
+                }
+                if _canon_person(e["name"]) in _excluded_canon:
+                    # Part D: the tenant has confirmed this "seller" is a POS artifact, not a
+                    # commissionable person. It leaves the unassigned list but is still REPORTED (a
+                    # collapsed note) — never silently hidden. Pay math is untouched: this rep has no
+                    # plan, so they contribute $0 either way, and this branch runs only under coverage.
+                    _row["excluded"] = True
+                    _excluded_reps.append(_row)
+                    _unmatched_excluded_lines += len(e["lines"])
+                else:
+                    _row["diagnosis"] = _unassigned_diagnosis(
+                        e["name"], store, market, rep_role, _roster, plans, _trace, _hints, _store_res)
+                    unassigned.append(_row)
+                    if _unmatched_rows is not None:
+                        for _r in e["lines"]:
+                            _unmatched_rows.append(_unmatched_record(
+                                _r, "rep_unassigned", e["name"], store, market))
             continue
         rules = plan.get("rules") or []
 
@@ -887,6 +1352,10 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                  "department": r.get("department"), "category": r.get("category"),
                  "contract_type": r.get("contract_type"), "product": r.get("product_desc"),
                  "ext_price": round(safe_float(r.get("ext_price")), 2)} for r in _un[:5]]
+            if _unmatched_rows is not None:
+                for _r in _un:
+                    _unmatched_rows.append(_unmatched_record(
+                        _r, "no_rule_matched", e["name"], store, market, plan.get("name")))
         if detail:
             out_rows[-1]["assignment"] = (resolution or {}).get("winner")
             out_rows[-1]["considered"] = (resolution or {}).get("considered")
@@ -901,16 +1370,36 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                       "sale_lines": len(valid), "plans": len(plans)},
            "note": None}
     if coverage:
-        unassigned.sort(key=lambda x: -(x.get("ext_price") or 0))
+        # suspected POS artifacts sink to the BOTTOM (still listed) so the real people needing an
+        # assignment are the first thing the owner reads.
+        unassigned.sort(key=lambda x: (
+            1 if (((x.get("diagnosis") or {}).get("artifact") or {}).get("suspect")) else 0,
+            -(x.get("ext_price") or 0)))
+        _excluded_reps.sort(key=lambda x: -(x.get("ext_price") or 0))
         out["coverage"] = _coverage_block(plans, valid, out_rows, unassigned, _pay_cfg,
-                                          _uses_bucket or _ct_mapped, _bucket_lines)
+                                          _uses_bucket or _ct_mapped, _bucket_lines,
+                                          excluded_reps=_excluded_reps, cov_cfg=_cov_cfg,
+                                          store_res=_store_res, bridge=_bridge,
+                                          store_market=store_market)
+        if _unmatched_rows is not None:
+            out["coverage"]["unmatched_detail"] = _unmatched_rows
+            out["coverage"]["unmatched_detail_excluded_lines"] = _unmatched_excluded_lines
     return out
 
 
-def _coverage_block(plans, valid, out_rows, unassigned, pay_cfg, bucket_built, bucket_lines):
+def _coverage_block(plans, valid, out_rows, unassigned, pay_cfg, bucket_built, bucket_lines,
+                    excluded_reps=None, cov_cfg=None, store_res="exact", bridge=None,
+                    store_market=None):
     """Diagnostics for "why doesn't my plan pay what I configured?" — PURE (everything passed in) and
     money-free: it reads the already-computed rows and never changes a payout. Returns
-    {unassigned_reps, unmatched, contract_type, plan_warnings, settings}."""
+    {unassigned_reps, excluded_reps, orphan_assignments, stores, unmatched, contract_type,
+     plan_warnings, settings}.
+
+    `orphan_assignments` is the MIRROR of unassigned_reps and the other half of the owner's 2026-07-28
+    report: an employee-scope assignment whose scope_value canon-matches NOBODY who sold this period. The
+    bulk-assign roster shows such a person as "current plan ✓" because it compares roster-side values to
+    roster-side values — it never checks the sales side — so an assignment can look applied while the
+    engine pays nothing."""
     blank_ct = sum(1 for r in valid if not str(r.get("contract_type") or "").strip())
     ct_values = {}
     for r in valid:
@@ -960,10 +1449,76 @@ def _coverage_block(plans, valid, out_rows, unassigned, pay_cfg, bucket_built, b
         if not (p.get("assignments") or []):
             warnings.append({"plan": nm, "severity": "medium", "code": "plan_without_assignment",
                              "message": f"'{nm}' has no assignments — it covers nobody."})
+    # ORPHAN ASSIGNMENTS — assigned to a name nobody sold under this period.
+    sellers = {}
+    for r in valid:
+        nm = str(r.get("salesperson") or "").strip()
+        if nm:
+            sellers.setdefault(_canon_person(nm), nm)
+    orphans = []
+    for p in plans:
+        if not p.get("is_active", True):
+            continue
+        for a in (p.get("assignments") or []):
+            if (a.get("scope") or "").strip().lower() != "employee":
+                continue
+            sv = str(a.get("scope_value") or "").strip()
+            if not sv or _canon_person(sv) in sellers:
+                continue
+            near = sorted(({"rep": disp, "score": _name_score(sv, disp)} for disp in sellers.values()),
+                          key=lambda x: (-x["score"], x["rep"]))
+            near = [n for n in near if n["score"] >= 0.34][:3]
+            orphans.append({
+                "plan_id": p.get("id"), "plan_name": p.get("name"), "scope_value": sv,
+                "nearest_sellers": near,
+                "message": ((f"'{sv}' is assigned to plan '{p.get('name')}' but nobody sold under that "
+                             f"name this period. Closest seller(s): "
+                             + ", ".join(f"'{n['rep']}' ({int(round(n['score'] * 100))}%)" for n in near)
+                             + " — the POS spells the name differently, so the plan never attaches.")
+                            if near else
+                            (f"'{sv}' is assigned to plan '{p.get('name')}' but has no sales this "
+                             f"period under that name (nothing to pay, or a different POS spelling).")),
+            })
+    orphans.sort(key=lambda x: (-(x["nearest_sellers"][0]["score"] if x["nearest_sellers"] else 0),
+                                str(x.get("scope_value") or "")))
+    orphans = orphans[:100]
+
+    # STORE BRIDGE per distinct POS store string — what resolves today vs what the /store-match alias
+    # table WOULD resolve (the store_resolution='alias' preview).
+    store_counts = {}
+    for r in valid:
+        s = str(r.get("store") or "").strip()
+        if s:
+            store_counts[s] = store_counts.get(s, 0) + 1
+    store_rows, n_unmapped, n_would = [], 0, 0
+    for s, n in sorted(store_counts.items(), key=lambda x: (-x[1], x[0]))[:150]:
+        t = _store_trace(store_market or {}, bridge, s)
+        would = bool(t.get("alias_market")) and not t.get("exact_market")
+        if not t.get("exact_market"):
+            n_unmapped += 1
+        if would:
+            n_would += 1
+        store_rows.append({"store": s, "lines": n, "status": t.get("status"),
+                           "market": t.get("exact_market"), "alias_market": t.get("alias_market"),
+                           "alias": t.get("alias"), "would_resolve_with_alias": would,
+                           "message": t.get("message")})
+
+    _excl = excluded_reps or []
     return {
         "unassigned_reps": unassigned,
         "unassigned_count": len(unassigned),
         "unassigned_ext_price": round(sum(x.get("ext_price") or 0 for x in unassigned), 2),
+        # Part D — sellers the TENANT marked "not a commissionable seller". Reported, never hidden.
+        "excluded_reps": _excl,
+        "excluded_count": len(_excl),
+        "excluded_ext_price": round(sum(x.get("ext_price") or 0 for x in _excl), 2),
+        "excluded_config": {"sellers": list(((cov_cfg or {}).get("excluded_sellers") or [])),
+                            "ready": bool((cov_cfg or {}).get("ready"))},
+        "orphan_assignments": orphans,
+        "orphan_count": len(orphans),
+        "stores": {"mode": store_res, "rows": store_rows, "distinct": len(store_counts),
+                   "unresolved": n_unmapped, "would_resolve_with_alias": n_would,
+                   "bridge_available": bridge is not None},
         "unmatched": {
             "reps": [{"rep": r.get("rep"), "plan_name": r.get("plan_name"),
                       "unmatched_lines": r.get("unmatched_lines"),
@@ -983,4 +1538,193 @@ def _coverage_block(plans, valid, out_rows, unassigned, pay_cfg, bucket_built, b
         },
         "plan_warnings": warnings,
         "settings": dict(pay_cfg),
+    }
+
+
+# ── "LINES NOT PAYING" EXPLORER (mod-commission 2026-07-28) ──────────────────────────────────────
+UNMATCHED_LINE_CAP_DEFAULT = 500
+UNMATCHED_LINE_CAP_MAX = 5000
+
+# group_by -> the record keys the group is keyed on. 'category' is the default because that is the
+# grain a plan rule is normally written at.
+UNMATCHED_GROUP_BY = {
+    "department": ("department",),
+    "category": ("department", "category"),
+    "product": ("department", "category", "product_desc"),
+    "contract_type": ("contract_type",),
+    "rep": ("rep",),
+    "store": ("store",),
+}
+_UNMATCHED_FACETS = ("rep", "store", "market", "department", "category", "contract_type", "why")
+
+
+def _match_list(v):
+    """A filter value list -> a lower-cased set.
+
+    Accepts a list (the endpoint passes repeatable query params) or a PIPE-joined string. The separator
+    is deliberately '|' and NOT ',': raw_sales.salesperson is "Last, First" and store strings carry
+    commas too, so comma-splitting would shred every real filter value ("Office, Back" -> office/back)."""
+    if v is None:
+        return set()
+    if isinstance(v, str):
+        v = v.split("|")
+    return {str(x).strip().lower() for x in v if str(x or "").strip()}
+
+
+def unmatched_explorer(client, org_id, period, filters=None, group_by="category",
+                       line_limit=UNMATCHED_LINE_CAP_DEFAULT):
+    """READ-ONLY: every sale line this period that is NOT considered for a commission payout, grouped so
+    the gap is actionable. Writes nothing and triggers no calculation.
+
+    Two populations, each line tagged with `why`:
+      • rep_unassigned   — the seller has NO commission plan attached, so none of their lines are even
+                           evaluated (they pay $0 legitimately-but-silently);
+      • no_rule_matched  — the seller HAS a plan, but no rule in it matched the line.
+    Voided and Return lines are excluded by the SAME gate the pay path uses, because the whole population
+    comes from `preview(coverage=True, unmatched_detail=True)` — the money engine itself. Nothing here
+    re-implements rule matching, so "considered for commission" cannot drift from what pays.
+
+    Every group also reports which REAL plan rules match its lines (evaluated with `_rule_matches` on the
+    group's own record), so "no rule references this category" is a fact rather than a guess.
+
+    Returns {ready, period, totals, groups, facets, lines, line_cap, line_total, truncated, note}.
+    The LINE-LEVEL payload is capped (`line_cap`) and the cap is always reported alongside `line_total`
+    — there is no silent truncation. Group aggregates are computed over ALL filtered lines."""
+    filters = filters or {}
+    group_by = (group_by or "category").strip().lower()
+    if group_by not in UNMATCHED_GROUP_BY:
+        group_by = "category"
+    try:
+        cap = int(line_limit or UNMATCHED_LINE_CAP_DEFAULT)
+    except (TypeError, ValueError):
+        cap = UNMATCHED_LINE_CAP_DEFAULT
+    cap = max(0, min(cap, UNMATCHED_LINE_CAP_MAX))
+
+    prev = preview(client, org_id, period, coverage=True, unmatched_detail=True)
+    cov = prev.get("coverage") or {}
+    rows = cov.get("unmatched_detail") or []
+    if not prev.get("ready"):
+        return {"ready": False, "period": period, "note": prev.get("note"), "group_by": group_by,
+                "totals": {}, "groups": [], "facets": {}, "lines": [], "line_cap": cap,
+                "line_total": 0, "truncated": False}
+
+    # FACETS come from the UNFILTERED population so the pickers always offer every value present
+    # (pick-don't-type, §3b) even after a filter narrows the table.
+    facets = {f: {} for f in _UNMATCHED_FACETS}
+    for r in rows:
+        for f in _UNMATCHED_FACETS:
+            v = str(r.get(f) or "").strip()
+            key = v if v else "(blank)"
+            facets[f][key] = facets[f].get(key, 0) + 1
+
+    want = {f: _match_list(filters.get(f)) for f in _UNMATCHED_FACETS}
+    product_q = str(filters.get("product") or "").strip().lower()
+
+    def _keep(r):
+        for f, sel in want.items():
+            if not sel:
+                continue
+            v = str(r.get(f) or "").strip().lower()
+            if (v or "(blank)") not in sel and v not in sel:
+                return False
+        if product_q and product_q not in str(r.get("product_desc") or "").lower():
+            return False
+        return True
+
+    filtered = [r for r in rows if _keep(r)]
+
+    keys = UNMATCHED_GROUP_BY[group_by]
+    groups = {}
+    for r in filtered:
+        k = tuple(str(r.get(x) or "").strip() for x in keys)
+        g = groups.get(k)
+        if g is None:
+            g = groups[k] = {"key": dict(zip(keys, k)), "lines": 0, "ext_price": 0.0, "gp": 0.0,
+                             "reps": set(), "why": {}, "_sample": r}
+        g["lines"] += 1
+        g["ext_price"] += safe_float(r.get("ext_price"))
+        g["gp"] += safe_float(r.get("gp"))
+        if r.get("rep"):
+            g["reps"].add(r["rep"])
+        w = r.get("why") or "?"
+        g["why"][w] = g["why"].get(w, 0) + 1
+
+    plans, plans_ready = _load_plans(client, org_id)
+    active = [p for p in plans if p.get("is_active", True)] if plans_ready else []
+
+    out_groups = []
+    for g in groups.values():
+        sample = g.pop("_sample")
+        hits = []
+        for p in active:
+            for rule in (p.get("rules") or []):
+                try:
+                    ok = _rule_matches(sample, rule)
+                except Exception:
+                    ok = False
+                if ok:
+                    hits.append({"plan_id": p.get("id"), "plan_name": p.get("name"),
+                                 "rule_id": rule.get("id"),
+                                 "label": rule.get("label") or rule.get("match_value")
+                                 or rule.get("match_field"),
+                                 "match_field": rule.get("match_field") or "any",
+                                 "match_op": rule.get("match_op") or "equals",
+                                 "match_value": rule.get("match_value"),
+                                 "payout_kind": rule.get("payout_kind")})
+        label = " · ".join(v or "(blank)" for v in
+                           (str(g["key"].get(x) or "") for x in keys))
+        n_un = g["why"].get("rep_unassigned", 0)
+        n_nr = g["why"].get("no_rule_matched", 0)
+        if hits and n_un and not n_nr:
+            sug = (f"a rule already matches these lines — plan '{hits[0]['plan_name']}' rule "
+                   f"'{hits[0]['label']}' ({hits[0]['match_field']} {hits[0]['match_op']} "
+                   f"'{hits[0]['match_value']}'). They are unpaid only because the seller has no plan "
+                   f"attached. Attach a plan to the rep(s) above.")
+        elif hits:
+            sug = (f"plan '{hits[0]['plan_name']}' rule '{hits[0]['label']}' "
+                   f"({hits[0]['match_field']} {hits[0]['match_op']} '{hits[0]['match_value']}') matches "
+                   f"these lines, but it is not in the plan these reps are on — add an equivalent rule to "
+                   f"their plan, or move them to that plan.")
+        else:
+            sug = (f"NO rule in any active plan references {label} — add a rule in the plan editor "
+                   f"(match on {keys[-1].replace('_', ' ')} '{g['key'].get(keys[-1]) or '(blank)'}'), or "
+                   f"classify these products in the accessory catalog so an accessory rule can pay them.")
+        out_groups.append({**g["key"], "label": label, "lines": g["lines"],
+                           "ext_price": round(g["ext_price"], 2), "gp": round(g["gp"], 2),
+                           "reps": len(g["reps"]), "why": g["why"],
+                           "rep_unassigned_lines": n_un, "no_rule_matched_lines": n_nr,
+                           "matching_rules": hits[:5], "matching_rule_count": len(hits),
+                           "suggestion": sug})
+    out_groups.sort(key=lambda x: (-(x.get("ext_price") or 0), -(x.get("lines") or 0), x["label"]))
+
+    by_why = {}
+    for r in filtered:
+        w = r.get("why") or "?"
+        b = by_why.setdefault(w, {"lines": 0, "ext_price": 0.0, "gp": 0.0})
+        b["lines"] += 1
+        b["ext_price"] += safe_float(r.get("ext_price"))
+        b["gp"] += safe_float(r.get("gp"))
+    for b in by_why.values():
+        b["ext_price"] = round(b["ext_price"], 2)
+        b["gp"] = round(b["gp"], 2)
+
+    lines = [{k: v for k, v in r.items() if not k.startswith("_")} for r in filtered[:cap]]
+    return {
+        "ready": True, "period": period, "group_by": group_by, "note": prev.get("note"),
+        "totals": {
+            "lines": len(filtered), "lines_unfiltered": len(rows),
+            "ext_price": round(sum(safe_float(r.get("ext_price")) for r in filtered), 2),
+            "gp": round(sum(safe_float(r.get("gp")) for r in filtered), 2),
+            "reps": len({r.get("rep") for r in filtered if r.get("rep")}),
+            "groups": len(out_groups), "by_why": by_why,
+            "sale_lines": (prev.get("totals") or {}).get("sale_lines"),
+            "excluded_seller_lines": cov.get("unmatched_detail_excluded_lines", 0),
+        },
+        "groups": out_groups,
+        "facets": {f: sorted(({"value": k, "lines": n} for k, n in facets[f].items()),
+                             key=lambda x: (-x["lines"], x["value"]))[:300]
+                   for f in _UNMATCHED_FACETS},
+        "lines": lines, "line_cap": cap, "line_total": len(filtered),
+        "truncated": len(filtered) > cap,
+        "plans_ready": plans_ready,
     }

@@ -8,6 +8,9 @@ import {
   PlanOptions, MatchRule, MatchValuePicker, MatchWarnings, OptionsSourceNote,
   usePlanMatchStats, FALLBACK_VOCAB, countMatches,
 } from '../_lib/planMatch'
+import {
+  UnassignedRow, UnmatchedExplorer, OrphanAssignments, StoreBridgePanel, ExcludedSellers,
+} from '../_lib/coverageDiagnosis'
 
 // Configurable commission PLAN engine (migration 059). A PLAN is a set of RULES the user creates — each
 // rule matches sale lines on any sales-transaction field (contract_type/tender_type/department/category/
@@ -93,6 +96,9 @@ export default function CommissionPlansPage() {
   // plan-coverage diagnostic (mig 232): uncovered sellers · unmatched lines · tier/CT warnings · stale snapshot
   const [cov, setCov] = useState<any>(null)
   const [covBusy, setCovBusy] = useState(false)
+  // Part D — the tenant's "not a commissionable seller" list (mig 248). Diagnostics only: it moves a $0
+  // seller out of the uncovered list into a visible collapsed note; it can never change a payout.
+  const [exclBusy, setExclBusy] = useState(false)
   // ── people-centric BULK assignment (owner directive 2026-07-23) ──
   const [tab, setTab] = useState<'plans' | 'bulk'>('plans')
   const [roster, setRoster] = useState<Roster>({ people: [], roles: [], markets: [], ready: true })
@@ -332,6 +338,18 @@ export default function CommissionPlansPage() {
       setCov(await api(`/api/v1/commcalc/commission-plans/coverage?period=${encodeURIComponent(period)}`))
     } catch (e: any) { setMsg('❌ Coverage: ' + (e?.message || e)) } finally { setCovBusy(false) }
   }
+  // Part D writer — admin-gated server-side. Re-runs coverage so the panel always shows what the SERVER
+  // stored, never what was clicked.
+  async function saveExcluded(sellers: string[]) {
+    setExclBusy(true)
+    try {
+      await api('/api/v1/commcalc/commission-plans/coverage-excluded', {
+        method: 'PUT', body: JSON.stringify({ sellers }),
+      })
+      await runCoverage()
+    } catch (e: any) { setMsg('❌ Excluded sellers: ' + (e?.message || e)) } finally { setExclBusy(false) }
+  }
+  const excludedNow: string[] = cov?.coverage?.excluded_config?.sellers || []
 
   // Periods this tenant actually has sales for (pick-don't-type); free entry stays allowed so an operator
   // can still look at a period that has no rows yet.
@@ -351,7 +369,27 @@ export default function CommissionPlansPage() {
           { header: 'Rep', get: (r: any) => r.rep }, { header: 'Store', get: (r: any) => r.store },
           { header: 'Market', get: (r: any) => r.market }, { header: 'Role', get: (r: any) => r.role },
           { header: 'Transactions', get: (r: any) => r.transactions }, { header: 'Lines', get: (r: any) => r.lines },
-          { header: 'Sales $', get: (r: any) => r.ext_price }] },
+          { header: 'Sales $', get: (r: any) => r.ext_price, money: true },
+          // the structured diagnosis, flattened — an emailed export must be as actionable as the page
+          { header: 'What to do', get: (r: any) => r.diagnosis?.conclusion || r.reason },
+          { header: 'Name bridge', get: (r: any) => r.diagnosis?.name_bridge?.status },
+          { header: 'Roster candidates', get: (r: any) => (r.diagnosis?.name_bridge?.candidates || []).map((x: any) => `${x.name} (${Math.round((x.score || 0) * 100)}%)`).join('; ') },
+          { header: 'Assignment near-miss', get: (r: any) => (r.diagnosis?.assignment_near_miss || []).map((x: any) => `${x.plan_name}: '${x.scope_value}'`).join('; ') },
+          { header: 'Store resolution', get: (r: any) => r.diagnosis?.store_bridge?.message },
+          { header: 'With alias resolution', get: (r: any) => r.diagnosis?.alias_preview?.message },
+          { header: 'Looks like a POS artifact', get: (r: any) => (r.diagnosis?.artifact?.reasons || []).join('; ') }] },
+        { name: 'Excluded sellers', rows: c.excluded_reps || [], columns: [
+          { header: 'Rep', get: (r: any) => r.rep }, { header: 'Store', get: (r: any) => r.store },
+          { header: 'Lines', get: (r: any) => r.lines }, { header: 'Sales $', get: (r: any) => r.ext_price, money: true }] },
+        { name: 'Assigned to nobody', rows: c.orphan_assignments || [], columns: [
+          { header: 'Assigned name', get: (r: any) => r.scope_value }, { header: 'Plan', get: (r: any) => r.plan_name },
+          { header: 'Nearest sellers', get: (r: any) => (r.nearest_sellers || []).map((x: any) => `${x.rep} (${Math.round((x.score || 0) * 100)}%)`).join('; ') },
+          { header: 'Why', get: (r: any) => r.message }] },
+        { name: 'Store to market', rows: c.stores?.rows || [], columns: [
+          { header: 'POS store string', get: (r: any) => r.store }, { header: 'Lines', get: (r: any) => r.lines },
+          { header: 'Market today', get: (r: any) => r.market }, { header: 'Status', get: (r: any) => r.status },
+          { header: 'With alias', get: (r: any) => r.would_resolve_with_alias ? `${r.alias?.store_code} → ${r.alias_market}` : '' },
+          { header: 'What to do', get: (r: any) => r.message }] },
         { name: 'Covered reps', rows: cov?.by_rep || [], columns: [
           { header: 'Rep', get: (r: any) => r.rep }, { header: 'Plan', get: (r: any) => r.plan_name },
           { header: 'Tier count', get: (r: any) => r.tier_units }, { header: 'Basis', get: (r: any) => r.tier_basis },
@@ -733,16 +771,26 @@ export default function CommissionPlansPage() {
             <span>lines no rule matched: <b>{cov.coverage?.unmatched?.total_lines ?? 0}</b></span>
             <span>blank Contract Type: <b>{cov.coverage?.contract_type?.blank ?? 0}</b> / {cov.coverage?.contract_type?.sale_lines ?? 0} ({cov.coverage?.contract_type?.blank_pct ?? 0}%)</span>
           </div>
+          {/* the three OTHER halves of the same story: assignments attached to nobody, the store→market
+              bridge, and the sellers this tenant has confirmed are not people */}
+          <OrphanAssignments rows={cov.coverage?.orphan_assignments || []} />
+          <StoreBridgePanel stores={cov.coverage?.stores} />
+          <ExcludedSellers cov={cov.coverage} busy={exclBusy}
+            onChange={saveExcluded} />
           {(cov.coverage?.unassigned_reps || []).length > 0 && (
             <div style={{ marginBottom: 12 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Sellers with sales but NO plan attached — these reps pay $0</div>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 2 }}>Sellers with sales but NO plan attached — these reps pay $0</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text2)', marginBottom: 4 }}>
+                Expand a row (▸) to see exactly which bridge failed — the roster NAME match, an assignment
+                saved under a different spelling, or the store→market lookup — and fix it from there.
+              </div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead><tr>{['Rep', 'Store', 'Market', 'Role', 'Txns', 'Lines', 'Sales $'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                  <thead><tr>{['Rep', 'Store', 'Market', 'Role', 'Txns', 'Lines', 'Sales $', 'What to do'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
                   <tbody>{cov.coverage.unassigned_reps.map((u: any, i: number) => (
-                    <tr key={i}><td style={td}>{u.rep}</td><td style={td}>{u.store}</td><td style={td}>{u.market}</td>
-                      <td style={td}>{u.role || '—'}</td><td style={td}>{u.transactions}</td><td style={td}>{u.lines}</td>
-                      <td style={td}>{fmt(u.ext_price)}</td></tr>
+                    <UnassignedRow key={i} u={u} people={roster.people} busy={exclBusy || covBusy}
+                      onLinked={loadRoster}
+                      onExclude={(rep: string) => saveExcluded([...excludedNow, rep])} />
                   ))}</tbody>
                 </table>
               </div>
@@ -765,6 +813,8 @@ export default function CommissionPlansPage() {
               </div>
             </div>
           )}
+          {/* Part C — every line NOT considered for commission, from the pay engine itself */}
+          <UnmatchedExplorer period={cov.period || period} />
         </>)}
       </div>
       </>)}

@@ -8763,6 +8763,99 @@ async def commission_plan_coverage(period: str, org_id: str = ORG_ID):
     }
 
 
+@router.get("/commission-plans/coverage-unmatched")
+async def commission_plan_coverage_unmatched(
+        period: str, group_by: str = "category", limit: int = 500,
+        rep: list = Query(default=[]), store: list = Query(default=[]),
+        market: list = Query(default=[]), department: list = Query(default=[]),
+        category: list = Query(default=[]), contract_type: list = Query(default=[]),
+        why: list = Query(default=[]), product: str = "",
+        org_id: str = ORG_ID):
+    """READ-ONLY explorer over every sale line NOT considered for a commission payout this period.
+    Writes nothing and triggers no calculation.
+
+    Two populations, each line tagged with `why`:
+      • rep_unassigned  — the seller has no plan attached, so none of their lines are ever evaluated;
+      • no_rule_matched — the seller has a plan, but no rule in it matched the line.
+    Both come from `commission_engine.preview(coverage=True, unmatched_detail=True)` — the SAME engine
+    that computes pay — so voided/Return exclusion and the definition of "considered for commission"
+    can never drift from what actually pays. Nothing here re-implements rule matching.
+
+    Filters (RULE FIVE core set + the appended product/department/category/contract-type facets) are
+    REPEATABLE query params (`?rep=A&rep=B`) — deliberately not comma-joined, because a POS seller name
+    IS "Last, First". They drive the grouped table, the totals AND the line-level drill. The line payload
+    is CAPPED (`limit`, max 5000) and the response always reports `line_cap` / `line_total` /
+    `truncated` — group aggregates are computed over ALL filtered lines, so nothing is silently
+    truncated.
+
+    `group_by`: department | category (default) | product | contract_type | rep | store."""
+    if not period:
+        raise HTTPException(400, "period required")
+    require_org(org_id)
+    filters = {"rep": rep, "store": store, "market": market, "department": department,
+               "category": category, "contract_type": contract_type, "why": why, "product": product}
+    try:
+        return commission_engine.unmatched_explorer(sb(), org_id, period, filters=filters,
+                                                    group_by=group_by, line_limit=limit)
+    except Exception as e:
+        print(f"WARN coverage-unmatched failed for org {org_id} {period}: {e}")
+        raise HTTPException(500, f"coverage-unmatched failed: {e}")
+
+
+@router.get("/commission-plans/coverage-excluded")
+async def get_coverage_excluded_sellers(org_id: str = ORG_ID):
+    """The tenant's POS-artifact seller list (mig 248) — "sellers" like 'Office, Back' that are a till or
+    a back-office login rather than a commissionable person. Read-only, org-scoped.
+
+    These names are only ever REMOVED FROM THE UNCOVERED LIST (and shown in a collapsed 'excluded' note);
+    they are never hidden from the data and they can never change pay — an excluded seller has no plan
+    attached, so they pay $0 with or without the setting."""
+    require_org(org_id)
+    cfg = commission_engine._coverage_config(sb(), org_id)
+    return {"sellers": cfg.get("excluded_sellers") or [],
+            "artifact_hints": cfg.get("artifact_hints") or [],
+            "default_hints": list(commission_engine.DEFAULT_ARTIFACT_HINTS),
+            "ready": bool(cfg.get("ready")),
+            "note": None if cfg.get("ready") else
+            "Run migration 248_commission_coverage_excluded_sellers.sql to persist this list."}
+
+
+@router.put("/commission-plans/coverage-excluded")
+async def put_coverage_excluded_sellers(body: dict, authorization: str = Header(default=""),
+                                        org_id: str = ORG_ID):
+    """Admin-only. Sets the tenant's excluded-seller list (and optionally the artifact word list).
+    Body: {sellers:[str], artifact_hints?:[str]}.
+
+    NOT money-touching: the engine applies this list ONLY inside preview(coverage=True) when building the
+    'sellers with no plan attached' panel — the payout loop never sees it, so no rep's pay can move."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    sellers = body.get("sellers")
+    if sellers is None or not isinstance(sellers, list):
+        raise HTTPException(400, "sellers must be a list of seller names")
+    clean, seen = [], set()
+    for s in sellers:
+        v = str(s or "").strip()
+        k = v.lower()
+        if not v or k in seen:
+            continue
+        seen.add(k)
+        clean.append(v)
+    row = {"org_id": org_id, "coverage_excluded_sellers": clean,
+           "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    if isinstance(body.get("artifact_hints"), list):
+        row["coverage_artifact_hints"] = [str(h).strip().lower() for h in body["artifact_hints"]
+                                          if str(h or "").strip()]
+    try:
+        sb().schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
+    except Exception as e:
+        raise HTTPException(500, "could not save the excluded-seller list (is migration "
+                                 f"248_commission_coverage_excluded_sellers.sql applied?): {e}")
+    cfg = commission_engine._coverage_config(sb(), org_id)
+    return {"sellers": cfg.get("excluded_sellers") or [],
+            "artifact_hints": cfg.get("artifact_hints") or [], "ready": bool(cfg.get("ready"))}
+
+
 @router.get("/plan-field-options")
 async def plan_field_options(months: int = 3, period: str = "", limit: int = 4000,
                              value_limit: int = 400, org_id: str = ORG_ID):
