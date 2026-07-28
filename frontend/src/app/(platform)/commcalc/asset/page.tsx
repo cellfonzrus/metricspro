@@ -86,6 +86,10 @@ export default function AssetPage() {
   const [dateTo, setDateTo] = useState('')
   const [markets, setMarkets] = useState<string[]>([])
   const [stores, setStores] = useState<{store:string;market:string}[]>([])
+  // "(no market)" bucket (2026-07-27 fix): rows that never matched store_mapping — offered as an
+  // explicit, filterable market option instead of being unreachable from every market filter.
+  const [noMarketCount, setNoMarketCount] = useState(0)
+  const NO_MARKET_VALUE = '__no_market__'
 
   // Drill-down state
   const [openCat, setOpenCat] = useState<string | null>(null)
@@ -105,7 +109,7 @@ export default function AssetPage() {
 
   useEffect(() => {
     api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
-      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) }).catch(console.error)
+      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]); setNoMarketCount(d.no_market_count||0) }).catch(console.error)
   }, [])
   // Reload summary (and reset any open drill-down) whenever a filter changes.
   useEffect(() => { loadSummary(); setOpenCat(null); setDetail(null) }, [store, market, dateFrom, dateTo])
@@ -184,6 +188,30 @@ export default function AssetPage() {
     setUploading(false)
   }
 
+  // 2026-07-27 market-filter-dropdown fix: re-stamp asset_ledger.market from the CURRENT
+  // store_mapping on demand — for a market that was set/edited in Settings -> Stores AFTER the
+  // last upload (the "1800 Great Neck Rd shows under its store but not its market" bug), instead
+  // of waiting for the next full ledger upload to pick it up.
+  async function handleResyncMarket() {
+    setUploading(true); setUploadMsg('')
+    try {
+      const d = await api(`/api/v1/asset/resync-market?org_id=${ORG_ID}`, { method: 'POST' })
+      const stillGap = d.stores_unmapped > 0
+        ? ` · ${d.stores_unmapped} store(s) still unmapped${d.unmapped_examples?.length ? ` (e.g. ${d.unmapped_examples.slice(0,3).join(', ')})` : ''}`
+        : ''
+      // NIT-2: conflicting store_mapping rows (same address, different markets) are deliberately
+      // SKIPPED rather than arbitrary-picked — surfaced here so an admin knows to fix the data.
+      const conflictMsg = d.stores_conflicted > 0
+        ? ` · ⚠️ ${d.stores_conflicted} store(s) skipped — conflicting markets in Settings → Stores${d.conflicted_examples?.length ? ` (e.g. ${d.conflicted_examples.slice(0,3).join(', ')})` : ''}, fix the duplicate row(s) and re-sync`
+        : ''
+      setUploadMsg(`✅ Re-synced markets: ${d.stores_updated} store(s) / ${d.rows_updated.toLocaleString()} row(s) updated${stillGap}${conflictMsg}`)
+      await loadSummary()
+    } catch (e: any) {
+      setUploadMsg(`❌ ${e.message}`)
+    }
+    setUploading(false)
+  }
+
   function buildPayload(): ExportPayload {
     const sheets: ExportPayload['sheets'] = []
     if (summary?.loaded) {
@@ -224,7 +252,8 @@ export default function AssetPage() {
   }
 
   const selStyle = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
-  const visibleStores = market ? stores.filter(s => s.market === market) : stores
+  const visibleStores = market === NO_MARKET_VALUE ? stores.filter(s => !s.market)
+    : market ? stores.filter(s => s.market === market) : stores
 
   return (
     <div>
@@ -254,6 +283,9 @@ export default function AssetPage() {
           <button className="btn" onClick={handleRefreshPrices} disabled={uploading} title="Re-pull selling prices from sales and re-sync undercharge flags">
             🔄 Refresh prices &amp; flags
           </button>
+          <button className="btn" onClick={handleResyncMarket} disabled={uploading} title="Re-stamp asset ledger markets from Settings → Stores right now, without a full re-upload">
+            🗺️ Re-sync Markets
+          </button>
           <button className="btn btn-primary" onClick={() => fileRef.current?.click()} disabled={uploading}>
             {uploading ? '⏳ Uploading…' : '📤 Upload Asset_Lending.xlsx'}
           </button>
@@ -268,6 +300,7 @@ export default function AssetPage() {
           <select style={selStyle} value={market} onChange={e => { setMarket(e.target.value); setStore('') }}>
             <option value="">All markets</option>
             {markets.map(m => <option key={m} value={m}>{m}</option>)}
+            {noMarketCount > 0 && <option value={NO_MARKET_VALUE}>(no market) — {noMarketCount}</option>}
           </select>
           <select style={selStyle} value={store} onChange={e => setStore(e.target.value)}>
             <option value="">All stores</option>

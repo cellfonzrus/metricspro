@@ -16,20 +16,28 @@ WHAT THIS IS
        VIP asset-financing program at all (see docs/handoffs/asset.md, asset-10 luxelink-parity).
 
     2. asset_market_gap      — asset_ledger rows whose `store` text (VIP's own "Billing Address 1")
-       never matched commcalc.store_mapping OR the router's MARKET_OVERRIDES dict during the
-       upload-time backfill (router.py's `_backfill_market`), so they carry NO market and silently
-       drop out of every market-filtered asset report (Charges Dashboard, RMA, Aging, Owed-Weekly all
-       accept a `market` query param). This is DIFFERENT from the centrally-covered "stores not in
-       the market map" check (core/import_health.py's own `unmapped_stores` provider, which compares
-       storeops.stores against store_mapping) — that one never looks at asset_ledger at all. Reads
-       the org-scoped Postgres aggregate `commcalc.asset_market_gap` (migration 302) rather than
-       pulling ledger rows into Python (CLAUDE.md: aggregate in Postgres, not Python, for 40k+ rows).
+       never matched commcalc.store_mapping OR the router's MARKET_OVERRIDES dict the last time
+       `_backfill_market` ran, so they carry NO market and silently drop out of every
+       market-filtered asset report (Charges Dashboard, RMA, Aging, Owed-Weekly all accept a
+       `market` query param) — UNLESS the caller explicitly asks for the "(no market)" bucket
+       (`market=__no_market__`, now offered directly in each report's own market picker; see the
+       2026-07-27 market-filter-dropdown fix in router.py). This is DIFFERENT from the
+       centrally-covered "stores not in the market map" check (core/import_health.py's own
+       `unmapped_stores` provider, which compares storeops.stores against store_mapping) — that one
+       never looks at asset_ledger at all. Reads the org-scoped Postgres aggregate
+       `commcalc.asset_market_gap` (migration 302) rather than pulling ledger rows into Python
+       (CLAUDE.md: aggregate in Postgres, not Python, for 40k+ rows).
        IMPORTANT (confirmed by reading commcalc/router.py's own comment at its store-aliases route):
        `commcalc.store_aliases` — what the Store-Matching page (/commcalc/store-match) actually
        writes — deliberately does NOT touch `store_mapping`, "which the asset market join depends
        on". So this provider's fix instructions point at Settings → Stores (`/commcalc/settings`,
        `PUT /commcalc/stores/{id}`), the one surface that edits `store_mapping.market` directly —
-       resolving an alias in Store Matching would NOT fix this gap.
+       resolving an alias in Store Matching would NOT fix this gap. 2026-07-27: `_backfill_market`
+       now (a) re-reads store_mapping fresh every time it runs rather than only at upload, (b)
+       tolerates case/whitespace/common street-abbreviation differences instead of requiring a
+       byte-exact address match, and (c) is re-runnable on demand via `POST /asset/resync-market`
+       (a "Re-sync Markets" button on the Asset Ledger page) — so fixing the Settings → Stores row
+       no longer requires waiting for the next full ledger upload.
 
     3. asset_pipeline_issues — the last upload logged a real pipeline failure (market backfill,
        selling-price backfill, or a flag sync raised) into core.failure_log (category `asset_%`,
@@ -156,16 +164,20 @@ def _p_asset_market_gap(client, org_id, ctx):
         "group": "mapping", "key": "asset_market_gap", "severity": severity,
         "label": "Asset ledger rows with no market",
         "detail": f"{gap} of {total} asset ledger row(s) have no market because the store text VIP "
-                  f"sent for them doesn't match a store address in Store Mapping.{eg} These rows "
-                  f"silently drop out of every market-filtered asset report (Charges Dashboard, RMA, "
-                  f"Aging, Owed-Weekly). Fix: open Settings → Stores and set the market for that "
-                  f"store (the dropdown there edits commcalc.store_mapping directly — the ONLY thing "
-                  f"this backfill checks; a Store-Matching alias does NOT fix this). "
-                  f"If the store isn't listed there at all, it needs to be created in StoreOps first "
-                  f"with its address spelled EXACTLY like VIP's file, then re-upload the Asset Ledger "
-                  f"(or wait for the next scheduled upload) to backfill.",
-        "count": gap, "deep_link": "/commcalc/settings",
-        "deep_link_label": "Open Settings → Stores",
+                  f"sent for them doesn't match a store address in Store Mapping (or its market was "
+                  f"set/changed too recently to have been picked up).{eg} These rows silently drop "
+                  f"out of every market-filtered asset report (Charges Dashboard, RMA, Aging, "
+                  f"Owed-Weekly) — or use the new \"(no market)\" filter option on any of those "
+                  f"reports to see them directly. Fix: 1) open Settings → Stores and confirm/set the "
+                  f"market for that store (the dropdown there edits commcalc.store_mapping directly "
+                  f"— a Store-Matching alias does NOT fix this); if the store isn't listed there at "
+                  f"all, create it in StoreOps first with its address spelled like VIP's file "
+                  f"(matching now tolerates case/spacing and common St/Street, Ave/Avenue, Rd/Road, "
+                  f"etc. abbreviation differences — it no longer has to be byte-exact). 2) Then click "
+                  f"\"Re-sync Markets\" on the Asset Ledger page (or POST /asset/resync-market) to "
+                  f"re-stamp the ledger immediately — no re-upload needed.",
+        "count": gap, "deep_link": "/commcalc/asset",
+        "deep_link_label": "Open Asset Ledger → Re-sync Markets",
     }]
 
 

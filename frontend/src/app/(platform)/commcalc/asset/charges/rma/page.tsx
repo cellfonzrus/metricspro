@@ -59,6 +59,9 @@ export default function RmaPage() {
   const [store, setStore] = useState('')
   const [markets, setMarkets] = useState<string[]>([])
   const [stores, setStores] = useState<{store:string;market:string}[]>([])
+  // "(no market)" bucket (2026-07-27 fix) — must match router.py's NO_MARKET_SENTINEL exactly.
+  const [noMarketCount, setNoMarketCount] = useState(0)
+  const NO_MARKET_VALUE = '__no_market__'
   const [data, setData] = useState<RmaData | null>(null)
   const [loading, setLoading] = useState(true)
   const [month, setMonth] = useState(0)  // 0 = all time
@@ -69,7 +72,7 @@ export default function RmaPage() {
 
   useEffect(() => {
     api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
-      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) })
+      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]); setNoMarketCount(d.no_market_count||0) })
       .catch(console.error)
       .finally(() => setFilterOptionsLoaded(true))
   }, [])
@@ -87,7 +90,8 @@ export default function RmaPage() {
     setLoading(false)
   }
 
-  const visibleStores = market ? stores.filter(s => s.market === market) : stores
+  const visibleStores = market === NO_MARKET_VALUE ? stores.filter(s => !s.market)
+    : market ? stores.filter(s => s.market === market) : stores
   const sel = { padding:'6px 10px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, background:'var(--surface)' }
 
   function buildPayload(): ExportPayload {
@@ -136,6 +140,7 @@ export default function RmaPage() {
         <span style={{ fontSize:13, fontWeight:600, color:'var(--text2)' }}>Filters:</span>
         <select style={sel} value={market} onChange={e=>{ setMarket(e.target.value); setStore('') }}>
           <option value="">All markets</option>{markets.map(m=><option key={m} value={m}>{m}</option>)}
+          {noMarketCount > 0 && <option value={NO_MARKET_VALUE}>(no market) — {noMarketCount}</option>}
         </select>
         <select style={sel} value={store} onChange={e=>setStore(e.target.value)}>
           <option value="">All stores</option>{visibleStores.map(s=><option key={s.store} value={s.store}>{s.store}</option>)}
