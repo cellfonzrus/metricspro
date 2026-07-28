@@ -43,6 +43,21 @@ Proves:
   G. The common/healthy path (every raw label maps, or the table is genuinely empty) is BYTE-IDENTICAL
      to before this package — `x_report_unmapped` is `None` per store, `x_report_unmapped_total` is 0,
      `totals`/`tenders`/`match` unchanged. Org isolation: another tenant's rows never surface.
+
+  ── Gate-1 fold (2026-07-28), same theme, three more reachable silent-drop states ──
+  I. N1 — a `closing_tender_map` rule whose `tender_key` points at a DEAD/off-axis key (a deactivated
+     or typo'd `closing_tender_def` — never validated against each other at save time) used to return a
+     TRUTHY `canon` that then failed the `canon in agg` check and vanished with NO signal at all (not
+     even into x_report_unmapped, since the old code's `if canon:` branch already committed to the
+     "bucket it" path). Now routed to x_report_unmapped like every other unmapped case.
+  J. N2 — the sales leg (`_sales_tenders_by_store`) had the identical `if not canon: continue` silent
+     drop, producing an unexplained one-sided sales-vs-x_report delta. New optional `unmapped_out`
+     accumulator param (omitted by any other caller = byte-identical) surfaces it as `sales_unmapped`,
+     mirroring `x_report_unmapped` — excluded from `totals.sales`, named in the response + `note`.
+  K. N3 — the CLOSING leg used to filter `store=` at the DB level (`.eq("store_code", store)`), which
+     NEVER matches a NULL store_code row — silently dropping an unresolved closing row the instant any
+     store filter was active (asymmetric with the x_report/sales legs' Python-level `_keep` rule). Now
+     fetches the full day and applies the SAME `_keep` rule uniformly across all four legs.
 """
 import sys
 from types import SimpleNamespace
@@ -229,8 +244,17 @@ st4["daily_closing"] = [{"org_id": HOUSE, "close_date": DATE, "store_code": "S1"
 # EVERY row unmapped -> post-drop `xrep` is completely empty for this store/day.
 st4["pos_tender_summary"] = [xr_row(tender_type="CC", amount=5.0, tender_class="card")]
 resp4 = cr.tender_recon_3way(date=DATE, org_id=HOUSE)
-old_xrep_would_be_empty = True  # by construction: the only row is unmapped, so old `xrep` dict is {}
-check("E1. OLD bug reproduced conceptually: post-drop xrep would be empty here", old_xrep_would_be_empty)
+# N4 (Gate-1 nit): independently RECOMPUTE what the OLD pre-fix `xrep` dict would have held, by
+# re-running the actual old algorithm (`if not canon: continue`) against `cr._canon_tender` directly —
+# tender config is empty here, so resolve_x IS _canon_tender exactly (proven identical in section A/G),
+# making this a real, non-tautological assertion rather than a hard-coded `True`.
+old_style_xrep = {}
+for _row in st4["pos_tender_summary"]:
+    _canon = cr._canon_tender(_row["tender_type"])
+    if _canon:
+        old_style_xrep.setdefault("S1", {}).setdefault(_canon, 0.0)
+check("E1. OLD bug REPRODUCED (independent recompute, not a tautology): the old algorithm's xrep would be empty here",
+      old_style_xrep == {}, old_style_xrep)
 check("E2. FIX: sources_present.x_report is True (raw pos_tender_summary rows exist for today)",
       resp4["sources_present"]["x_report"] is True, resp4["sources_present"])
 check("E3. FIX: x_report_ever is also True (not falsely 'never imported')", resp4["x_report_ever"] is True)
@@ -287,6 +311,71 @@ resp8 = cr.tender_recon_3way(date=DATE, org_id=HOUSE)
 codes8 = {s["store_code"]: s for s in resp8["stores"]}
 check("H1. HOUSE call never sees OTHER org's store/money", "OS1" not in codes8 and
       all(s["totals"]["x_report"] != 999.0 for s in resp8["stores"]), list(codes8))
+
+# ═══════════════════ I. N1 — map rule pointing at a dead/off-axis tender_key (x_report leg) ═════════
+st9 = fresh_store(); fake9 = wire(st9)
+st9["store_mapping"] = [sm_row()]
+st9["daily_closing"] = [{"org_id": HOUSE, "close_date": DATE, "store_code": "S1", "store_address": "1 Main St", "t_cash": 0.0}]
+st9["closing_tender_def"] = [
+    {"org_id": HOUSE, "tender_key": "cash", "label": "Cash", "is_active": True, "sort_order": 1},
+    {"org_id": HOUSE, "tender_key": "credit", "label": "Credit", "is_active": True, "sort_order": 2},
+]
+# A live map rule pointing at "legacy_cash" — NOT one of the two active def keys above (a deactivated/
+# renamed def, never validated against the map at save time — the exact reachable state Gate-1 flagged).
+st9["closing_tender_map"] = [
+    {"org_id": HOUSE, "tender_key": "legacy_cash", "report": "x_report", "source_labels": ["cash"],
+     "match_mode": "substring", "priority": 10},
+]
+st9["pos_tender_summary"] = [xr_row(tender_type="Cash", amount=77.0, tender_class="cash")]
+resp9 = cr.tender_recon_3way(date=DATE, org_id=HOUSE)
+s1i = next(s for s in resp9["stores"] if s["store_code"] == "S1")
+check("I1. N1: a map rule pointing at a dead/off-axis tender_key -> $ lands in x_report_unmapped, not silently dropped",
+      s1i["x_report_unmapped"] and s1i["x_report_unmapped"]["amount"] == 77.0, s1i.get("x_report_unmapped"))
+check("I2. N1: totals.x_report for the real active axis stays 0 (the dead key never phantom-credits a real bucket)",
+      s1i["totals"]["x_report"] == 0.0, s1i["totals"])
+check("I3. N1: unmapped raw label recorded as the RAW string ('Cash'), not the dead resolved key",
+      s1i["x_report_unmapped"]["raw_labels"] == ["Cash"], s1i["x_report_unmapped"]["raw_labels"])
+
+# ═══════════════════ J. N2 — sales leg gets the same unmapped surfacing ═════════════════════════════
+st10 = fresh_store(); fake10 = wire(st10)
+st10["store_mapping"] = [sm_row()]
+st10["daily_closing"] = [{"org_id": HOUSE, "close_date": DATE, "store_code": "S1", "store_address": "1 Main St", "t_cash": 0.0}]
+st10["daily_sales_feed"] = [
+    {"org_id": HOUSE, "period": "2026-07", "trans_date": DATE, "store": "1 Main St",
+     "tender_type": "Cash", "ext_price": 40.0, "voided": "", "trans_type": "Sale"},
+    {"org_id": HOUSE, "period": "2026-07", "trans_date": DATE, "store": "1 Main St",
+     "tender_type": "PayPal", "ext_price": 15.0, "voided": "", "trans_type": "Sale"},  # _canon_tender: no match
+]
+resp10 = cr.tender_recon_3way(date=DATE, org_id=HOUSE)
+s1j = next(s for s in resp10["stores"] if s["store_code"] == "S1")
+check("J1. N2: sales leg no-match label ('PayPal') is NOT dropped -> sales_unmapped.amount == 15",
+      s1j["sales_unmapped"] and s1j["sales_unmapped"]["amount"] == 15.0, s1j.get("sales_unmapped"))
+check("J2. N2: sales_unmapped raw label named", s1j["sales_unmapped"]["raw_labels"] == ["PayPal"])
+check("J3. N2: totals.sales for the matched label stays 40 (unchanged math)", s1j["totals"]["sales"] == 40.0, s1j["totals"])
+check("J4. N2: top-level sales_unmapped_total == 15", resp10["sales_unmapped_total"] == 15.0, resp10["sales_unmapped_total"])
+check("J5. N2: note mentions the unmapped sales $ amount",
+      "15.00" in resp10["note"] and "sales-transaction tenders" in resp10["note"], resp10["note"])
+check("J6. N2 regression guard: _sales_tenders_by_store WITHOUT unmapped_out stays byte-identical (no 3rd return, no raise)",
+      cr._sales_tenders_by_store(fake10, HOUSE, DATE, cr._canon_tender, cr.CANON_TENDERS) == {"S1": {**{k: 0.0 for k in cr.CANON_TENDERS}, "cash": 40.0}})
+
+# ═══════════════════ K. N3 — closing leg honors the same never-drop-unresolved store filter ═════════
+st11 = fresh_store(); fake11 = wire(st11)
+st11["store_mapping"] = [sm_row(code="S1", addr="1 Main St"), sm_row(code="S2", addr="2 Oak Ave")]
+st11["daily_closing"] = [
+    {"org_id": HOUSE, "close_date": DATE, "store_code": "S1", "store_address": "1 Main St", "t_cash": 5.0},
+    {"org_id": HOUSE, "close_date": DATE, "store_code": "S2", "store_address": "2 Oak Ave", "t_cash": 9.0},
+    {"org_id": HOUSE, "close_date": DATE, "store_code": None, "store_address": "Unresolved Kiosk", "t_cash": 3.0},
+]
+resp11 = cr.tender_recon_3way(date=DATE, store="S1", org_id=HOUSE)
+codes11 = {s["store_code"] for s in resp11["stores"]}
+check("K1. N3: store=S1 filter on the CLOSING leg — the OTHER resolved store (S2) IS excluded", "S2" not in codes11, codes11)
+check("K2. N3: store=S1 filter on the CLOSING leg — the NULL-store_code row ('?') is NOT dropped "
+      "(previously silently dropped at the DB level by `.eq(\"store_code\", store)`)", "?" in codes11, codes11)
+s1k = next(s for s in resp11["stores"] if s["store_code"] == "S1")
+check("K3. N3: S1's own closing total unaffected by the filter", s1k["totals"]["closing"] == 5.0, s1k["totals"])
+unresolved_out = next(s for s in resp11["stores"] if s["store_code"] == "?")
+check("K4. N3: the unresolved closing row keeps its own $ (3.0), not merged/lost", unresolved_out["totals"]["closing"] == 3.0,
+      unresolved_out["totals"])
 
 # ── summary ──
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")

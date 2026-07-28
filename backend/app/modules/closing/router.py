@@ -936,7 +936,7 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
                 else:
                     money_recon["note"] = ("This tenant has NEVER had a POS X-report imported (and the sales "
                                            "feed has no Tender Type), so cash & credit can't be reconciled — "
-                                           "check (1) the mailbox has an *X*Report* -> x_report rule and "
+                                           "check (1) the mailbox has an *X-Report* -> x_report rule and "
                                            "(2) b2bsoft is actually scheduled to email an X-Report for this "
                                            "tenant. Shown as pending, not flagged.")
             money_recon["any_flag"] = any(money_recon[k].get("flag") for k in ("accessory", "cash", "credit"))
@@ -1566,12 +1566,23 @@ def closing_attempts(period: str = None, date: str = None, store: str = None, on
 
 
 # ── 3-way tender recon: DAILY CLOSING vs POS X-REPORT vs SALES TRANSACTIONS, per store, per tender ──
-def _sales_tenders_by_store(client, org_id: str, date: str, tresolve=None, keys=None) -> dict:
+def _sales_tenders_by_store(client, org_id: str, date: str, tresolve=None, keys=None,
+                             unmapped_out: dict = None) -> dict:
     """The day's sales-transaction $ bucketed per tender, per store_code (from the same unified B2B
     source the money recon uses). Sums ext_price per tender — merchandise by tender, so it tracks the
     X-report's tender split (which also includes tax, hence small deltas are expected). `tresolve`/`keys`
     let the caller pass a tenant-configured tender resolver + axis; default = the hardcoded
-    _canon_tender + CANON_TENDERS, so behaviour is unchanged when a tenant hasn't opted in."""
+    _canon_tender + CANON_TENDERS, so behaviour is unchanged when a tenant hasn't opted in.
+
+    `unmapped_out`, if given, is a dict this function POPULATES (per store_code: {"amount", "labels"})
+    with sales rows whose tender resolved to nothing bucketable — either no resolver match at all, OR a
+    truthy tender_key an explicit tenant map rule returned that isn't actually on this tenant's active
+    axis (2026-07-28 Gate-1 N1/N2: a map rule's `tender_key` is never validated against `closing_tender_
+    def` at save time, so a deactivated/typo'd def leaves a rule pointing at a dead key — previously that
+    silently dropped the dollars with NO signal, the exact bug class this whole package exists to fix).
+    Mirrors the X-report leg's `xrep_unmapped` treatment. OPTIONAL/backward-compatible: omitting it (any
+    other/future caller) is BYTE-IDENTICAL to before this fix — an unmapped row is just not tallied into
+    `out`, same as today."""
     addr = _addr_resolver(client, org_id)
     tresolve = tresolve or _canon_tender
     keys = keys or CANON_TENDERS
@@ -1582,13 +1593,18 @@ def _sales_tenders_by_store(client, org_id: str, date: str, tresolve=None, keys=
             continue
         if str(r.get("trans_type") or "").strip() == "Return":
             continue
-        canon = tresolve(r.get("tender_type"))
-        if not canon:
-            continue
         code = addr(r.get("store")) or (r.get("store") or "?")
-        agg = out.setdefault(code, {t: 0.0 for t in keys})
-        if canon in agg:
-            agg[canon] += _f(r.get("ext_price"))
+        amt = _f(r.get("ext_price"))
+        canon = tresolve(r.get("tender_type"))
+        if canon and canon in keys:
+            agg = out.setdefault(code, {t: 0.0 for t in keys})
+            agg[canon] += amt
+        elif unmapped_out is not None:
+            u = unmapped_out.setdefault(code, {"amount": 0.0, "labels": set()})
+            u["amount"] += amt
+            lbl = str(r.get("tender_type") or "").strip()
+            if lbl:
+                u["labels"].add(lbl)
     return out
 
 
@@ -1614,11 +1630,13 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
     # yet (mig 104/111 not run): fall back so the recon never 500s on a not-yet-run migration.
     closing = {}
     def _closing_rows(cols):
-        q = (client.schema("commcalc").table("daily_closing").select(cols)
-             .eq("org_id", org_id).eq("close_date", d))
-        if store:
-            q = q.eq("store_code", store)
-        return q.limit(50000).execute().data or []
+        # No DB-level store_code filter here (2026-07-28 Gate-1 N3): `.eq("store_code", store)` never
+        # matches a NULL store_code row, so it silently dropped an unresolved closing row the instant a
+        # store filter was active — the same value-space bug already fixed for the x_report/sales legs.
+        # Always fetch the full day; the store filter is applied POST-HOC below via the shared `_keep`
+        # rule, uniformly with the other 3 legs (latent — the current frontend never sends `store=`).
+        return (client.schema("commcalc").table("daily_closing").select(cols)
+                .eq("org_id", org_id).eq("close_date", d).limit(50000).execute().data) or []
     try:
         _crows = _closing_rows("store_code,store_address,t_cash,t_credit,t_ext_cc,t_gift,t_store_acct,t_zelle,t_acima,tenders")
     except Exception:
@@ -1659,31 +1677,45 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
         code = resolve(r.get("store")) or (r.get("store") or "?")
         amt = _f(r.get("amount"))
         canon = resolve_x(r.get("tender_type"))
-        if canon:
+        # 2026-07-28 Gate-1 N1: `canon` can be truthy-but-not-on-axis — an explicit tenant map rule
+        # (closing_tender_map) returns its `tender_key` verbatim with NO validation against the active
+        # `closing_tender_def` axis at save time, so a deactivated/typo'd def leaves a live rule pointing
+        # at a dead key. That used to take the `if canon:` branch, fail the `canon in agg` check, and
+        # drop the dollars with NO signal at all (neither bucketed NOR in xrep_unmapped) — the same
+        # silent-disappearance bug this whole package exists to fix, just reached via a different code
+        # path. Checking `canon in keys` (the tenant's actual axis) up front closes both paths at once.
+        if canon and canon in keys:
             agg = xrep.setdefault(code, {t: 0.0 for t in keys})
-            if canon in agg:
-                agg[canon] += amt
+            agg[canon] += amt
         else:
             u = xrep_unmapped.setdefault(code, {"amount": 0.0, "labels": set()})
             u["amount"] += amt
             lbl = str(r.get("tender_type") or "").strip()
             if lbl:
                 u["labels"].add(lbl)
-    # (3) sales transactions (same tenant axis + resolver)
-    sales = _sales_tenders_by_store(client, org_id, d, resolve_s, keys)
+    # (3) sales transactions (same tenant axis + resolver). `sales_unmapped` mirrors `xrep_unmapped`
+    # (2026-07-28 Gate-1 N2) — the sales leg had the identical silent-drop pattern (both the no-match
+    # case and the truthy-but-off-axis case from N1), now surfaced the same way instead of just quietly
+    # producing an unexplained sales-vs-x_report delta.
+    sales_unmapped = {}
+    sales = _sales_tenders_by_store(client, org_id, d, resolve_s, keys, unmapped_out=sales_unmapped)
     if store:
-        # An unresolved store (its pos_tender_summary/raw_sales `store` string never matched
-        # store_mapping, so the dict key here is the raw address/"?" placeholder, not a real store_code)
-        # is NEVER dropped by this filter — a real store_code selection can only ever equal another REAL
-        # store_code, so a raw/unmatched key can't be "the wrong store" the way a resolved code can.
-        # Mirrors the analogous "unresolved row bypasses a filter" rule already applied to
-        # /closing/summary + /closing/rollup (retail-ops-14 B1/NIT-4a).
+        # An unresolved store (its pos_tender_summary/raw_sales/daily_closing `store` string never
+        # matched store_mapping, so the dict key here is the raw address/"?" placeholder, not a real
+        # store_code) is NEVER dropped by this filter — a real store_code selection can only ever equal
+        # another REAL store_code, so a raw/unmatched key can't be "the wrong store" the way a resolved
+        # code can. Mirrors the analogous "unresolved row bypasses a filter" rule already applied to
+        # /closing/summary + /closing/rollup (retail-ops-14 B1/NIT-4a). Applied uniformly to all four
+        # legs (2026-07-28 Gate-1 N3 folded the closing leg in — it used to filter at the DB level with
+        # `.eq("store_code", store)`, which silently drops a NULL-store_code row for ANY filter value).
         def _keep(k):
             return k == store or k not in resolved_codes
+        closing = {k: v for k, v in closing.items() if _keep(k)}
         xrep = {k: v for k, v in xrep.items() if _keep(k)}
         xrep_unmapped = {k: v for k, v in xrep_unmapped.items() if _keep(k)}
         sales = {k: v for k, v in sales.items() if _keep(k)}
-    codes = sorted(set(closing) | set(xrep) | set(sales) | set(xrep_unmapped))
+        sales_unmapped = {k: v for k, v in sales_unmapped.items() if _keep(k)}
+    codes = sorted(set(closing) | set(xrep) | set(sales) | set(xrep_unmapped) | set(sales_unmapped))
     stores_out = []
     for code in codes:
         c, x, s = closing.get(code, {}), xrep.get(code, {}), sales.get(code, {})
@@ -1692,16 +1724,18 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
             cv, xv, sv = round(c.get(t, 0), 2), round(x.get(t, 0), 2), round(s.get(t, 0), 2)
             per.append({"tender": t, "label": tlabel.get(t, t), "closing": cv, "x_report": xv, "sales": sv,
                         "match": abs(cv - xv) <= 1 and abs(xv - sv) <= 1 and abs(cv - sv) <= 1})
-        um = xrep_unmapped.get(code)
+        um, sm_u = xrep_unmapped.get(code), sales_unmapped.get(code)
         stores_out.append({
             "store_code": code, "store_address": name_by_code.get(code) or addr_by_code.get(code) or code,
             "tenders": per,
             # Additive-only, never touches the byte-identical `tenders`/`totals` comparison above — the
-            # X-report dollars this store had that no rule/fallback could bucket into a known tender,
-            # so recon math for a fully-mapped tenant/day is untouched, but a partial/no-map gap is now
-            # VISIBLE instead of silently reading as "no X-report money at all".
+            # X-report/sales dollars this store had that no rule/fallback could bucket into a known
+            # tender, so recon math for a fully-mapped tenant/day is untouched, but a partial/no-map gap
+            # is now VISIBLE instead of silently reading as "no data at all".
             "x_report_unmapped": ({"amount": round(um["amount"], 2), "raw_labels": sorted(um["labels"])}
                                    if um else None),
+            "sales_unmapped": ({"amount": round(sm_u["amount"], 2), "raw_labels": sorted(sm_u["labels"])}
+                                if sm_u else None),
             "totals": {"closing": round(sum(c.values()), 2), "x_report": round(sum(x.values()), 2),
                        "sales": round(sum(s.values()), 2)}})
     # x_report_ever: has this tenant EVER had ANY X-report imported (vs just missing for THIS day)?
@@ -1758,17 +1792,21 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
         }
 
     x_report_unmapped_total = round(sum(u["amount"] for u in xrep_unmapped.values()), 2)
+    sales_unmapped_total = round(sum(u["amount"] for u in sales_unmapped.values()), 2)
     note = ("X-report tender amounts include tax; sales-transaction figures are merchandise "
             "(ext price), so small deltas between those two are expected. Bank Deposit is compared "
             f"against the tenant's configured basis ({dep_cfg['match_target'].replace('_', ' ')}).")
     if not x_report_ever:
         note += (" This tenant has NEVER had a POS X-report imported — check (1) the mailbox has an "
-                 "*X*Report* -> x_report rule and (2) b2bsoft is actually scheduled to email an "
+                 "*X-Report* -> x_report rule and (2) b2bsoft is actually scheduled to email an "
                  "X-Report for this tenant.")
     if x_report_unmapped_total:
         note += (f" ⚠ ${x_report_unmapped_total:,.2f} of X-report tenders used a raw label this "
                  "tenant's mapping doesn't recognize (see the ⚠ marker per store below) — map it on "
                  "/closing/tender-config or it will keep showing outside the tender breakdown.")
+    if sales_unmapped_total:
+        note += (f" ⚠ ${sales_unmapped_total:,.2f} of sales-transaction tenders used a raw label this "
+                 "tenant's mapping doesn't recognize.")
     return {"date": d, "tenders": [{"key": t, "label": tlabel.get(t, t)} for t in keys],
             "stores": stores_out,
             # x_report here is RAW presence (any pos_tender_summary row today), not "every row mapped" —
@@ -1778,6 +1816,7 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
                                 "bank_deposit": bool(bank_by_store)},
             "x_report_ever": x_report_ever,
             "x_report_unmapped_total": x_report_unmapped_total,
+            "sales_unmapped_total": sales_unmapped_total,
             "note": note}
 
 
@@ -3530,7 +3569,7 @@ def closing_readiness(org_id: str = ORG_ID):
         issues.append({"code": "no_xreport_ever", "severity": "warning",
                        "message": "No POS X-report has ever been imported \u2014 cash & credit recon will "
                                   "stay \u2018pending\u2019 (never falsely flagged/blocked, but never "
-                                  "verified either). Check (1) the mailbox has an *X*Report* \u2192 "
+                                  "verified either). Check (1) the mailbox has an *X-Report* \u2192 "
                                   "x_report rule under Email Imports and (2) b2bsoft is actually scheduled "
                                   "to email an X-Report for this tenant (a separate subscription from the "
                                   "mailbox rule)."})

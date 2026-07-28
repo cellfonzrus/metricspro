@@ -91,6 +91,11 @@ export default function TenderRecon3WayPage() {
         label: `⚠ Unmapped X-report (${(s.x_report_unmapped.raw_labels || []).join(', ') || 'unlabeled'})`,
         closing: '', x_report: s.x_report_unmapped.amount, sales: '', match: false,
       })
+      if (s.sales_unmapped?.amount) rows.push({
+        store: s.store_address, tender: 'unmapped',
+        label: `⚠ Unmapped sales (${(s.sales_unmapped.raw_labels || []).join(', ') || 'unlabeled'})`,
+        closing: '', x_report: '', sales: s.sales_unmapped.amount, match: false,
+      })
     }
     return {
       title: '3-Way Tender Recon', subtitle: date,
@@ -157,10 +162,11 @@ export default function TenderRecon3WayPage() {
           </div>
         </div>
       )}
-      {!loading && !data?.error && data?.x_report_ever && (data?.x_report_unmapped_total || 0) > 0 && (
+      {!loading && !data?.error && data?.x_report_ever && ((data?.x_report_unmapped_total || 0) > 0 || (data?.sales_unmapped_total || 0) > 0) && (
         <div className="card" style={{ padding: '10px 14px', marginBottom: 14, border: '1px solid #f59e0b', background: '#fffbeb', fontSize: 13, color: '#78350f' }}>
-          ⚠ {fmt(data.x_report_unmapped_total)} of today's X-report tenders used a raw label this tenant's mapping
-          doesn't recognize — see the ⚠ per-store note below. Map it on <a href="/closing/tender-config" style={{ color: '#92400e', fontWeight: 600 }}>Tender Setup</a> so
+          {(data?.x_report_unmapped_total || 0) > 0 && <>⚠ {fmt(data.x_report_unmapped_total)} of today's X-report tenders used a raw label this tenant's mapping doesn't recognize. </>}
+          {(data?.sales_unmapped_total || 0) > 0 && <>⚠ {fmt(data.sales_unmapped_total)} of today's sales-transaction tenders used a raw label this tenant's mapping doesn't recognize. </>}
+          See the ⚠ per-store note below. Map it on <a href="/closing/tender-config" style={{ color: '#92400e', fontWeight: 600 }}>Tender Setup</a> so
           it's bucketed instead of sitting outside the table.
         </div>
       )}
@@ -209,6 +215,11 @@ export default function TenderRecon3WayPage() {
                   {s.x_report_unmapped?.amount > 0 && (
                     <span style={{ color: '#b91c1c', fontWeight: 700 }} title={`Raw label(s): ${(s.x_report_unmapped.raw_labels || []).join(', ')}`}>
                       {' '}· ⚠ {fmt(s.x_report_unmapped.amount)} unmapped X-report
+                    </span>
+                  )}
+                  {s.sales_unmapped?.amount > 0 && (
+                    <span style={{ color: '#b91c1c', fontWeight: 700 }} title={`Raw label(s): ${(s.sales_unmapped.raw_labels || []).join(', ')}`}>
+                      {' '}· ⚠ {fmt(s.sales_unmapped.amount)} unmapped sales
                     </span>
                   )}
                 </span>
