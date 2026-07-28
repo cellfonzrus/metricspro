@@ -3,7 +3,14 @@ import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { MultiSelect } from '@/lib/multiselect'
 import { NoLedgerData } from '../_shared/NoLedgerData'
+
+// "(no market)" bucket (2026-07-27 market-filter-dropdown fix): rows that never matched
+// store_mapping never showed under any market filter before this — this sentinel makes them an
+// explicit, pickable option instead of silently unreachable. Must match router.py's
+// NO_MARKET_SENTINEL exactly.
+const NO_MARKET_VALUE = '__no_market__'
 
 type Row = {
   id: number; store: string; market: string; esn_imei: string|null; phone_number: string|null
@@ -14,11 +21,18 @@ type Row = {
   physically_missing?: boolean; investigation_remark?: string
 }
 type Bucket = { count: number; owed: number; rows: Row[] }
+type ByModel = { device_model: string; under45: number; warn: number; missed: number; zero: number; total: number; owed: number }
 type Aging = {
   today: string; data_as_of: string|null
   buckets: { under45: Bucket; warn: Bucket; missed: Bucket }
   zero_inventory: { count: number; rows: Row[] }
-  totals: { flagged_count: number; flagged_owed: number }
+  totals: {
+    flagged_count: number; flagged_owed: number
+    total_amount: number; total_amount_column: string; total_phones_outstanding: number
+  }
+  by_model: ByModel[]
+  by_model_meta: { total_models: number; shown: number; omitted: number }
+  bucket_basis: string
 }
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -85,41 +99,92 @@ function RowTable({ rows, accent }: { rows: Row[]; accent: string }) {
   )
 }
 
+function ByModelTable({ rows, meta }: { rows: ByModel[]; meta: { total_models: number; shown: number; omitted: number } }) {
+  if (!rows.length) return <div style={{ padding: 18, color: 'var(--text3)', fontSize: 13 }}>No devices for this filter.</div>
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+        <thead>
+          <tr style={{ background: 'var(--surface2)' }}>
+            {['Device Model','Under 45','45–60 WARN','Over 60 MISSED','$0 Owed','Total Phones','Owed'].map((h,i) => (
+              <th key={h} style={{ textAlign: i===0?'left':'right', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((m, i) => (
+            <tr key={m.device_model} style={{ borderTop:'1px solid var(--border)', background: i%2===0?'transparent':'var(--surface2)' }}>
+              <td style={{ padding:'8px 12px', fontSize:12 }}>{m.device_model}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right' }}>{m.under45}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'#d97706', fontWeight:600 }}>{m.warn}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'#dc2626', fontWeight:600 }}>{m.missed}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'var(--text3)' }}>{m.zero}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', fontWeight:700 }}>{m.total}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right' }}>{fmt(m.owed)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {meta.omitted > 0 && (
+        <div style={{ padding:'10px 12px', fontSize:12, color:'var(--text3)' }}>
+          Showing top {meta.shown} of {meta.total_models} models by phone count — {meta.omitted} more model(s) not shown (raise this if you need the full list).
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function AgingPage() {
   const [market, setMarket] = useState('')
-  const [store, setStore] = useState('')
+  const [selStores, setSelStores] = useState<string[]>([])
   const [markets, setMarkets] = useState<string[]>([])
   const [stores, setStores] = useState<{store:string;market:string}[]>([])
+  const [noMarketCount, setNoMarketCount] = useState(0)
   const [data, setData] = useState<Aging | null>(null)
   const [loading, setLoading] = useState(true)
   const [showZero, setShowZero] = useState(false)
-  const [month, setMonth] = useState(0)  // 0 = all time
+  const [showByModel, setShowByModel] = useState(true)
+  const [month, setMonth] = useState(0)  // 0 = all time (legacy quick-pick, kept alongside date range)
   const [year, setYear] = useState(new Date().getFullYear())
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   // Has GET /asset/filter-options resolved yet? Gates the "no ledger data" empty state so it can't
   // flash for a tenant that DOES have data (see NoLedgerData.tsx header comment — luxelink-parity).
   const [filterOptionsLoaded, setFilterOptionsLoaded] = useState(false)
 
   useEffect(() => {
     api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
-      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) })
+      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]); setNoMarketCount(d.no_market_count||0) })
       .catch(console.error)
       .finally(() => setFilterOptionsLoaded(true))
   }, [])
-  useEffect(() => { load() }, [market, store, month, year])
+  useEffect(() => { load() }, [market, selStores, month, year, dateFrom, dateTo])
 
   async function load() {
     setLoading(true)
     try {
       const qs = new URLSearchParams({ org_id: ORG_ID })
       if (market) qs.set('market', market)
-      if (store) qs.set('store', store)
+      if (selStores.length) qs.set('store', selStores.join(','))
       if (month) { qs.set('month', String(month)); qs.set('year', String(year)) }
+      if (dateFrom) qs.set('date_from', dateFrom)
+      if (dateTo) qs.set('date_to', dateTo)
       setData(await api(`/api/v1/asset/aging?${qs.toString()}`))
     } catch(e) { console.error(e) }
     setLoading(false)
   }
 
-  const visibleStores = market ? stores.filter(s => s.market === market) : stores
+  // When market changes, drop any selected store no longer in the visible set (mirrors owed-weekly).
+  function onMarketChange(v: string) {
+    setMarket(v)
+    const allowed = new Set(
+      (v === NO_MARKET_VALUE ? stores.filter(s => !s.market)
+        : v ? stores.filter(s => s.market === v) : stores).map(s => s.store)
+    )
+    setSelStores(prev => prev.filter(s => allowed.has(s)))
+  }
+  const visibleStores = market === NO_MARKET_VALUE ? stores.filter(s => !s.market)
+    : market ? stores.filter(s => s.market === market) : stores
   const selStyle = { padding:'6px 10px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, background:'var(--surface)' }
   const staleDays = data?.data_as_of ? daysSince(data.data_as_of) : null
   const isStale = staleDays !== null && staleDays > 3
@@ -138,12 +203,37 @@ export default function AgingPage() {
       { header:'Distributor Invoice #', get:r=>r.vip_invoice_number },
       { header:'Distributor Invoice Date', get:r=> r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '' },
     ]
-    const filterLabel = [market||null, store||null].filter(Boolean).join(' · ') || 'All markets'
+    const filterParts = [market === NO_MARKET_VALUE ? '(no market)' : market || null,
+                         selStores.length ? selStores.join(', ') : null,
+                         (dateFrom || dateTo) ? `${dateFrom||'…'} to ${dateTo||'…'}` : null]
+      .filter(Boolean)
+    const filterLabel = filterParts.join(' · ') || 'All markets'
+    const summaryRows = data ? [{
+      metric: 'Total Amount (Owed to Distributor)', value: fmt(data.totals.total_amount),
+    }, {
+      metric: 'Total Phones Outstanding', value: data.totals.total_phones_outstanding,
+    }, {
+      metric: '45–60 Day WARN', value: `${data.buckets.warn.count} devices / ${fmt(data.buckets.warn.owed)}`,
+    }, {
+      metric: 'Over 60 Day MISSED', value: `${data.buckets.missed.count} devices / ${fmt(data.buckets.missed.owed)}`,
+    }] : []
     return {
       title: 'Inventory Aging — Sell Before 60 Days',
       subtitle: `${filterLabel}${data?.data_as_of ? ` · data as of ${data.data_as_of}, aged to ${data.today}` : ''}`,
-      filename: `inventory-aging${store?'-'+store.replace(/[^a-z0-9]+/gi,'-').toLowerCase():''}`,
+      filename: `inventory-aging${selStores.length===1?'-'+selStores[0].replace(/[^a-z0-9]+/gi,'-').toLowerCase():''}`,
       sheets: [
+        { name:'Summary', rows: summaryRows, columns: [
+          { header:'Metric', get:(r:any)=>r.metric }, { header:'Value', get:(r:any)=>r.value },
+        ]},
+        { name:'By Model', rows: data?.by_model||[], columns: [
+          { header:'Device Model', get:(r:any)=>r.device_model },
+          { header:'Under 45', get:(r:any)=>r.under45, align:'right' },
+          { header:'45-60 WARN', get:(r:any)=>r.warn, align:'right' },
+          { header:'Over 60 MISSED', get:(r:any)=>r.missed, align:'right' },
+          { header:'$0 Owed', get:(r:any)=>r.zero, align:'right' },
+          { header:'Total Phones', get:(r:any)=>r.total, align:'right' },
+          { header:'Owed', get:(r:any)=>r.owed, money:true },
+        ]},
         { name:'45-60 Day Warning', rows:data?.buckets.warn.rows||[], columns:cols },
         { name:'Over 60 (Missed)', rows:data?.buckets.missed.rows||[], columns:cols },
         { name:'Under 45 Days', rows:data?.buckets.under45.rows||[], columns:cols },
@@ -162,7 +252,7 @@ export default function AgingPage() {
           </p>
         </div>
         {data && <ExportButtons payload={buildPayload} />}
-        {data && <SendReportButton reportKey="inventory_aging" filters={{ ...(store?{store}:{}), ...(market?{market}:{}), ...(month?{month, year}:{}) }} />}
+        {data && <SendReportButton reportKey="inventory_aging" filters={{ ...(selStores.length?{store:selStores.join(',')}:{}), ...(market?{market}:{}), ...(month?{month, year}:{}), ...(dateFrom?{date_from:dateFrom}:{}), ...(dateTo?{date_to:dateTo}:{}) }} />}
       </div>
 
       {/* Stale data banner */}
@@ -172,18 +262,18 @@ export default function AgingPage() {
         </div>
       )}
 
-      {/* Filters */}
+      {/* Filters — standardized bar (RULE FIVE): market · store (multi) · acquired-date range */}
       <div className="card" style={{ padding:14, marginBottom:20, display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>
         <span style={{ fontSize:13, fontWeight:600, color:'var(--text2)' }}>Filters:</span>
-        <select style={selStyle} value={market} onChange={e => { setMarket(e.target.value); setStore('') }}>
+        <select style={selStyle} value={market} onChange={e => onMarketChange(e.target.value)}>
           <option value="">All markets</option>
           {markets.map(m => <option key={m} value={m}>{m}</option>)}
+          {noMarketCount > 0 && <option value={NO_MARKET_VALUE}>(no market) — {noMarketCount}</option>}
         </select>
-        <select style={selStyle} value={store} onChange={e => setStore(e.target.value)}>
-          <option value="">All stores</option>
-          {visibleStores.map(s => <option key={s.store} value={s.store}>{s.store}</option>)}
-        </select>
-        <select style={selStyle} value={month} onChange={e => setMonth(+e.target.value)} title="Acquired in">
+        <MultiSelect allLabel="All stores" value={selStores} onChange={setSelStores}
+          options={visibleStores.map(s => ({ value: s.store }))} width={190} />
+        <label style={{ fontSize:12, color:'var(--text3)' }}>Acquired</label>
+        <select style={selStyle} value={month} onChange={e => setMonth(+e.target.value)} title="Quick month pick (acquired_date)">
           <option value={0}>All time</option>
           {MONTHS.map((m,i) => <option key={m} value={i+1}>{m}</option>)}
         </select>
@@ -192,8 +282,19 @@ export default function AgingPage() {
             {[2024,2025,2026].map(y => <option key={y} value={y}>{y}</option>)}
           </select>
         )}
+        <span style={{ fontSize:12, color:'var(--text3)' }}>or range</span>
+        <input type="date" style={selStyle} value={dateFrom} onChange={e => setDateFrom(e.target.value)} title="Acquired from" />
+        <span style={{ fontSize:12, color:'var(--text3)' }}>to</span>
+        <input type="date" style={selStyle} value={dateTo} onChange={e => setDateTo(e.target.value)} title="Acquired to" />
+        {(market || selStores.length || month || dateFrom || dateTo) && (
+          <button className="btn btn-secondary" style={{ fontSize:12, padding:'4px 10px' }}
+            onClick={() => { setMarket(''); setSelStores([]); setMonth(0); setDateFrom(''); setDateTo('') }}>✕ Clear</button>
+        )}
         {data?.data_as_of && <span style={{ marginLeft:'auto', fontSize:12, color:'var(--text3)' }}>Data as of {data.data_as_of} · aged to {data.today}</span>}
       </div>
+      {data?.bucket_basis && (
+        <div style={{ fontSize:12, color:'var(--text3)', marginTop:-14, marginBottom:16 }}>ℹ️ {data.bucket_basis}</div>
+      )}
 
       {loading ? (
         <div style={{ textAlign:'center', padding:60, color:'var(--text3)' }}>Loading…</div>
@@ -215,6 +316,20 @@ export default function AgingPage() {
             </div>
           )}
 
+          {/* Footer-style totals, shown at the top for visibility too — recompute per active filter */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:16, marginBottom:20 }}>
+            <div className="card" style={{ padding:'16px 20px' }}>
+              <div style={{ fontSize:12, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', letterSpacing:'0.05em' }}>Total Amount ({data.totals.total_amount_column === 'owed_to_vip' ? 'Owed to Distributor' : data.totals.total_amount_column})</div>
+              <div style={{ fontSize:24, fontWeight:700, marginTop:6 }}>{fmt(data.totals.total_amount)}</div>
+              <div style={{ fontSize:12, color:'var(--text3)', marginTop:2 }}>across every filtered unsold on-inventory device</div>
+            </div>
+            <div className="card" style={{ padding:'16px 20px' }}>
+              <div style={{ fontSize:12, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', letterSpacing:'0.05em' }}>Total Phones Outstanding</div>
+              <div style={{ fontSize:24, fontWeight:700, marginTop:6 }}>{data.totals.total_phones_outstanding.toLocaleString()}</div>
+              <div style={{ fontSize:12, color:'var(--text3)', marginTop:2 }}>unsold devices matching this filter (incl. $0 owed)</div>
+            </div>
+          </div>
+
           {/* Bucket cards */}
           <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:16, marginBottom:24 }}>
             {[
@@ -228,6 +343,16 @@ export default function AgingPage() {
                 <div style={{ fontSize:12, color:'var(--text3)', marginTop:2 }}>{c.b.count.toLocaleString()} devices · {c.sub}</div>
               </div>
             ))}
+          </div>
+
+          {/* Per-model breakdown */}
+          <div className="card" style={{ padding:0, marginBottom:20 }}>
+            <div onClick={() => setShowByModel(!showByModel)}
+                 style={{ padding:'14px 18px', fontWeight:600, fontSize:14, cursor:'pointer', display:'flex', justifyContent:'space-between', borderBottom: showByModel ? '1px solid var(--border)' : 'none' }}>
+              <span>{showByModel ? '▾' : '▸'} Phones per Device Model ({data.by_model_meta.total_models})</span>
+              <span style={{ fontWeight:400, color:'var(--text3)', fontSize:12 }}>honors active filters</span>
+            </div>
+            {showByModel && <ByModelTable rows={data.by_model} meta={data.by_model_meta} />}
           </div>
 
           {/* WARN list */}

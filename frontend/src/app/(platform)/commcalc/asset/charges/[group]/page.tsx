@@ -51,6 +51,9 @@ export default function ChargeGroupPage() {
   const [store, setStore] = useState('')
   const [markets, setMarkets] = useState<string[]>([])
   const [stores, setStores] = useState<{store:string;market:string}[]>([])
+  // "(no market)" bucket (2026-07-27 fix) — must match router.py's NO_MARKET_SENTINEL exactly.
+  const [noMarketCount, setNoMarketCount] = useState(0)
+  const NO_MARKET_VALUE = '__no_market__'
   const [group, setGroup] = useState<Group | null>(null)
   const [lineItems, setLineItems] = useState<ChargeRows | null>(null)
   const [loading, setLoading] = useState(true)
@@ -67,7 +70,7 @@ export default function ChargeGroupPage() {
 
   useEffect(() => {
     api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
-      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]) })
+      .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]); setNoMarketCount(d.no_market_count||0) })
       .catch(console.error)
       .finally(() => setFilterOptionsLoaded(true))
   }, [])
@@ -99,7 +102,8 @@ export default function ChargeGroupPage() {
 
   if (!cfg) return <div style={{ padding:40 }}>Unknown report. <a href="/commcalc/asset/dashboard">Back to dashboard</a></div>
 
-  const visibleStores = market ? stores.filter(s => s.market === market) : stores
+  const visibleStores = market === NO_MARKET_VALUE ? stores.filter(s => !s.market)
+    : market ? stores.filter(s => s.market === market) : stores
   const selStyle = { padding:'6px 10px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, background:'var(--surface)' }
   const tabBtn = (active:boolean) => ({ padding:'6px 14px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, cursor:'pointer', fontWeight:600,
     background: active ? 'var(--accent)' : 'var(--surface)', color: active ? '#fff' : 'var(--text2)' })
@@ -190,6 +194,7 @@ export default function ChargeGroupPage() {
         <select style={selStyle} value={market} onChange={e => { setMarket(e.target.value); setStore('') }}>
           <option value="">All markets</option>
           {markets.map(m => <option key={m} value={m}>{m}</option>)}
+          {noMarketCount > 0 && <option value={NO_MARKET_VALUE}>(no market) — {noMarketCount}</option>}
         </select>
         <select style={selStyle} value={store} onChange={e => setStore(e.target.value)}>
           <option value="">All stores</option>
