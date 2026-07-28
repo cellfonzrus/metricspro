@@ -8814,6 +8814,68 @@ async def bulk_assign_commission_plan(body: dict, org_id: str = ORG_ID):
             "replace_existing": replace_existing, "results": results, "summary": summary}
 
 
+# ── MARKETS (pick-don't-type options for the Store Markets editor — AGENT_CONTRACT §3b/RULE THREE) ──
+# A market is a free-form label the org invents once and then reuses; typing it per store is how "LI",
+# "li" and "L I" become three different markets and a store silently drops out of its market filter.
+# These helpers are the single definition of "the markets this org already uses" + "what a submitted
+# market normalizes to", shared by the options read and the store write below.
+
+def _market_key(name: str) -> str:
+    """Case/whitespace-insensitive identity of a market label — the ONLY thing that decides whether two
+    spellings are the SAME market (' li ' == 'LI'). Not stored; used for matching/dedupe."""
+    return " ".join((name or "").split()).casefold()
+
+
+def _org_markets(client, org_id: str) -> list:
+    """The org's existing market labels: distinct, non-blank, sorted (case-insensitive).
+    Source = commcalc.store_mapping (the canon this settings page edits) UNIONed with storeops.stores
+    (a tenant may keep its roster only there; storeops writes propagate into store_mapping anyway).
+    Both reads are org-scoped (RULE ONE). Spellings that differ only by case/whitespace collapse to ONE
+    canonical option — the spelling the most rows use, ties broken alphabetically — so the dropdown can
+    never offer both "LI" and "li". Never raises: an unreadable table just contributes nothing."""
+    variants = {}
+    for schema, table in (("commcalc", "store_mapping"), ("storeops", "stores")):
+        try:
+            rows = (client.schema(schema).table(table).select("market")
+                    .eq("org_id", org_id).execute().data) or []
+        except Exception as e:
+            print(f"WARN _org_markets: {schema}.{table}.market unreadable ({e})")
+            rows = []
+        for r in rows:
+            name = " ".join((r.get("market") or "").split())
+            if not name:                      # blank/NULL market = "unassigned", never an option
+                continue
+            bucket = variants.setdefault(_market_key(name), {})
+            bucket[name] = bucket.get(name, 0) + 1
+    canon = [sorted(b.items(), key=lambda kv: (-kv[1], kv[0]))[0][0] for b in variants.values()]
+    return sorted(canon, key=lambda s: (s.casefold(), s))
+
+
+def _canonical_market(client, org_id: str, value) -> str:
+    """Normalize a submitted market label before it is stored: trim (and collapse inner runs of
+    whitespace), then snap to the CANONICAL casing of an existing market when it matches one
+    case-insensitively — picking/typing "li" where "LI" already exists stores "LI", so the two can never
+    become separate market buckets. A value matching nothing is kept verbatim (that IS how a genuinely
+    new market is created — the UI makes that an explicit choice). Blank stays blank: no market is a
+    legitimate, explicit state."""
+    name = " ".join((value or "").split())
+    if not name:
+        return ""
+    key = _market_key(name)
+    for existing in _org_markets(client, org_id):
+        if _market_key(existing) == key:
+            return existing
+    return name
+
+
+@router.get("/markets")
+async def list_markets(org_id: str = ORG_ID):
+    """Options list for the market dropdown: the org's existing markets, distinct + sorted, blanks
+    excluded. Read-only, org-scoped; degrades to [] rather than erroring so the editor still renders."""
+    require_org(org_id)
+    return {"markets": _org_markets(sb(), org_id)}
+
+
 @router.get("/stores")
 async def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
@@ -8826,6 +8888,11 @@ async def update_store(store_id: str, body: dict, org_id: str = "00000000-0000-0
     allowed = {k: v for k, v in body.items() if k in ['market', 'store_code', 'store_address', 'is_active', 'salesforce_id']}
     if not allowed:
         raise HTTPException(400, "No valid fields to update")
+    # market is normalized for EVERY caller, not just the settings dropdown: trimmed, and snapped to the
+    # canonical casing of an existing market when it matches one case-insensitively (see
+    # _canonical_market). Blank is preserved as blank = explicitly unassigned.
+    if 'market' in allowed:
+        allowed['market'] = _canonical_market(client, org_id, allowed['market'])
     r = client.schema('commcalc').table('store_mapping').update(allowed).eq('org_id', org_id).eq('id', store_id).execute()
     return r.data[0] if r.data else {}
 

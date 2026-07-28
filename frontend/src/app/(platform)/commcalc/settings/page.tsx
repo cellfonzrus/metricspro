@@ -1,7 +1,8 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import EntityPicker from '@/components/EntityPicker'
 
 const DEFAULTS = {
   upgrade_flat: 20, premium_flat: 5, byod_flat: 3, byod_extra_spiff: 0,
@@ -45,6 +46,7 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<'rates'|'kpi'|'tier'|'stores'|'comprates'|'topphones'>('comprates')
   const [storeList, setStoreList] = useState<any[]>([])
   const [storeSaving, setStoreSaving] = useState<string | null>(null)
+  const [markets, setMarkets] = useState<string[]>([])
   const [aliases, setAliases] = useState<any[]>([])
   const [newAlias, setNewAlias] = useState({ alias: '', store_code: '' })
   const [aliasSaving, setAliasSaving] = useState(false)
@@ -76,8 +78,17 @@ export default function SettingsPage() {
   useEffect(() => {
     if (activeTab === 'comprates') loadCompRates()
     if (activeTab === 'topphones') loadTopSellers()
-    if (activeTab === 'stores') loadAliases()
+    if (activeTab === 'stores') { loadAliases(); loadMarkets() }
   }, [activeTab, period])
+
+  // Existing markets = the pick-don't-type option list for the Store Markets editor (RULE THREE).
+  // A failure here is non-fatal: marketOptions still falls back to the markets already on the rows.
+  async function loadMarkets() {
+    try {
+      const d = await api(`/api/v1/commcalc/markets?org_id=${ORG_ID}`)
+      setMarkets(Array.isArray(d?.markets) ? d.markets : [])
+    } catch (e) { console.error(e) }
+  }
 
   async function loadAliases() {
     try {
@@ -179,13 +190,34 @@ export default function SettingsPage() {
   async function saveStoreMarket(storeId: string, market: string) {
     setStoreSaving(storeId)
     try {
-      await api(`/api/v1/commcalc/stores/${storeId}?org_id=${ORG_ID}`, {
+      const row = await api(`/api/v1/commcalc/stores/${storeId}?org_id=${ORG_ID}`, {
         method: 'PUT', body: JSON.stringify({ market }),
       })
-      setStoreList(list => list.map(s => s.id === storeId ? { ...s, market } : s))
+      // The server normalizes (trim + canonical casing of an existing market: "li" → "LI"), so show
+      // what was actually STORED, not what was clicked. Falls back to the sent value if the row is thin.
+      const saved = typeof row?.market === 'string' ? row.market : market
+      setStoreList(list => list.map(s => s.id === storeId ? { ...s, market: saved } : s))
+      if (saved) setMarkets(ms => ms.includes(saved) ? ms : [...ms, saved])
     } catch (e: any) { alert(e.message) }
     setStoreSaving(null)
   }
+
+  // Options for the market picker: the org's existing markets (server, incl. the storeops roster)
+  // UNIONed with whatever is already on the visible rows — so every row's current value is always a
+  // real option (it renders as the selection, not as "no market") even before /markets is deployed.
+  // Blanks excluded; an unassigned store is the picker's empty state, not an option.
+  const marketOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const out: { id: string; label: string }[] = []
+    for (const raw of [...markets, ...storeList.map(s => String(s.market || ''))]) {
+      const m = raw.trim()
+      if (!m || seen.has(m)) continue
+      seen.add(m)
+      out.push({ id: m, label: m })
+    }
+    return out.sort((a, b) =>
+      a.label.toLowerCase().localeCompare(b.label.toLowerCase()) || a.label.localeCompare(b.label))
+  }, [markets, storeList])
 
   function Field({ label, field, prefix = '', suffix = '' }: { label: string; field: string; prefix?: string; suffix?: string }) {
     return (
@@ -541,6 +573,15 @@ export default function SettingsPage() {
         <div className="card" style={{ padding: 0 }}>
           <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', fontWeight: 600 }}>
             Store Markets — {storeList.length} stores
+            <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}>
+              · {marketOptions.length} market{marketOptions.length === 1 ? '' : 's'} set up
+            </span>
+          </div>
+          <div style={{ padding: '10px 18px', fontSize: 12, color: 'var(--text3)' }}>
+            Pick a market from the ones already set up — market filters across the app (asset ledger,
+            reports, targets) match on the exact name, so a re-typed <em>“li”</em> vs <em>“LI”</em> silently
+            splits a market in two. To add a genuinely new one, type it and choose <strong>➕ New market</strong>.
+            Clear with ✕ to leave a store unassigned.
           </div>
           <table style={{ width: '100%' }}>
             <thead>
@@ -557,15 +598,20 @@ export default function SettingsPage() {
                   <td style={{ padding: '8px 18px', fontSize: 12, color: 'var(--text3)' }}>{s.store_code}</td>
                   <td style={{ padding: '8px 18px' }}>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <input
-                        className="input"
-                        style={{ width: 120 }}
-                        defaultValue={s.market || ''}
-                        placeholder="e.g. NYC"
-                        onBlur={e => {
-                          const v = e.target.value.trim()
-                          if (v !== (s.market || '')) saveStoreMarket(s.id, v)
-                        }}
+                      {/* RULE THREE: pick an EXISTING market; a brand-new one is an explicit
+                          "➕ New market" choice, never an accidental typo saved silently. ✕ clears
+                          back to unassigned, which stays a legitimate state. */}
+                      <EntityPicker
+                        options={marketOptions}
+                        value={(s.market || '').trim() || null}
+                        onChange={id => saveStoreMarket(s.id, id || '')}
+                        allowCreate
+                        onCreate={v => { const m = v.trim(); if (m) saveStoreMarket(s.id, m) }}
+                        createLabel={v => `New market: “${v.trim()}”`}
+                        placeholder="— no market —"
+                        ariaLabel={`Market for ${s.store_address || s.store_code || 'store'}`}
+                        disabled={storeSaving === s.id}
+                        width={200}
                       />
                       {storeSaving === s.id && <div className="spinner" style={{ width: 14, height: 14 }} />}
                     </div>
