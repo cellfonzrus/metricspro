@@ -6038,6 +6038,39 @@ def _can_view_device_commission(authorization, org_id):
         return False
 
 
+def _can_view_imei_rebates(authorization, org_id):
+    """PAGE gate for the IMEI ↔ Rebate reconciliation report (owner directive 2026-07-29: this report
+    has NO default access). ADMIN-ONLY BY DEFAULT, grantable via the DATA_GRANTS 'imei_rebates' key —
+    the same resolution shape as `_can_view_device_commission`, but it gates the WHOLE report rather
+    than a money section: the per-IMEI rows, counts and gap statuses are themselves restricted, not
+    only the dollars. Frontend mirror: `hasDataGrant(perms, 'imei_rebates')`.
+
+    Degrades CLOSED on any resolution error — an unresolvable caller can only ever be refused, never
+    handed the report. (No tenant toggle: unlike carrier_residual there is no 'all' posture.)
+
+    INDEPENDENT of the money gate. Passing this gate says "you may open the report"; whether its $
+    are populated is still decided by `_can_view_carrier_residual` further down the handler."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller
+        from app.modules.commcalc import imei_rebate_report as _irr_gate
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid) if uid else None
+        return _irr_gate.imei_rebates_allowed(caller)
+    except Exception:
+        return False
+
+
+def _require_imei_rebates(authorization, org_id):
+    """Raise 403 naming the permission when the caller may not open the IMEI rebate report. The detail
+    string carries the literal grant key `imei_rebates` so the page can recognise its own gate in the
+    thrown message (client.ts `api()` surfaces only `detail`, not the status code) and render the lock
+    note instead of a raw error."""
+    if not _can_view_imei_rebates(authorization, org_id):
+        raise HTTPException(403, "IMEI rebate reconciliation is restricted — you need the "
+                                 "'imei_rebates' permission to view it. Ask an admin to grant "
+                                 "'IMEI rebate reconciliation' on your role.")
+
+
 def _has_any_pay_source(client, org_id, period):
     """True if this org has ANYTHING configured to pay reps from for the period: active commission-plan
     ASSIGNMENTS, an active payout_schedule (raw_mi installments), an active plan_installment_schedule
@@ -18517,8 +18550,9 @@ def agency_void_invoice(invoice_id: str, org_id: str = ORG_ID, authorization: st
 # ALL aggregation math lives in the PURE, unit-proved module `commcalc.imei_rebate_report`; this endpoint
 # only READS (org-scoped, period-indexed) and composes. READ-ONLY: it displays money the carrier/processor
 # already recorded — no rate, tier, plan rule, payout or calc input is read or written, and nothing
-# recomputes. Money columns ride the EXISTING `_can_view_carrier_residual` gate (RULE FOUR: a gated money
-# column never leaks through an export either).
+# recomputes. The WHOLE report is DEFAULT-CLOSED behind the 'imei_rebates' DATA_GRANT (owner directive
+# 2026-07-29) via `_require_imei_rebates`; money columns ride the SEPARATE, pre-existing
+# `_can_view_carrier_residual` gate (RULE FOUR: a gated money column never leaks through an export either).
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 _IR_READ_CAP = 200000          # hard ceiling on rows pulled per table (a runaway read is a 502, not a report)
 
@@ -18600,9 +18634,15 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
     `activation_type` / `platform` / `financed` / `source` (all comma-separated, applied SERVER-side so
     tiles, table and export agree) · `limit` (display cap; the tiles always describe the full filtered set).
 
-    READ-ONLY. Money columns are gated by `_can_view_carrier_residual`; a caller without it gets the counts
-    and statuses with every $ nulled and `money_gated: true`."""
+    READ-ONLY. TWO INDEPENDENT GATES, in this order:
+      1. PAGE gate — `_require_imei_rebates` (the 'imei_rebates' DATA_GRANT, DEFAULT-CLOSED per the
+         owner directive 2026-07-29). No grant → 403 before a single row is read; the counts, gap
+         statuses and IMEIs are restricted, not just the dollars.
+      2. MONEY gate — `_can_view_carrier_residual`, UNCHANGED. A caller who passes gate 1 but lacks
+         carrier-residual on a tenant running residual visibility 'permissioned' still gets the counts
+         and statuses with every $ nulled and `money_gated: true`. Passing gate 1 grants no dollars."""
     require_org(org_id)
+    _require_imei_rebates(authorization, org_id)
     from app.modules.commcalc import imei_rebate_report as _irr
     from app.modules.commcalc.discrepancy_engine import parse_payment_type as _ir_ppt
     client = sb()

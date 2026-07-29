@@ -1,6 +1,8 @@
 'use client'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, fmt, getActiveOrg } from '@/lib/client'
+import { useAuth } from '@/lib/auth-context'
+import { hasDataGrant } from '@/lib/rbac'
 import ReportShell from '@/components/ReportShell'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -17,6 +19,14 @@ import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-fi
 // The point of the report is the GAPS: an activation with NO rebate against it is a first-class row with
 // its own tile and quick facet, not an absent row. The inverse (a rebate whose IMEI has no activation
 // here) is the collapsed data-quality section at the bottom.
+//
+// ACCESS: this report has NO DEFAULT ACCESS (owner directive 2026-07-29). It is gated by the
+// 'imei_rebates' DATA_GRANT — super-admins / company-wide ('all') roles / admins pass; everyone else
+// needs the grant on their role. The BACKEND is the enforcement (`_require_imei_rebates` → 403 before a
+// single row is read); `hasDataGrant` here is the frontend MIRROR, so an ungranted user sees the lock
+// note instead of firing a request that can only fail. Because the mirror is optimistic while
+// permissions are still loading (an empty perms object reads as scope 'all'), the 403 itself is ALSO
+// handled — it renders the same lock note rather than a raw red error string.
 //
 // RULE FOUR: ReportShell brings Excel / PDF / Print + Send (email & WhatsApp) over the rows on screen.
 // RULE FIVE: <StandardFilterBar> carries the core set (period · stores · market · reps); the appended
@@ -43,7 +53,31 @@ function thisMonth() { return new Date().toISOString().slice(0, 7) }
 
 type Row = any
 
+// The backend 403 detail names the grant key verbatim ('imei_rebates'); client.ts `api()` throws an
+// Error carrying only that detail string (the status code is not preserved), so the key IS the signal.
+const isGateError = (m: string) => /imei_rebates/i.test(m) || /restricted/i.test(m)
+
+function LockNote() {
+  return (
+    <div className="card" style={{ padding: 18, marginTop: 14, fontSize: 13, lineHeight: 1.7,
+      background: 'var(--surface2, #f8fafc)', border: '1px solid var(--border)' }}>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>🔒 This report is restricted</div>
+      Ask an admin to grant <b>“IMEI rebate reconciliation”</b> on your role
+      (Roles &amp; Access → your role → sensitive data grants). This report has <b>no default access</b>:
+      the per-IMEI activation and rebate detail is restricted for everyone until it is explicitly granted.
+      <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>
+        Nothing is wrong with your login — administrators and company-wide roles already have it.
+      </div>
+    </div>
+  )
+}
+
 export default function ImeiRebatesPage() {
+  const { permissions } = useAuth()
+  // Frontend MIRROR of backend `_can_view_imei_rebates`. Optimistic while permissions load; the 403
+  // below is the authoritative lock.
+  const clientGranted = hasDataGrant(permissions, 'imei_rebates')
+  const [locked, setLocked] = useState(false)
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter(thisMonth()))
   const [lag, setLag] = useState(6)
   const [basis, setBasis] = useState('both')
@@ -59,6 +93,7 @@ export default function ImeiRebatesPage() {
   const [showOrphans, setShowOrphans] = useState(false)
 
   const load = useCallback(async () => {
+    if (!clientGranted) { setLocked(true); setBusy(false); return }   // no grant → don't fire a doomed request
     setBusy(true); setMsg('')
     try {
       const qs = new URLSearchParams({ period: filt.period || thisMonth(), lag_months: String(lag), basis })
@@ -71,9 +106,13 @@ export default function ImeiRebatesPage() {
       if (financed.length) qs.set('financed', financed.join(','))
       if (feed.length) qs.set('source', feed.join(','))
       setD(await api(`/api/v1/commcalc/imei-rebates?${qs.toString()}${orgParam()}`))
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    } catch (e: any) {
+      const m = String(e?.message || e)
+      // A permission refusal is not an error to shout about — show the same lock note, no crash.
+      if (isGateError(m)) { setLocked(true); setD(null) } else setMsg('❌ ' + m)
+    }
     setBusy(false)
-  }, [filt, lag, basis, status, actType, platform, financed, feed])
+  }, [filt, lag, basis, status, actType, platform, financed, feed, clientGranted])
 
   useEffect(() => { load() }, [])            // eslint-disable-line react-hooks/exhaustive-deps
   const didMount = useRef(false)
@@ -144,16 +183,26 @@ export default function ImeiRebatesPage() {
   const t = d?.tiles
   const quick = (id: string) => setStatus(status.length === 1 && status[0] === id ? [] : [id])
 
+  const header = (
+    <div style={{ marginBottom: 14 }}>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📱 IMEI Rebate Reconciliation</h1>
+      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        Every IMEI activated in the month and the rebate recorded against it — and, just as importantly,
+        the ones with <b>no rebate</b>. The source is whichever activation + rebate feed this tenant
+        actually has; nothing here changes what anyone is paid.
+      </p>
+    </div>
+  )
+
+  // NO DEFAULT ACCESS: without the grant the report is not rendered at all — not the filters, not the
+  // tiles, not the counts, not the IMEIs. (The backend refuses independently.)
+  if (locked) {
+    return <div style={{ maxWidth: 1280 }}>{header}<LockNote /></div>
+  }
+
   return (
     <div style={{ maxWidth: 1280 }}>
-      <div style={{ marginBottom: 14 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📱 IMEI Rebate Reconciliation</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Every IMEI activated in the month and the rebate recorded against it — and, just as importantly,
-          the ones with <b>no rebate</b>. The source is whichever activation + rebate feed this tenant
-          actually has; nothing here changes what anyone is paid.
-        </p>
-      </div>
+      {header}
 
       {/* RULE FIVE core set + the appended module facets. */}
       <StandardFilterBar

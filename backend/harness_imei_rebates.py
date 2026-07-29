@@ -21,6 +21,13 @@ in-memory FAKE Supabase client (no network, no DB). What this proves that the pu
   • the `carrier_residual` money gate nulls every $ in rows AND tiles AND orphans
   • a missing table (mig 083 not run) degrades to a note, never a 500
 
+  THE PAGE GATE (owner directive 2026-07-29 — NO DEFAULT ACCESS)
+  • super-admins / scope-'all' / role-'admin' open the report; a plain caller gets 403
+  • the grant passes under EITHER carrier: perms.data.imei_rebates or perms.modules['imei_rebates']
+  • an unresolvable caller (no token) and a caller-resolution ERROR both DEGRADE CLOSED (403)
+  • the 403 names the permission, and is raised BEFORE any DB read (zero queries on a denial)
+  • the page gate and the money gate are INDEPENDENT: a granted non-admin still gets $ nulled
+
 Run: `python3 harness_imei_rebates.py` from the backend dir.
 """
 import os, sys
@@ -159,6 +166,50 @@ def install(store):
     R.sb = lambda: FakeClient(store)      # noqa: E731
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# FAKE CALLER RESOLUTION. The REAL gate (`R._can_view_imei_rebates` -> the pure
+# `imei_rebate_report.imei_rebates_allowed`) runs untouched; only core's token->caller resolution is
+# stubbed, so the token string IS the caller key. Both gates (page + carrier_residual) resolve through
+# this same pair, which is exactly how they behave in production.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+CALLERS = {}
+
+
+def _fake_uid(auth):
+    return (auth.strip() or None) if isinstance(auth, str) else None
+
+
+def _fake_caller(client, uid, active_org=None):
+    c = CALLERS.get(uid)
+    if c == "BOOM":                                     # caller resolution blows up -> must degrade CLOSED
+        raise RuntimeError("roles table unavailable")
+    return c
+
+
+import app.modules.core.router as CR                                                   # noqa: E402
+CR._uid_from_token, CR._resolve_caller = _fake_uid, _fake_caller
+
+SUPER = "t-super"
+ADMIN = "t-admin"
+SCOPE_ALL = "t-scope-all"
+PLAIN = "t-plain"
+GRANT_DATA = "t-grant-data"
+GRANT_MODULE = "t-grant-module"
+BROKEN = "t-broken"
+CALLERS.update({
+    SUPER:        {"super_admin": True, "role": "owner", "perms": {"scope": "store"}},
+    ADMIN:        {"super_admin": False, "role": "admin", "perms": {"scope": "store"}},
+    SCOPE_ALL:    {"super_admin": False, "role": "market_manager", "perms": {"scope": "all"}},
+    PLAIN:        {"super_admin": False, "role": "rep",
+                   "perms": {"scope": "store", "modules": {"commissions": True}, "data": {}}},
+    GRANT_DATA:   {"super_admin": False, "role": "rep",
+                   "perms": {"scope": "store", "modules": {}, "data": {"imei_rebates": True}}},
+    GRANT_MODULE: {"super_admin": False, "role": "rep",
+                   "perms": {"scope": "store", "modules": ["imei_rebates"], "data": {}}},
+    BROKEN:       "BOOM",
+})
+
+
 HOUSE = "00000000-0000-0000-0000-000000000001"
 TEN = "00000000-0000-0000-0000-0000000000aa"
 I1, I2, I3, I4 = "355163568356971", "355163568356972", "355163568356973", "355163568356974"
@@ -204,7 +255,20 @@ def mi_row(**kw):
 
 
 def call(org_id, **kw):
+    """Default to an ADMIN token: every behavioural proof below is about the REPORT, and the report is
+    now DEFAULT-CLOSED (section 8 proves the gate itself)."""
+    kw.setdefault("authorization", ADMIN)
     return R.imei_rebate_report_endpoint(period=kw.pop("period", "June 2026"), org_id=org_id, **kw)
+
+
+def denied(org_id, token, **kw):
+    """Call and report (status, detail) instead of raising — HTTPException is the 403 contract."""
+    from fastapi import HTTPException
+    try:
+        call(org_id, authorization=token, **kw)
+        return None, None
+    except HTTPException as e:
+        return e.status_code, str(e.detail)
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -411,7 +475,9 @@ STORE_GATED = {**STORE_EP,
                "commcalc.commission_org_config": [{"org_id": HOUSE, "pay_disabled": False,
                                                    "residual_visibility": "permissioned"}]}
 install(STORE_GATED)
-d = call(HOUSE, authorization="")          # no token -> cannot resolve a caller -> denied
+# GRANT_DATA holds 'imei_rebates' but NOT 'carrier_residual' -> passes the PAGE gate, fails the MONEY
+# gate. This is the two-independent-gates contract: opening the report grants no dollars.
+d = call(HOUSE, authorization=GRANT_DATA)
 check("a caller without carrier_residual gets money_gated", d["money_gated"] is True)
 check("every row $ is NULLED (never leaks through an export)",
       all(r["rebate"] is None and r["total_received"] is None and r["spiff_by_month"] is None
@@ -457,9 +523,89 @@ check("the two spellings return the same money", approx(a["tiles"]["rebate_total
       and approx(b["tiles"]["rebate_total"], a["tiles"]["rebate_total"]))
 check("the period echoes back canonically", a["period"] == b["period"] == "June 2026")
 install(STORE_SPELL)
-blank = R.imei_rebate_report_endpoint(org_id=TEN)
+blank = R.imei_rebate_report_endpoint(org_id=TEN, authorization=ADMIN)
 check("a blank period defaults to the current month rather than erroring",
       blank["ready"] is True and blank["period"] and len(blank["window"]) == 7)
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n── 8. the PAGE gate: NO DEFAULT ACCESS (owner directive 2026-07-29) ─────────────────")
+from app.modules.commcalc import imei_rebate_report as IRR
+
+# 8a. the PURE function, unit-level (no DB, no HTTP, no FastAPI) — the same shape as
+#     device_history.device_commission_allowed.
+check("pure gate: super_admin allowed", IRR.imei_rebates_allowed(CALLERS[SUPER]) is True)
+check("pure gate: role 'admin' allowed", IRR.imei_rebates_allowed(CALLERS[ADMIN]) is True)
+check("pure gate: perms.scope 'all' allowed", IRR.imei_rebates_allowed(CALLERS[SCOPE_ALL]) is True)
+check("pure gate: perms.data.imei_rebates allowed", IRR.imei_rebates_allowed(CALLERS[GRANT_DATA]) is True)
+check("pure gate: 'imei_rebates' in perms.modules allowed",
+      IRR.imei_rebates_allowed(CALLERS[GRANT_MODULE]) is True)
+check("pure gate: a plain commissions user is DENIED (default-closed)",
+      IRR.imei_rebates_allowed(CALLERS[PLAIN]) is False)
+check("pure gate: caller=None is DENIED", IRR.imei_rebates_allowed(None) is False)
+check("pure gate: an empty perms dict is DENIED (no implicit access)",
+      IRR.imei_rebates_allowed({"perms": {}}) is False)
+check("pure gate: a DIFFERENT grant does not open this report",
+      IRR.imei_rebates_allowed({"perms": {"data": {"device_commission": True, "carrier_residual": True}}}) is False)
+check("pure gate: perms.data.imei_rebates FALSE is denied (an explicit off stays off)",
+      IRR.imei_rebates_allowed({"perms": {"data": {"imei_rebates": False}}}) is False)
+check("the grant key the frontend must mirror is exactly 'imei_rebates'", IRR.GRANT_KEY == "imei_rebates")
+
+# 8b. through the REAL endpoint.
+install(STORE_MA)
+d = call(TEN, authorization=ADMIN)
+_admin_imeis = [r["imei"] for r in d["rows"]]
+check("endpoint: an admin opens the report normally", d["ready"] is True and d["tiles"]["activations"] == 3)
+install(STORE_MA)
+d = call(TEN, authorization=SUPER)
+check("endpoint: a super-admin opens the report", d["ready"] is True)
+install(STORE_MA)
+d = call(TEN, authorization=SCOPE_ALL)
+check("endpoint: a company-wide ('all') role opens the report", d["ready"] is True)
+install(STORE_MA)
+d = call(TEN, authorization=GRANT_DATA)
+check("endpoint: the perms.data grant opens the report", d["ready"] is True and d["tiles"]["activations"] == 3)
+check("a granted non-admin sees the SAME rows an admin sees (the grant is not a lesser view)",
+      [r["imei"] for r in d["rows"]] == _admin_imeis)
+install(STORE_MA)
+d = call(TEN, authorization=GRANT_MODULE)
+check("endpoint: the perms.modules grant opens the report", d["ready"] is True)
+
+install(STORE_MA)
+st, detail = denied(TEN, PLAIN)
+check("endpoint: a plain commissions user is 403'd", st == 403)
+check("the 403 names the permission key by hand ('imei_rebates')", "'imei_rebates'" in (detail or ""))
+check("the 403 also names the human grant label for the roles UI",
+      "IMEI rebate reconciliation" in (detail or ""))
+check("NOT A SINGLE ROW IS READ on a denial (the gate is the first thing after require_org)",
+      QUERY_LOG == [])
+
+install(STORE_MA)
+st, _ = denied(TEN, "")
+check("endpoint: no token at all -> 403 (unresolvable caller degrades CLOSED)", st == 403)
+install(STORE_MA)
+st, _ = denied(TEN, BROKEN)
+check("endpoint: a caller-resolution ERROR -> 403 (degrades CLOSED, never open)", st == 403)
+check("a resolution error reads nothing either", QUERY_LOG == [])
+
+# 8c. the two gates are INDEPENDENT and the counts/IMEIs are gated too (not just the $).
+install(STORE_GATED)
+d = call(HOUSE, authorization=GRANT_DATA)
+check("granted non-admin on a 'permissioned' tenant: report opens but every $ is still nulled",
+      d["ready"] is True and d["money_gated"] is True
+      and all(r["rebate"] is None for r in d["rows"]))
+install(STORE_GATED)
+st, _ = denied(HOUSE, PLAIN)
+check("ungranted caller gets NO counts/statuses/IMEIs either (whole report gated, not just money)",
+      st == 403)
+
+# 8d. the gate did not change the route surface.
+_routes8 = [r for r in R.router.routes if getattr(r, "path", "") == "/commcalc/imei-rebates"]
+check("still exactly ONE GET route for the report (no extra endpoint added)",
+      len(_routes8) == 1 and set(getattr(_routes8[0], "methods", [])) == {"GET"})
+check("`authorization` is a Header param on the handler (the gate's input)",
+      "authorization" in inspect.signature(R.imei_rebate_report_endpoint).parameters)
 
 
 print(f"\n{'='*90}\n  {_pass} passed, {_fail} failed\n{'='*90}")

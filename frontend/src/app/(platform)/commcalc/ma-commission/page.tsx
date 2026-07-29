@@ -5,6 +5,8 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import { type EntityOption } from '@/lib/entity-picker-core'
+import { useAuth } from '@/lib/auth-context'
+import { hasDataGrant } from '@/lib/rbac'
 
 // Total Processor (VidaPay / Total Access) commission report — the MA Commission Details + MA Daily
 // Tx roll-up (mig 083). Sign-flipped: positive = money the dealer RECEIVES. Org-scoped: shows the
@@ -21,6 +23,10 @@ function currentPeriod() {
 }
 
 export default function MaCommissionPage() {
+  // IMEI Rebate Reconciliation is DEFAULT-CLOSED behind the 'imei_rebates' grant (owner directive
+  // 2026-07-29) — only link it for callers who can open it.
+  const { permissions } = useAuth()
+  const canImeiRebates = hasDataGrant(permissions, 'imei_rebates')
   const [period, setPeriod] = useState(currentPeriod())
   const [d, setD] = useState<any>(null)
   const [busy, setBusy] = useState(false)
@@ -98,9 +104,11 @@ export default function MaCommissionPage() {
           spiffs from <b>MA Commission Details</b>, plus airtime margin from <b>MA Daily Tx</b>. Positive = money you
           receive. Upload the reports on <a href="/commcalc/upload" style={{ color: 'var(--accent,#2563eb)' }}>Data Imports</a> (no
           period needed) or auto-import them with a mailbox rule.
-          {' '}Need it <b>per handset</b>? <a href="/commcalc/imei-rebates" style={{ color: 'var(--accent,#2563eb)' }}>IMEI
-          Rebate Reconciliation</a> breaks the same data down to one row per activated IMEI — and shows the
-          activations with <i>no</i> rebate against them.
+          {canImeiRebates && <>
+            {' '}Need it <b>per handset</b>? <a href="/commcalc/imei-rebates" style={{ color: 'var(--accent,#2563eb)' }}>IMEI
+            Rebate Reconciliation</a> breaks the same data down to one row per activated IMEI — and shows the
+            activations with <i>no</i> rebate against them.
+          </>}
         </p>
       </div>
 

@@ -667,3 +667,37 @@ def window_note(window, lag_months):
     return (f"Rebate evidence is collected across {len(window)} period(s): {window[0]} → {window[-1]} "
             f"(the activation month plus {lag_months} month(s) of lag). A rebate that lands later than "
             "that window will read as a gap here — widen the lag to see it.")
+
+
+# ── the PAGE gate (owner directive 2026-07-29: this report has NO default access) ────────────────
+GRANT_KEY = "imei_rebates"
+
+
+def imei_rebates_allowed(caller):
+    """Gate the WHOLE REPORT. DEFAULT-CLOSED, grantable via the DATA_GRANTS 'imei_rebates' key — the
+    same resolution SHAPE as `device_history.device_commission_allowed`, applied one level up: there it
+    hides a money section inside an otherwise-open widget; here it decides whether the report exists at
+    all for this caller (owner directive 2026-07-29 — counts, statuses and IMEIs are themselves
+    restricted, not just the dollars). Mirrors the frontend `hasDataGrant(perms, 'imei_rebates')`.
+
+    PURE over an already-resolved caller dict (no DB, no HTTP) so it is unit-provable:
+      super_admin / perms.scope == 'all' / role == 'admin'          -> allow
+      'imei_rebates' in perms.modules, or perms.data.imei_rebates truthy -> allow
+      else (including caller=None, i.e. an unresolvable token)      -> DENY
+
+    NOT the money gate. A granted non-admin still passes through the INDEPENDENT
+    `_can_view_carrier_residual` check, which nulls every $ when the tenant runs residual visibility
+    'permissioned'. Two gates, two questions: "may you open this report" and "may you see its dollars".
+    """
+    if not caller:
+        return False
+    if caller.get("super_admin"):
+        return True
+    perms = caller.get("perms") or {}
+    if (perms.get("scope") == "all") or ((caller.get("role") or "").lower() == "admin"):
+        return True
+    if GRANT_KEY in (perms.get("modules") or []):
+        return True
+    if bool((perms.get("data") or {}).get(GRANT_KEY)):
+        return True
+    return False
