@@ -1002,6 +1002,309 @@ def onboarding_encrypt_existing(authorization: str = Header(default="")):
     return {"ok": True, "profiles_scanned": scanned, "values_encrypted": enc_count}
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# EMPLOYEE DATABASE report (owner directive 2026-07-29) — one exportable row per employee across
+# storeops.employees (operational roster) + HR onboarding intake (employee_onboarding_profile.
+# intake_data, Fernet-encrypted at rest) + the Documents board (workflow/onboarding state).
+# Selection (which employees / which columns) is pick-don't-type on the frontend (RULE THREE) and
+# drives BOTH the on-screen table AND every export identically (RULE FOUR).
+#
+# MASKING IS SERVER-SIDE, NEVER CLIENT-ONLY: SSN + direct-deposit ROUTING/ACCOUNT numbers are
+# ALWAYS rendered masked (last 4 real, everything before it masked) in this endpoint's response
+# UNLESS the caller passes reveal=true AND passes the STRICT admin/super-admin gate
+# (`_require_admin_reveal`, below) — narrower than this file's existing `_require_hr_or_admin` (the
+# base HR/admin page gate), per the owner's literal "only show the full number to the admin". A
+# non-admin/non-reveal caller's response payload never contains a full value in the first place —
+# reveal=true from a caller who fails the strict gate is REJECTED (403) BEFORE any employee row is
+# read.
+#
+# WHAT'S ACTUALLY COLLECTED TODAY (investigated, not assumed — see docs/handoffs/people.md for the
+# full write-up):
+#   • name / phone / address / date_of_birth — real, plaintext columns on storeops.employees
+#     (propagated from the onboarding intake form, migration 077). Shown as-is, never masked (not
+#     classified sensitive anywhere else in this app either).
+#   • email — storeops.employees.email (login/notification address). `personal_email` (a separate,
+#     UNPROPAGATED intake field, migration 079) is surfaced alongside when the employee gave one.
+#   • direct deposit (bank name / routing / account / type) — REAL, encrypted-at-rest values inside
+#     employee_onboarding_profile.intake_data (migration 079 seeds dd_bank_name/dd_routing/
+#     dd_account/dd_account_type as `sensitive` intake fields). Discovered dynamically PER ORG from
+#     the tenant's actual onboarding_intake_field config (section='direct_deposit') rather than a
+#     hard-coded key list (RULE TWO) — a tenant that renames/adds a direct-deposit field is picked
+#     up automatically. Routing + account are masked by default (`_dd_field_is_masked`); bank name
+#     and account type (Checking/Savings) are not — see that helper's docstring; OWNER-OVERRIDABLE,
+#     flagged in the handoff.
+#   • SSN — NOT COLLECTED ANYWHERE in this product today. Confirmed: migration 079's own comment
+#     states "full SSN is intentionally NOT captured" (kept only in the uploaded W-4/I-9 PDF files,
+#     never a structured value); the only SSN-shaped value in the schema is
+#     employee_onboarding_profile.verify_ssn4 — a last-4-only IDENTITY-GATE value for the
+#     credential-less onboarding portal link, not a stored SSN, and not tied to a specific field
+#     concept that could double as "the employee's SSN". Per the work order ("if SSN isn't
+#     collected... build the table over what EXISTS... with the missing field designed but clearly
+#     marked absent, rather than inventing storage"), the SSN column is present in the field
+#     catalog/picker and its value is ALWAYS the literal string "(not collected)" — no new storage
+#     was invented here. `_mask_ssn` below is written + unit-proven so the masking format is ready
+#     the day real SSN capture is approved and migrated (this agent's band, 400-499, Fernet-
+#     encrypted exactly like intake_data) — that is an explicit owner call, not built in this pass.
+#   • Document status — reuses `onboarding_doc_status()` (the SAME Documents-board computation, same
+#     scope: ACTIVE roster only) rather than re-deriving it. An inactive employee (only reachable via
+#     include_inactive=true) shows an honest "(inactive — not on Documents board)" rather than a
+#     fabricated status.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_DD_MASK_HINT = re.compile(r"(account|routing)", re.I)
+_DD_UNMASK_HINT = re.compile(r"type", re.I)  # e.g. dd_account_type (Checking/Savings) — nothing to mask
+
+
+def _mask_last4(raw) -> str:
+    """Show only the last 4 characters of `raw`; everything before it becomes 'x'. Empty/None -> ''.
+    A value of 4 chars or fewer is masked in full (nothing safe to reveal as 'the rest')."""
+    s = ("" if raw is None else str(raw)).strip()
+    if not s:
+        return ""
+    if len(s) <= 4:
+        return "x" * len(s)
+    return ("x" * (len(s) - 4)) + s[-4:]
+
+
+def _mask_ssn(raw) -> str:
+    """Standard SSN grouping xxx-xx-1234 (last 4 real) for a 9-digit value; anything else falls back
+    to the generic last-4 mask. Not wired to any real data today (see module docstring above) — kept
+    ready + unit-proven for when SSN capture is actually built."""
+    digits = re.sub(r"\D", "", raw or "")
+    if len(digits) == 9:
+        return f"xxx-xx-{digits[-4:]}"
+    return _mask_last4(raw)
+
+
+def _dd_field_is_masked(key: str) -> bool:
+    """Which direct-deposit intake fields get last-4 masking by default: account + routing numbers
+    (the actual money-movement identifiers) — NOT the bank name (not itself sensitive) and NOT a
+    '_type' select field (e.g. Checking/Savings has no meaningful 'last 4'). Matched by KEY NAME so a
+    tenant's custom direct-deposit field is covered by the same rule without a hard-coded key list
+    (RULE TWO). OWNER-OVERRIDABLE: routing numbers are semi-public bank identifiers in most fintech
+    UIs (not secret on their own); masked here anyway, conservatively, because paired with the
+    account number they're what actually moves money — flagged in docs/handoffs/people.md."""
+    k = (key or "").lower()
+    if _DD_UNMASK_HINT.search(k):
+        return False
+    return bool(_DD_MASK_HINT.search(k))
+
+
+def _require_admin_reveal(authorization: str):
+    """STRICTER than `_require_hr_or_admin` above: admin / super_admin ONLY — no generic 'hr'-titled
+    role, no custom permissions.hr grant. Used only for the Employee Database report's 'show full
+    SSN / direct-deposit numbers' reveal (owner directive 2026-07-29: 'only show the full number to
+    the admin'). Same resolution mechanics + same open-app parity fallback as `_require_hr_or_admin`
+    (this file, above) so both gates log/behave identically apart from the stricter `ok` predicate."""
+    from app.modules.core.router import _uid_from_token
+    uid = _uid_from_token(authorization)
+    if not uid:
+        if _rbac_enforced():
+            raise HTTPException(401, "Sign in as an admin to reveal full sensitive values.")
+        return (ORG_ID, "(open-app)", "open")
+    rows = (get_supabase().schema("storeops").table("app_users")
+            .select("org_id,email,role,super_admin").eq("auth_id", uid).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(403, "Your login isn't recognized.")
+    u = rows[0]
+    role = (u.get("role") or "").lower()
+    if not (bool(u.get("super_admin")) or role == "admin"):
+        raise HTTPException(403, "Only admins/super-admins can reveal full sensitive values (SSN, direct-deposit numbers).")
+    return (u.get("org_id") or ORG_ID, u.get("email"), role)
+
+
+# Always-present columns (identity/contact/address/personal/onboarding) — never masked, gated only
+# by the page-level HR/admin gate. `section` groups the frontend's column picker.
+_EMPDB_BASE_FIELDS = [
+    {"key": "employee_id",     "label": "Employee ID",             "section": "identity"},
+    {"key": "name",            "label": "Name",                    "section": "identity"},
+    {"key": "role",            "label": "Role / Title",            "section": "identity"},
+    {"key": "home_store",      "label": "Home Store",              "section": "identity"},
+    {"key": "is_active",       "label": "Active",                  "section": "identity"},
+    {"key": "hire_date",       "label": "Hire Date",                "section": "identity"},
+    {"key": "phone",           "label": "Phone",                    "section": "contact"},
+    {"key": "email",           "label": "Email",                    "section": "contact"},
+    {"key": "personal_email",  "label": "Personal Email (intake)",  "section": "contact"},
+    {"key": "address_line1",   "label": "Address line 1",            "section": "address"},
+    {"key": "address_line2",   "label": "Address line 2",            "section": "address"},
+    {"key": "city",            "label": "City",                     "section": "address"},
+    {"key": "state",           "label": "State",                     "section": "address"},
+    {"key": "zip",             "label": "ZIP",                        "section": "address"},
+    {"key": "date_of_birth",   "label": "Date of Birth",             "section": "personal"},
+    {"key": "ssn",             "label": "SSN", "section": "sensitive", "sensitive": True, "masked": True,
+     "designed_absent": True, "note": "Not collected anywhere in this product today — see backend docstring."},
+    {"key": "doc_status",      "label": "Document Status",           "section": "onboarding"},
+    {"key": "workflow_status", "label": "Onboarding Stage",          "section": "onboarding"},
+    {"key": "docs_sent_at",    "label": "Packet Sent",               "section": "onboarding"},
+]
+
+
+def _empdb_dd_fields(org_id):
+    """Direct-deposit columns discovered from the tenant's OWN onboarding_intake_field config
+    (section='direct_deposit'), never a hard-coded key list (RULE TWO). Empty list if the tenant has
+    no direct-deposit fields configured (never fabricated)."""
+    out = []
+    for f in _public_intake_fields(org_id):
+        if (f.get("section") or "") != "direct_deposit":
+            continue
+        out.append({"key": f["key"], "label": f["label"], "section": "direct_deposit",
+                     "sensitive": True, "masked": _dd_field_is_masked(f["key"])})
+    return out
+
+
+@router.get("/employee-database/fields")
+def hr_employee_database_fields(authorization: str = Header(default="")):
+    """Column CATALOG for the Employee Database report's field/column picker — metadata only, never
+    a PII value. Gated identically to the report itself (HR/admin)."""
+    org_id, _email, _role = _require_hr_or_admin(authorization)
+    return {"fields": _EMPDB_BASE_FIELDS + _empdb_dd_fields(org_id)}
+
+
+@router.get("/employee-database")
+def hr_employee_database(employee_ids: str = "", fields: str = "", include_inactive: bool = True,
+                          reveal: bool = False, authorization: str = Header(default="")):
+    """The Employee Database report (owner directive 2026-07-29): one row per employee, every PII
+    field this app actually collects, plus document status from the Documents board. `employee_ids`
+    / `fields` (both comma-separated) are the server-side honoring of the frontend's pick-don't-type
+    employee multi-select + column picker — omit either to get the full roster / every column.
+
+    GATE FIRST, before any employee row is read (contract proof requirement): reveal=true requires
+    the STRICT admin/super-admin gate (`_require_admin_reveal` — 403 before any data read if the
+    caller doesn't qualify); reveal=false (the default) uses the page's own HR/admin gate
+    (`_require_hr_or_admin`). Every reveal=true call that passes the gate is written to the SAME
+    onboarding_event audit trail the existing sensitive-reveal endpoint uses (`_log_event`).
+
+    org_id is resolved from the CALLER'S OWN membership, not a query param — the same stricter
+    posture already used by this file's other maximum-sensitivity endpoints (the sensitive-reveal
+    endpoint above, /security-status, /onboarding/encrypt-existing) given the class of data here."""
+    if reveal:
+        org_id, email, role = _require_admin_reveal(authorization)
+    else:
+        org_id, email, role = _require_hr_or_admin(authorization)
+
+    so = _so()
+    ids = [i.strip() for i in employee_ids.split(",") if i.strip()]
+    field_keys = [f.strip() for f in fields.split(",") if f.strip()]
+    want = (lambda k: (not field_keys) or (k in field_keys))
+
+    q = so.table("employees").select("*").eq("org_id", org_id)
+    if not include_inactive:
+        q = q.eq("is_active", True)
+    if ids:
+        q = q.in_("employee_id", ids)
+    try:
+        emps = q.order("name").execute().data or []
+    except Exception:
+        # Degrade: a not-yet-migrated tenant may be missing a newer column (hire_date/date_of_birth,
+        # migration 077) from PostgREST's schema cache — fall back to the always-safe core columns
+        # rather than 500ing the whole report.
+        q2 = so.table("employees").select("employee_id,name,home_store,role,is_active,email,phone").eq("org_id", org_id)
+        if not include_inactive:
+            q2 = q2.eq("is_active", True)
+        if ids:
+            q2 = q2.in_("employee_id", ids)
+        emps = q2.order("name").execute().data or []
+
+    emp_ids_in_scope = [e.get("employee_id") for e in emps if e.get("employee_id")]
+
+    profs = {}
+    if emp_ids_in_scope:
+        try:
+            prows = (so.table("employee_onboarding_profile")
+                     .select("employee_id,intake_data,workflow_status,docs_sent_at,invited_at")
+                     .eq("org_id", org_id).in_("employee_id", emp_ids_in_scope).execute().data) or []
+            profs = {p.get("employee_id"): p for p in prows}
+        except Exception:
+            profs = {}
+
+    # Document status — reuse the SAME Documents-board computation (active-roster scope, matching
+    # its existing product semantics exactly; never re-derived/duplicated).
+    doc_by_id = {}
+    try:
+        ds = onboarding_doc_status(org_id=org_id)
+        if ds.get("ready"):
+            doc_by_id = {r.get("employee_id"): r for r in ds.get("employees", [])}
+    except Exception:
+        doc_by_id = {}
+
+    dd_defs = _empdb_dd_fields(org_id)
+    out_rows = []
+    for e in emps:
+        eid = e.get("employee_id")
+        row: dict = {"employee_id": eid}
+        if want("name"):
+            row["name"] = e.get("legal_name") or e.get("name")
+        if want("role"):
+            row["role"] = e.get("role")
+        if want("home_store"):
+            row["home_store"] = e.get("home_store")
+        if want("is_active"):
+            row["is_active"] = e.get("is_active") is not False
+        if want("hire_date"):
+            row["hire_date"] = e.get("hire_date")
+        if want("phone"):
+            row["phone"] = e.get("phone")
+        if want("email"):
+            row["email"] = e.get("email")
+        if want("address_line1"):
+            row["address_line1"] = e.get("address_line1")
+        if want("address_line2"):
+            row["address_line2"] = e.get("address_line2")
+        if want("city"):
+            row["city"] = e.get("city")
+        if want("state"):
+            row["state"] = e.get("state")
+        if want("zip"):
+            row["zip"] = e.get("zip")
+        if want("date_of_birth"):
+            row["date_of_birth"] = e.get("date_of_birth")
+        if want("ssn"):
+            row["ssn"] = "(not collected)"
+
+        prof = profs.get(eid) or {}
+        intake = dict(prof.get("intake_data") or {})
+        if want("personal_email"):
+            row["personal_email"] = intake.get("personal_email") or ""
+
+        for d in dd_defs:
+            k = d["key"]
+            if not want(k):
+                continue
+            raw = intake.get(k)
+            if not raw or not str(raw).strip():
+                row[k] = ""
+                continue
+            val = crypto.decrypt(raw)
+            if val is None:
+                row[k] = "(unavailable — encryption key rotated/lost)"
+            elif d.get("masked") and not reveal:
+                row[k] = _mask_last4(val)
+            else:
+                row[k] = val
+
+        doc = doc_by_id.get(eid)
+        if want("doc_status"):
+            if doc:
+                row["doc_status"] = f"{doc.get('verified', 0)}/{doc.get('total', 0)} verified" + \
+                    (f" · {doc.get('pending')} pending" if doc.get("pending") else "")
+            else:
+                row["doc_status"] = "(inactive — not on Documents board)" if e.get("is_active") is False \
+                    else "(no onboarding record)"
+        if want("workflow_status"):
+            row["workflow_status"] = (doc or {}).get("workflow_status") or prof.get("workflow_status")
+        if want("docs_sent_at"):
+            row["docs_sent_at"] = (doc or {}).get("docs_sent_at") or prof.get("docs_sent_at") or prof.get("invited_at")
+
+        out_rows.append(row)
+
+    if reveal:
+        _log_event(org_id, None, "employee_database_reveal", actor=email,
+                   detail={"by": email, "role": role, "employee_ids": emp_ids_in_scope,
+                           "fields": [d["key"] for d in dd_defs if d.get("masked")]})
+
+    return {"ready": True, "reveal": bool(reveal), "encryption_enabled": crypto.is_enabled(),
+            "fields": _EMPDB_BASE_FIELDS + dd_defs, "employees": out_rows}
+
+
 @router.post("/onboarding/employee/{employee_id}/task/{task_id}")
 def onboarding_update_status(employee_id: str, task_id: str, body: dict, org_id: str = ORG_ID):
     """HR/DM/MM marks a task verified / not-applicable, or adds a note. status=verified stamps who+when."""
