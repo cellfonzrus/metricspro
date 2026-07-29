@@ -21,7 +21,7 @@ from app.core.database import get_supabase, get_supabase_admin
 from app.core.config import settings
 from app.modules.core.entitlements import (
     MODULE_CATALOG, ROLE_GATE_KEYS, load_module_catalog,
-    sync_tenant, sync_all_tenants, needs_sync,
+    sync_tenant, sync_all_tenants, needs_sync, SEED_VERSION,
 )
 # Auth-hardening (2026-07-17): PURE password-policy / OTP / 2FA-marker helpers (unit-proven) + the
 # delivery bridge that reuses notify's Resend/WhatsApp creds logic (no duplication).
@@ -36,6 +36,10 @@ from app.modules.core.membership import (
 
 router = APIRouter(prefix="/core", tags=["Core / RBAC"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+# Sentinel distinguishing "caller did not prefetch the tenants row" from "prefetched and absent"
+# (None), so the login hot path never re-queries a row bootstrap already looked up.
+_TENANT_UNFETCHED = object()
 
 
 def sb():
@@ -55,7 +59,7 @@ def _rbac_enabled_flag() -> bool:
 
 
 @router.get("/auth-config")
-async def get_auth_config():
+def get_auth_config():
     """PUBLIC: tells the frontend whether to enforce login. Default false (app open) so the
     deploy never locks anyone out; the admin flips it on once everyone is provisioned.
     Returns false if migration 015 hasn't run yet (table missing)."""
@@ -158,7 +162,7 @@ def _uid_from_token(authorization: str):
 
 
 @router.get("/my-tenants")
-async def my_tenants(authorization: str = Header(default="")):
+def my_tenants(authorization: str = Header(default="")):
     """The tenants this ONE login belongs to (drives the post-login tenant picker + the top-bar
     switcher). Resolves purely from the token's auth_id, so it works BEFORE an active tenant is
     chosen. A single-membership login returns exactly one row ⇒ the frontend shows no picker."""
@@ -168,23 +172,26 @@ async def my_tenants(authorization: str = Header(default="")):
     return _my_tenants_payload(sb(), uid)
 
 
-def _my_tenants_payload(client, uid, rows=None):
+def _my_tenants_payload(client, uid, rows=None, tmap=None, role_map=None):
     """Body of GET /my-tenants, shared with /bootstrap (ONE source — never duplicate this logic).
     `rows` lets a caller that already fetched the membership rows (bootstrap) share them; when None
-    they are fetched here exactly as the endpoint always did."""
+    they are fetched here exactly as the endpoint always did. `tmap` ({org_id: tenants row}) and
+    `role_map` ({(org_id, name): roles row}) likewise share bootstrap's batched fetches — when None
+    each is fetched here per-row exactly as before."""
     if rows is None:
         rows = _memberships(client, uid)
     if not rows:
         return {"tenants": [], "count": 0}
     # tenant display names + per-membership role display (roles are per-org)
     orgs = [r.get("org_id") for r in rows if r.get("org_id")]
-    tmap = {}
-    try:
-        tens = (client.schema("storeops").table("tenants").select("org_id,name,slug")
-                .in_("org_id", orgs).execute().data) or []
-        tmap = {t["org_id"]: t for t in tens}
-    except Exception:
-        pass
+    if tmap is None:
+        tmap = {}
+        try:
+            tens = (client.schema("storeops").table("tenants").select("org_id,name,slug")
+                    .in_("org_id", orgs).execute().data) or []
+            tmap = {t["org_id"]: t for t in tens}
+        except Exception:
+            pass
     default_org = next((r.get("org_id") for r in rows if r.get("is_default_org")), (orgs[0] if orgs else None))
     out = []
     for r in rows:
@@ -195,10 +202,15 @@ def _my_tenants_payload(client, uid, rows=None):
         rdisp = r.get("role")
         try:
             if r.get("role"):
-                rr = (client.schema("storeops").table("roles").select("display_name")
-                      .eq("org_id", o).eq("name", r["role"]).limit(1).execute().data) or []
-                if rr:
-                    rdisp = rr[0].get("display_name") or r.get("role")
+                if role_map is not None:
+                    rr0 = role_map.get((o, r["role"]))
+                    if rr0:
+                        rdisp = rr0.get("display_name") or r.get("role")
+                else:
+                    rr = (client.schema("storeops").table("roles").select("display_name")
+                          .eq("org_id", o).eq("name", r["role"]).limit(1).execute().data) or []
+                    if rr:
+                        rdisp = rr[0].get("display_name") or r.get("role")
         except Exception:
             pass
         out.append({
@@ -216,8 +228,8 @@ def _my_tenants_payload(client, uid, rows=None):
 
 
 @router.get("/me")
-async def whoami(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
-                 x_2fa_token: str = Header(default="")):
+def whoami(background_tasks: BackgroundTasks, authorization: str = Header(default=""),
+           x_active_org: str = Header(default=""), x_2fa_token: str = Header(default="")):
     """The logged-in user's profile + resolved role permissions FOR THE ACTIVE TENANT. Token-verified
     — the frontend sends the Supabase session access token as `Authorization: Bearer <token>` and, for
     a login that belongs to >1 tenant, the chosen tenant as `x-active-org`. The active tenant is
@@ -226,46 +238,79 @@ async def whoami(authorization: str = Header(default=""), x_active_org: str = He
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
-    return _me_payload(sb(), uid, x_active_org, x_2fa_token)
+    return _me_payload(sb(), uid, x_active_org, x_2fa_token, bg=background_tasks)
 
 
-def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None):
+def _post_login_writes(user_row_id, org_id, seed_stale):
+    """Fire-and-forget per-login writes: stamp last_login, then (when the tenant's stamped
+    seed_version is behind the code's SEED_VERSION) run the self-provision sync. Runs as a
+    BackgroundTask AFTER the response on the /me + /bootstrap hot path — neither write changes
+    anything the response itself returns (sync_tenant touches tenant_modules + seeded default
+    content, never the membership/roles/tenants fields already serialized). Order (stamp first,
+    sync second) and best-effort semantics match the old inline code exactly; sync_tenant stays
+    idempotent and stamps seed_version only on success, so a failed seed retries next login."""
+    client = sb()
+    try:
+        client.schema("storeops").table("app_users").update(
+            {"last_login": datetime.now(timezone.utc).isoformat()}).eq("id", user_row_id).execute()
+    except Exception:
+        pass
+    if seed_stale:
+        try:
+            sync_tenant(client, org_id)
+        except Exception:
+            pass
+
+
+def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
+                tenant_row=_TENANT_UNFETCHED, role_map=None, bg=None):
     """Body of GET /me, shared with /bootstrap (ONE source — never duplicate this logic). `rows`
-    lets a caller that already fetched the membership rows (bootstrap) share them; semantics are
-    otherwise byte-identical to calling /me with the same headers."""
+    lets a caller that already fetched the membership rows (bootstrap) share them; `tenant_row`
+    (the acting org's storeops.tenants row — pass None for fetched-and-absent) and `role_map`
+    ({(org_id, name): roles row}) likewise share bootstrap's batched fetches. `bg`
+    (BackgroundTasks) defers the fire-and-forget post-login writes to after the response; when
+    None they run inline as before. Semantics are otherwise byte-identical to calling /me with
+    the same headers."""
     if rows is None:
         rows = _memberships(client, uid)
     u = _pick_membership(rows, (x_active_org or "").strip() or None)
     if not u:
         return {"provisioned": False, "user": None, "permissions": {}}
+    org_id = u.get("org_id") or ORG_ID
+    # ONE tenants-row fetch serves the tenant info, seed-version check and password/2FA policies
+    # below (this same row was previously fetched up to 4x per request).
+    t = tenant_row
+    if t is _TENANT_UNFETCHED:
+        try:
+            t = _tenant_row(client, org_id)
+        except Exception:
+            t = None
     perms = {}
     if u.get("role"):
-        rr = client.schema("storeops").table("roles").select("display_name,permissions") \
-            .eq("org_id", u.get("org_id") or ORG_ID).eq("name", u["role"]).limit(1).execute().data or []
-        if rr:
-            perms = rr[0].get("permissions") or {}
-            u["role_display"] = rr[0].get("display_name")
-    # best-effort last_login stamp
-    try:
-        client.schema("storeops").table("app_users").update(
-            {"last_login": datetime.now(timezone.utc).isoformat()}).eq("id", u["id"]).execute()
-    except Exception:
-        pass
-    # Self-provision on login: if this tenant is behind the current SEED_VERSION, reconcile its
-    # module entitlement + seed any newly-shipped default content. This is how a NEW feature
-    # auto-propagates to every existing tenant (no per-feature migration needed). Cheap no-op once
-    # the tenant is up to date (a single indexed lookup).
-    try:
-        org = u.get("org_id") or ORG_ID
-        if needs_sync(client, org):
-            sync_tenant(client, org)
-    except Exception:
-        pass
+        rr_row = None
+        if role_map is not None:
+            rr_row = role_map.get((org_id, u["role"]))
+        else:
+            rr = client.schema("storeops").table("roles").select("display_name,permissions") \
+                .eq("org_id", org_id).eq("name", u["role"]).limit(1).execute().data or []
+            rr_row = rr[0] if rr else None
+        if rr_row:
+            perms = rr_row.get("permissions") or {}
+            u["role_display"] = rr_row.get("display_name")
+    # Post-login writes: best-effort last_login stamp + self-provision seed sync (how a NEW
+    # feature auto-propagates to every existing tenant when SEED_VERSION bumps). Staleness is
+    # decided off the already-fetched tenants row — mirroring needs_sync: no row (or no
+    # seed_version column, pre-mig-076) => never stale.
+    seed_stale = bool(t) and ("seed_version" in t) and (
+        t["seed_version"] is None or t["seed_version"] < SEED_VERSION)
+    if bg is not None:
+        bg.add_task(_post_login_writes, u["id"], org_id, seed_stale)
+    else:
+        _post_login_writes(u["id"], org_id, seed_stale)
     # Tenant pay-period + onboarding-setup status (mig 085) — powers the "finish setup" banner
     # (banner only, nothing blocked) and lets the schedule/payroll derive the tenant's work-week.
     tenant = None
     try:
-        t = _tenant_row(client, u.get("org_id") or ORG_ID)
         if t:
             tenant = {"org_id": t.get("org_id"), "name": t.get("name"),
                       "setup_complete": bool(t.get("setup_complete")),
@@ -277,16 +322,15 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None):
     carriers = []
     try:
         cr = (client.schema("commcalc").table("carrier").select("name,code,is_default")
-              .eq("org_id", u.get("org_id") or ORG_ID).execute().data) or []
+              .eq("org_id", org_id).execute().data) or []
         carriers = [{"name": c.get("name"), "code": c.get("code"), "is_default": c.get("is_default")}
                     for c in cr if c.get("name")]
     except Exception:
         pass
     # Auth-hardening: the tenant password policy (client-side strength hints) + the 2FA gate for the
     # active tenant/user. Best-effort — un-run migs degrade to code defaults / 2FA off (no lockout).
-    org_id = u.get("org_id") or ORG_ID
-    pw_policy = _load_password_policy(client, org_id)
-    tw_policy = _load_twofa_policy(client, org_id)
+    pw_policy = _load_password_policy(client, org_id, t=t)
+    tw_policy = _load_twofa_policy(client, org_id, t=t)
     twofa = {"required": _twofa_required_for(tw_policy, u.get("role"), u.get("twofa_enabled")),
              "verified": bool(_sec.twofa_token_valid_for(x_2fa_token, uid, org_id, _sec.now_ts())),
              "mode": tw_policy["mode"], "user_channels": u.get("twofa_channels") or ["email"]}
@@ -297,8 +341,8 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None):
 
 
 @router.get("/bootstrap")
-async def bootstrap(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
-                    x_2fa_token: str = Header(default="")):
+def bootstrap(background_tasks: BackgroundTasks, authorization: str = Header(default=""),
+              x_active_org: str = Header(default=""), x_2fa_token: str = Header(default="")):
     """ONE post-sign-in call that replaces the frontend's sequential login waterfall (auth-config →
     my-tenants → pending-connections → me = 4 blocking round trips before first paint). Returns
     {rbac_enabled, tenants: <the /my-tenants payload>, pending: <the /pending-connections payload>,
@@ -317,21 +361,48 @@ async def bootstrap(authorization: str = Header(default=""), x_active_org: str =
         raise HTTPException(401, "not authenticated")
     client = sb()
     rows = _memberships(client, uid)   # fetched ONCE; shared into both payload helpers below
-    tenants = _my_tenants_payload(client, uid, rows=rows)
-    pending = _pending_connections_payload(client, uid)
-    requested = (x_active_org or "").strip()
     member_orgs = [r.get("org_id") for r in rows if r.get("org_id")]
+    # Batched fetches shared into every payload helper (perf: the old path fetched the tenants row
+    # up to 4x and the roles row twice per login). Superset .in_ queries keyed exactly afterwards;
+    # on ANY failure the map stays None and each helper falls back to fetching for itself.
+    tmap = None
+    try:
+        tens = (client.schema("storeops").table("tenants").select("*")
+                .in_("org_id", member_orgs).execute().data) or []
+        tmap = {tr["org_id"]: tr for tr in tens}
+    except Exception:
+        tmap = None
+    role_map = None
+    try:
+        role_names = sorted({r["role"] for r in rows if r.get("role")})
+        if member_orgs and role_names:
+            rls = (client.schema("storeops").table("roles")
+                   .select("org_id,name,display_name,permissions")
+                   .in_("org_id", member_orgs).in_("name", role_names).execute().data) or []
+            role_map = {(rl["org_id"], rl["name"]): rl for rl in rls}
+        else:
+            role_map = {}
+    except Exception:
+        role_map = None
+    tenants = _my_tenants_payload(client, uid, rows=rows, tmap=tmap, role_map=role_map)
+    pending = _pending_connections_payload(
+        client, uid, email=next((r.get("email") for r in rows if r.get("email")), None))
+    requested = (x_active_org or "").strip()
     if len(member_orgs) > 1 and requested not in member_orgs:
         me = None                      # >1 membership, no valid choice yet → frontend shows the picker
     else:
-        me = _me_payload(client, uid, requested, x_2fa_token, rows=rows)
+        acting = _pick_membership(rows, requested or None)
+        trow = (tmap.get(acting.get("org_id") or ORG_ID)
+                if (tmap is not None and acting) else _TENANT_UNFETCHED)
+        me = _me_payload(client, uid, requested, x_2fa_token, rows=rows,
+                         tenant_row=trow, role_map=role_map, bg=background_tasks)
     active_org = ((me.get("user") or {}).get("org_id")) if me else None
     return {"rbac_enabled": _rbac_enabled_flag(), "tenants": tenants, "pending": pending,
             "me": me, "active_org": active_org}
 
 
 @router.post("/me/password-changed")
-async def password_changed(authorization: str = Header(default="")):
+def password_changed(authorization: str = Header(default="")):
     """Clear the must_reset_password flag after the user sets a new password."""
     uid = _uid_from_token(authorization)
     if not uid:
@@ -673,13 +744,15 @@ def _tenant_row(client, org_id):
 # owner-default-satisfying generator; OTP lifecycle uses the PURE decisions in auth_security.
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 
-def _load_password_policy(client, org_id):
+def _load_password_policy(client, org_id, t=_TENANT_UNFETCHED):
     """The tenant's effective password policy (override merged over owner defaults, all bounds clamped).
-    Best-effort: any read error / un-run mig 709 → the code defaults (so enforcement is never lost)."""
+    Best-effort: any read error / un-run mig 709 → the code defaults (so enforcement is never lost).
+    `t` lets the login hot path pass its already-fetched tenants row (None = known absent)."""
     raw = None
     try:
-        t = _tenant_row(client, org_id) or {}
-        raw = t.get("password_policy")
+        if t is _TENANT_UNFETCHED:
+            t = _tenant_row(client, org_id)
+        raw = (t or {}).get("password_policy")
     except Exception:
         raw = None
     return _sec.normalize_policy(raw)
@@ -2284,7 +2357,7 @@ async def create_login(body: dict, org_id: str = ORG_ID):
 
 # ── Account linking — the user resolves a pending invite on their own next sign-in ────────────────
 @router.get("/pending-connections")
-async def pending_connections(authorization: str = Header(default="")):
+def pending_connections(authorization: str = Header(default="")):
     """Pending account-link invites addressed to the AUTHENTICATED caller's OWN email. Returns ONLY
     the inviting tenant's name per invite (zero cross-tenant disclosure — never the caller's other
     tenants, never who else an email belongs to). Empty for everyone without an invite, so the vast
@@ -2295,9 +2368,11 @@ async def pending_connections(authorization: str = Header(default="")):
     return _pending_connections_payload(sb(), uid)
 
 
-def _pending_connections_payload(client, uid):
-    """Body of GET /pending-connections, shared with /bootstrap (ONE source — never duplicate)."""
-    email = _email_for_uid(client, uid)
+def _pending_connections_payload(client, uid, email=None):
+    """Body of GET /pending-connections, shared with /bootstrap (ONE source — never duplicate).
+    `email` lets bootstrap pass the login's email straight off its already-fetched membership rows
+    (normalized identically to _email_for_uid); when absent the lookup runs exactly as before."""
+    email = (email or "").strip().lower() or _email_for_uid(client, uid)
     if not email:
         return {"pending": []}
     try:
@@ -2479,10 +2554,12 @@ def _normalize_twofa_policy(raw):
     return p
 
 
-def _load_twofa_policy(client, org_id):
+def _load_twofa_policy(client, org_id, t=_TENANT_UNFETCHED):
+    """`t` lets the login hot path pass its already-fetched tenants row (None = known absent)."""
     try:
-        t = _tenant_row(client, org_id) or {}
-        return _normalize_twofa_policy(t.get("twofa_policy"))
+        if t is _TENANT_UNFETCHED:
+            t = _tenant_row(client, org_id)
+        return _normalize_twofa_policy((t or {}).get("twofa_policy"))
     except Exception:
         return _normalize_twofa_policy(None)
 
