@@ -5,11 +5,21 @@ import { TrendChart, type TrendSeries } from '@/components/TrendChart'
 import { ExportButtons, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { captureChartPng } from '@/lib/chart-capture'
+import { RestrictedReport, useReportGrant, isForbidden, ACCOUNT_TRENDS_GRANT } from '../_components/ReportGate'
 
 // Central Trends hub: month-over-month charts for the key financial metrics, with shared
 // range/store/market filters — so lower commissions vs residual, expenses vs profit, etc. are all
 // visible in one place. Each metric has its own endpoint; the default line is the company total, and
 // picking markets/stores re-aggregates every chart to that subset.
+//
+// PERMISSION (owner directive 2026-07-29): DEFAULT-CLOSED behind the 'account_trends' data grant.
+// Super-admins / scope-'all' roles / role 'admin' pass; everyone else sees the lock note instead of the
+// hub — and no request is made at all, so none of the four metric endpoints returns data to them here.
+// Backend truth for the finance-owned series: GET /account/residual-per-sub accepts 'account_trends' OR
+// 'residual_per_sub' and 403s otherwise. The other three series (/commcalc/expenses-trend,
+// /commcalc/commission-trend, /commcalc/gp-trend) are mod-commission-owned endpoints shared with the
+// commcalc Expenses / GP pages — they carry their own module gates and are NOT re-gated from here
+// (cross-module coordination note in docs/handoffs/finance.md).
 const MONTH_OPTS = [3, 6, 12, 24]
 const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const r2 = (n: number) => Math.round((n || 0) * 100) / 100
@@ -31,17 +41,27 @@ export default function TrendsHubPage() {
   const [selMarkets, setSelMarkets] = useState<string[]>([])
   const [selStores, setSelStores] = useState<string[]>([])
   const [msg, setMsg] = useState('')
+  const { granted, ready } = useReportGrant(ACCOUNT_TRENDS_GRANT)
+  const [denied, setDenied] = useState(false)
 
   useEffect(() => {
-    setLoading(true); setMsg('')
+    if (!ready) return                    // wait for permissions before deciding (and before fetching)
+    if (!granted) {                       // no grant → don't request any of the four metric endpoints
+      setLoading(false); setRes(null); setExp(null); setComm(null); setGp(null); return
+    }
+    setLoading(true); setMsg(''); setDenied(false)
+    let forbidden = false
     Promise.all([
-      api(`/api/v1/account/residual-per-sub?months=${months}&org_id=${ORG_ID}`).catch(() => null),
+      // Only the finance-owned series drives the page lock: a 403 here IS the account_trends gate.
+      api(`/api/v1/account/residual-per-sub?months=${months}&org_id=${ORG_ID}`).catch(e => { if (isForbidden(e)) forbidden = true; return null }),
       api(`/api/v1/commcalc/expenses-trend?months=${months}&org_id=${ORG_ID}`).catch(() => null),
       api(`/api/v1/commcalc/commission-trend?months=${months}&org_id=${ORG_ID}`).catch(() => null),
       api(`/api/v1/commcalc/gp-trend?months=${months}&org_id=${ORG_ID}`).catch(() => null),
-    ]).then(([r, e, c, g]: any) => { setRes(r); setExp(e); setComm(c); setGp(g); if (g?.note) setMsg(g.note) })
-      .finally(() => setLoading(false))
-  }, [months])
+    ]).then(([r, e, c, g]: any) => {
+      if (forbidden) { setDenied(true); setRes(null); setExp(null); setComm(null); setGp(null); return }
+      setRes(r); setExp(e); setComm(c); setGp(g); if (g?.note) setMsg(g.note)
+    }).finally(() => setLoading(false))
+  }, [months, granted, ready])
 
   const allStores = useMemo(() => {
     const m = new Map<string, any>()
@@ -104,6 +124,14 @@ export default function TrendsHubPage() {
   const scope = filtered ? `${visibleCodes.size} store(s)` : 'all stores'
   const card: React.CSSProperties = { padding: '14px 12px 8px', marginBottom: 16 }
   const cardTitle: React.CSSProperties = { fontSize: 13, fontWeight: 600, marginBottom: 8, paddingLeft: 6 }
+
+  // Gate LAST (after every hook, so hook order never changes): once permissions are known, no grant
+  // client-side or a backend 403 → the lock note replaces the whole hub (no charts, no filters, no
+  // export/send buttons). Before `ready` the page just shows its spinner (nothing is fetched yet).
+  if (ready && (!granted || denied)) {
+    return <RestrictedReport title="Trends" grantKey={ACCOUNT_TRENDS_GRANT}
+      subtitle="Month-over-month across expenses, commissions, residual and profit." />
+  }
 
   return (
     <div>

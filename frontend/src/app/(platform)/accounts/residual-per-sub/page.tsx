@@ -6,10 +6,16 @@ import { ExportButtons, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { captureChartPng } from '@/lib/chart-capture'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
+import { RestrictedReport, useReportGrant, isForbidden, RESIDUAL_PER_SUB_GRANT } from '../_components/ReportGate'
 
 // Residual (MI+ATU) per subscriber per store, month over month, with a commission overlay — to see
 // the effect of lower commissions on the residual payout. Data: GET /account/residual-per-sub?months=.
 // Store/market filtering is client-side (same pattern as the GP report).
+//
+// PERMISSION (owner directive 2026-07-29): DEFAULT-CLOSED behind the 'residual_per_sub' data grant.
+// Super-admins / scope-'all' roles / role 'admin' pass; everyone else needs an explicit per-role grant
+// and sees the lock note instead of the report. The BACKEND is the source of truth (403 from
+// GET /account/residual-per-sub) — this page also honors that 403 if the client-side hint disagrees.
 
 const MONTH_OPTS = [3, 6, 12, 24]
 const METRICS = [
@@ -44,12 +50,18 @@ export default function ResidualPerSubPage() {
   const chartWrapRef = useRef<HTMLDivElement>(null)
   const [chartImg, setChartImg] = useState('')
   const cw = useColumnResize()
+  const { granted, ready } = useReportGrant(RESIDUAL_PER_SUB_GRANT)
+  const [denied, setDenied] = useState(false)
 
   useEffect(() => {
-    setLoading(true); setMsg('')
+    if (!ready) return                                           // wait for permissions before deciding
+    if (!granted) { setLoading(false); setData(null); return }   // no grant → don't even ask
+    setLoading(true); setMsg(''); setDenied(false)
     api(`/api/v1/account/residual-per-sub?months=${months}&org_id=${ORG_ID}`)
-      .then(setData).catch(e => setMsg('Load failed: ' + (e?.message || e))).finally(() => setLoading(false))
-  }, [months])
+      .then(setData)
+      .catch(e => { if (isForbidden(e)) { setDenied(true); setData(null) } else setMsg('Load failed: ' + (e?.message || e)) })
+      .finally(() => setLoading(false))
+  }, [months, granted, ready])
 
   const periods: string[] = data?.months || []
   const stores: any[] = data?.stores || []
@@ -122,6 +134,14 @@ export default function ResidualPerSubPage() {
   }, [chartData, chartSeries, loading])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const rowsToShow = filtered ? visibleStores : stores
+
+  // Gate LAST (after every hook, so hook order never changes): once permissions are known, no grant
+  // client-side or a backend 403 → the lock note replaces the whole report (no chart, no table, no
+  // export/send buttons). Before `ready` the page just shows its spinner (nothing is fetched yet).
+  if (ready && (!granted || denied)) {
+    return <RestrictedReport title="Residual per Subscriber" grantKey={RESIDUAL_PER_SUB_GRANT}
+      subtitle="Residual (MI + ATU) per paid subscriber, month over month, vs commissions paid." />
+  }
 
   return (
     <div>

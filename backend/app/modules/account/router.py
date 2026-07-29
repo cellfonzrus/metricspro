@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from app.core.database import get_supabase
 from app.core.config import settings
-from app.modules.account import coa, engine, autocompute
+from app.modules.account import coa, engine, autocompute, report_gates
 # Settings/imports audit (2026-07-26): importing this module REGISTERS the finance domain's checks with
 # platform-core's admin-attention feed (GET /core/attention). It is read-only diagnostics and is fully
 # guarded internally — if core.import_health is unavailable the import is inert, so finance never breaks
@@ -453,13 +453,24 @@ async def sweep_credit_memos(org_id: str = ORG_ID):
 
 # ── residual per subscriber (MI+ATU) per store, month over month + commission overlay ─────────
 @router.get("/residual-per-sub")
-async def residual_per_sub(months: int = 6, org_id: str = ORG_ID):
+async def residual_per_sub(months: int = 6, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Residual (MI+ATU) per SUBSCRIBER per store, month over month, with each month's commission
     (rep_commissions.total_payout) alongside it — built to show the effect of lower commissions on the
     residual payout over time. Store/market filtering is client-side, so every store's monthly series
     is returned. Aggregated in Postgres via commcalc.residual_per_sub_by_store (falls back to a bounded
-    Python aggregation until migration 101 is run)."""
+    Python aggregation until migration 101 is run).
+
+    PERMISSION (owner directive 2026-07-29): DEFAULT-CLOSED. This one endpoint serves BOTH gated
+    reports — the Residual per Subscriber page AND the residual/commission series on the Trends hub —
+    so it accepts EITHER grant ('residual_per_sub' or 'account_trends'); a Trends grantee already sees
+    this series on their own page. Super-admins / scope-'all' roles / role 'admin' always pass; anyone
+    else needs an explicit per-role grant. Resolution failure degrades CLOSED (403), never open.
+    Note: `residual_subs.compute` itself is NOT gated — commcalc's What-If simulator calls it directly
+    and carries its own carrier_residual gate (cross-module note in the finance handoff)."""
     require_org(org_id)
+    report_gates.require_report_grant(
+        authorization, (report_gates.RESIDUAL_PER_SUB, report_gates.ACCOUNT_TRENDS),
+        report="Residual per Subscriber")
     from app.modules.account import residual_subs
     return residual_subs.compute(sb(), org_id, months=max(1, min(int(months or 6), 36)))
 
