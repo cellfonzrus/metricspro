@@ -33,6 +33,14 @@ import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-fi
 // facets (rebate status / activation type / platform / financed / feed) are pick-don't-type over the
 // values PRESENT IN THE DATA. Every filter is applied SERVER-side so the tiles, the table and the export
 // can never disagree.
+//
+// STORE + MARKET (owner directive 2026-07-29). The backend resolves every store key it can meet — the
+// POS store string, the processor merchant account (labelled with the feed's own account_name) and the
+// residual feed's salesforce_id — through the org's EXISTING /store-match chain, so the store picker
+// lists real store NAMES (two spellings of one store, or the same store seen from both feeds, fold into
+// one option) and the market picker actually works on BOTH paths. Anything unresolved is grouped under
+// the selectable "(no market)" bucket and counted in `unmapped_market_rows`, so a market filter can
+// never quietly swallow rows — the fix is a mapping at Store Matching, and the page links straight to it.
 
 // Super-admin org resolution: a super-admin is not rewritten by the tenant middleware, so an org-less read
 // would default to the house org and a tenant's report would look empty. Same targeted mitigation the
@@ -153,7 +161,9 @@ export default function ImeiRebatesPage() {
     { header: 'Activation type', field: 'activation_type', get: (r: Row) => [r.activation_type, r.activation_type2].filter(Boolean).join(' · ') },
     { header: 'Device / SKU', field: 'device', get: (r: Row) => r.device || r.sku || '' },
     { header: 'Store', field: 'store', role: 'store', get: (r: Row) => r.store_label || r.store || '' },
-    { header: 'Market', field: 'market', get: (r: Row) => r.market || '' },
+    // A blank market is a REAL answer here (the "(no market)" bucket), so it is named rather than left
+    // as an ambiguous empty cell — the table, the filter and the export then all say the same thing.
+    { header: 'Market', field: 'market', get: (r: Row) => r.market || (d?.no_market_label || '') },
     { header: 'Rep', field: 'rep', role: 'rep', get: (r: Row) => r.rep || '' },
     { header: 'Rebate status', field: 'rebate_status_label', get: (r: Row) => r.rebate_status_label },
     ...(gated ? [] : [{ header: 'Rebate', field: 'rebate', money: true, get: (r: Row) => r.rebate } as ExportColumn]),
@@ -309,6 +319,14 @@ export default function ImeiRebatesPage() {
           <div><b>Definition.</b> {d.definition_note}</div>
           {d.window_note && <div><b>Rebate window.</b> {d.window_note}</div>}
           {d.sign_note && <div><b>Sign.</b> {d.sign_note}.</div>}
+          {d.unmapped_market_rows > 0 && (
+            <div><b>Market coverage.</b> {d.unmapped_market_rows} of {d.unfiltered_rows} row(s) have no
+              market and are grouped under <b>{d.no_market_label}</b> — pick that bucket to see them, or
+              map their store / processor account at{' '}
+              <a href="/commcalc/store-match" style={{ color: 'var(--accent,#2563eb)' }}>Store Matching</a>
+              {' '}and they will filter by market with no other change.
+            </div>
+          )}
         </div>
 
         {d.note && (

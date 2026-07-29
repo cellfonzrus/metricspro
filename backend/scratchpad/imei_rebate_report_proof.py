@@ -411,5 +411,65 @@ check("the window note warns that a later rebate reads as a gap", "widen the lag
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n── 12. store/market resolution + the (no market) bucket (owner 2026-07-29) ─────────")
+_R = {"1800 great neck rd": ("1800 Great Neck Rd", "Long Island"),
+      "gn store #5": ("1800 Great Neck Rd", "Long Island"),
+      "sf-0015000": ("1800 Great Neck Rd", "Long Island"),
+      "ma-1001": ("1800 Great Neck Rd", "Long Island")}
+_store_of = lambda s: _R.get(str(s or "").strip().lower(), (None, None))          # noqa: E731
+
+a1 = irr.epay_activation_from_sale({"serial_1": "355163568356971", "store": "GN Store #5",
+                                    "trans_date": "2026-06-10", "period": "June 2026"},
+                                   store_of=_store_of)
+check("the POS store resolves to the CANONICAL store name + market",
+      a1["store_label"] == "1800 Great Neck Rd" and a1["market"] == "Long Island")
+check("the raw source cell is preserved for traceability", a1["store"] == "GN Store #5")
+a2 = irr.epay_activation_from_sale({"serial_1": "355163568356972", "store": "Kiosk",
+                                    "trans_date": "2026-06-10"}, store_of=_store_of)
+check("an unresolved store keeps its raw label and gets no market",
+      a2["store_label"] == "Kiosk" and a2["market"] is None)
+
+m1 = irr.ma_activation({"imei": "355163568356973", "tx_date": "2026-06-10",
+                        "merchant_account_id": "MA-1001"},
+                       store_of=_store_of, account_name="Cellfonz Great Neck")
+check("a MAPPED processor account resolves to the real store + market",
+      m1["store_label"] == "1800 Great Neck Rd" and m1["market"] == "Long Island")
+m2 = irr.ma_activation({"imei": "355163568356974", "tx_date": "2026-06-10",
+                        "merchant_account_id": "MA-9999"},
+                       store_of=_store_of, account_name="Cellfonz Yonkers")
+check("an UNMAPPED account falls back to the processor's own account NAME, never a bare id",
+      m2["store_label"] == "Cellfonz Yonkers" and m2["store"] == "MA-9999" and m2["market"] is None)
+m3 = irr.ma_activation({"imei": "355163568356975", "tx_date": "2026-06-10",
+                        "merchant_account_id": "MA-9999"}, store_of=_store_of)
+check("with no account name either, the id is the label (nothing is invented)",
+      m3["store_label"] == "MA-9999")
+
+r1 = irr.epay_activation_from_mi({"device_serial": "355163568356976", "mi_activation_date": "6/10/2026",
+                                  "salesforce_id": "SF-0015000"}, store_of=_store_of)
+check("the residual leg resolves its store via salesforce_id",
+      r1["store_label"] == "1800 Great Neck Rd" and r1["market"] == "Long Island")
+r2 = irr.epay_activation_from_mi({"device_serial": "355163568356977", "mi_activation_date": "6/10/2026",
+                                  "salesforce_id": "SF-UNKNOWN"}, store_of=_store_of)
+check("an unresolvable salesforce id is NOT shown as a store (opaque key stays hidden)",
+      r2["store_label"] is None and r2["store"] is None)
+
+mk_rows = [{"market": "Long Island"}, {"market": None}, {"market": ""}]
+check("the (no market) sentinel is a stable, quotable label", irr.NO_MARKET == "(no market)")
+check("unresolved rows are COUNTED", irr.unresolved_market_count(mk_rows) == 2)
+check("a blank selection matches every row", all(irr.market_match(r, set()) for r in mk_rows))
+check("a real market matches only its own rows",
+      [irr.market_match(r, {"long island"}) for r in mk_rows] == [True, False, False])
+check("the (no market) selection matches EXACTLY the unresolved rows",
+      [irr.market_match(r, {"(no market)"}) for r in mk_rows] == [False, True, True])
+check("selecting every bucket reaches every row (a market filter can never hide one)",
+      all(irr.market_match(r, {"long island", "(no market)"}) for r in mk_rows))
+o_opts = irr.filter_options([{"market": "Long Island"}, {"market": None}])
+check("the option list offers the bucket when something is unresolved",
+      o_opts["market_options"] == ["Long Island", irr.NO_MARKET])
+o_all = irr.filter_options([{"market": "Long Island"}])
+check("...and does NOT offer it when everything resolved", o_all["market_options"] == ["Long Island"])
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
 print(f"\n{'='*90}\n  {_pass} passed, {_fail} failed\n{'='*90}")
 sys.exit(1 if _fail else 0)

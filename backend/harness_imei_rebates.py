@@ -21,6 +21,15 @@ in-memory FAKE Supabase client (no network, no DB). What this proves that the pu
   • the `carrier_residual` money gate nulls every $ in rows AND tiles AND orphans
   • a missing table (mig 083 not run) degrades to a note, never a 500
 
+  STORE NAME + MARKET FILTERS (owner directive 2026-07-29)
+  • the POS store string, the processor merchant account and the residual salesforce_id all resolve
+    through the org's EXISTING /store-match chain -> canonical store name + market
+  • two spellings of one store (and the same store seen from both feeds) collapse to ONE option
+  • unresolved -> the SELECTABLE "(no market)" bucket + a counted note, never a silent drop
+  • a bare numeric account id cannot borrow a street-numbered store's market
+  • store/market filters narrow rows, tiles AND orphans, server-side
+  • an org with no mapping behaves exactly as before
+
   THE PAGE GATE (owner directive 2026-07-29 — NO DEFAULT ACCESS)
   • super-admins / scope-'all' / role-'admin' open the report; a plain caller gets 403
   • the grant passes under EITHER carrier: perms.data.imei_rebates or perms.modules['imei_rebates']
@@ -606,6 +615,192 @@ check("still exactly ONE GET route for the report (no extra endpoint added)",
       len(_routes8) == 1 and set(getattr(_routes8[0], "methods", [])) == {"GET"})
 check("`authorization` is a Header param on the handler (the gate's input)",
       "authorization" in inspect.signature(R.imei_rebate_report_endpoint).parameters)
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n── 9. STORE NAME + MARKET filters on BOTH paths (owner directive 2026-07-29) ────────")
+# The org's EXISTING /store-match chain, nothing new: store_mapping (address/code/market/salesforce_id)
+# + store_aliases (raw POS or processor-account string -> store_code). No new mapping table exists.
+SM = [{"org_id": HOUSE, "store_code": "GN1", "store_address": "1800 Great Neck Rd",
+       "market": "Long Island", "salesforce_id": "SF-0015000"},
+      {"org_id": HOUSE, "store_code": "BK2", "store_address": "42 Main St",
+       "market": "Brooklyn", "salesforce_id": ""},
+      {"org_id": HOUSE, "store_code": "NY3", "store_address": "1001 Broadway",
+       "market": "Manhattan", "salesforce_id": ""},
+      {"org_id": TEN, "store_code": "GN1", "store_address": "1800 Great Neck Rd",
+       "market": "Long Island", "salesforce_id": "SF-0015000"}]
+AL = [{"org_id": HOUSE, "alias": "gn store #5", "store_code": "GN1"},
+      {"org_id": TEN, "alias": "cellfonz great neck", "store_code": "GN1"},
+      {"org_id": TEN, "alias": "gn store #5", "store_code": "GN1"}]
+
+STORE_MAP_EP = {
+    "commcalc.raw_ma_commission": [],
+    "commcalc.raw_sales": [
+        sale_row(serial_1=I1, store="1800 Great Neck Rd"),         # exact address
+        sale_row(serial_1=I2, store="GN Store #5"),                # ALIASED spelling of the SAME store
+        sale_row(serial_1=I3, store="42 Main St"),                 # a different, mapped store
+        sale_row(serial_1=I4, store="Kiosk at the mall"),          # UNMAPPED -> (no market)
+    ],
+    "commcalc.raw_mi": [],
+    "commcalc.raw_payment_detail": [pay_row(imei=I1, amount=200.0)],
+    "commcalc.store_mapping": SM,
+    "commcalc.store_aliases": AL,
+    "commcalc.commission_org_config": [],
+}
+install(STORE_MAP_EP)
+d = call(HOUSE)
+by = {r["imei"]: r for r in d["rows"]}
+check("ePay: the raw POS store resolves to the CANONICAL store name",
+      by[I1]["store_label"] == "1800 Great Neck Rd" and by[I1]["market"] == "Long Island")
+check("ePay: an ALIASED spelling resolves to the SAME canonical store + market",
+      by[I2]["store_label"] == "1800 Great Neck Rd" and by[I2]["market"] == "Long Island")
+check("two spellings of one store collapse to ONE pickable option",
+      d["store_options"].count("1800 Great Neck Rd") == 1 and "GN Store #5" not in d["store_options"])
+check("the raw source cell is still traceable on the row (store kept verbatim)",
+      by[I2]["store"] == "GN Store #5")
+check("an UNMAPPED store keeps its raw label and carries no market",
+      by[I4]["store_label"] == "Kiosk at the mall" and by[I4]["market"] is None)
+check("market options are the markets PRESENT in the data",
+      "Long Island" in d["market_options"] and "Brooklyn" in d["market_options"])
+check("...and NOT markets that no row uses (no dead options)", "Manhattan" not in d["market_options"])
+check("the (no market) bucket is offered because something is unresolved",
+      d["market_options"][-1] == d["no_market_label"] == "(no market)")
+check("the payload counts the unmapped rows", d["unmapped_market_rows"] == 1)
+check("the note says where to fix it", "/commcalc/store-match" in (d["note"] or ""))
+
+install(STORE_MAP_EP)
+d = call(HOUSE, stores="1800 Great Neck Rd")
+check("a STORE-NAME filter narrows to both spellings of that store",
+      sorted(r["imei"] for r in d["rows"]) == sorted([I1, I2]))
+check("...and the TILES follow the filter (server-side, so the export agrees)",
+      d["tiles"]["activations"] == 2)
+
+install(STORE_MAP_EP)
+d = call(HOUSE, markets="Long Island")
+check("a MARKET filter narrows rows", sorted(r["imei"] for r in d["rows"]) == sorted([I1, I2]))
+check("...and the tiles follow it too", d["tiles"]["activations"] == 2)
+install(STORE_MAP_EP)
+d = call(HOUSE, markets="Brooklyn")
+check("market filtering is per-market, not all-or-nothing", [r["imei"] for r in d["rows"]] == [I3])
+
+install(STORE_MAP_EP)
+d = call(HOUSE, markets="(no market)")
+check("the (no market) bucket is SELECTABLE and returns exactly the unresolved row",
+      [r["imei"] for r in d["rows"]] == [I4])
+install(STORE_MAP_EP)
+d_a = call(HOUSE, markets="Long Island,Brooklyn,(no market)")
+check("every row is reachable by SOME market selection (nothing falls in a hole)",
+      d_a["tiles"]["activations"] == 4)
+
+# ── MA path ───────────────────────────────────────────────────────────────────────────────────
+STORE_MAP_MA = {
+    "commcalc.raw_ma_commission": [
+        ma_row(id="m1", imei=I1, merchant_account_id="MA-1001", rebate=-100.0),
+        ma_row(id="m2", imei=I2, merchant_account_id="MA-2002", rebate=-50.0),
+        ma_row(id="m3", imei=I3, merchant_account_id="1001", rebate=-25.0),
+    ],
+    "commcalc.raw_ma_daily_tx": [
+        {"org_id": TEN, "period": "June 2026", "account_id": "MA-1001",
+         "account_name": "Cellfonz Great Neck"},
+        {"org_id": TEN, "period": "June 2026", "account_id": "MA-2002",
+         "account_name": "Cellfonz Yonkers"},
+    ],
+    "commcalc.raw_sales": [], "commcalc.raw_mi": [], "commcalc.raw_payment_detail": [],
+    "commcalc.store_mapping": SM, "commcalc.store_aliases": AL,
+    "commcalc.commission_org_config": [],
+}
+install(STORE_MAP_MA)
+d = call(TEN)
+by = {r["imei"]: r for r in d["rows"]}
+check("MA: a processor account MAPPED at /store-match resolves to the real store + market",
+      by[I1]["store_label"] == "1800 Great Neck Rd" and by[I1]["market"] == "Long Island")
+check("MA: an UNMAPPED account shows the processor's own account NAME, not a bare id",
+      by[I2]["store_label"] == "Cellfonz Yonkers" and by[I2]["market"] is None)
+check("MA: the raw merchant_account_id stays on the row", by[I2]["store"] == "MA-2002")
+check("MA: a bare numeric account id NEVER borrows '1001 Broadway's market (leading-number guard)",
+      by[I3]["market"] is None and by[I3]["store_label"] == "1001")
+check("MA: the (no market) bucket is offered and counted", d["unmapped_market_rows"] == 2)
+check("MA: the note points at /store-match for processor accounts",
+      "processor account" in (d["note"] or "") and "/commcalc/store-match" in (d["note"] or ""))
+install(STORE_MAP_MA)
+d = call(TEN, markets="Long Island")
+check("MA: a MARKET filter works on the master-agent path", [r["imei"] for r in d["rows"]] == [I1])
+install(STORE_MAP_MA)
+d = call(TEN, stores="Cellfonz Yonkers")
+check("MA: the store facet filters on the human account name too",
+      [r["imei"] for r in d["rows"]] == [I2])
+
+# ── residual (raw_mi) path: salesforce_id -> store_mapping ─────────────────────────────────────
+STORE_MAP_MI = {
+    "commcalc.raw_ma_commission": [], "commcalc.raw_sales": [],
+    "commcalc.raw_mi": [mi_row(device_serial=I1, salesforce_id="SF-0015000"),
+                        mi_row(device_serial=I2, salesforce_id="SF-UNKNOWN")],
+    "commcalc.raw_payment_detail": [],
+    "commcalc.store_mapping": SM, "commcalc.store_aliases": AL,
+    "commcalc.commission_org_config": [],
+}
+install(STORE_MAP_MI)
+d = call(HOUSE, basis="residual")
+by = {r["imei"]: r for r in d["rows"]}
+check("residual: salesforce_id resolves the store + market (no new mapping table)",
+      by[I1]["store_label"] == "1800 Great Neck Rd" and by[I1]["market"] == "Long Island")
+check("residual: an unresolvable salesforce id is NOT shown as a store name (opaque key stays hidden)",
+      by[I2]["store_label"] is None and by[I2]["market"] is None)
+check("residual: the opaque key never pollutes the store picker",
+      "SF-UNKNOWN" not in d["store_options"])
+install(STORE_MAP_MI)
+d = call(HOUSE, basis="residual", markets="Long Island")
+check("residual: the market filter narrows it", [r["imei"] for r in d["rows"]] == [I1])
+
+# ── union org: the SAME store from both feeds is ONE option ────────────────────────────────────
+STORE_MAP_BOTH = {**STORE_MAP_MA, "org": None,
+                  "commcalc.raw_sales": [sale_row(org_id=TEN, serial_1=I4, store="GN Store #5")],
+                  "commcalc.raw_payment_detail": []}
+STORE_MAP_BOTH.pop("org")
+install(STORE_MAP_BOTH)
+d = call(TEN)
+check("union org: the same store reached from the MA feed AND the POS feed is ONE store option",
+      d["store_options"].count("1800 Great Neck Rd") == 1 and d["source"] == "both")
+install(STORE_MAP_BOTH)
+d = call(TEN, markets="Long Island")
+check("union org: one market filter narrows BOTH feeds at once",
+      sorted(r["imei"] for r in d["rows"]) == sorted([I1, I4]))
+
+# ── orphans narrow under the same filters ──────────────────────────────────────────────────────
+STORE_MAP_ORPH = {**STORE_MAP_EP,
+                  "commcalc.raw_sales": [sale_row(serial_1=I1, store="1800 Great Neck Rd")],
+                  "commcalc.raw_payment_detail": [
+                      pay_row(imei=I1, amount=200.0, business_address="1800 Great Neck Rd"),
+                      pay_row(imei="355163568359999", amount=75.0,
+                              business_address="42 Main St"),          # <- ORPHAN, other market
+                  ]}
+install(STORE_MAP_ORPH)
+d = call(HOUSE)
+check("an orphan carries the resolved store + market too",
+      d["orphans"] and d["orphans"][0]["store_label"] == "42 Main St"
+      and d["orphans"][0]["market"] == "Brooklyn")
+install(STORE_MAP_ORPH)
+d = call(HOUSE, markets="Long Island")
+check("a market filter narrows the ORPHANS as well (no survivor of a filter it does not match)",
+      d["orphans"] == [])
+install(STORE_MAP_ORPH)
+d = call(HOUSE, markets="Brooklyn")
+check("...and selecting the orphan's own market keeps it", len(d["orphans"]) == 1)
+
+# ── regression: an org with NO mapping behaves exactly as before ───────────────────────────────
+install({**STORE_MAP_EP, "commcalc.store_mapping": [], "commcalc.store_aliases": []})
+d = call(HOUSE)
+by = {r["imei"]: r for r in d["rows"]}
+check("no store_mapping at all -> raw store strings kept as labels, exactly as before",
+      by[I1]["store_label"] == "1800 Great Neck Rd" and by[I2]["store_label"] == "GN Store #5")
+check("...every market is None and the whole set is the (no market) bucket",
+      all(r["market"] is None for r in d["rows"])
+      and d["market_options"] == ["(no market)"])
+check("...and the gap/orphan semantics are untouched", d["tiles"]["activations"] == 4)
+check("EVERY store/market resolution read was org-scoped",
+      all(q["eq"].get("org_id") == HOUSE for q in QUERY_LOG
+          if q["schema"] in ("commcalc", "storeops")))
 
 
 print(f"\n{'='*90}\n  {_pass} passed, {_fail} failed\n{'='*90}")

@@ -18609,6 +18609,117 @@ def _ir_ma_rows(client, org_id, window, date_from, date_to, cols):
     return list(by_id.values()), ok
 
 
+def _ir_store_resolver(client, org_id):
+    """`resolve(raw_key) -> (store_label, market)` for EVERY store key this report can meet, so store
+    NAME and MARKET are real filters on BOTH paths (owner directive 2026-07-29).
+
+    RULE TWO — no new mapping table, no new config surface. It REUSES the org's existing chain:
+      `_store_maps` (commcalc.store_aliases → store_code → commcalc.store_mapping / storeops.stores,
+      plus coa.store_resolver canonicalization) — the same chain the Store-Matching UI and the Daily
+      Targets actuals use. Read-only here: this is display/filtering, so it is deliberately NOT gated
+      by the tenant's `store_resolution` setting (that setting governs PAY attachment, and nothing on
+      this page pays anyone).
+
+    Key spaces tried, in order, all org-scoped:
+      1. the /store-match alias for the raw string, then for its canonicalized spelling
+      2. store_mapping address → code, then the storeops roster address → code
+      3. the string is ALREADY a store_code
+      4. `store_mapping.salesforce_id` — the residual (raw_mi) leg's only store key, the same join
+         /sales-analyzer uses for store scoping
+      5. leading street number → a mapped address, but ONLY for strings shaped like an address
+         ("1800 Great Neck Rd"), never for a bare/prefixed processor account id ("1001", "MA-1001")
+
+    Returns the CANONICAL address as the label when anything resolves, so two POS spellings of one
+    store — and the same store arriving from the MA feed and the ePay feed — collapse into ONE pickable
+    option. Nothing resolves → `(None, None)`: the caller then keeps whatever name its own feed gave it
+    (or the raw string) and the row lands in the `(no market)` bucket.
+    Memoized per call; never raises (a dead mapping table just means every market is None)."""
+    try:
+        M = _store_maps(client, org_id)
+    except Exception:
+        M = {"addr_to_code": {}, "so_addr_to_code": {}, "so_codes": set(),
+             "alias_to_code": {}, "stores": [], "resolve_store": None}
+    code_to = {}
+    for s in (M.get("stores") or []):
+        c = str(s.get("store_code") or "").strip()
+        if not c:
+            continue
+        e = code_to.setdefault(c.upper(), {"code": c, "address": "", "market": ""})
+        if not e["address"] and s.get("address"):
+            e["address"] = str(s["address"]).strip()
+        if not e["market"] and s.get("market"):
+            e["market"] = str(s["market"]).strip()
+    # salesforce_id + leading-number maps (one tiny org-scoped read; absent column -> both stay empty
+    # and the residual leg keeps behaving exactly as it does today).
+    sf_to, num_to = {}, {}
+    try:
+        sm = (client.schema("commcalc").table("store_mapping")
+              .select("store_code,store_address,market,salesforce_id")
+              .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        sm = []
+    for m in sm:
+        addr = str(m.get("store_address") or "").strip()
+        mkt = str(m.get("market") or "").strip()
+        code = str(m.get("store_code") or "").strip()
+        sf = str(m.get("salesforce_id") or "").strip()
+        if sf:
+            sf_to.setdefault(sf.upper(), (addr or code, mkt))
+        n = re.match(r"\s*(\d+)", addr)
+        if n and mkt:
+            num_to.setdefault(n.group(1), (addr, mkt))
+
+    alias_to_code, addr_to_code = M.get("alias_to_code") or {}, M.get("addr_to_code") or {}
+    so_addr_to_code, so_codes = M.get("so_addr_to_code") or {}, M.get("so_codes") or set()
+    _canon = M.get("resolve_store")
+    memo = {}
+
+    def _resolve(raw):
+        s = str(raw or "").strip()
+        if not s:
+            return (None, None)
+        if s in memo:
+            return memo[s]
+        low = s.lower()
+        ck = low
+        try:
+            c = _canon(s) if _canon else None
+            if c:
+                ck = str(c).strip().lower()
+        except Exception:
+            pass
+        code = (alias_to_code.get(low) or alias_to_code.get(ck)
+                or addr_to_code.get(ck) or addr_to_code.get(low)
+                or so_addr_to_code.get(ck) or so_addr_to_code.get(low))
+        if not code and s.upper() in code_to:
+            code = code_to[s.upper()]["code"]
+        if not code and s.upper() in so_codes:
+            code = s
+        label, market = None, None
+        if code:
+            e = code_to.get(str(code).upper()) or {}
+            label, market = (e.get("address") or str(code)), (e.get("market") or None)
+        if not market:
+            hit = sf_to.get(s.upper())
+            if hit:
+                label, market = (label or hit[0] or s), (hit[1] or None)
+        if not market:
+            # address-shaped only: a digit run followed by whitespace then a non-digit token. A bare
+            # account id can never borrow a store's market this way.
+            n = re.match(r"\s*(\d+)\s+\S", s)
+            if n and re.match(r"\s*(\d+)", s).group(1) in num_to:
+                a, mk = num_to[re.match(r"\s*(\d+)", s).group(1)]
+                label, market = (label or a or s), mk
+        # label stays None when NOTHING resolved — that is the signal callers use to fall back to a
+        # feed-supplied name (a processor account_name) or to keep the raw string, and to tell an
+        # opaque key (a salesforce id) apart from a real store name.
+        out = (label or None, market or None)
+        memo[s] = out
+        return out
+
+    return _resolve
+
+
 @router.get("/imei-rebates")
 def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: str = "both",
                                 stores: str = "", reps: str = "", markets: str = "", status: str = "",
@@ -18633,6 +18744,14 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
     leg counts) · the RULE FIVE filters `stores` / `reps` / `markets` and the appended facets `status` /
     `activation_type` / `platform` / `financed` / `source` (all comma-separated, applied SERVER-side so
     tiles, table and export agree) · `limit` (display cap; the tiles always describe the full filtered set).
+
+    STORE + MARKET (owner directive 2026-07-29). `stores` matches the CANONICAL store name and `markets`
+    the resolved market on BOTH paths — the POS store string, the processor merchant account (labelled
+    with `raw_ma_daily_tx.account_name` where the feed publishes it) and the residual feed's
+    salesforce_id all run through the org's existing /store-match chain (`_ir_store_resolver`). Options
+    are the values PRESENT in the data; anything unresolved is grouped under the SELECTABLE
+    `(no market)` bucket and counted in `unmapped_market_rows`, so a market filter can never silently
+    swallow rows. Rows keep `market: None` when unresolved — the bucket is a facet label, not a value.
 
     READ-ONLY. TWO INDEPENDENT GATES, in this order:
       1. PAGE gate — `_require_imei_rebates` (the 'imei_rebates' DATA_GRANT, DEFAULT-CLOSED per the
@@ -18666,13 +18785,14 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
     else:
         date_from = date_to = None
 
-    # Market resolution for the ePay legs (store string → market, the SAME store_mapping resolution the
-    # Sales Report / Custom Report use). MA data is processor-account-keyed with NO store_mapping linkage —
-    # the documented /ma-commission/summary deviation — so MA rows carry no market.
+    # STORE NAME + MARKET resolution for EVERY path (owner directive 2026-07-29). One resolver over the
+    # org's existing /store-match chain serves the POS store string, the processor merchant account and
+    # the residual feed's salesforce_id alike — see `_ir_store_resolver`. Anything it cannot resolve
+    # keeps its raw label and lands in the explicit `(no market)` bucket, never in a silent hole.
     try:
-        _market_for, _all_markets = _cr_market_resolver(client, org_id)
+        _store_for = _ir_store_resolver(client, org_id)
     except Exception:
-        _market_for, _all_markets = (lambda s: ""), []
+        _store_for = None
 
     sources, notes = [], []
     activations, events = [], []
@@ -18686,9 +18806,20 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
         ma_rows, ma_ok = _ir_ma_rows(client, org_id, window, date_from, date_to, ma_cols)
     else:
         ma_rows, ma_ok = _ir_paged(client, org_id, "raw_ma_commission", window, ma_cols)
+    # Human names for the processor merchant accounts. `raw_ma_daily_tx.account_name` is the ONLY place
+    # the processor publishes them (the same source /ma-commission/summary uses for its store picker);
+    # missing/unreadable → the account id stays the label, never a fabricated name.
+    ma_acct_names = {}
+    if ma_rows:
+        tx_rows, _tx_ok = _ir_paged(client, org_id, "raw_ma_daily_tx", window, "account_id,account_name")
+        for r in tx_rows or []:
+            aid, nm = str(r.get("account_id") or "").strip(), str(r.get("account_name") or "").strip()
+            if aid and nm:
+                ma_acct_names.setdefault(aid, nm)
     if ma_rows:
         sources.append("ma")
         for r in ma_rows:
+            _acct_nm = ma_acct_names.get(str(r.get("merchant_account_id") or "").strip())
             k = _irr.imei_key(r.get("imei"))
             if not _irr.is_device_identifier(k):
                 continue
@@ -18701,8 +18832,8 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
             # landing in a later window period is that activation's adjustment, not a new activation.
             if _irr.date_in_period(r.get("tx_date"), per) or (
                     not r.get("tx_date") and _irr.canon_period(r.get("period")) == _irr.canon_period(per)):
-                activations.append(_irr.ma_activation(r))
-            events.extend(_irr.ma_events(r))
+                activations.append(_irr.ma_activation(r, store_of=_store_for, account_name=_acct_nm))
+            events.extend(_irr.ma_events(r, store_of=_store_for, account_name=_acct_nm))
     elif ma_ok:
         # MA table readable but empty for this window — say so ONLY if the org has MA data at all, so a
         # Boost-only tenant never sees a Total-flavoured note.
@@ -18723,9 +18854,18 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
         sale_rows, _ = _ir_paged(client, org_id, "raw_sales", [per], sale_cols,
                                  tweak=lambda q: q.neq("serial_1", ""))
     if basis in ("both", "residual"):
-        mi_cols = "device_serial,period,mi_activation_date,customer_plan,subscriber_status,rep_username"
-        mi_rows, _ = _ir_paged(client, org_id, "raw_mi", [per], mi_cols,
-                               tweak=lambda q: q.neq("device_serial", ""))
+        # salesforce_id is the residual feed's ONLY store key (store_mapping.salesforce_id → store +
+        # market). Selected defensively: a database without the column would fail the whole read, so a
+        # failed wide read retries narrow — the residual leg then simply carries no store, as before.
+        mi_cols = ("device_serial,period,mi_activation_date,customer_plan,subscriber_status,"
+                   "rep_username,salesforce_id")
+        mi_rows, _mi_ok = _ir_paged(client, org_id, "raw_mi", [per], mi_cols,
+                                    tweak=lambda q: q.neq("device_serial", ""))
+        if not _mi_ok and not mi_rows:
+            mi_rows, _ = _ir_paged(
+                client, org_id, "raw_mi", [per],
+                "device_serial,period,mi_activation_date,customer_plan,subscriber_status,rep_username",
+                tweak=lambda q: q.neq("device_serial", ""))
 
     epay_acts, mi_no_date = [], 0
     for r in sale_rows or []:
@@ -18734,7 +18874,7 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
         k = _irr.imei_key(r.get("serial_1"))
         if not _irr.is_device_identifier(k):
             continue
-        epay_acts.append(_irr.epay_activation_from_sale(r, market_of=_market_for))
+        epay_acts.append(_irr.epay_activation_from_sale(r, store_of=_store_for))
     for r in mi_rows or []:
         k = _irr.imei_key(r.get("device_serial"))
         if not _irr.is_device_identifier(k):
@@ -18746,7 +18886,7 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
             mi_no_date += 1
             continue
         if _irr.date_in_period(r.get("mi_activation_date"), per):
-            epay_acts.append(_irr.epay_activation_from_mi(r, market_of=_market_for))
+            epay_acts.append(_irr.epay_activation_from_mi(r, store_of=_store_for))
 
     pay_ok = True
     if epay_acts:
@@ -18760,7 +18900,7 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
             k = _irr.imei_key(r.get("imei"))
             if not _irr.is_device_identifier(k):
                 continue
-            events.append(_irr.epay_event(r, _comp_of))
+            events.append(_irr.epay_event(r, _comp_of, store_of=_store_for))
         if not pay_ok:
             notes.append("The ePay payment-detail feed could not be read — rebates on those activations "
                          "are shown as unknown gaps until it is available.")
@@ -18775,13 +18915,18 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
     rows = _irr.apply_filters(all_rows, stores=stores, reps=reps, markets=markets, status=status,
                               activation_type=activation_type, platform=platform, financed=financed,
                               source=source)
+    # Orphans narrow on the SAME resolved keys as the rows (store label, rep, market) — a rebate with no
+    # activation must not survive a filter it does not match. `market_match` keeps the `(no market)`
+    # bucket selectable here too.
     orph = orphans
-    if stores or reps:
-        _st, _rp = {s.strip().lower() for s in (stores or "").split(",") if s.strip()}, \
-                   {s.strip().lower() for s in (reps or "").split(",") if s.strip()}
+    if stores or reps or markets:
+        _st = {s.strip().lower() for s in (stores or "").split(",") if s.strip()}
+        _rp = {s.strip().lower() for s in (reps or "").split(",") if s.strip()}
+        _mk = {s.strip().lower() for s in (markets or "").split(",") if s.strip()}
         orph = [o for o in orphans
-                if (not _st or str(o.get("store") or "").strip().lower() in _st)
-                and (not _rp or str(o.get("rep") or "").strip().lower() in _rp)]
+                if (not _st or str(o.get("store_label") or o.get("store") or "").strip().lower() in _st)
+                and (not _rp or str(o.get("rep") or "").strip().lower() in _rp)
+                and _irr.market_match(o, _mk)]
     tiles = _irr.tiles_for(rows, orph)
 
     try:
@@ -18816,6 +18961,17 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
         notes.append("Rebate amounts are hidden for your role (carrier-residual visibility is set to "
                      "'permissioned' for this tenant). Counts and statuses are still shown.")
 
+    # Say the size of the `(no market)` bucket out loud, and where to fix it — an unmapped store or
+    # processor account is a CONFIG gap the operator can close at /store-match, not a data error.
+    _unmapped = _irr.unresolved_market_count(all_rows, orphans)
+    if _unmapped:
+        _who = ("store" if "epay" in sources and "ma" not in sources
+                else "processor account" if "ma" in sources and "epay" not in sources
+                else "store / processor account")
+        notes.append(f"{_unmapped} of {len(all_rows) + len(orphans)} row(s) could not be resolved to a "
+                     f"market and are grouped under \"{_irr.NO_MARKET}\" — map the {_who} at "
+                     "/commcalc/store-match (Store Matching) and they will filter by market with no "
+                     "other change.")
     if not sources:
         notes.append("No activation source carries data for this org in " + per + ". Import the "
                      "master-agent commission report (Data Imports), or the monthly Sales / MI files, "
@@ -18836,7 +18992,7 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
         "orphan_note": ("A rebate recorded against an IMEI with no activation in this period's universe. "
                         "The commonest cause is an activation in an EARLIER period (the rebate lags), not "
                         "an error — widen the month to confirm before treating it as a data problem."),
-        "market_options": opts["market_options"] or _all_markets,
+        "market_options": opts["market_options"],
         "store_options": opts["store_options"], "rep_options": opts["rep_options"],
         "activation_type_options": opts["activation_type_options"],
         "platform_options": opts["platform_options"],
@@ -18844,6 +19000,7 @@ def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: st
         "status_options": opts["status_options"],
         "source_options": sources,
         "unfiltered_rows": len(all_rows),
+        "no_market_label": _irr.NO_MARKET, "unmapped_market_rows": _unmapped,
         "note": (" ".join(notes) or None),
     }
 

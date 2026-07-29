@@ -191,6 +191,42 @@ def _s(v):
     return s or None
 
 
+# The explicit bucket for an activation whose store/processor account resolves to NO market. It is a
+# SELECTABLE filter option, never a silent exclusion: filtering by market must not make rows disappear
+# into a hole nobody can see (the retail-ops B1 lesson). Rows keep `market: None` — this is a facet
+# label, so a blank market still exports blank.
+NO_MARKET = "(no market)"
+
+
+def _store_fields(raw, store_of=None, market_of=None, label_hint=None):
+    """Resolve ONE raw store key (a POS store string, a processor merchant-account id/name, or a
+    store_mapping salesforce id) into the (store, store_label, market) triple every activation carries.
+
+      store       — the RAW key, kept verbatim so a row can always be traced back to its source cell
+      store_label — the CANONICAL store name/address when the org's own mapping resolves it, else
+                    `label_hint` (e.g. a processor account_name), else the raw key. This is what the
+                    store facet and the table show, so two spellings of one store — or the same store
+                    arriving from the MA feed AND the ePay feed — collapse to ONE pickable option.
+      market      — from the org's store_mapping/storeops roster via the resolver, else None.
+
+    `store_of(raw) -> (label, market)` is the full resolver (alias → address → code → salesforce id →
+    leading number, all org-scoped, built by the caller). `market_of(raw) -> market` is the older
+    market-only resolver, still honoured so existing callers/tests keep working unchanged."""
+    key = _s(raw)
+    label, market = None, None
+    if key and store_of:
+        try:
+            label, market = store_of(key)
+        except Exception:                       # a resolver hiccup must never lose the activation
+            label, market = None, None
+    if key and market is None and market_of:
+        try:
+            market = market_of(key) or None
+        except Exception:
+            market = None
+    return key, (_s(label) or _s(label_hint) or key), (_s(market) or None)
+
+
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # 2. SOURCE ADAPTERS — raw table row → the ONE normalized shape the report layer consumes
 #    Activation: {key, imei, date, period, source, evidence[], activation_type, activation_type2,
@@ -199,10 +235,17 @@ def _s(v):
 #    Event:      {key, kind: 'rebate'|'spiff'|'other', amount (paid-to-dealer), date, period, label,
 #                 source, source_table, month (spiffs only), store, rep}
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-def ma_activation(row, market_of=None):
-    """One normalized ACTIVATION from a `raw_ma_commission` row. `market_of` (optional) maps the
-    processor merchant account to a market — MA data is processor-account-keyed with NO store_mapping
-    linkage (the documented `/ma-commission/summary` deviation), so it normally stays None."""
+def ma_activation(row, market_of=None, store_of=None, account_name=None):
+    """One normalized ACTIVATION from a `raw_ma_commission` row.
+
+    STORE + MARKET on the MA path (owner directive 2026-07-29 — the report must filter by real store
+    name and market on BOTH paths). MA data is processor-account-keyed and has no store_mapping FK, so
+    the account is resolved the only honest way available: `account_name` (the human name the processor
+    itself publishes on MA Daily Tx) is used as the display label, and BOTH the name and the raw account
+    id are offered to `store_of` — the org's existing /store-match alias chain. A tenant that has mapped
+    its processor accounts gets real store names + market filtering with ZERO new configuration; one
+    that has not keeps the account id as the label and lands in the `(no market)` bucket, which the
+    report says out loud. `market_of` (market-only) is still honoured for older callers."""
     k = imei_key(row.get("imei"))
     d = parse_loose_date(row.get("tx_date"))
     per = canon_period(row.get("period"))
@@ -215,7 +258,14 @@ def ma_activation(row, market_of=None):
             per = ""
     if not per and d:
         per = canon_period(d[:7])
-    store = _s(row.get("merchant_account_id"))
+    acct = _s(row.get("merchant_account_id"))
+    name = _s(account_name)
+    store, label, market = _store_fields(acct, store_of, market_of, label_hint=name)
+    if market is None and name:
+        # The account ID did not resolve — try the processor's own account NAME through the same chain.
+        _s2, _l2, _m2 = _store_fields(name, store_of, market_of)
+        if _m2:
+            label, market = _l2, _m2
     return {
         "key": k, "imei": _s(row.get("imei")) or k, "date": d, "period": per or None,
         "source": "ma", "evidence": ["ma_commission"],
@@ -223,14 +273,14 @@ def ma_activation(row, market_of=None):
         "activation_type2": _s(row.get("activation_type2")),
         "sub_type": _s(row.get("sub_type")),
         "sku": _s(row.get("sku")), "device": _s(row.get("sku")),
-        "store": store, "store_label": store, "rep": _s(row.get("user_name")),
-        "market": (market_of(store) if (market_of and store) else None) or None,
+        "store": store, "store_label": label, "rep": _s(row.get("user_name")),
+        "market": market,
         "financed": _s(row.get("is_financed")), "platform": _s(row.get("platform")),
         "line_status": _s(row.get("line_status")), "rows": 1,
     }
 
 
-def ma_events(row):
+def ma_events(row, store_of=None, market_of=None, account_name=None):
     """The paid-to-dealer money events on ONE `raw_ma_commission` row: the rebate, the M1–M6 spiffs, and
     the remaining payable components ('other'). EVERY amount is normalized through
     `device_history.ma_paid` (negative=paid → POSITIVE; a charge/clawback → NEGATIVE) — sign preserved,
@@ -240,9 +290,12 @@ def ma_events(row):
     k = imei_key(row.get("imei"))
     d = parse_loose_date(row.get("tx_date"))
     per = canon_period(row.get("period")) or (canon_period(d[:7]) if d else None)
-    store, rep = _s(row.get("merchant_account_id")), _s(row.get("user_name"))
+    rep = _s(row.get("user_name"))
+    store, label, market = _store_fields(row.get("merchant_account_id"), store_of, market_of,
+                                         label_hint=_s(account_name))
     base = {"key": k, "date": d, "period": per, "source": "ma",
-            "source_table": "raw_ma_commission", "store": store, "rep": rep}
+            "source_table": "raw_ma_commission", "store": store, "store_label": label,
+            "market": market, "rep": rep}
     out = []
     amt = dh.ma_paid(row.get("rebate"))
     if amt:
@@ -258,44 +311,69 @@ def ma_events(row):
     return out
 
 
-def epay_activation_from_sale(row, market_of=None):
+def epay_activation_from_sale(row, market_of=None, store_of=None):
     """One normalized ACTIVATION from a `raw_sales` device line (a POS line carrying a serial). This is
-    the same sale leg device-history reads (IMEI → serial_1)."""
+    the same sale leg device-history reads (IMEI → serial_1). `store_of` resolves the raw POS store
+    string to the org's CANONICAL store name + market through the existing /store-match chain, so the
+    store facet lists real store names (and two POS spellings of one store fold into one option)."""
     k = imei_key(row.get("serial_1"))
     d = parse_loose_date(row.get("trans_date"))
-    store = _s(row.get("store"))
+    store, label, market = _store_fields(row.get("store"), store_of, market_of)
     return {
         "key": k, "imei": _s(row.get("serial_1")) or k, "date": d,
         "period": canon_period(row.get("period")) or (canon_period(d[:7]) if d else None),
         "source": "epay", "evidence": ["sale"],
         "activation_type": _s(row.get("contract_type")), "activation_type2": None, "sub_type": None,
         "sku": _s(row.get("sku")), "device": _s(row.get("product_desc")),
-        "store": store, "store_label": store,
+        "store": store, "store_label": label,
         "rep": _s(row.get("salesperson")) or _s(row.get("user_login")),
-        "market": (market_of(store) if (market_of and store) else None) or None,
+        "market": market,
         "financed": None, "platform": None, "line_status": None, "rows": 1,
     }
 
 
-def epay_activation_from_mi(row, market_of=None):
+def epay_activation_from_mi(row, market_of=None, store_of=None):
     """One normalized ACTIVATION from a `raw_mi` residual line. The caller admits a row ONLY when
     `mi_activation_date` falls in the reported period (see the module docstring) — raw_mi carries every
-    ACTIVE subscriber every month, so mere presence is not an activation."""
+    ACTIVE subscriber every month, so mere presence is not an activation.
+
+    STORE + MARKET (owner directive 2026-07-29): the residual feed has no store column, but it carries
+    `salesforce_id`, which `commcalc.store_mapping.salesforce_id` already maps to a store address +
+    market — the same join `/sales-analyzer` uses for its RBAC store scoping. No new mapping table:
+    `store_of` accepts the salesforce id as one of its key spaces. Unresolved → `(no market)`, and the
+    residual leg keeps behaving exactly as before (store None)."""
     k = imei_key(row.get("device_serial"))
     d = parse_loose_date(row.get("mi_activation_date"))
+    sfid = _s(row.get("salesforce_id"))
+    label, market = (None, None)
+    if sfid and store_of:
+        try:
+            label, market = store_of(sfid)
+        except Exception:                       # a resolver hiccup must never lose the activation
+            label, market = (None, None)
+    if market is None and sfid and market_of:
+        try:
+            market = market_of(sfid) or None
+        except Exception:
+            market = None
+    label = _s(label)
     return {
         "key": k, "imei": _s(row.get("device_serial")) or k, "date": d,
         "period": canon_period(row.get("period")) or (canon_period(d[:7]) if d else None),
         "source": "epay", "evidence": ["residual"],
         "activation_type": None, "activation_type2": None, "sub_type": None,
         "sku": None, "device": _s(row.get("customer_plan")),
-        "store": None, "store_label": None, "rep": _s(row.get("rep_username")),
-        "market": None, "financed": None, "platform": None,
+        # A salesforce id that resolves to nothing is an OPAQUE processor key, not a store name — it is
+        # deliberately NOT shown as a store label (that would put "0015000..." in the store picker).
+        # A resolved id keeps its store even when that store carries no market.
+        "store": (sfid if label else None), "store_label": label,
+        "rep": _s(row.get("rep_username")),
+        "market": market, "financed": None, "platform": None,
         "line_status": _s(row.get("subscriber_status")), "rows": 1,
     }
 
 
-def epay_event(row, comp_of):
+def epay_event(row, comp_of, store_of=None, market_of=None):
     """One money event from a `raw_payment_detail` row. The rebate-vs-other split REUSES the existing
     classifier chain (`comp_of` = discrepancy_engine.parse_payment_type → comp_type, then
     device_history.categorize_comp) — no second classification is invented here. Amount is read AS-IS:
@@ -321,11 +399,15 @@ def epay_event(row, comp_of):
     except Exception:                                     # a classifier hiccup must not lose the row
         comp = ""
     kind = "rebate" if dh.categorize_comp(comp) == "rebate" else "other"
+    # The event's own store is resolved through the SAME chain as an activation's, so an ORPHAN row
+    # (a rebate with no activation) narrows under the same store/market selection instead of surviving
+    # a filter it should not have matched.
+    store, label, market = _store_fields(row.get("business_address"), store_of, market_of)
     return {"key": k, "kind": kind, "amount": amt, "date": d, "period": per or None,
             "label": ptype or ("Reimbursement" if kind == "rebate" else "Other compensation"),
             "source": "epay", "source_table": "raw_payment_detail", "month": None,
-            "store": _s(row.get("business_address")), "rep": _s(row.get("rep_username")),
-            "comp_type": comp or None}
+            "store": store, "store_label": label, "market": market,
+            "rep": _s(row.get("rep_username")), "comp_type": comp or None}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -544,7 +626,9 @@ def build_report(activations, events, *, expected_of=None, tolerance=TOLERANCE):
         orph_by[k] = {"imei": k, "key": k, "amount": amt, "lines": len(reb),
                       "date": first.get("date"), "period": first.get("period"),
                       "label": first.get("label"), "source": first.get("source_table"),
-                      "store": first.get("store"), "rep": first.get("rep")}
+                      "store": first.get("store"),
+                      "store_label": first.get("store_label") or first.get("store"),
+                      "market": first.get("market"), "rep": first.get("rep")}
     orphan_rows = sorted(orph_by.values(), key=lambda o: (-abs(o["amount"]), o["imei"]))
 
     return {"rows": rows, "orphans": orphan_rows, "tiles": tiles_for(rows, orphan_rows)}
@@ -575,10 +659,16 @@ def filter_options(rows, orphans=None):
             seen.setdefault(s.lower(), s)
         return sorted(seen.values(), key=lambda s: s.lower())
 
+    # Market options are the markets PRESENT IN THE DATA plus — when anything failed to resolve — the
+    # explicit `(no market)` bucket, so every row on the page is reachable by some market selection and
+    # a market filter can never quietly swallow rows (the retail-ops B1 lesson).
+    markets = _opts(lambda r: r.get("market"), orphans or [])
+    if unresolved_market_count(rows, orphans) > 0:
+        markets = markets + [NO_MARKET]
     return {
         "store_options": _opts(lambda r: r.get("store_label") or r.get("store"), orphans or []),
         "rep_options": _opts(lambda r: r.get("rep"), orphans or []),
-        "market_options": _opts(lambda r: r.get("market")),
+        "market_options": markets,
         "activation_type_options": _opts(lambda r: r.get("activation_type")),
         "platform_options": _opts(lambda r: r.get("platform")),
         "financed_options": _opts(lambda r: r.get("financed")),
@@ -587,8 +677,26 @@ def filter_options(rows, orphans=None):
     }
 
 
+def unresolved_market_count(rows, orphans=None):
+    """How many rows/orphans carry NO market — the size of the `(no market)` bucket. Drives both the
+    filter option and the on-page 'map these at /store-match' prompt."""
+    return sum(1 for r in list(rows or []) + list(orphans or []) if not _s(r.get("market")))
+
+
 def _sel(csv):
     return {s.strip().lower() for s in str(csv or "").split(",") if s.strip()}
+
+
+def market_match(row, selection):
+    """Does `row` satisfy a market selection? `selection` is the folded set from `_sel`. The
+    `(no market)` sentinel matches rows with a blank market — that bucket is a real, selectable answer,
+    never a silent drop."""
+    if not selection:
+        return True
+    mk = _fold(row.get("market"))
+    if mk and mk in selection:
+        return True
+    return (not mk) and (NO_MARKET.lower() in selection)
 
 
 def apply_filters(rows, *, stores="", reps="", markets="", status="",
@@ -605,7 +713,7 @@ def apply_filters(rows, *, stores="", reps="", markets="", status="",
             continue
         if rp and _fold(r.get("rep")) not in rp:
             continue
-        if mk and _fold(r.get("market")) not in mk:
+        if not market_match(r, mk):
             continue
         if stt and _fold(r.get("rebate_status")) not in stt:
             continue
