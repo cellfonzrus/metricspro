@@ -18441,6 +18441,309 @@ def agency_void_invoice(invoice_id: str, org_id: str = ORG_ID, authorization: st
     return _agency.void_invoice(sb(), org_id, invoice_id, _agency_who(authorization, org_id))
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# IMEI ↔ REBATE RECONCILIATION REPORT (owner request 2026-07-28: "one more exclusive report which shows
+# the IMEI activated and the rebate received against it")
+#
+# CARRIER- AND TENANT-AGNOSTIC by construction (AGENT_CONTRACT §3 / RULE TWO): the source path is resolved
+# by WHICH DATA EXISTS for the org — a master-agent/VidaPay feed (commcalc.raw_ma_commission, mig 083) or
+# the ePay feed (raw_payment_detail rebate classes against raw_sales / raw_mi activations) — never by a
+# tenant or carrier NAME. An org carrying both gets the union, every row tagged with its source.
+#
+# ALL aggregation math lives in the PURE, unit-proved module `commcalc.imei_rebate_report`; this endpoint
+# only READS (org-scoped, period-indexed) and composes. READ-ONLY: it displays money the carrier/processor
+# already recorded — no rate, tier, plan rule, payout or calc input is read or written, and nothing
+# recomputes. Money columns ride the EXISTING `_can_view_carrier_residual` gate (RULE FOUR: a gated money
+# column never leaks through an export either).
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+_IR_READ_CAP = 200000          # hard ceiling on rows pulled per table (a runaway read is a 502, not a report)
+
+
+def _ir_paged(client, org_id, table, periods, cols, tweak=None):
+    """Org-scoped, PERIOD-INDEXED paged read across every spelling of every period in `periods`
+    (`_pvariants` — the recurring period-spelling bug class). Returns (rows, ok); a missing table or a
+    read error degrades to ([], False) so one absent feed never 500s the whole report."""
+    rows = []
+    try:
+        for per in periods:
+            start = 0
+            while True:
+                q = (client.schema("commcalc").table(table).select(cols)
+                     .eq("org_id", org_id).in_("period", _pvariants(per)))
+                if tweak:
+                    q = tweak(q)
+                chunk = q.range(start, start + 999).execute().data or []
+                rows.extend(chunk)
+                if len(chunk) < 1000 or len(rows) >= _IR_READ_CAP:
+                    break
+                start += 1000
+            if len(rows) >= _IR_READ_CAP:
+                break
+    except Exception as e:
+        print(f"WARN imei-rebates {table} period read failed: {e}")
+        return rows, False
+    return rows, True
+
+
+def _ir_ma_rows(client, org_id, window, date_from, date_to, cols):
+    """raw_ma_commission over the rebate window, read TWO indexed ways and UNIONed on id:
+      • by `period` (index raw_ma_commission_org_period), and
+      • by `tx_date` range (index raw_ma_commission_org_date),
+    because a pulled/uploaded MA row may carry one of those two and not the other (the period columns are
+    DERIVED per row at import — mig 083). Union-on-id means neither gap silently drops an activation."""
+    rows, ok = _ir_paged(client, org_id, "raw_ma_commission", window, cols)
+    by_id = {r.get("id"): r for r in rows if r.get("id")}
+    try:
+        start = 0
+        while True:
+            chunk = (client.schema("commcalc").table("raw_ma_commission").select(cols)
+                     .eq("org_id", org_id).gte("tx_date", date_from).lte("tx_date", date_to)
+                     .range(start, start + 999).execute().data) or []
+            for r in chunk:
+                if r.get("id"):
+                    by_id.setdefault(r["id"], r)
+            if len(chunk) < 1000 or len(by_id) >= _IR_READ_CAP:
+                break
+            start += 1000
+        ok = True
+    except Exception as e:
+        print(f"WARN imei-rebates raw_ma_commission date read failed: {e}")
+    return list(by_id.values()), ok
+
+
+@router.get("/imei-rebates")
+def imei_rebate_report_endpoint(period: str = "", lag_months: int = 6, basis: str = "both",
+                                stores: str = "", reps: str = "", markets: str = "", status: str = "",
+                                activation_type: str = "", platform: str = "", financed: str = "",
+                                source: str = "", limit: int = 5000,
+                                authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """IMEI ↔ REBATE reconciliation — one row per ACTIVATED IMEI in `period`, with the rebate recorded
+    against it, the M1–M6 spiffs the feed states, and a `rebate_status` of received / none / partial.
+
+    The point of the report is the GAPS: an activation with NO rebate is a first-class, filterable row and
+    its own tile — not an absent row. The inverse (a rebate whose IMEI has no activation in this period's
+    universe) comes back in `orphans` as a collapsed data-quality section.
+
+    Source resolution is by DATA PRESENCE, never by tenant/carrier name: master-agent rows
+    (raw_ma_commission) → the MA path; B2B sales / residual activations + raw_payment_detail rebate classes
+    → the ePay path; an org with both gets the union, each row tagged `source`. The rebate-vs-other split
+    on the ePay side REUSES the existing device-history / discrepancy-engine classifier — no second
+    classification exists.
+
+    Params: `period` (any spelling; blank = current month) · `lag_months` (rebate window after the
+    activation month, default 6 = the M1–M6 schedule) · `basis` both|sales|residual (which ePay activation
+    leg counts) · the RULE FIVE filters `stores` / `reps` / `markets` and the appended facets `status` /
+    `activation_type` / `platform` / `financed` / `source` (all comma-separated, applied SERVER-side so
+    tiles, table and export agree) · `limit` (display cap; the tiles always describe the full filtered set).
+
+    READ-ONLY. Money columns are gated by `_can_view_carrier_residual`; a caller without it gets the counts
+    and statuses with every $ nulled and `money_gated: true`."""
+    require_org(org_id)
+    from app.modules.commcalc import imei_rebate_report as _irr
+    from app.modules.commcalc.discrepancy_engine import parse_payment_type as _ir_ppt
+    client = sb()
+
+    per = (period or "").strip() or _date.today().strftime("%B %Y")
+    try:
+        lag = max(0, min(24, int(lag_months)))
+    except (TypeError, ValueError):
+        lag = 6
+    basis = (basis or "both").strip().lower()
+    if basis not in ("both", "sales", "residual"):
+        basis = "both"
+    window = _irr.period_window(per, lag)
+    ym = _irr.period_ym(per)
+    if ym:
+        _y, _m = ym
+        date_from = f"{_y:04d}-{_m:02d}-01"
+        _ly, _lm = _irr.period_ym(window[-1]) or (_y, _m)
+        _nm, _ny = (_lm % 12) + 1, _ly + (1 if _lm == 12 else 0)
+        date_to = (_date(_ny, _nm, 1) - _timedelta(days=1)).isoformat()
+    else:
+        date_from = date_to = None
+
+    # Market resolution for the ePay legs (store string → market, the SAME store_mapping resolution the
+    # Sales Report / Custom Report use). MA data is processor-account-keyed with NO store_mapping linkage —
+    # the documented /ma-commission/summary deviation — so MA rows carry no market.
+    try:
+        _market_for, _all_markets = _cr_market_resolver(client, org_id)
+    except Exception:
+        _market_for, _all_markets = (lambda s: ""), []
+
+    sources, notes = [], []
+    activations, events = [], []
+
+    # ── MA PATH ───────────────────────────────────────────────────────────────────────────────────
+    ma_cols = ("id,imei,tx_date,period,period_month,period_year,merchant_account_id,user_name,sku,"
+               "activation_type,activation_type2,sub_type,line_status,is_financed,platform,rebate,"
+               + ",".join(_irr.SPIFF_KEYS) + "," + ",".join(_irr.MA_OTHER_COMPONENTS))
+    ma_rows, ma_ok = ([], True)
+    if date_from:
+        ma_rows, ma_ok = _ir_ma_rows(client, org_id, window, date_from, date_to, ma_cols)
+    else:
+        ma_rows, ma_ok = _ir_paged(client, org_id, "raw_ma_commission", window, ma_cols)
+    if ma_rows:
+        sources.append("ma")
+        for r in ma_rows:
+            k = _irr.imei_key(r.get("imei"))
+            if not _irr.is_device_identifier(k):
+                continue
+            # A line whose TRANSACTION DATE predates the reported period belongs to an EARLIER activation
+            # (its later-month spiff/adjustment can carry a window `period` while keeping the original
+            # tx_date). Crediting it here would mis-state this period AND manufacture a phantom orphan.
+            if _irr.is_before_period(r.get("tx_date"), per):
+                continue
+            # ACTIVATION = a master-agent line whose TRANSACTION DATE falls in the reported period. A line
+            # landing in a later window period is that activation's adjustment, not a new activation.
+            if _irr.date_in_period(r.get("tx_date"), per) or (
+                    not r.get("tx_date") and _irr.canon_period(r.get("period")) == _irr.canon_period(per)):
+                activations.append(_irr.ma_activation(r))
+            events.extend(_irr.ma_events(r))
+    elif ma_ok:
+        # MA table readable but empty for this window — say so ONLY if the org has MA data at all, so a
+        # Boost-only tenant never sees a Total-flavoured note.
+        try:
+            probe = (client.schema("commcalc").table("raw_ma_commission").select("id")
+                     .eq("org_id", org_id).limit(1).execute().data) or []
+        except Exception:
+            probe = []
+        if probe:
+            notes.append("This org has master-agent commission rows, but none fall in the selected "
+                         "window — check the period/date on the import, or widen the month.")
+
+    # ── ePay PATH ─────────────────────────────────────────────────────────────────────────────────
+    sale_rows, mi_rows = [], []
+    if basis in ("both", "sales"):
+        sale_cols = ("serial_1,trans_date,period,store,salesperson,user_login,product_desc,sku,"
+                     "contract_type,voided,ext_price")
+        sale_rows, _ = _ir_paged(client, org_id, "raw_sales", [per], sale_cols,
+                                 tweak=lambda q: q.neq("serial_1", ""))
+    if basis in ("both", "residual"):
+        mi_cols = "device_serial,period,mi_activation_date,customer_plan,subscriber_status,rep_username"
+        mi_rows, _ = _ir_paged(client, org_id, "raw_mi", [per], mi_cols,
+                               tweak=lambda q: q.neq("device_serial", ""))
+
+    epay_acts, mi_no_date = [], 0
+    for r in sale_rows or []:
+        if _gp_is_voided(r.get("voided")):
+            continue
+        k = _irr.imei_key(r.get("serial_1"))
+        if not _irr.is_device_identifier(k):
+            continue
+        epay_acts.append(_irr.epay_activation_from_sale(r, market_of=_market_for))
+    for r in mi_rows or []:
+        k = _irr.imei_key(r.get("device_serial"))
+        if not _irr.is_device_identifier(k):
+            continue
+        # raw_mi carries EVERY active subscriber every month — presence is not an activation. Only a line
+        # whose MI ACTIVATION DATE falls in the period counts; a blank activation date is EXCLUDED and
+        # COUNTED (never guessed), because guessing would invent thousands of phantom "no rebate" gaps.
+        if not _irr.parse_loose_date(r.get("mi_activation_date")):
+            mi_no_date += 1
+            continue
+        if _irr.date_in_period(r.get("mi_activation_date"), per):
+            epay_acts.append(_irr.epay_activation_from_mi(r, market_of=_market_for))
+
+    pay_ok = True
+    if epay_acts:
+        sources.append("epay")
+        activations.extend(epay_acts)
+        pay_cols = "imei,mdn,payment_type,amount,period,period_month,period_year,payment_date,business_address,rep_username"
+        pay_rows, pay_ok = _ir_paged(client, org_id, "raw_payment_detail", window, pay_cols,
+                                     tweak=lambda q: q.neq("imei", ""))
+        _comp_of = lambda pt: _ir_ppt(pt)[0]                                          # noqa: E731
+        for r in pay_rows or []:
+            k = _irr.imei_key(r.get("imei"))
+            if not _irr.is_device_identifier(k):
+                continue
+            events.append(_irr.epay_event(r, _comp_of))
+        if not pay_ok:
+            notes.append("The ePay payment-detail feed could not be read — rebates on those activations "
+                         "are shown as unknown gaps until it is available.")
+    if mi_no_date:
+        notes.append(f"{mi_no_date} residual line(s) carry no MI activation date and were EXCLUDED from "
+                     "the activation count rather than guessed.")
+
+    built = _irr.build_report(activations, events)
+    all_rows, orphans = built["rows"], built["orphans"]
+    opts = _irr.filter_options(all_rows, orphans)
+
+    rows = _irr.apply_filters(all_rows, stores=stores, reps=reps, markets=markets, status=status,
+                              activation_type=activation_type, platform=platform, financed=financed,
+                              source=source)
+    orph = orphans
+    if stores or reps:
+        _st, _rp = {s.strip().lower() for s in (stores or "").split(",") if s.strip()}, \
+                   {s.strip().lower() for s in (reps or "").split(",") if s.strip()}
+        orph = [o for o in orphans
+                if (not _st or str(o.get("store") or "").strip().lower() in _st)
+                and (not _rp or str(o.get("rep") or "").strip().lower() in _rp)]
+    tiles = _irr.tiles_for(rows, orph)
+
+    try:
+        cap = max(1, min(50000, int(limit)))
+    except (TypeError, ValueError):
+        cap = 5000
+    total_rows, truncated = len(rows), len(rows) > cap
+    shown = rows[:cap]
+
+    # RULE FOUR money gate — the caller lacking `carrier_residual` gets counts + statuses, every $ nulled
+    # (in the rows AND the tiles AND therefore every export), never a silently-omitted column.
+    money_ok = True
+    try:
+        money_ok = _can_view_carrier_residual(authorization, org_id)
+    except Exception:
+        money_ok = True
+    if not money_ok:
+        _MONEY = ("rebate", "spiff_total", "other_paid", "total_received", "expected_rebate")
+        for r in shown:
+            for f in _MONEY:
+                r[f] = None
+            r["spiff_by_month"] = None
+        for o in orph:
+            o["amount"] = None
+        tiles = {**tiles,
+                 "with_rebate": {**tiles["with_rebate"], "amount": None},
+                 "no_rebate": {**tiles["no_rebate"], "estimated_amount": None},
+                 "partial": {**tiles["partial"], "amount": None},
+                 "rebate_total": None, "spiff_total": None, "other_total": None,
+                 "total_received": None,
+                 "orphan": {**tiles["orphan"], "amount": None}}
+        notes.append("Rebate amounts are hidden for your role (carrier-residual visibility is set to "
+                     "'permissioned' for this tenant). Counts and statuses are still shown.")
+
+    if not sources:
+        notes.append("No activation source carries data for this org in " + per + ". Import the "
+                     "master-agent commission report (Data Imports), or the monthly Sales / MI files, "
+                     "then reload.")
+
+    return {
+        "ready": True, "period": _irr.canon_period(per) or per, "basis": basis,
+        "lag_months": lag, "window": window,
+        "window_from": date_from, "window_to": date_to,
+        "sources": sources, "source": ("both" if len(sources) > 1 else (sources[0] if sources else "none")),
+        "definition_note": _irr.definition_note(sources, basis),
+        "sign_note": _irr.sign_note(sources),
+        "window_note": _irr.window_note(window, lag),
+        "money_gated": (not money_ok),
+        "tiles": tiles,
+        "rows": shown, "total_rows": total_rows, "truncated": truncated,
+        "orphans": orph[:1000], "orphan_truncated": len(orph) > 1000,
+        "orphan_note": ("A rebate recorded against an IMEI with no activation in this period's universe. "
+                        "The commonest cause is an activation in an EARLIER period (the rebate lags), not "
+                        "an error — widen the month to confirm before treating it as a data problem."),
+        "market_options": opts["market_options"] or _all_markets,
+        "store_options": opts["store_options"], "rep_options": opts["rep_options"],
+        "activation_type_options": opts["activation_type_options"],
+        "platform_options": opts["platform_options"],
+        "financed_options": opts["financed_options"],
+        "status_options": opts["status_options"],
+        "source_options": sources,
+        "unfiltered_rows": len(all_rows),
+        "note": (" ".join(notes) or None),
+    }
+
+
 # ── ADMIN-ATTENTION PROVIDERS (settings-audit 2026-07-26) ────────────────────────────────────────
 # Importing commcalc.import_audit registers this module's attention providers with platform-core's
 # aggregator (GET /core/attention → the admin login popup): connectors that cannot import, the

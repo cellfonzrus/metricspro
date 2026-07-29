@@ -98,6 +98,9 @@ export default function MaCommissionPage() {
           spiffs from <b>MA Commission Details</b>, plus airtime margin from <b>MA Daily Tx</b>. Positive = money you
           receive. Upload the reports on <a href="/commcalc/upload" style={{ color: 'var(--accent,#2563eb)' }}>Data Imports</a> (no
           period needed) or auto-import them with a mailbox rule.
+          {' '}Need it <b>per handset</b>? <a href="/commcalc/imei-rebates" style={{ color: 'var(--accent,#2563eb)' }}>IMEI
+          Rebate Reconciliation</a> breaks the same data down to one row per activated IMEI — and shows the
+          activations with <i>no</i> rebate against them.
         </p>
       </div>
 
