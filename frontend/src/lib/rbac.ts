@@ -67,6 +67,12 @@ export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
     help: 'Raw carrier/processor residual reports (raw_mi-derived). Only enforced when the tenant sets residual visibility to "permissioned".' },
   { key: 'device_commission', label: 'Device history commission amounts',
     help: 'Per-period commission & rebate $ on the Device History Lookup (backend commcalc `_can_view_device_commission`). DEFAULT-CLOSED — admin-only until granted; the device history / prompts / tenure stay visible to everyone regardless.' },
+  { key: 'imei_rebates', label: 'IMEI rebate reconciliation report',
+    help: 'Access to /commcalc/imei-rebates — the whole report, not just the $ (backend commcalc `_can_view_imei_rebates`). DEFAULT-CLOSED — admin-only until granted; money columns additionally ride the carrier-residual gate when the tenant sets residual visibility to "permissioned".' },
+  { key: 'residual_per_sub', label: 'Residual per Subscriber report',
+    help: 'Access to /accounts/residual-per-sub. DEFAULT-CLOSED — admin-only until granted.' },
+  { key: 'account_trends', label: 'Trends report (all metrics)',
+    help: 'Access to /accounts/trends. DEFAULT-CLOSED — admin-only until granted.' },
 ]
 // Frontend mirror of backend commcalc `_can_view_carrier_residual` — KEEP IN SYNC. Super-admins /
 // company-wide ('all') roles / admins always pass; otherwise the grant is honored under either the
@@ -212,6 +218,7 @@ export const NAV: NavGroup[] = [
     { href: '/hr/people', label: 'People (add employees)', icon: '🧑‍💼', module: 'hr', scopes: ['all', 'market'] },
     { href: '/hr/onboarding', label: 'Onboarding Checklist', icon: '🧩', module: 'hr', scopes: ['all', 'market'] },
     { href: '/hr/compliance', label: 'Compliance', icon: '📋', module: 'hr', scopes: ['all', 'market'] },
+    { href: '/hr/employee-database', label: 'Employee Database', icon: '🗄️', module: 'hr', scopes: ['all', 'market'] },
     { href: '/hr', label: 'HR · Total Comp', icon: '📊', module: 'hr', scopes: ['all', 'market'] },
     { href: '/hr/payroll-expenses', label: 'Payroll Expenses', icon: '💼', module: 'hr', scopes: ['all', 'market'] },
     { href: '/storeops/payroll', label: 'Payroll', icon: '💵', module: 'storeops', scopes: ['all', 'market'] },
