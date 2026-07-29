@@ -11,17 +11,24 @@ DEVICE_DEPTS = {'Android - XP', 'IPHONE - XP', 'TABLET - XP'}
 ONDIGO_DEPT = 'Ondigo'
 GP_CATEGORIES = {'device', 'accessory', 'plan', 'other', 'exclude'}
 
-def _dept_classifier(gp_category_map):
-    """Return a fn department_label -> GP category. The map (commcalc.gp_category_map, mig 069) is a set
-    of OVERRIDES layered on the built-in Boost defaults — so an EMPTY/None map reproduces the original
-    hard-coded buckets byte-for-byte (device = Android/IPHONE/TABLET-XP, accessory = Ondigo, blank = plan,
-    everything else = other). A tenant maps only the labels that differ; '' overrides blank-department rows."""
+def _gp_overrides(gp_category_map):
+    """{department: gp-bucket} from commcalc.gp_category_map rows (mig 069) — the ONE override-parsing
+    rule, shared by the legacy department classifier and the config-mode per-line classifier."""
     overrides = {}
     for row in (gp_category_map or []):
         d = str(row.get('department') or '').strip()
         c = str(row.get('category') or '').strip().lower()
         if c in GP_CATEGORIES:
             overrides[d] = c
+    return overrides
+
+
+def _dept_classifier(gp_category_map):
+    """Return a fn department_label -> GP category. The map (commcalc.gp_category_map, mig 069) is a set
+    of OVERRIDES layered on the built-in Boost defaults — so an EMPTY/None map reproduces the original
+    hard-coded buckets byte-for-byte (device = Android/IPHONE/TABLET-XP, accessory = Ondigo, blank = plan,
+    everything else = other). A tenant maps only the labels that differ; '' overrides blank-department rows."""
+    overrides = _gp_overrides(gp_category_map)
     def classify(dept) -> str:
         d = str(dept or '').strip()
         if d in overrides:        return overrides[d]
@@ -93,6 +100,8 @@ def calc_gp_report(
     comp_rows: list[dict] = None,
     gp_category_map: list[dict] = None,
     resolve_store_code=None,
+    config_classify: dict = None,
+    ma_income: dict = None,
 ) -> dict:
     """
     Returns store_rows (by store) and rep_rows (by rep).
@@ -102,8 +111,37 @@ def calc_gp_report(
     expenses (keyed by the org's storeops store_code) when the store_mapping street-number join yields no
     store_code — i.e. a tenant with no commcalc.store_mapping. Gated on an empty derived store_code so the
     house (store_mapping populated) is byte-identical. None = disabled (pre-existing behavior).
+    config_classify (mig 250, per-org OPT-IN): {'is_accessory': fn(row)->bool, 'box_departments': set}.
+    When given, per-LINE classification runs accessory-first through the org's Sales-Report accessory rule
+    (department+category+keyword+catalog — POS feeds like luxelink's are ambiguous by department alone),
+    then the explicit gp_category_map department overrides, then box departments => device, blank => plan,
+    else other. None (default, and every org with apply_to_gp false) = the legacy department-only
+    classifier, byte-identical.
+    ma_income: {'comm': $, 'atu': $} of VidaPay/MA carrier income for ePay-less orgs (router computes it
+    only when raw_payment_detail is EMPTY for the period). Lands on ONE company-wide row — MA rows carry
+    no store address (same posture as the P&L's owner-approved MA fallback). None = no row (house).
     """
     classify = _dept_classifier(gp_category_map)
+    if config_classify is None:
+        def classify_row(r) -> str:
+            return classify(r.get('department'))
+    else:
+        _is_acc = config_classify.get('is_accessory') or (lambda _r: False)
+        _box = {str(b).strip() for b in (config_classify.get('box_departments') or ())}
+        _ovr = _gp_overrides(gp_category_map)
+        def classify_row(r) -> str:
+            # Accessory FIRST (the whole point: category-level discrimination the dept map can't express),
+            # then the tenant's explicit department overrides, then box departments = device, blank = plan.
+            if _is_acc(r):
+                return 'accessory'
+            d = str(r.get('department') or '').strip()
+            if d in _ovr:
+                return _ovr[d]
+            if d in _box:
+                return 'device'
+            if d == '':
+                return 'plan'
+            return 'other'
     # ── Catalog cost map (product cost lookup) ────────────────────
     # Keyed by product_id (HOUSE format — byte-identical) PLUS, ADDITIVELY, UPC / SKU / normalized
     # product_desc so the TOTAL/luxelink UPC-keyed catalog (NO Product ID; migs 230/231) also yields a cost.
@@ -252,12 +290,12 @@ def calc_gp_report(
         market = str(sm.get('market') or 'Boost').strip()
         store_code = str(sm.get('store_code') or '').strip()
 
-        acc_gp    = sum(safe_float(r.get('gp')) for r in rows if classify(r.get('department')) == 'accessory')
+        acc_gp    = sum(safe_float(r.get('gp')) for r in rows if classify_row(r) == 'accessory')
         setup_gp  = sum(safe_float(r.get('gp')) for r in rows if 'Device Setup Charge' in str(r.get('product_desc','')))
-        phone_sales = sum(safe_float(r.get('ext_price')) for r in rows if classify(r.get('department')) == 'device')
-        plan_gp   = sum(safe_float(r.get('gp')) for r in rows if classify(r.get('department')) == 'plan')
+        phone_sales = sum(safe_float(r.get('ext_price')) for r in rows if classify_row(r) == 'device')
+        plan_gp   = sum(safe_float(r.get('gp')) for r in rows if classify_row(r) == 'plan')
         other_gp  = sum(safe_float(r.get('gp')) for r in rows
-                        if classify(r.get('department')) == 'other'
+                        if classify_row(r) == 'other'
                         and 'Device Setup Charge' not in str(r.get('product_desc','')))
 
         pay = pay_by_num.get(num, {})
@@ -303,6 +341,24 @@ def calc_gp_report(
             'net_profit': net_profit, 'net_excl_mdf': net_excl_mdf,
         })
 
+    # ── VidaPay/MA carrier income (ePay-less orgs) — ONE company-wide row ─────────────────────────
+    # Owner 2026-07-29: "the commission received should be in commission column." MA rows carry no store
+    # address (only a processor merchant id), so — exactly like the P&L's MA fallback — the money is
+    # booked company-wide instead of inventing a phantom per-store bucket. comm = MA Commission Details
+    # payable (sign-flipped, positive = dealer receives); atu = airtime margin (merchant_discount).
+    # ma_income is None for every ePay org (house/Boost) → no row, byte-identical.
+    if ma_income and (safe_float(ma_income.get('comm')) or safe_float(ma_income.get('atu'))):
+        _mc, _ma = safe_float(ma_income.get('comm')), safe_float(ma_income.get('atu'))
+        store_rows.append({
+            'store': '(Company-wide — VidaPay/MA)', 'store_code': '', 'market': '',
+            'acc_gp': 0.0, 'setup_gp': 0.0, 'phone_sales': 0.0, 'plan_gp': 0.0, 'other_gp': 0.0,
+            'comm': _mc, 'reimb': 0.0, 'mdf': 0.0,
+            'comp_comm': 0.0, 'comp_reimb': 0.0, 'comp_mdf': 0.0,
+            'chargeback': 0.0, 'unmapped': 0.0, 'mi': 0.0, 'atu': _ma,
+            'total_rev': _mc + _ma, 'rep_pay': 0.0, 'exp_total': 0.0, 'net_phone_cost': 0.0,
+            'net_profit': _mc + _ma, 'net_excl_mdf': _mc + _ma,
+        })
+
     # ── Build rep rows ────────────────────────────────────────────
     by_rep: dict[str, list] = {}
     for r in sales:
@@ -313,10 +369,10 @@ def calc_gp_report(
 
     rep_rows = []
     for rep, rows in by_rep.items():
-        acc_gp   = sum(safe_float(r.get('gp')) for r in rows if classify(r.get('department')) == 'accessory')
+        acc_gp   = sum(safe_float(r.get('gp')) for r in rows if classify_row(r) == 'accessory')
         setup_gp = sum(safe_float(r.get('gp')) for r in rows if 'Device Setup Charge' in str(r.get('product_desc','')))
-        phone_s  = sum(safe_float(r.get('ext_price')) for r in rows if classify(r.get('department')) == 'device')
-        plan_gp  = sum(safe_float(r.get('gp')) for r in rows if classify(r.get('department')) == 'plan')
+        phone_s  = sum(safe_float(r.get('ext_price')) for r in rows if classify_row(r) == 'device')
+        plan_gp  = sum(safe_float(r.get('gp')) for r in rows if classify_row(r) == 'plan')
 
         comm_row = next((c for c in rep_commissions if c.get('epay_salesperson') == rep), {})
 
@@ -369,7 +425,7 @@ def calc_gp_report(
     excluded = {k: {'lines': 0, 'ext_price': 0.0, 'gp': 0.0}
                 for k in ('voided', 'return', 'unattributed')}
     for r in sales:
-        cat = classify(r.get('department'))
+        cat = classify_row(r)
         dept = str(r.get('department') or '').strip() or '(blank)'
         d = comp.setdefault(cat, {}).setdefault(dept, {'department': dept, 'lines': 0, 'ext_price': 0.0,
                                                        'gp': 0.0, 'excluded_lines': 0,

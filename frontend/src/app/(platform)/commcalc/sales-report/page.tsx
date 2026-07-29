@@ -63,6 +63,7 @@ export default function SalesReportPage() {
   const [accCanEdit, setAccCanEdit] = useState(true)               // caller may edit Classification settings ('classification' perm)
   const [boxBuckets, setBoxBuckets] = useState<string[]>([])       // box_count_buckets (mig 231); UI toggles only 'byod', other members preserved
   const [catOn, setCatOn] = useState(false)                        // catalog-driven accessory classification (mig 231)
+  const [gpOn, setGpOn] = useState(false)                          // GP-report adoption of these rules (mig 250)
   const [catCats, setCatCats] = useState<string[]>([])             // which catalog categories = accessory
   const [catOpts, setCatOpts] = useState<string[]>([])             // distinct catalog categories (pick-don't-type)
   const [selMarkets, setSelMarkets] = useState<string[]>([])   // multi-select market filter
@@ -85,6 +86,7 @@ export default function SalesReportPage() {
       setAccCanEdit(f.can_edit !== false)
       setBoxBuckets(Array.isArray(f.box_count_buckets) ? f.box_count_buckets : [])
       setCatOn(!!f.catalog_classify_enabled)
+      setGpOn(!!f.apply_to_gp)
       setCatCats(f.catalog_accessory_categories || [])
       setCatOpts(f.catalog_categories || [])
     }).catch(e => setAccMsg('❌ ' + (e?.message || e)))
@@ -102,7 +104,8 @@ export default function SalesReportPage() {
         box_departments: accSel.box, setup_fee_keywords: setupKws, contract_type_map: ctMap,
         billpay_products: accSel.billpay,
         box_count_buckets: boxBuckets,
-        catalog_classify_enabled: catOn, catalog_accessory_categories: catCats }) })
+        catalog_classify_enabled: catOn, catalog_accessory_categories: catCats,
+        apply_to_gp: gpOn }) })
       setAccMsg('✅ Saved.'); setAccOpen(false); load()
     } catch (e: any) { setAccMsg('❌ ' + (e?.message || e)) }
   }
@@ -624,6 +627,17 @@ export default function SalesReportPage() {
                   </label>
                   <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
                     A BYOD activation (customer brings their own phone) has no device box, so it isn&apos;t counted as a &ldquo;box&rdquo; by default. Tick this to count each BYOD activation as one box — it flows to the box count everywhere (Daily Targets, Productivity, stack ranking). Requires BYOD to be classified (Contract-type &rarr; activation bucket, or blank-CT activation rules). <b>Money-adjacent</b> only if a plan pays on box targets — re-run Calculate to apply.
+                  </div>
+                </div>
+                {/* GP-report adoption (mig 250): the GP page's Acc GP / Phone Sales buckets classify through
+                    THESE rules instead of the department-only Boost defaults. Off = legacy, byte-identical. */}
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                  <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, fontWeight: 700 }}>
+                    <input type="checkbox" checked={gpOn} onChange={e => setGpOn(e.target.checked)} />
+                    Use these rules for the Gross-Profit report buckets
+                  </label>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', margin: '4px 0 8px' }}>
+                    When on, the <a href="/commcalc/gp" style={{ color: 'var(--accent)' }}>GP report</a> counts a line as <b>Acc GP</b> using the accessory rules above (department, category, keyword, catalog) and as <b>Phone Sales</b> using the box departments — instead of the built-in Boost department labels. Turn this on when your POS departments don&apos;t match the Boost names (e.g. a Total feed where the same department holds both phones and accessories). Display-only: rep pay never reads it.
                   </div>
                 </div>
                 {/* CATALOG-driven accessory classification (migs 230/231). A product-catalog upload's category

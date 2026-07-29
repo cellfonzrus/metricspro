@@ -4690,6 +4690,19 @@ def _accessory_config_uncached(client, org_id):
                                  if str(b).strip().lower() in ("byod", "upgrade", "premium")]
     except Exception:
         box_count_buckets = []
+    # GP-REPORT adoption flag (mig 250; per-org, admin-editable — the Classification modal's "use for
+    # GP report" toggle). When TRUE the GP report classifies its Acc GP / Phone Sales buckets through THIS
+    # config (_is_accessory + box_departments) instead of the department-only Boost defaults. Fetched in
+    # its OWN defensive query; missing column (pre-250) / default false → GP classification BYTE-IDENTICAL.
+    # DISPLAY ONLY (GP page); no payout path reads it.
+    apply_to_gp = False
+    try:
+        grows = (client.schema("commcalc").table("accessory_config")
+                 .select("apply_to_gp").eq("org_id", org_id).limit(1).execute().data) or []
+        if grows:
+            apply_to_gp = bool(grows[0].get("apply_to_gp"))
+    except Exception:
+        apply_to_gp = False
     # CATALOG-DRIVEN accessory classification (migs 230/231; mig 224 doctrine — additive, config-gated).
     # `catalog_classify_enabled` (default false → Boost/house byte-identical) turns on an ADDITIVE catalog
     # layer: a line whose product (by normalized product_desc, else sku/upc/product_id where present) carries
@@ -4735,6 +4748,7 @@ def _accessory_config_uncached(client, org_id):
             "box_count_buckets_list": box_count_buckets,
             "catalog_classify_enabled": catalog_classify_enabled,
             "catalog_accessory_categories_list": catalog_accessory_categories,
+            "apply_to_gp": apply_to_gp,
             "catalog_classifier": catalog_classifier}
 
 
@@ -9439,13 +9453,38 @@ def _compute_gp(client, org_id, period, market=""):
     # / net_profit) do NOT read them and are byte-identical. Defensive fallback to the pre-⑦ select so a
     # tenant/table without those columns can never break the GP page (composition then counts every line,
     # exactly as it did before).
-    _sales_cols = 'store,department,gp,product_desc,ext_price,salesperson,product_id,sku,voided,trans_type'
+    _sales_cols = 'store,department,category,gp,product_desc,ext_price,salesperson,product_id,sku,voided,trans_type'
     try:
         sales  = sc.table('raw_sales').select(_sales_cols).eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
     except Exception as _sce:
         print(f'WARN gp sales select fell back (no voided/trans_type columns?): {_sce}')
-        sales  = sc.table('raw_sales').select('store,department,gp,product_desc,ext_price,salesperson,product_id,sku').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
+        sales  = sc.table('raw_sales').select('store,department,category,gp,product_desc,ext_price,salesperson,product_id,sku').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
     pay_detail = sc.table('raw_payment_detail').select('business_address,amount,payment_type').eq('org_id', org_id).in_('period', pv).limit(50000).execute().data or []
+    # VidaPay/MA fallback for the carrier-income columns (owner 2026-07-29: "the commission received
+    # should be in commission column"). ePay-less orgs (Total/luxelink — raw_payment_detail EMPTY for the
+    # period) fall through to the MA sources, mirroring the P&L's owner-approved fallback (account/coa.py):
+    # commission received = raw_ma_commission (sign-flipped Σ _MA_COMPONENTS; positive = dealer receives)
+    # → the COMMISSION column; airtime margin = raw_ma_daily_tx.merchant_discount → the ATU column. MA rows
+    # carry no store address, so calc_gp_report books the money on ONE company-wide row (same posture as
+    # the P&L). House/Boost: pay_detail non-empty → never fires; both MA tables empty → None → identical.
+    ma_income = None
+    if not pay_detail:
+        _ma_comm = _ma_atu = 0.0
+        try:
+            from app.modules.account.residual_subs import _MA_COMPONENTS as _MACOMP
+            _mrows = sc.table('raw_ma_commission').select(','.join(_MACOMP)).eq('org_id', org_id) \
+                .in_('period', pv).limit(100000).execute().data or []
+            _ma_comm = -sum(sum(safe_float(x.get(c)) for c in _MACOMP) for x in _mrows)
+        except Exception:
+            _ma_comm = 0.0
+        try:
+            _drows = sc.table('raw_ma_daily_tx').select('merchant_discount').eq('org_id', org_id) \
+                .in_('period', pv).limit(100000).execute().data or []
+            _ma_atu = sum(safe_float(x.get('merchant_discount')) for x in _drows)
+        except Exception:
+            _ma_atu = 0.0
+        if _ma_comm or _ma_atu:
+            ma_income = {'comm': round(_ma_comm, 2), 'atu': round(_ma_atu, 2)}
     mi_rows    = sc.table('raw_mi').select('salesforce_id,actual_mi_payout,actual_atu_payout').eq('org_id', org_id).in_('period', pv).execute().data or []
     rep_comms  = sc.table('rep_commissions').select('store,total_payout,epay_salesperson,storeops_name').eq('org_id', org_id).in_('period', pv).execute().data or []
     expenses   = sc.table('store_expenses').select('store_code,amount').eq('org_id', org_id).in_('period', pv).execute().data or []
@@ -9467,13 +9506,31 @@ def _compute_gp(client, org_id, period, market=""):
         gp_cat_map = sc.table('gp_category_map').select('department,category').eq('org_id', org_id).execute().data or []
     except Exception:
         gp_cat_map = []
+    # Config-driven GP bucket classification (mig 250 apply_to_gp; owner 2026-07-29: "accessory sales
+    # should be in accessory column"). OPT-IN per org: when the tenant ticked "use these rules for the
+    # GP report" (Classification settings), accessory lines classify via the SAME rule the Sales Report
+    # uses (_is_accessory — feeds like luxelink's are ambiguous by department alone; Category is the
+    # discriminator) and device lines via the org's BOX departments. Default false / pre-mig-250 →
+    # config_classify None → the legacy department-only classifier, byte-identical.
+    config_classify = None
+    try:
+        _acfg = _accessory_config(client, org_id)
+        if _acfg.get('apply_to_gp'):
+            config_classify = {
+                'is_accessory': (lambda r, _a=_acfg: _is_accessory(
+                    r.get('department'), r.get('category'), r.get('product_desc'), _a)),
+                'box_departments': _acfg.get('box_departments') or set(),
+            }
+    except Exception:
+        config_classify = None
     # Universal store-code resolution (store_mapping → storeops roster → explicit store_aliases) so a
     # tenant with NO commcalc.store_mapping (e.g. luxelink) still attaches its configured store_expenses,
     # which are keyed by the org's storeops store_code. House byte-identical (store_mapping populated →
     # calc_gp_report's own street-number join yields the code and the fallback never fires).
     _resolve_code = _store_code_resolver(client, org_id)
     result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period,
-                            comp_rows=comp_rows, gp_category_map=gp_cat_map, resolve_store_code=_resolve_code)
+                            comp_rows=comp_rows, gp_category_map=gp_cat_map, resolve_store_code=_resolve_code,
+                            config_classify=config_classify, ma_income=ma_income)
     if market:
         result['store_rows'] = [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]
     return result
@@ -10175,7 +10232,8 @@ def get_accessory_config(org_id: str = ORG_ID):
             "activation_rules": c["activation_rules"],
             "box_count_buckets": c["box_count_buckets_list"],
             "catalog_classify_enabled": c["catalog_classify_enabled"],
-            "catalog_accessory_categories": c["catalog_accessory_categories_list"]}
+            "catalog_accessory_categories": c["catalog_accessory_categories_list"],
+            "apply_to_gp": c.get("apply_to_gp", False)}
 
 
 @router.put("/accessory-config")
@@ -10289,14 +10347,18 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
         row["catalog_accessory_categories"] = [str(x).strip() for x in (body.get("catalog_accessory_categories") or []) if str(x).strip()]
     else:
         row["catalog_accessory_categories"] = cur["catalog_accessory_categories_list"]
+    # GP-report adoption flag (mig 250 — editable from the shared Classification-settings UI).
+    row["apply_to_gp"] = (bool(body.get("apply_to_gp")) if "apply_to_gp" in body
+                          else bool(cur.get("apply_to_gp", False)))
     # Persist defensively: pre-mig-214/213/217/218/231 those columns don't exist, so a save carrying them
     # 500s — retry progressively dropping the NEWEST columns first (mig-231 columns are the newest) so
     # editing the accessory lists never breaks before the migrations run (billpay → Boost-token fallback,
     # contract-type map → empty/classifier, box → _BOX_DEPTS, set-up fee → 'Device Setup Charge', catalog →
     # disabled/legacy classification).
-    _new231 = ["box_count_buckets", "catalog_classify_enabled", "catalog_accessory_categories"]
+    _new250 = ["apply_to_gp"]
+    _new231 = _new250 + ["box_count_buckets", "catalog_classify_enabled", "catalog_accessory_categories"]
     _drop_final = _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords", "box_departments"]
-    for _drop in ([], _new231, _new231 + ["activation_rules"], _new231 + ["activation_rules", "billpay_products"],
+    for _drop in ([], _new250, _new231, _new231 + ["activation_rules"], _new231 + ["activation_rules", "billpay_products"],
                   _new231 + ["activation_rules", "billpay_products", "contract_type_map"],
                   _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords"], _drop_final):
         attempt = dict(row)
@@ -10365,6 +10427,8 @@ def sales_fields(period: str = "", org_id: str = ORG_ID, authorization: str = He
             # Box (device-unit) departments + device set-up-fee keywords for the Classification-settings UI —
             # options are the DISTINCT `departments`/`products` above (pick-don't-type, RULE THREE).
             "box_departments": cur["box_departments_list"], "setup_fee_keywords": cur["setup_fee_keywords_list"],
+            # GP-report adoption flag (mig 250) — the Classification modal's "use for GP report" toggle.
+            "apply_to_gp": cur.get("apply_to_gp", False),
             # Bill-payment products (mig 214): the org's CURRENT configured list + its pick-don't-type OPTIONS
             # (`billpay_product_options` = observed product descriptions). Empty list = the Boost-token default.
             "billpay_products": cur["billpay_products_list"], "billpay_product_options": billpay_options,
