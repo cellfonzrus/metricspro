@@ -19661,3 +19661,661 @@ def ma_handset_cogs_endpoint(period: str = "", window_months: int = 1, group_by:
         "source_table": "commcalc.raw_ma_fulfillment",
         "note": (" ".join(notes) or None),
     }
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# DEVICE COST RECONCILIATION — the OPTION-A MEASUREMENT PASS (owner GO 2026-07-30, design note §9
+# "Execution order locked", item 1 ONLY · appended as ONE contiguous block so a concurrent router.py
+# package merges clean)
+#
+# "What did each device cost us, according to WHICH source, and how much of that number is the same
+# device counted twice?" Four sources, four shapes, no shared key (docs/designs/device-cost-ledger.md):
+#   ① commcalc.raw_ma_fulfillment      purchase price   date_ordered     (mig 083)
+#   ② commcalc.asset_ledger            VIP billing      billing_friday   (mod-asset — READ ONLY)
+#   ③ raw_sales ∪ daily_sales_feed     ext − GP         trans_date
+#   ④ commcalc.inventory_aging_device  unit_cost        as_of_date       (mig 216)
+# All the math lives in the PURE, unit-proved `commcalc.device_cost_recon`; this endpoint only READS
+# (org-scoped, indexed where an index exists) and composes.
+#
+# READ-ONLY, DISPLAY-ONLY, NOT MONEY-TOUCHING. Nothing is written — in particular never
+# `commcalc.asset_ledger`, which belongs to mod-asset and whose upload wipes-and-reinserts. No rate,
+# tier, plan rule or payout is read; no P&L / GP / calculator route is modified; no recompute is
+# reachable. The policy column is a PREVIEW of the owner's §9 answers so the month × store delta can be
+# reviewed BEFORE the Option-C flip, which stays HELD and is not part of this package.
+#
+# WHOLE-REPORT GATE: DEFAULT-CLOSED behind the 'device_cost_recon' DATA_GRANT
+# (`_require_device_cost_recon`, the shipped `_require_ma_handset_cogs` pattern) — this surface exposes
+# what every device cost us across every source, which is strictly more sensitive than the per-source
+# reports it reconciles. The 403 is raised BEFORE a single row is read.
+#
+# PERIOD SPELLING: ①②④ are date-columned (no `period`), so their months come from indexed date ranges.
+# ③ IS period-columned and is read through `_pvariants` in BOTH spellings ('June 2026' / '2026-06') —
+# the recurring bug class where `.eq('period', …)` silently returns zero rows.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+_DCR_MA_CAP = 200000        # ① order lines (indexed on (org_id, date_ordered))
+_DCR_ASSET_CAP = 60000      # ② ledger rows per read leg (asset_ledger is ~43k rows for the house org)
+_DCR_SALES_CAP = 200000     # ③ sale lines per month, per table
+_DCR_INV_CAP = 60000        # ④ snapshot rows (one CURRENT row per device — unique on (org_id, imei))
+_DCR_ORDER_CAP = 4000       # distinct ① order numbers pushed through the activation→IMEI join
+_DCR_VIP_CAP = 40000        # vip_invoice_devices rows scanned for the SERIAL-join caveat
+_DCR_DEFAULT_ROWS = 3000    # display cap; tiles/groups/delta always describe the FULL filtered set
+
+_DCR_MA_COLS = ("id,org_id,carrier_id,source_id,order_number,order_status,order_type,tspid,business_name,"
+                "business_address,city,state,zip,product_name,number_ordered,price,tracking_number,"
+                "date_ordered,date_filled,date_shipped")
+_DCR_ASSET_COLS = ("id,esn_imei,store,market,device_model,category,status,acquired_date,due_date,"
+                   "trigger_date,billing_friday,date_sold,owed_to_vip,reimbursement,reimbursement_date,"
+                   "selling_price")
+_DCR_SALES_COLS = ("trans_id,trans_date,period,store,salesperson,department,category,product_desc,"
+                   "ext_price,gp,voided,serial_1")
+_DCR_INV_COLS = "id,imei,serial,sku,item,store,unit_cost,received_date,days_in_stock,as_of_date"
+
+
+def _can_view_device_cost_recon(authorization, org_id):
+    """PAGE gate for the Device Cost Reconciliation report. ADMIN-ONLY BY DEFAULT, grantable via the
+    DATA_GRANTS 'device_cost_recon' key — the same resolution shape as `_can_view_ma_handset_cogs`.
+    Degrades CLOSED on any resolution error: an unresolvable caller can only ever be refused."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller
+        from app.modules.commcalc import device_cost_recon as _dcr_gate
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid) if uid else None
+        return _dcr_gate.device_cost_recon_allowed(caller)
+    except Exception:
+        return False
+
+
+def _require_device_cost_recon(authorization, org_id):
+    """Raise 403 naming the permission. The detail carries the literal grant key `device_cost_recon` so
+    the page can recognise its own gate in the thrown message (client.ts `api()` surfaces only `detail`,
+    not the status code) and render the lock note instead of a raw red error."""
+    if not _can_view_device_cost_recon(authorization, org_id):
+        raise HTTPException(403, "The Device Cost Reconciliation report is restricted — you need the "
+                                 "'device_cost_recon' permission to view it. Ask an admin to grant "
+                                 "'Device cost reconciliation' on your role.")
+
+
+def _dcr_months(date_from, date_to):
+    """The 'YYYY-MM' months a [date_from, date_to] window covers, in order."""
+    out = []
+    if not (date_from and date_to):
+        return out
+    y, m = int(date_from[:4]), int(date_from[5:7])
+    ey, em = int(date_to[:4]), int(date_to[5:7])
+    while (y, m) <= (ey, em) and len(out) < 48:
+        out.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+    return out
+
+
+def _dcr_paged(client, table, cols, narrow, cap, label=None):
+    """Org-scoped paged read. Returns (rows, ok, truncated). A missing table (an unrun migration) or a
+    read error degrades to (partial, False, …) so the page renders an honest note instead of a 500 —
+    a missing migration must never break an unrelated surface."""
+    rows = []
+    try:
+        start = 0
+        while True:
+            q = narrow(client.schema("commcalc").table(table).select(cols))
+            chunk = (q.range(start, start + 999).execute().data) or []
+            rows.extend(chunk)
+            if len(chunk) < 1000 or len(rows) >= cap:
+                break
+            start += 1000
+    except Exception as e:
+        print(f"WARN device-cost-recon {label or table} read failed: {e}")
+        return rows, False, False
+    return rows[:cap], True, len(rows) >= cap
+
+
+def _dcr_store_key_fn(client, org_id):
+    """`key_of(raw) -> canonical store KEY` — the single key space the delta table compares in.
+
+    It deliberately reuses the FINANCE module's own canonicalizer (`account.coa.store_resolver` →
+    `commcalc.store_mapping.store_address`, the chain the P&L's `device_cost` line already books
+    through), so the policy leg and today's leg cannot land the same physical store in two different
+    cells. If that import ever changes shape the closure degrades to the raw upper-cased string and the
+    endpoint SAYS the comparison is coarser, rather than silently splitting a store in two.
+    Memoized; never raises."""
+    rs = None
+    try:
+        from app.modules.account import coa as _coa
+        rs = _coa.store_resolver(client, org_id)
+    except Exception as e:
+        print(f"WARN device-cost-recon store canonicalizer unavailable: {e}")
+    cache = {}
+
+    def key_of(raw):
+        s = str(raw or "").strip()
+        if not s:
+            return ""
+        if s in cache:
+            return cache[s]
+        v = s
+        if rs:
+            try:
+                v = rs(s) or s
+            except Exception:
+                v = s
+        cache[s] = (v or "").strip().upper()
+        return cache[s]
+
+    return key_of, bool(rs)
+
+
+def _dcr_arrangements(client, org_id):
+    """The org's distributor/arrangement CONFIG (RULE TWO — read, never guessed):
+    `commcalc.distributors` (mig 058) + `commcalc.data_source` (mig 083, the precise ① link) +
+    `commcalc.payable_source_map` (mig 095, which already has an admin UI at /commcalc/payables).
+    Every table is optional: a missing one just means fewer resolution chains, reported in the notes."""
+    from app.modules.commcalc import device_cost_recon as _dcr
+
+    def _read(table, cols):
+        try:
+            return (client.schema("commcalc").table(table).select(cols)
+                    .eq("org_id", org_id).limit(2000).execute().data) or []
+        except Exception as e:
+            print(f"WARN device-cost-recon {table} config read failed: {e}")
+            return []
+
+    dists = _read("distributors", "id,name,carrier_id,arrangement,terms_days,billing_cycle,"
+                                 "has_asset_lending,is_active")
+    srcs = _read("data_source", "id,distributor_id,carrier_id,processor,label")
+    maps = _read("payable_source_map", "id,carrier_id,distributor_id,label,source_table,imei_field,"
+                                       "owed_field,billing_friday_field,is_active")
+    return _dcr.ArrangementIndex(dists, srcs, maps), dists, maps
+
+
+def _dcr_asset_field_names(source_maps):
+    """(owed_field, billing_friday_field) from the org's `payable_source_map` row for `asset_ledger`
+    (mig 095 already CONFIGURES both per carrier). Falls back to the seeded Boost/VIP names so an org
+    with no map row still reads its ledger; a tenant whose ledger spells them differently needs a config
+    row, not a code change."""
+    for m in (source_maps or []):
+        if str(m.get("source_table") or "").strip().lower() != "asset_ledger":
+            continue
+        owed = (m.get("owed_field") or "").strip() or None
+        dt = (m.get("billing_friday_field") or "").strip() or None
+        if owed or dt:
+            return (owed or "owed_to_vip"), (dt or "billing_friday"), True
+    return "owed_to_vip", "billing_friday", False
+
+
+def _dcr_order_imeis(client, org_id, order_numbers):
+    """The ① → IMEI bridge, and NOTHING else: `raw_ma_commission.activation_order` →
+    `raw_ma_fulfillment.order_number` — the VERIFIED mig-083 join Device History uses
+    (`device_history.pick_ma_marketplace_price`). Returns (index, ok, capped).
+
+    Chunked `.in_()` over the order-number spellings (`device_history.order_candidates`, so a '.0'
+    artefact cannot silently miss). Capped at `_DCR_ORDER_CAP` distinct orders — a cap that BITES is
+    reported, because an un-resolved order reads as un-linkable and inflating that count would be a
+    false finding."""
+    from app.modules.commcalc import device_cost_recon as _dcr
+    cands = device_history.order_candidates(order_numbers or [])
+    capped = len(cands) > _DCR_ORDER_CAP
+    cands = cands[:_DCR_ORDER_CAP]
+    if not cands:
+        return {}, True, False
+    rows, ok = [], True
+    for i in range(0, len(cands), 200):
+        try:
+            rows += (client.schema("commcalc").table("raw_ma_commission").select("activation_order,imei")
+                     .eq("org_id", org_id).in_("activation_order", cands[i:i + 200])
+                     .limit(20000).execute().data) or []
+        except Exception as e:
+            print(f"WARN device-cost-recon raw_ma_commission order→imei read failed: {e}")
+            ok = False
+            break
+    return _dcr.order_imei_index(rows), ok, capped
+
+
+def _dcr_sales_by_month(client, org_id, months):
+    """③ sale lines per month: `raw_sales` ∪ `daily_sales_feed`, deduped by trans_id with raw_sales
+    winning — the SAME union rule the P&L (`account.coa._sales_union_rows`) and the commission side use,
+    so the monthly basis is correct whether or not the daily feed has been promoted yet. Read through
+    `_pvariants` in BOTH period spellings.
+
+    Returns ({ym: rows}, ok, truncated, feed_only_rows). Each row is tagged `_src` so the page can say
+    which table a cost came from."""
+    out, ok, trunc, feed_only = {}, True, False, 0
+    for ym in months:
+        pv = _pvariants(ym)
+        raw, ok1, t1 = _dcr_paged(client, "raw_sales", _DCR_SALES_COLS,
+                                  lambda q, pv=pv: q.eq("org_id", org_id).in_("period", pv),
+                                  _DCR_SALES_CAP, "raw_sales")
+        feed, ok2, t2 = _dcr_paged(client, "daily_sales_feed", _DCR_SALES_COLS,
+                                   lambda q, pv=pv: q.eq("org_id", org_id).in_("period", pv),
+                                   _DCR_SALES_CAP, "daily_sales_feed")
+        ok = ok and ok1
+        trunc = trunc or t1 or t2
+        for r in raw:
+            r["_src"] = "raw_sales"
+        merged = list(raw)
+        if feed:
+            if not raw:
+                for r in feed:
+                    r["_src"] = "daily_sales_feed"
+                merged = list(feed)
+                feed_only += len(feed)
+            else:
+                seen = {str(r.get("trans_id") or "").strip() for r in raw
+                        if str(r.get("trans_id") or "").strip()}
+                for r in feed:
+                    tid = str(r.get("trans_id") or "").strip()
+                    if tid and tid not in seen:
+                        r["_src"] = "daily_sales_feed"
+                        merged.append(r)
+                        feed_only += 1
+        out[ym] = merged
+    return out, ok, trunc, feed_only
+
+
+def _dcr_today_leg(client, org_id, sales_by_month, key_of):
+    """TODAY's device-COGS route, per (month, store key) — the P&L's `device_cost` line.
+
+    It is computed with the FINANCE module's OWN device/accessory classifier
+    (`account.coa._sales_classifier`, the per-tenant config the commission side also uses) over the same
+    sale rows this report already read, and with coa's own store canonicalization + its
+    "skip voided / skip a zero amount" rules — so this leg IS today's route rather than a
+    re-implementation of it that could drift. If the finance module changes shape the import fails and
+    the endpoint reports the delta as UNAVAILABLE with the reason; it never guesses a substitute
+    formula, because a wrong "today" number would make every delta wrong.
+
+    Returns (map, ok, reason, timing_mismatch_rows). `timing_mismatch_rows` counts device sale lines
+    whose `trans_date` month differs from the `period` they are filed under: today's route books by
+    PERIOD, the §9 Q1 fallback recognizes at SALE TIME, so those rows legitimately land in different
+    cells — a real cause of delta that must be visible, not mistaken for a policy effect."""
+    try:
+        from app.modules.account import coa as _coa
+        is_accessory, is_device = _coa._sales_classifier(client, org_id)
+    except Exception as e:
+        print(f"WARN device-cost-recon today-leg unavailable: {e}")
+        return {}, False, str(e), 0
+    out, mismatch = {}, 0
+    for ym, rows in (sales_by_month or {}).items():
+        for r in rows:
+            if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
+                continue
+            dept = (r.get("department") or "").strip()
+            try:
+                if is_accessory(dept, r.get("category"), r.get("product_desc")):
+                    continue
+                if not is_device(dept):
+                    continue
+            except Exception:
+                continue
+            amt = round(safe_float(r.get("ext_price")) - safe_float(r.get("gp")), 2)
+            td = str(r.get("trans_date") or "")[:7]
+            if td and td != ym:
+                mismatch += 1
+            if not amt:                      # coa's add() skips a zero amount — mirrored exactly
+                continue
+            k = (ym, key_of(r.get("store")))
+            out[k] = round(out.get(k, 0.0) + amt, 2)
+    return out, True, None, mismatch
+
+
+def _dcr_vip_serial_caveat(client, org_id, months):
+    """§9 Q1's other caveat, MEASURED: VIP invoice evidence joins by `vip_invoice_devices.SERIAL`, not
+    imei. Counts, over the window's periods, how many invoice-device rows carry a usable IMEI vs only a
+    serial — so "the invoice is in the system" can be believed exactly as far as the data supports it."""
+    from app.modules.commcalc import device_cost_recon as _dcr
+    pv = []
+    for ym in months:
+        pv += _pvariants(ym)
+    pv = sorted(set(pv))
+    if not pv:
+        return None
+    rows, ok, trunc = _dcr_paged(client, "vip_invoice_devices", "imei,serial,period,invoice_number",
+                                 lambda q: q.eq("org_id", org_id).in_("period", pv),
+                                 _DCR_VIP_CAP, "vip_invoice_devices")
+    if not ok:
+        return None
+    by_imei = sum(1 for r in rows if _dcr.device_key(r.get("imei")))
+    by_serial_only = sum(1 for r in rows
+                         if not _dcr.device_key(r.get("imei")) and _dcr.device_key(r.get("serial")))
+    neither = len(rows) - by_imei - by_serial_only
+    return {"rows": len(rows), "by_imei": by_imei, "by_serial_only": by_serial_only,
+            "neither": neither, "truncated": trunc,
+            "invoices": len({str(r.get("invoice_number") or "").strip() for r in rows
+                             if str(r.get("invoice_number") or "").strip()})}
+
+
+@router.get("/device-cost-recon")
+def device_cost_recon_endpoint(period: str = "", window_months: int = 1, group_by: str = "source",
+                               price_basis: str = "unit", ma_recognition_date: str = "ordered",
+                               precedence: str = "", include_cancelled: int = 0,
+                               sources: str = "", arrangements: str = "", timings: str = "",
+                               stores: str = "", markets: str = "", reps: str = "",
+                               products: str = "", months: str = "",
+                               overlap_only: int = 0, unlinkable_only: int = 0,
+                               recognized_only: int = 0, min_amount: float = 0,
+                               limit: int = _DCR_DEFAULT_ROWS,
+                               authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """DEVICE COST RECONCILIATION — every device-cost row from all four sources, tagged with source +
+    arrangement + timing, with the IMEI-overlap flags, the un-linkable counts per source, and the
+    month × store delta preview between today's device-COGS route and the owner's §9 policy.
+
+    Params — RULE FIVE core set: `period` (anchor month, any spelling; blank = current month) ·
+    `window_months` (1–12 months ENDING with `period`) · `stores` · `markets` · `reps`. Appended
+    pick-don't-type facets: `sources` (①②③④) · `arrangements` · `timings` · `products` · `months`.
+    Investigation toggles: `overlap_only` · `unlinkable_only` · `recognized_only` · `min_amount`.
+    Policy knobs (§9 Q4 — stated on the page and in every export, not buried constants):
+    `precedence` (default `ma_fulfillment,asset_lending,pos_sale` = invoice-first, sale-time fallback) ·
+    `ma_recognition_date` (ordered|filled|shipped) · `price_basis` (unit|line) · `include_cancelled`.
+    `group_by` (see `device_cost_recon.GROUP_BY`) · `limit` (display cap only).
+
+    RULE FIVE deviation, stated out loud: only ③ carries a rep/salesperson — a marketplace order is
+    placed against the dealer account, the asset ledger is keyed on a device, and an inventory snapshot
+    has no seller. A `reps` selection narrows ③ and KEEPS the other three sources (dropping them would
+    misreport them as $0), and the response says so.
+
+    READ-ONLY. Gated DEFAULT-CLOSED by the 'device_cost_recon' DATA_GRANT before any read. Writes
+    nothing; `commcalc.asset_ledger` is read and never written."""
+    require_org(org_id)
+    _require_device_cost_recon(authorization, org_id)
+    from app.modules.commcalc import device_cost_recon as _dcr
+    client = sb()
+
+    per = (period or "").strip() or _date.today().strftime("%B %Y")
+    try:
+        win = max(1, min(12, int(window_months or 1)))
+    except (TypeError, ValueError):
+        win = 1
+    basis = (price_basis or "unit").strip().lower()
+    if basis not in _mhc_price_basis():
+        basis = "unit"
+    ma_date = (ma_recognition_date or "").strip().lower()
+    if ma_date not in _dcr.MA_DATE_MODES:
+        ma_date = _dcr.DEFAULT_MA_DATE
+    prec = _dcr.parse_precedence(precedence)
+    gb = (group_by or "source").strip().lower()
+    if gb not in _dcr.GROUP_BY:
+        gb = "source"
+    date_from, date_to = _mhc_month_range(per, win)
+    notes, degraded = [], []
+
+    if not date_from:
+        return _dcr_empty(per, win, gb, basis, ma_date, prec,
+                          f"'{period}' is not a month this report can read — pick a month.")
+
+    wmonths = _dcr_months(date_from, date_to)
+    key_of, key_ok = _dcr_store_key_fn(client, org_id)
+    try:
+        store_of = _ir_store_resolver(client, org_id)
+    except Exception:
+        store_of = None
+    arr_index, dists, source_maps = _dcr_arrangements(client, org_id)
+    notes += arr_index.notes()
+    if not key_ok:
+        degraded.append("The finance module's store canonicalizer could not be loaded, so stores are "
+                        "compared on their raw spelling — one physical store may appear twice in the "
+                        "delta table.")
+
+    # ── ① marketplace order lines (indexed on (org_id, date_ordered)) ─────────────────────────────
+    ma_rows, ma_ok, ma_trunc = _dcr_paged(
+        client, "raw_ma_fulfillment", _DCR_MA_COLS,
+        lambda q: q.eq("org_id", org_id).gte("date_ordered", date_from).lte("date_ordered", date_to),
+        _DCR_MA_CAP, "raw_ma_fulfillment")
+    if not ma_ok:
+        degraded.append("① the marketplace fulfillment feed could not be read (is mig 083 run and the "
+                        "MA Handset Ordering report imported for this tenant?).")
+    order_imeis, oi_ok, oi_capped = _dcr_order_imeis(
+        client, org_id, [r.get("order_number") for r in ma_rows])
+    if not oi_ok:
+        degraded.append("① the activation→IMEI bridge (raw_ma_commission) could not be read, so every "
+                        "order line reads as un-linkable — that count is NOT a data finding here.")
+    if oi_capped:
+        degraded.append(f"① more than {_DCR_ORDER_CAP:,} distinct order numbers are in this window; the "
+                        "activation→IMEI bridge was resolved for the first "
+                        f"{_DCR_ORDER_CAP:,}, so the un-linkable count above is an UPPER bound. Narrow "
+                        "the window for an exact figure.")
+    ev_ma, ma_notes = _dcr.ma_events(ma_rows, order_imeis=order_imeis, arrangements=arr_index,
+                                     store_of=store_of, key_of=key_of, price_basis=basis,
+                                     ma_date=ma_date, include_cancelled=bool(include_cancelled))
+    notes += ma_notes
+
+    # ── ② asset_ledger / consignment (READ-ONLY; mod-asset's table) ───────────────────────────────
+    owed_f, date_f, mapped_fields = _dcr_asset_field_names(source_maps)
+    al_rows, al_ok, al_trunc = _dcr_paged(
+        client, "asset_ledger", _DCR_ASSET_COLS,
+        lambda q: q.eq("org_id", org_id).gte(date_f, date_from).lte(date_f, date_to),
+        _DCR_ASSET_CAP, "asset_ledger")
+    if not al_ok:
+        degraded.append("② the asset/consignment ledger could not be read for this window.")
+    # Unsold stock carries no billing date in the window, so it needs its own read — otherwise the C3
+    # inventory leg and the ②↔④ double-valuation flag would both silently read as zero. The asset
+    # module's OWN definition of unsold is used (date_sold IS NULL AND category ILIKE '%On Inventory%').
+    al_inv_rows, al_inv_ok, al_inv_trunc = _dcr_paged(
+        client, "asset_ledger", _DCR_ASSET_COLS,
+        lambda q: (q.eq("org_id", org_id).is_("date_sold", "null")
+                   .ilike("category", "%On Inventory%")),
+        _DCR_ASSET_CAP, "asset_ledger (unsold)")
+    _al_seen = {r.get("id") for r in al_rows}
+    al_extra = [r for r in al_inv_rows if r.get("id") not in _al_seen]
+    ev_al = _dcr.asset_events(al_rows, arrangements=arr_index, store_of=store_of, key_of=key_of,
+                              owed_field=owed_f, date_field=date_f)
+    ev_al_unsold = _dcr.asset_events(al_extra, arrangements=arr_index, store_of=store_of,
+                                     key_of=key_of, owed_field=owed_f, date_field=date_f)
+    if al_inv_trunc:
+        degraded.append(f"② the unsold-stock read hit its {_DCR_ASSET_CAP:,}-row cap — the consignment "
+                        "liability and inventory figures are a lower bound.")
+
+    # ── ③ POS sale lines (period-columned → BOTH spellings via _pvariants) ────────────────────────
+    sales_by_month, s_ok, s_trunc, feed_only = _dcr_sales_by_month(client, org_id, wmonths)
+    if not s_ok:
+        degraded.append("③ the sales basis could not be read for this window.")
+    if s_trunc:
+        degraded.append(f"③ a month's sale-line read hit its {_DCR_SALES_CAP:,}-row cap — the POS leg is "
+                        "a lower bound. Narrow the window.")
+    try:
+        from app.modules.account import coa as _coa_cls
+        _is_acc, _is_dev = _coa_cls._sales_classifier(client, org_id)
+    except Exception:
+        _is_acc, _is_dev = None, None
+    _flat_sales = [r for rows in sales_by_month.values() for r in rows]
+    ev_pos = _dcr.pos_events(_flat_sales, is_device=_is_dev, arrangements=arr_index,
+                             store_of=store_of, key_of=key_of)
+    if _is_dev is None:
+        degraded.append("③ this tenant's device/accessory classifier could not be loaded, so EVERY sale "
+                        "line is treated as a device line — the POS leg is an upper bound.")
+
+    # ── ④ inventory snapshot (one CURRENT row per device — no month-end history exists) ───────────
+    inv_rows, inv_ok, inv_trunc = _dcr_paged(
+        client, "inventory_aging_device", _DCR_INV_COLS,
+        lambda q: q.eq("org_id", org_id), _DCR_INV_CAP, "inventory_aging_device")
+    if not inv_ok:
+        degraded.append("④ the per-device inventory snapshot could not be read (is mig 216 run and the "
+                        "Inventory Aging report imported?).")
+    if inv_trunc:
+        degraded.append(f"④ the inventory snapshot read hit its {_DCR_INV_CAP:,}-row cap — the "
+                        "valuation is a lower bound.")
+    ev_inv = _dcr.inventory_events(inv_rows, arrangements=arr_index, store_of=store_of, key_of=key_of)
+
+    # ── assemble, flag the overlaps, apply the owner's policy ─────────────────────────────────────
+    # The unsold-stock rows are INCLUDED in the event set on purpose: without them the ②↔④
+    # double-valuation flag and the C3 inventory leg would silently read as zero (an unsold device has
+    # no billing date inside the window, so the windowed read cannot see it). They are not a COGS —
+    # `recognize()` refuses an unbilled consignment row per §9 Q2 and says why — so including them
+    # cannot inflate the month.
+    ev_al_all = ev_al + ev_al_unsold
+    all_events = ev_ma + ev_al_all + ev_pos + ev_inv
+    overlaps, ov_summary = _dcr.find_overlaps(all_events)
+    policy = _dcr.recognize(all_events, prec)
+    liability = _dcr.liability_leg(ev_al_all)
+    inventory = _dcr.inventory_leg(ev_inv, ev_al_all)
+    if ev_al_unsold:
+        notes.append(f"{len(ev_al_unsold):,} unsold consignment device(s) are listed regardless of the "
+                     "window — they carry no billing date inside it, and the inventory valuation and "
+                     "the ②↔④ double-valuation flag would read as zero without them. None of them is "
+                     "counted as a cost (an unbilled consignment device is liability + inventory only).")
+    opts = _dcr.filter_options(all_events)
+
+    ov_keys = {o["device_key"] for o in overlaps}
+    rows = _dcr.apply_filters(all_events, sources=sources, arrangements=arrangements, timings=timings,
+                              stores=stores, markets=markets, reps=reps, products=products,
+                              months=months, overlap_device_keys=ov_keys,
+                              overlap_only=bool(overlap_only),
+                              unlinkable_only=bool(unlinkable_only),
+                              recognized_only=bool(recognized_only), min_amount=min_amount)
+
+    # ── the DELTA PREVIEW (month × store): today's route vs the §9 policy ─────────────────────────
+    today_map, today_ok, today_why, timing_mismatch = _dcr_today_leg(
+        client, org_id, sales_by_month, key_of)
+    # If the SALES BASIS itself could not be read, today's route is UNKNOWN, not $0. The finance
+    # classifier never raises (it hard-falls-back to the Boost taxonomy), so without this the leg would
+    # confidently report $0 over zero rows and every delta would read as "the policy invented money".
+    if today_ok and not s_ok:
+        today_ok, today_map = False, {}
+        today_why = ("the sales basis (raw_sales / daily_sales_feed) could not be read, so today's "
+                     "device COGS is unknown for this window — not $0")
+    d_rows, d_totals = _dcr.delta_table(today_map if today_ok else {}, rows)
+    today_tile = {"available": today_ok,
+                  "device_cogs": (round(sum(today_map.values()), 2) if today_ok else None),
+                  "route": "account.coa build_inputs → 'device_cost' (Σ ext_price − GP on device lines)",
+                  "basis": "booked by PERIOD (the P&L's own attribution)",
+                  "note": (None if today_ok else
+                           f"today's device-COGS route could not be read ({today_why}) — the delta "
+                           "column is unavailable rather than guessed")}
+    if not today_ok:
+        degraded.append("Today's device-COGS route could not be read, so the delta preview shows the "
+                        "policy leg only. Nothing is guessed in its place.")
+    if timing_mismatch:
+        notes.append(f"{timing_mismatch:,} device sale line(s) carry a `trans_date` in a different month "
+                     "than the `period` they are filed under. Today's route books by PERIOD; the §9 Q1 "
+                     "fallback recognizes at SALE TIME — so those rows legitimately land in different "
+                     "cells of the delta table. That is a timing difference, not a policy effect.")
+    if win >= 6:
+        notes.append(f"This window reads {win} months of sale lines from two tables plus the four cost "
+                     "sources. If the page times out, narrow the window — a recompute is NOT involved "
+                     "here (nothing on this page writes or recalculates anything).")
+    if feed_only:
+        notes.append(f"{feed_only:,} sale line(s) came from the hourly B2B feed rather than raw_sales "
+                     "(the month is not promoted yet) and are counted once — raw_sales wins on a shared "
+                     "trans_id, the same union rule the P&L and the commission engine use.")
+
+    # WYSIWYG (RULE FOUR): the IMEI dedup above was decided over the WHOLE window — filtering first
+    # would let a different row win and produce a fake number — but the totals on screen must describe
+    # only what is on screen. So the DECISIONS are global and the SUMMARY is re-taken over the filtered
+    # rows. `policy_full` stays available for the honest "of the whole window" framing.
+    policy_full = policy
+    policy = _dcr.policy_summary(rows, prec)
+    tiles = _dcr.tiles_for(rows, overlap_summary=ov_summary, policy=policy, today=today_tile,
+                           inventory=inventory, liability=liability)
+    groups = _dcr.group_rows(rows, gb)
+    unlink = _dcr.unlinkable_summary(rows)
+    vip_caveat = _dcr_vip_serial_caveat(client, org_id, wmonths)
+
+    try:
+        cap = max(1, min(50000, int(limit)))
+    except (TypeError, ValueError):
+        cap = _DCR_DEFAULT_ROWS
+    total_rows, truncated = len(rows), len(rows) > cap
+    shown = rows[:cap]
+
+    if not all_events:
+        notes.append("No device-cost rows were found in this window from ANY of the four sources. That "
+                     "is a real answer, not an error: check the window, and confirm the four imports "
+                     "(MA fulfillment · Asset Lending · the 78-column Sales Transaction Details · "
+                     "Inventory Aging) at Data Imports.")
+    if (reps or "").strip():
+        notes.append("Only the POS-sale source carries a rep/salesperson — a marketplace order is placed "
+                     "against the dealer account, the asset ledger is keyed on a device, and an "
+                     "inventory snapshot has no seller. The rep filter narrowed ③ and KEPT ①②④ rather "
+                     "than reporting them as $0.")
+    if liability.get("definition_note"):
+        notes.append(liability["definition_note"])
+    if not mapped_fields:
+        notes.append("No payable source map points at `asset_ledger` for this org, so the consignment "
+                     "cost/date columns fall back to the seeded `owed_to_vip` / `billing_friday` names. "
+                     "Map them per carrier at Payables → source maps if this ledger spells them "
+                     "differently.")
+
+    return {
+        "ready": True,
+        "period": _mhc_month_label(date_to) or per,
+        "window_months": win, "window_from": date_from, "window_to": date_to,
+        "months_in_window": wmonths,
+        "group_by": gb, "group_label": _dcr.GROUP_LABEL.get(gb, gb),
+        "group_by_options": [{"id": g, "label": _dcr.GROUP_LABEL[g]} for g in _dcr.GROUP_BY],
+        "price_basis": basis, "ma_recognition_date": ma_date,
+        "precedence": list(prec), "precedence_label": policy["precedence_label"],
+        "include_cancelled": bool(include_cancelled),
+        "tiles": tiles, "groups": groups,
+        "rows": shown, "total_rows": total_rows, "truncated": truncated,
+        "unfiltered_rows": len(all_events),
+        "overlaps": overlaps[:1000], "overlap_total": len(overlaps),
+        "overlap_summary": ov_summary,
+        "unlinkable": unlink,
+        "policy": policy, "policy_window": policy_full,
+        "liability": liability, "inventory": inventory,
+        "today": today_tile,
+        "delta_rows": d_rows[:2000], "delta_total_rows": len(d_rows), "delta_totals": d_totals,
+        "vip_serial_caveat": vip_caveat,
+        "source_legend": _dcr.source_legend(),
+        "distributors": [{"id": d.get("id"), "name": d.get("name"),
+                          "arrangement": d.get("arrangement"),
+                          "has_asset_lending": bool(d.get("has_asset_lending"))} for d in dists],
+        "definition_note": _dcr.definition_note(),
+        "policy_note": _dcr.policy_note(policy, ma_date, basis),
+        "caveat_note": _dcr.caveat_note(unlink, policy),
+        "source_options": opts["source_options"], "arrangement_options": opts["arrangement_options"],
+        "timing_options": opts["timing_options"], "store_options": opts["store_options"],
+        "market_options": opts["market_options"], "rep_options": opts["rep_options"],
+        "product_options": opts["product_options"], "month_options": opts["month_options"],
+        "distributor_options": opts["distributor_options"],
+        "no_market_label": _dcr.NO_MARKET, "no_store_label": _dcr.NO_STORE,
+        "no_device_label": _dcr.NO_DEVICE_KEY,
+        "truncated_reads": {"ma_fulfillment": ma_trunc, "asset_ledger": al_trunc,
+                            "asset_unsold": al_inv_trunc, "sales": s_trunc,
+                            "inventory": inv_trunc},
+        "degraded": (degraded or None),
+        "note": (" ".join(notes) or None),
+    }
+
+
+def _mhc_price_basis():
+    """The shared price-basis vocabulary (Handset COGS' own tuple) so the two reports can never accept
+    different values for the same knob."""
+    from app.modules.commcalc import ma_handset_cogs as _m
+    return _m.PRICE_BASIS
+
+
+def _mhc_month_label(d10):
+    from app.modules.commcalc import ma_handset_cogs as _m
+    return _m.month_label(_m.month_of(d10)) if d10 else None
+
+
+def _dcr_empty(per, win, gb, basis, ma_date, prec, why):
+    """A READY, empty payload that says why — an unreadable period must never 500 or render blank."""
+    from app.modules.commcalc import device_cost_recon as _dcr
+    empty_policy = _dcr.recognize([], prec)
+    return {
+        "ready": True, "period": per, "window_months": win, "months_in_window": [],
+        "window_from": None, "window_to": None,
+        "group_by": gb, "group_label": _dcr.GROUP_LABEL.get(gb, gb),
+        "group_by_options": [{"id": g, "label": _dcr.GROUP_LABEL[g]} for g in _dcr.GROUP_BY],
+        "price_basis": basis, "ma_recognition_date": ma_date,
+        "precedence": list(prec), "precedence_label": empty_policy["precedence_label"],
+        "include_cancelled": False,
+        "tiles": _dcr.tiles_for([], policy=empty_policy, today={"available": False}),
+        "groups": [], "rows": [], "total_rows": 0, "truncated": False, "unfiltered_rows": 0,
+        "overlaps": [], "overlap_total": 0,
+        "overlap_summary": {"devices": 0, "rows": 0, "gross_amount": 0.0, "duplicate_amount": 0.0,
+                            "pairs": []},
+        "unlinkable": _dcr.unlinkable_summary([]),
+        "policy": empty_policy, "policy_window": empty_policy, "liability": _dcr.liability_leg([]),
+        "inventory": _dcr.inventory_leg([], []),
+        "today": {"available": False, "device_cogs": None},
+        "delta_rows": [], "delta_total_rows": 0, "delta_totals": {},
+        "vip_serial_caveat": None, "source_legend": _dcr.source_legend(), "distributors": [],
+        "definition_note": _dcr.definition_note(),
+        "policy_note": _dcr.policy_note(empty_policy, ma_date, basis),
+        "caveat_note": _dcr.caveat_note(),
+        "source_options": [], "arrangement_options": [], "timing_options": [], "store_options": [],
+        "market_options": [], "rep_options": [], "product_options": [], "month_options": [],
+        "distributor_options": [],
+        "no_market_label": _dcr.NO_MARKET, "no_store_label": _dcr.NO_STORE,
+        "no_device_label": _dcr.NO_DEVICE_KEY,
+        "truncated_reads": {}, "degraded": None, "note": why,
+    }
