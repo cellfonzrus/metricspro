@@ -787,8 +787,15 @@ from fastapi import FastAPI                        # noqa: E402
 from fastapi.testclient import TestClient          # noqa: E402
 from app.main import app as real_app, HardeningMiddleware  # noqa: E402
 
-check("I0. app.main still imports and exposes 906 routes (unchanged vs base b54a3f3)",
-      len(real_app.routes) == 906, str(len(real_app.routes)))
+# This package registers ZERO routes (it touches no router file). 906 is the count at this
+# branch's base, b54a3f3. Merging onto a newer main legitimately changes it — pass the expected
+# number via EXPECT_ROUTES rather than editing this file.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "906"))
+print(f"   (app.main route count = {len(real_app.routes)}, expecting {_expect_routes})")
+check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
+      len(real_app.routes) == _expect_routes,
+      f"got {len(real_app.routes)}; if this tree merged newer main, re-run with "
+      f"EXPECT_ROUTES={len(real_app.routes)}")
 
 srv = TinyServer()
 probe = FastAPI()
