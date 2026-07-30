@@ -262,14 +262,13 @@ export default function DailyClosingVerify() {
     return {
       dm_store_cash: String(v.dm_store_cash ?? t.store_cash ?? ''),
       dm_store_cc: String(v.dm_store_cc ?? t.store_cc ?? ''),
-      // NOTE (2026-07-29, same investigation as the ePay display-tile fix above): this PREFILLS
-      // a field that gets WRITTEN to daily_closing_verification.dm_epay_cash/dm_epay_cc on
-      // "Mark verified" — a write path, not a display, so it's deliberately left reading the
-      // legacy t.epay_cash/epay_cc (still 0 for a modern row) rather than the new
-      // t.epay_on_cash/epay_on_cc, per the money rule (propose-first before changing what a
-      // save-able form field defaults to). Flagged in the handoff as a found-but-not-fixed item.
-      dm_epay_cash: String(v.dm_epay_cash ?? t.epay_cash ?? ''),
-      dm_epay_cc: String(v.dm_epay_cc ?? t.epay_cc ?? ''),
+      // Prefill from the REAL ePay breakdown (t.epay_on_cash/epay_on_cc — era-aware via
+      // _row_epay_display, closing/router.py), owner-approved 2026-07-30 ("push"/"go"). The legacy
+      // t.epay_cash/epay_cc are hard-zeroed by create_row for modern rows, so prefilling from them
+      // defaulted the DM's saved count to $0. A previously SAVED verification value still wins;
+      // dm_epay_* is stored on daily_closing_verification only — no recon formula reads it.
+      dm_epay_cash: String(v.dm_epay_cash ?? t.epay_on_cash ?? ''),
+      dm_epay_cc: String(v.dm_epay_cc ?? t.epay_on_cc ?? ''),
       dm_acc_sale: String(v.dm_acc_sale ?? t.acc_sale ?? ''),
       dm_other: String(v.dm_other ?? t.other_account ?? ''),
       note: v.note || '',
