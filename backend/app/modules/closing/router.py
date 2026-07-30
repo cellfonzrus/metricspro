@@ -893,17 +893,30 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
         if store_set is not None and code and code.upper() not in store_set:
             continue
         totals = {
-            "store_cash": round(sum(_f(r["store_cash"]) for r in reps), 2),
-            "store_cc": round(sum(_f(r["store_cc"]) for r in reps), 2),
-            "epay_cash": round(sum(_f(r["epay_cash"]) for r in reps), 2),
-            "epay_cc": round(sum(_f(r["epay_cc"]) for r in reps), 2),
+            # retail-ops closing-summary-keyerror (2026-07-30, fix-pipeline d71b6d34): these 6 are
+            # commcalc.daily_closing's ORIGINAL day-1 physical columns (mig 029, NUMERIC DEFAULT 0) and
+            # every write path (create_row, _ingest_dataframe) always sets all 6, so a raw r["..."]
+            # cannot KeyError against any row this module itself ever wrote. Switched to .get() anyway
+            # to (a) match the established convention EVERY other field in this same function/its
+            # sibling closing_rollup already uses (.get()-only; these were the sole raw-bracket outlier
+            # — grepped, confirmed), and (b) be robust to a column genuinely absent for a reason outside
+            # this module's control (a differently-provisioned tenant DB, a schema-cache-reload race
+            # immediately after a daily_closing-touching migration). .get() -> None -> _f(None) -> 0.0,
+            # the SAME value the column's own SQL DEFAULT 0 already produces — byte-identical on every
+            # row this endpoint can actually see today, never a fabricated non-zero recon input.
+            "store_cash": round(sum(_f(r.get("store_cash")) for r in reps), 2),
+            "store_cc": round(sum(_f(r.get("store_cc")) for r in reps), 2),
+            "epay_cash": round(sum(_f(r.get("epay_cash")) for r in reps), 2),
+            "epay_cc": round(sum(_f(r.get("epay_cc")) for r in reps), 2),
             # The REAL ePay-cash/ePay-CC breakdown (see _row_epay_display) — additive display fields
             # only, NEVER read by money_recon below (which still uses epay_cash/epay_cc above,
             # untouched, to avoid double-counting epay already folded into store_cash/t_cash).
+            # _row_epay_display ALWAYS returns a fixed {"cash":..., "cc":...} dict regardless of `r`'s
+            # shape (its own .get()-only body) — that bracket access was never the risk here, left as-is.
             "epay_on_cash": round(sum(_row_epay_display(r)["cash"] for r in reps), 2),
             "epay_on_cc": round(sum(_row_epay_display(r)["cc"] for r in reps), 2),
-            "acc_sale": round(sum(_f(r["acc_sale"]) for r in reps), 2),
-            "other_account": round(sum(_f(r["other_account"]) for r in reps), 2),
+            "acc_sale": round(sum(_f(r.get("acc_sale")) for r in reps), 2),
+            "other_account": round(sum(_f(r.get("other_account")) for r in reps), 2),
             "upgrade_count": sum(int(r.get("upgrade_count") or 0) for r in reps),
             "new_line_count": sum(int(r.get("new_line_count") or 0) for r in reps),
             "postpaid_count": sum(int(r.get("postpaid_count") or 0) for r in reps),
