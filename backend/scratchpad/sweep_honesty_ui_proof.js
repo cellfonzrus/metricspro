@@ -23,9 +23,16 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const ts = require('/workspaces/metricspro/frontend/node_modules/typescript');
-
 const REPO = path.join(__dirname, '..', '..');
+// Resolve TypeScript from THIS checkout's node_modules first, falling back to the canonical repo's —
+// a hard-coded absolute worktree path is exactly what broke universal_ingest_proof.py for two weeks.
+const ts = (() => {
+  for (const p of [path.join(REPO, 'frontend', 'node_modules', 'typescript'),
+                   '/workspaces/metricspro/frontend/node_modules/typescript']) {
+    try { return require(p); } catch (e) { /* try the next */ }
+  }
+  throw new Error('typescript not found — run npm i in frontend/ or symlink node_modules');
+})();
 const REL = path.join('frontend', 'src', 'app', '(platform)', 'commcalc', '_lib', 'sweepOutcome.tsx');
 const MOD = path.join(REPO, REL);
 const FTP_PAGE = path.join(REPO, 'frontend', 'src', 'app', '(platform)', 'commcalc', 'ftp-imports', 'page.tsx');

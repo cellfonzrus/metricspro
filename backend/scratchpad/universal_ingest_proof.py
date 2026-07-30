@@ -9,10 +9,16 @@ Proves:
      request and vice-versa, and the resolver reads across the spelling boundary.
   C. The trace record shape: _write_upload_trace derives status/target/periods/date_counts/rows from a
      result dict, degrades gracefully when the table insert raises, and captures errors.
-Run: python3 universal_ingest_proof.py   (from the package's backend venv)
+Run: python3 backend/scratchpad/universal_ingest_proof.py   (from ANY worktree, any cwd)
 """
+import os
 import sys, datetime
-sys.path.insert(0, "/workspaces/mp-wt-comm-ingest/backend")
+# IMPORT REPAIR (2026-07-30): this line was a HARD-CODED absolute path to the worktree the package was
+# built in (`/workspaces/mp-wt-comm-ingest/backend`), which was deleted when that package shipped — so
+# the proof has raised ModuleNotFoundError ever since, in every tree including origin/main. Resolve the
+# backend root from THIS FILE instead (scratchpad/ lives directly under backend/), so the proof always
+# exercises the router of the checkout it is sitting in — which is the only thing it should ever prove.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
 import app.modules.commcalc.router as R
 
 PASS = 0
@@ -87,15 +93,23 @@ class FakeClient:
     def schema(self, s): return FakeSchema(self.store)
 
 
-def feed_row(day, cat="Regular", ext=100.0):
-    return {"org_id": LUX, "period": OPEN_MONTH_NAME, "trans_id": f"F{day}", "trans_date": f"{OPEN_MONTH_NUM}-{day:02d}",
-            "store": "3 Palisade Ave", "salesperson": "REP A", "department": "", "category": cat,
+# FIXTURE REPAIR (2026-07-30) — the two builders used to stamp DIFFERENT trans_ids for the same day
+# ("F1" in the feed, "R1" in raw_sales). That modelled a world the resolver cannot see: its documented
+# dedup key is (canonical store cell, NORMALIZED trans_id), so two different ids on one store-day are two
+# DIFFERENT transactions, and since the 2026-07-18 completeness backfill (the luxelink '957 Pennsylvania
+# Ave' undercount fix) a raw-ONLY transaction on a feed-led cell is deliberately RECOVERED rather than
+# dropped. The old fixture therefore made the CORRECT current behaviour look like a double-count.
+# Real overlapping rows carry the SAME trans_id, so `tid` now defaults to a shared "T<day>"; which SOURCE
+# a shown row came from is identified by `salesperson` (a payload field, not part of the dedup key).
+def feed_row(day, cat="Regular", ext=100.0, tid=None):
+    return {"org_id": LUX, "period": OPEN_MONTH_NAME, "trans_id": tid or f"T{day}", "trans_date": f"{OPEN_MONTH_NUM}-{day:02d}",
+            "store": "3 Palisade Ave", "salesperson": "REP FEED", "department": "", "category": cat,
             "product_desc": "x", "contract_type": "New Activation", "ext_price": ext, "gp": 10.0,
             "voided": "", "trans_type": ""}
 
-def raw_row(day, period=None, cat="Regular", ext=100.0):
-    return {"org_id": LUX, "period": period or OPEN_MONTH_NAME, "trans_id": f"R{day}", "trans_date": f"{OPEN_MONTH_NUM}-{day:02d}",
-            "store": "3 Palisade Ave", "salesperson": "REP A", "department": "", "category": cat,
+def raw_row(day, period=None, cat="Regular", ext=100.0, tid=None):
+    return {"org_id": LUX, "period": period or OPEN_MONTH_NAME, "trans_id": tid or f"T{day}", "trans_date": f"{OPEN_MONTH_NUM}-{day:02d}",
+            "store": "3 Palisade Ave", "salesperson": "REP RAW", "department": "", "category": cat,
             "product_desc": "x", "contract_type": "New Activation", "ext_price": ext, "gp": 10.0,
             "voided": "", "trans_type": ""}
 
@@ -109,17 +123,43 @@ rows, meta = R._sales_rows_union(FakeClient(store), LUX, OPEN_MONTH_NUM)
 days = sorted({r["trans_date"][8:10] for r in rows})
 check("A1 luxelink shape: union shows days 1-13", days == [f"{d:02d}" for d in range(1, 14)], f"got {days}")
 check("A1 primary=feed (feed-wins)", meta["primary"] == "daily_sales_feed", meta)
-check("A1 days 1-8 come from the FEED (F* ids)",
-      all(r["trans_id"].startswith("F") for r in rows if int(r["trans_date"][8:10]) <= 8))
-check("A1 days 9-13 filled from raw_sales (R* ids)",
-      all(r["trans_id"].startswith("R") for r in rows if int(r["trans_date"][8:10]) >= 9))
+check("A1 days 1-8 come from the FEED",
+      all(r["salesperson"] == "REP FEED" for r in rows if int(r["trans_date"][8:10]) <= 8),
+      [r for r in rows if int(r["trans_date"][8:10]) <= 8 and r["salesperson"] != "REP FEED"])
+check("A1 days 9-13 filled from raw_sales",
+      all(r["salesperson"] == "REP RAW" for r in rows if int(r["trans_date"][8:10]) >= 9),
+      [r for r in rows if int(r["trans_date"][8:10]) >= 9 and r["salesperson"] != "REP RAW"])
 check("A1 filled_days == 9..13", meta["filled_days"] == [f"{OPEN_MONTH_NUM}-{d:02d}" for d in range(9, 14)], meta["filled_days"])
 check("A1 meta counts: feed 8, raw 13, shown 13, filled 5",
       (meta["feed_rows"], meta["raw_rows"], meta["shown_rows"], meta["filled_rows"]) == (8, 13, 13, 5), meta)
 
-# A2: no double-count on overlap days — day 1 exists in BOTH; only ONE row for it, from the feed.
+# A2: no double-count on overlap days — the SAME transaction exists in both sources for day 1; it shows
+# ONCE, from the feed (feed leads the cell it has).
 day1 = [r for r in rows if r["trans_date"].endswith("-01")]
-check("A2 overlap day appears once, from feed", len(day1) == 1 and day1[0]["trans_id"] == "F1", day1)
+check("A2 overlap transaction appears once, from feed",
+      len(day1) == 1 and day1[0]["trans_id"] == "T1" and day1[0]["salesperson"] == "REP FEED", day1)
+
+# A2b: the 2026-07-18 COMPLETENESS CONTRACT, which superseded the old day-grain winner-take-all and is
+# what the pre-repair fixture accidentally asserted against. A raw_sales transaction the feed does NOT
+# carry, on a store-day the feed DOES lead, must be RECOVERED — not masked by the feed's copy of the day.
+store_c = {"daily_sales_feed": [feed_row(1, tid="T1")],
+           "raw_sales": [raw_row(1, tid="T1"), raw_row(1, tid="RAW-ONLY-9")]}
+rows_c, meta_c = R._sales_rows_union(FakeClient(store_c), LUX, OPEN_MONTH_NUM)
+tids_c = sorted(r["trans_id"] for r in rows_c)
+check("A2b a raw-ONLY transaction on a feed-led store-day is recovered (completeness backfill)",
+      tids_c == ["RAW-ONLY-9", "T1"], tids_c)
+check("A2b the shared transaction still shows the FEED copy exactly once",
+      [r["salesperson"] for r in rows_c if r["trans_id"] == "T1"] == ["REP FEED"], rows_c)
+check("A2b and the recovery is reported for the transparency line",
+      meta_c.get("completeness_rows") == 1, meta_c)
+# A2c: the recovery is one-directional — on a raw_sales-LED month a feed-only trans_id is never
+# resurrected (a transaction deleted from the POS must stay gone).
+store_d = {"daily_sales_feed": [feed_row(1, tid="FEED-ONLY-9")],
+           "raw_sales": [raw_row(d, period=CLOSED_NAME) for d in range(1, 6)]}
+rows_d, meta_d = R._sales_rows_union(FakeClient(store_d), LUX, CLOSED_NUM)
+check("A2c a feed-only transaction is NOT resurrected into a raw-led (closed) month",
+      meta_d["primary"] == "raw_sales"
+      and all(r["trans_id"] != "FEED-ONLY-9" for r in rows_d), rows_d)
 
 # A3: feed empty → entire raw_sales shows (no masking of a hand-uploaded month with an empty feed).
 store = {"daily_sales_feed": [], "raw_sales": [raw_row(d) for d in range(1, 14)]}
