@@ -5,12 +5,36 @@ functions in the asset / commcalc routers (they are plain async functions taking
 kwargs and returning dicts/lists) and reshapes the result into a render payload
 (see render.py). On-demand and scheduled sends share this code, so output matches
 the browser export in frontend/src/lib/export.tsx.
+
+TWO OPT-IN EXTRAS a builder may declare on its registry entry (default off, so the other
+builders keep the plain `build(org_id, filters)` shape):
+
+  "wants_auth": True  → build(org_id, filters, authorization=<the CALLER's Authorization header>)
+        These route-handlers are `async def h(..., authorization: str = Header(default=""))`.
+        Called in-process WITHOUT that kwarg, Python binds the FastAPI `Header` SENTINEL OBJECT
+        (not a str) and the handler's `caller_scope(authorization, ...)` blew up with
+        `AttributeError: 'Header' object has no attribute 'lower'` deep in core's `_uid_from_token`
+        — a hard 500 on POST /notify/send for every report that scopes by caller (2026-07-17
+        failure_log rows). Passing the real header also satisfies AGENT_CONTRACT §3c: an export
+        respects the caller's permission gates. A scheduled run has no caller → "" → the handler's
+        own "no token = org-wide" path, i.e. exactly what an admin-configured subscription means.
+
+  "wants_tz": True    → build(org_id, filters, tz=<the subscription's timezone>)
+        Relative date filters ("this week's billing Friday") must resolve against the TENANT's
+        business day, not the server's UTC day, or a schedule that fires late in the evening
+        local time lands on the next day's date.
 """
 from datetime import date
 
 from app.modules.asset import router as A
 from app.modules.commcalc import router as C
 from app.modules.account import router as AC
+# Pure filter resolution lives in a LEAF module (no cross-module imports) so the attention provider
+# can validate a saved schedule without importing these routers. Re-exported here because this is
+# the module every caller already talks to.
+from .report_filters import (ReportConfigError, business_today as _business_today,      # noqa: F401
+                             resolve_billing_friday as _resolve_billing_friday,
+                             validate_filters as _validate_filters)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -120,10 +144,11 @@ async def _rma(org_id, f):
             "filename": "rma-reconciliation", "sheets": sheets}
 
 
-async def _owed_weekly(org_id, f):
-    thursday = f.get("thursday")
-    if not thursday:
-        raise ValueError("owed_weekly requires a 'thursday' (billing Friday, YYYY-MM-DD) filter")
+async def _owed_weekly(org_id, f, tz=""):
+    # A blank / relative `thursday` resolves to the CURRENT billing Friday (same default the
+    # owed-weekly page opens on) instead of raising — a recurring subscription cannot carry a
+    # correct fixed date. asset's Friday billing trigger is untouched: we only pick the date.
+    thursday = _resolve_billing_friday(f, tz)
     data = await A.get_owed_weekly(thursday=thursday, org_id=org_id,
                                    store=f.get("store", "") or "", market=f.get("market", "") or "")
     sheets = [
@@ -149,7 +174,10 @@ async def _owed_weekly(org_id, f):
         ]},
     ]
     return {"title": "Weekly Owed-to-Distributor", "subtitle": f"Billing Friday {thursday}",
-            "filename": f"owed-weekly-{thursday}", "sheets": sheets}
+            "filename": f"owed-weekly-{thursday}", "sheets": sheets,
+            # RESOLVED filters → the "View live report" link opens the same week the file covers
+            # (a blank/relative `thursday` would otherwise link to the page's own default).
+            "live_filters": {**(f or {}), "thursday": thursday}}
 
 
 def _charges_builder(group_slug, label):
@@ -242,9 +270,9 @@ async def _vip_invoices(org_id, f):
             "filename": "vip-invoices", "sheets": sheets}
 
 
-async def _flags(org_id, f):
+async def _flags(org_id, f, authorization=""):
     period = _resolve_period(f)
-    rows = await C.get_flags(period=period, org_id=org_id)
+    rows = await C.get_flags(period=period, org_id=org_id, authorization=authorization)
     return {"title": "Flags", "subtitle": period, "filename": f"flags-{period.replace(' ', '-')}",
             "sheets": [{"name": "Flags", "rows": rows or [], "columns": [
                 {"header": "Flag Type", "key": "flag_type"},
@@ -258,9 +286,9 @@ async def _flags(org_id, f):
             ]}]}
 
 
-async def _commissions(org_id, f):
+async def _commissions(org_id, f, authorization=""):
     period = _resolve_period(f)
-    rows = await C.get_commissions(period=period, org_id=org_id)
+    rows = await C.get_commissions(period=period, org_id=org_id, authorization=authorization)
     return {"title": "Commissions", "subtitle": period, "filename": f"commissions-{period.replace(' ', '-')}",
             "sheets": [{"name": "Rep Payouts", "rows": rows or [], "columns": [
                 {"header": "Rep", "key": "epay_salesperson"},
@@ -277,9 +305,10 @@ async def _commissions(org_id, f):
             ]}]}
 
 
-async def _gp(org_id, f):
+async def _gp(org_id, f, authorization=""):
     period = _resolve_period(f)
-    data = await C.get_gp_report(period=period, view="store", market=f.get("market", "") or "", org_id=org_id)
+    data = await C.get_gp_report(period=period, view="store", market=f.get("market", "") or "", org_id=org_id,
+                                 authorization=authorization)
     return {"title": "Gross Profit", "subtitle": period, "filename": f"gp-{period.replace(' ', '-')}",
             "sheets": [{"name": "By Store", "rows": data.get("store_rows") or [], "columns": [
                 {"header": "Store", "key": "store"},
@@ -458,11 +487,12 @@ async def _top_sellers(org_id, f):
             ]}]}
 
 
-async def _action_plan(org_id, f):
+async def _action_plan(org_id, f, authorization=""):
     period = _resolve_period(f)
     data = await C.get_action_plan(period=period, org_id=org_id,
                                    store_code=f.get("store_code", "") or "",
-                                   rep=f.get("rep", "") or "")
+                                   rep=f.get("rep", "") or "",
+                                   authorization=authorization)
     rows, metric_rows = [], []
     for s in (data.get("stores") or []):
         label = s.get("address") or s.get("store_code")
@@ -583,7 +613,7 @@ REPORTS = {
     "owed_weekly": {
         "label": "Weekly Owed-to-Distributor", "filters": ["thursday", "store", "market"],
         "live_path": lambda f: "/commcalc/asset/owed-weekly" + _qs(f, ["thursday", "store", "market"]),
-        "build": _owed_weekly},
+        "build": _owed_weekly, "wants_tz": True},
     "charges_appeals": {
         "label": "Charges — Appeals & Denied", "filters": ["store", "market", "month", "year", "week_friday"],
         "live_path": lambda f: "/commcalc/asset/charges/appeals" + _qs(f, ["store", "market", "month", "year"]),
@@ -610,13 +640,13 @@ REPORTS = {
         "build": _vip_invoices},
     "flags": {
         "label": "Flags", "filters": ["period"],
-        "live_path": lambda f: "/commcalc/flags", "build": _flags},
+        "live_path": lambda f: "/commcalc/flags", "build": _flags, "wants_auth": True},
     "commissions": {
         "label": "Commissions", "filters": ["period"],
-        "live_path": lambda f: "/commcalc/reports", "build": _commissions},
+        "live_path": lambda f: "/commcalc/reports", "build": _commissions, "wants_auth": True},
     "gp": {
         "label": "Gross Profit", "filters": ["period", "market"],
-        "live_path": lambda f: "/commcalc/gp", "build": _gp},
+        "live_path": lambda f: "/commcalc/gp", "build": _gp, "wants_auth": True},
     "discrepancy": {
         "label": "Pay Discrepancy", "filters": ["period"],
         "live_path": lambda f: "/commcalc/discrepancy", "build": _discrepancy},
@@ -637,7 +667,7 @@ REPORTS = {
     "action_plan": {
         "label": "Daily Action Plan", "filters": ["period", "store_code", "rep"],
         "live_path": lambda f: "/commcalc/targets/action-plan" + _qs(f, ["store_code", "rep"]),
-        "build": _action_plan},
+        "build": _action_plan, "wants_auth": True},
     "account_pl": {
         "label": "Profit & Loss (Account Module)", "filters": ["period", "scope"],
         "live_path": lambda f: "/accounts/pl" + _qs(f, ["scope"]),
@@ -653,10 +683,27 @@ def list_reports():
     return [{"key": k, "label": v["label"], "filters": v["filters"]} for k, v in REPORTS.items()]
 
 
-async def build_payload(report_key: str, org_id: str, filters: dict) -> dict:
+def validate_filters(report_key: str, filters: dict) -> None:
+    """Raise ReportConfigError if this report's SAVED FILTERS can't produce a report — see
+    report_filters.validate_filters. This wrapper supplies the live report-key list."""
+    _validate_filters(report_key, filters, known_keys=REPORTS)
+
+
+async def build_payload(report_key: str, org_id: str, filters: dict, *,
+                        authorization: str = "", tz: str = "") -> dict:
+    """Build one report payload. `authorization` is the CALLER's header (on-demand sends) and `tz`
+    the subscription's timezone (scheduled sends); each reaches only the builders that opted in —
+    see the module docstring."""
     spec = REPORTS.get(report_key)
     if not spec:
         raise KeyError(f"unknown report '{report_key}'")
-    payload = await spec["build"](org_id, filters or {})
-    payload["live_path"] = spec["live_path"](filters or {})
+    extra = {}
+    if spec.get("wants_auth"):
+        extra["authorization"] = authorization if isinstance(authorization, str) else ""
+    if spec.get("wants_tz"):
+        extra["tz"] = tz if isinstance(tz, str) else ""
+    payload = await spec["build"](org_id, filters or {}, **extra)
+    # A builder that RESOLVED relative filters hands back `live_filters` so the live-report link
+    # points at exactly what was sent; everyone else links off the filters as given.
+    payload["live_path"] = spec["live_path"](payload.pop("live_filters", None) or filters or {})
     return payload

@@ -126,6 +126,14 @@ def _uid_from_token(authorization: str):
     Verified results are cached 60s per token (positive only) — /me, /my-tenants, /bootstrap and
     storeops' caller_scope all verify the SAME token within one page load; without the cache each
     call paid a full network auth.get_user round trip."""
+    if not isinstance(authorization, str):
+        # A route handler called IN-PROCESS (notify's report builders, module-to-module reuse)
+        # binds FastAPI's `Header(default="")` SENTINEL OBJECT here instead of a string, and
+        # `.lower()` on it raised AttributeError — a 500 from deep inside auth for what is simply
+        # "this call has no caller" (POST /notify/send, 2026-07-17). Treat it as no token: every
+        # authorization site already fails closed on a None uid. Callers should still pass the real
+        # header (the notify builders now do) — this only stops the class from 500-ing.
+        return None
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
     token = authorization.split(" ", 1)[1].strip()
@@ -3476,21 +3484,32 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
 
     # Effective widgets = role default (all-on if no role), then this employee's
     # per-person overrides applied on top (#1b).
+    #
+    # GUARDED (2026-07-30): this block is COSMETIC — it only decides which widgets the portal draws,
+    # and every section below is computed and returned regardless (see this endpoint's docstring), so
+    # the fallback exposes nothing the same response does not already carry. Un-guarded, a hiccup on
+    # either of these two small reads took the rep's entire dashboard down with a 500 (the failure_log
+    # RuntimeError frame at this line). Same shape as the phone_priority guard below; success-path
+    # behaviour is byte-identical, and the fallback is the documented "no role ⇒ all widgets on".
     widgets = {k: True for k in EMP_WIDGETS}
-    au = (client.schema("storeops").table("app_users").select("role,widget_overrides")
-          .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data or [])
-    role_name = au[0].get("role") if au else None
-    if role_name:
-        rr = (client.schema("storeops").table("roles").select("permissions")
-              .eq("org_id", org_id).eq("name", role_name).limit(1).execute().data or [])
-        ew = (rr[0].get("permissions") or {}).get("employee_widgets") if rr else None
-        if isinstance(ew, dict):
-            widgets = {k: bool(ew.get(k, True)) for k in EMP_WIDGETS}
-    ovr = au[0].get("widget_overrides") if au else None
-    if isinstance(ovr, dict):
-        for k, v in ovr.items():
-            if k in widgets:
-                widgets[k] = bool(v)
+    role_name = None
+    try:
+        au = (client.schema("storeops").table("app_users").select("role,widget_overrides")
+              .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data or [])
+        role_name = au[0].get("role") if au else None
+        if role_name:
+            rr = (client.schema("storeops").table("roles").select("permissions")
+                  .eq("org_id", org_id).eq("name", role_name).limit(1).execute().data or [])
+            ew = (rr[0].get("permissions") or {}).get("employee_widgets") if rr else None
+            if isinstance(ew, dict):
+                widgets = {k: bool(ew.get(k, True)) for k in EMP_WIDGETS}
+        ovr = au[0].get("widget_overrides") if au else None
+        if isinstance(ovr, dict):
+            for k, v in ovr.items():
+                if k in widgets:
+                    widgets[k] = bool(v)
+    except Exception:
+        widgets = {k: True for k in EMP_WIDGETS}   # partial application ⇒ reset to the plain default
 
     out = {
         "employee": {"employee_id": employee_id, "name": name, "store": emp.get("home_store"),
