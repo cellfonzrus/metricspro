@@ -66,7 +66,10 @@ export default function InventoryReconPage() {
       const valueMsg = res.inventory_value_stores
         ? ` · wrote $${Number(res.inventory_value_total).toLocaleString(undefined, { maximumFractionDigits: 0 })} inventory value to the Balance Sheet for ${res.inventory_value_stores} store(s).`
         : ''
-      setMsg(`Loaded ${res.loaded} category rows as of ${res.as_of_date}${res.skipped ? ` · ${res.skipped} skipped (unmapped category/qty)` : ''}.${valueMsg}`)
+      const staleMsg = res.inventory_value_skipped_stale?.length
+        ? ` · ⚠️ ${res.inventory_value_skipped_stale.length} store(s) NOT updated — the Balance Sheet already has a value from a newer date (${res.inventory_value_skipped_stale.map((s: any) => `${s.store}: kept ${s.existing_as_of_date}`).join('; ')}).`
+        : ''
+      setMsg(`Loaded ${res.loaded} category rows as of ${res.as_of_date}${res.skipped ? ` · ${res.skipped} skipped (unmapped category/qty)` : ''}.${valueMsg}${staleMsg}`)
       setAsOf(res.as_of_date)
       await load()
     } catch (e: any) { setMsg('Upload failed: ' + (e?.message || e)) }

@@ -549,6 +549,21 @@ def _canon_store(raw: str, addr_map: dict) -> str:
     return addr_map.get(s.lower(), s) if s else s
 
 
+def _iso_date_key(s) -> str | None:
+    """First 10 chars of a value that actually look like an ISO YYYY-MM-DD date, else None.
+    Used only to compare two as_of_date strings lexically (ISO dates sort correctly as plain
+    strings) — never raises, never guesses on a malformed value (asset-8 review, 2026-07-30:
+    a b2b-inventory upload's swept_value should never silently regress the Balance Sheet to a
+    stale count because an admin re-uploaded an OLDER export after a newer one already landed;
+    if either date can't be read as ISO, the guard fails OPEN — i.e. does not block the write —
+    same "never let an edge case break an already-working upload" posture as the surrounding
+    try/except)."""
+    s = str(s or "").strip()
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-" and s[:10].replace("-", "").isdigit():
+        return s[:10]
+    return None
+
+
 # ── "(no market)" bucket (2026-07-27 market-filter-dropdown fix) ──────────────────────────────
 # Rows that never matched store_mapping/MARKET_OVERRIDES (the asset_market_gap admin-attention
 # item) carry NO market — before this fix, that meant they were invisible from EVERY market
@@ -1144,16 +1159,41 @@ async def upload_b2b_inventory(body: dict, org_id: str = ORG_ID):
     # a tenant that hasn't run migration 026 yet still gets the qty/category recon above.
     inventory_value_stores = 0
     inventory_value_total = 0.0
+    inventory_value_skipped_stale = []
     if value_by_store:
         try:
+            new_key = _iso_date_key(as_of)
+            existing_as_of = {}
+            if new_key:
+                # One batched read of the stores this upload actually touches — never a full-table
+                # scan — so an out-of-order re-upload can be detected before it overwrites a newer
+                # swept_value. Read-only; degrades to "no existing data" (never blocks) on any error.
+                try:
+                    ex_rows = (client.schema("commcalc").table("inventory_value")
+                               .select("store,as_of_date").eq("org_id", org_id)
+                               .in_("store", list(value_by_store.keys())).execute().data) or []
+                    existing_as_of = {r.get("store"): r.get("as_of_date") for r in ex_rows}
+                except Exception:
+                    existing_as_of = {}
             for store_key, total in value_by_store.items():
+                exist_key = _iso_date_key(existing_as_of.get(store_key))
+                if new_key and exist_key and exist_key > new_key:
+                    # This store's Balance Sheet swept_value is already sourced from a NEWER
+                    # export than the one being uploaded now — never regress it to a stale count.
+                    # (manual_value, if an admin has set one, is untouched either way — this
+                    # endpoint's upsert payload never includes that column.)
+                    inventory_value_skipped_stale.append({"store": store_key,
+                                                           "existing_as_of_date": existing_as_of.get(store_key),
+                                                           "attempted_as_of_date": as_of})
+                    continue
                 rec = {"org_id": org_id, "store": store_key, "swept_value": round(total, 2),
                        "as_of_date": as_of, "source": "asset_b2b_upload",
                        "updated_at": datetime.now(timezone.utc).isoformat()}
                 client.schema("commcalc").table("inventory_value") \
                     .upsert(rec, on_conflict="org_id,store").execute()
-            inventory_value_stores = len(value_by_store)
-            inventory_value_total = round(sum(value_by_store.values()), 2)
+            inventory_value_stores = len(value_by_store) - len(inventory_value_skipped_stale)
+            inventory_value_total = round(sum(v for k, v in value_by_store.items()
+                                              if k not in {s["store"] for s in inventory_value_skipped_stale}), 2)
         except Exception as _e:
             # commcalc.inventory_value may not exist yet (migration 026 not run for this tenant) —
             # never let that break the qty/category recon upload above, which already succeeded.
@@ -1162,7 +1202,8 @@ async def upload_b2b_inventory(body: dict, org_id: str = ORG_ID):
     return {"loaded": len(payload), "skipped": len(skipped), "as_of_date": as_of,
             "skipped_rows": skipped[:20],
             "inventory_value_stores": inventory_value_stores,
-            "inventory_value_total": inventory_value_total}
+            "inventory_value_total": inventory_value_total,
+            "inventory_value_skipped_stale": inventory_value_skipped_stale}
 
 
 @router.post("/sync-inventory-flags")
