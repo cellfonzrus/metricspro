@@ -357,6 +357,15 @@ def closing_submissions(date_from: str = None, date_to: str = None,
     else:
         date_to = date_to or today
         date_from = date_from or (date_to[:8] + "01")
+    # N2 (2026-07-30 nit sweep): mirror closing_rollup's own defensive parse (Gate-1 NIT-3,
+    # 2026-07-28) — an un-validated garbage date_from/date_to reaching gte()/lte() against a real
+    # `date` column raises inside the Supabase client (an uncaught 500), not a clean 400. Validate +
+    # normalize here so a bad value fails loudly as a real 4xx instead.
+    try:
+        date_from = dateparser.parse(str(date_from)).date().isoformat()
+        date_to = dateparser.parse(str(date_to)).date().isoformat()
+    except Exception:
+        raise HTTPException(400, "date_from/date_to must be valid dates (YYYY-MM-DD)")
     if date_from > date_to:
         date_from, date_to = date_to, date_from
 
@@ -551,10 +560,27 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
         q = q.gte("close_date", d_from).lte("close_date", d_to)
         date_from, date_to = d_from, d_to
     rows = (q.limit(50000).execute().data) or []
-    store_rows = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
+    # N3 (2026-07-30 nit sweep): this roster fetch used to be UNGUARDED — a transient storeops.stores
+    # failure would 500 the whole dashboard rollup rather than just degrade the market filter. Now
+    # matches the ops-chargebacks endpoint's own established degrade (Gate-1 NIT-4b): on failure,
+    # resolve nothing (market/address fall back to their existing "unresolved" defaults) instead of
+    # crashing, and `market_filter_skipped` (below) tells the caller a REQUESTED market filter didn't
+    # actually run — rather than leaving that silent, the way NIT-4b originally left it elsewhere.
+    try:
+        store_rows = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
+        _roster_ok = True
+    except Exception:
+        store_rows = []
+        _roster_ok = False
     store_meta = {s.get("store_code"): s for s in store_rows if s.get("store_code")}
 
     market_set = _resolve_market_filter(market, markets)
+    # True only when a market filter was actually requested AND the roster it depends on failed to
+    # load — never true for an unfiltered call, never true when the roster loaded fine. Neutralize
+    # market_set itself (never silently mis-filter every row into "(no market)" on a missing roster).
+    market_filter_skipped = bool(market_set is not None and not _roster_ok)
+    if market_filter_skipped:
+        market_set = None
     store_set = _resolve_store_filter(stores)
     rep_set = _resolve_rep_filter(reps)
 
@@ -634,6 +660,7 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
         "period": period, "date_from": date_from, "date_to": date_to,
         "by_store": bs, "by_rep": br, "totals": finalize(grand),
         "verified_keys": len(verified_keys & submitted_keys), "submitted_keys": len(submitted_keys),
+        "market_filter_skipped": market_filter_skipped,
     }
 
 
@@ -676,8 +703,17 @@ def _closing_summary_org_ctx(client, org_id) -> dict:
         tlabels = {d.get("tender_key"): (d.get("label") or d.get("tender_key")) for d in _tdefs}
     except Exception:
         tlabels = {}
-    stores = (client.schema("storeops").table("stores")
-              .select("store_code,address,market").eq("org_id", org_id).execute().data) or []
+    # N3 (2026-07-30 nit sweep): guard this roster fetch — previously unguarded, so a transient
+    # storeops.stores failure would 500 the WHOLE /closing/summary request. `roster_ok` lets the
+    # caller (closing_summary) neutralize an active market filter rather than silently mis-bucket
+    # every row into "(no market)", and surface a `market_filter_skipped` flag on the response.
+    try:
+        stores = (client.schema("storeops").table("stores")
+                  .select("store_code,address,market").eq("org_id", org_id).execute().data) or []
+        _roster_ok = True
+    except Exception:
+        stores = []
+        _roster_ok = False
     store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
     tcfg = (client.schema("storeops").table("tenants").select("closing_mode")
             .eq("org_id", org_id).limit(1).execute().data or [{}])
@@ -690,7 +726,8 @@ def _closing_summary_org_ctx(client, org_id) -> dict:
     closer_by_store = {c.get("store_code"): (c.get("employee_name") or "").strip()
                        for c in closer_rows if c.get("store_code")}
     return {"ckeys": _ckeys, "clabels": _clabels, "crclass": _crclass, "tlabels": tlabels,
-            "store_meta": store_meta, "closing_mode": closing_mode, "closer_by_store": closer_by_store}
+            "store_meta": store_meta, "closing_mode": closing_mode, "closer_by_store": closer_by_store,
+            "roster_ok": _roster_ok}
 
 
 def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_set, tolerance, can_review,
@@ -1085,10 +1122,27 @@ def closing_summary(date: str = None, date_from: str = None, date_to: str = None
     if is_range:
         d_from = date_from or date_to
         d_to = date_to or date_from
+        # N2 (2026-07-30 nit sweep): same defensive parse as closing_rollup's Gate-1 NIT-3 — this
+        # endpoint's range mode used to rely on _date_range_list's own silent fallback (a garbage
+        # string parses to `[str(d_from)]`, i.e. the SAME garbage string as a one-item "date list"),
+        # which then reached _closing_summary_for_date's `.eq("close_date", date)` unvalidated — an
+        # uncaught 500 from the Supabase client, not a clean 400. Validate up front instead.
+        try:
+            d_from = dateparser.parse(str(d_from)).date().isoformat()
+            d_to = dateparser.parse(str(d_to)).date().isoformat()
+        except Exception:
+            raise HTTPException(400, "date_from/date_to must be valid dates (YYYY-MM-DD)")
         all_dates = _date_range_list(d_from, d_to)
         range_capped = len(all_dates) > _SUMMARY_MAX_RANGE_DATES
         dates = all_dates[-_SUMMARY_MAX_RANGE_DATES:] if range_capped else all_dates
     else:
+        # Same validation for the single-day path (`date=`) — the historical call shape, must reach
+        # `.eq("close_date", date)` as a real date, not a raw unchecked string (`date` defaults to
+        # today above when omitted entirely, which is already valid and re-parses unchanged).
+        try:
+            date = dateparser.parse(str(date)).date().isoformat()
+        except Exception:
+            raise HTTPException(400, "date must be a valid date (YYYY-MM-DD)")
         dates = [date]
         all_dates = dates
         range_capped = False
@@ -1101,6 +1155,14 @@ def closing_summary(date: str = None, date_from: str = None, date_to: str = None
     # Perf (see _closing_summary_org_ctx) — compute the date-independent lookups ONCE for the whole
     # request instead of once per date in the loop below.
     org_ctx = _closing_summary_org_ctx(client, org_id)
+    # N3 (2026-07-30 nit sweep): a REQUESTED market filter that couldn't actually be applied (the
+    # roster fetch inside _closing_summary_org_ctx failed) used to silently mis-bucket every store
+    # into "(no market)" and drop it under any real market pick (the exact NIT-4b class already fixed
+    # on the ops-chargebacks endpoint, unfixed here until now). Neutralize the filter in that case
+    # (never mis-drop) and surface it explicitly so the frontend can tell the DM their pick didn't run.
+    market_filter_skipped = bool(market_set is not None and not org_ctx.get("roster_ok", True))
+    if market_filter_skipped:
+        market_set = None
     out = []
     for d in dates:
         out.extend(_closing_summary_for_date(client, org_id, d, market_set, store_set, rep_set, tolerance,
@@ -1117,7 +1179,7 @@ def closing_summary(date: str = None, date_from: str = None, date_to: str = None
         out = [s for s in out if in_keyset(ks, s.get("store_code"), s.get("store_address"))]
     return {"date": date, "dates": dates, "range": is_range, "stores": out,
            "dates_requested": len(all_dates), "dates_computed": len(dates), "range_capped": range_capped,
-           "can_review": can_review}
+           "can_review": can_review, "market_filter_skipped": market_filter_skipped}
 
 
 # ── DM verification upsert ────────────────────────────────────────────────────────────────
@@ -1948,7 +2010,6 @@ def put_tender_config(payload: dict, org_id: str = ORG_ID, authorization: str = 
         raise HTTPException(403, "Editing tender configuration is permission-restricted.")
     defs = payload.get("defs") or []
     maps = payload.get("maps") or []
-    client.schema("commcalc").table("closing_tender_def").delete().eq("org_id", org_id).execute()
     rows = []
     for i, dd in enumerate(defs):
         key = (dd.get("tender_key") or "").strip()
@@ -1959,9 +2020,6 @@ def put_tender_config(payload: dict, org_id: str = ORG_ID, authorization: str = 
                      "is_active": dd.get("is_active", True) is not False,
                      "recon_class": dd.get("recon_class") or "other",
                      "include_in_total": dd.get("include_in_total", True) is not False})
-    if rows:
-        client.schema("commcalc").table("closing_tender_def").insert(rows).execute()
-    client.schema("commcalc").table("closing_tender_map").delete().eq("org_id", org_id).execute()
     mrows = []
     for m in maps:
         key = (m.get("tender_key") or "").strip()
@@ -1971,6 +2029,32 @@ def put_tender_config(payload: dict, org_id: str = ORG_ID, authorization: str = 
         mrows.append({"org_id": org_id, "tender_key": key, "report": m.get("report") or "both",
                       "source_labels": labels, "match_mode": m.get("match_mode") or "substring",
                       "priority": m.get("priority", 100)})
+
+    # Durable off-axis validation (2026-07-30 nit sweep): retail-ops-15 found that a `closing_tender_
+    # map` row whose `tender_key` isn't on the tenant's real active axis makes those dollars vanish
+    # from 3-way recon with no signal (or, post-15, land in x_report_unmapped) — but that's a READ-time
+    # mitigation; nothing here at SAVE time ever stopped an off-axis map row from being written in the
+    # first place. Reject BEFORE any write instead: the active axis is this SAME save's own active
+    # (is_active) custom defs when any are being saved, else the standard 7 (CANON_TENDERS) — the
+    # EXACT "empty defs -> hardcoded fallback" rule tender_axis()/load_tender_config() apply at read
+    # time (load_tender_config's own query already filters `is_active=True`), so this check reflects
+    # the REAL axis resolve_x will use for this data, not a guess. Additive/reject-only: a payload that
+    # was already internally consistent inserts byte-identically; only a genuinely off-axis map row
+    # (dead/deactivated/typo'd tender_key) now fails loudly at save time instead of silently at read
+    # time. Nothing is deleted/written until this check passes (a rejected save leaves the tenant's
+    # PREVIOUS config completely untouched).
+    active_keys = {r["tender_key"] for r in rows if r["is_active"]} or set(CANON_TENDERS)
+    off_axis = sorted({m["tender_key"] for m in mrows if m["tender_key"] not in active_keys})
+    if off_axis:
+        raise HTTPException(
+            400,
+            "Tender map references tender_key(s) not on the active axis: " + ", ".join(off_axis) +
+            ". Activate/add that tender field first, or fix the map row's tender_key. Nothing was saved.")
+
+    client.schema("commcalc").table("closing_tender_def").delete().eq("org_id", org_id).execute()
+    if rows:
+        client.schema("commcalc").table("closing_tender_def").insert(rows).execute()
+    client.schema("commcalc").table("closing_tender_map").delete().eq("org_id", org_id).execute()
     if mrows:
         client.schema("commcalc").table("closing_tender_map").insert(mrows).execute()
     try:
@@ -2854,6 +2938,7 @@ def get_missed_dm_verifies(lookback_days: int = 14, date_from: str = None, date_
         rows = [r for r in rows if not r.get("store_code") or (r.get("store_code") or "").upper() in store_set]
     if rep_set is not None:
         rows = [r for r in rows if (r.get("employee_name") or "").strip().casefold() in rep_set]
+    market_filter_skipped = False
     if market_set is not None:
         try:
             _store_rows = (client.schema("storeops").table("stores").select("store_code,market")
@@ -2865,14 +2950,16 @@ def get_missed_dm_verifies(lookback_days: int = 14, date_from: str = None, date_
             # which buckets EVERY row into "(no market)" via the .get(...) default — a market filter for
             # any REAL market then silently emptied the whole panel even though the true markets were
             # simply unresolvable. Prefer NOT applying the market filter in this degraded path over a
-            # silent, misleading drop.
-            pass
+            # silent, misleading drop. N3 (2026-07-30 nit sweep): also SURFACE this degrade instead of
+            # leaving it silent — market_filter_skipped tells the caller their market pick didn't apply.
+            market_filter_skipped = True
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
     return {"rows": rows, "totals": ops_chargebacks.totals(rows),
-            "can_decide": _can_mgmt_review(_caller_perms(client, authorization))}
+            "can_decide": _can_mgmt_review(_caller_perms(client, authorization)),
+            "market_filter_skipped": market_filter_skipped}
 
 
 @router.post("/ops-chargebacks/decide")

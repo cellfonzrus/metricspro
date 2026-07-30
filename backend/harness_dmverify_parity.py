@@ -641,6 +641,161 @@ check("M6. omitting org_ctx (backward-compat) yields the SAME card as the range 
       direct and threaded and direct[0]["closer"] == threaded[0]["closer"] == "Closer One",
       str((direct, threaded)))
 
+# ═══ N. Nit sweep (2026-07-30): N2 range-date 400-not-500 (closing_summary + closing_submissions,
+#      extending closing_rollup's own Gate-1 NIT-3 fix to its two siblings) + N3 market_filter_skipped
+#      (closing_summary / closing_rollup / the chargebacks endpoint all now guard their roster fetch
+#      AND surface an explicit flag when a REQUESTED market filter couldn't actually run, instead of
+#      leaving the NIT-4b-style degrade silent — chargebacks already had the guard, just not the flag;
+#      closing_summary/closing_rollup's roster fetch was previously UNGUARDED entirely). N1 (canonical
+#      -mode bypass align + chargebacks) is OBSOLETE — see docs/handoffs/retail-ops.md: retail-ops-16
+#      already fixed the store-filter bypass at all 3 call sites with a roster-INDEPENDENT rule (gate
+#      on the raw code itself), which the chargebacks endpoint (this file, NIT-4a) already matched
+#      since retail-ops-14 — nothing left to align. ═══════════════════════════════════════════════════
+from fastapi import HTTPException as _HTTPException
+
+st = fresh_store(); wire(st)
+try:
+    cr.closing_summary(date="not-a-date", authorization=AUTH_NONE, org_id=HOUSE)
+    check("N1. closing_summary single-date `date=` rejects a garbage date with a clean HTTPException(400)", False, "did not raise")
+except Exception as e:
+    check("N1. closing_summary single-date `date=` rejects a garbage date with a clean HTTPException(400)",
+          isinstance(e, _HTTPException) and e.status_code == 400, f"{type(e).__name__}: {e}")
+
+st = fresh_store(); wire(st)
+try:
+    cr.closing_summary(date_from="not-a-date", date_to="also-not-a-date", authorization=AUTH_NONE, org_id=HOUSE)
+    check("N2. closing_summary range mode (date_from/date_to) rejects a garbage date with a clean HTTPException(400)", False, "did not raise")
+except Exception as e:
+    check("N2. closing_summary range mode (date_from/date_to) rejects a garbage date with a clean HTTPException(400)",
+          isinstance(e, _HTTPException) and e.status_code == 400, f"{type(e).__name__}: {e}")
+
+st = fresh_store(); wire(st)
+try:
+    cr.closing_submissions(date_from="not-a-date", date_to="also-not-a-date", authorization=AUTH_NONE, org_id=HOUSE)
+    check("N3. closing_submissions rejects a garbage date_from/date_to with a clean HTTPException(400)", False, "did not raise")
+except Exception as e:
+    check("N3. closing_submissions rejects a garbage date_from/date_to with a clean HTTPException(400)",
+          isinstance(e, _HTTPException) and e.status_code == 400, f"{type(e).__name__}: {e}")
+
+# Regression: well-formed dates still work exactly as before on both endpoints.
+st = fresh_store(); wire(st)
+st["daily_closing"] = [dc_row(id="r1", store_code="S1", close_date="2026-07-15")]
+resp_n4 = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)
+check("N4. closing_summary still works normally with a well-formed date= (regression)",
+      resp_n4["date"] == "2026-07-15" and len(resp_n4["stores"]) == 1, str(resp_n4.get("date")))
+
+st = fresh_store(); wire(st)
+st["daily_closing"] = [dc_row(id="r1", store_code="S1", close_date="2026-07-15")]
+resp_n5 = cr.closing_submissions(date_from="2026-07-01", date_to="2026-07-31", authorization=AUTH_NONE, org_id=HOUSE)
+check("N5. closing_submissions still works normally with well-formed date_from/date_to (regression)",
+      len(resp_n5.get("rows", [])) == 1, str(resp_n5))
+
+# N3 — market_filter_skipped: healthy path (roster loads fine) -> always False, even WITH a real
+# market filter active (regression: never falsely flags a filter that actually ran).
+st = fresh_store(); wire(st)
+st["daily_closing"] = [dc_row(id="r1", store_code="S1", close_date="2026-07-15")]
+st["stores"] = [{"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "Texas"}]
+resp_n6 = cr.closing_summary(date="2026-07-15", markets="Texas", authorization=AUTH_NONE, org_id=HOUSE)
+check("N6. closing_summary market_filter_skipped is False when the roster loads fine (regression, even WITH an active market filter)",
+      resp_n6.get("market_filter_skipped") is False, str(resp_n6.get("market_filter_skipped")))
+
+# N3 — market_filter_skipped: roster fetch fails while a market filter WAS requested -> flag True, AND
+# the row is NOT silently dropped (market_set neutralized rather than mis-bucketing everything into
+# "(no market)" and excluding it under a real market pick) — the exact NIT-4b class, now on
+# /closing/summary too (previously unguarded there — a roster failure used to 500 the WHOLE request).
+st = fresh_store(); wire(st)
+st["daily_closing"] = [dc_row(id="r1", store_code="S1", close_date="2026-07-15")]
+fake_client_n = cr.sb()
+_orig_table_n = fake_client_n.table
+def _exploding_table_n(name):
+    if name == "stores":
+        raise RuntimeError("storeops.stores unreachable (simulated)")
+    return _orig_table_n(name)
+fake_client_n.table = _exploding_table_n
+try:
+    resp_n7 = cr.closing_summary(date="2026-07-15", markets="Texas", authorization=AUTH_NONE, org_id=HOUSE)
+    check("N7. closing_summary: roster fetch fails + a market filter WAS requested -> market_filter_skipped=True, row still shown (never mis-dropped, never a 500)",
+          resp_n7.get("market_filter_skipped") is True and len(resp_n7["stores"]) == 1,
+          str((resp_n7.get("market_filter_skipped"), len(resp_n7["stores"]))))
+finally:
+    fake_client_n.table = _orig_table_n
+
+# N3 — market_filter_skipped stays False when NO market filter was requested at all, even if the
+# roster fetch fails (nothing was "skipped" because nothing was asked for).
+st = fresh_store(); wire(st)
+st["daily_closing"] = [dc_row(id="r1", store_code="S1", close_date="2026-07-15")]
+fake_client_n2 = cr.sb()
+_orig_table_n2 = fake_client_n2.table
+def _exploding_table_n2(name):
+    if name == "stores":
+        raise RuntimeError("storeops.stores unreachable (simulated)")
+    return _orig_table_n2(name)
+fake_client_n2.table = _exploding_table_n2
+try:
+    resp_n8 = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)
+    check("N8. closing_summary: roster fetch fails but NO market filter was requested -> market_filter_skipped stays False (nothing to skip)",
+          resp_n8.get("market_filter_skipped") is False, str(resp_n8.get("market_filter_skipped")))
+finally:
+    fake_client_n2.table = _orig_table_n2
+
+# Same 3 states on /closing/rollup: healthy+filtered=False, roster-fails+filtered=True (row kept).
+st = fresh_store(); wire(st)
+st["daily_closing"] = [dc_row(id="p1", store_code="S1", period="2026-07")]
+st["stores"] = [{"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "Texas"}]
+resp_n9 = cr.closing_rollup(period="2026-07", markets="Texas", authorization=AUTH_NONE, org_id=HOUSE)
+check("N9. closing_rollup market_filter_skipped is False when the roster loads fine (regression)",
+      resp_n9.get("market_filter_skipped") is False, str(resp_n9.get("market_filter_skipped")))
+
+st = fresh_store(); wire(st)
+st["daily_closing"] = [dc_row(id="p1", store_code="S1", period="2026-07")]
+fake_client_n3 = cr.sb()
+_orig_table_n3 = fake_client_n3.table
+def _exploding_table_n3(name):
+    if name == "stores":
+        raise RuntimeError("storeops.stores unreachable (simulated)")
+    return _orig_table_n3(name)
+fake_client_n3.table = _exploding_table_n3
+try:
+    resp_n10 = cr.closing_rollup(period="2026-07", markets="Texas", authorization=AUTH_NONE, org_id=HOUSE)
+    check("N10. closing_rollup: roster fetch fails + a market filter WAS requested -> market_filter_skipped=True, row still shown, no 500",
+          resp_n10.get("market_filter_skipped") is True and len(resp_n10["by_store"]) == 1,
+          str((resp_n10.get("market_filter_skipped"), len(resp_n10["by_store"]))))
+finally:
+    fake_client_n3.table = _orig_table_n3
+
+# get_missed_dm_verifies: same flag, reusing the section-I3 degrade path (proves the flag on the SAME
+# scenario I3 already proves the row-kept behavior for — I3 itself is left untouched).
+CB_N = [{"id": "cb_n", "org_id": HOUSE, "store_code": "S1", "incident_date": "2026-07-10",
+        "employee_name": "DM N", "status": "pending", "amount": 25.0, "parent_id": None}]
+_orig_detect_n = oc.detect_missed_dm_verifies
+oc.detect_missed_dm_verifies = lambda org_id, lookback_days=14: list(CB_N)
+st = fresh_store(); wire(st)
+fake_client_n4 = cr.sb()
+_orig_table_n4 = fake_client_n4.table
+def _exploding_table_n4(name):
+    if name == "stores":
+        raise RuntimeError("storeops.stores unreachable (simulated)")
+    return _orig_table_n4(name)
+fake_client_n4.table = _exploding_table_n4
+try:
+    resp_n11 = cr.get_missed_dm_verifies(markets="Texas", authorization=AUTH_NONE, org_id=HOUSE)
+    check("N11. chargebacks endpoint: roster fetch fails + a market filter WAS requested -> market_filter_skipped=True",
+          resp_n11.get("market_filter_skipped") is True, str(resp_n11.get("market_filter_skipped")))
+finally:
+    oc.detect_missed_dm_verifies = _orig_detect_n
+    fake_client_n4.table = _orig_table_n4
+
+st = fresh_store(); wire(st)
+st["stores"] = [{"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "Texas"}]
+_orig_detect_n2 = oc.detect_missed_dm_verifies
+oc.detect_missed_dm_verifies = lambda org_id, lookback_days=14: list(CB_N)
+try:
+    resp_n12 = cr.get_missed_dm_verifies(markets="Texas", authorization=AUTH_NONE, org_id=HOUSE)
+    check("N12. chargebacks endpoint: market_filter_skipped is False when the roster loads fine (regression)",
+          resp_n12.get("market_filter_skipped") is False, str(resp_n12.get("market_filter_skipped")))
+finally:
+    oc.detect_missed_dm_verifies = _orig_detect_n2
+
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:
