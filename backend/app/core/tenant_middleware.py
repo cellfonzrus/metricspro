@@ -73,6 +73,21 @@ _PUBLIC_PREFIXES = (
     "/api/v1/hr/public/onboarding",       # HR onboarding public token endpoints (the link token IS the auth)
     "/api/v1/notify/dl",                   # no-login report download: the HMAC token IS the auth; reaches
                                            # ONLY the one artifact it signs (uniform 404 on any bad token)
+    "/api/v1/core/fix-pipeline",            # Auto-Fix Pipeline (mig 718): DUAL-AUTH, same shape as
+                                           # /core/tenants/sync + the */run-due sweeps. The scheduled
+                                           # triage routine carries NO JWT — it authenticates with the
+                                           # least-privilege x-fix-pipeline-secret header — so the JWT
+                                           # requirement must not fire before the handler runs. EVERY
+                                           # route under this prefix self-gates in
+                                           # core/fix_pipeline.py::_authorize (default DENY: valid
+                                           # secret scoped to feed+registry, else a verified
+                                           # SUPER-ADMIN JWT; anything else 401/403) and resolves its
+                                           # own org, because allowlisting also skips the org_id
+                                           # rewrite. Boundary-matched, so ONLY
+                                           # /api/v1/core/fix-pipeline[/…] is affected — the
+                                           # pre-existing /api/v1/core/fix-requests endpoints (mig 716
+                                           # support pipeline) do NOT match and keep full middleware
+                                           # protection.
 )
 
 # Self-authenticating background sweeps: EVERY route ending in "/run-due" is invoked by pg_cron with

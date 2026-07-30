@@ -3792,6 +3792,17 @@ from app.modules.core import import_health as _import_health   # noqa: E402  (bo
 
 router.include_router(_import_health.router)
 
+# ── Auto-Fix Pipeline, Phase 1 (mig 718, owner-approved in chat 2026-07-30) ──────────────────────
+# The fix-request registry + cost accounting behind /admin/fix-requests. Mounted ONTO this router (same
+# rationale as import_health above): main.py needs no change, and the sub-router's own "/fix-pipeline"
+# prefix resolves its paths to /api/v1/core/fix-pipeline/*. It imports core.router only LAZILY (inside
+# functions), so there is no import cycle. NOTE: these paths are middleware-allowlisted (the agent door
+# carries no JWT), so EVERY route in that module self-gates via its own _authorize() — see the module
+# docstring and harness_fix_pipeline.py's route-coverage proof.
+from app.modules.core import fix_pipeline as _fix_pipeline   # noqa: E402  (bottom-of-file mount)
+
+router.include_router(_fix_pipeline.router)
+
 # Platform-core's OWN attention providers (tenant provisioning + system-error backlog). Imported purely
 # for the @register_provider side effect — no routes, no gate, no aggregation change. Each of notify /
 # helpdesk registers its own providers from its own module file the same way (see their routers' tails).

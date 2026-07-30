@@ -26,6 +26,20 @@ const SEV: Record<string, string> = { error: '#dc2626', warning: '#d97706', info
 const STATUS: Record<string, string> = { open: '#dc2626', resolved: '#16a34a', ignored: '#6b7280' }
 const when = (iso?: string | null) => { if (!iso) return '—'; try { return new Date(iso).toLocaleString() } catch { return iso } }
 
+// KNOWN GAP CLOSED (auto-fix-pipeline design §2a): `detail` has carried the full technical context since
+// mig 112 — for a `system_error` row that is {ref, method, path, exc_type, traceback} written by
+// HardeningMiddleware — but NO UI ever rendered it, so the reference code the user was shown led nowhere
+// and the trace could only be read with SQL. Each row now expands to show it.
+const detailRef = (d: any) => (d && typeof d === 'object' ? (d.ref || null) : null)
+const detailTrace = (d: any) => (d && typeof d === 'object' ? (d.traceback || null) : null)
+// Everything in `detail` EXCEPT the traceback (rendered separately as a <pre>), so no field is hidden.
+function detailRest(d: any): [string, string][] {
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return []
+  return Object.entries(d)
+    .filter(([k]) => k !== 'traceback')
+    .map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)] as [string, string])
+}
+
 export default function FailureLogsPage() {
   const [groups, setGroups] = useState<Group[]>([])
   const [rows, setRows] = useState<Row[]>([])
@@ -242,7 +256,33 @@ export default function FailureLogsPage() {
                                 <td style={cell}><input type="checkbox" checked={sel.has(r.id)} onChange={() => toggleRow(r.id)} /></td>
                                 <td style={{ ...cell, whiteSpace: 'nowrap', color: 'var(--text3)' }}>{when(r.created_at)}</td>
                                 <td style={cell}>{r.employee_name || '—'}{r.store_code ? <span style={{ color: 'var(--text3)' }}> · {r.store_code}</span> : ''}</td>
-                                <td style={cell}>{r.message}</td>
+                                <td style={cell}>
+                                  {r.message}
+                                  {/* Technical detail + TRACEBACK (design §2a): present in the DB since mig 112,
+                                      never rendered until now. Collapsed by default so the triage list stays
+                                      readable; the reference code shown to the user is surfaced on the summary
+                                      so an admin can match a user's report to the row without SQL. */}
+                                  {(detailTrace(r.detail) || detailRest(r.detail).length > 0) && (
+                                    <details style={{ marginTop: 5 }}>
+                                      <summary style={{ fontSize: 11.5, color: 'var(--text3)', cursor: 'pointer' }}>
+                                        Technical detail{detailRef(r.detail) ? ` · ref ${detailRef(r.detail)}` : ''}
+                                        {detailTrace(r.detail) ? ' · traceback' : ''}
+                                      </summary>
+                                      {detailRest(r.detail).length > 0 && (
+                                        <div style={{ fontSize: 11.5, color: 'var(--text2)', margin: '5px 0' }}>
+                                          {detailRest(r.detail).map(([k, v]) => (
+                                            <div key={k}><b>{k}:</b> {v.length > 400 ? v.slice(0, 400) + '…' : v}</div>
+                                          ))}
+                                        </div>
+                                      )}
+                                      {detailTrace(r.detail) && (
+                                        <pre style={{ fontSize: 11, background: 'var(--surface2)', padding: 9, borderRadius: 7, overflow: 'auto', maxHeight: 300, whiteSpace: 'pre-wrap', margin: '5px 0 0' }}>
+                                          {detailTrace(r.detail)}
+                                        </pre>
+                                      )}
+                                    </details>
+                                  )}
+                                </td>
                                 <td style={cell}>
                                   {r.reviewed
                                     ? <button className="btn btn-sm" onClick={() => clearIds([r.id], false)}>Reopen</button>

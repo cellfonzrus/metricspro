@@ -310,6 +310,13 @@ export const NAV: NavGroup[] = [
     // Deliberately NOT in REPORT_DIRECTORY — it edits import schedules, and the directory excludes
     // config/entry surfaces by design (one line to add if the operator prefers it listed).
     { href: '/admin/import-health', label: 'Import Health', icon: '📡', module: 'admin' },
+    // Auto-Fix Pipeline board (mig 718) — the fix-request registry + AI token/$ accounting. Tagged
+    // module 'admin' with NO `scopes`, byte-identical in shape to its /admin/tenants sibling: the PAGE
+    // itself is super-admin-only (it renders an explainer for anyone else, and every backend endpoint
+    // 403s a non-super-admin independently), so this nav line adds no new permission surface and needs
+    // no SEED_VERSION bump for roles. Deliberately NOT a new module key: it is a platform surface, not
+    // a billable tenant module.
+    { href: '/admin/fix-requests', label: 'Auto-Fix Pipeline', icon: '🛠️', module: 'admin' },
   ]},
 ]
 
@@ -392,6 +399,12 @@ export const REPORT_DIRECTORY: [string, string][] = [
   // Admin & System
   ['/failures', 'admin'], ['/helpdesk', 'admin'], ['/helpdesk/dashboard', 'admin'], ['/remediation', 'admin'],
   ['/admin/tenants', 'admin'],
+  // The fix-request board IS a report surface (status board + rollup tile + full ReportShell export set),
+  // so it belongs in the directory — same treatment as its super-admin-only sibling /admin/tenants, and
+  // unlike the pure config surfaces (Import Health, Roles & Access), which are deliberately excluded.
+  // NOTE: do not name those config hrefs literally here — prove_import_health_nav.mjs asserts the
+  // directory block does not CONTAIN that string, and a mention in a comment would trip it.
+  ['/admin/fix-requests', 'admin'],
 ]
 const REPORT_CATEGORY_LABEL: Record<string, string> = Object.fromEntries(REPORT_CATEGORIES.map(c => [c.key, c.label]))
 
