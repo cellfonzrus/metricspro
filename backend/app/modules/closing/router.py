@@ -321,6 +321,29 @@ def _row_display_tenders(r: dict) -> dict:
             "zelle": _f(r.get("other_account")), "acima": 0.0}
 
 
+def _row_epay_display(r: dict) -> dict:
+    """OWNER BUG REPORT 2026-07-29 ('DM verify shows ePay cash $0.00 but the daily closing shows
+    epay was $70 in cash'): the informational ePay bill-payment breakdown for ONE submitted row — how
+    much of the row's declared cash/credit was ePay. Deliberately SEPARATE from
+    _row_display_tenders/totals['epay_cash']/totals['epay_cc'] (untouched, still always 0 for a
+    mig103+ row) because money_recon's `closing_cash = totals['epay_cash'] + totals['store_cash']`
+    relies on that always-0 invariant to avoid double-counting epay (already folded into store_cash/
+    t_cash) — this helper/its dedicated `epay_on_cash`/`epay_on_cc` totals keys are read-only DISPLAY
+    additions, never fed into that (or any other) recon formula.
+    A mig103+ row (has_t, i.e. any t_* column populated) carries the real breakdown in
+    epay_on_cash/epay_on_credit/epay_on_acima (create_row always zeroes the legacy epay_cash/epay_cc
+    columns for these rows — a SUBSET of t_cash/t_credit, not additional money). A pre-mig103
+    sheet_upload row has no epay_on_* columns at all; its legacy epay_cash/epay_cc columns hold a
+    REAL, separate value instead (already added into store_cash/store_cc's own total there — see
+    _row_display_tenders' fallback branch), so surfacing them unchanged is correct for that era too."""
+    has_t = any(r.get(k) is not None for k in
+                ("t_cash", "t_credit", "t_ext_cc", "t_gift", "t_store_acct", "t_zelle", "t_acima"))
+    if has_t:
+        return {"cash": _f(r.get("epay_on_cash")),
+                "cc": round(_f(r.get("epay_on_credit")) + _f(r.get("epay_on_acima")), 2)}
+    return {"cash": _f(r.get("epay_cash")), "cc": _f(r.get("epay_cc"))}
+
+
 @router.get("/submissions")
 def closing_submissions(date_from: str = None, date_to: str = None,
                         authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -565,11 +588,15 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
         mk_bucket = _market_bucket(meta.get("market"))
         if market_set is not None and mk_bucket.casefold() not in market_set:
             continue
-        # A store filter never touches a row whose store didn't resolve to a real storeops.stores
-        # record (no store_code at all, OR a code no longer/not yet in the roster) — it has no store
-        # identity a picker could ever offer, and hiding it behind an unrelated store pick would
-        # recreate the exact silent-drop bug this package fixes.
-        if store_set is not None and meta and raw_code.upper() not in store_set:
+        # A store filter never touches a row with NO store_code identity at all (no picker could ever
+        # offer it). OWNER BUG REPORT 2026-07-29 ("choosing 509 Nostrand also showed b1/b2701/b418"):
+        # this used to gate on `meta` (whether the code was found in the CURRENT storeops.stores
+        # roster fetch) instead of on `raw_code` itself — a REAL, non-blank store_code that simply
+        # isn't (yet, or no longer) in that roster snapshot bypassed the filter entirely and showed up
+        # regardless of what was picked, the exact "canonical-mode bypass" — a store WITH a real code
+        # must always be filtered against store_set; only a row with no code at all has no identity a
+        # picker could ever offer.
+        if store_set is not None and raw_code and raw_code.upper() not in store_set:
             continue
         if rep_set is not None and (r.get("employee_name") or "").strip().casefold() not in rep_set:
             continue
@@ -631,46 +658,27 @@ _SUMMARY_MAX_RANGE_DATES = 14   # bounded like closing_stale_stores' "at most 14
 _GATE_RANK = {"blocked": 4, "flagged": 3, "recon_pending": 2, "not_computed": 1, "ok": 0}
 
 
-def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_set, tolerance, can_review):
-    """One day's DM-Verify per-store summary. Returns a list of store dicts, each tagged
-    close_date=date. market_set/store_set/rep_set (see _resolve_*_filter) are None (unrestricted) or
-    a normalized set narrowing which store CARDS come back — filtering never touches the money math,
-    it only decides which already-computed cards are included."""
-    rows = (client.schema("commcalc").table("daily_closing").select("*")
-            .eq("org_id", org_id).eq("close_date", date).execute().data) or []
-
-    # Configurable activation-count fields (mig 501): empty config -> the hardcoded 3 fields
-    # (upgrade_count/new_line_count/postpaid_count), so an un-opted tenant is byte-identical.
+def _closing_summary_org_ctx(client, org_id) -> dict:
+    """The ORG-LEVEL (date-independent) lookups _closing_summary_for_date needs: count/tender config,
+    the store roster, the tenant's closing_mode, and assigned closers. Perf fix (OWNER BUG REPORT
+    2026-07-29 — DM verify 'locks out for over 3-4 minutes'; senior-review RC-4): a range-mode
+    /closing/summary call (up to _SUMMARY_MAX_RANGE_DATES=14 dates) used to re-run ALL FIVE of these
+    org-scoped queries once per date, even though none of them depend on the date at all — 14 dates
+    meant 14x the redundant round trips for the exact same rows. Computed ONCE per request in
+    closing_summary and threaded through every per-date call instead. Zero behavior change: every
+    value here is the SAME query, at the SAME point in _closing_summary_for_date's control flow,
+    just computed once and reused rather than refetched — no recon/gate math touched."""
     from . import count_config, tender_config
     _cdefs = count_config.load_count_config(client, org_id)
     _ckeys, _clabels, _crclass = count_config.count_axis(_cdefs)
-    # Configurable tender labels (mig 111) — for the custom-tenders display string only (same source
-    # /closing/submissions already uses); never affects the close gate.
     try:
         _tdefs, _tmaps = tender_config.load_tender_config(client, org_id)
         tlabels = {d.get("tender_key"): (d.get("label") or d.get("tender_key")) for d in _tdefs}
     except Exception:
         tlabels = {}
-
-    # Store + market context.
     stores = (client.schema("storeops").table("stores")
               .select("store_code,address,market").eq("org_id", org_id).execute().data) or []
     store_meta = {s.get("store_code"): s for s in stores if s.get("store_code")}
-
-    # Scheduled reps that day (to flag who didn't submit).
-    shifts = (client.schema("storeops").table("shifts").select("store_code,employee_name")
-              .eq("org_id", org_id).eq("is_deleted", False).eq("shift_date", date).execute().data) or []
-    sched_by_store = {}
-    for s in shifts:
-        sc = s.get("store_code")
-        nm = (s.get("employee_name") or "").strip()
-        if sc and nm:
-            sched_by_store.setdefault(sc, set()).add(nm)
-
-    # Who ACTUALLY worked each store (clock-in ∪ B2B sales-by-rep) — the closing checks reality, not
-    # the roster. Plus the tenant closing_mode (per_rep = every worker owes a closing; one_closing =
-    # only the assigned closer does, and tallies the store's cash) + the assigned closers.
-    who = _who_worked_by_store(client, org_id, date)
     tcfg = (client.schema("storeops").table("tenants").select("closing_mode")
             .eq("org_id", org_id).limit(1).execute().data or [{}])
     closing_mode = (tcfg[0].get("closing_mode") if tcfg else None) or "per_rep"
@@ -681,6 +689,43 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
         closer_rows = []
     closer_by_store = {c.get("store_code"): (c.get("employee_name") or "").strip()
                        for c in closer_rows if c.get("store_code")}
+    return {"ckeys": _ckeys, "clabels": _clabels, "crclass": _crclass, "tlabels": tlabels,
+            "store_meta": store_meta, "closing_mode": closing_mode, "closer_by_store": closer_by_store}
+
+
+def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_set, tolerance, can_review,
+                              org_ctx: dict = None):
+    """One day's DM-Verify per-store summary. Returns a list of store dicts, each tagged
+    close_date=date. market_set/store_set/rep_set (see _resolve_*_filter) are None (unrestricted) or
+    a normalized set narrowing which store CARDS come back — filtering never touches the money math,
+    it only decides which already-computed cards are included. `org_ctx` (optional, see
+    _closing_summary_org_ctx) lets a multi-date range caller compute the date-independent lookups
+    ONCE instead of once per date; omitted (any other/future caller) computes it inline exactly as
+    before — byte-identical either way."""
+    rows = (client.schema("commcalc").table("daily_closing").select("*")
+            .eq("org_id", org_id).eq("close_date", date).execute().data) or []
+
+    if org_ctx is None:
+        org_ctx = _closing_summary_org_ctx(client, org_id)
+    from . import count_config   # still used directly below (row_value/STD_FIELD_KEYS), not just via org_ctx
+    _ckeys, _clabels, _crclass = org_ctx["ckeys"], org_ctx["clabels"], org_ctx["crclass"]
+    tlabels = org_ctx["tlabels"]
+    store_meta = org_ctx["store_meta"]
+    closing_mode = org_ctx["closing_mode"]
+    closer_by_store = org_ctx["closer_by_store"]
+
+    # Scheduled reps that day (to flag who didn't submit) — genuinely date-scoped, stays per-call.
+    shifts = (client.schema("storeops").table("shifts").select("store_code,employee_name")
+              .eq("org_id", org_id).eq("is_deleted", False).eq("shift_date", date).execute().data) or []
+    sched_by_store = {}
+    for s in shifts:
+        sc = s.get("store_code")
+        nm = (s.get("employee_name") or "").strip()
+        if sc and nm:
+            sched_by_store.setdefault(sc, set()).add(nm)
+
+    # Who ACTUALLY worked each store (clock-in ∪ B2B sales-by-rep) — genuinely date-scoped.
+    who = _who_worked_by_store(client, org_id, date)
 
     # B2B actual daily sales per store — from the UNIFIED source (feed-first for the open month) with
     # the shared contract-type classifier + configurable accessory, so July populates and it agrees with
@@ -776,17 +821,24 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
         # it can only be excluded if the caller explicitly deselects the "(no market)" bucket.
         if market_set is not None and mkt_bucket.casefold() not in market_set:
             continue
-        # A store filter never touches a row whose store didn't resolve to a real storeops.stores
-        # record (no store_code at all, OR a code no longer/not yet in the roster) — it has no store
-        # identity a picker could ever offer, and hiding a "did this even close" alert behind an
-        # unrelated store pick would recreate the exact silent-drop bug this package fixes.
-        if store_set is not None and meta and code.upper() not in store_set:
+        # A store filter never touches a row with NO store_code identity at all (no picker could ever
+        # offer it). OWNER BUG REPORT 2026-07-29 ("choosing 509 Nostrand also showed b1/b2701/b418"):
+        # gate on `code` itself (a real, non-blank store_code), NOT on whether the roster lookup
+        # (`meta`) succeeded — a real code that's simply missing from the CURRENT storeops.stores
+        # fetch used to bypass the filter entirely (shown no matter what was picked); only a row with
+        # NO code at all (the "name:" fallback key) has no identity a picker could ever offer.
+        if store_set is not None and code and code.upper() not in store_set:
             continue
         totals = {
             "store_cash": round(sum(_f(r["store_cash"]) for r in reps), 2),
             "store_cc": round(sum(_f(r["store_cc"]) for r in reps), 2),
             "epay_cash": round(sum(_f(r["epay_cash"]) for r in reps), 2),
             "epay_cc": round(sum(_f(r["epay_cc"]) for r in reps), 2),
+            # The REAL ePay-cash/ePay-CC breakdown (see _row_epay_display) — additive display fields
+            # only, NEVER read by money_recon below (which still uses epay_cash/epay_cc above,
+            # untouched, to avoid double-counting epay already folded into store_cash/t_cash).
+            "epay_on_cash": round(sum(_row_epay_display(r)["cash"] for r in reps), 2),
+            "epay_on_cc": round(sum(_row_epay_display(r)["cc"] for r in reps), 2),
             "acc_sale": round(sum(_f(r["acc_sale"]) for r in reps), 2),
             "other_account": round(sum(_f(r["other_account"]) for r in reps), 2),
             "upgrade_count": sum(int(r.get("upgrade_count") or 0) for r in reps),
@@ -945,7 +997,7 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
         for rp, (dt, g) in zip(reps, _rep_computed):
             ct_display, rc_display = _rep_custom_displays(rp)
             out_reps.append({**rp, "envelope_url": _signed_envelope(rp.get("envelope_picture")),
-                             "_tenders": dt, "_gate": g,
+                             "_tenders": dt, "_gate": g, "_epay_display": _row_epay_display(rp),
                              "_custom_tenders_display": ct_display, "_custom_counts_display": rc_display})
 
         out.append({
@@ -973,7 +1025,11 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
         mkt_bucket = _market_bucket(mkt)
         if market_set is not None and mkt_bucket.casefold() not in market_set:
             continue
-        if store_set is not None and meta and code.upper() not in store_set:
+        # Same fix as the two sites above — `code` is already guaranteed non-blank here (line above:
+        # `if not code ... continue`), so this simplifies to a plain filter; kept explicit/consistent
+        # rather than relying on `meta` (roster-lookup success), which is what let other stores'
+        # "no closing submitted" cards leak through an active store filter.
+        if store_set is not None and code and code.upper() not in store_set:
             continue
         clocked = set(ww.get("clocked_in", set()))
         sold = set(ww.get("sold", set()))
@@ -1042,9 +1098,13 @@ def closing_summary(date: str = None, date_from: str = None, date_to: str = None
     rep_set = _resolve_rep_filter(reps)
     can_review = _can_mgmt_review(_caller_perms(client, authorization))
 
+    # Perf (see _closing_summary_org_ctx) — compute the date-independent lookups ONCE for the whole
+    # request instead of once per date in the loop below.
+    org_ctx = _closing_summary_org_ctx(client, org_id)
     out = []
     for d in dates:
-        out.extend(_closing_summary_for_date(client, org_id, d, market_set, store_set, rep_set, tolerance, can_review))
+        out.extend(_closing_summary_for_date(client, org_id, d, market_set, store_set, rep_set, tolerance,
+                                             can_review, org_ctx=org_ctx))
 
     # Stable two-pass sort: store_address ascending WITHIN each date, dates descending overall — for a
     # single-day call (all rows share one close_date) this is byte-identical to the historical
@@ -3010,6 +3070,20 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     if store_f:
         store_set.add(store_f)
     emp_set = {e.strip().lower() for e in employees.split(",") if e.strip()}
+    # Market filter (OWNER BUG REPORT 2026-07-29 — Abid/Ismail: "choose a date, there are no dates
+    # available to show cash pickup" for any day other than today; confirmed root cause: this endpoint
+    # did a raw exact-string market match, silently dropping EVERY envelope whose store hadn't
+    # resolved a market — and this page auto-applies the caller's own market for a market-scoped DM
+    # (see pickup/page.tsx's `useEffect`), with no manual market picker to override it, so a DM in that
+    # situation could never even SEE the affected envelope, let alone pick it up).
+    #
+    # DELIBERATELY STRICTER than /closing/summary's bucket-aware "(no market) is excluded unless
+    # explicitly selected" rule: this is a CASH-COLLECTION action list, not a read-only report — an
+    # envelope with real, uncollected cash must never become invisible because of a store-market
+    # metadata gap. So here, an unresolved/blank market ALWAYS bypasses the filter unconditionally
+    # (never excluded, not even by an implicit "(no market) not selected"); the filter can only ever
+    # exclude an envelope whose store resolved to a REAL, DIFFERENT market than the one active.
+    market_cf = market.strip().casefold() if market else None
 
     out = []
     for r in rows:
@@ -3019,9 +3093,12 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
         code = r.get("store_code") or ""
         meta = smeta.get(code, {})
         mk = (meta.get("market") or "").strip() or sm_market.get(code, "")
-        if market and mk.strip().lower() != market.strip().lower():
+        if market_cf and mk and mk.casefold() != market_cf:
             continue
-        if store_set and (code or "").upper() not in store_set:
+        # A store filter never excludes a row whose store didn't resolve to a real storeops.stores
+        # record (no store_code at all) — it has no store identity a picker could ever offer, same
+        # "never silently drop an unresolved row" rule /closing/summary already applies.
+        if store_set and code and code.upper() not in store_set:
             continue
         _rname = (r.get("employee_name") or "").lower()
         if emp_f and emp_f not in _rname:
@@ -3063,7 +3140,7 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             if not code or code in closed or s.get("is_active") is False:
                 continue
             mk = (s.get("market") or "").strip() or sm_market.get(code, "")
-            if market and mk.strip().lower() != market.strip().lower():
+            if market_cf and mk and mk.casefold() != market_cf:
                 continue
             not_closed.append({"store_code": code, "store_name": s.get("address") or code, "market": mk})
         not_closed.sort(key=lambda s: str(s.get("store_name") or ""))

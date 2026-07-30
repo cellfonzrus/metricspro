@@ -43,9 +43,19 @@ const GATE_COLOR: Record<string, React.CSSProperties> = {
   blocked: { background: '#fde8e8', color: '#b42318' },
   recon_pending: { background: 'var(--surface2)', color: 'var(--text3)' },
 }
-function GateBadge({ status }: { status?: string | null }) {
+// `resolved` (OWNER BUG REPORT 2026-07-29, "management removed block still showing on dm verify" +
+// senior-review RC-2): gate_status itself is NEVER changed here — it's still the live, unmodified
+// re-derivation of declared-vs-B2B (_money_issues, untouched) — but a Blocked/Flagged row that's
+// already been DM-verified, auto-accepted (3rd try), or released for correction no longer reads as an
+// UNADDRESSED alarm: same status, muted styling + an explicit "(reviewed)" qualifier. Display-layer
+// only — never fed back into the gate classification/thresholds.
+function GateBadge({ status, resolved }: { status?: string | null; resolved?: boolean }) {
   if (!status || !GATE_LABEL[status]) return null
-  return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 6, ...GATE_COLOR[status] }}>{GATE_LABEL[status]}</span>
+  const alarm = resolved && (status === 'blocked' || status === 'flagged')
+  const style = alarm ? { background: 'var(--surface2)', color: 'var(--text3)' } : GATE_COLOR[status]
+  return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 6, ...style }}>
+    {GATE_LABEL[status]}{alarm ? ' (reviewed)' : ''}
+  </span>
 }
 
 type Form = { dm_store_cash: string; dm_store_cc: string; dm_epay_cash: string; dm_epay_cc: string; dm_acc_sale: string; dm_other: string; note: string }
@@ -245,6 +255,27 @@ export default function DailyClosingVerify() {
     () => pEmps.filter((e: any) => (e.name || '').trim()).map((e: any) => ({ id: e.name, label: e.name, sublabel: e.email || undefined })),
     [pEmps])
 
+  // Shared with the narrow single-card refresh below (refreshStore) so the two never drift.
+  function buildForm(s: any): Form {
+    const v = s.verification || {}
+    const t = s.totals || {}
+    return {
+      dm_store_cash: String(v.dm_store_cash ?? t.store_cash ?? ''),
+      dm_store_cc: String(v.dm_store_cc ?? t.store_cc ?? ''),
+      // NOTE (2026-07-29, same investigation as the ePay display-tile fix above): this PREFILLS
+      // a field that gets WRITTEN to daily_closing_verification.dm_epay_cash/dm_epay_cc on
+      // "Mark verified" — a write path, not a display, so it's deliberately left reading the
+      // legacy t.epay_cash/epay_cc (still 0 for a modern row) rather than the new
+      // t.epay_on_cash/epay_on_cc, per the money rule (propose-first before changing what a
+      // save-able form field defaults to). Flagged in the handoff as a found-but-not-fixed item.
+      dm_epay_cash: String(v.dm_epay_cash ?? t.epay_cash ?? ''),
+      dm_epay_cc: String(v.dm_epay_cc ?? t.epay_cc ?? ''),
+      dm_acc_sale: String(v.dm_acc_sale ?? t.acc_sale ?? ''),
+      dm_other: String(v.dm_other ?? t.other_account ?? ''),
+      note: v.note || '',
+    }
+  }
+
   const load = useCallback(() => {
     if (!filt.period) return
     const myReq = ++reqRef.current
@@ -260,26 +291,41 @@ export default function DailyClosingVerify() {
         if (reqRef.current !== myReq) return
         setData(d)
         const f: Record<string, Form> = {}
-        ;(d?.stores || []).forEach((s: any) => {
-          const v = s.verification || {}
-          const t = s.totals || {}
-          const k = cardKey(s)
-          f[k] = {
-            dm_store_cash: String(v.dm_store_cash ?? t.store_cash ?? ''),
-            dm_store_cc: String(v.dm_store_cc ?? t.store_cc ?? ''),
-            dm_epay_cash: String(v.dm_epay_cash ?? t.epay_cash ?? ''),
-            dm_epay_cc: String(v.dm_epay_cc ?? t.epay_cc ?? ''),
-            dm_acc_sale: String(v.dm_acc_sale ?? t.acc_sale ?? ''),
-            dm_other: String(v.dm_other ?? t.other_account ?? ''),
-            note: v.note || '',
-          }
-        })
+        ;(d?.stores || []).forEach((s: any) => { f[cardKey(s)] = buildForm(s) })
         setForms(f)
       })
       .catch(console.error)
       .finally(() => { if (reqRef.current === myReq) setLoading(false) })
   }, [filt.period, filt.periodTo, filt.stores, filt.markets, filt.reps])
   useEffect(() => { load() }, [load])
+
+  // OWNER BUG REPORT 2026-07-29 ("DM verify after doing one verification goes into a loop and locks
+  // out for over 3-4 minutes"): verify()/approveExpense() used to call the full load() — a fast
+  // upsert (POST /closing/verify or /closing/expense/approve) followed by a reload of the ENTIRE
+  // active filter/date-range via /closing/summary. In range mode that's up to
+  // _SUMMARY_MAX_RANGE_DATES=14 dates, each running 10+ queries (schedules, timelog/B2B money+counts,
+  // X-report, verifications, the gate replay) — a single-card action paid for re-deriving every OTHER
+  // card too. This refetches ONLY the one (store, close_date) that actually changed and merges it
+  // into the existing `data.stores` array in place — never touches the rest of the loaded range. Best
+  // effort: on failure it silently leaves the optimistic update in place (the action itself already
+  // succeeded server-side; this is just a display refresh).
+  async function refreshStore(storeCode: string, closeDate: string) {
+    try {
+      const qs = new URLSearchParams({ date_from: closeDate, date_to: closeDate, stores: storeCode })
+      const d = await api(`/api/v1/closing/summary?${qs.toString()}`)
+      const fresh = (d?.stores || []).find((x: any) => x.store_code === storeCode && x.close_date === closeDate)
+      if (!fresh) return
+      setData((prev: any) => {
+        if (!prev) return prev
+        const already = (prev.stores || []).some((x: any) => x.store_code === storeCode && x.close_date === closeDate)
+        const stores = already
+          ? (prev.stores || []).map((x: any) => (x.store_code === storeCode && x.close_date === closeDate) ? fresh : x)
+          : [...(prev.stores || []), fresh]
+        return { ...prev, stores }
+      })
+      setForms(p => ({ ...p, [cardKey(fresh)]: buildForm(fresh) }))
+    } catch { /* best-effort refresh only — the write already succeeded */ }
+  }
 
   async function upload(file: File) {
     setUpBusy(true); setUpMsg('')
@@ -305,20 +351,28 @@ export default function DailyClosingVerify() {
         dm_epay_cash: num(f.dm_epay_cash), dm_epay_cc: num(f.dm_epay_cc),
         dm_acc_sale: num(f.dm_acc_sale), dm_other: num(f.dm_other), note: f.note,
       }) })
-      load()
+      // Optimistic local update so the card flips to "Verified" instantly, then a narrow
+      // single-store/single-day background refresh (see refreshStore) — never the full load().
+      const now = new Date().toISOString()
+      setData((prev: any) => prev ? { ...prev, stores: (prev.stores || []).map((x: any) =>
+        (x.store_code === s.store_code && x.close_date === s.close_date)
+          ? { ...x, verification: { ...(x.verification || {}), verified: true, verified_by: user?.full_name || 'DM', verified_at: now } }
+          : x) } : prev)
+      refreshStore(s.store_code, s.close_date)
     } catch (e: any) { alert('Verify failed: ' + (e?.message || e)) }
   }
 
   // DM expense approval — a single checkbox per rep row. Checking it asks "Is this an approved
   // expense?"; on confirm we persist. Unchecking clears the approval. The checkbox is driven by
-  // server state (data reloads after each toggle), so a cancelled confirm just leaves it as-is.
+  // server state, so a cancelled confirm just leaves it as-is — same "narrow refresh, never the
+  // whole range" fix as verify() above (the row already carries its own store_code/close_date).
   async function approveExpense(r: any, approved: boolean) {
     if (approved && !window.confirm('Is this an approved expense?')) return
     try {
       await api('/api/v1/closing/expense/approve', { method: 'POST', body: JSON.stringify({
         row_id: r.id, approved, approved_by: user?.full_name || 'DM',
       }) })
-      load()
+      if (r.store_code && r.close_date) refreshStore(r.store_code, r.close_date); else load()
     } catch (e: any) { alert('Approve failed: ' + (e?.message || e)) }
   }
 
@@ -343,8 +397,8 @@ export default function DailyClosingVerify() {
     { header: 'Missing reps', field: 'missing_reps', get: (r: any) => (r.missing_reps || []).join('; ') },
     { header: 'Store cash $', field: 'store_cash', money: true, get: (r: any) => r.totals?.store_cash },
     { header: 'Store CC $', field: 'store_cc', money: true, get: (r: any) => r.totals?.store_cc },
-    { header: 'ePay cash $', field: 'epay_cash', money: true, get: (r: any) => r.totals?.epay_cash },
-    { header: 'ePay CC $', field: 'epay_cc', money: true, get: (r: any) => r.totals?.epay_cc },
+    { header: 'ePay cash $', field: 'epay_cash', money: true, get: (r: any) => r.totals?.epay_on_cash },
+    { header: 'ePay CC $', field: 'epay_cc', money: true, get: (r: any) => r.totals?.epay_on_cc },
     { header: 'ACIMA $', field: 't_acima', money: true, get: (r: any) => r.totals?.t_acima },
     { header: 'Accessory sale $', field: 'acc_sale', money: true, get: (r: any) => r.totals?.acc_sale },
     { header: 'Other (Zelle/CashApp/Gift/Store Acct) $', field: 'other_account', money: true, get: (r: any) => r.totals?.other_account },
@@ -369,8 +423,8 @@ export default function DailyClosingVerify() {
     { header: 'Employee', field: 'employee_name', role: 'rep', get: (r: any) => r.employee_name },
     { header: 'Store cash $', field: 'store_cash', money: true, get: (r: any) => r.store_cash },
     { header: 'Store CC $', field: 'store_cc', money: true, get: (r: any) => r.store_cc },
-    { header: 'ePay cash $', field: 'epay_cash', money: true, get: (r: any) => r.epay_cash },
-    { header: 'ePay CC $', field: 'epay_cc', money: true, get: (r: any) => r.epay_cc },
+    { header: 'ePay cash $', field: 'epay_cash', money: true, get: (r: any) => r._epay_display?.cash },
+    { header: 'ePay CC $', field: 'epay_cc', money: true, get: (r: any) => r._epay_display?.cc },
     { header: 'ACIMA $', field: 'acima', money: true, get: (r: any) => r._tenders?.acima },
     { header: 'Gift $', field: 'gift', money: true, get: (r: any) => r._tenders?.gift },
     { header: 'Store Account $', field: 'store_acct', money: true, get: (r: any) => r._tenders?.store_acct },
@@ -475,6 +529,17 @@ export default function DailyClosingVerify() {
         // still shows exactly the 3 built-in fields (Upgrades / New Lines / Postpaid).
         const countCols: { key: string; label: string }[] = (t.counts || []).map((c: any) => ({ key: c.field_key, label: c.label }))
         const customTenderCols: { key: string; label: string }[] = (t.custom_tenders || []).map((c: any) => ({ key: c.key, label: c.label }))
+        // OWNER BUG REPORT 2026-07-29 ("management removed block still showing on dm verify"): the
+        // gate_status badge is a live re-derivation of cash/credit vs B2B (never redefined here) — it
+        // was already correct, but gave NO indication of two things a DM/management could have already
+        // done about a "⛔ Blocked"/"⚠️ Flagged" row: (1) the 3-try submit flow itself auto-accepted the
+        // rep's 3rd attempt (letting them finish closing — the "block" on the REP was already lifted,
+        // it's now a management-review item, not something the rep needs to redo), or (2) management
+        // RELEASED the row for a corrected resubmit (which the rep hasn't sent yet). Without this
+        // context a still-"Blocked" badge reads as "nothing was done," even when it was. Read-only —
+        // does not touch _money_issues/the gate classification itself.
+        const autoAcceptedRep = (s.reps || []).find((r: any) => r.auto_accepted)
+        const releasedRep = (s.reps || []).find((r: any) => r.released_at)
         return (
           <div key={k} className="card" style={{ padding: 16, marginBottom: 14, borderLeft: `4px solid ${ver ? 'var(--green, #16794a)' : recon?.discrepancy ? 'var(--amber, #b45309)' : 'var(--border)'}` }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
@@ -482,8 +547,19 @@ export default function DailyClosingVerify() {
                 <div style={{ fontSize: 16, fontWeight: 700 }}>{s.store_address || s.store_name}{isRange && <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text3)' }}> · {s.close_date}</span>}</div>
                 <div style={{ fontSize: 12, color: 'var(--text3)' }}>{s.market || '—'} · {t.rep_count || 0} rep submission{(t.rep_count || 0) === 1 ? '' : 's'}{typeof s.worked_count === 'number' ? ` · ${s.worked_count} actually worked` : ''}{s.closer ? ` · closer: ${s.closer}` : ''}{s.closing_mode === 'one_closing' ? ' (one closing/store)' : ''}</div>
               </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <GateBadge status={s.gate_status} />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <GateBadge status={s.gate_status} resolved={!!(ver || autoAcceptedRep || releasedRep)} />
+                {(s.gate_status === 'blocked' || s.gate_status === 'flagged') && autoAcceptedRep && (
+                  <span style={{ fontSize: 11, color: 'var(--text3)' }}
+                    title="The rep's 3rd attempt was auto-accepted so they could finish closing — this is now a Management Review item, not something the rep needs to redo.">
+                    · auto-accepted (3rd try) — needs Mgmt Review
+                  </span>
+                )}
+                {(s.gate_status === 'blocked' || s.gate_status === 'flagged') && releasedRep && (
+                  <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+                    · released for correction by {releasedRep.released_by || 'management'}{releasedRep.correction_count ? '' : ' (not yet resubmitted)'}
+                  </span>
+                )}
                 {ver
                   ? <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--green, #16794a)' }}>✅ Verified by {s.verification.verified_by}</span>
                   : <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)' }}>Unverified</span>}
@@ -520,8 +596,14 @@ export default function DailyClosingVerify() {
             <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 12, fontSize: 13 }}>
               <Stat label="Store cash" value={fmt(t.store_cash)} />
               <Stat label="Store CC" value={fmt(t.store_cc)} />
-              <Stat label="ePay cash" value={fmt(t.epay_cash)} />
-              <Stat label="ePay CC" value={fmt(t.epay_cc)} />
+              {/* OWNER BUG REPORT 2026-07-29 (509 Nostrand): these used to read t.epay_cash/epay_cc,
+                  a legacy column create_row ALWAYS zeroes for a modern (t_*) submission — the rep's
+                  real entered "ePay on Cash/Credit $" breakdown never showed here. epay_on_cash/
+                  epay_on_cc are new, display-only totals fields (see _row_epay_display, closing/
+                  router.py) — money_recon's own cash/credit math is untouched (still reads
+                  totals.epay_cash/epay_cc, byte-identical). */}
+              <Stat label="ePay cash" value={fmt(t.epay_on_cash)} />
+              <Stat label="ePay CC" value={fmt(t.epay_on_cc)} />
               <Stat label="Acc sale" value={fmt(t.acc_sale)} />
               <Stat label="Other" value={fmt(t.other_account)} />
               {!!t.t_acima && <Stat label="ACIMA" value={fmt(t.t_acima)} />}
@@ -570,15 +652,19 @@ export default function DailyClosingVerify() {
                         <td style={cell}>{r.employee_name || '—'}</td>
                         <td style={cell}>{fmt(r.store_cash)}</td>
                         <td style={cell}>{fmt(r.store_cc)}</td>
-                        <td style={cell}>{fmt(r.epay_cash)}</td>
-                        <td style={cell}>{fmt(r.epay_cc)}</td>
+                        <td style={cell}>{fmt(r._epay_display?.cash)}</td>
+                        <td style={cell}>{fmt(r._epay_display?.cc)}</td>
                         <td style={cell}>{r._tenders?.acima ? fmt(r._tenders.acima) : '—'}</td>
                         <td style={cell}>{fmt(r.acc_sale)}</td>
                         <td style={cell}>{fmt(r.other_account)}</td>
                         <td style={cell}>{r._custom_tenders_display || '—'}</td>
                         {(countCols.length > 0 ? countCols : [{ key: 'upgrade_count', label: 'Upg' }, { key: 'new_line_count', label: 'New' }, { key: 'postpaid_count', label: 'Post' }])
                           .map(c => <td key={c.key} style={cell}>{countVal(r, c.key)}</td>)}
-                        <td style={cell}><GateBadge status={r._gate?.status} /></td>
+                        <td style={cell}>
+                          <GateBadge status={r._gate?.status} resolved={!!(ver || r.auto_accepted || r.released_at)} />
+                          {r.auto_accepted && <span style={{ fontSize: 10, color: 'var(--text3)', marginLeft: 4 }} title="3rd-try auto-accept — see Management Review">·3rd try</span>}
+                          {r.released_at && <span style={{ fontSize: 10, color: 'var(--text3)', marginLeft: 4 }} title={`Released for correction by ${r.released_by || 'management'}`}>·released</span>}
+                        </td>
                         <td style={cell}>{(r.envelope_url || r.envelope_picture) ? <a href={r.envelope_url || r.envelope_picture} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>📷</a> : '—'}</td>
                         <td style={cell}>
                           {(Number(r.expense_amount) || 0) > 0

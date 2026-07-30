@@ -262,13 +262,24 @@ st["daily_closing"] = [
     dc_row(id="jane", store_code="S1", employee_name="Jane Rep", t_cash=100.0, t_credit=50.0),
     dc_row(id="john", store_code="S1", employee_name="John Rep", t_cash=40.0, t_credit=10.0),
     dc_row(id="s2row", store_code="S2", employee_name="Mo Rep", t_cash=1.0, t_credit=1.0),
-    dc_row(id="unresolved", store_code="S_X", employee_name="Unmapped Rep", t_cash=1.0, t_credit=1.0),
+    # A REAL store_code that just isn't in the roster snapshot (e.g. B1/B2701/B418 — OWNER BUG REPORT
+    # 2026-07-29: "dm verify store filter chosen for 509 Nostrand also showed b1/b2701/b418"). This has
+    # an identity a picker COULD match against, so an active store filter must exclude it like any
+    # other unpicked store — updated 2026-07-30 from the prior (buggy) expectation that ANY roster-miss
+    # bypassed the filter.
+    dc_row(id="unmatched_code", store_code="S_X", employee_name="Unmapped Rep", t_cash=1.0, t_credit=1.0),
+    # A row with NO store_code identity AT ALL (unresolved SFID) — this is the ONLY case a store
+    # filter must never drop, since no picker could ever have offered it.
+    dc_row(id="no_code_at_all", store_code=None, store_name="Truly Unresolved Store",
+           employee_name="Ghost Rep2", t_cash=2.0, t_credit=2.0),
 ]
 resp = cr.closing_summary(date="2026-07-15", stores="S1", authorization=AUTH_NONE, org_id=HOUSE)
-codes = sorted({s["store_code"] for s in resp["stores"]}, key=lambda x: (x is None, x))
-check("C1. stores=S1 -> S1's card + the UNRESOLVED store (S_X, no roster match) — S2 (a real, "
-      "just-not-picked store) IS dropped, an unresolved one never is",
-      codes == ["S1", "S_X"], str(codes))
+codes = sorted({(s["store_code"] or f"name:{s.get('store_name')}") for s in resp["stores"]})
+check("C1. stores=S1 -> ONLY S1's card + the row with NO store_code at all (no identity a picker "
+      "could ever offer). S2 (a real, unpicked store) is excluded, and S_X (a REAL but "
+      "roster-unmatched code) is now ALSO excluded — the exact 'canonical-mode bypass' fix (2026-07-29 "
+      "509 Nostrand report): only a code-less row bypasses the filter, not merely an unmatched one",
+      codes == ["S1", "name:Truly Unresolved Store"], str(codes))
 
 s1_card = [s for s in resp["stores"] if s["store_code"] == "S1"][0]
 check("C2. store filter does NOT re-aggregate — S1's total still sums BOTH Jane and John",
@@ -392,6 +403,22 @@ check("F2. date_from/date_to mode: only the 2 rows in [07-10,07-20]",
 
 roll_stores = cr.closing_rollup(period="2026-07", stores="S1", authorization=AUTH_NONE, org_id=HOUSE)
 check("F3. stores=S1 -> only S1 rows aggregated", len(roll_stores["by_store"]) == 1 and roll_stores["by_store"][0]["store_code"] == "S1")
+
+# F3b: same "canonical-mode bypass" fix (issue 5, 509 Nostrand) applied to the DASHBOARD rollup —
+# a REAL but roster-unmatched store_code (S_X) must be EXCLUDED by an active store filter, not shown
+# regardless of the pick; a row with NO code at all still bypasses (has no identity to filter by).
+st_bypass = fresh_store(); wire(st_bypass)
+st_bypass["stores"] = [{"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "Texas"}]
+st_bypass["daily_closing"] = [
+    dc_row(id="r1b", store_code="S1", period="2026-07", employee_name="Jane Rep"),
+    dc_row(id="unmatched", store_code="S_X", period="2026-07", employee_name="Unmapped Rep"),
+    dc_row(id="nocode", store_code=None, store_name="Truly Unresolved", period="2026-07", employee_name="Ghost Rep3"),
+]
+roll_bypass = cr.closing_rollup(period="2026-07", stores="S1", authorization=AUTH_NONE, org_id=HOUSE)
+roll_codes = sorted({(s.get("store_code") or f"name:{s.get('store_name')}") for s in roll_bypass["by_store"]})
+check("F3b. rollup stores=S1 -> ONLY S1 + the no-code-at-all row; S_X (real but unmatched code) is "
+      "now excluded too (was: any roster-miss bypassed the filter and showed up regardless of pick)",
+      roll_codes == ["S1", "name:Truly Unresolved"], str(roll_codes))
 
 roll_reps = cr.closing_rollup(period="2026-07", reps="Jane Rep", authorization=AUTH_NONE, org_id=HOUSE)
 check("F4. reps=Jane Rep -> only Jane's row aggregated", roll_reps["totals"]["rows"] == 1)
@@ -529,6 +556,90 @@ try:
 finally:
     oc.detect_missed_dm_verifies = _orig_detect4
     fake_client.table = _orig_table
+
+# ═══ L. ePay display fix (OWNER BUG REPORT 2026-07-29 — 509 Nostrand: "ePay cash $0.00 ... but the
+#      daily closing shows that the epay was $70 in cash") ══════════════════════════════════════════
+# A modern (t_*) row: create_row ALWAYS zeroes the legacy epay_cash/epay_cc columns and stores the
+# real, entered ePay breakdown in epay_on_cash/epay_on_credit/epay_on_acima instead (a SUBSET of
+# t_cash/t_credit, not additional money). totals.epay_cash/epay_cc must stay BYTE-IDENTICAL (still 0
+# — money_recon's closing_cash = totals.epay_cash + totals.store_cash relies on that invariant to
+# avoid double-counting); the new totals.epay_on_cash/epay_on_cc must carry the REAL figure.
+st = fresh_store(); wire(st)
+modern_epay = dc_row(id="modern_epay", t_cash=90.0, t_credit=0.0, epay_cash=0.0, epay_cc=0.0,
+                     epay_on_cash=70.0, epay_on_credit=0.0, epay_on_acima=0.0, acc_sale=20.0)
+st["daily_closing"] = [modern_epay]
+resp = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)
+t = resp["stores"][0]["totals"]
+check("L1. 509-Nostrand-shaped row: totals.epay_cash stays 0 (legacy column, UNTOUCHED — money_recon "
+      "still reads this, must not double-count)", t["epay_cash"] == 0.0, str(t["epay_cash"]))
+check("L2. totals.epay_on_cash carries the REAL $70 the rep entered (was invisible before this fix)",
+      t["epay_on_cash"] == 70.0, str(t["epay_on_cash"]))
+check("L3. t_cash / total_collected unaffected — still $90 (epay was already folded in, not missing)",
+      t["t_cash"] == 90.0 and t["total_collected"] == 90.0, str((t["t_cash"], t["total_collected"])))
+rep_out = resp["stores"][0]["reps"][0]
+check("L4. per-rep _epay_display.cash == 70.0 (feeds the per-rep table on DM Verify)",
+      rep_out["_epay_display"]["cash"] == 70.0, str(rep_out["_epay_display"]))
+
+# A pre-mig103 legacy row (no t_* at all, no epay_on_* either): epay_cash/epay_cc hold a REAL,
+# separate value for that era (already folded into store_cash's own total by _row_display_tenders'
+# fallback) — epay_on_cash/epay_on_cc must surface that SAME real value (era-correct fallback), and
+# the legacy epay_cash/epay_cc fields stay whatever they already were (real for this era, unchanged).
+st2 = fresh_store(); wire(st2)
+legacy_epay = dc_row(id="legacy_epay", t_cash=None, t_credit=None, t_ext_cc=None, t_gift=None,
+                     t_store_acct=None, t_zelle=None, t_acima=None,
+                     store_cash=80.0, store_cc=20.0, epay_cash=30.0, epay_cc=5.0, other_account=0.0)
+st2["daily_closing"] = [legacy_epay]
+resp2 = cr.closing_summary(date="2026-07-15", authorization=AUTH_NONE, org_id=HOUSE)
+t2 = resp2["stores"][0]["totals"]
+check("L5. legacy (pre-mig103) row: epay_on_cash falls back to the REAL legacy epay_cash (30.0)",
+      t2["epay_on_cash"] == 30.0, str(t2["epay_on_cash"]))
+check("L6. legacy row: epay_on_cc falls back to the REAL legacy epay_cc (5.0)",
+      t2["epay_on_cc"] == 5.0, str(t2["epay_on_cc"]))
+check("L7. legacy row: totals.epay_cash itself is unchanged (30.0 — was already real for this era)",
+      t2["epay_cash"] == 30.0, str(t2["epay_cash"]))
+
+# ═══ M. Perf — org-level context hoisted OUT of the per-date loop (senior-review RC-4, OWNER BUG
+#      REPORT 2026-07-29 — "dm verify ... locks out for over 3-4 minutes") ═══════════════════════════
+# A 3-date range must query the date-INDEPENDENT tables (storeops.stores/tenants/store_closer) ONCE
+# total, not once per date — the actual perf claim, proven quantitatively (not just "it's faster").
+st = fresh_store(); wire(st)
+st["stores"] = [{"org_id": HOUSE, "store_code": "S1", "address": "1 Main St", "market": "Texas"}]
+st["tenants"] = [{"org_id": HOUSE, "closing_mode": "per_rep"}]
+st["store_closer"] = [{"org_id": HOUSE, "store_code": "S1", "employee_name": "Closer One"}]
+st["daily_closing"] = [
+    dc_row(id="d1", store_code="S1", close_date="2026-07-01"),
+    dc_row(id="d2", store_code="S1", close_date="2026-07-02"),
+    dc_row(id="d3", store_code="S1", close_date="2026-07-03"),
+]
+fake_client = cr.sb()
+call_counts: dict[str, int] = {}
+_orig_table_m = fake_client.table
+def _counting_table(name):
+    call_counts[name] = call_counts.get(name, 0) + 1
+    return _orig_table_m(name)
+fake_client.table = _counting_table
+try:
+    resp = cr.closing_summary(date_from="2026-07-01", date_to="2026-07-03", authorization=AUTH_NONE, org_id=HOUSE)
+finally:
+    fake_client.table = _orig_table_m
+check("M1. a 3-date range still returns one card per date (3 cards)", len(resp["stores"]) == 3, str(len(resp["stores"])))
+check("M2. storeops.stores queried ONCE for the whole 3-date range (was 3x before this fix)",
+      call_counts.get("stores") == 1, str(call_counts.get("stores")))
+check("M3. storeops.tenants (closing_mode) queried ONCE for the whole range (was 3x before)",
+      call_counts.get("tenants") == 1, str(call_counts.get("tenants")))
+check("M4. storeops.store_closer queried ONCE for the whole range (was 3x before)",
+      call_counts.get("store_closer") == 1, str(call_counts.get("store_closer")))
+check("M5. each of the 3 cards still resolved the assigned closer correctly (org_ctx carried the "
+      "closer_by_store map through, not lost by hoisting it)",
+      all(s.get("closer") == "Closer One" for s in resp["stores"]), str([s.get("closer") for s in resp["stores"]]))
+
+# Backward-compat: _closing_summary_for_date called directly WITHOUT org_ctx (any future/other caller)
+# must still compute it inline and return the IDENTICAL result as the org_ctx-threaded path above.
+direct = cr._closing_summary_for_date(fake_client, HOUSE, "2026-07-01", None, None, None, 1.0, False)
+threaded = [s for s in resp["stores"] if s["close_date"] == "2026-07-01"]
+check("M6. omitting org_ctx (backward-compat) yields the SAME card as the range call threaded it through",
+      direct and threaded and direct[0]["closer"] == threaded[0]["closer"] == "Closer One",
+      str((direct, threaded)))
 
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")

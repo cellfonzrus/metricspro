@@ -198,6 +198,123 @@ def _cb_exists(client, org_id, employee_id, store_code, reason, incident_date) -
         return True
 
 
+# ── Perf (OWNER BUG REPORT 2026-07-29 — "DM verify after doing one verification goes into a loop
+#    and locks out for over 3-4 minutes"): both detection sweeps below used to call _cb_exists (and,
+#    for missed_dm_verify, the district-walk-up storeops.router._dm_for_store — itself 3-5 sequential
+#    queries) ONCE PER (date, store) PAIR that hasn't been resolved yet. Every GET
+#    /closing/ops-chargebacks/dm-verify (the "Missed verifications & chargebacks" panel at the top of
+#    the DM Verify page) re-runs this sweep with NO caching, so a real backlog of unverified store-days
+#    turned into hundreds of sequential synchronous Supabase round trips on literally every page load —
+#    easily minutes, and (since FastAPI runs a sync `def` handler in the shared worker threadpool) long
+#    enough to starve OTHER requests (like the verify POST + the /closing/summary reload right after
+#    it) behind it, which is what reads to the user as "the page locks up right after I verify one
+#    store." Same total chargebacks created, same skip/idempotency semantics — this only replaces the
+#    per-pair queries with a handful of batched ones. ──
+def _existing_chargeback_keys(client, org_id: str, reason: str, dates):
+    """Batched replacement for calling _cb_exists once per (employee_id, store_code, date) pair — ONE
+    query for the whole date range instead of N. Returns a set of (employee_id, store_code,
+    incident_date) tuples for every PARENT chargeback (parent_id IS NULL) already recorded for this
+    reason within `dates` — the exact idempotency key _cb_exists checks, just fetched in bulk. Returns
+    None (not a set) on a read failure, signalling the caller to fall back to the conservative
+    per-row _cb_exists check rather than risk a duplicate insert."""
+    dates = sorted({d for d in (dates or []) if d})
+    if not dates:
+        return set()
+    try:
+        rows = (client.schema("commcalc").table("ops_chargeback")
+                .select("employee_id,store_code,incident_date")
+                .eq("org_id", org_id).eq("reason", reason).is_("parent_id", "null")
+                .in_("incident_date", dates).execute().data) or []
+    except Exception:
+        return None
+    return {(str(r.get("employee_id") or ""), str(r.get("store_code") or ""),
+             str(r.get("incident_date") or "")[:10]) for r in rows}
+
+
+def _dm_for_stores_batch(client, org_id: str, store_codes) -> dict:
+    """Batched replacement for calling storeops.router._dm_for_store once per (date, store) pair — the
+    SAME district-walk-up + market-fallback resolution logic (kept in sync deliberately — see that
+    function's docstring), but the org tree (storeops.org_levels/org_units) and the DM roster
+    (storeops.org_managers/storeops.employees) are each fetched ONCE for the whole set of store_codes
+    instead of once per pair. Returns {store_code: (employee_id, email, name)}; a store with no
+    resolvable DM is simply absent (matches _dm_for_store's (None, None, None) return — every caller
+    already treats a missing/falsy dm_id as 'unresolvable -> skip')."""
+    codes = sorted({c for c in (store_codes or []) if c})
+    if not codes:
+        return {}
+    try:
+        st_rows = (client.schema("storeops").table("stores").select("store_code,org_unit_id,market")
+                   .eq("org_id", org_id).in_("store_code", codes).execute().data) or []
+    except Exception:
+        st_rows = []
+    st_by_code = {s.get("store_code"): s for s in st_rows if s.get("store_code")}
+    try:
+        levels = {l["id"]: (l.get("name") or "") for l in
+                  (client.schema("storeops").table("org_levels").select("id,name")
+                   .eq("org_id", org_id).execute().data or [])}
+        units = {u["id"]: u for u in
+                 (client.schema("storeops").table("org_units").select("id,name,level_id,parent_id,code")
+                  .eq("org_id", org_id).execute().data or [])}
+    except Exception:
+        levels, units = {}, {}
+
+    def _district_for(unit_id, market):
+        cur = units.get(unit_id) if unit_id else None
+        guard = 0
+        while cur and guard < 20:
+            if "district" in (levels.get(cur.get("level_id")) or "").lower():
+                return cur
+            cur = units.get(cur.get("parent_id"))
+            guard += 1
+        if market:
+            mk = str(market).strip().lower()
+            for u in units.values():
+                if "district" in (levels.get(u.get("level_id")) or "").lower() and (
+                        mk and (mk in (u.get("name") or "").lower() or (u.get("code") or "").lower() == f"district:{mk}")):
+                    return u
+        return None
+
+    district_by_code = {}
+    for code in codes:
+        s = st_by_code.get(code) or {}
+        d = _district_for(s.get("org_unit_id"), s.get("market"))
+        if d:
+            district_by_code[code] = d["id"]
+
+    district_ids = sorted({d for d in district_by_code.values() if d})
+    mgr_by_unit = {}
+    if district_ids:
+        try:
+            mgs = (client.schema("storeops").table("org_managers").select("unit_id,employee_id")
+                   .eq("org_id", org_id).in_("unit_id", district_ids).execute().data) or []
+            for m in mgs:
+                uid = m.get("unit_id")
+                if uid and uid not in mgr_by_unit:   # first manager wins, same as the per-store .limit(1)
+                    mgr_by_unit[uid] = m.get("employee_id")
+        except Exception:
+            mgr_by_unit = {}
+
+    emp_ids = sorted({e for e in mgr_by_unit.values() if e})
+    emp_by_id = {}
+    if emp_ids:
+        try:
+            emps = (client.schema("storeops").table("employees").select("employee_id,name,email")
+                    .eq("org_id", org_id).in_("employee_id", emp_ids).execute().data) or []
+            emp_by_id = {e.get("employee_id"): e for e in emps if e.get("employee_id")}
+        except Exception:
+            emp_by_id = {}
+
+    out = {}
+    for code in codes:
+        uid = district_by_code.get(code)
+        deid = mgr_by_unit.get(uid) if uid else None
+        if not deid:
+            continue
+        emp = emp_by_id.get(deid) or {}
+        out[code] = (deid, emp.get("email"), emp.get("name"))
+    return out
+
+
 def list_chargebacks(client, org_id: str, reason: str, employee_id: str = None,
                      statuses=None) -> list[dict]:
     """ops_chargeback rows for a reason, newest incident first. statuses=None -> all statuses;
@@ -371,6 +488,9 @@ def _run_missed_closing_detection(client, org_id: str, lookback_days: int):
     closer_by_store = {_norm_store(c.get("store_code")): c for c in closer_rows if c.get("store_code")}
     labels = _store_labels(client, org_id)
     emps = _employee_roster(client, org_id)
+    # Batched idempotency check (perf — see the module-level note above _existing_chargeback_keys):
+    # ONE query for every day in the lookback window instead of one _cb_exists call per (day, store).
+    existing = _existing_chargeback_keys(client, org_id, "missed_closing", worked_by_day.keys())
 
     for d, stores in worked_by_day.items():
         for sc_norm in stores:
@@ -382,7 +502,9 @@ def _run_missed_closing_detection(client, org_id: str, lookback_days: int):
                 continue
             eff_id, eff_name = _effective_closer(org_id, closer_by_store.get(sc_norm), punches, emps)
             store_code = punches[0].get("store_code") or sc_norm
-            if _cb_exists(client, org_id, eff_id, store_code, "missed_closing", d):
+            skip = (_cb_exists(client, org_id, eff_id, store_code, "missed_closing", d) if existing is None
+                    else (str(eff_id or ""), str(store_code or ""), str(d)) in existing)
+            if skip:
                 continue
             row = {
                 "org_id": org_id, "employee_id": (eff_id or ""), "employee_name": eff_name,
@@ -470,24 +592,35 @@ def _run_missed_dm_verify_detection(client, org_id: str, lookback_days: int):
     verified = {(str(v.get("close_date") or "")[:10], (v.get("store_code") or "").strip())
                 for v in vers if v.get("verified")}
     emps = _employee_roster(client, org_id)
+    # Batched DM resolution + idempotency check (perf — OWNER BUG REPORT 2026-07-29, see the
+    # module-level note above _dm_for_stores_batch/_existing_chargeback_keys): this used to call
+    # storeops.router._dm_for_store (3-5 sequential queries) AND _cb_exists (1 more) once per
+    # still-unverified (day, store) pair — a real backlog of unverified store-days made this a
+    # multi-minute sweep on EVERY load of the DM Verify page's chargebacks panel. Resolve every
+    # candidate store's DM in one batched pass, and check existing chargebacks in one query, BEFORE
+    # the per-pair loop.
+    unverified_stores = {sc for d, sc in pairs if (d, sc) not in verified}
+    dm_by_store = _dm_for_stores_batch(client, org_id, unverified_stores)
+    existing = _existing_chargeback_keys(client, org_id, "missed_dm_verify", dates)
 
     for d, sc in sorted(pairs):
         if (d, sc) in verified:
             continue
-        try:
-            from app.modules.storeops.router import _dm_for_store
-            dm_id, _dm_email, dm_name = _dm_for_store(org_id, sc)
-        except Exception:
-            dm_id, dm_name = None, None
-        if not dm_id:
+        res = dm_by_store.get(sc)
+        if not res:
             continue  # unresolvable DM -> skip, never guess
+        dm_id, _dm_email, dm_name = res
+        if not dm_id:
+            continue
         # Stamp the CANONICAL roster (employee_id, name) — commission's rep-pay join matches
-        # UPPER(employee_name), not employee_id alone. _dm_for_store already resolves through
+        # UPPER(employee_name), not employee_id alone. _dm_for_stores_batch already resolves through
         # storeops.employees itself, but re-resolving here is a cheap extra safety net (e.g. if
         # org_managers.employee_id ever holds the numeric `.id` variant instead of the business key).
         dm_id, dm_name = _resolve_roster(emps, dm_id, dm_name)
         dm_id = str(dm_id)
-        if _cb_exists(client, org_id, dm_id, sc, "missed_dm_verify", d):
+        skip = (_cb_exists(client, org_id, dm_id, sc, "missed_dm_verify", d) if existing is None
+                else (dm_id, str(sc or ""), str(d)) in existing)
+        if skip:
             continue
         row = {
             "org_id": org_id, "employee_id": dm_id, "employee_name": dm_name,
