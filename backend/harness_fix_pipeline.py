@@ -70,6 +70,29 @@ Proves:
      G4     the seeded rate INSERT has matching column/value arity on every row (the class of bug Gate 1
             caught on mig 715) and every rate row is dated;
      G5     the seed function is called from the entitlement sync path and SEED_VERSION was bumped.
+  I. USER ACTIONS — "FIXED, and here is what YOU still have to do" (mig 719)
+     I1     the vocabulary is exactly {sql, env, config, data, other}, and `action_write` is in ALL_CAPS
+            but NOT in SECRET_CAPS (automation writes the checklist; only a human ticks it off);
+     I2     normalize_user_actions REJECTS an unknown kind, a blank instruction, a non-list, a duplicate
+            id and an over-long list — a bad kind is never silently coerced to 'other';
+     I3     ids are stable/generated, and rewriting the checklist at ship time can NEVER un-tick a step
+            the operator already completed (unless the caller explicitly restates status);
+     I4     action_required is TRUE only for a pushed row with an outstanding step (a parked row's
+            checklist is a plan, not a debt), and the rollup counts both;
+     I5     the board GET returns user_actions + the DERIVED action_required/pending_actions, so the UI
+            never recomputes them;
+     I6     a super-admin mark-done stamps status/done_by/done_at, appends ONE audit entry, and flips
+            action_required to false when the last step is ticked; un-ticking clears the stamps;
+     I7     the SERVICE SECRET is refused on mark-done (403) — direct AND over real HTTP — while it CAN
+            still write the checklist itself (its status ceiling is unchanged: no approve, no push);
+     I8     mark-done is ORG-SCOPED: tenant B cannot tick tenant A's checklist (404), and the write is
+            org-stamped;
+     I9     bad inputs on mark-done: unknown action id → 404, invalid status → 422;
+     I10    an UN-RUN mig 719 degrades: the status transition + audit still land, the response carries
+            the honest hint, and a POST that carries a checklist still registers the row;
+     I11    mig 719 SQL sanity — additive/idempotent, adds exactly the two columns, does NOT touch the
+            push-gate trigger, and grants nothing to anon/authenticated.
+
   H. LOGIN / SEED PATH SAFETY (a SEED_VERSION bump is a change to the login path)
      H1-H3  SEED_VERSION is 7; the HOUSE sync pass calls core.seed_token_rates, a TENANT pass does not
             (rates are platform config, not per-tenant content);
@@ -648,6 +671,8 @@ want = [("GET", "/api/v1/core/fix-pipeline/feed", "pipeline_feed"),
         ("POST", "/api/v1/core/fix-pipeline/requests", "create_pipeline_request"),
         ("GET", "/api/v1/core/fix-pipeline/requests/abc-1", "get_pipeline_request"),
         ("PATCH", "/api/v1/core/fix-pipeline/requests/abc-1", "patch_pipeline_request"),
+        ("PATCH", "/api/v1/core/fix-pipeline/requests/abc-1/actions/act-1",
+         "patch_pipeline_request_action"),
         ("GET", "/api/v1/core/fix-pipeline/token-rates", "list_token_rates"),
         ("PUT", "/api/v1/core/fix-pipeline/token-rates", "upsert_token_rate")]
 resolved = {}
@@ -657,11 +682,11 @@ for method, path, _ in want:
     resolved[(method, path)] = next((getattr(r, "name", str(r)) for r in APP.routes
                                      if r.matches(scope)[0] == Match.FULL), "NO MATCH")
 mismatched = [(k, resolved[k], n) for (m, p, n) in want for k in [(m, p)] if resolved[k] != n]
-check("F2a all 7 endpoints resolve under /api/v1 to THEIR OWN handlers (the /api/v1 last mile)",
+check("F2a all 8 endpoints resolve under /api/v1 to THEIR OWN handlers (the /api/v1 last mile)",
       not mismatched, mismatched)
 pipeline_routes = [r for r in APP.routes if "fix-pipeline" in getattr(r, "path", "")]
-check("F2b exactly 7 pipeline routes are registered (no accidental extras)",
-      len(pipeline_routes) == 7, [getattr(r, "path", "") for r in pipeline_routes])
+check("F2b exactly 8 pipeline routes are registered (7 from mig 718 + the mig-719 mark-done)",
+      len(pipeline_routes) == 8, [getattr(r, "path", "") for r in pipeline_routes])
 
 from starlette.testclient import TestClient   # noqa: E402
 
@@ -853,6 +878,397 @@ check("H6 needs_sync still reads the watermark (a tenant at 7 is up to date, at 
 check("H7 NO new entitlement module was invented (the board is a platform surface, not billable)",
       "fix_pipeline" not in ent.MODULE_CATALOG and "fix_requests" not in ent.MODULE_CATALOG
       and len(ent.ALL_MODULES) == 12, ent.ALL_MODULES)
+
+print("\n══ I. USER ACTIONS — FIXED + what YOU must do (mig 719) ══")
+
+
+def fixrow(org=TEN_A, status="pushed", actions=None, **extra):
+    """A registry row placed DIRECTLY in the fake store (a pushed row can only be reached through the
+    approval gate, which sections B/D/F already prove — here we care about the checklist, not the walk)."""
+    r = {"id": nid("fr"), "org_id": org, "signature": "GET /api/v1/x/{id}|KeyError",
+         "sample_path": "GET /api/v1/x/9", "exc_type": "KeyError", "title": "t",
+         "status": status, "occurrence_count": 1, "failure_ids": [], "affected_orgs": [],
+         "audit": [], "tokens_triage": 0, "tokens_build": 0, "tokens_review": 0,
+         "model": "claude-opus-5", "created_at": "2026-07-30T10:00:00+00:00",
+         "approved_by": "owner@metricspro.tech", "approved_at": "2026-07-30T11:00:00+00:00",
+         "user_actions": [] if actions is None else actions}
+    r.update(extra)
+    return r
+
+
+def act(aid, kind="sql", instruction="RUN THIS;", status="pending", **extra):
+    a = {"id": aid, "kind": kind, "instruction": instruction, "status": status,
+         "done_by": None, "done_at": None}
+    a.update(extra)
+    return a
+
+
+class Pre719Client(FakeClient):
+    """A database on which migration 719 has NOT been run: any write mentioning the new columns fails
+    exactly the way PostgREST fails on an unknown column."""
+    BOOM = "Could not find the 'user_actions' column of 'fix_requests' in the schema cache"
+
+    def table(self, name):
+        q = Q(self.store, name, self.ro)
+        real_update, real_insert = q.update, q.insert
+
+        def update(patch, **k):
+            if any(f in (patch or {}) for f in fp.MIG719_FIELDS):
+                raise RuntimeError(Pre719Client.BOOM)
+            return real_update(patch, **k)
+
+        def insert(rows, **k):
+            payload = rows if isinstance(rows, list) else [rows]
+            if any(f in (r or {}) for r in payload for f in fp.MIG719_FIELDS):
+                raise RuntimeError(Pre719Client.BOOM)
+            return real_insert(rows, **k)
+
+        q.update, q.insert = update, insert
+        return q
+
+
+# I1 — vocabulary + privilege
+check("I1a USER_ACTION_KINDS is exactly {sql, env, config, data, other}",
+      set(fp.USER_ACTION_KINDS) == {"sql", "env", "config", "data", "other"}, fp.USER_ACTION_KINDS)
+check("I1b 'action_write' is a real capability a super-admin holds…",
+      "action_write" in fp.ALL_CAPS
+      and fp._authorize("action_write", authorization="Bearer super")["super_admin"] is True)
+check("I1c …and it is NOT in SECRET_CAPS — automation can never claim a human did the work",
+      "action_write" not in fp.SECRET_CAPS and fp.SECRET_CAPS < fp.ALL_CAPS)
+check("I1d the mig-718 secret scope is UNCHANGED by this package (no ceiling was raised)",
+      set(fp.SECRET_CAPS) == {"feed_read", "registry_read", "registry_write"})
+
+# I2 — validation
+bad_cases = [
+    ("unknown kind", [{"kind": "reboot", "instruction": "x"}]),
+    ("blank instruction", [{"kind": "sql", "instruction": "   "}]),
+    ("missing instruction", [{"kind": "env"}]),
+    ("not a list", {"kind": "sql", "instruction": "x"}),
+    ("not an object", ["just a string"]),
+    ("duplicate id", [{"id": "a", "kind": "sql", "instruction": "x"},
+                      {"id": "a", "kind": "env", "instruction": "y"}]),
+    ("too many", [{"kind": "other", "instruction": str(i)} for i in range(fp.MAX_USER_ACTIONS + 1)]),
+    ("bad status", [{"kind": "sql", "instruction": "x", "status": "maybe"}]),
+]
+bad_accepted = []
+for label, payload in bad_cases:
+    try:
+        fp.normalize_user_actions(payload)
+        bad_accepted.append(label)
+    except ValueError:
+        pass
+check(f"I2a every malformed checklist is REJECTED ({len(bad_cases)} cases)", not bad_accepted, bad_accepted)
+try:
+    fp.normalize_user_actions([{"kind": "REBOOT", "instruction": "x"}])
+    coerced = True
+except ValueError as e:
+    coerced = False
+    kind_msg = str(e)
+check("I2b an unknown kind is never silently coerced to 'other' — it names the legal set",
+      not coerced and "sql, env, config, data, other" in kind_msg)
+ok5 = fp.normalize_user_actions([{"kind": k, "instruction": f"do {k}"} for k in fp.USER_ACTION_KINDS])
+check("I2c all five legal kinds are accepted and normalized to the full element shape",
+      len(ok5) == 5 and all(set(a) == {"id", "kind", "instruction", "status", "done_by", "done_at"}
+                            for a in ok5) and all(a["status"] == "pending" for a in ok5), ok5[:1])
+check("I2d kind is case-insensitive on the way in, canonical lower-case on the way out",
+      fp.normalize_user_actions([{"kind": " SQL ", "instruction": "x"}])[0]["kind"] == "sql")
+check("I2e a long instruction is bounded, not rejected (a whole SQL block must fit)",
+      len(fp.normalize_user_actions([{"kind": "sql", "instruction": "x" * 99999}])[0]["instruction"])
+      == fp.MAX_INSTRUCTION)
+
+# I3 — stable ids + never un-tick
+gen = fp.normalize_user_actions([{"kind": "sql", "instruction": "a"}, {"kind": "env", "instruction": "b"}])
+check("I3a a missing id is generated and unique (so mark-done can address the item)",
+      all(a["id"] for a in gen) and len({a["id"] for a in gen}) == 2, [a["id"] for a in gen])
+done_now = [act("a1", status="done", done_by="owner@x", done_at="2026-07-30T12:00:00+00:00"),
+            act("a2", kind="env", instruction="SET FOO")]
+rewrite = fp.normalize_user_actions(
+    [{"id": "a1", "kind": "sql", "instruction": "RUN THIS;"},
+     {"id": "a2", "kind": "env", "instruction": "SET FOO"},
+     {"kind": "data", "instruction": "re-upload July"}], done_now)
+check("I3b rewriting the checklist KEEPS a completed step completed (and its who/when)",
+      rewrite[0]["status"] == "done" and rewrite[0]["done_by"] == "owner@x"
+      and rewrite[0]["done_at"] == "2026-07-30T12:00:00+00:00", rewrite[0])
+check("I3c …while new items arrive pending",
+      rewrite[1]["status"] == "pending" and rewrite[2]["status"] == "pending" and len(rewrite) == 3)
+untick = fp.normalize_user_actions([{"id": "a1", "kind": "sql", "instruction": "RUN THIS;",
+                                     "status": "pending"}], done_now)
+check("I3d an EXPLICIT status restatement can still reopen a step, and clears the stamps",
+      untick[0]["status"] == "pending" and untick[0]["done_by"] is None
+      and untick[0]["done_at"] is None, untick[0])
+
+# I4 — the derived flags
+pushed_pending = fixrow(status="pushed", actions=[act("a1"), act("a2", status="done")])
+pushed_clean = fixrow(status="pushed", actions=[act("a1", status="done")])
+parked_pending = fixrow(status="gate1_parked", actions=[act("a1")])
+check("I4a a PUSHED row with an outstanding step is action_required",
+      fp.action_required(pushed_pending) is True and fp.pending_user_actions(pushed_pending) == 1)
+check("I4b a PUSHED row with everything ticked is clean green",
+      fp.action_required(pushed_clean) is False and fp.pending_user_actions(pushed_clean) == 0)
+check("I4c a PARKED row's checklist is a plan, not a debt — never action_required",
+      fp.action_required(parked_pending) is False and fp.pending_user_actions(parked_pending) == 1)
+check("I4d a row with NO checklist at all (incl. a pre-719 row missing the column) is safe",
+      fp.action_required(fixrow(status="pushed")) is False
+      and fp.user_actions_of({"status": "pushed"}) == []
+      and fp.user_actions_of({"status": "pushed", "user_actions": "junk"}) == []
+      and fp.pending_user_actions({}) == 0)
+roll = fp.rollup([pushed_pending, pushed_clean, parked_pending])
+check("I4e the rollup counts shipped-but-blocked fixes and the outstanding steps",
+      roll["action_required"] == 1 and roll["pending_actions"] == 1 and roll["shipped"] == 2
+      and roll["parked"] == 1, roll)
+
+# I5 — board payload
+st_i = fresh_store()
+st_i["fix_requests"] = [fixrow(status="pushed", actions=[act("a1"), act("a2", status="done")],
+                              resolved_note="Owed-weekly Friday resolution shipped.")]
+wire(st_i)
+board = run(fp.list_pipeline_requests(org_id=TEN_A, authorization="Bearer super"))
+brow = board["fix_requests"][0]
+check("I5a the board GET returns the checklist AND the derived flags (the UI recomputes nothing)",
+      brow["action_required"] is True and brow["pending_actions"] == 1
+      and len(brow["user_actions"]) == 2, {k: brow.get(k) for k in
+                                           ("action_required", "pending_actions")})
+check("I5b …the resolved_note ('what shipped') rides along",
+      brow.get("resolved_note") == "Owed-weekly Friday resolution shipped.")
+check("I5c …the rollup and the kind vocabulary are published for the UI",
+      board["rollup"]["action_required"] == 1
+      and board["user_action_kinds"] == list(fp.USER_ACTION_KINDS)
+      and "not working yet" in board["action_note"].lower(), board.get("action_note"))
+det = run(fp.get_pipeline_request(st_i["fix_requests"][0]["id"], org_id=TEN_A,
+                                  authorization="Bearer super"))
+check("I5d the detail GET decorates the same way",
+      det["fix_request"]["action_required"] is True
+      and det["fix_request"]["pending_actions"] == 1)
+
+# I6 — mark done / undo
+rid_i = st_i["fix_requests"][0]["id"]
+audit_before = len(st_i["fix_requests"][0]["audit"])
+res = run(fp.patch_pipeline_request_action(rid_i, "a1", {"status": "done"}, org_id=TEN_A,
+                                           authorization="Bearer super"))
+stored = st_i["fix_requests"][0]
+a1 = next(a for a in stored["user_actions"] if a["id"] == "a1")
+check("I6a a super-admin tick stamps status + who + when",
+      a1["status"] == "done" and a1["done_by"] == "owner@metricspro.tech" and a1["done_at"], a1)
+check("I6b …the last outstanding step clearing flips action_required to FALSE",
+      res["action_required"] is False and res["pending_actions"] == 0
+      and fp.action_required(stored) is False, res)
+check("I6c …exactly ONE audit entry is appended, naming what was done",
+      len(stored["audit"]) == audit_before + 1
+      and "marked done" in stored["audit"][-1]["note"]
+      and stored["audit"][-1]["actor"] == "owner@metricspro.tech"
+      and stored["audit"][-1]["actor_kind"] == "user", stored["audit"][-1:])
+check("I6d …and the STATUS of the fix itself is untouched by a tick (pushed stays pushed)",
+      stored["status"] == "pushed" and stored["audit"][-1]["from"] == "pushed"
+      and stored["audit"][-1]["to"] == "pushed")
+res_undo = run(fp.patch_pipeline_request_action(rid_i, "a1", {"status": "pending"}, org_id=TEN_A,
+                                                authorization="Bearer super"))
+a1 = next(a for a in st_i["fix_requests"][0]["user_actions"] if a["id"] == "a1")
+check("I6e un-ticking reopens the step and CLEARS the stamps (no stale 'done by')",
+      a1["status"] == "pending" and a1["done_by"] is None and a1["done_at"] is None
+      and res_undo["action_required"] is True, a1)
+check("I6f the other item is untouched by a single-item tick",
+      next(a for a in st_i["fix_requests"][0]["user_actions"] if a["id"] == "a2")["status"] == "done")
+
+# I7 — the secret can WRITE a checklist but can NEVER tick one
+err = None
+try:
+    run(fp.patch_pipeline_request_action(rid_i, "a1", {"status": "done"}, org_id=TEN_A,
+                                         x_fix_pipeline_secret=SECRET))
+except HTTPException as e:
+    err = e
+check("I7a the SERVICE SECRET is refused on mark-done (403)",
+      err is not None and err.status_code == 403 and "action_write" in str(err.detail), err)
+err = None
+try:
+    fp._authorize("action_write", secret=SECRET)
+except HTTPException as e:
+    err = e
+check("I7b …at the capability gate itself, not just in the handler",
+      err is not None and err.status_code == 403)
+wrote = run(fp.patch_pipeline_request(rid_i, {"user_actions": [
+    {"id": "a1", "kind": "sql", "instruction": "-- 719\nALTER TABLE ...;"},
+    {"kind": "config", "instruction": "map the Luxelink mailbox to its own org"}]},
+    org_id=TEN_A, x_fix_pipeline_secret=SECRET))
+check("I7c …but the secret CAN write the checklist itself (that is the triage agent's job)",
+      len(wrote["user_actions"]) == 2
+      and [a["kind"] for a in wrote["user_actions"]] == ["sql", "config"], wrote.get("user_actions"))
+check("I7d …and writing a checklist did NOT un-tick the done item (merge, not clobber)",
+      next(a for a in st_i["fix_requests"][0]["user_actions"] if a["id"] == "a1")["status"] == "pending"
+      and wrote["action_required"] is True)
+err = None
+try:
+    run(fp.patch_pipeline_request(rid_i, {"user_actions": [{"kind": "nope", "instruction": "x"}]},
+                                  org_id=TEN_A, x_fix_pipeline_secret=SECRET))
+except HTTPException as e:
+    err = e
+check("I7e a bad kind through the PATCH door is a 422, and nothing is written",
+      err is not None and err.status_code == 422
+      and len(st_i["fix_requests"][0]["user_actions"]) == 2, err)
+err = None
+try:
+    run(fp.patch_pipeline_request(rid_i, {"status": "approved"}, org_id=TEN_A,
+                                  x_fix_pipeline_secret=SECRET))
+except HTTPException as e:
+    err = e
+check("I7f the secret's STATUS ceiling is unchanged by this package (still no approve)",
+      err is not None and err.status_code in (403, 409), err)
+
+# I8 — org scoping
+st_o = fresh_store()
+st_o["fix_requests"] = [fixrow(org=TEN_A, status="pushed", actions=[act("a1")])]
+wire(st_o)
+rid_o = st_o["fix_requests"][0]["id"]
+err = None
+try:
+    run(fp.patch_pipeline_request_action(rid_o, "a1", {"status": "done"}, org_id=TEN_B,
+                                         authorization="Bearer super"))
+except HTTPException as e:
+    err = e
+check("I8a tenant B cannot tick tenant A's checklist (404, not a silent cross-tenant write)",
+      err is not None and err.status_code == 404
+      and st_o["fix_requests"][0]["user_actions"][0]["status"] == "pending", err)
+run(fp.patch_pipeline_request_action(rid_o, "a1", {"status": "done"}, org_id=TEN_A,
+                                     authorization="Bearer super"))
+check("I8b …and the correct org DOES land the write (org_id is a query param, stamped on the update)",
+      st_o["fix_requests"][0]["user_actions"][0]["status"] == "done")
+# The board is cross-tenant by default (a code bug spans tenants), so the platform scope must work here
+# too — and the WRITE must be stamped with the ROW's own org, not with whatever org_id the caller sent.
+st_x = fresh_store()
+st_x["fix_requests"] = [fixrow(org=TEN_A, status="pushed", actions=[act("a1")]),
+                        fixrow(org=TEN_B, status="pushed", actions=[act("a1")])]
+wire(st_x)
+run(fp.patch_pipeline_request_action(st_x["fix_requests"][0]["id"], "a1", {"status": "done"},
+                                     org_id=TEN_B, all_orgs=1, authorization="Bearer super"))
+check("I8c all_orgs=1 (the board's own scope) finds a row in ANOTHER tenant…",
+      st_x["fix_requests"][0]["user_actions"][0]["status"] == "done")
+check("I8d …and the write was stamped with the ROW's org (TEN_A), so tenant B's row is untouched "
+      "and nothing was mis-filed",
+      st_x["fix_requests"][0]["org_id"] == TEN_A
+      and st_x["fix_requests"][1]["user_actions"][0]["status"] == "pending"
+      and len(st_x["fix_requests"]) == 2)
+
+# I9 — bad inputs
+for label, aid, body_i, want_code in [("unknown action id", "nope", {"status": "done"}, 404),
+                                      ("invalid status", "a1", {"status": "sorta"}, 422)]:
+    err = None
+    try:
+        run(fp.patch_pipeline_request_action(rid_o, aid, body_i, org_id=TEN_A,
+                                             authorization="Bearer super"))
+    except HTTPException as e:
+        err = e
+    check(f"I9 {label} → {want_code}", err is not None and err.status_code == want_code, err)
+err = None
+try:
+    run(fp.patch_pipeline_request_action("no-such-row", "a1", {"status": "done"}, org_id=TEN_A,
+                                         authorization="Bearer super"))
+except HTTPException as e:
+    err = e
+check("I9c an unknown fix request → 404", err is not None and err.status_code == 404)
+
+# I10 — an UN-RUN mig 719 degrades, it does not break
+st_p = fresh_store()
+st_p["fix_requests"] = [fixrow(org=TEN_A, status="gate1_parked", actions=None)]
+del st_p["fix_requests"][0]["user_actions"]          # the column does not exist yet
+pre = Pre719Client(st_p)
+fp.sb = lambda: pre
+core.get_supabase = lambda: pre
+rid_p = st_p["fix_requests"][0]["id"]
+out = run(fp.patch_pipeline_request(rid_p, {"status": "building", "branch": "agent/x/y",
+                                            "resolved_note": "shipped",
+                                            "user_actions": [{"kind": "sql", "instruction": "RUN 719"}]},
+                                    org_id=TEN_A, authorization="Bearer super"))
+check("I10a pre-719: the status transition + evidence STILL land (the fix pipeline keeps working)",
+      st_p["fix_requests"][0]["status"] == "building"
+      and st_p["fix_requests"][0]["branch"] == "agent/x/y", st_p["fix_requests"][0].get("status"))
+check("I10b pre-719: the audit entry still lands",
+      len(st_p["fix_requests"][0]["audit"]) == 1)
+check("I10c pre-719: the response says so honestly instead of pretending it saved",
+      "migration 719" in (out.get("hint") or "") and out["user_actions"] == []
+      and "user_actions" not in st_p["fix_requests"][0], out.get("hint"))
+st_p2 = fresh_store()
+pre2 = Pre719Client(st_p2)
+fp.sb = lambda: pre2
+core.get_supabase = lambda: pre2
+out2 = run(fp.create_pipeline_request({"signature": "GET /api/v1/z/{id}|ValueError",
+                                       "user_actions": [{"kind": "env", "instruction": "SET X"}]},
+                                      org_id=TEN_A, authorization="Bearer super"))
+check("I10d pre-719: a POST carrying a checklist still REGISTERS the row (triage is never blocked)",
+      out2["ok"] and len(st_p2["fix_requests"]) == 1
+      and "migration 719" in (out2.get("hint") or ""), out2)
+check("I10e pre-719: reads of that row are safe and simply show no checklist",
+      fp.user_actions_of(st_p2["fix_requests"][0]) == []
+      and fp.action_required(st_p2["fix_requests"][0]) is False)
+
+# I10f/g — POST with a checklist on a healthy DB, incl. the no-clobber re-file rule
+st_c = fresh_store()
+wire(st_c)
+created = run(fp.create_pipeline_request(
+    {"signature": "GET /api/v1/q/{id}|KeyError", "classification": "config",
+     "user_actions": [{"kind": "config", "instruction": "point the mailbox at the right org"}]},
+    org_id=TEN_A, x_fix_pipeline_secret=SECRET))
+check("I10f a triage POST may file the checklist with the row (config/data findings), org-stamped",
+      created["ok"] and st_c["fix_requests"][0]["org_id"] == TEN_A
+      and st_c["fix_requests"][0]["user_actions"][0]["kind"] == "config"
+      and st_c["fix_requests"][0]["user_actions"][0]["status"] == "pending")
+st_c["fix_requests"][0]["user_actions"][0]["status"] = "done"
+run(fp.create_pipeline_request(
+    {"signature": "GET /api/v1/q/{id}|KeyError",
+     "user_actions": [{"kind": "config", "instruction": "point the mailbox at the right org"}]},
+    org_id=TEN_A, x_fix_pipeline_secret=SECRET))
+check("I10g a RE-FILE of the same signature never resets a checklist the operator ticked off",
+      len(st_c["fix_requests"]) == 1
+      and st_c["fix_requests"][0]["user_actions"][0]["status"] == "done")
+
+# I7-ASGI + I5-ASGI: the real wire
+st_w = fresh_store()
+st_w["fix_requests"] = [fixrow(org=TEN_A, status="pushed",
+                               actions=[act("a1", instruction="-- run me\nALTER TABLE x;")])]
+wire(st_w)
+rid_w = st_w["fix_requests"][0]["id"]
+with TestClient(APP, raise_server_exceptions=False) as c:
+    r = c.patch(f"/api/v1/core/fix-pipeline/requests/{rid_w}/actions/a1?org_id=" + TEN_A,
+                headers={fp.SECRET_HEADER: SECRET}, json={"status": "done"})
+    check("I11a REAL ASGI: the secret cannot tick a checklist item (403) and nothing changed",
+          r.status_code == 403 and st_w["fix_requests"][0]["user_actions"][0]["status"] == "pending",
+          (r.status_code, r.text[:200]))
+    r = c.patch(f"/api/v1/core/fix-pipeline/requests/{rid_w}/actions/a1?org_id=" + TEN_A,
+                headers={"Authorization": "Bearer super"}, json={"status": "done"})
+    check("I11b REAL ASGI: a super-admin CAN, over /api/v1, and the row goes clean-green",
+          r.status_code == 200 and r.json()["action_required"] is False
+          and st_w["fix_requests"][0]["user_actions"][0]["done_by"] == "owner@metricspro.tech",
+          (r.status_code, r.text[:200]))
+    r = c.get("/api/v1/core/fix-pipeline/requests?all_orgs=1", headers={"Authorization": "Bearer super"})
+    check("I11c REAL ASGI: the board payload carries the derived flags over the wire",
+          r.status_code == 200 and r.json()["fix_requests"][0]["action_required"] is False
+          and r.json()["rollup"]["action_required"] == 0, (r.status_code, r.text[:200]))
+    r = c.patch(f"/api/v1/core/fix-pipeline/requests/{rid_w}/actions/a1?org_id=" + TEN_A,
+                json={"status": "done"})
+    check("I11d REAL ASGI: no credential at all → 401 (the handler is the gate on a public prefix)",
+          r.status_code == 401, (r.status_code, r.text[:160]))
+
+# I12 — mig 719 SQL sanity
+SQL719 = open("../database/migrations/719_core_fix_request_user_actions.sql").read()
+sql719_code = "\n".join(ln for ln in SQL719.splitlines() if not ln.strip().startswith("--"))
+check("I12a 719 adds exactly the two columns, idempotently (ADD COLUMN IF NOT EXISTS)",
+      sql719_code.count("ADD COLUMN IF NOT EXISTS") == 2
+      and "user_actions jsonb NOT NULL DEFAULT '[]'::jsonb" in sql719_code
+      and "resolved_note text" in sql719_code)
+check("I12b 719 does NOT touch the push-gate trigger, any function, or any status/data rule",
+      "fix_requests_guard" not in sql719_code
+      and not re.search(r"(?i)\b(create|drop|alter)\s+(or\s+replace\s+)?(trigger|function)", sql719_code)
+      and not re.search(r"(?i)\b(update|delete|insert)\s+", sql719_code)
+      and not re.search(r"(?i)\bstatus\s*=", sql719_code),
+      [ln for ln in sql719_code.splitlines()
+       if re.search(r"(?i)trigger|function|update |delete |insert ", ln)])
+check("I12c 719 creates no table, drops nothing, and grants NOTHING to anon/authenticated",
+      "CREATE TABLE" not in sql719_code and "DROP " not in sql719_code
+      and not re.search(r"(?i)\bgrant\b", sql719_code)
+      and not re.search(r"(?i)create\s+policy", sql719_code))
+check("I12d 719 reloads the PostgREST schema cache (else the new column 404s in prod)",
+      "NOTIFY pgrst, 'reload schema'" in sql719_code)
+check("I12e the kind vocabulary in the SQL comment matches the code (one source of truth)",
+      all(k in SQL719 for k in fp.USER_ACTION_KINDS)
+      and "fix_pipeline.USER_ACTION_KINDS" in SQL719)
 
 print(f"\n{'='*92}\n{len(PASS)} passed, {len(FAIL)} failed" + (f"  → {FAIL}" if FAIL else "  ✅") + f"\n{'='*92}")
 sys.exit(1 if FAIL else 0)
