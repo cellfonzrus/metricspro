@@ -160,7 +160,9 @@ export default function DailyTargetsPage() {
       { header: "Today's Target", get: (s: any) => s.categories?.activations?.today_target ?? 0 },
       { header: 'Pace/day', get: (s: any) => s.categories?.activations?.pace ?? 0 },
       { header: 'Trending Box', get: (s: any) => s.trending_box ?? 0 },
-      { header: 'Trending Acc. $', get: (s: any) => s.trending_acc_sales ?? 0, money: true },
+      // Same basis as 'Acc. Achieved (MTD)' below (accessory $ + device set-up fee) — projecting the
+      // pure-accessory basis next to a set-up-fee-inclusive achieved was the 2026-07-30 mismatch.
+      { header: 'Trending Acc. $ (acc. + set-up)', get: (s: any) => s.trending_acc_target ?? s.trending_acc_sales ?? 0, money: true },
       { header: 'Acc. Achieved (MTD)', get: (s: any) => s.categories?.accessories?.achieved_mtd ?? 0, money: true },
       { header: "Acc. Today's Target", get: (s: any) => s.categories?.accessories?.today_target ?? 0, money: true },
       { header: 'Acc. $/day needed', get: (s: any) => s.categories?.accessories?.pace ?? 0, money: true },
@@ -260,7 +262,7 @@ export default function DailyTargetsPage() {
                     <td style={{ ...td, fontWeight: 700, color: 'var(--accent)' }}>{fmtN(a?.today_target, 1)}</td>
                     <td style={td}>{fmtN(a?.pace, 1)}</td>
                     <td style={{ ...td, color: 'var(--accent)', fontWeight: 600 }} title="Projected month-end activations (same source as Executive MTD)">{fmtN(s.trending_box, 0)}</td>
-                    <td style={{ ...td, color: 'var(--accent)', fontWeight: 600 }} title="Projected month-end accessory $ (same source as Executive MTD)">{fmt(s.trending_acc_sales)}</td>
+                    <td style={{ ...td, color: 'var(--accent)', fontWeight: 600 }} title={`Projected month-end on the SAME basis as Acc. Ach. — accessory $ + device set-up fee (same computation as Executive MTD). Executive MTD's accessory-only projection for this store is ${fmt(s.trending_acc_sales)}.`}>{fmt(s.trending_acc_target ?? s.trending_acc_sales)}</td>
                     <td style={td} title="Accessory $ achieved MTD (incl. device set-up fee) — the actual accessory sales flowing from the feed">{fmt(ac?.achieved_mtd)}</td>
                     <td style={{ ...td, fontWeight: 700, color: 'var(--accent)' }} title={`Accessory $ needed today${setupMtd ? ` · includes ${fmt(setupMtd)} device set-up fee in achieved` : ''}`}>{fmt(ac?.today_target)}</td>
                     <td style={td} title={`Accessory $ needed per open day left${setupMtd ? ` · set-up fee counted toward the accessory target (${fmt(setupMtd)} MTD)` : ''}`}>{fmt(ac?.pace)}</td>

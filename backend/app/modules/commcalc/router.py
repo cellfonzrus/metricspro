@@ -13391,20 +13391,38 @@ def _targets_trending_by_code(client, org_id, period, today=None):
         return {}, {}
     resolve = _store_code_resolver(client, org_id)
     by_code = {}
+    # Suspect (e), 2026-07-30: Exec MTD lists EVERY selling store; the Targets summary can only show a
+    # store that resolves to a store_code in the roster/target universe. Such a store's accessory$ sat
+    # in Exec MTD's total and nowhere on the Targets pages, silently — one of the ways the two
+    # "different accessory numbers" arise. The resolver's LAST fallback returns the cleaned raw string
+    # (never empty), so "unmapped" is not detectable here — it means "resolved to a code the roster
+    # doesn't contain", which only `get_targets_summary` knows. We therefore keep the raw display
+    # name(s) behind each code in `names` and let the summary compute + report the residual.
     for r in (ex.get('by_location', {}) or {}).get('rows', []) or []:
         code = str(resolve(r.get('store')) or '').strip().upper()
         if not code:
             continue
         d = by_code.setdefault(code, {'trending_acc_sales': 0.0, 'trending_box': 0,
-                                      'acc_sales': 0.0, 'total_activation': 0})
+                                      'acc_sales': 0.0, 'total_activation': 0,
+                                      'setup_fee': 0.0, 'acc_plus_setup': 0.0,
+                                      'trending_acc_plus_setup': 0.0, 'names': []})
+        _nm = str(r.get('store') or '').strip()
+        if _nm and _nm not in d['names']:
+            d['names'].append(_nm)          # raw POS spelling(s) behind this code, for the recon banner
         d['trending_acc_sales'] += safe_float(r.get('trending_acc_sales'))
         d['trending_box'] += int(r.get('trending_box') or 0)
         d['acc_sales'] += safe_float(r.get('acc_sales'))
         d['total_activation'] += int(r.get('total_activation') or 0)
+        # TARGET-basis twins (accessory$ + device set-up fee) — the basis the Accessory Targets page's
+        # achieved/target columns use, so its Trending column projects the metric it actually tracks.
+        d['setup_fee'] += safe_float(r.get('setup_fee'))
+        d['acc_plus_setup'] += safe_float(r.get('acc_plus_setup'))
+        d['trending_acc_plus_setup'] += safe_float(r.get('trending_acc_plus_setup'))
     for d in by_code.values():
-        d['trending_acc_sales'] = round(d['trending_acc_sales'], 2)
-        d['acc_sales'] = round(d['acc_sales'], 2)
-    return by_code, (ex.get('trending', {}) or {})
+        for _k in ('trending_acc_sales', 'acc_sales', 'setup_fee', 'acc_plus_setup',
+                   'trending_acc_plus_setup'):
+            d[_k] = round(d[_k], 2)
+    return by_code, dict(ex.get('trending', {}) or {})
 
 
 def _byod_pct_default(client, period, org_id=ORG_ID):
@@ -13937,10 +13955,51 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
             'categories': res['categories'],
             'conversion': store_conv,
             'trending_acc_sales': safe_float(trend.get('trending_acc_sales')),
+            # `trending_acc_sales` is Executive MTD's PURE accessory$ projection (unchanged semantics —
+            # it must keep matching Exec MTD's own column). `trending_acc_target` is the projection on
+            # the ACCESSORY-TARGET basis (accessory$ + device set-up fee) — the basis this row's
+            # categories.accessories.achieved_mtd / monthly / need are all measured in. The Accessory
+            # Targets page renders THAT one, so its Trending column projects the number in the column
+            # beside it (before this it projected the pure basis, and a store whose set-up fees were
+            # material could show a projected month-end BELOW its already-achieved MTD).
+            'trending_acc_target': safe_float(trend.get('trending_acc_plus_setup')),
+            'acc_sales_ex_setup': safe_float(trend.get('acc_sales')),
+            'setup_fee_mtd_exec': safe_float(trend.get('setup_fee')),
             'trending_box': int(trend.get('trending_box') or 0),
             'reps': reps_out,
         })
     out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
+    # ── EXEC-MTD RECONCILIATION (2026-07-30 owner bug, suspect (e)) ──────────────────────────────
+    # Executive MTD lists EVERY selling store. This page can only render a store that exists in the
+    # roster/target universe above, so a selling store with no roster row, no target row and no store
+    # mapping contributes accessory$ to Exec MTD's total and to NOTHING here — silently, which is one
+    # of the ways the two pages "show different accessory sales". Compute the residual EXPLICITLY off
+    # the SAME `_targets_trending_by_code` payload the trending columns come from, so the delta between
+    # the two pages is always fully explained instead of guessed at. Computed against the UNIVERSE
+    # (pre-filter, pre-RBAC) so it reports genuinely-unmapped stores only — a store hidden by the
+    # active filter or by the caller's RBAC span is NOT "unmapped" and must not be reported as such.
+    _universe = {str(s.get('store_code') or '').strip().upper() for s in roster
+                 if str(s.get('store_code') or '').strip()}
+    _un_names, _un_acc, _un_acc_setup = [], 0.0, 0.0
+    for _c, _d in (trend_by_code or {}).items():
+        if _c in _universe:
+            continue
+        _un_acc += safe_float(_d.get('acc_sales'))
+        _un_acc_setup += safe_float(_d.get('acc_plus_setup'))
+        for _n in (_d.get('names') or []):
+            if _n not in _un_names:
+                _un_names.append(_n)
+    trend_meta = dict(trend_meta or {})
+    trend_meta['unmapped_stores'] = sorted(_un_names)
+    trend_meta['unmapped_acc_sales'] = round(_un_acc, 2)
+    trend_meta['unmapped_acc_plus_setup'] = round(_un_acc_setup, 2)
+    if _un_acc_setup > 0:
+        setup_hint_unmapped = (
+            f"{len(_un_names) or 1} store(s) sold {_un_acc_setup:,.2f} of accessory + set-up-fee $ that "
+            f"Executive MTD counts but no target row can hold ({', '.join(_un_names[:5])}"
+            f"{chr(8230) if len(_un_names) > 5 else ''}) - map them in Store Matching to close the gap.")
+    else:
+        setup_hint_unmapped = ""
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)
     # A self-scoped rep gets an EMPTY keyset from scope_keyset (no manager span) → `is not None` would drop
@@ -13966,6 +14025,9 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     if sold_codes and not (sold_codes & rendered_codes):
         setup_hint.append("Sales were found but none matched a target store — map your POS store names to "
                           "stores in Store Matching so achieved numbers attach.")
+    elif setup_hint_unmapped:
+        # PARTIAL mismatch — the loud "nothing matched" hint above never fires, so this was silent.
+        setup_hint.append(setup_hint_unmapped)
     return {'period': period, 'today': today.isoformat(), 'stores': out,
             'filters': filters, 'applied': applied, 'trending': trend_meta, 'setup_hint': setup_hint}
 
@@ -14509,7 +14571,19 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
 
     Verified formulas: Total Activation = Activation+Port+BYOD+Upgrade; Trending Box = Total Activation ×
     days_in_month ÷ complete_days_elapsed; Trending Acc. Sales likewise on Acc. Sales; Conv. = Total
-    Activation ÷ Bill Payment Qty; APB = Acc. Sales ÷ Total Activation. Closed/past month trending = actual."""
+    Activation ÷ Bill Payment Qty; APB = Acc. Sales ÷ Total Activation. Closed/past month trending = actual.
+
+    TWO ACCESSORY BASES (2026-07-30, owner: "accessory sales in Executive MTD are different from the
+    accessory target link"). Both come from the ONE shared `_sales_cell_agg`, which splits every line
+    into `accessory_rev` and `setup_fee_rev`:
+      • `acc_sales`       = PURE accessory$ — identical to the Sales Report's `accessory_rev` and to the
+                            b2bsoft column this report replicates. `apb` / `trending_acc_sales` use it.
+      • `acc_plus_setup`  = accessory$ + device SET-UP FEE — the basis the Accessory Targets page
+                            measures achieved/target in (owner directive 2026-07-17: the set-up fee is a
+                            separate PAY item, never folded into the accessory$ number, but it DOES
+                            count toward the accessory TARGET).
+    Neither is "the" answer; showing both, labelled, is what makes the two pages reconcile to the cent.
+    `setup_fee` is the bridge between them. DISPLAY-ONLY — no payout reads any of this."""
     cfg = _exec_metric_config(client, org_id)
     acfg = _accessory_config(client, org_id)
     rows, meta = _sales_rows_union(client, org_id, period)
@@ -14572,9 +14646,16 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
 
     # ── Apply the selected filters to the UNION rows SERVER-SIDE (before bucketing) — case-insensitive
     #    membership; a market filter resolves each row's store to its market. Empty selection = no filter.
-    store_sel = {str(s).strip().lower() for s in (stores or []) if str(s).strip()}
-    rep_sel = {str(s).strip().lower() for s in (reps or []) if str(s).strip()}
-    market_sel = {str(s).strip().lower() for s in (markets or []) if str(s).strip()}
+    # `_as_filter_list` (not `x or []`): an INTERNAL caller that omits a repeated-Query param passes the
+    # fastapi Query DEFAULT OBJECT, which is truthy and NOT iterable -> `TypeError: 'Query' object is not
+    # iterable` (the confirmed 3bf51b4d My-Team class). get_targets_summary was hardened for it; _exec_mtd
+    # carries the identical param shape and is now also reachable with an explicit `today`, so harden it.
+    stores = _as_filter_list(stores)
+    markets = _as_filter_list(markets)
+    reps = _as_filter_list(reps)
+    store_sel = {str(s).strip().lower() for s in stores if str(s).strip()}
+    rep_sel = {str(s).strip().lower() for s in reps if str(s).strip()}
+    market_sel = {str(s).strip().lower() for s in markets if str(s).strip()}
     applied = {'stores': sorted(store_sel), 'markets': sorted(market_sel), 'reps': sorted(rep_sel)}
     # M2 (filter canonical-safe): the by_location rows are grouped by the CANONICAL store key, so filtering
     # by a merged store's LABEL must match every variant-spelling row of that store. Canonicalize BOTH the
@@ -14620,7 +14701,8 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         # NOTE (n3): by_store dicts also gain a '_name' key (the raw display spelling) set in the loop
         # below — a metric sentinel, NOT a bucket. Any future code iterating these dicts must skip '_name'.
         return {'activation': 0, 'port': 0, 'byod': 0, 'upgrade': 0, 'total_phones': 0,
-                'bill_qty': 0, 'bill_amt': 0.0, 'acc_sales': 0.0, 'activation_fee': 0.0, 'protect': 0}
+                'bill_qty': 0, 'bill_amt': 0.0, 'acc_sales': 0.0, 'setup_fee': 0.0,
+                'activation_fee': 0.0, 'protect': 0}
     by_store, by_emp = {}, {}
     for (st, rep, date), a in cells.items():
         if cut and date and date > cut:
@@ -14640,6 +14722,12 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
             d['bill_qty'] += a['bill_qty']
             d['bill_amt'] += a['bill_amt']
             d['acc_sales'] += a['accessory_rev']
+            # DEVICE SET-UP FEE — the SAME `setup_fee_rev` accumulator the accessory TARGET attainment
+            # folds in (owner directive 2026-07-17: the set-up fee is a SEPARATE pay item, never blended
+            # into the accessory$ number, but it DOES count toward the accessory target). Carried here so
+            # Executive MTD can state BOTH bases from the ONE shared aggregation instead of silently
+            # showing a different number than the Accessory Targets page. `acc_sales` is UNCHANGED.
+            d['setup_fee'] += a['setup_fee_rev']
             d['activation_fee'] += a['activation_fee']
             d['protect'] += a['protect']
 
@@ -14654,6 +14742,15 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
                 'acc_sales': round(d['acc_sales'], 2),
                 'apb': round(d['acc_sales'] / ta, 2) if ta else 0.0,
                 'trending_acc_sales': round(d['acc_sales'] * trend_factor, 2),
+                # ── The accessory TARGET basis, from the SAME cells (2026-07-30 owner bug: "accessory
+                #    sales in Executive MTD are different from the accessory target link"). `acc_sales`
+                #    above is the PURE accessory$ (== the Sales Report's accessory_rev, == the b2bsoft
+                #    column this report replicates); `acc_plus_setup` adds the device set-up fee, which
+                #    is what the Accessory Targets page tracks its achieved/target against. Reporting
+                #    both, labelled, is the ONLY honest way to show two legitimately different bases.
+                'setup_fee': round(d['setup_fee'], 2),
+                'acc_plus_setup': round(d['acc_sales'] + d['setup_fee'], 2),
+                'trending_acc_plus_setup': round((d['acc_sales'] + d['setup_fee']) * trend_factor, 2),
                 'activation_fee': round(d['activation_fee'], 2),
                 'total_protect': d['protect']}
 
@@ -14667,6 +14764,7 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         t = {label_key: 'TOTAL'}
         for k in ('total_activation', 'activation', 'port', 'byod', 'upgrade', 'total_phones',
                   'trending_box', 'bill_payment_qty', 'amount', 'acc_sales', 'trending_acc_sales',
+                  'setup_fee', 'acc_plus_setup', 'trending_acc_plus_setup',
                   'activation_fee', 'total_protect'):
             t[k] = round(sum(r.get(k, 0) for r in rowset), 2)
         t['conv'] = round(t['total_activation'] / t['bill_payment_qty'], 4) if t['bill_payment_qty'] else 0.0
@@ -14683,7 +14781,7 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
 
 
 @router.get("/exec-mtd/{period}")
-def exec_mtd(period: str, org_id: str = ORG_ID,
+def exec_mtd(period: str, org_id: str = ORG_ID, today: str = "",
              stores: Optional[List[str]] = Query(default=None),
              markets: Optional[List[str]] = Query(default=None),
              reps: Optional[List[str]] = Query(default=None)):
@@ -14693,9 +14791,22 @@ def exec_mtd(period: str, org_id: str = ORG_ID,
 
     RULE FIVE standardized filters: optional repeated `stores` / `markets` / `reps` query params filter
     the union rows SERVER-SIDE (before bucketing) so the tables, trending AND exports stay consistent.
-    The response's `filters` object lists the pick-don't-type options over the org's real data."""
+    The response's `filters` object lists the pick-don't-type options over the org's real data.
+
+    `today` (YYYY-MM-DD, optional) is the CALLER'S LOCAL date — the same override `/targets/{period}/
+    summary` already takes (see `_period_bounds`). Without it this endpoint resolved "today" on the
+    SERVER's UTC clock while the Targets pages resolved it on the browser's, so on an evening sales
+    floor (after ~8pm ET, UTC has rolled over) the two surfaces used a different MTD cut and a
+    different trending divisor and could not agree. Omitted/malformed -> the server date, byte-identical
+    to before."""
     require_org(org_id)
-    return _exec_mtd(sb(), org_id, period, stores=stores, markets=markets, reps=reps)
+    _t = None
+    if today:
+        try:
+            _t = _date.fromisoformat(str(today)[:10])
+        except Exception:
+            _t = None      # malformed override -> server date (never 500 a report over it)
+    return _exec_mtd(sb(), org_id, period, stores=stores, markets=markets, reps=reps, today=_t)
 
 
 @router.get("/exec-metric-config")

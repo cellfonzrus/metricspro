@@ -11,13 +11,32 @@ import { MultiSelect } from '@/lib/multiselect'
 // summary endpoint (categories.accessories). Expand a store to see each rep's accessory contribution.
 // RULE FIVE: store/market/rep filter bar drives the page + exports (server-side). Trending Acc. = the
 // projected month-end accessory $ read straight from Executive MTD (one source, moves together).
+//
+// TWO BASES (2026-07-30 owner bug "accessory sales in Executive MTD are different from the accessory
+// target link"): every number on THIS page is on the ACCESSORY-TARGET basis = accessory sales $ + the
+// device set-up fee (owner directive 2026-07-17 — the set-up fee is a separate PAY item, never folded
+// into the accessory$ figure, but it DOES count toward the accessory TARGET). Executive MTD's
+// "Acc. Sales" column is the PURE accessory$ basis; its "Acc.+Set-up" column is this page's basis and
+// matches to the cent. Trending now projects the TARGET basis (`trending_acc_target`) so the column
+// projects the metric sitting next to it — it used to project the pure basis, which could render a
+// projected month-end BELOW the already-achieved MTD.
 type Acc = { unit: string; monthly: number; achieved_mtd: number; need: number; base_today: number; today_target: number; pace: number; open_days_left: number; setup_fee_mtd?: number }
 type MSOpt = { value: string; label?: string }
+type TrendMeta = { unmapped_stores?: string[]; unmapped_acc_sales?: number; unmapped_acc_plus_setup?: number }
+
+// Column tooltips that state the BASIS out loud — the whole point of the 2026-07-30 fix is that no
+// accessory number on any surface is unlabelled about whether the device set-up fee is in it.
+const HDR_TIPS: Record<string, string> = {
+  Achieved: 'Accessory sales $ + device set-up fee, month to date — the accessory TARGET basis. Executive MTD shows this as "Acc.+Set-up"; its "Acc. Sales" column is the accessory-only part.',
+  'Set-up fee': 'The device set-up-fee portion of Achieved. A separate pay item, but it counts toward the accessory target (owner directive 2026-07-17).',
+  Trending: 'Projected month-end on the SAME basis as Achieved (accessory $ + set-up fee) = MTD x days-in-month / complete days elapsed. Same computation as Executive MTD.',
+}
 
 export default function AccessoryTargetsPage() {
   const { period } = usePeriod()
   const [rows, setRows] = useState<any[]>([])
   const [filters, setFilters] = useState<{ stores: MSOpt[]; markets: string[]; reps: string[] }>({ stores: [], markets: [], reps: [] })
+  const [trendMeta, setTrendMeta] = useState<TrendMeta>({})
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState<Record<string, boolean>>({})
   // RULE FIVE standardized filters — applied SERVER-SIDE.
@@ -35,11 +54,12 @@ export default function AccessoryTargetsPage() {
     api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/summary?${qs.toString()}`)
       .then((d: any) => {
         setFilters(d.filters || { stores: [], markets: [], reps: [] })
+        setTrendMeta(d.trending || {})
         setRows((d.stores || []).filter((s: any) => {
           const a = s.categories?.accessories || {}
           // Show a store if it has an accessory target OR any accessory sales achieved this month —
           // so accessory $ is tracked even before per-store targets are configured.
-          return (a.monthly || 0) > 0 || (a.achieved_mtd || 0) > 0 || (s.trending_acc_sales || 0) > 0
+          return (a.monthly || 0) > 0 || (a.achieved_mtd || 0) > 0 || (s.trending_acc_target ?? s.trending_acc_sales ?? 0) > 0
         }))
       })
       .catch(console.error).finally(() => setLoading(false))
@@ -51,7 +71,11 @@ export default function AccessoryTargetsPage() {
 
   const acc = (s: any): Acc => s.categories?.accessories || { unit: 'dollars', monthly: 0, achieved_mtd: 0, need: 0, base_today: 0, today_target: 0, pace: 0, open_days_left: 0 }
   const setupFee = (s: any): number => Number(acc(s).setup_fee_mtd || 0)
-  const trend = (s: any): number => Number(s.trending_acc_sales || 0)
+  // Project the SAME basis this page tracks (accessory $ + set-up fee). `trending_acc_target` is the
+  // Executive-MTD projection on that basis; `trending_acc_sales` (pure accessory$) is the fallback for a
+  // backend that predates it, and is also shown separately below so the two pages stay comparable.
+  const trend = (s: any): number => Number(s.trending_acc_target ?? s.trending_acc_sales ?? 0)
+  const trendPure = (s: any): number => Number(s.trending_acc_sales || 0)
   const pct = (a: Acc) => a.monthly ? Math.min(100, Math.round(100 * a.achieved_mtd / a.monthly)) : 0
   const onTrack = (a: Acc) => a.achieved_mtd >= (a.base_today || 0) - 0.01
 
@@ -65,9 +89,10 @@ export default function AccessoryTargetsPage() {
       sheets: [{ name: 'By store', rows, columns: [
         { header: 'Store', get: (s: any) => s.address || s.store_code },
         { header: 'Target $', get: (s: any) => acc(s).monthly, money: true },
-        { header: 'Achieved MTD $', get: (s: any) => acc(s).achieved_mtd, money: true },
+        { header: 'Achieved MTD $ (acc. + set-up)', get: (s: any) => acc(s).achieved_mtd, money: true },
         { header: 'of which set-up fee $', get: (s: any) => setupFee(s), money: true },
-        { header: 'Trending $', get: (s: any) => trend(s), money: true },
+        { header: 'Accessory $ only (= Exec MTD Acc. Sales)', get: (s: any) => Number((acc(s).achieved_mtd || 0) - setupFee(s)), money: true },
+        { header: 'Trending $ (acc. + set-up)', get: (s: any) => trend(s), money: true },
         { header: '% to goal', get: (s: any) => pct(acc(s)) },
         { header: 'Remaining $', get: (s: any) => Math.max(0, acc(s).need), money: true },
         { header: "Today's target $", get: (s: any) => acc(s).today_target, money: true },
@@ -103,6 +128,20 @@ export default function AccessoryTargetsPage() {
         {selReps.length > 0 && <span style={{ fontSize: 11, color: 'var(--text3)' }}>rep filter narrows the per‑store breakdown; store totals stay whole‑store</span>}
       </div>
 
+      {/* Exec-MTD reconciliation: accessory $ that Executive MTD counts but no target row can hold,
+          because the selling store isn't in the roster / has no store mapping. Previously this simply
+          vanished from this page, which is one of the ways the two surfaces showed different totals. */}
+      {Number(trendMeta.unmapped_acc_plus_setup || 0) > 0 && (
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, borderLeft: '3px solid #d97706', fontSize: 12.5, color: 'var(--text2)' }}>
+          ⚠️ <b>{fmt(Number(trendMeta.unmapped_acc_plus_setup || 0))}</b> of accessory + set‑up‑fee $ is on{' '}
+          <a href="/commcalc/exec/mtd">Executive MTD</a> but cannot appear here — the selling store isn&apos;t
+          mapped to a store code, so there is no target row to attach it to
+          {(trendMeta.unmapped_stores || []).length > 0 && <>: <b>{(trendMeta.unmapped_stores || []).slice(0, 6).join(', ')}</b>{(trendMeta.unmapped_stores || []).length > 6 ? ` +${(trendMeta.unmapped_stores || []).length - 6} more` : ''}</>}.
+          {' '}Map them in <a href="/commcalc/store-match">Store Matching</a> to close the gap. This is the
+          full, exact difference between the two pages&apos; totals.
+        </div>
+      )}
+
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : rows.length === 0 ? (
@@ -125,7 +164,8 @@ export default function AccessoryTargetsPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
               <thead><tr style={{ background: 'var(--surface2)', fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
                 {['Store', 'Target', 'Achieved', 'Set-up fee', 'Trending', '% to goal', 'Remaining', "Today's target", '$/day needed', 'Days left', 'Status'].map(h =>
-                  <th key={h} style={{ textAlign: h === 'Store' ? 'left' : 'right', padding: '9px 12px', whiteSpace: 'nowrap' }}>{h}</th>)}
+                  <th key={h} title={HDR_TIPS[h]}
+                    style={{ textAlign: h === 'Store' ? 'left' : 'right', padding: '9px 12px', whiteSpace: 'nowrap' }}>{h}</th>)}
               </tr></thead>
               <tbody>
                 {rows.map(s => {
@@ -138,7 +178,8 @@ export default function AccessoryTargetsPage() {
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13 }}>{fmt(a.monthly)}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: '#16a34a' }}>{fmt(a.achieved_mtd)}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--text3)' }} title="Device set-up fee counted toward the accessory target (reported separately)">{fmt(setupFee(s))}</td>
-                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--accent)', fontWeight: 600 }}>{fmt(trend(s))}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--accent)', fontWeight: 600 }}
+                          title={`Projected month-end on the Achieved basis (accessory $ + set-up fee). Executive MTD's accessory-only projection for this store is ${fmt(trendPure(s))}.`}>{fmt(trend(s))}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 12 }}>
                           <div style={{ display: 'inline-block', width: 70, height: 7, background: 'var(--surface2)', borderRadius: 4, overflow: 'hidden', verticalAlign: 'middle', marginRight: 6 }}>
                             <div style={{ width: `${p}%`, height: '100%', background: ok ? '#16a34a' : '#d97706' }} />
@@ -171,13 +212,21 @@ export default function AccessoryTargetsPage() {
           </div>
           <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 12 }}>
             "Behind" = achieved MTD is under the pace expected by today. <b>Trending</b> is the projected
-            month‑end accessory $ (MTD × days‑in‑month ÷ complete days elapsed) taken from the SAME source as
-            Executive MTD — the two always agree. "$/day needed" spreads the remaining target over the open
-            days left in the month. Stores with accessory sales but marked <b>No target</b> still appear here
-            so achieved $ is tracked — set a target for them in Target Settings to get pacing. <b>Achieved MTD
-            counts accessory sales revenue PLUS the device set-up fee</b> (owner directive) — the set-up-fee
-            portion is broken out in its own <b>Set-up fee</b> column so nothing is blended silently. The
-            set-up-fee lines are identified per-tenant in the Sales Report → Accessory settings.
+            month‑end (MTD × days‑in‑month ÷ complete days elapsed) computed by the SAME code as Executive
+            MTD, <b>on the same basis as Achieved</b>. "$/day needed" spreads the remaining target over the
+            open days left in the month. Stores with accessory sales but marked <b>No target</b> still appear
+            here so achieved $ is tracked — set a target for them in Target Settings to get pacing.
+          </p>
+          <p style={{ fontSize: 12, color: 'var(--text2)', marginTop: 8, padding: '9px 11px', background: 'var(--surface2)', borderRadius: 6, maxWidth: 900 }}>
+            ℹ️ <b>Why this page and Executive MTD show different accessory numbers.</b> Every figure here is
+            on the <b>accessory target basis</b> = accessory sales revenue <b>plus</b> the device set-up fee
+            (owner directive 2026‑07‑17: the set-up fee is a separate <i>pay</i> item — never folded into the
+            accessory $ number — but it does count toward the accessory <i>target</i>). Executive MTD&apos;s{' '}
+            <b>Acc. Sales</b> column is the accessory‑only figure, so it is <i>legitimately smaller</i>;
+            its <b>Acc.+Set‑up</b> column is this page&apos;s basis and matches to the cent. The set‑up‑fee
+            portion is broken out in the <b>Set‑up fee</b> column here, and the set‑up‑fee lines are
+            identified per tenant in Sales Report → Accessory settings. Both pages read the same sales rows
+            through the same classifier — nothing here affects anyone&apos;s pay.
           </p>
         </>
       )}
