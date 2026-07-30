@@ -204,7 +204,11 @@ DATASETS = [
             _col("order_type", "Order Type", "text", group=True),
             _col("account_id", "Account", "text"),
             _col("order_number", "Order #", "text"),
-            _col("merchant_invoice", "Merchant Invoice $", "money", gate="carrier_residual"),
+            # NOT money: `merchant_invoice` is the Merchant Invoice NUMBER (ma_upload.FIELD_LABELS role
+            # "key"), stored NUMERIC by mig 083. As a "money" column the builder SUMMED it — the same
+            # defect that reported -$492,946,277,716 of "residual" on the What-If page (2026-07-30).
+            # Typed "text" it is still selectable/groupable and no longer aggregates.
+            _col("merchant_invoice", "Merchant invoice # (ID, not money)", "text", gate="carrier_residual"),
             _col("merchant_discount", "Merchant Discount $", "money", gate="carrier_residual"),
             _col("retail_cost", "Retail Cost $", "money", gate="carrier_residual"),
         ],
