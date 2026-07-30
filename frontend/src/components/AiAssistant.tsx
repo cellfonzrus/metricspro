@@ -8,6 +8,12 @@ import { api, ORG_ID } from '@/lib/client'
 // tenant entitlement + API-key status and degrades gracefully.
 type Msg = { role: 'user' | 'assistant'; content: string }
 
+// Client-side ceiling on one Ask-AI round trip. The backend caps its own model call at ~60s
+// (AI_ASSIST_TIMEOUT_S x retries) and always answers gracefully; this is the belt-and-braces so a
+// network/proxy stall can never leave the user staring at "thinking…" forever. (SEV-1 2026-07-30.)
+const AI_CLIENT_TIMEOUT_MS = 60_000
+const AI_SLOW_MSG = 'The assistant is taking too long — please try again in a minute, or raise a ticket and a person will help.'
+
 export default function AiAssistant() {
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<{ module_enabled: boolean; configured: boolean } | null>(null)
@@ -31,15 +37,21 @@ export default function AiAssistant() {
     const history = msgs.slice(-10)
     setMsgs(m => [...m, { role: 'user', content: q }])
     setBusy(true)
+    // api() spreads its opts straight into fetch(), so an AbortSignal passes through unchanged —
+    // no change to the shared client is needed.
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), AI_CLIENT_TIMEOUT_MS)
     try {
       const d = await api(`/api/v1/helpdesk/ai-assist?org_id=${ORG_ID}`, {
-        method: 'POST', body: JSON.stringify({ message: q, history }),
+        method: 'POST', body: JSON.stringify({ message: q, history }), signal: ctrl.signal,
       })
       setMsgs(m => [...m, { role: 'assistant', content: d.reply || '(no answer)' }])
     } catch (e: any) {
-      setErr(e?.message || 'The assistant is unavailable right now.')
-      setMsgs(m => [...m, { role: 'assistant', content: 'Sorry — I hit an error. You can raise a ticket and a person will help.' }])
-    } finally { setBusy(false) }
+      const timedOut = e?.name === 'AbortError' || ctrl.signal.aborted
+      setErr(timedOut ? AI_SLOW_MSG : (e?.message || 'The assistant is unavailable right now.'))
+      setMsgs(m => [...m, { role: 'assistant', content: timedOut ? AI_SLOW_MSG
+        : 'Sorry — I hit an error. You can raise a ticket and a person will help.' }])
+    } finally { clearTimeout(timer); setBusy(false) }
   }
 
   if (status && !status.module_enabled) return null   // tenant not entitled to the AI assistant

@@ -10,6 +10,7 @@ is org-scoped. Caller identity (requester + whether they're an agent) is supplie
 frontend from the logged-in user — the same loose-identity pattern the other modules use;
 hardening to server-verified identity plugs into the RBAC-enforcement work later.
 """
+import os
 import uuid
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
@@ -521,6 +522,20 @@ def dashboard(org_id: str = ORG_ID, date_from: str = "", date_to: str = ""):
 
 
 # ── AI support assistant (Phase 2) — tenant-scoped, READ-ONLY ───────────────────────────────────
+# Event-loop safety limits for the ONE outbound AI call (SEV-1 2026-07-30). The Anthropic SDK
+# defaults to a 600s timeout with 2 automatic retries; these defaults cap a single Ask-AI request at
+# ~60s worst case (timeout x (1 + retries)). Env-tunable so the operator can widen/narrow without a
+# code deploy; a garbage env value falls back to the default rather than breaking module import.
+try:
+    AI_ASSIST_TIMEOUT_S = max(1.0, float(os.getenv("AI_ASSIST_TIMEOUT_S") or 30))
+except Exception:
+    AI_ASSIST_TIMEOUT_S = 30.0
+try:
+    AI_ASSIST_MAX_RETRIES = max(0, int(os.getenv("AI_ASSIST_MAX_RETRIES") or 1))
+except Exception:
+    AI_ASSIST_MAX_RETRIES = 1
+
+
 _AI_SUPPORT_SYSTEM = """You are the in-app support assistant for MetricsPro, a multi-tenant SaaS for
 cellular-retail commission and store operations. You are helping a user at the tenant "{tenant_name}".
 Enabled modules for this tenant: {modules}.
@@ -610,9 +625,16 @@ async def ai_assist(body: dict, org_id: str = ORG_ID):
             msgs.append({"role": role, "content": content[:4000]})
     msgs.append({"role": "user", "content": question})
     try:
-        from anthropic import Anthropic
-        cli = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        resp = cli.messages.create(
+        # SEV-1 2026-07-30 — this call MUST be the ASYNC client and MUST be awaited. The synchronous
+        # Anthropic client blocks the FastAPI event loop for the entire HTTP call, and the SDK
+        # defaults to a 600s timeout with 2 automatic retries, so one stalled Ask-AI request froze
+        # EVERY endpoint (including /health) for up to ~30 minutes. Awaiting the async client hands
+        # the loop back while the model thinks; the explicit timeout + single retry cap the worst
+        # case for THIS request at ~60s. Do NOT reintroduce `Anthropic(` here.
+        from anthropic import AsyncAnthropic
+        cli = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY,
+                             timeout=AI_ASSIST_TIMEOUT_S, max_retries=AI_ASSIST_MAX_RETRIES)
+        resp = await cli.messages.create(
             model=settings.ACCOUNT_ENGINE_MODEL, max_tokens=1024,
             system=system, messages=msgs,
         )
@@ -621,7 +643,12 @@ async def ai_assist(body: dict, org_id: str = ORG_ID):
         return {"reply": reply or "I couldn't produce an answer — try rephrasing, or raise a ticket.",
                 "configured": True}
     except Exception as e:
-        return {"reply": "The assistant hit an error. You can raise a ticket and a person will help.",
+        # anthropic.APITimeoutError / APIConnectionError subclass Exception, so they land here with no
+        # extra import; name-matching keeps that true even if the SDK reshuffles its exception tree.
+        slow = type(e).__name__ in ("APITimeoutError", "APIConnectionError")
+        return {"reply": ("The assistant is taking too long to answer right now — please try again in a "
+                          "minute, or raise a ticket and a person will help.") if slow else
+                         "The assistant hit an error. You can raise a ticket and a person will help.",
                 "configured": True, "error": str(e)[:200]}
 
 
