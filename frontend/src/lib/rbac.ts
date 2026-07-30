@@ -75,6 +75,8 @@ export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
     help: 'Access to /accounts/trends. DEFAULT-CLOSED — admin-only until granted.' },
   { key: 'ma_handset_cogs', label: 'Marketplace handset COGS report',
     help: 'Access to /commcalc/ma-handsets — the whole report (lines, quantities and handset costs), not just the totals (backend commcalc `_can_view_ma_handset_cogs`). DEFAULT-CLOSED — admin-only until granted.' },
+  { key: 'device_cost_recon', label: 'Device cost reconciliation',
+    help: 'Access to /commcalc/device-cost-recon — every device-cost row from all four sources at once (marketplace purchase price, consignment/VIP billing, POS-derived cost, inventory unit cost) plus the policy delta preview (backend commcalc `_can_view_device_cost_recon`). DEFAULT-CLOSED — admin-only until granted. Strictly MORE sensitive than the per-source reports it reconciles.' },
 ]
 // Frontend mirror of backend commcalc `_can_view_carrier_residual` — KEEP IN SYNC. Super-admins /
 // company-wide ('all') roles / admins always pass; otherwise the grant is honored under either the
@@ -115,6 +117,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/kpi', label: 'KPI Metrics', icon: '🎯', module: 'commissions' },
     { href: '/commcalc/device-history', label: 'Device History', icon: '📱', module: 'commissions' },
     { href: '/commcalc/ma-handsets', label: 'Handset COGS', icon: '📦', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/device-cost-recon', label: 'Device Cost Recon', icon: '🧮', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/productivity', label: 'Productivity & Reviews', icon: '🏅', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/coaching', label: 'Rep Coaching', icon: '🎓', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-analyzer', label: 'Sales Analyzer', icon: '📉', module: 'commissions', scopes: ['all', 'market', 'store'] },
