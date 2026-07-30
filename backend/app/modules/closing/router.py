@@ -280,6 +280,19 @@ def closing_dates(period: str = None, org_id: str = ORG_ID):
 @router.get("/days")
 def closing_rows(date: str = None, store_code: str = None, date_from: str = None,
                  date_to: str = None, org_id: str = ORG_ID):
+    """LIVE: ClosingSubmitForm.tsx's rep-closing-form calls this on every mount
+    (`/closing/days?date=${f.close_date}`) to show that store/date's already-submitted rows. `date`/
+    `date_from`/`date_to` used to reach `.eq/.gte/.lte("close_date", ...)` completely unvalidated — a
+    garbage string raises inside the Supabase client (an uncaught 500), not a clean 4xx. Same
+    dateparser-parse-or-400 guard `closing_summary`/`closing_submissions`/`closing_rollup` already
+    apply (2026-07-30 nit sweep, N2/NIT-3) — normalizes each provided value to YYYY-MM-DD; an
+    omitted param is untouched (this endpoint has no required date at all, unlike those three)."""
+    try:
+        if date:      date = dateparser.parse(str(date)).date().isoformat()
+        if date_from: date_from = dateparser.parse(str(date_from)).date().isoformat()
+        if date_to:   date_to = dateparser.parse(str(date_to)).date().isoformat()
+    except Exception:
+        raise HTTPException(400, "date/date_from/date_to must be valid dates (YYYY-MM-DD)")
     q = sb().schema("commcalc").table("daily_closing").select("*").eq("org_id", org_id)
     if date:      q = q.eq("close_date", date)
     if store_code: q = q.eq("store_code", store_code)
@@ -683,6 +696,19 @@ _SUMMARY_MAX_RANGE_DATES = 14   # bounded like closing_stale_stores' "at most 14
                                 # money+counts, X-report, verification, + now the gate replay) than
                                 # closing_submissions' single _b2b_day call.
 _GATE_RANK = {"blocked": 4, "flagged": 3, "recon_pending": 2, "not_computed": 1, "ok": 0}
+
+_RECON_MAX_DATES = 45   # closing-hardening (2026-07-30): bounds the number of distinct close_dates
+                         # whose _b2b_day gets replayed per /closing/recon call. Mirrors the
+                         # retail-ops perf-fold day-cache pattern (closing_submissions'
+                         # _SUBMISSIONS_MAX_STATUS_DATES — replay each distinct date's _b2b_day ONCE,
+                         # capped, prioritizing the MOST RECENT dates when capped, over-cap dates
+                         # marked "not_computed" rather than silently dropped) — same value/rationale,
+                         # since recon's ONLY current call shape (period=<input type="month">) is a
+                         # whole calendar month (<=31 dates): _SUMMARY_MAX_RANGE_DATES's 14 would trip
+                         # on nearly every real request (that endpoint's typical call is a single day),
+                         # which would fail this endpoint's own "byte-identical for a normal request"
+                         # bar; 45 comfortably covers any real month untouched and only engages for a
+                         # genuinely oversized/adversarial period span.
 
 
 def _closing_summary_org_ctx(client, org_id) -> dict:
@@ -2576,10 +2602,28 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
     for r in closing:
         by_date.setdefault(r.get("close_date"), []).append(r)
 
+    # Fan-out cap (closing-hardening 2026-07-30): this loop used to call the heavy _b2b_day() once
+    # per distinct close_date in the period, UNCAPPED — ~31 calls for a full calendar month, this
+    # endpoint's only real shape. Bounded + cached (day_cache) the same way closing_submissions
+    # already bounds its own per-date _b2b_day replay — see _RECON_MAX_DATES. Dates beyond the cap
+    # are never queried and their rows fall through to the SAME "no B2B data" pending path every date
+    # already takes when _b2b_day genuinely has nothing loaded yet (day=None behaves exactly like
+    # has_data=False below) — just tagged with a distinct "not_computed" status (this module's
+    # existing vocabulary for "gate/recon couldn't be recomputed this request", already used by
+    # closing_submissions/_closing_summary_for_date) instead of "recon_pending", so a capped-out date
+    # is never confused with a genuinely-not-yet-loaded one. All_dates/date iteration order (most
+    # recent first) is unchanged; for an in-cap period (<=_RECON_MAX_DATES distinct dates — every
+    # real month) day_cache computes the exact same _b2b_day call, for the exact same dates, the code
+    # simply reads it back from a dict instead of inline — the JSON response is byte-identical.
+    all_dates = sorted((d for d in by_date if d), reverse=True)
+    recon_dates = all_dates[:_RECON_MAX_DATES]
+    recon_capped = len(all_dates) > _RECON_MAX_DATES
+    day_cache = {d: _b2b_day(client, org_id, d) for d in recon_dates}
+
     errors = []
     blocks = flags = pending = 0
-    for date in sorted((d for d in by_date if d), reverse=True):
-        day = _b2b_day(client, org_id, date)
+    for date in all_dates:
+        day = day_cache.get(date)   # None ⇒ beyond the cap, never queried this request
         store_groups = {}
         for r in by_date[date]:
             store_groups.setdefault(r.get("store_code") or f"name:{r.get('store_name') or '—'}", []).append(r)
@@ -2593,12 +2637,16 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
                 emp = (r.get("employee_name") or "").strip()
                 dcash = _f(r.get("store_cash")) + _f(r.get("epay_cash"))
                 dcred = _f(r.get("store_cc")) + _f(r.get("epay_cc"))
-                repb = _rep_b2b(day, code, emp) if (code and day["has_data"]) else None
+                repb = _rep_b2b(day, code, emp) if (code and day and day["has_data"]) else None
                 if repb is None:
                     pending += 1
                     errors.append({"date": date, "store_code": code, "store_address": addr, "rep": emp or "—",
-                                   "metric": "recon", "severity": "pending", "status": "recon_pending",
-                                   "reason": "B2B not loaded / rep not matched yet", "declared": round(dcash + dcred, 2),
+                                   "metric": "recon", "severity": "pending",
+                                   "status": "recon_pending" if day is not None else "not_computed",
+                                   "reason": "B2B not loaded / rep not matched yet" if day is not None else
+                                             f"Not recomputed this request — beyond the most recent {_RECON_MAX_DATES} "
+                                             "closing dates for this period (recon_capped).",
+                                   "declared": round(dcash + dcred, 2),
                                    "b2b": None, "variance": None})
                     continue
                 for it in _money_issues(dcash, dcred, repb["cash"], repb["card"], tolerance):
@@ -2607,7 +2655,7 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
                     errors.append({"date": date, "store_code": code, "store_address": addr, "rep": emp or "—",
                                    "status": it["severity"], **it})
             # store-level count recon
-            if code and day["has_data"] and code in day["counts"]:
+            if code and day and day["has_data"] and code in day["counts"]:
                 cnt = day["counts"][code]
                 cl_act = sum(sum(count_config.row_value(x, k) for x in reps) for k in _ckeys if _crclass.get(k) == "activation")
                 cl_upg = sum(sum(count_config.row_value(x, k) for x in reps) for k in _ckeys if _crclass.get(k) == "upgrade")
@@ -2627,7 +2675,8 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
         flags = sum(1 for e in errors if e["severity"] == "flag")
         pending = sum(1 for e in errors if e["severity"] == "pending")
     return {"period": period, "errors": errors,
-            "summary": {"blocks": blocks, "flags": flags, "pending": pending, "total": len(errors)}}
+            "summary": {"blocks": blocks, "flags": flags, "pending": pending, "total": len(errors)},
+            "recon_capped": recon_capped, "dates_computed": len(recon_dates), "dates_total": len(all_dates)}
 
 
 # ── DM cash-envelope pickup + notify the assigned recipient ─────────────────────────────────
