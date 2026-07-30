@@ -2,6 +2,10 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from datetime import datetime, timezone
 import re
 from app.core.database import get_supabase
+from app.modules.asset.market_filter import (
+    NO_MARKET_SENTINEL, _apply_market_filter, _market_matches, _store_list,
+    resolve_market_for_rpc,
+)
 
 router = APIRouter()
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -552,33 +556,12 @@ def _canon_store(raw: str, addr_map: dict) -> str:
 # to find them, because "" means "no filter" everywhere in this file. NO_MARKET_SENTINEL is a
 # reserved market value (never a real market name) a caller can pass to explicitly select those
 # rows, so the gap is investigable from the report UI itself, not just the login popup.
-NO_MARKET_SENTINEL = "__no_market__"
-
-
-def _apply_market_filter(q, market: str):
-    """Apply the `market` query param to a Supabase/PostgREST query builder against a table with a
-    `market` text column (asset_ledger today). `market == NO_MARKET_SENTINEL` selects the "(no
-    market)" bucket (NULL or blank) instead of silently returning nothing. Any other non-empty
-    value is an ordinary exact match — safe because every asset market dropdown is sourced from
-    GET /filter-options, built from the real distinct values already on the rows (pick-don't-type,
-    RULE THREE), so what's offered always exactly matches what's stored; no case-folding needed on
-    the read side (that risk lives entirely upstream, in how the value got INTO the column, which
-    is what _backfill_market's normalization now addresses)."""
-    if market == NO_MARKET_SENTINEL:
-        return q.or_("market.is.null,market.eq.")
-    if market:
-        return q.eq("market", market)
-    return q
-
-
-def _market_matches(row_market, market: str) -> bool:
-    """Python-side equivalent of _apply_market_filter, for the handful of endpoints that filter an
-    already-fetched list (store_borrowings) instead of a live query builder."""
-    if not market:
-        return True
-    if market == NO_MARKET_SENTINEL:
-        return not row_market
-    return row_market == market
+#
+# NO_MARKET_SENTINEL / _apply_market_filter / _market_matches / _store_list / resolve_market_for_rpc
+# now live in market_filter.py (2026-07-29 dedupe — see that file's module docstring) and are
+# imported above; re-exported here as module attributes unchanged so every existing caller in this
+# file (and the harnesses, which access them as `router.NO_MARKET_SENTINEL` etc.) keeps working
+# byte-identically.
 
 
 @router.post("/resync-market")
@@ -1372,7 +1355,7 @@ async def get_aging(
     phones outstanding) and a per-device-model breakdown, all recomputed for the ACTIVE filters."""
     from datetime import date
     client = sb()
-    store_list = [s.strip() for s in store.split(",") if s.strip()]
+    store_list = _store_list(store)
 
     def _acq_in_period(r):
         a = r.get("acquired_date")
@@ -1727,7 +1710,7 @@ async def get_on_inventory_by_store(
     with /aging (same predicate, same bucket math, same "(no market)" handling)."""
     from datetime import date
     client = sb()
-    store_list = [s.strip() for s in store.split(",") if s.strip()]
+    store_list = _store_list(store)
 
     def _acq_in_period(r):
         a = r.get("acquired_date")
@@ -2239,11 +2222,11 @@ async def get_charges_summary(org_id: str = ORG_ID, store: str = "", market: str
     # rows in Python instead of teaching the (already-verified-in-prod, mig 304) SQL function a new
     # NULL-handling branch — same "don't touch verified aggregate SQL for a filter-only change"
     # caution as the Friday billing trigger, just lower stakes.
-    is_no_market = market == NO_MARKET_SENTINEL
+    p_market, is_no_market = resolve_market_for_rpc(market)
     params = {
         "p_org_id": org_id,
         "p_store": store or None,
-        "p_market": None if is_no_market else (market or None),
+        "p_market": p_market,
         "p_month": month,
         "p_year": year,
         "p_week_friday": week_friday or None,

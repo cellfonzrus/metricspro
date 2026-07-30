@@ -67,18 +67,16 @@ if core/import_health.py is ever refactored) — deliberately NOT added to atten
 merge collision with the concurrently in-flight `agent/asset/market-filter-dropdown` package, which
 is actively editing that file for unrelated reasons.
 
-MARKET/STORE FILTER CONVENTIONS: this package (started from a fresh `origin/main` worktree) does
-NOT yet have the market-filter-dropdown package's `NO_MARKET_SENTINEL` / `_apply_market_filter` /
-multi-store-CSV conventions merged in, since that package is still uncommitted-in-flight in a
-parallel worktree at the time this was built. Per dispatch instructions, this file duplicates the
-tiny pieces of that convention it needs (same sentinel VALUE, `"__no_market__"`, and the same
-comma-separated multi-store query-param shape) rather than importing the other branch's
-not-yet-merged code. **Flagged for merge-time dedupe**: once both packages land on main, these
-local copies (`NO_MARKET_SENTINEL`, `_store_list`, the market-filter branch in
-`_call_recon_rpc`) should be deleted in favor of router.py's shared `_apply_market_filter` /
-`_market_matches`, or this file should import them from router.py — whichever the merging agent
-judges cleaner. Left duplicated (not unified) here so each package stays independently
-mergeable/rejectable per AGENT_CONTRACT §7.
+MARKET/STORE FILTER CONVENTIONS: this package originally (2026-07-28) duplicated the
+market-filter-dropdown package's `NO_MARKET_SENTINEL` / multi-store-CSV conventions locally,
+since that package was still uncommitted-in-flight in a parallel worktree at build time, and
+flagged the duplication for a merge-time dedupe pass. Both packages have since landed on main
+(`2ed44ba`/`cff89b0` and `358876f`/`48406d0`); **2026-07-29: dedupe done** — `NO_MARKET_SENTINEL`,
+`_store_list`, and the market-filter-vs-RPC-param translation `_call_recon_rpc` used are now
+imported from `app.modules.asset.market_filter` (the new shared helper module both this file and
+router.py use) instead of being locally redefined. See that file's module docstring for the full
+history. This module's own read-only classification/join logic (the 3-way recon RPC call shape,
+row shaping, admin-attention provider) is unchanged.
 
 NO WRITES: every endpoint in this file is read-only. It never inserts/updates/deletes any ledger,
 flag, or investigation row.
@@ -88,6 +86,7 @@ from datetime import date
 from fastapi import APIRouter
 
 from app.core.database import get_supabase
+from app.modules.asset.market_filter import NO_MARKET_SENTINEL, _store_list, resolve_market_for_rpc
 
 router = APIRouter()
 
@@ -97,9 +96,9 @@ _MIGRATION_MSG = ("On-Inventory 3-Way Recon migration pending — ask the operat
                    "database/migrations/310_asset_oninv_3way_recon_rpc.sql in the Supabase SQL Editor.")
 _MISSING_SCHEMA_MARKERS = ("PGRST202", "PGRST205", "PGRST203", "schema cache", "does not exist")
 
-# Duplicated from the in-flight agent/asset/market-filter-dropdown package (uncommitted at the time
-# this was built) — SAME sentinel value, see module docstring "MARKET/STORE FILTER CONVENTIONS".
-NO_MARKET_SENTINEL = "__no_market__"
+# NO_MARKET_SENTINEL is imported above from market_filter.py (2026-07-29 dedupe — see module
+# docstring "MARKET/STORE FILTER CONVENTIONS"); re-exported as a module attribute unchanged so
+# `oninv_recon.NO_MARKET_SENTINEL` (used by harness_asset_oninv_3way_recon.py) keeps working.
 
 # Tenant-configurable-in-spirit, hardcoded-for-now (documented constant, same posture as
 # attention.py's `_STALE_DAYS`) — a store with this many or more MISSING-PHONE CANDIDATE devices is
@@ -119,12 +118,6 @@ def _is_missing_schema_error(exc: Exception) -> bool:
     return any(m in s for m in _MISSING_SCHEMA_MARKERS)
 
 
-def _store_list(store: str):
-    """Comma-separated multi-select store param (RULE FIVE), same shape the aging report's
-    2026-07-28 update uses. Empty string / no param = no store filter."""
-    return [s.strip() for s in (store or "").split(",") if s.strip()]
-
-
 def _fl(v):
     try:
         return round(float(v), 2)
@@ -135,12 +128,7 @@ def _fl(v):
 def _call_recon_rpc(client, org_id: str, store: str, market: str, date_from: str, date_to: str):
     """Calls commcalc.asset_oninv_3way_recon (mig 310). Returns (rows, migrated:bool)."""
     stores = _store_list(store)
-    p_market = None
-    p_no_market_only = False
-    if market == NO_MARKET_SENTINEL:
-        p_no_market_only = True
-    elif market:
-        p_market = market
+    p_market, p_no_market_only = resolve_market_for_rpc(market)
     params = {
         "p_org_id": org_id,
         "p_stores": stores or None,
