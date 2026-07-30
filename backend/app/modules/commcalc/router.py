@@ -1761,6 +1761,189 @@ async def upload_history(org_id: str = ORG_ID, period: str = "", limit: int = 10
         return []
 
 
+# ── LAST SET OF DATA per report (owner 2026-07-29) ──────────────────────────────────────
+# "show there for each report when the last set of data was uploaded". Reads the two ingest journals
+# this module already writes — commcalc.upload_trace (mig 202: EVERY path, incl. the email/FTP sweeps and
+# the feed→raw_sales promotion) and the older commcalc.upload_log (mig 007) — and folds them into ONE
+# newest-per-report record. Nothing here writes.
+_UPLOAD_SOURCE_LABEL = {
+    'manual': 'manual upload',
+    'email_sweep': 'email feed',
+    'ftp_sweep': 'FTP feed',
+    'promotion': 'auto-promotion',
+    'portal': 'portal pull',
+    'ledger-import': 'ledger import',
+    'import-wizard': 'import wizard',
+    'onboarding-import': 'onboarding import',
+}
+# Columns the "which ingest was newest" pass needs. Deliberately EXCLUDES the periods/date_counts JSONB
+# so scanning a busy tenant's recent window stays small; the winners' detail is fetched by id after.
+_UPLOAD_LAST_TRACE_COLS = 'id,created_at,upload_type,source,status,skipped,rows_saved,filename'
+_UPLOAD_LAST_LOG_COLS = 'id,uploaded_at,file_type,period,rows_saved,filename'
+
+
+def _upload_ts(v):
+    """ISO timestamp → aware datetime for ORDERING two journals against each other. Never raises;
+    an unparseable/absent stamp sorts oldest so it can never win a 'newest' comparison."""
+    try:
+        d = _datetime.fromisoformat(str(v).replace('Z', '+00:00'))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except Exception:
+        return _datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _upload_last_cand(row, origin):
+    """Normalize one upload_trace ('trace') or upload_log ('log') row into the shared candidate shape."""
+    if origin == 'trace':
+        at, key = row.get('created_at'), row.get('upload_type')
+        status, source, skipped, period_text = (row.get('status'), row.get('source'),
+                                                row.get('skipped'), None)
+    else:
+        at, key = row.get('uploaded_at'), row.get('file_type')
+        # upload_log has no source/status columns — report that honestly as unknown rather than
+        # guessing 'manual' (the epay sweep writes upload_log rows too).
+        status, source, skipped, period_text = None, None, None, row.get('period')
+    if not at or not key:
+        return None
+    rs = row.get('rows_saved')
+    return {'key': str(key), 'at': str(at), 'ts': _upload_ts(at),
+            'rows_saved': (int(rs) if isinstance(rs, (int, float)) else None),
+            'status': status, 'source': source, 'skipped': skipped, 'period_text': period_text,
+            'filename': row.get('filename'), 'id': row.get('id'),
+            'origin': ('upload_trace' if origin == 'trace' else 'upload_log')}
+
+
+def _upload_last_public(c, extra=None):
+    """Candidate → the wire shape (drops the internal sort key / row id)."""
+    return {'at': c['at'], 'rows_saved': c['rows_saved'], 'status': c['status'],
+            'source': c['source'], 'source_label': _UPLOAD_SOURCE_LABEL.get(c['source'] or '',
+                                                                            (c['source'] or '').replace('_', ' ')),
+            'skipped': c['skipped'], 'origin': c['origin'], 'filename': c['filename'],
+            **(extra or {})}
+
+
+@router.get("/upload/last")
+def upload_last_by_report(types: str = "", limit: int = 1200, org_id: str = ORG_ID):
+    """LAST SET OF DATA per report, for THIS org — powers the "Last upload: …" line on every Data
+    Imports tile and on the manual MA upload page.
+
+    Per report key it answers two different questions honestly:
+      • `last_at` / `rows_saved` / `period` / `span`  — the newest ingest that actually LANDED rows
+      • `latest_attempt`                              — present ONLY when a NEWER attempt saved nothing
+        (a price-guard refusal, a parser that read no rows, an error), so a tile can never imply fresh
+        data arrived when the last file was refused.
+
+    `types` is an optional CSV of report keys the caller cares about: any of them absent from the recent
+    window gets a targeted newest-row lookup (a monthly report can be older than the last `limit`
+    ingests on a tenant that sweeps hourly), and any with no record at all is returned explicitly with
+    `last_at: null` instead of being silently missing.
+
+    Read-only + org-scoped (RULE ONE: org_id is a QUERY PARAM; every read is .eq('org_id', …)).
+    Degrades gracefully — a missing upload_trace (mig 202 unrun) or upload_log (mig 007) is reported in
+    `hint` and the other journal still answers; it never 500s."""
+    require_org(org_id)
+    client = sb()
+    want = {t.strip() for t in (types or '').split(',') if t.strip()}
+    win = max(1, min(int(limit or 1200), 5000))
+    cands, sources_read, hints = [], [], []
+
+    # 1. the recent window of each journal (newest first), light columns only
+    for tbl, cols, order_col, origin in (
+            ('upload_trace', _UPLOAD_LAST_TRACE_COLS, 'created_at', 'trace'),
+            ('upload_log', _UPLOAD_LAST_LOG_COLS, 'uploaded_at', 'log')):
+        try:
+            rows = (client.schema('commcalc').table(tbl).select(cols)
+                    .eq('org_id', org_id).order(order_col, desc=True).limit(win).execute().data) or []
+            sources_read.append(tbl)
+            for r in rows:
+                c = _upload_last_cand(r, origin)
+                if c:
+                    cands.append(c)
+        except Exception as e:
+            mig = 'migration 202' if tbl == 'upload_trace' else '007_upload_log.sql'
+            hints.append(f'{tbl} unavailable (run {mig}): {str(e)[:160]}')
+
+    # 2. targeted lookup for asked-about keys the window didn't reach. Two queries at most per key:
+    #    the newest row, then — only if that one saved nothing — the newest row that DID land rows.
+    seen = {c['key'] for c in cands}
+    for t in sorted(want - seen)[:40]:
+        for tbl, cols, order_col, key_col, origin in (
+                ('upload_trace', _UPLOAD_LAST_TRACE_COLS, 'created_at', 'upload_type', 'trace'),
+                ('upload_log', _UPLOAD_LAST_LOG_COLS, 'uploaded_at', 'file_type', 'log')):
+            if tbl not in sources_read:
+                continue
+            try:
+                rows = (client.schema('commcalc').table(tbl).select(cols)
+                        .eq('org_id', org_id).eq(key_col, t)
+                        .order(order_col, desc=True).limit(1).execute().data) or []
+                c = _upload_last_cand(rows[0], origin) if rows else None
+                if c:
+                    cands.append(c)
+                    if not (c['rows_saved'] or 0) > 0:
+                        landed = (client.schema('commcalc').table(tbl).select(cols)
+                                  .eq('org_id', org_id).eq(key_col, t).gt('rows_saved', 0)
+                                  .order(order_col, desc=True).limit(1).execute().data) or []
+                        c2 = _upload_last_cand(landed[0], origin) if landed else None
+                        if c2:
+                            cands.append(c2)
+            except Exception as e:
+                print(f'WARN upload/last targeted lookup for {t} in {tbl} skipped: {e}')
+
+    # 3. fold → newest-that-landed + newest-overall, per key
+    landed_by, newest_by = {}, {}
+    for c in cands:
+        k = c['key']
+        if k not in newest_by or c['ts'] > newest_by[k]['ts']:
+            newest_by[k] = c
+        if (c['rows_saved'] or 0) > 0 and (k not in landed_by or c['ts'] > landed_by[k]['ts']):
+            landed_by[k] = c
+
+    # 4. the winners' rich detail (per-period + per-day saved counts) — one extra query, by id
+    detail = {}
+    ids = [c['id'] for c in landed_by.values() if c['origin'] == 'upload_trace' and c.get('id')]
+    if ids:
+        try:
+            for r in ((client.schema('commcalc').table('upload_trace')
+                       .select('id,periods,date_counts,note,rows_in,target_table')
+                       .eq('org_id', org_id).in_('id', ids).limit(len(ids)).execute().data) or []):
+                detail[str(r.get('id'))] = r
+        except Exception as e:
+            print(f'WARN upload/last detail fetch skipped: {e}')
+
+    reports = {}
+    for k in sorted(set(landed_by) | set(newest_by) | want):
+        landed, newest = landed_by.get(k), newest_by.get(k)
+        d = detail.get(str((landed or {}).get('id'))) or {}
+        periods = d.get('periods') if isinstance(d.get('periods'), dict) else None
+        dcounts = d.get('date_counts') if isinstance(d.get('date_counts'), dict) else None
+        days = sorted(str(x) for x in dcounts) if dcounts else []
+        period = None
+        if periods and len(periods) == 1:
+            period = str(next(iter(periods)))
+        elif landed and landed.get('period_text'):
+            period = str(landed['period_text'])
+        rec = {'key': k, 'last_at': (landed or {}).get('at'),
+               'rows_saved': (landed or {}).get('rows_saved'),
+               'rows_in': d.get('rows_in'), 'target_table': d.get('target_table'),
+               'status': (landed or {}).get('status'), 'origin': (landed or {}).get('origin'),
+               'source': (landed or {}).get('source'),
+               'source_label': (_UPLOAD_SOURCE_LABEL.get((landed or {}).get('source') or '',
+                                                         ((landed or {}).get('source') or '').replace('_', ' '))
+                                or None),
+               'filename': (landed or {}).get('filename'),
+               'period': period, 'periods': periods,
+               'span': ([days[0], days[-1]] if days else None), 'days': (len(days) or None),
+               'note': d.get('note'), 'latest_attempt': None}
+        # A newer attempt that did NOT land rows is the whole point of the honesty line.
+        if newest and (not landed or newest['ts'] > landed['ts']):
+            rec['latest_attempt'] = _upload_last_public(newest)
+        reports[k] = rec
+
+    return {'ok': True, 'org_id': org_id, 'count': len(reports), 'reports': reports,
+            'sources': sources_read, 'asked': sorted(want),
+            'hint': ('; '.join(hints) or None)}
+
+
 # ── VIP Wireless invoice import (scraped via tools/vip_scraper) ───────────────
 def _vip_money(v):
     """'$1,234.50' / '(12.47)' / '199.5' / '' -> float or None."""

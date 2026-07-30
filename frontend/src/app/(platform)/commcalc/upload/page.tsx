@@ -4,24 +4,50 @@ import { ORG_ID, api, apiUpload } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
+import { LastUploadLine, useLastUploads } from '../_lib/lastUpload'
 
-const FILE_TYPES = [
-  { id: 'sales',          label: 'Sales Transactions',    icon: '🛍️', required: true,  desc: 'POS Sales Transaction Details (78-col, all columns)' },
-  { id: 'daily_sales',    label: 'Daily Sales Upload',      icon: '📅', required: false, desc: 'Append daily transactions — no period wipe, deduped by Trans ID' },
-  { id: 'payment_detail', label: 'Payment Detail',        icon: '💳', required: true,  desc: 'Payment Processor Commission Payment Detail' },
-  { id: 'dlar_rep',       label: 'Metrics — Rep Report',  icon: '📊', required: true,  desc: 'Rep KPI report (per-carrier portal)' },
-  { id: 'dlar_store',     label: 'Metrics — Store Report', icon: '🏪', required: false, desc: 'Store-level KPI data (per-carrier portal)' },
-  { id: 'mi_report',      label: 'MI & ATU Report',       icon: '💰', required: false, desc: 'Monthly Incentive + ATU Payout' },
-  { id: 'catalog',        label: 'Product Catalog',       icon: '📱', required: false, desc: 'Product catalog + cost/category — the B2B "Product Update" (Product-ID) OR the TOTAL/UPC "Product Catalog Update" variant' },
-  { id: 'master_cats',    label: 'Payment Categories',    icon: '🗂️', required: false, desc: 'Payment type → category mapping' },
-  { id: 'comp_report',    label: 'Comprehensive Comp Report', icon: '🏦', required: false, desc: 'Carrier store-level rebates & MDF' },
-  { id: 'inventory_aging', label: 'Inventory Aging (POS)',  icon: '📦', required: false, desc: 'b2bsoft / any POS inventory aging — per-store value snapshot' },
-  { id: 'x_report',       label: 'X Report (POS tenders)', icon: '🧾', required: false, desc: 'POS daily tenders by type — reconciles vs the daily closing sheet' },
+// ── WHAT AN UPLOAD ACTUALLY DOES, per file type (owner 2026-07-29) ──────────────────────────────
+// The tiles used to say "Replace File" on EVERY report, which is wrong for more than half of them: the
+// day-grain feeds ADD days and only refresh the days the file covers. This ONE map is display metadata
+// that MIRRORS the backend's real write semantics in backend/app/modules/commcalc/router.py
+// (`_upload_file_impl`) — keep it in sync if the backend's keying changes:
+//   • DATE_KEYED = {daily_sales, ma_commission, ma_daily_tx, ma_fulfillment} → delete-then-insert PER DAY
+//     ⇒ 'additive_daily': new days add, a re-upload of the same day refreshes only that day.
+//   • x_report (upsert on org+close_date+store+tender_type) / inventory_aging (per-store snapshot upsert)
+//     ⇒ 'additive_keyed': nothing outside the file's own keys is ever cleared.
+//   • has_period types (sales, payment_detail, mi_report, dlar_rep, dlar_store, comp_report) → the
+//     SELECTED period is deleted then re-inserted ⇒ 'replace_period'.
+//   • catalog / master_cats (has_period === false) → the whole table is wiped ⇒ 'replace_all'.
+type UploadMode = 'additive_daily' | 'additive_keyed' | 'replace_period' | 'replace_all'
+const MODE_UI: Record<UploadMode, { verb: string; explain: string }> = {
+  additive_daily: { verb: '⬆️ Upload additional file',
+    explain: 'Adds the days in the file. Re-uploading the same day is safe — it refreshes only that day; other days stay.' },
+  additive_keyed: { verb: '⬆️ Upload additional file',
+    explain: 'Adds or refreshes only what this file covers — nothing outside it is cleared.' },
+  replace_period: { verb: '📂 Replace period file',
+    explain: 'Clears & replaces everything stored for the selected period.' },
+  replace_all: { verb: '📂 Replace all data',
+    explain: 'Replaces ALL stored rows for this report — not just one period.' },
+}
+const modeVerb = (mode: UploadMode, prior: boolean) => (prior ? MODE_UI[mode].verb : '📂 Choose File')
+
+const FILE_TYPES: { id: string; label: string; icon: string; required: boolean; desc: string; mode: UploadMode }[] = [
+  { id: 'sales',          label: 'Sales Transactions',    icon: '🛍️', required: true,  mode: 'replace_period', desc: 'POS Sales Transaction Details (78-col, all columns)' },
+  { id: 'daily_sales',    label: 'Daily Sales Upload',      icon: '📅', required: false, mode: 'additive_daily', desc: 'Append daily transactions — no period wipe, deduped by Trans ID' },
+  { id: 'payment_detail', label: 'Payment Detail',        icon: '💳', required: true,  mode: 'replace_period', desc: 'Payment Processor Commission Payment Detail' },
+  { id: 'dlar_rep',       label: 'Metrics — Rep Report',  icon: '📊', required: true,  mode: 'replace_period', desc: 'Rep KPI report (per-carrier portal)' },
+  { id: 'dlar_store',     label: 'Metrics — Store Report', icon: '🏪', required: false, mode: 'replace_period', desc: 'Store-level KPI data (per-carrier portal)' },
+  { id: 'mi_report',      label: 'MI & ATU Report',       icon: '💰', required: false, mode: 'replace_period', desc: 'Monthly Incentive + ATU Payout' },
+  { id: 'catalog',        label: 'Product Catalog',       icon: '📱', required: false, mode: 'replace_all',    desc: 'Product catalog + cost/category — the B2B "Product Update" (Product-ID) OR the TOTAL/UPC "Product Catalog Update" variant' },
+  { id: 'master_cats',    label: 'Payment Categories',    icon: '🗂️', required: false, mode: 'replace_all',    desc: 'Payment type → category mapping' },
+  { id: 'comp_report',    label: 'Comprehensive Comp Report', icon: '🏦', required: false, mode: 'replace_period', desc: 'Carrier store-level rebates & MDF' },
+  { id: 'inventory_aging', label: 'Inventory Aging (POS)',  icon: '📦', required: false, mode: 'additive_keyed', desc: 'b2bsoft / any POS inventory aging — per-store value snapshot' },
+  { id: 'x_report',       label: 'X Report (POS tenders)', icon: '🧾', required: false, mode: 'additive_keyed', desc: 'POS daily tenders by type — reconciles vs the daily closing sheet' },
   // Total / VidaPay Master-Agent portal exports (mig 083) — the Total-side MI/ATU equivalents.
   // Date-grain: the period derives per ROW, so no period selection; re-uploads are day-idempotent.
-  { id: 'ma_commission',  label: 'MA Commission Details (Total)', icon: '🧾', required: false, desc: 'Total/VidaPay per-activation commission detail — spiffs M1–M6, rebates, MRC Net Discount' },
-  { id: 'ma_daily_tx',    label: 'MA Daily Tx (Total airtime)', icon: '📆', required: false, desc: 'Total/VidaPay daily airtime/top-up transactions — merchant discount = your margin' },
-  { id: 'ma_fulfillment', label: 'MA Handset Fulfillment (Total)', icon: '🚚', required: false, desc: 'Total/VidaPay marketplace handset fulfillment orders' },
+  { id: 'ma_commission',  label: 'MA Commission Details (Total)', icon: '🧾', required: false, mode: 'additive_daily', desc: 'Total/VidaPay per-activation commission detail — spiffs M1–M6, rebates, MRC Net Discount' },
+  { id: 'ma_daily_tx',    label: 'MA Daily Tx (Total airtime)', icon: '📆', required: false, mode: 'additive_daily', desc: 'Total/VidaPay daily airtime/top-up transactions — merchant discount = your margin' },
+  { id: 'ma_fulfillment', label: 'MA Handset Fulfillment (Total)', icon: '🚚', required: false, mode: 'additive_daily', desc: 'Total/VidaPay marketplace handset fulfillment orders' },
 ]
 const PERIODLESS = new Set(['catalog', 'master_cats', 'inventory_aging', 'x_report', 'ma_commission', 'ma_daily_tx', 'ma_fulfillment'])
 const TYPE_META = Object.fromEntries(FILE_TYPES.map(t => [t.id, t]))
@@ -44,20 +70,36 @@ const AUTO_SOURCES = [
 
 // Module uploads — files that load into other modules (their own endpoints, not the generic
 // /commcalc/upload/{file_type}). Each posts a multipart file to its own endpoint.
-const MODULE_UPLOADS = [
+// Same honesty rules as FILE_TYPES above. `traceKeys` = the upload_type/file_type these endpoints record
+// their ingest under (they are NOT always the tile id); `tracked: false` = the endpoint writes no ingest
+// journal at all (asset + closing are other modules' routers), so the tile shows NO last-upload line
+// rather than a false "no data uploaded yet".
+const MODULE_UPLOADS: { id: string; label: string; icon: string; endpoint: string; needsDate: boolean;
+                        desc: string; mode: UploadMode; traceKeys?: string[]; tracked?: boolean }[] = [
   { id: 'hotsheet',      label: 'Pricing Hotsheet',     icon: '🏷️', endpoint: 'commcalc/hotsheet/upload', needsDate: true,
+    mode: 'additive_keyed', traceKeys: ['hotsheet'],
     desc: 'Carrier promo pricing by device — powers the Hotsheet expected-vs-paid recon. Pick the effective date.' },
   { id: 'vip_workbook',  label: 'VIP Wireless Workbook', icon: '🧾', endpoint: 'commcalc/vip/upload', needsDate: false,
+    mode: 'replace_all', traceKeys: ['vip_workbook', 'vip_invoices'],
     desc: 'Distributor scraper workbook (Invoices / Lines / Devices sheets). Full-replace of Distributor history.' },
   { id: 'asset_ledger',  label: 'Asset Ledger',         icon: '📒', endpoint: 'asset/upload', needsDate: false,
+    mode: 'replace_all', tracked: false,
     desc: 'Asset_Lending.xlsx — wipes & re-inserts all asset rows, then backfills market + flags.' },
   { id: 'daily_closing', label: 'Daily Closing Sheet',  icon: '🧮', endpoint: 'closing/upload', needsDate: false,
+    mode: 'additive_daily', tracked: false,
     desc: 'Google "Envelopes Data" export — one row per rep per day; idempotent per day.' },
 ]
 // Structured (non-file) uploads that live on their own page — linked, not inlined here.
 const MODULE_LINKS = [
   { id: 'b2b_inventory', label: 'b2bsoft Inventory', icon: '📦', href: '/commcalc/asset/inventory-recon',
     desc: 'On-hand inventory by store & category — structured entry/recon, not a single file. Opens its page.' },
+]
+
+// Every report key the "last set of data" lookup should answer for — the manual tiles plus the module
+// uploads that actually record an ingest. Module-scope constant so its identity is stable across renders.
+const LAST_UPLOAD_KEYS = [
+  ...FILE_TYPES.map(t => t.id),
+  ...MODULE_UPLOADS.flatMap(m => m.traceKeys || []),
 ]
 
 type UploadRecord ={ id: string; file_type: string; period: string | null; filename: string | null; rows_saved: number; uploaded_at: string }
@@ -77,6 +119,16 @@ export default function UploadPage() {
   const [outcomes, setOutcomes] = useState<Record<string, UploadOutcome | null>>({})
   const [history, setHistory] = useState<UploadRecord[]>([])
   const [showHistory, setShowHistory] = useState(false)
+  // "when was the last set of data uploaded", per report — folds upload_trace (every ingest path,
+  // incl. the hourly email sweep) with upload_log. Reloaded after every upload on this page.
+  const { last: lastData, loaded: lastLoaded, hint: lastHint, reload: reloadLast } = useLastUploads(LAST_UPLOAD_KEYS)
+
+  // The newest landed record across a module upload's trace keys (vip logs under two different keys).
+  const moduleLast = (entry: typeof MODULE_UPLOADS[number]) => {
+    const recs = (entry.traceKeys || []).map(k => lastData[k]).filter(Boolean)
+    if (!recs.length) return null
+    return recs.reduce((a, b) => (!a?.last_at ? b : !b?.last_at ? a : (a.last_at! >= b.last_at! ? a : b)))
+  }
 
   // auto-import panel state
   const [cfgs, setCfgs] = useState<Record<string, any>>({})
@@ -140,7 +192,7 @@ export default function UploadPage() {
       setStatuses(s => ({ ...s, [fileType]: o.tone === 'ok' ? 'done' : 'warn' }))
       setMessages(m => ({ ...m, [fileType]: (o.tone === 'ok' ? '✅ ' : '⚠️ ') + o.text }))
       setOutcomes(p => ({ ...p, [fileType]: o }))
-      loadHistory()
+      loadHistory(); reloadLast()
     } catch (e: any) {
       setStatuses(s => ({ ...s, [fileType]: 'error' }))
       setMessages(m => ({ ...m, [fileType]: `❌ ${e.message}` }))
@@ -159,7 +211,7 @@ export default function UploadPage() {
       const n = data.rows_uploaded ?? data.saved ?? data.rows_saved ?? data.inserted ?? data.count ?? data.rows
       setStatuses(s => ({ ...s, [entry.id]: 'done' }))
       setMessages(m => ({ ...m, [entry.id]: `✅ ${n != null ? Number(n).toLocaleString() + ' rows' : 'Uploaded'}` }))
-      loadHistory()
+      loadHistory(); reloadLast()
     } catch (e: any) {
       setStatuses(s => ({ ...s, [entry.id]: 'error' }))
       setMessages(m => ({ ...m, [entry.id]: `❌ ${e.message}` }))
@@ -181,7 +233,7 @@ export default function UploadPage() {
       <div className="card" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
         <label style={{ fontWeight: 600, fontSize: 14 }}>Period:</label>
         <input className="input" style={{ width: 200 }} value={period} onChange={e => setPeriod(e.target.value)} placeholder="April 2026" />
-        <span style={{ color: 'var(--text3)', fontSize: 13 }}>Which period this data is for. Manual uploads clear &amp; replace this period.</span>
+        <span style={{ color: 'var(--text3)', fontSize: 13 }}>Which period this data is for. What an upload does differs per report — each tile says so (day-grain feeds add days; period reports replace the selected period).</span>
       </div>
 
       {/* ── Unified Auto-Imports panel ─────────────────────────────────── */}
@@ -263,9 +315,19 @@ export default function UploadPage() {
       </div>
 
       <div style={{ fontWeight: 700, fontSize: 14, margin: '0 0 10px' }}>📁 Manual upload</div>
+      {/* If an ingest journal is missing (mig 202 / 007 not run on this deployment) the "Last upload"
+          lines below are INCOMPLETE — say so rather than letting a tile read as "never uploaded". */}
+      {lastHint && (
+        <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#92400e', margin: '0 0 12px' }}>
+          ⚠️ Last-upload history is incomplete on this deployment — {lastHint}
+        </div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-        {FILE_TYPES.map(({ id, label, icon, required, desc }) => {
+        {FILE_TYPES.map(({ id, label, icon, required, desc, mode }) => {
           const status = statuses[id] || 'idle'; const msg = messages[id] || ''; const prior = lastUpload(id)
+          // "has data already" for the BUTTON wording = anything this report ever ingested (not just the
+          // selected period) — a day-grain feed has no period badge at all.
+          const everLanded = !!prior || !!lastData[id]?.last_at
           return (
             <div key={id} className="card" style={{ border: status === 'done' ? '1px solid #86efac' : status === 'error' ? '1px solid #fca5a5' : status === 'warn' ? '1px solid #fcd34d' : undefined, background: status === 'done' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : status === 'warn' ? '#fffbeb' : undefined }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
@@ -276,16 +338,19 @@ export default function UploadPage() {
                     {required && <span style={{ fontSize: 10, background: '#fee2e2', color: '#dc2626', padding: '1px 6px', borderRadius: 999, fontWeight: 600 }}>Required</span>}
                     {prior && <span style={{ fontSize: 10, background: '#dcfce7', color: '#15803d', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>✓ Uploaded</span>}
                   </div>
-                  <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 10px' }}>{desc}</div>
+                  <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 6px' }}>{desc}</div>
+                  {/* What THIS report's upload does to stored data — mirrors the backend's write path. */}
+                  <div style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>{MODE_UI[mode].explain}</div>
                   {status === 'uploading' ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text2)', fontSize: 13 }}><div className="spinner" />Uploading...</div>
                   ) : (
                     <label style={{ cursor: 'pointer' }}>
-                      <div className="btn btn-secondary" style={{ display: 'inline-flex' }}>📂 {prior ? 'Replace File' : 'Choose File'}</div>
+                      <div className="btn btn-secondary" style={{ display: 'inline-flex' }}>{modeVerb(mode, everLanded)}</div>
                       <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(id, f) }} />
                     </label>
                   )}
-                  {prior && status !== 'done' && <div style={{ marginTop: 8, fontSize: 12, color: '#15803d' }}>✓ Uploaded {fmtWhen(prior.uploaded_at)} · {prior.rows_saved.toLocaleString()} rows{PERIODLESS.has(id) && prior.period ? ` · ${prior.period}` : ''}</div>}
+                  {/* When the last SET OF DATA landed (any path: manual, email sweep, portal pull). */}
+                  <LastUploadLine rec={lastData[id]} loaded={lastLoaded} />
                   {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? '#16a34a' : status === 'warn' ? '#b45309' : '#dc2626' }}>{msg}</div>}
                   {/* Honest amber panel: WHY an upload saved 0 rows (X-report parser forensics,
                       price-guard refusal, shrink warning). Renders nothing on a clean save. */}
@@ -310,7 +375,8 @@ export default function UploadPage() {
                 <span style={{ fontSize: 28 }}>{entry.icon}</span>
                 <div style={{ flex: 1 }}>
                   <span style={{ fontWeight: 600, fontSize: 14 }}>{entry.label}</span>
-                  <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 10px' }}>{entry.desc}</div>
+                  <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 6px' }}>{entry.desc}</div>
+                  <div style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>{MODE_UI[entry.mode].explain}</div>
                   {entry.needsDate && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                       <label style={{ fontSize: 12, color: 'var(--text2)' }}>Effective date:</label>
@@ -321,10 +387,11 @@ export default function UploadPage() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text2)', fontSize: 13 }}><div className="spinner" />Uploading...</div>
                   ) : (
                     <label style={{ cursor: 'pointer' }}>
-                      <div className="btn btn-secondary" style={{ display: 'inline-flex' }}>📂 Choose File</div>
+                      <div className="btn btn-secondary" style={{ display: 'inline-flex' }}>{modeVerb(entry.mode, !!moduleLast(entry)?.last_at)}</div>
                       <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) handleModuleUpload(entry, f) }} />
                     </label>
                   )}
+                  <LastUploadLine rec={moduleLast(entry)} loaded={lastLoaded} tracked={entry.tracked !== false} />
                   {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? '#16a34a' : '#dc2626' }}>{msg}</div>}
                 </div>
               </div>

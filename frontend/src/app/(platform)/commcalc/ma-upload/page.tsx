@@ -1,8 +1,9 @@
 'use client'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { api, apiUpload } from '@/lib/client'
 import EntityPicker from '@/components/EntityPicker'
+import { LastUploadLine, useLastUploads } from '../_lib/lastUpload'
 
 // Per-carrier MANUAL upload for the MA reports — the SAP-style parallel track to the flaky live portal
 // pull (owner directive 2026-07-17). Wizard: pick a carrier → pick a report (mapping status shown) →
@@ -230,6 +231,10 @@ function UploadStep({ carrierId, report, setMsg, onRemap }: { carrierId: string;
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<any>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  // When this report last received data — from ANY path (this page, the portal pull, an email sweep).
+  // /manual-upload/ingest traces under the report_key itself, so the key needs no mapping.
+  const keys = useMemo(() => [report.report_key], [report.report_key])
+  const { last, loaded, reload: reloadLast } = useLastUploads(keys)
 
   function scopeRange(): { date_from: string; date_to: string } {
     if (scope === 'day' && day) return { date_from: day, date_to: day }
@@ -254,6 +259,7 @@ function UploadStep({ carrierId, report, setMsg, onRemap }: { carrierId: string;
       const r: any = await apiUpload('/api/v1/commcalc/manual-upload/ingest', fd)
       setResult(r)
       setMsg(`✅ ${mode === 'historical' ? 'Loaded' : 'Appended'} ${r?.saved ?? 0} row(s)${r?.dupes_dropped ? `, ${r.dupes_dropped} duplicate(s) skipped` : ''}.`)
+      reloadLast()
     } catch (e: any) { setMsg('❌ Upload failed: ' + (e?.message || e)) } finally { setBusy(false) }
   }
 
@@ -262,6 +268,7 @@ function UploadStep({ carrierId, report, setMsg, onRemap }: { carrierId: string;
       <h3 style={{ marginTop: 0 }}>4. Upload data — <code>{report.display_name}</code></h3>
       <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 12, maxWidth: 720 }}>
         💵 <b>Ingest only.</b> This loads the file into <code>{report.target_table}</code>. No commission or residual is recalculated — the loaded numbers are presented for review before any recalc.
+        <LastUploadLine rec={last[report.report_key]} loaded={loaded} />
       </div>
 
       <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 12 }}>
