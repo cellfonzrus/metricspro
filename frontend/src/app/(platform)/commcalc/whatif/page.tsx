@@ -184,6 +184,7 @@ function ByodResidual({ carrierId }: { carrierId: string }) {
   const srcLabel = data.residual_source === 'ma_daily_tx' ? 'MA Daily Tx (residual orders) + MA Commission' : 'MI + ATU'
   return (
     <div>
+      {data.residual_field_warning && <NoteBanner tone="warn" text={`⚠ ${data.residual_field_warning}`} />}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <label style={{ fontSize: 13, color: 'var(--text2)' }}>Residual window:</label>
         <select value={months} onChange={e => setMonths(Number(e.target.value))}
@@ -374,17 +375,21 @@ function CarrierIncome({ carrierId }: { carrierId: string }) {
 
   return (
     <div>
+      {trend.residual_field_warning && <NoteBanner tone="warn" text={`⚠ ${trend.residual_field_warning}`} />}
+      {trend.data_note && <NoteBanner tone="info" text={trend.data_note} />}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <label style={{ fontSize: 13, color: 'var(--text2)' }}>Period:</label>
         <select value={period} onChange={e => setPeriod(e.target.value)}
           style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }}>
-          {months.map(m => <option key={m.period} value={m.period}>{m.period}{num(m.total_comp) > 0 ? '' : ' (comp not posted)'}</option>)}
+          {months.map(m => <option key={m.period} value={m.period}>{m.period}{num(m.total_comp) > 0 ? '' : (m.comp_source_missing ? ' (no MA Commission rows)' : ' (comp not posted)')}</option>)}
         </select>
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>What {trend.carrier?.name || 'the carrier'} pays the company — source: {isMA ? 'MA Commission + MA Daily Tx' : 'Comprehensive Comp + MI+ATU'}</span>
       </div>
 
       {noComp && <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 13, color: '#92400e', background: '#fffbeb', borderLeft: '3px solid #f59e0b' }}>
-        Carrier compensation for {period} isn’t posted yet — showing residual only. Pick a month with data for the full split.
+        {cur.comp_source_missing
+          ? <>Carrier compensation for {period} reads $0 because <b>MA Commission Details has no rows for that month</b> ({cur.daily_tx_rows} MA Daily Tx row(s), 0 commission row(s)) — a data gap, not a calculation error. Showing residual only; pull that report for the month on Data&nbsp;Imports.</>
+          : <>Carrier compensation for {period} isn’t posted yet — showing residual only. Pick a month with data for the full split.</>}
       </div>}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, marginBottom: 8 }}>
@@ -420,6 +425,14 @@ function CarrierIncome({ carrierId }: { carrierId: string }) {
   )
 }
 
+// Page-level honesty banner. tone 'warn' (red) = the figures below are NOT trustworthy as configured
+// (e.g. the residual $ column points at an invoice NUMBER); tone 'info' (amber) = the figures are right
+// but a source month is missing, so a $0 is a data gap and not a calculation error.
+function NoteBanner({ text, tone }: { text: string; tone: 'warn' | 'info' }) {
+  const c = tone === 'warn' ? { bg: '#fef2f2', bd: '#dc2626', fg: '#991b1b' } : { bg: '#fffbeb', bd: '#f59e0b', fg: '#92400e' }
+  return <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 13, lineHeight: 1.5, color: c.fg, background: c.bg, borderLeft: `3px solid ${c.bd}` }}>{text}</div>
+}
+
 function RestrictedNote({ what }: { what: string }) {
   return <div className="card" style={{ ...card, borderLeft: '3px solid #dc2626' }}>
     <div style={{ fontWeight: 700, marginBottom: 4 }}>🔒 Restricted</div>
@@ -450,10 +463,13 @@ function SourcesPanel({ carrierId, onSaved }: { carrierId: string; onSaved: () =
   }
 
   const opts = cfg?.options || {}
+  // Human labels for values whose bare column name is misleading (e.g. merchant_invoice is an invoice
+  // NUMBER, not money). Falls back to the raw value when the backend sends no label.
+  const optLabels = cfg?.option_labels || {}
   const sel = (key: string, choices: string[]) => (
     <select value={form[key] ?? ''} onChange={e => setForm({ ...form, [key]: e.target.value })}
-      style={{ padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }}>
-      {(choices || []).map((c: string) => <option key={c} value={c}>{c}</option>)}
+      style={{ padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)', maxWidth: '100%' }}>
+      {(choices || []).map((c: string) => <option key={c} value={c}>{optLabels?.[key]?.[c] || c}</option>)}
     </select>
   )
 
@@ -478,6 +494,7 @@ function SourcesPanel({ carrierId, onSaved }: { carrierId: string; onSaved: () =
             <Row label="Residual $ column (MA)">{sel('residual_amount_field', opts.residual_amount_field)}</Row>
             <Row label="Residual sign">{sel('residual_sign', opts.residual_sign)}</Row>
             <Row label="Retail-cost source">{sel('retail_cost_source', opts.retail_cost_source)}</Row>
+            {opts.ma_commission_sign && <Row label="MA commission sign (M1–M6 / rebate)">{sel('ma_commission_sign', opts.ma_commission_sign)}</Row>}
           </div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 14 }}>
             <button onClick={save} style={{ padding: '7px 14px', borderRadius: 8, background: 'var(--accent)', color: '#fff', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer' }}>Save override</button>

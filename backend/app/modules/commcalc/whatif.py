@@ -16,9 +16,15 @@ Four tools, all read-only:
                             Boost → Comprehensive Comp + MI+ATU; MA-fed → raw_ma_commission (M1-M6 spiffs +
                             rebate) + raw_ma_daily_tx (residual + airtime margin).
 
-Source selection is CONFIG (commcalc.whatif_source_config, mig 209): the residual order-type string, the
-residual $ column, the sign normalization, and which source feeds each view are all editable, never code
-constants. Degrades to mode-derived code defaults (Boost byte-identical) when mig 209 hasn't run.
+Source selection is CONFIG (commcalc.whatif_source_config, mig 209 + mig 252): the residual order-type
+string, the residual $ column, the sign normalization, the MA-commission sign and which source feeds each
+view are all editable, never code constants. Degrades to mode-derived code defaults (Boost byte-identical)
+when mig 209 hasn't run.
+
+MONEY-COLUMN RULE (2026-07-30, after the -$492,946,277,716 "residual"): raw_ma_daily_tx.merchant_invoice
+is the Merchant Invoice NUMBER, not money. Only _MA_MONEY_COLUMNS may be summed as dollars; the residual
+default is `retail_cost` — the same signed column the canonical Commission Ledger books from. Read-only
+module: nothing here writes, pays, or recomputes.
 """
 import calendar
 from app.modules.commcalc.calculator import classify_contract_type, safe_float
@@ -27,6 +33,37 @@ from app.modules.account import residual_subs
 _MONTHS = {m: i for i, m in enumerate(calendar.month_name) if m}
 _NIL_CARRIER = "00000000-0000-0000-0000-000000000000"
 _HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
+
+# ─── MA numeric columns: which are MONEY and which are IDENTIFIERS ─────────────────────────────────
+# raw_ma_daily_tx carries THREE numeric columns and one of them is not money at all: `merchant_invoice`
+# is the Merchant Invoice NUMBER (mig 083 declared it NUMERIC; mig 207 maps the file's "Merchant Invoice"
+# header into it). Summing it as the residual amount is what reported -$492,946,277,716 of May-2026
+# "residual" on this page (owner report + finance root cause, 2026-07-30). The single source of truth for
+# the roles is the MA column catalogue in ma_upload.FIELD_LABELS ("merchant_invoice" -> role "key",
+# "retail_cost" -> role "money"); the sets below are CHECKED against it at import so this module cannot
+# silently drift back into treating an identifier as dollars. The check is NON-FATAL by design: a
+# catalogue rename must surface as a flag, never take the whole commcalc router down on import.
+_MA_MONEY_COLUMNS = ("retail_cost", "merchant_discount")    # signed $ (negative = paid to the dealer)
+_MA_IDENTIFIER_COLUMNS = ("merchant_invoice",)              # NUMERIC, but an ID — never a $ amount
+_MA_SPIFF_FIELDS = tuple(f"spiff_m{i}" for i in range(1, 7))
+_MA_COLUMN_ROLE_DRIFT = []
+try:
+    from app.modules.commcalc.ma_upload import FIELD_LABELS as _MA_FIELD_LABELS
+    for _c in _MA_IDENTIFIER_COLUMNS:
+        if (_MA_FIELD_LABELS.get(_c) or {}).get("role") != "key":
+            _MA_COLUMN_ROLE_DRIFT.append(_c)
+    for _c in _MA_MONEY_COLUMNS:
+        if (_MA_FIELD_LABELS.get(_c) or {}).get("role") not in (None, "money"):
+            _MA_COLUMN_ROLE_DRIFT.append(_c)
+except Exception:                                           # catalogue unavailable → the sets stand alone
+    pass
+
+
+def is_ma_money_column(field):
+    """True when `field` may be summed as dollars off an MA row. An identifier column (the Merchant
+    Invoice NUMBER) is NEVER money, whatever its Postgres type says."""
+    f = (field or "").strip()
+    return bool(f) and f not in _MA_IDENTIFIER_COLUMNS
 
 
 def _pvariants(period: str):
@@ -95,16 +132,25 @@ def _carrier_ctx(client, org_id, carrier_id=None):
     return carriers, picked, mode
 
 
+# `residual_amount_field` = retail_cost in BOTH modes (mig 252 applies the same correction to the mig-209
+# seed rows). retail_cost is the SAME signed column the canonical Commission Ledger books its MA payout
+# lines from (column_mapping.py maps the "Retail Cost" header onto the ledger's raw_amount), so the
+# residual view and the ledger can no longer disagree about which number is the money. It is unused in
+# boost mode (Boost residual comes from raw_mi) but set anyway, so no future MA-fed carrier inherits the
+# wrong default. `ma_commission_sign` normalizes raw_ma_commission money columns to INCOME the way
+# residual_sign does for daily-tx rows: on the MA Commission Details export NEGATIVE = paid to the dealer.
 _CFG_DEFAULTS = {
     "boost": {"residual_source": "boost_mi_atu", "residual_order_type": None,
-              "residual_amount_field": "merchant_invoice", "residual_sign": "as_is",
-              "income_source": "boost_comp_mi_atu", "retail_cost_source": "none"},
+              "residual_amount_field": "retail_cost", "residual_sign": "as_is",
+              "income_source": "boost_comp_mi_atu", "retail_cost_source": "none",
+              "ma_commission_sign": "negate"},
     "plan": {"residual_source": "ma_daily_tx", "residual_order_type": "Postpaid Residual Order",
-             "residual_amount_field": "merchant_invoice", "residual_sign": "negate",
-             "income_source": "ma", "retail_cost_source": "ma_pr_activation"},
+             "residual_amount_field": "retail_cost", "residual_sign": "negate",
+             "income_source": "ma", "retail_cost_source": "ma_pr_activation",
+             "ma_commission_sign": "negate"},
 }
 _CFG_KEYS = ("residual_source", "residual_order_type", "residual_amount_field", "residual_sign",
-             "income_source", "retail_cost_source")
+             "income_source", "retail_cost_source", "ma_commission_sign")
 
 
 def _whatif_source_config(client, org_id, carrier_id, carrier_mode):
@@ -458,20 +504,71 @@ def _boost_byod_residual(client, org_id, months=6):
     }
 
 
+def _residual_field(cfg):
+    """The configured residual $ column. Cheap enough to call per row."""
+    return (cfg.get("residual_amount_field") or _CFG_DEFAULTS["plan"]["residual_amount_field"]).strip()
+
+
+def _residual_amount_field(cfg):
+    """(field, warning). The PER-PAYLOAD resolution — the same column `_residual_field` gives, plus the
+    loud identifier warning. An org's EXPLICIT choice always wins (RULE TWO), including the old
+    `merchant_invoice`: silently overriding a saved config row would be a second lie. But an identifier
+    column is flagged for the page, and it is never a DEFAULT (see _CFG_DEFAULTS) and never a FALLBACK
+    (see _first_ma_money_value). Called once per response, not per row (it formats a message)."""
+    field = _residual_field(cfg)
+    if not is_ma_money_column(field):
+        return field, ("The residual $ column is configured as `%s`, which is the Merchant Invoice "
+                       "NUMBER (an identifier), not money — every residual figure here is a sum of ID "
+                       "numbers, not dollars. Fix it in \u2699\ufe0f Sources: set the residual $ column to "
+                       "`retail_cost`, the same signed column the Commission Ledger books from." % field)
+    return field, None
+
+
+def _first_ma_money_value(row, columns=_MA_MONEY_COLUMNS):
+    """The residual amount to use when the CONFIGURED column is blank on this row. Preference:
+      1. a value that LOOKS like money — it carries cents or a negative sign — in `columns` order;
+      2. otherwise the first non-zero money column;
+      3. otherwise the first present money column, else 0.
+    IDENTIFIER columns never participate. The original heuristic was max(|value|) across all three
+    numeric columns, which is precisely backwards: an id is always the largest number on the row, so the
+    fallback re-picked the Merchant Invoice NUMBER every time it fired (that is where the July figure's
+    extra magnitude, and its stray cents, came from)."""
+    present = [(c, row.get(c)) for c in columns if row.get(c) not in (None, "")]
+    for _c, v in present:
+        x = safe_float(v)
+        if x < 0 or abs(x - int(x)) > 1e-9:
+            return v
+    for _c, v in present:
+        if safe_float(v) != 0:
+            return v
+    return present[0][1] if present else 0
+
+
 def _ma_residual_amount(row, cfg):
-    """Residual $ for one raw_ma_daily_tx row: the configured field, sign-normalized. When the configured
-    field is empty, fall back to the largest-magnitude of the candidate numeric columns (documented
-    ambiguity — the real Total daily-tx export pins which column carries the residual)."""
+    """Residual $ for one raw_ma_daily_tx row: the configured MONEY column, sign-normalized. A blank
+    value falls back over the MONEY columns only (never an identifier), preferring a cents/negative-
+    bearing value over a bigger one."""
     sign = (cfg.get("residual_sign") or "negate").strip().lower()
-    field = (cfg.get("residual_amount_field") or "merchant_invoice").strip()
-    v = row.get(field)
+    v = row.get(_residual_field(cfg))
     if v in (None, "", 0, 0.0):
-        cand = [row.get("merchant_invoice"), row.get("merchant_discount"), row.get("retail_cost")]
-        if any(x not in (None, "") for x in cand):
-            v = max(cand, key=lambda x: abs(safe_float(x)))
-        else:
-            v = 0
+        v = _first_ma_money_value(row)
     return _normalize_amount(v, sign)
+
+
+def _ma_commission_sign(cfg):
+    return (cfg.get("ma_commission_sign") or _CFG_DEFAULTS["plan"]["ma_commission_sign"]).strip().lower()
+
+
+def _ma_commission_amount(row, cfg, fields):
+    """Sum of raw_ma_commission money columns for one row, normalized to INCOME (positive = the dealer
+    receives) exactly the way RESIDUAL is normalized. On the MA Commission Details export NEGATIVE =
+    paid to the dealer, which is why /ma-commission/summary, account.residual_subs._aggregate_ma and
+    coa.build_inputs all book -Sigma. This module summed the same columns RAW, so a month that DOES have
+    MA commission rows posted NEGATIVE commission/spiff beside a POSITIVE residual on the same row
+    (finance escalation 2026-07-30 §④.2 — three surfaces, two conventions). The sign is CONFIG
+    (`ma_commission_sign`, default 'negate'), so a tenant whose export already arrives positive sets
+    'as_is' on its own carrier row instead of anyone hard-coding a carrier."""
+    return _normalize_amount(sum(safe_float(row.get(f)) for f in fields), _ma_commission_sign(cfg))
 
 
 def _ma_pkey(period):
@@ -533,8 +630,9 @@ def _ma_byod_residual(client, org_id, months, cfg):
         for r in chunk:
             p = (r.get("period") or "").strip()
             is_byod = str(r.get("activation_type2") or "").strip().lower() in ("byop", "byod")
-            m16 = sum(safe_float(r.get(f"spiff_m{i}")) for i in range(1, 7))
-            reb = safe_float(r.get("rebate"))
+            # Sign-normalized to income, same convention as RESIDUAL above (§④.2).
+            m16 = _ma_commission_amount(r, cfg, _MA_SPIFF_FIELDS)
+            reb = _ma_commission_amount(r, cfg, ("rebate",))
             comm_stats["all_m16"] += m16
             comm_stats["all_rebate"] += reb
             comm_stats["all_lines"] += 1
@@ -582,6 +680,7 @@ def _ma_byod_residual(client, org_id, months, cfg):
     if not series:
         note = ("No master-agent residual rows found — pull the MA Daily Tx report (Data Imports → "
                 "payment-processor sources), and confirm the residual order type in ⚙️ Sources.")
+    field, field_warning = _residual_amount_field(cfg)
     return {
         "months": kept, "series": series,
         "avg_residual_per_sub": round(tot_res / tot_subs, 2) if tot_subs else 0.0,
@@ -589,6 +688,9 @@ def _ma_byod_residual(client, org_id, months, cfg):
         "latest": series[-1] if series else None,
         "byod_specific": byod_specific,
         "retail_cost": _ma_retail_cost(client, org_id, cfg),
+        "residual_amount_field": field,
+        "residual_field_warning": field_warning,
+        "ma_commission_sign": _ma_commission_sign(cfg),
         "note": note,
     }
 
@@ -849,7 +951,12 @@ def _ma_carrier_income(client, org_id, months, cfg):
 
     def _slot(p):
         return per.setdefault(p, {"COMMISSION": 0.0, "SPIFF": 0.0, "REIMBURSEMENT": 0.0,
-                                  "RESIDUAL": 0.0, "UNMAPPED": 0.0, "accounts": set()})
+                                  "RESIDUAL": 0.0, "UNMAPPED": 0.0, "accounts": set(),
+                                  "commission_rows": 0, "daily_tx_rows": 0})
+
+    # How the MA Commission Details rows actually arrive, so an operator can tell whether their export
+    # matches the negative-is-payable convention `ma_commission_sign` assumes (diagnostic only).
+    raw_signs = {"negative": 0, "positive": 0, "zero": 0}
 
     start, page = 0, 1000
     while True:
@@ -865,8 +972,12 @@ def _ma_carrier_income(client, org_id, months, cfg):
             if not p:
                 continue
             s = _slot(p)
-            s["COMMISSION"] += sum(safe_float(r.get(f"spiff_m{i}")) for i in range(1, 7))
-            s["SPIFF"] += safe_float(r.get("rebate"))
+            # Normalized to income (positive = the dealer receives), same as RESIDUAL below (§④.2).
+            s["COMMISSION"] += _ma_commission_amount(r, cfg, _MA_SPIFF_FIELDS)
+            s["SPIFF"] += _ma_commission_amount(r, cfg, ("rebate",))
+            s["commission_rows"] += 1
+            _raw = sum(safe_float(r.get(f)) for f in _MA_SPIFF_FIELDS) + safe_float(r.get("rebate"))
+            raw_signs["negative" if _raw < 0 else ("positive" if _raw > 0 else "zero")] += 1
             acc = str(r.get("merchant_account_id") or "").strip()
             if acc:
                 s["accounts"].add(acc)
@@ -887,6 +998,7 @@ def _ma_carrier_income(client, org_id, months, cfg):
             if not p:
                 continue
             s = _slot(p)
+            s["daily_tx_rows"] += 1
             ot = str(r.get("order_type") or "").strip().lower()
             if order_type in ot:
                 s["RESIDUAL"] += _ma_residual_amount(r, cfg)
@@ -916,11 +1028,35 @@ def _ma_carrier_income(client, org_id, months, cfg):
             "components": {"COMMISSION": round(s["COMMISSION"], 2), "SPIFF": round(s["SPIFF"], 2),
                           "REIMBURSEMENT": round(s["REIMBURSEMENT"], 2), "RESIDUAL": residual,
                           "UNMAPPED": round(s["UNMAPPED"], 2)},
+            # Per-report ingest coverage for THIS month (§④.3): COMMISSION/SPIFF come only from MA
+            # Commission Details, RESIDUAL/airtime only from MA Daily Tx. A month with daily-tx rows and
+            # no commission rows reads $0 comp HONESTLY — it is a data gap, not a stale ledger.
+            "commission_rows": s["commission_rows"], "daily_tx_rows": s["daily_tx_rows"],
+            "comp_source_missing": bool(s["daily_tx_rows"] and not s["commission_rows"]),
         })
         prev = comp_total
+    coverage = [{"period": p, "commission_rows": per[p]["commission_rows"],
+                 "daily_tx_rows": per[p]["daily_tx_rows"]} for p in kept]
+    gaps = [c["period"] for c in coverage if c["daily_tx_rows"] and not c["commission_rows"]]
+    data_note = None
+    if gaps:
+        data_note = (
+            "DATA GAP (not a calculation error) — " + ", ".join(gaps) + ": these month(s) have MA Daily "
+            "Tx rows but NO MA Commission Details rows, so Commission (M1–M6) and Rebate honestly read "
+            "$0 for them. Pull MA Commission Details for those months (Data Imports → payment-processor "
+            "sources; that report supports up to 12 months back). Note the Commission Ledger classifies "
+            "MA Daily Tx payout lines, so its totals for the SAME month can be non-zero while this view "
+            "reads $0 — a different, thinner source, NOT a stale ledger.")
+    field, field_warning = _residual_amount_field(cfg)
     return {
         "months": kept, "totals_by_month": totals_by_month, "dips": [], "dip_count": 0,
-        "params": {"months": months, "source": "ma"},
+        "params": {"months": months, "source": "ma", "residual_amount_field": field,
+                   "ma_commission_sign": _ma_commission_sign(cfg),
+                   "commission_row_signs": raw_signs},
+        "ma_coverage": coverage,
+        "data_note": data_note,
+        "residual_amount_field": field,
+        "residual_field_warning": field_warning,
         "note": (None if kept else
                  "No master-agent commission/daily-tx rows yet — pull the MA Commission + MA Daily Tx "
                  "reports (Data Imports → payment-processor sources)."),

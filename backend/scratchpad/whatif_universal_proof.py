@@ -213,7 +213,7 @@ cfg_ma = {"residual_order_type": "Postpaid Residual Order", "residual_amount_fie
           "residual_sign": "negate", "retail_cost_source": "none"}
 check("_ma_residual_amount uses configured field + negates (-20 → 20)",
       W._ma_residual_amount({"merchant_invoice": -20}, cfg_ma) == 20)
-check("_ma_residual_amount falls back to largest-|x| when configured field empty (-8 → 8)",
+check("_ma_residual_amount falls back to the cents/negative MONEY column when the configured field is\n      empty (-8 → 8; never the invoice NUMBER — 2026-07-31)",
       W._ma_residual_amount({"merchant_invoice": None, "merchant_discount": -8, "retail_cost": 2}, cfg_ma) == 8)
 
 store_res = {
@@ -227,11 +227,18 @@ store_res = {
         {"org_id": LUX, "period": JUNE, "order_type": "Airtime Topup", "account_id": "A1",
          "merchant_invoice": 0, "merchant_discount": 5.0, "retail_cost": 0},  # NOT a residual row
     ],
+    # MA Commission Details sign convention (realigned 2026-07-31, whatif-residual-column): the export is
+    # NEGATIVE when the amount is paid TO the dealer, which is why /ma-commission/summary,
+    # residual_subs._aggregate_ma and coa.build_inputs all book -Σ. These fixture rows now carry the real
+    # convention and the assertions below still expect POSITIVE income — whatif normalizes them via the
+    # `ma_commission_sign` config (default 'negate'), so all four surfaces finally agree on one sign.
     "raw_ma_commission": [
         {"org_id": LUX, "period": JUNE, "activation_type2": "byop", "imei": "111",
-         "spiff_m1": 5, "spiff_m2": 5, "spiff_m3": 5, "spiff_m4": 0, "spiff_m5": 0, "spiff_m6": 0, "rebate": 10},
+         "spiff_m1": -5, "spiff_m2": -5, "spiff_m3": -5, "spiff_m4": 0, "spiff_m5": 0, "spiff_m6": 0,
+         "rebate": -10},
         {"org_id": LUX, "period": JUNE, "activation_type2": "branded", "imei": "222",
-         "spiff_m1": 8, "spiff_m2": 0, "spiff_m3": 0, "spiff_m4": 0, "spiff_m5": 0, "spiff_m6": 0, "rebate": 4},
+         "spiff_m1": -8, "spiff_m2": 0, "spiff_m3": 0, "spiff_m4": 0, "spiff_m5": 0, "spiff_m6": 0,
+         "rebate": -4},
     ],
 }
 cr = FakeClient(store_res)
@@ -242,7 +249,8 @@ check("MA residual = |−100|+|−50| = 150 (sign-normalized to income), airtime
       outr["total_residual"] == 150.0, outr["total_residual"])
 check("MA residual subs = 2 distinct accounts", outr["total_subs"] == 2, outr["total_subs"])
 check("byod_specific present (BYOD M1-M6 + rebate)", outr["byod_specific"] is not None)
-check("BYOD income = 15 (M1-M3) + 10 rebate = 25", outr["byod_specific"]["byod_residual_month"] == 25.0,
+check("BYOD income = |M1-M3| 15 + |rebate| 10 = 25 (normalized to income, ma_commission_sign)",
+      outr["byod_specific"]["byod_residual_month"] == 25.0,
       outr["byod_specific"])
 check("byod_acts per period counted (1 byop)", (outr["series"][0]["byod_acts"] if outr["series"] else None) == 1)
 
@@ -254,11 +262,11 @@ check("carrier_income MA → income_source 'ma'", ci["income_source"] == "ma")
 tbm = {t["period"]: t for t in ci["totals_by_month"]}
 june = tbm.get(JUNE, {})
 comp = june.get("components", {})
-check("MA COMMISSION == Σ M1-M6 (15 + 8 = 23)", comp.get("COMMISSION") == 23.0, comp)
-check("MA SPIFF == Σ rebate (10 + 4 = 14)", comp.get("SPIFF") == 14.0, comp)
+check("MA COMMISSION == Σ|M1-M6| (15 + 8 = 23), sign-normalized to income", comp.get("COMMISSION") == 23.0, comp)
+check("MA SPIFF == Σ|rebate| (10 + 4 = 14), sign-normalized to income", comp.get("SPIFF") == 14.0, comp)
 check("MA residual_mi_atu == 150 (normalized residual orders)", june.get("residual_mi_atu") == 150.0, june)
 check("MA UNMAPPED == airtime margin (5)", comp.get("UNMAPPED") == 5.0, comp)
-check("MA total_comp == 23+14+5 = 42", june.get("total_comp") == 42.0, june)
+check("MA total_comp == 23+14+5 = 42 (all buckets one sign)", june.get("total_comp") == 42.0, june)
 # Boost income routes to comp_trend (empty comp → shape preserved, income_source boost)
 cb2 = FakeClient({"carrier": store_boost["carrier"], "whatif_source_config": store_boost["whatif_source_config"]})
 cib = W.carrier_income(cb2, HOUSE, months=6, carrier_id=BOOST_ID)

@@ -1796,7 +1796,25 @@ def whatif_get_source_config(carrier_id: str = "", org_id: str = ORG_ID):
             "residual_sign": ["as_is", "negate", "abs"],
             "income_source": ["boost_comp_mi_atu", "ma"],
             "retail_cost_source": ["none", "ma_pr_activation"],
-            "residual_amount_field": ["merchant_invoice", "merchant_discount", "retail_cost"],
+            # retail_cost FIRST = the recommended (and now default) residual $ column — the same signed
+            # column the Commission Ledger books MA payout lines from. merchant_invoice stays selectable
+            # (never silently drop a value an org may already have saved) but carries the warning label
+            # below: it is the Merchant Invoice NUMBER, and summing it reported -$492,946,277,716 of
+            # "residual" on 2026-07-30.
+            "residual_amount_field": ["retail_cost", "merchant_discount", "merchant_invoice"],
+            "ma_commission_sign": ["negate", "as_is", "abs"],
+        },
+        "option_labels": {
+            "residual_amount_field": {
+                "retail_cost": "retail_cost — signed $ (recommended; matches the Commission Ledger)",
+                "merchant_discount": "merchant_discount — airtime margin $",
+                "merchant_invoice": "merchant_invoice — ⚠ invoice NUMBER, not money",
+            },
+            "ma_commission_sign": {
+                "negate": "negate — export is negative when paid to the dealer (recommended)",
+                "as_is": "as_is — export already arrives positive",
+                "abs": "abs — take the magnitude",
+            },
         },
     }
 
@@ -1815,7 +1833,7 @@ def whatif_put_source_config(body: dict, authorization: str = Header(default="")
     row = {"org_id": org_id, "carrier_id": carrier_id, "carrier_mode": carrier_mode,
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
     for k in ("residual_source", "residual_order_type", "residual_amount_field", "residual_sign",
-              "income_source", "retail_cost_source", "notes"):
+              "income_source", "retail_cost_source", "ma_commission_sign", "notes"):
         if k in body:
             row[k] = body.get(k)
     if "is_active" in body:
