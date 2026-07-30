@@ -736,10 +736,24 @@ async def get_category_detail(
     }
 
 
-@router.get("/filter-options")
-async def get_filter_options(org_id: str = ORG_ID):
-    """Distinct stores + markets for the report dropdowns."""
-    client = sb()
+# ── filter-options-aggregate hardening (2026-07-30 failure_log triage, migration 311) ─────────
+# GET /filter-options used to be an unguarded SEQUENTIAL fetch-all loop (up to 100 x 1000-row
+# .range() pages against the 43k+-row ledger just to derive distinct store/market values) — a
+# CLAUDE.md/AGENT_CONTRACT §6 convention violation (aggregate in Postgres, never fetch-all-then-
+# filter in Python) and, per the 2026-07-30 triage, each of those ~44 round trips was an
+# independent chance to hit the platform-wide stale-pooled-connection failure class (one prod 500
+# on 7/29 traced to this exact endpoint). `_filter_options_via_rpc` calls the new Postgres
+# aggregate (migration 311, commcalc.asset_filter_options — ONE round trip) and feature-detects
+# whether it has been run yet (same `_is_missing_schema_error` helper the asset-2 staging-swap
+# package already uses), falling back to the exact legacy scan (kept verbatim as
+# `_filter_options_legacy_scan`, never deleted) so this endpoint can never 500 for a not-yet-run
+# migration. Both paths return the identical shape consumed below — the rest of the function
+# (store_groups building, "(no market)" bucket, response shape) is completely unchanged.
+def _filter_options_legacy_scan(client, org_id):
+    """Pre-migration-311 fallback: the original sequential fetch-all-pages scan of asset_ledger,
+    kept byte-for-byte so behavior stays identical (and provably byte-identical against the RPC
+    path — see harness_asset_filter_options_aggregate.py) until migration 311 is run. Not on the
+    happy path once the RPC is live; exists purely as the graceful-degrade route."""
     rows = []
     page = 0; PAGE = 1000
     while True:
@@ -766,6 +780,55 @@ async def get_filter_options(org_id: str = ORG_ID):
         if s:
             store_to_market[s] = r.get("market")
             store_counts[s] = store_counts.get(s, 0) + 1
+    return {
+        "markets": sorted(markets),
+        "store_to_market": store_to_market,
+        "store_counts": store_counts,
+        "no_market_count": no_market_count,
+    }
+
+
+def _filter_options_via_rpc(client, org_id):
+    """ONE round trip via commcalc.asset_filter_options (migration 311) instead of the legacy
+    scan's ~44. Returns the same shape as _filter_options_legacy_scan, or None if the migration
+    hasn't been run yet (caller falls back to the legacy scan — never a 500 for a missing
+    migration, per AGENT_CONTRACT §5's degrade-gracefully rule)."""
+    try:
+        res = client.schema("commcalc").rpc(
+            "asset_filter_options", {"p_org_id": org_id}
+        ).execute()
+    except Exception as exc:
+        if _is_missing_schema_error(exc):
+            return None
+        raise
+    data = res.data or []
+    if not data:
+        return {"markets": [], "store_to_market": {}, "store_counts": {}, "no_market_count": 0}
+    row = data[0]
+    stores_raw = row.get("stores") or []
+    store_to_market = {s["store"]: s.get("market") for s in stores_raw if s.get("store")}
+    store_counts = {s["store"]: s.get("row_count", 0) for s in stores_raw if s.get("store")}
+    return {
+        "markets": sorted(row.get("markets") or []),
+        "store_to_market": store_to_market,
+        "store_counts": store_counts,
+        "no_market_count": row.get("no_market_count") or 0,
+    }
+
+
+@router.get("/filter-options")
+async def get_filter_options(org_id: str = ORG_ID):
+    """Distinct stores + markets for the report dropdowns. Postgres-aggregated (migration 311)
+    with an automatic, transparent fall back to the legacy per-row scan pre-migration — see the
+    block comment above _filter_options_legacy_scan."""
+    client = sb()
+    agg = _filter_options_via_rpc(client, org_id)
+    if agg is None:
+        agg = _filter_options_legacy_scan(client, org_id)
+    markets = agg["markets"]
+    store_to_market = agg["store_to_market"]
+    store_counts: dict = agg["store_counts"]
+    no_market_count = agg["no_market_count"]
     stores = [{"store": k, "market": v} for k, v in store_to_market.items()]
     stores.sort(key=lambda x: x["store"])
 
