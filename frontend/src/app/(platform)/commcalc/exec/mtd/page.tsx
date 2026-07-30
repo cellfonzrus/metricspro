@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { api, fmt, getActiveOrg } from '@/lib/client'
+import { api, fmt, getActiveOrg, localToday } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { MultiSelect } from '@/lib/multiselect'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
@@ -41,6 +41,10 @@ export default function ExecMtdPage() {
     if (!period) return
     setLoading(true); setErr(null)
     const qs = new URLSearchParams()
+    // Send the BROWSER's local date, exactly like the Daily/Accessory Targets pages do. Without it the
+    // MTD cut + trending divisor were resolved on the server's UTC clock, so after ~8pm ET the two
+    // surfaces projected off a different "complete days elapsed" and could not agree.
+    qs.set('today', localToday())
     selStores.forEach((s) => qs.append('stores', s))
     selMarkets.forEach((s) => qs.append('markets', s))
     selReps.forEach((s) => qs.append('reps', s))
@@ -66,8 +70,15 @@ export default function ExecMtdPage() {
   const total = active?.total || {}
   const tr = data?.trending || {}
 
-  // 16-column layout, in the exact order of the owner's spreadsheet. Conv. exported as the raw ratio (as
-  // the file stores it); money columns flagged so Excel/PDF format + subtotal correctly.
+  // 16-column layout, in the exact order of the owner's spreadsheet, THEN two appended reconciliation
+  // columns (the spreadsheet's own order is preserved). Conv. exported as the raw ratio (as the file
+  // stores it); money columns flagged so Excel/PDF format + subtotal correctly.
+  // WHY the two extra columns (2026-07-30): "Acc. Sales" here is the PURE accessory$ — the same number
+  // the Sales Report shows and the same one this b2bsoft report has always meant. The Accessory Targets
+  // page measures achieved/target on accessory$ + the device SET-UP FEE (owner directive 2026-07-17:
+  // the set-up fee is a separate PAY item, never folded into accessory$, but it DOES count toward the
+  // accessory TARGET). Both come from the one shared classifier; showing the bridge (Set-up Fee) and
+  // the target basis (Acc.+Set-up) is what lets the two pages be reconciled to the cent.
   const cols = (lk: string): ExportColumn[] => [
     { header: lk === 'store' ? 'Store' : 'Employee', field: lk, role: lk === 'store' ? 'store' : 'rep', get: (r) => r[lk] },
     { header: 'Total Activation', field: 'total_activation', type: 'number', get: (r) => r.total_activation },
@@ -85,6 +96,8 @@ export default function ExecMtdPage() {
     { header: 'Trending Acc. Sales', field: 'trending_acc_sales', money: true, get: (r) => r.trending_acc_sales },
     { header: 'Activation Fee', field: 'activation_fee', money: true, get: (r) => r.activation_fee },
     { header: 'Total Protect', field: 'total_protect', type: 'number', get: (r) => r.total_protect },
+    { header: 'Set-up Fee', field: 'setup_fee', money: true, get: (r) => r.setup_fee },
+    { header: 'Acc.+Set-up (target basis)', field: 'acc_plus_setup', money: true, get: (r) => r.acc_plus_setup },
   ]
   // Export BOTH tabs (like the file's two sheets), each with its own totals row appended.
   const withTotal = (rs: any[], tot: any, lk: string) => [...rs, { ...tot, [lk]: 'TOTAL' }]
@@ -94,12 +107,20 @@ export default function ExecMtdPage() {
   ]
 
   const HEADERS = ['Total Activation', 'Activation', 'Port', 'BYOD', 'Upgrade', 'Total Phones', 'Trending Box',
-    'Bill Payment Qty', '$', 'Conv.', 'Acc. Sales', 'APB', 'Trending Acc. Sales', 'Activation Fee', 'Total Protect']
+    'Bill Payment Qty', '$', 'Conv.', 'Acc. Sales', 'APB', 'Trending Acc. Sales', 'Activation Fee', 'Total Protect',
+    'Set-up Fee', 'Acc.+Set-up']
+  // Tooltips only on the two appended reconciliation columns (the b2bsoft 15 are unchanged).
+  const HEADER_TIPS: Record<string, string> = {
+    'Acc. Sales': 'Accessory sales revenue ONLY — the device set-up fee is excluded (it is a separate pay item). Same number as the Sales Report.',
+    'Set-up Fee': 'Device set-up fee sold. A separate pay item, so it is NOT in Acc. Sales — but it DOES count toward the accessory target.',
+    'Acc.+Set-up': 'Accessory sales + device set-up fee = the basis the Accessory Targets page measures achieved vs target on. THIS is the number to compare with that page.',
+  }
 
   const cellVals = (r: any) => [
     int(r.total_activation), int(r.activation), int(r.port), int(r.byod), int(r.upgrade), int(r.total_phones),
     int(r.trending_box), int(r.bill_payment_qty), fmt(r.amount), pct(r.conv), fmt(r.acc_sales), n2(r.apb),
     fmt(r.trending_acc_sales), fmt(r.activation_fee), int(r.total_protect),
+    fmt(r.setup_fee), fmt(r.acc_plus_setup),
   ]
 
   return (
@@ -174,7 +195,7 @@ export default function ExecMtdPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>
               <th style={thL}>{labelHdr}</th>
-              {HEADERS.map((h) => <th key={h} style={th}>{h}</th>)}
+              {HEADERS.map((h) => <th key={h} style={th} title={HEADER_TIPS[h]}>{h}</th>)}
             </tr></thead>
             <tbody>
               {rows.map((r, i) => (
@@ -190,6 +211,18 @@ export default function ExecMtdPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {!loading && !err && rows.length > 0 && (
+        <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 12, maxWidth: 900 }}>
+          <b>Two accessory numbers, on purpose.</b> <b>Acc. Sales</b> is accessory sales revenue only —
+          the device <b>set-up fee</b> is a separate pay item and is never folded into it (owner
+          directive 2026‑07‑17), which is why it has its own column. The{' '}
+          <a href="/commcalc/targets/accessories">Accessory Targets</a> page measures achieved‑vs‑target
+          on <b>Acc.+Set‑up</b> — so compare that column, not Acc. Sales, when the two pages look
+          different. Both bases come from the SAME shared classifier and the same sales rows as the
+          Sales Report; <b>APB</b> and <b>Trending Acc. Sales</b> stay on the pure Acc. Sales basis.
+        </p>
       )}
     </div>
   )
