@@ -201,7 +201,7 @@ async def put_report_config(report_key: str, body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/send-to-designated")
-async def send_to_designated(body: dict, org_id: str = ORG_ID):
+async def send_to_designated(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Send a report to its CONFIGURED designated recipients (report_config). The single entry point
     every module uses for 'send this to the designated person' — envelope-mismatch alerts, daily
     targets, cash pickup, etc. Body: report_key, filters?. No recipients in the body — they come from
@@ -222,9 +222,12 @@ async def send_to_designated(body: dict, org_id: str = ORG_ID):
         return {"sent": 0, "failed": 0, "skipped": "designated recipients have no contact info"}
     channels = cfg.get("channels") or (["email"] if emails else []) + (["whatsapp"] if phones else [])
     try:
+        # NOTE: other modules call this function IN-PROCESS (commcalc sales-recon) without the
+        # header, which binds FastAPI's Header sentinel; build_payload normalizes a non-str to ""
+        # (= no caller ⇒ the handler's own org-wide path), so that path cannot crash.
         return await _dispatch(org_id, report_key, body.get("filters") or {}, channels,
                                cfg.get("formats"), emails, phones, body.get("message"),
-                               triggered_by="designated")
+                               triggered_by="designated", authorization=authorization)
     except (KeyError, ValueError) as e:
         raise HTTPException(400, str(e))
 
@@ -277,12 +280,17 @@ def _email_html(payload, link, message) -> str:
 
 
 async def _dispatch(org_id, report_key, filters, channels, formats, emails, phones, message,
-                    subscription_id=None, triggered_by="manual"):
-    """Build the report once, deliver to every target, log each attempt."""
+                    subscription_id=None, triggered_by="manual", authorization="", tz=""):
+    """Build the report once, deliver to every target, log each attempt.
+
+    `authorization` is the SENDING caller's header (on-demand) and `tz` the schedule's timezone
+    (scheduled). Both are consumed only by builders that opted in — see report_registry's docstring;
+    they never touch the delivery payload, and the token is never written to send_log."""
     channels = channels or ["email"]
     formats = [f for f in (formats or ["xlsx", "pdf"]) if f in ("xlsx", "pdf")] or ["xlsx"]
 
-    payload = await report_registry.build_payload(report_key, org_id, filters or {})
+    payload = await report_registry.build_payload(report_key, org_id, filters or {},
+                                                  authorization=authorization, tz=tz)
     link = settings.APP_PUBLIC_URL.rstrip("/") + (payload.get("live_path") or "/")
 
     # Render each requested format once: (bytes, filename, mime)
@@ -513,7 +521,7 @@ async def put_settings(body: dict, org_id: str = ORG_ID,
 
 
 @router.post("/send")
-async def send_now(body: dict, org_id: str = ORG_ID):
+async def send_now(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """On-demand send. Body: report_key, filters, channels[], formats[],
     emails[], phones[], recipient_ids[], message."""
     report_key = body.get("report_key")
@@ -524,9 +532,12 @@ async def send_now(body: dict, org_id: str = ORG_ID):
         raise HTTPException(400, "no recipients (provide emails, phones, or recipient_ids)")
     channels = body.get("channels") or (["email"] if emails else []) + (["whatsapp"] if phones else [])
     try:
+        # The caller's header rides along so a caller-scoped report (flags / commissions / gp /
+        # action_plan) exports exactly what that caller may see (AGENT_CONTRACT §3c) instead of
+        # 500-ing on the FastAPI Header sentinel.
         return await _dispatch(org_id, report_key, body.get("filters") or {}, channels,
                                body.get("formats"), emails, phones, body.get("message"),
-                               triggered_by="manual")
+                               triggered_by="manual", authorization=authorization)
     except (KeyError, ValueError) as e:
         raise HTTPException(400, str(e))
 
@@ -645,6 +656,33 @@ async def send_log(org_id: str = ORG_ID, limit: int = 200):
         .order("created_at", desc=True).limit(min(max(limit, 1), 1000)).execute().data or []
 
 
+def _log_schedule_config_error(org_id, sub, err) -> None:
+    """Record a mis-configured schedule as a CONFIG problem against that subscription.
+
+    Best-effort in every direction (AGENT_CONTRACT §5: a missing migration must never break the
+    caller): one core.failure_log row, org-scoped, category 'report_config' — deliberately NOT the
+    'sweep_error' category run_for_tenant writes, because nothing crashed and re-running will not
+    help; a human has to fix the schedule's filters."""
+    try:
+        name = sub.get("name") or sub.get("report_key") or "?"
+        get_supabase().schema("core").table("failure_log").insert({
+            "org_id": org_id,
+            "category": "report_config",
+            "severity": "warning",
+            "source": f"notify.subscription/{sub.get('report_key') or '?'}"[:200],
+            "message": f"Scheduled report '{name}' was skipped: {err}"[:1000],
+            "detail": {"subscription_id": sub.get("id"), "report_key": sub.get("report_key"),
+                       "filters": sub.get("filters") or {}, "error": str(err)},
+            "remediation": ("This scheduled report's saved filters can't produce a report, so nothing "
+                            "was sent (nothing crashed — re-running will not help). Open /notify → "
+                            "Schedules, fix the filter named in the message, and the next run goes out. "
+                            "Leaving a date filter BLANK is usually right for a recurring schedule: it "
+                            "resolves to the current period every time."),
+        }).execute()
+    except Exception:
+        pass
+
+
 # ── scheduler entrypoint (called by Supabase pg_cron via pg_net) ──────────────
 @router.post("/run-due")
 async def run_due(x_notify_secret: str = Header(default="")):
@@ -663,27 +701,48 @@ async def run_due(x_notify_secret: str = Header(default="")):
                 "phones": s.get("ad_hoc_phones") or []}
         result = {"error": None}
 
+        # A schedule whose SAVED FILTERS can't build a report is a configuration problem, not a
+        # crash. Validate BEFORE the tenant guard (cheap + pure) so it is reported against the
+        # subscription instead of landing in core.failure_log as a sweep_error the operator would
+        # chase as a bug — and so one bad schedule never opens a failed job_run. next_run_at is
+        # still advanced below, so the sweep does not hot-loop on it.
+        try:
+            report_registry.validate_filters(s.get("report_key"), s.get("filters") or {})
+            bad_config = None
+        except report_registry.ReportConfigError as e:
+            _log_schedule_config_error(org_id, s, e)
+            bad_config = {"error": str(e), "config_error": True, "sent": 0, "failed": 0}
+
         # Each subscription runs under the central tenant guard: it asserts the subscription's tenant
         # exists + is active (a deactivated tenant is skipped, not sent to) and records a core.job_run
         # audit row + a core.failure_log entry on dispatch failure. money_scope="none" — notify sends a
         # report, it writes no money. See core.run_for_tenant.
         async def _job(ctx, _s=s, _body=body):
             emails, phones = _resolve_targets(sb(), ctx.org_id, _body)
+            # No caller on a scheduled run ⇒ authorization stays "" (the report's own org-wide
+            # path, which is what an admin-configured subscription means). `tz` lets a relative
+            # date filter resolve on the schedule's own business day.
             return await _dispatch(
                 ctx.org_id, _s["report_key"], _s.get("filters") or {}, _s.get("channels"),
                 _s.get("formats"), emails, phones, None,
-                subscription_id=_s.get("id"), triggered_by="schedule")
-        try:
-            result = await run_for_tenant_async(org_id, "notify.subscription", _job)
-        except TenantNotRunnable as e:
-            result = {"error": str(e), "sent": 0, "failed": 0, "skipped": True}
-        except Exception as e:
-            result = {"error": str(e), "sent": 0, "failed": 0}
+                subscription_id=_s.get("id"), triggered_by="schedule",
+                tz=_s.get("timezone") or "")
+        if bad_config is not None:
+            result = bad_config          # nothing ran; the schedule needs a human, not a retry
+        else:
+            try:
+                result = await run_for_tenant_async(org_id, "notify.subscription", _job)
+            except TenantNotRunnable as e:
+                result = {"error": str(e), "sent": 0, "failed": 0, "skipped": True}
+            except Exception as e:
+                result = {"error": str(e), "sent": 0, "failed": 0}
 
+        # Advance the schedule either way, so a mis-configured one does not hot-loop the sweep.
         nxt = _compute_next_run(s.get("frequency"), s.get("day_of_week"),
                                 s.get("day_of_month"), s.get("hour"), s.get("timezone"))
         sb().table("subscriptions").update(
-            {"last_run_at": now_iso, "next_run_at": nxt}).eq("id", s["id"]).execute()
+            {"last_run_at": now_iso, "next_run_at": nxt}) \
+            .eq("org_id", org_id).eq("id", s["id"]).execute()   # org-scoped write (RULE ONE)
         ran.append({"id": s.get("id"), "report_key": s.get("report_key"), **result})
 
     return {"ran": len(ran), "results": ran}

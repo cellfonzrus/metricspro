@@ -23,6 +23,12 @@ type LogRow = {
 }
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+// Placeholder hints for the RELATIVE date filters. A recurring schedule must not carry a frozen
+// date: blank (or 'current'/'last') is resolved server-side on every run — see report_registry.
+const FILTER_HINT: Record<string, string> = {
+  period: ' (e.g. June 2026 / current / last)',
+  thursday: ' — billing Friday (blank = current week / last)',
+}
 const card: React.CSSProperties = { background: 'var(--surface,#fff)', border: '1px solid var(--border,#e5e7eb)', borderRadius: 12, padding: 16, marginBottom: 16 }
 const inp: React.CSSProperties = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border,#ddd)', fontSize: 13 }
 const th: React.CSSProperties = { textAlign: 'left', padding: '8px 12px', fontSize: 12, color: '#666', borderBottom: '1px solid var(--border,#eee)' }
@@ -258,11 +264,16 @@ function Subscriptions({ reports, saved, subs, onChange, setMsg }: {
         </div>
 
         {rep && rep.filters.length > 0 && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10, alignItems: 'center' }}>
             {rep.filters.map(f => (
-              <input key={f} style={inp} placeholder={f + (f === 'period' ? ' (e.g. June 2026 / current / last)' : '')}
+              <input key={f} style={inp} placeholder={f + (FILTER_HINT[f] || '')}
                 value={filters[f] || ''} onChange={e => setFilters({ ...filters, [f]: e.target.value })} />
             ))}
+            {rep.filters.some(f => FILTER_HINT[f]) && (
+              <span style={{ fontSize: 12, color: '#888' }}>
+                Leave a date filter blank on a recurring schedule — it resolves to the current period every run.
+              </span>
+            )}
           </div>
         )}
 

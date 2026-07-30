@@ -19,10 +19,14 @@ costs 1), exception-guarded, and every item clears as soon as its cause is fixed
   notify_scheduler_idle   — clears the moment the sweep runs (run-due stamps next_run_at forward).
   notify_channel_failing  — LAST attempt per channel, not a rolling error count: clears on the next
                             successful send, so a fixed channel stops nagging immediately.
+  notify_schedule_config  — the schedule's SAVED FILTERS can't build a report (pure, in-process
+                            check — no DB, no report build): clears the moment the filter is fixed.
 """
+import sys
 from datetime import timedelta
 
 from app.modules.core.import_health import register_provider, _item, _now, _parse_ts
+from . import report_filters
 from .channels import email_resend, whatsapp_meta
 
 # Grace on top of a schedule's own next_run_at before we call the scheduler idle. The pg_cron sweep runs
@@ -45,6 +49,15 @@ def _grace_hours(client, org_id):
     return _SCHED_GRACE_HOURS_DEFAULT
 
 
+def _known_report_keys():
+    """The live report-key list, WITHOUT importing report_registry here — that module pulls in the
+    asset / commcalc / account routers, which this leaf provider has no business dragging in. The
+    app always has it loaded (notify/router.py imports it before this module); when it genuinely is
+    not loaded we simply skip the report-key check and validate filters only."""
+    mod = sys.modules.get("app.modules.notify.report_registry")
+    return set(getattr(mod, "REPORTS", None) or ()) or None
+
+
 def _has_target(sub):
     return bool((sub.get("recipient_ids") or []) or (sub.get("ad_hoc_emails") or [])
                 or (sub.get("ad_hoc_phones") or []))
@@ -58,7 +71,7 @@ def _p_notify_delivery(client, org_id, ctx):
     out = []
     try:
         subs = (client.schema("notify").table("subscriptions")
-                .select("id,name,report_key,channels,recipient_ids,ad_hoc_emails,ad_hoc_phones,"
+                .select("id,name,report_key,filters,channels,recipient_ids,ad_hoc_emails,ad_hoc_phones,"
                         "is_active,next_run_at,last_run_at")
                 .eq("org_id", org_id).limit(500).execute().data) or []
     except Exception:
@@ -116,6 +129,28 @@ def _p_notify_delivery(client, org_id, ctx):
                              f"so no scheduled report is going out. Send one on demand to confirm the "
                              f"report itself works, then have the scheduler checked.",
                              len(idle), "/notify?tab=subs", "Review schedules"))
+
+    # 3b) the schedule's saved filters can't build a report — it is skipped every run and delivers
+    # nothing. Pure + in-process (no DB, no report build), so this costs nothing on a healthy tenant.
+    misconfig = []
+    known = _known_report_keys()
+    for s in active:
+        try:
+            report_filters.validate_filters(s.get("report_key"), s.get("filters") or {},
+                                            known_keys=known)
+        except report_filters.ReportConfigError as e:
+            misconfig.append((s, str(e)))
+        except Exception:
+            pass                                  # never let a provider break the popup
+    if misconfig:
+        first = misconfig[0]
+        out.append(_item("config", "notify_schedule_config", "error",
+                         "A scheduled report can't run — check its filters",
+                         f"{len(misconfig)} schedule(s) are skipped every run because their saved "
+                         f"filters can't produce a report — e.g. "
+                         f"\"{(first[0].get('name') or first[0].get('report_key') or '?')}\": {first[1]} "
+                         f"Nothing is being delivered for them until the filter is fixed.",
+                         len(misconfig), "/notify?tab=subs", "Fix schedule filters"))
 
     # 4) the most recent attempt on a channel FAILED (state, not history → clears on the next success).
     try:
