@@ -56,8 +56,14 @@ DEFAULT_RULES = [
 # ships seeded in 071; Boost (boost) ships seeded in 072 — the curated Boost Description→Category taxonomy
 # (Commission Categories Master File) mapped onto these same five canonical buckets (exact rules, sign_rule
 # 'any' because Boost commission amounts are POSITIVE, vs MA's negative=payout convention).
+# `ma_commission` was added 2026-07-30 alongside the MA-data refresh (ledger_ma_sync.py): the MA
+# Commission Details report carries the per-activation components (device/consumer margin, rebate, the
+# 1st–6th month spiffs) that MA Daily Tx does not, and it needs its OWN rule namespace so its labels never
+# reclassify a Daily Tx line. Adding a key here only adds a picker option + a rule namespace; it seeds no
+# rule and moves no money (a label matching no rule is booked 'other' and surfaced).
 BUILTIN_TEMPLATES = {
     "ma_daily_tx": "Total Wireless (MA Daily Tx)",
+    "ma_commission": "Total Wireless (MA Commission Details)",
     "boost": "Boost (ePay / DLAR)",
 }
 

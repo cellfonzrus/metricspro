@@ -33,6 +33,7 @@ from app.modules.commcalc import commission_catalog
 from app.modules.commcalc import ma_upload
 from app.modules.commcalc import target_registry
 from app.modules.commcalc import commission_ledger
+from app.modules.commcalc import ledger_ma_sync
 from app.modules.commcalc import device_history
 from app.modules.commcalc import template_clone
 from app.modules.commcalc import custom_report
@@ -3498,6 +3499,40 @@ def _ledger_source_rules(client, org_id, carrier_id=""):
             for d in column_mapping.default_mapping("commission_ledger")]
 
 
+def _ledger_origin_ready(client, org_id):
+    """True when migration 251 is applied (commission_ledger carries the `origin` column). Probed with a
+    1-row read; never raises. Not cached — the process-wide singleton client makes object-keyed caches
+    live for the whole process, and a freshly-run migration must be picked up on the next request."""
+    try:
+        (client.schema("commcalc").table("commission_ledger").select("origin")
+         .eq("org_id", org_id).limit(1).execute())
+        return True
+    except Exception:
+        return False
+
+
+def _ledger_delete_scoped(client, org_id, source_report, period, origin):
+    """Delete a period's ledger rows for ONE origin. Post-251 the wipe is origin-scoped (a 'file' wipe also
+    takes legacy NULL-origin rows, which are file imports by definition — the migration backfills them, but
+    a partially-migrated table must never leave duplicates behind). Pre-251 (no origin column) a 'file' wipe
+    degrades to today's exact un-scoped statement; an 'ma_sync' wipe RAISES, because without provenance the
+    sync cannot isolate its own rows and must refuse rather than risk a file import."""
+    def _base():
+        return (client.schema("commcalc").table("commission_ledger").delete()
+                .eq("org_id", org_id).eq("source_report", source_report).eq("period", period))
+    if _ledger_origin_ready(client, org_id):
+        _base().eq("origin", origin).execute()
+        if origin == ledger_ma_sync.ORIGIN_FILE:
+            _base().is_("origin", "null").execute()
+        return "origin_scoped"
+    if origin != ledger_ma_sync.ORIGIN_FILE:
+        raise HTTPException(400, "Refresh needs migration 251_commission_ledger_ma_sync.sql — without the "
+                                 "`origin` column a sync cannot be told apart from a file import, so it "
+                                 "refuses to write.")
+    _base().execute()
+    return "unscoped_pre_251"
+
+
 @router.post("/commission-ledger/import")
 async def commission_ledger_import(
     file: UploadFile = File(...),
@@ -3530,11 +3565,15 @@ async def commission_ledger_import(
         rows.append(commission_ledger.build_row(src, base, cat_rules))
     if not rows:
         raise HTTPException(400, "No usable rows — check the column mapping for this file.")
-    # GUARD: only clear once we have rows; scope the wipe to this source_report + period.
+    # GUARD: only clear once we have rows; scope the wipe to this source_report + period — and, once
+    # migration 251 is applied, to THIS ORIGIN ('file'), so re-uploading a file can never delete the rows
+    # a MA-data refresh derived (and vice-versa). Pre-251 there is no origin column: the delete falls back
+    # to today's exact statement, so behaviour is byte-identical until the migration runs.
     if period:
         try:
-            client.schema("commcalc").table("commission_ledger").delete() \
-                .eq("org_id", org_id).eq("source_report", source_report).eq("period", period).execute()
+            _ledger_delete_scoped(client, org_id, source_report, period, ledger_ma_sync.ORIGIN_FILE)
+        except HTTPException:
+            raise                                   # keep an explicit 4xx refusal as itself, not a 500
         except Exception as e:
             raise HTTPException(500, f"Failed to clear existing ledger for {source_report}/{period}: {e}")
     saved = 0
@@ -3604,25 +3643,34 @@ async def commission_ledger_analyze(
 
 
 @router.get("/commission-ledger/summary")
-def commission_ledger_summary(source_report: str = "ma_daily_tx", period: str = "", org_id: str = ORG_ID):
+def commission_ledger_summary(source_report: str = "ma_daily_tx", period: str = "", origin: str = "",
+                              org_id: str = ORG_ID):
     """Per-category totals + counts, a (category × payment_month) matrix, payout/charge/other totals — for
-    the canonical commission report. Empty (not 500) if migration 071 isn't applied yet."""
+    the canonical commission report. Empty (not 500) if migration 071 isn't applied yet.
+
+    `origin` (optional, mig 251) narrows to ONE provenance — 'file' (a human uploaded the carrier file) or
+    'ma_sync' (derived from the raw MA tables) — so a period populated by both can be read one source at a
+    time instead of silently summing them. Default '' = every origin: byte-identical to before."""
     require_org(org_id)
     try:
         q = (sb().schema("commcalc").table("commission_ledger").select("*")
              .eq("org_id", org_id).eq("source_report", source_report))
         if period:
             q = q.eq("period", period)
+        if origin:
+            q = q.eq("origin", origin)
         rows = q.execute().data or []
     except Exception:
         rows = []
-    return {"source_report": source_report, "period": period, **commission_ledger.summarize(rows)}
+    return {"source_report": source_report, "period": period, "origin": origin or None,
+            **commission_ledger.summarize(rows)}
 
 
 @router.get("/commission-ledger/rows")
 def commission_ledger_rows(source_report: str = "ma_daily_tx", period: str = "", category: str = "",
-                           rep_user: str = "", limit: int = 2000, org_id: str = ORG_ID):
-    """Ledger line items (optionally filtered by category/rep) for the report drill-downs."""
+                           rep_user: str = "", origin: str = "", limit: int = 2000, org_id: str = ORG_ID):
+    """Ledger line items (optionally filtered by category/rep/origin) for the report drill-downs.
+    `origin` (mig 251) narrows to one provenance; default '' = every origin (unchanged)."""
     require_org(org_id)
     try:
         q = (sb().schema("commcalc").table("commission_ledger").select("*")
@@ -3633,6 +3681,8 @@ def commission_ledger_rows(source_report: str = "ma_daily_tx", period: str = "",
             q = q.eq("category", category)
         if rep_user:
             q = q.eq("rep_user", rep_user)
+        if origin:
+            q = q.eq("origin", origin)
         rows = q.order("payout_total", desc=True).limit(min(int(limit or 2000), 5000)).execute().data or []
     except Exception:
         rows = []
@@ -3667,7 +3717,8 @@ def commission_ledger_observed_types(source_report: str = "ma_daily_tx", period:
 
 
 @router.get("/commission-ledger/by-rep")
-def commission_ledger_by_rep(source_report: str = "ma_daily_tx", period: str = "", org_id: str = ORG_ID):
+def commission_ledger_by_rep(source_report: str = "ma_daily_tx", period: str = "", origin: str = "",
+                            org_id: str = ORG_ID):
     """Per-REP rollup of the canonical commission ledger: each rep's five-bucket payout totals from
     commcalc.commission_ledger, joined to what the LIVE calc actually pays them (rep_commissions.total_payout)
     for the same period, keyed on the canonical rep name. This is the 'unified rep payout view' — the ledger
@@ -3683,6 +3734,8 @@ def commission_ledger_by_rep(source_report: str = "ma_daily_tx", period: str = "
              .eq("org_id", org_id).eq("source_report", source_report))
         if period:
             q = q.in_("period", _pvariants(period))
+        if origin:
+            q = q.eq("origin", origin)
         lrows = q.limit(100000).execute().data or []
     except Exception:
         lrows = []
@@ -3729,9 +3782,402 @@ def commission_ledger_templates(org_id: str = ORG_ID):
     """Preconfigured templates (Total/Boost) + any tenant-created rule-sets — a new tenant adopts one or
     forks their own. Drives the template picker on the report + category-map pages."""
     require_org(org_id)
-    return {"templates": commission_ledger.list_templates(sb(), org_id),
+    client = sb()
+    cfg = _ledger_sync_config_rows(client, org_id)
+    tmpls = commission_ledger.list_templates(client, org_id)
+    # Which templates can be REFRESHED from the raw MA tables (mig 083) rather than a hand-uploaded file.
+    # Additive field — every existing consumer keys off {key,label,builtin,rule_count} and is unaffected.
+    for t in tmpls:
+        srcs = ledger_ma_sync.template_sources(t.get("key"), cfg)
+        known = [s for s in srcs if s in ledger_ma_sync.DEFAULT_SOURCES or
+                 any(r.get("report_key") == s for r in cfg)]
+        t["ma_syncable"] = bool(known)
+        t["ma_sources"] = known
+    return {"templates": tmpls,
             "categories": commission_ledger.CATEGORIES,
-            "category_labels": commission_ledger.CATEGORY_LABELS}
+            "category_labels": commission_ledger.CATEGORY_LABELS,
+            "sync_ready": _ledger_origin_ready(client, org_id),
+            "sync_migration": "251_commission_ledger_ma_sync.sql"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# LEDGER REFRESH FROM THE RAW MA TABLES (owner directive 2026-07-30 — "commission ledger has stale data
+# and should be updated from ma commission and ma tx"). The ledger's only ingest was a hand-uploaded file
+# per period, while commcalc.raw_ma_daily_tx / raw_ma_commission (mig 083) keep filling automatically —
+# so the ledger went stale silently. These endpoints (re)derive a period's ledger rows FROM those tables
+# through the SAME mapping + classification the file import uses (see ledger_ma_sync.py: it builds the
+# pseudo file row and calls column_mapping.apply_mapping -> commission_ledger.build_row; it classifies
+# nothing itself). Preview first, then a delete-then-insert scoped to (org, template, period, origin) so
+# a refresh is idempotent and can never touch a file-imported row. Needs migration 251.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+def _ledger_sync_config_rows(client, org_id):
+    """commcalc.ledger_sync_config rows for this org (mig 251). [] when un-migrated — the built-in
+    DEFAULT_TEMPLATE_SOURCES then apply, so the refresh works the moment the code deploys."""
+    try:
+        return (client.schema("commcalc").table("ledger_sync_config").select("*")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        return []
+
+
+def _ledger_month_bounds(period):
+    """('YYYY-MM-01', 'YYYY-MM-<last>') for a month-period, or (None, None) when it isn't one. Used ONLY
+    as the fallback when a raw table's own `period` column carries a third spelling (or is blank)."""
+    try:
+        mo, yr = _month_year(period)
+        if not (1 <= mo <= 12 and yr):
+            return None, None
+        last = _calendar.monthrange(yr, mo)[1]
+        return f"{yr}-{mo:02d}-01", f"{yr}-{mo:02d}-{last:02d}"
+    except Exception:
+        return None, None
+
+
+def _ledger_raw_rows(client, org_id, source_table, period, date_col, carrier_id=""):
+    """Paged read of ONE raw MA table for a period. org-scoped, spelling-agnostic (_pvariants covers
+    'June 2026' AND '2026-06'), and when the period column matches NOTHING it falls back to the row's own
+    date column over the month's bounds — and reports WHICH matched, so 'no rows' is never ambiguous.
+    Returns (rows, meta)."""
+    meta = {"source_table": source_table, "matched_by": None, "rows": 0, "truncated": False,
+            "table_missing": False, "error": None}
+
+    def _page(apply_filter):
+        out, start, page = [], 0, 1000
+        while True:
+            q = (client.schema("commcalc").table(source_table).select("*")
+                 .eq("org_id", org_id))
+            if carrier_id:
+                q = q.eq("carrier_id", carrier_id)
+            q = apply_filter(q)
+            chunk = q.range(start, start + page - 1).execute().data or []
+            out.extend(chunk)
+            if len(chunk) < page or len(out) >= 100000:
+                meta["truncated"] = len(out) >= 100000
+                break
+            start += page
+        return out
+
+    try:
+        rows = _page(lambda q: q.in_("period", _pvariants(period))) if period else _page(lambda q: q)
+        if rows:
+            meta["matched_by"] = "period" if period else "all"
+        elif period and date_col:
+            lo, hi = _ledger_month_bounds(period)
+            if lo:
+                rows = _page(lambda q: q.gte(date_col, lo).lte(date_col, hi))
+                if rows:
+                    meta["matched_by"] = f"{date_col} range {lo}..{hi} (the period column matched nothing)"
+    except Exception as e:
+        msg = str(e)
+        meta["table_missing"] = ("does not exist" in msg or "PGRST205" in msg or "42P01" in msg)
+        meta["error"] = msg[:300]
+        rows = []
+    meta["rows"] = len(rows)
+    return rows, meta
+
+
+def _ledger_existing_by_origin(client, org_id, source_report, period):
+    """What is ALREADY in the ledger for (template, period), split by provenance:
+    {origin: {lines, payout_total, last_at}}. Pre-251 (no origin column) every row reads as 'file' and
+    `ready` is False. Spelling-agnostic on period."""
+    out, ready = {}, True
+    try:
+        q = (client.schema("commcalc").table("commission_ledger")
+             .select("origin,payout_total,created_at,synced_at")
+             .eq("org_id", org_id).eq("source_report", source_report))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        rows = q.limit(100000).execute().data or []
+    except Exception:
+        ready = False
+        try:
+            q = (client.schema("commcalc").table("commission_ledger").select("payout_total,created_at")
+                 .eq("org_id", org_id).eq("source_report", source_report))
+            if period:
+                q = q.in_("period", _pvariants(period))
+            rows = q.limit(100000).execute().data or []
+        except Exception:
+            rows = []
+    for r in rows:
+        o = (r.get("origin") or ledger_ma_sync.ORIGIN_FILE) if ready else ledger_ma_sync.ORIGIN_FILE
+        a = out.setdefault(o, {"origin": o, "label": ledger_ma_sync.ORIGIN_LABELS.get(o, o),
+                               "lines": 0, "payout_total": 0.0, "last_at": None})
+        a["lines"] += 1
+        a["payout_total"] = round(a["payout_total"] + safe_float(r.get("payout_total")), 2)
+        ts = r.get("synced_at") or r.get("created_at")
+        if ts and (a["last_at"] is None or str(ts) > str(a["last_at"])):
+            a["last_at"] = ts
+    return out, ready
+
+
+def _ledger_ma_derive(client, org_id, source_report, period, carrier_id="", report_key=""):
+    """Derive (WITHOUT writing) the ledger rows a refresh would produce for (template, period).
+
+    Returns (rows, sources, warnings). Every source reports its own field resolution, honesty counters and
+    refusal reason; NOTHING here classifies — commission_ledger's rules + the tenant's column mapping do."""
+    cfg_rows = _ledger_sync_config_rows(client, org_id)
+    keys = [report_key] if report_key else ledger_ma_sync.template_sources(source_report, cfg_rows)
+    degraded = []
+    try:
+        hdr_rules = _ledger_source_rules(client, org_id, carrier_id)
+    except Exception as e:
+        # A READ-ONLY preview must never 500 because a config table is unreachable — fall back to the
+        # built-in ledger layout (the same list _ledger_source_rules returns when nothing is saved) and
+        # SAY that a saved override could not be consulted.
+        hdr_rules = [{"target_field": d["target_field"], "source_header": d["source_header"],
+                      "transform": d["transform"]}
+                     for d in column_mapping.default_mapping("commission_ledger")]
+        degraded.append(f"the saved ledger column mapping could not be read ({str(e)[:120]}) — the "
+                        f"built-in default layout was used")
+    cat_rules = commission_ledger.load_rules(client, org_id, source_report)
+    field_defs = column_mapping.target_fields("commission_ledger", client, org_id)
+    # the tenant's saved per-(carrier, report) MA column-map overrides (mig 212), keyed by report_key
+    saved_maps = {}
+    try:
+        q = (client.schema("commcalc").table("manual_report_mapping").select("report_key,column_map,carrier_id")
+             .eq("org_id", org_id))
+        if carrier_id:
+            q = q.eq("carrier_id", carrier_id)
+        for r in (q.execute().data or []):
+            if r.get("report_key") and isinstance(r.get("column_map"), dict) and r["column_map"]:
+                saved_maps.setdefault(r["report_key"], r["column_map"])
+    except Exception:
+        pass
+
+    synced_at = column_mapping.now_iso()
+    all_rows, sources, warnings = [], [], list(degraded)
+    for rk in keys:
+        cfg = next((c for c in cfg_rows if c.get("source_report") == source_report
+                    and c.get("report_key") == rk), None) or {}
+        sdef = ledger_ma_sync.source_def(rk, {"source_table": cfg.get("source_table"),
+                                              "kind": cfg.get("kind"), "date_col": cfg.get("date_col"),
+                                              "field_hints": cfg.get("field_hints")})
+        ceiling = (safe_float(cfg.get("amount_ceiling")) or ledger_ma_sync.AMOUNT_CEILING_DEFAULT)
+        col_map = ledger_ma_sync.ma_column_map(rk, saved_maps.get(rk))
+        resolved, unresolved = ledger_ma_sync.resolve_field_sources(hdr_rules, field_defs, col_map,
+                                                                   sdef.get("field_hints"))
+        comps = (ledger_ma_sync.components_for(rk, cfg.get("component_map"), col_map)
+                 if sdef["kind"] == "component" else [])
+        raw, meta = _ledger_raw_rows(client, org_id, sdef["source_table"], period,
+                                     sdef.get("date_col"), carrier_id)
+        base = {"org_id": org_id, "source_report": source_report,
+                "origin": ledger_ma_sync.ORIGIN_SYNC}
+        if period:
+            base["period"] = period
+        rows, diag = ledger_ma_sync.derive(
+            raw, kind=sdef["kind"], resolved=resolved, hdr_rules=hdr_rules, cat_rules=cat_rules,
+            base=base, components=comps, ceiling=ceiling, source_table=sdef["source_table"],
+            synced_at=synced_at, report_key=rk)
+        all_rows.extend(rows)
+        # On a COMPONENT source the amount and the product label are SYNTHESIZED per component (each
+        # payout column becomes its own line, labelled with the report's own header) — so their absence
+        # from the raw table is by design, not a config gap. Report them as synthesized, not unresolved.
+        synth = ([u["target_field"] for u in unresolved
+                  if u["target_field"] in ledger_ma_sync.HINT_FORBIDDEN_FIELDS]
+                 if sdef["kind"] == "component" else [])
+        unresolved = [u for u in unresolved if u["target_field"] not in synth]
+        sources.append({**sdef, "ceiling": ceiling, "read": meta, "diag": diag,
+                        "mapped_fields": [{"target_field": k, **v} for k, v in sorted(resolved.items())],
+                        "unresolved_fields": unresolved, "synthesized_fields": synth,
+                        "components": comps,
+                        "column_map_source": "saved override" if saved_maps.get(rk) else "report_pull default",
+                        "mapping_saved": bool(saved_maps.get(rk))})
+        if meta.get("table_missing"):
+            warnings.append(f"{sdef['source_table']} does not exist — is migration 083 applied?")
+        elif not meta.get("rows"):
+            warnings.append(f"{sdef['source_table']} has no rows for {period or 'any period'}"
+                            f"{' (carrier filter applied)' if carrier_id else ''}.")
+        if diag.get("refused"):
+            warnings.append(f"{sdef['source_table']}: {diag['refused']}")
+        for u in unresolved:
+            warnings.append(f"{sdef['source_table']}: ledger field '{u['target_field']}' "
+                            f"({u['label']}) has no column here — header '{u['header']}' is absent, so the "
+                            f"field is left empty. Add it as an alias on Target Fields to fill it.")
+    return all_rows, sources, warnings
+
+
+def _ledger_observed(rows):
+    """(order_type, product_name) -> count / payout / the category it classified to — the same shape
+    /commission-ledger/analyze returns, so the preview surfaces unmapped labels identically."""
+    agg = {}
+    for r in rows:
+        key = (r.get("order_type") or "", r.get("product_name") or "")
+        a = agg.setdefault(key, {"order_type": key[0], "product_name": key[1], "count": 0,
+                                 "payout_total": 0.0, "category": r.get("category"),
+                                 "payment_month": r.get("payment_month")})
+        a["count"] += 1
+        a["payout_total"] = round(a["payout_total"] + safe_float(r.get("payout_total")), 2)
+    return sorted(agg.values(), key=lambda x: (-x["payout_total"], x["product_name"]))
+
+
+def _ledger_ma_payload(client, org_id, source_report, period, carrier_id="", report_key=""):
+    """The shared preview payload — what a refresh WOULD write, plus every honesty surface. Read-only.
+    Returns (payload, rows): the preview endpoint returns the payload and DROPS the rows; the refresh
+    endpoint inserts them. One derivation serves both, so the preview and the write can never disagree."""
+    rows, sources, warnings = _ledger_ma_derive(client, org_id, source_report, period, carrier_id, report_key)
+    existing, ready = _ledger_existing_by_origin(client, org_id, source_report, period)
+    observed = _ledger_observed(rows)
+    summary = commission_ledger.summarize(rows)
+    guard = ledger_ma_sync.merge_diags([s["diag"] for s in sources])
+    note = ledger_ma_sync.overlap_note(existing, len(rows))
+    payload = {
+        "source_report": source_report, "period": period, "carrier_id": carrier_id or None,
+        "ready": ready, "migration": None if ready else "251_commission_ledger_ma_sync.sql",
+        "would_write": len(rows),
+        "delete_scope": {"org_id": org_id, "source_report": source_report, "period": period,
+                         "origin": ledger_ma_sync.ORIGIN_SYNC},
+        "sources": sources, "summary": summary, "observed": observed,
+        "unmapped": [o for o in observed if o.get("category") == "other"],
+        "guard": guard, "existing_by_origin": list(existing.values()), "overlap_note": note,
+        "warnings": warnings,
+        "categories": commission_ledger.CATEGORIES,
+        "category_labels": commission_ledger.CATEGORY_LABELS,
+        "origin_labels": ledger_ma_sync.ORIGIN_LABELS,
+    }
+    return payload, rows
+
+
+@router.get("/commission-ledger/ma-sync/preview")
+def commission_ledger_ma_sync_preview(source_report: str = "ma_daily_tx", period: str = "",
+                                      carrier_id: str = "", report_key: str = "", org_id: str = ORG_ID):
+    """READ-ONLY preview of a refresh: the five-bucket summary the raw MA tables WOULD produce for this
+    template/period, every label it classified to (so unmapped ones can get a rule first), the per-source
+    field resolution, the amount-guard exclusions, and what is already in the period per provenance.
+    Writes NOTHING — the button next to it does."""
+    require_org(org_id)
+    if not period:
+        raise HTTPException(400, "period is required (e.g. 'June 2026')")
+    payload, _rows = _ledger_ma_payload(sb(), org_id, source_report, period, carrier_id, report_key)
+    return payload
+
+
+@router.post("/commission-ledger/ma-sync")
+def commission_ledger_ma_sync(source_report: str = "ma_daily_tx", period: str = "", carrier_id: str = "",
+                              report_key: str = "", org_id: str = ORG_ID):
+    """REFRESH a period's ledger rows from the raw MA tables. Idempotent: deletes exactly this
+    (org, template, period, origin='ma_sync') set and re-inserts the freshly derived rows, so running it
+    twice leaves identical state and a file-imported row is never touched. Refuses (400) rather than write
+    when migration 251 is absent, when no rows could be derived, or when the amount column is an
+    identifier. Never touches rep_commissions, the calculators, payout schedules or any P&L table."""
+    require_org(org_id)
+    if not period:
+        raise HTTPException(400, "period is required (e.g. 'June 2026')")
+    client = sb()
+    if not _ledger_origin_ready(client, org_id):
+        raise HTTPException(400, "Refresh needs migration 251_commission_ledger_ma_sync.sql (the ledger's "
+                                 "`origin` column). Until it runs, a synced row could not be told apart "
+                                 "from a file import, so nothing is written.")
+    payload, rows = _ledger_ma_payload(client, org_id, source_report, period, carrier_id, report_key)
+    if not rows:
+        raise HTTPException(400, "Nothing to write — no usable rows were derived. " +
+                            (payload["warnings"][0] if payload["warnings"] else
+                             "Check the period and the source tables."))
+    _ledger_delete_scoped(client, org_id, source_report, period, ledger_ma_sync.ORIGIN_SYNC)
+    saved = 0
+    for i in range(0, len(rows), 500):
+        try:
+            client.schema("commcalc").table("commission_ledger").insert(rows[i:i + 500]).execute()
+            saved += len(rows[i:i + 500])
+        except Exception as e:
+            raise HTTPException(500, f"Insert into commission_ledger failed at row {i}: {e}")
+    _write_upload_trace(org_id, source="ledger-ma-sync", filename=None, upload_type=source_report,
+                        period=period,
+                        result={"saved": saved,
+                                "note": f"ledger refreshed from {', '.join(s['source_table'] for s in payload['sources'])}",
+                                "_trace": {"rows_in": payload["guard"]["rows_in"],
+                                           "target_table": "commission_ledger",
+                                           "periods": {period: saved}}})
+    after, _r = _ledger_existing_by_origin(client, org_id, source_report, period)
+    return {**payload, "saved": saved, "existing_by_origin": list(after.values()),
+            "refreshed_at": rows[0].get("synced_at") if rows else None}
+
+
+@router.get("/commission-ledger/provenance")
+def commission_ledger_provenance(source_report: str = "ma_daily_tx", org_id: str = ORG_ID):
+    """PER PERIOD: which source(s) populated this template's ledger and when — so "stale" is visible
+    instead of silent. Also counts the rows sitting in the raw MA tables per period, so a period whose
+    raw feed has moved on while the ledger hasn't is obvious at a glance. READ-ONLY."""
+    require_org(org_id)
+    client = sb()
+    ready = True
+    try:
+        rows = (client.schema("commcalc").table("commission_ledger")
+                .select("period,origin,payout_total,created_at,synced_at")
+                .eq("org_id", org_id).eq("source_report", source_report).limit(100000).execute().data) or []
+    except Exception:
+        ready = False
+        try:
+            rows = (client.schema("commcalc").table("commission_ledger")
+                    .select("period,payout_total,created_at")
+                    .eq("org_id", org_id).eq("source_report", source_report).limit(100000).execute().data) or []
+        except Exception:
+            rows = []
+    per = {}
+    for r in rows:
+        p = (r.get("period") or "").strip() or "(no period)"
+        o = (r.get("origin") or ledger_ma_sync.ORIGIN_FILE) if ready else ledger_ma_sync.ORIGIN_FILE
+        a = per.setdefault(p, {"period": p, "lines": 0, "payout_total": 0.0, "origins": {}})
+        a["lines"] += 1
+        a["payout_total"] = round(a["payout_total"] + safe_float(r.get("payout_total")), 2)
+        b = a["origins"].setdefault(o, {"origin": o, "label": ledger_ma_sync.ORIGIN_LABELS.get(o, o),
+                                       "lines": 0, "payout_total": 0.0, "last_at": None})
+        b["lines"] += 1
+        b["payout_total"] = round(b["payout_total"] + safe_float(r.get("payout_total")), 2)
+        ts = r.get("synced_at") or r.get("created_at")
+        if ts and (b["last_at"] is None or str(ts) > str(b["last_at"])):
+            b["last_at"] = ts
+    # raw availability per period, per feeding source (the "your source has moved on" signal)
+    cfg_rows = _ledger_sync_config_rows(client, org_id)
+    raw_avail, raw_meta = {}, []
+    for rk in ledger_ma_sync.template_sources(source_report, cfg_rows):
+        cfg = next((c for c in cfg_rows if c.get("source_report") == source_report
+                    and c.get("report_key") == rk), None) or {}
+        sdef = ledger_ma_sync.source_def(rk, {"source_table": cfg.get("source_table")})
+        counts, missing, truncated = {}, False, False
+        try:
+            # ONE column, paged, and BOUNDED. This runs on every page load, so it must never become the
+            # unbounded fetch-all that starved the worker on 2026-07-30 (team_snapshot). Past the cap the
+            # count is reported as truncated rather than quietly wrong.
+            start, page, cap = 0, 1000, 50000
+            while True:
+                chunk = (client.schema("commcalc").table(sdef["source_table"]).select("period")
+                         .eq("org_id", org_id).range(start, start + page - 1).execute().data) or []
+                for r in chunk:
+                    p = (r.get("period") or "").strip() or "(no period)"
+                    counts[p] = counts.get(p, 0) + 1
+                start += page
+                if len(chunk) < page:
+                    break
+                if start >= cap:
+                    truncated = True
+                    break
+        except Exception:
+            missing = True
+        raw_meta.append({"report_key": rk, "source_table": sdef["source_table"], "missing": missing,
+                         "periods": len(counts), "rows": sum(counts.values()), "truncated": truncated})
+        for p, n in counts.items():
+            raw_avail.setdefault(p, {})[sdef["source_table"]] = n
+    # union of ledger periods and raw periods, so a period present ONLY in the raw feed still shows
+    keys = set(per) | set(raw_avail)
+    out = []
+    for p in keys:
+        a = per.get(p) or {"period": p, "lines": 0, "payout_total": 0.0, "origins": {}}
+        a = dict(a)
+        a["origins"] = list((per.get(p) or {}).get("origins", {}).values())
+        a["raw_available"] = raw_avail.get(p) or {}
+        a["raw_rows"] = sum((raw_avail.get(p) or {}).values())
+        a["overlap"] = len(a["origins"]) > 1
+        a["synced"] = any(o["origin"] == ledger_ma_sync.ORIGIN_SYNC for o in a["origins"])
+        a["stale"] = bool(a["raw_rows"]) and not a["synced"]
+        out.append(a)
+    def _psort(p):
+        mo, yr = _month_year(p)
+        return (yr, mo, str(p))
+    out.sort(key=lambda x: _psort(x["period"]), reverse=True)
+    return {"source_report": source_report, "ready": ready,
+            "migration": None if ready else "251_commission_ledger_ma_sync.sql",
+            "periods": out, "raw_sources": raw_meta,
+            "origin_labels": ledger_ma_sync.ORIGIN_LABELS}
 
 
 @router.get("/commission-category-map")
