@@ -151,6 +151,8 @@ export default function ResidualPerSubPage() {
           <p style={{ color: 'var(--text2)', fontSize: 13, margin: '4px 0 0' }}>
             Residual (MI + ATU) per paid subscriber, month over month, vs commissions paid — to see the effect of lower commissions on residual.
           </p>
+          {/* Provenance: which residual source actually answered for this tenant (read-only). */}
+          {data?.source_label && <p style={{ color: 'var(--text3)', fontSize: 11, margin: '3px 0 0' }}>Source: {data.source_label}</p>}
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--red)' }}>{msg}</span>}
@@ -181,6 +183,23 @@ export default function ResidualPerSubPage() {
           <input type="checkbox" checked={breakout} disabled={!filtered} onChange={e => setPerStore(e.target.checked)} /> Break out by store
         </label>
       </div>
+
+      {/* Source-coverage warning — a month with airtime rows but no MA Commission Details rows
+          computes to $0 residual/subscriber legitimately; say so instead of showing a silent $0. */}
+      {!loading && data?.data_note && (
+        <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 12, color: '#92400e', background: '#fffbeb', borderLeft: '3px solid #f59e0b' }}>
+          {data.data_note}
+          {Array.isArray(data.ma_coverage) && data.ma_coverage.length > 0 && (
+            <div style={{ marginTop: 8, display: 'flex', gap: 12, flexWrap: 'wrap', color: 'var(--text2)' }}>
+              {data.ma_coverage.map((c: any) => (
+                <span key={c.period} style={{ fontSize: 11 }}>
+                  <b>{shortPeriod(c.period)}</b>: {Number(c.commission_rows || 0).toLocaleString()} commission · {Number(c.daily_tx_rows || 0).toLocaleString()} daily-tx
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Market + store filters */}
       {(markets.length > 0 || stores.length > 0) && !loading && (

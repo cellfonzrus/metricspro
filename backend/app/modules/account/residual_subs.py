@@ -64,6 +64,40 @@ _MA_COMPONENTS = ["device_margin", "consumer_margin", "consumer_financing", "reb
                   "wallet_funding", "fees_margin",
                   "spiff_m1", "spiff_m2", "spiff_m3", "spiff_m4", "spiff_m5", "spiff_m6"]
 
+# ── MONEY vs IDENTIFIER on the raw_ma_* tables (mig 083) ─────────────────────────────────────
+# Several raw_ma_* columns are declared NUMERIC but hold IDENTIFIERS, not dollars. Summing one of
+# them produces a 10–13 digit "amount" that looks like a catastrophic loss. This has already
+# happened in production once (2026-07-30: the What-If MA residual read `merchant_invoice` — the
+# Merchant Invoice NUMBER, catalogued as role "key" in commcalc/ma_upload.py — and reported
+# −$492,946,277,716 of May-2026 residual). The finance tree never read those columns; this list
+# makes that a checked invariant instead of an accident, so no future edit can quietly sum an id.
+#
+# The dealer's money columns on raw_ma_daily_tx are `retail_cost` (signed line amount; negative =
+# paid to the dealer — the column the canonical Commission Ledger books from) and
+# `merchant_discount` (airtime margin — what this module's ATU-equivalent reads).
+_MA_IDENTIFIER_COLUMNS = frozenset({
+    "merchant_invoice",       # Merchant Invoice # — an invoice identifier, NEVER an amount
+    "merchant_account_id", "account_id", "order_number", "activation_order",
+    "ban", "bin", "imei", "sim", "sku", "pos_invoice",
+    "user_id", "platform_tx_id", "external_ref",
+    "direct_ma_id", "top_ma_id", "id", "org_id", "carrier_id", "source_id",
+})
+
+
+def assert_money_columns(cols, where=""):
+    """Fail loudly if an identifier column is about to be summed as dollars. Returns `cols`."""
+    bad = sorted(c for c in cols if c in _MA_IDENTIFIER_COLUMNS)
+    if bad:
+        raise ValueError(
+            "refusing to sum identifier column(s) as money%s: %s — these raw_ma_* columns are "
+            "NUMERIC but hold identifiers (see _MA_IDENTIFIER_COLUMNS)."
+            % ((" in " + where) if where else "", ", ".join(bad)))
+    return cols
+
+
+_MA_ATU_COLUMN = assert_money_columns(["merchant_discount"], "raw_ma_daily_tx ATU-equivalent")[0]
+assert_money_columns(_MA_COMPONENTS, "raw_ma_commission MI-equivalent")
+
 
 def _latest_ma_period(client, org_id):
     """(year, month) of the most recent raw_ma_commission period; today's month if unknown/empty."""
@@ -81,7 +115,7 @@ def _latest_ma_period(client, org_id):
     return n.year, n.month
 
 
-def _aggregate_ma(client, org_id, months):
+def _aggregate_ma(client, org_id, months, meta=None):
     """Carrier-agnostic residual source for MA/VidaPay tenants (Total, luxelink), used when a tenant has
     NO Boost raw_mi. MI-equivalent = MA Commission Details payable (raw_ma_commission, sign-flipped);
     ATU-equivalent = airtime margin (raw_ma_daily_tx.merchant_discount) — the SAME two figures the
@@ -92,10 +126,20 @@ def _aggregate_ma(client, org_id, months):
 
     Returns the same per-(period, store) aggregate shape as the Boost path, or [] when the MA tables are
     empty (a data-gap until the VidaPay report ingest runs — the code path is correct, the data just
-    hasn't landed). NEVER raises."""
+    hasn't landed). NEVER raises.
+
+    `meta` (optional dict) is filled with per-period SOURCE COVERAGE — which of the two MA reports
+    actually had rows for each period. It changes no figure; it lets the report say out loud "this
+    month's residual is airtime-only because MA Commission Details was never pulled for it" instead
+    of showing a silent $0 the owner has to guess at."""
     ly, lm = _latest_ma_period(client, org_id)
     want = set(_recent_labels(ly, lm, months))
     agg = {}  # (period, store_label) -> aggregate
+    cov = {}  # period -> {"commission_rows": int, "daily_tx_rows": int}
+
+    def _cov(period, key):
+        c = cov.setdefault(period, {"commission_rows": 0, "daily_tx_rows": 0})
+        c[key] += 1
 
     def _bucket(period, store_label, name=None):
         k = (period, store_label)
@@ -126,6 +170,7 @@ def _aggregate_ma(client, org_id, months):
                 a["sum_mi"] += pay
                 a["lines"] += 1
                 a["subs"] += 1  # one Commission Details row == one activated subscriber line
+                _cov(per, "commission_rows")
             if len(chunk) < page:
                 break
             start += page
@@ -146,24 +191,32 @@ def _aggregate_ma(client, org_id, months):
                     continue
                 store = (r.get("account_id") or "").strip() or "(Unassigned)"
                 a = _bucket(per, store, name=(r.get("account_name") or None))
-                a["sum_atu"] += safe_float(r.get("merchant_discount"))
+                a["sum_atu"] += safe_float(r.get(_MA_ATU_COLUMN))
+                _cov(per, "daily_tx_rows")
             if len(chunk) < page:
                 break
             start += page
     except Exception:
         pass
 
+    if meta is not None:
+        meta["ma_coverage"] = cov
     return list(agg.values())
 
 
-def _aggregate(client, org_id, months):
+def _aggregate(client, org_id, months, meta=None):
     """Per (period, store): sum_mi, sum_atu, subs, lines — CARRIER-AGNOSTIC (no tenant-name branching).
     Boost (raw_mi) is the primary source; a tenant with no raw_mi falls through to the MA/VidaPay tables
-    (raw_ma_commission + raw_ma_daily_tx). Source is chosen by which data EXISTS, per org, at runtime."""
+    (raw_ma_commission + raw_ma_daily_tx). Source is chosen by which data EXISTS, per org, at runtime.
+    `meta` (optional) records WHICH source answered + the MA per-period coverage; figures are unchanged."""
     boost = _aggregate_boost(client, org_id, months)
     if boost:
+        if meta is not None:
+            meta["source"] = "boost_mi_atu"
         return boost
-    return _aggregate_ma(client, org_id, months)
+    if meta is not None:
+        meta["source"] = "vidapay_ma"
+    return _aggregate_ma(client, org_id, months, meta=meta)
 
 
 def _aggregate_boost(client, org_id, months):
@@ -212,10 +265,57 @@ def _aggregate_boost(client, org_id, months):
     return out
 
 
+_SOURCE_LABELS = {
+    "boost_mi_atu": "Boost / ePay — raw_mi actual MI + ATU payout",
+    "vidapay_ma": ("VidaPay / master-agent — MA Commission Details (MI-equivalent) "
+                   "+ MA Daily Tx airtime margin (ATU-equivalent)"),
+}
+
+
+def _source_diagnostics(source, meta, kept):
+    """Read-only provenance for the payload: WHICH residual source answered, and — for MA/VidaPay
+    tenants — the per-period coverage of the two MA reports. Moves NO figure. It exists because a
+    month with MA Daily Tx rows but no MA Commission Details rows legitimately computes to
+    airtime-margin-only residual and ZERO paid subscribers, which reads as "broken data" unless the
+    report says so out loud. Ruling out the data cause is the first step, so the report shows it."""
+    out = {"source": source or None, "source_label": _SOURCE_LABELS.get(source),
+           "ma_coverage": None, "data_note": None}
+    if source != "vidapay_ma":
+        return out
+    cov = meta.get("ma_coverage") or {}
+    rows, airtime_only = [], []
+    for p in kept:
+        c = cov.get(p) or {}
+        cr, dr = int(c.get("commission_rows") or 0), int(c.get("daily_tx_rows") or 0)
+        rows.append({"period": p, "commission_rows": cr, "daily_tx_rows": dr})
+        if dr and not cr:
+            airtime_only.append(p)
+    out["ma_coverage"] = rows
+    if airtime_only:
+        one = len(airtime_only) == 1
+        out["data_note"] = (
+            "DATA GAP (not a calculation error) — " + ", ".join(airtime_only) + ": "
+            + ("this month has" if one else "these months have")
+            + " MA Daily Tx rows but NO MA Commission Details rows, so "
+            + ("its" if one else "their") + " residual is airtime margin only and "
+            + ("its" if one else "their") + " paid-subscriber count is 0 (residual/subscriber "
+            "therefore reads $0.00). Pull MA Commission Details for "
+            + ("that month" if one else "those months")
+            + " (Data Imports \u2192 payment-processor sources) before comparing month over month.")
+    return out
+
+
 def compute(client, org_id, months=6):
     """Return the residual-per-subscriber trend: per-store monthly series + an exact company total.
-    Filtering by store/market is done client-side (like the GP report), so this returns every store."""
-    agg = _aggregate(client, org_id, months)
+    Filtering by store/market is done client-side (like the GP report), so this returns every store.
+
+    The payload also carries read-only provenance (`source`, `source_label`, `ma_coverage`,
+    `data_note`) so an MA/VidaPay tenant can tell a real $0 from an un-ingested month. No figure in
+    the series/company/totals is affected by it."""
+    # NOTE: `src_meta`, not `meta` — the store-bucket loop below already binds a local named `meta`
+    # (the store_mapping row). Naming this one `meta` silently shadowed it and blanked the provenance.
+    src_meta = {}
+    agg = _aggregate(client, org_id, months, meta=src_meta)
 
     # salesforce_id → store metadata
     sm_rows = (client.schema("commcalc").table("store_mapping")
@@ -315,7 +415,7 @@ def compute(client, org_id, months=6):
                         "commission": round(comm_company.get(p, 0.0), 2)})
 
     markets = sorted({d["market"] for d in store_rows if d["market"]})
-    return {
+    out = {
         "months": kept,
         "stores": store_rows,
         "company": company,
@@ -324,3 +424,5 @@ def compute(client, org_id, months=6):
                  "No residual (MI/ATU) data yet — upload the residual report (Boost: MI/ePay sweep; "
                  "Total/VidaPay: the MA Commission Details + Daily Tx reports) first."),
     }
+    out.update(_source_diagnostics(src_meta.get("source"), src_meta, kept))
+    return out
