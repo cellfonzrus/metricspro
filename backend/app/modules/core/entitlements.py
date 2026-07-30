@@ -27,7 +27,13 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"   # house org (middleware rewrit
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
 # folded the configurable HR intake-capture form into seed_tenant_defaults(); 3 = mig 079 expanded
 # seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
-SEED_VERSION = 6   # bumped: 6 = mig 715 registered the "support" (Tech Support) module, so every existing
+SEED_VERSION = 7   # bumped: 7 = mig 718 (Auto-Fix Pipeline) added core.seed_token_rates(), which sync_tenant
+                   #             now calls on the HOUSE org's pass, so the AI token-rate table self-seeds on
+                   #             the next login instead of depending on the migration's own seed line having
+                   #             been run. Idempotent (ON CONFLICT DO NOTHING) — it never clobbers an
+                   #             owner-edited rate. No new entitlement module: the fix-request board is a
+                   #             PLATFORM (super-admin) surface like /admin/tenants, not a billable module.
+                   #         6 = mig 715 registered the "support" (Tech Support) module, so every existing
                    #             tenant self-provisions a support tenant_modules entitlement row on its next
                    #             login (the cross-tenant console is HOUSE-gated regardless; this is billing
                    #             hygiene so the module isn't "missing" for any tenant).
@@ -176,6 +182,15 @@ def sync_tenant(client, org_id: str) -> dict:
         try:
             from app.modules.core.support_seed import seed_support_docs
             seed_support_docs(client, org_id)
+        except Exception:
+            pass
+        # HOUSE org only: seed the AI token-rate table (mig 718). Rates are PLATFORM config — the house
+        # rows are the default every tenant prices against (a tenant row overrides for that tenant), so
+        # this runs once on the house pass, not per tenant. Idempotent inside the SQL function
+        # (ON CONFLICT DO NOTHING) ⇒ an owner-edited rate is never clobbered. An un-run mig 718 is a
+        # silent no-op, so the fix-pipeline board simply shows no $ until the migration lands.
+        try:
+            client.schema("core").rpc("seed_token_rates", {"p_org": org_id}).execute()
         except Exception:
             pass
     if seeded:

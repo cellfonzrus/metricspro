@@ -20,6 +20,16 @@ class Settings(BaseSettings):
     API_PUBLIC_URL: str = "https://metricspro-production.up.railway.app"
     # Shared secret guarding POST /notify/run-due (pg_cron sends it as x-notify-secret).
     NOTIFY_RUN_SECRET: str = ""
+
+    # ── Auto-Fix Pipeline (mig 718) — the AGENT door into /api/v1/core/fix-pipeline/* ──────────
+    # Least-privilege service secret presented as `x-fix-pipeline-secret` by the scheduled triage
+    # routine (which has no JWT), same precedent as NOTIFY_RUN_SECRET. It is scoped IN CODE to
+    # feed-read + fix-request registry read/write (fix_pipeline.SECRET_CAPS): it can never approve,
+    # never mark anything pushed, never edit the token-rate table, and — because no other endpoint in
+    # the app reads this header — it unlocks nothing else. UNSET (the default) = the agent door is
+    # CLOSED (an empty secret can never match), so the browser/super-admin board is unaffected until
+    # the operator sets it on Railway. Never log it, never commit a value.
+    FIX_PIPELINE_SECRET: str = ""
     # Resend email — sending domain is metricspro.tech (verify it in Resend; override via env).
     RESEND_API_KEY: str = ""
     NOTIFY_FROM_EMAIL: str = "reports@metricspro.tech"
