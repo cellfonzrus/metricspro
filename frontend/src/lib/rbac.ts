@@ -73,6 +73,8 @@ export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
     help: 'Access to /accounts/residual-per-sub. DEFAULT-CLOSED — admin-only until granted.' },
   { key: 'account_trends', label: 'Trends report (all metrics)',
     help: 'Access to /accounts/trends. DEFAULT-CLOSED — admin-only until granted.' },
+  { key: 'ma_handset_cogs', label: 'Marketplace handset COGS report',
+    help: 'Access to /commcalc/ma-handsets — the whole report (lines, quantities and handset costs), not just the totals (backend commcalc `_can_view_ma_handset_cogs`). DEFAULT-CLOSED — admin-only until granted.' },
 ]
 // Frontend mirror of backend commcalc `_can_view_carrier_residual` — KEEP IN SYNC. Super-admins /
 // company-wide ('all') roles / admins always pass; otherwise the grant is honored under either the
@@ -112,6 +114,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/reports', label: 'Rep Commission Report', icon: '📋', module: 'commissions' },
     { href: '/commcalc/kpi', label: 'KPI Metrics', icon: '🎯', module: 'commissions' },
     { href: '/commcalc/device-history', label: 'Device History', icon: '📱', module: 'commissions' },
+    { href: '/commcalc/ma-handsets', label: 'Handset COGS', icon: '📦', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/productivity', label: 'Productivity & Reviews', icon: '🏅', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/coaching', label: 'Rep Coaching', icon: '🎓', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-analyzer', label: 'Sales Analyzer', icon: '📉', module: 'commissions', scopes: ['all', 'market', 'store'] },
@@ -123,6 +126,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/chargebacks', label: 'Chargebacks & Fraud', icon: '🔻', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/accessory-flags', label: 'Accessory Flags', icon: '🔖', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️', module: 'commissions' },
+    { href: '/commcalc/imei-rebates', label: 'IMEI Rebates', icon: '🔁', module: 'commissions' },
     { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', icon: '🔁', module: 'commissions', scopes: ['all', 'market'] },
     // Agency (Master/Sub-Agent) console — config + billing, admin/owner scope only (NEEDS CORE for
