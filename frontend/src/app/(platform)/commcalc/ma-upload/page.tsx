@@ -201,7 +201,7 @@ function MapStep({ carrierId, report, setMsg, onSaved }: { carrierId: string; re
           <tbody>
             {fields.map(f => (
               <tr key={f.col}>
-                <td style={cell}><code>{f.col}</code></td>
+                <td style={cell}><code>{f.col}</code>{(f as any).label && (f as any).label !== f.col ? <span style={{ color: 'var(--text3)', fontSize: 12 }}> · {(f as any).label}</span> : null}</td>
                 <td style={{ ...cell, color: 'var(--text3)', fontSize: 12 }}>{f.type}</td>
                 <td style={cell}>
                   <EntityPicker
