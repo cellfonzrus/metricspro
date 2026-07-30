@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
+import { SweepStatusCell, summarizeSweepRun } from '../_lib/sweepOutcome'
 
 // Generic FTP-pull sweep (Theme 6). Configure a vendor's FTP (host/creds/folder) and filename →
 // upload-type patterns; the backend pulls new files on a schedule and routes each to the right parser.
@@ -46,7 +47,17 @@ export default function FtpImportsPage() {
   }
   async function runNow() {
     setBusy('run')
-    try { const r: any = await api('/api/v1/commcalc/ftp-sweep/run-now', { method: 'POST', body: '{}' }); setMsg(r.ok ? `✅ Ingested ${r.ingested} file(s).` : `❌ ${r.error}`); load() }
+    try {
+      const r: any = await api('/api/v1/commcalc/ftp-sweep/run-now', { method: 'POST', body: '{}' })
+      // "Ingested N file(s)" alone was a green lie when N was 0 because every file saved 0 rows.
+      // Name what actually happened to the rest (same wording as the Email-Imports page).
+      const extra = summarizeSweepRun(r)
+      setMsg(!r.ok ? `❌ ${r.error}`
+        : r.ingested > 0 ? `✅ Ingested ${r.ingested} file(s).${extra ? ' · ' + extra : ''}`
+        : extra ? `⚠️ 0 ingested — ${extra}`
+        : '⚠️ 0 ingested — nothing new: matched files already imported OK (errored/refused ones auto-retry), or none match your patterns. Use Test connection to see the folder contents.')
+      load()
+    }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
   }
 
@@ -133,7 +144,10 @@ export default function FtpImportsPage() {
               <tr key={p.id}>
                 <td style={cell}>{p.filename}</td>
                 <td style={{ ...cell, fontSize: 12 }}>{p.upload_type}</td>
-                <td style={cell}>{p.status === 'ok' ? <span style={{ color: '#16794a' }}>✓ {p.rows_saved} rows</span> : <span style={{ color: '#dc2626' }}>✕ {p.detail}</span>}</td>
+                {/* Every status gets an honest, reasoned line — the old ok/else pair rendered an
+                    `empty` or `ignored` outcome as a bare red ✕ with no explanation, and an ok row
+                    carrying a caveat as a clean green tick. Shared with the Email-Imports page. */}
+                <td style={cell}><SweepStatusCell row={p} /></td>
                 <td style={{ ...cell, fontSize: 11, color: 'var(--text3)' }}>{p.processed_at ? new Date(p.processed_at).toLocaleString() : ''}</td>
               </tr>
             ))}

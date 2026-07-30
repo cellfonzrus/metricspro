@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '@/lib/client'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
+import { SweepStatusCell, summarizeSweepRun } from '../_lib/sweepOutcome'
 import EntityPicker from '@/components/EntityPicker'
 
 // Generic email (IMAP) inbox sweep — sibling of the FTP sweep. Configure a mailbox (host/creds) and
@@ -208,25 +209,22 @@ export default function EmailImportsPage() {
     setBusy('run')
     try {
       const r: any = await api(`/api/v1/commcalc/email-sweep/run-now?account=${encodeURIComponent(cfg.account || 'default')}`, { method: 'POST', body: '{}' })
-      const errs = (r.files || []).filter((f: any) => f.status === 'error')
-      const allSkips = (r.files || []).filter((f: any) => f.status === 'skipped')
-      // Two distinct 'skipped' kinds land here: a price-guard refusal, and an Inventory-Aging (or other)
-      // 0-row parse. Report each honestly rather than blaming everything on the price guard.
-      const guardSkips = allSkips.filter((f: any) => String(f.skipped || '').startsWith('price_guard'))
-      const otherSkips = allSkips.filter((f: any) => !String(f.skipped || '').startsWith('price_guard'))
+      const guardSkips = (r.files || []).filter((f: any) => f.status === 'skipped' && String(f.skipped || '').startsWith('price_guard'))
       // A PARTIAL price-guard ingest comes back status='ok' (rows saved) with skipped='price_guard_partial'.
       const partials = (r.files || []).filter((f: any) => f.skipped === 'price_guard_partial')
-      const skipNote = guardSkips.length ? ` · ⚠️ ${guardSkips.length} refused by the price guard (fuller data already stored — existing dollars kept)` : ''
-      const otherNote = otherSkips.length ? ` · ⚠️ ${otherSkips.length} skipped: ${otherSkips.slice(0, 2).map((f: any) => `${f.file}: ${f.detail || 'parsed 0 rows'}`).join(' · ')}` : ''
+      // Everything else worth saying — 0-row refusals with their reason, files read but carrying no
+      // ingestable rows (`empty`), types with no importer (`ignored`), errors, download failures,
+      // retries, and a failure to record the sweep's OWN history row. Shared with the FTP page so the
+      // two sweeps report identically.
+      const extra = summarizeSweepRun(r)
       const partNote = partials.length ? ` · ⚠️ ${partials.length} partial (ingested fresh day(s), kept existing data for degraded day(s))` : ''
       setMsg(!r.ok ? `❌ ${r.error}`
-        : r.ingested > 0 ? `✅ Ingested ${r.ingested} attachment(s).${skipNote}${otherNote}${partNote}`
-        : guardSkips.length ? `⚠️ 0 ingested — ${guardSkips.length} file(s) refused by the price guard: a degraded/price-less export arrived and the fuller data already stored for that day was kept. Re-send the full "Sales Transaction Details" (with Ext Price + GP).${otherNote}`
-        : otherSkips.length ? `⚠️ 0 ingested — ${otherSkips.length} file(s) skipped: ${otherSkips.slice(0, 2).map((f: any) => `${f.file}: ${f.detail || 'parsed 0 rows'}`).join(' · ')}`
-        : errs.length ? `⚠️ 0 ingested — ${errs.length} file(s) errored: ${errs.slice(0, 2).map((e: any) => `${e.file}: ${e.detail}`).join(' · ')}`
+        : r.ingested > 0 ? `✅ Ingested ${r.ingested} attachment(s).${extra ? ' · ' + extra : ''}${partNote}`
+        : guardSkips.length ? `⚠️ 0 ingested — ${guardSkips.length} file(s) refused by the price guard: a degraded/price-less export arrived and the fuller data already stored for that day was kept. Re-send the full "Sales Transaction Details" (with Ext Price + GP). · ${extra}`
+        : extra ? `⚠️ 0 ingested — ${extra}`
         : !(cfg.patterns || []).some((p: any) => (p.pattern || '').trim())
           ? '⚠️ 0 ingested — this mailbox has NO filename rules, so nothing can match. Add the rules below and Save.'
-          : '⚠️ 0 ingested — nothing new: matched files already imported OK (errored/empty ones now auto-retry), or none match your rules. Use Test connection to see the attachment names + which rule they hit.')
+          : '⚠️ 0 ingested — nothing new: matched files already imported OK (errored/refused ones auto-retry), or none match your rules. Use Test connection to see the attachment names + which rule they hit.')
       refresh(cfg.account)
     }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
@@ -759,23 +757,12 @@ export default function EmailImportsPage() {
                 <td style={cell}>{p.filename}</td>
                 <td style={{ ...cell, fontSize: 11, color: 'var(--text3)' }}>{p.account && p.account !== 'default' ? p.account : ''}</td>
                 <td style={{ ...cell, fontSize: 12 }}>{p.upload_type}</td>
-                <td style={cell}>{
-                  p.status === 'ok'
-                    // An ok row that carries a `detail` is a REAL ingest with a caveat — flag it amber so
-                    // it isn't shown as a clean green ✓ (a clean ok has no detail). Show the recorded
-                    // `detail` VERBATIM: two different outcomes land here — a price-guard PARTIAL ingest
-                    // and a device-only Inventory Aging ingest (0 stores, N device rows) — so the old
-                    // hard-coded price-guard sentence mislabelled the latter.
-                    ? (p.detail
-                        ? <span style={{ color: '#b45309' }} title={p.detail}>⚠ {p.rows_saved} rows — {p.detail}</span>
-                        : <span style={{ color: '#16794a' }}>✓ {p.rows_saved} rows</span>)
-                    : p.status === 'skipped'
-                      // Show the honest per-file reason (`detail`) directly — a price-guard refusal AND an
-                      // Inventory-Aging 0-store parse both land here as 'skipped', so a hard-coded price-guard
-                      // label would mislabel the latter. Fall back to the price-guard wording if no detail.
-                      ? <span style={{ color: '#b45309' }} title={p.detail || ''}>⚠ 0 rows — {p.detail || 'refused: fuller data already stored for that day (price guard)'}</span>
-                      : <span style={{ color: '#dc2626' }}>✕ {p.detail}</span>
-                }</td>
+                {/* Shared with the FTP-Imports page so the two can never disagree. Keeps the existing
+                    ok-with-caveat (amber) and skipped (amber, verbatim reason) behaviour and adds the
+                    two statuses the else-branch used to render as a bare red ✕: `empty` (read fine,
+                    carried no ingestable rows — terminal, so this row is the only record it arrived)
+                    and `ignored` (no importer for that report). */}
+                <td style={cell}><SweepStatusCell row={p} /></td>
                 <td style={{ ...cell, fontSize: 11, color: 'var(--text3)' }}>{p.processed_at ? new Date(p.processed_at).toLocaleString() : ''}</td>
               </tr>
             ))}

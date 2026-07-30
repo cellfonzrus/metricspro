@@ -531,6 +531,190 @@ def _xreport_outcome(*, saved, path, diag, flat_diag, attempts, save_failures, f
     return res
 
 
+# ── SWEEP INGEST HONESTY — one reading of an ingest result, shared by EVERY sweep ────────────────
+# Extends the shape the X-Report upload-honesty package shipped on the UPLOAD path (an outcome names its
+# own reason; a 0-row save is never a plain success) to the FTP + email sweep ingest branches, which each
+# carried their own partial copy of it:
+#   • the EMAIL sweep grew an if/elif ladder per KNOWN `skipped` marker. Anything not in that ladder — a
+#     file that read fine but mapped 0 rows, a custom sheet with no data rows, a KNOWN_IGNORED_TYPES
+#     attachment (which returns status='skipped'/rows=0 and no marker at all) — still recorded
+#     status='ok' + rows_saved=0: a green ✓ on a file that ingested NOTHING, and, because the dedup only
+#     marks a message done when rows_saved > 0, the same attachment re-ingested EVERY hour.
+#   • the FTP sweep had NONE of it: every 0-row outcome was 'ok' with no reason; it read only
+#     res['saved'] (so a device-only Inventory-Aging ingest recorded 0 where email records N); it threw
+#     the row-count `shrink` away entirely (no partial-export alert); and its dedup keyed on
+#     (filename, file_size) for ANY recorded row, so a file that ERRORED once was skipped FOREVER — the
+#     exact defect the email sweep was fixed for.
+#
+# `terminal` is the dedup contract and it is the whole point:
+#   True  → nothing a retry can change (rows landed / the file genuinely carried no ingestable rows /
+#           the type has no importer) ⇒ record it done so it stops being re-pulled and re-ingested.
+#   False → a retry could succeed (a parse or mapping miss, unmapped tender labels, a refused degraded
+#           re-delivery, a failed DB write, an exception) ⇒ NEVER mark it done; it must auto-retry.
+# So a sweep can neither re-ingest hourly nor permanently skip a file it failed on.
+
+# 0-row outcomes a retry could still fix — never marked done.
+SWEEP_RETRYABLE_ZERO = ('price_guard', 'inventory_no_stores') + XREPORT_ZERO_REASONS
+# Real ingests that carry a caveat: rows DID land (so they are done), the caveat rides in `detail` and the
+# history renders them amber rather than as a clean green tick.
+SWEEP_CAVEAT_MARKERS = ('price_guard_partial', 'inventory_devices_only',
+                        'x_report_partial_save', 'x_report_unmapped_labels')
+# Statuses a sweep's dedup may treat as DONE even though 0 rows landed.
+SWEEP_TERMINAL_ZERO_STATUSES = ('empty', 'ignored')
+
+
+def _ingest_rows_saved(res):
+    """How many rows an ingest ACTUALLY wrote, across every payload shape in this module.
+
+    Single source of truth for the count, because three readers had three different answers: the email
+    sweep special-cased `devices`, the FTP sweep read only `saved` (0 for a device-only inventory
+    ingest), and `_write_upload_trace` had its own chain. Returns 0, never None, so callers can compare.
+    """
+    if not isinstance(res, dict):
+        return 0
+    n = res.get('saved')
+    if n is None:
+        # x_report returns 'tenders' ('tenants' was the historical typo); inventory 'stores';
+        # the KNOWN_IGNORED / custom-capture payloads 'rows'.
+        n = res.get('tenders', res.get('tenants', res.get('stores', res.get('rows'))))
+    if not n and res.get('skipped') == 'inventory_devices_only':
+        # DEVICE-ONLY inventory aging: 'saved'/'stores' keep their store-count meaning (0), but N
+        # per-device rows really were written. Guarded by the marker so no other path moves.
+        n = res.get('devices')
+    try:
+        return int(n) if isinstance(n, (int, float)) else 0
+    except Exception:
+        return 0
+
+
+def _sweep_ingest_outcome(res, *, upload_type=None):
+    """Interpret ONE ingest result for a sweep history row.
+
+    Returns {status, detail, rows_saved, skipped, shrink, terminal} where `status` is one of
+      'ok'      rows landed (a caveat, if any, is in `detail`)
+      'skipped' 0 rows for a NAMED, fixable reason        → terminal False, auto-retries
+      'empty'   0 rows, the file was read and carried nothing ingestable → terminal True
+      'ignored' the upload type has no importer            → terminal True
+    ('error' is set by the caller's except blocks and is always non-terminal.)
+
+    Every status other than 'ok' carries a non-empty `detail`: a 0-row outcome must never be recorded
+    without a reason. The 'ok'/'skipped' detail strings are byte-identical to the ladder the email sweep
+    shipped, so its history rows do not change wording for any outcome it already handled.
+    """
+    res = res if isinstance(res, dict) else {}
+    rows_saved = _ingest_rows_saved(res)
+    marker = res.get('skipped')
+    shrink = res.get('shrink') or []
+    note = res.get('note')
+
+    def _out(status, detail, terminal, rows=None):
+        return {'status': status, 'detail': (str(detail)[:300] if detail else None),
+                'rows_saved': (rows if rows is not None else rows_saved),
+                'skipped': marker, 'shrink': shrink, 'terminal': terminal}
+
+    # (a) A type with no importer (KNOWN_IGNORED_TYPES → {'status':'skipped','rows':0,'reason':…}).
+    #     Cleanly ignored and nothing a retry changes — but it is NOT an ingest, so never a green ✓.
+    if res.get('status') == 'skipped' and not marker and rows_saved <= 0:
+        return _out('ignored',
+                    res.get('reason') or note or f"'{upload_type}' has no importer — ignored",
+                    True)
+
+    # (b) Rows landed → done. A caveat marker keeps its shipped wording in `detail`.
+    if rows_saved > 0:
+        detail = None
+        if marker in SWEEP_CAVEAT_MARKERS:
+            _gd = res.get('guarded_dates') or []
+            detail = ((shrink[0].get('reason') if shrink else None) or note
+                      or (f"ingested fresh day(s); kept existing data for "
+                          f"{', '.join(map(str, _gd))} (price guard)" if _gd else None))
+        return _out('ok', detail, True)
+
+    # (c) 0 rows with a NAMED, fixable reason → keep retrying so it self-heals the moment the source
+    #     report is corrected / a tender label is mapped / the fuller export arrives.
+    if marker in SWEEP_RETRYABLE_ZERO:
+        if marker == 'price_guard':
+            detail = ((shrink[0].get('reason') if shrink else None)
+                      or 'refused: fuller priced data already stored for that day (price guard)')
+        else:
+            detail = note or f"{upload_type or 'file'} saved 0 rows ({marker})"
+        return _out('skipped', detail, False)
+
+    # (d) Some OTHER named 0-row marker (a future outcome this code has not learned yet). Report the
+    #     marker verbatim and retry — never invent a green tick for an outcome we cannot classify.
+    if marker:
+        return _out('skipped', note or f'saved 0 rows ({marker})', False)
+
+    # (e) 0 rows, no marker at all. THE BRANCH BOTH SWEEPS WERE MISSING — it used to record a green
+    #     'ok · 0 rows'. The file was read and produced nothing ingestable, which is deterministic for
+    #     the same bytes, so it is terminal: a corrected export arrives as a NEW message / a new
+    #     (filename, size) and is fetched again on its own.
+    return _out('empty',
+                note or ('the file was read but produced 0 ingestable rows — nothing was saved and '
+                         'existing data was left untouched'),
+                True)
+
+
+def _sweep_status_suffix(results, *, journal_failures=0, journal_first_error=None, retried=0,
+                         shrinks=None):
+    """The honest tail of a sweep's `last_status` line, shared by both sweeps: errors, refusals,
+    read-but-empty files, ignored types, partial-export drops, retries, and — never swallowed — a
+    failure to WRITE the sweep's own journal row (which would make the file re-ingest every run)."""
+    def _n(st):
+        return [r for r in results if r.get('status') == st]
+    out = ''
+    errs = _n('error')
+    if errs:
+        out += ' · errors: ' + '; '.join(f"{e.get('file')}: {e.get('detail')}" for e in errs[:2])[:240]
+    dlf = _n('download_failed')
+    if dlf:
+        out += f" ⚠️ {len(dlf)} download failure(s) (will retry)"
+    guard = [r for r in _n('skipped') if str(r.get('skipped') or '').startswith('price_guard')]
+    other = [r for r in _n('skipped') if not str(r.get('skipped') or '').startswith('price_guard')]
+    if guard:
+        out += f" ⚠️ {len(guard)} refused by price guard (kept existing data)"
+    if other:
+        out += (f" ⚠️ {len(other)} saved 0 rows: "
+                + '; '.join(f"{r.get('file')}: {r.get('detail') or 'no reason recorded'}"
+                            for r in other[:2])[:240])
+    empty = _n('empty')
+    if empty:
+        out += (f" ⚠️ {len(empty)} file(s) read but carried no ingestable rows: "
+                + ', '.join(str(r.get('file')) for r in empty[:3])[:160])
+    ign = _n('ignored')
+    if ign:
+        out += f" · {len(ign)} ignored (no importer for that report)"
+    if retried:
+        out += f" · {retried} retried after a previous failure"
+    if shrinks:
+        out += f" ⚠️ {len(shrinks)} partial-export drop(s)"
+    if journal_failures:
+        out += (f" ❌ {journal_failures} history row(s) could NOT be recorded — those files will be "
+                f"re-processed next run. First error: {journal_first_error}")
+    return out
+
+
+async def _sweep_shrink_alert(client, org_id, shrinks, *, source_line):
+    """Alert the connector recipients that an ingested export SHRANK a day/period that previously held
+    real data (the fingerprint of a truncated/partial export). Shared by both sweeps — the FTP sweep
+    collected no `shrink` at all before, so a truncated FTP drop corrupted reports silently."""
+    if not shrinks:
+        return
+    try:
+        from app.modules.closing.router import _send_alert  # lazy: avoids a commcalc<->closing cycle
+        _today = _datetime.now(_timezone.utc).date()
+        for s in shrinks:
+            subject = f"⚠️ Partial data export: {s['upload_type']} dropped to {s['new']} rows for {s['key']}"
+            text = (f"MetricsPro — an ingested {s['upload_type']} file ingested FAR fewer rows than the data "
+                    f"it replaced for {s['key']}: {s['new']} rows vs {s['prior']} previously.\n\n"
+                    f"File: {s['file']}\n{source_line}\n\nThis is the signature of a truncated or "
+                    f"partial export. Verify the source report is complete before trusting {s['upload_type']} "
+                    f"numbers for {s['key']}; re-sending the full report self-heals (the ingest replaces it).")
+            ref = f"datadrop:{org_id}:{s['upload_type']}:{s['key']}:{_today}"
+            await _send_alert(client, org_id, "connector", subject, text, ref)
+    except Exception as e:
+        print(f"WARN row-count guardrail alert failed: {e}")
+
+
 # Row-count guardrail thresholds (user 2026-07-05): flag an ingest that SHRINKS a day/period which
 # previously held real data — the fingerprint of a truncated/partial export. Detection lives in
 # upload_file (all ingest paths); the email sweep escalates a hit to a WhatsApp/email alert.
@@ -15230,14 +15414,39 @@ def _ftp_current_period():
 
 async def _run_ftp_sweep(org_id):
     """Connect, download every NEW file matching a configured pattern, route each through the existing
-    upload pipeline (signature-validated, guarded), and record what was processed."""
+    upload pipeline (signature-validated, guarded), and record what was processed.
+
+    HONESTY PARITY with the email sweep (2026-07-30). This branch had none of it:
+      • every 0-row outcome was recorded status='ok' with no reason — a green ✓ on a file that ingested
+        nothing (the same defect that hid an empty X-Report and a 0-store Inventory Aging on the email
+        side). Now read through the shared `_sweep_ingest_outcome`.
+      • it read only res['saved'], so a device-only Inventory-Aging ingest recorded 0 rows where the
+        email sweep records N. Now via the shared `_ingest_rows_saved`.
+      • the row-count `shrink` was thrown away, so a TRUNCATED FTP export corrupted reports silently
+        while the identical emailed export raised an alert. Now the shared `_sweep_shrink_alert`.
+      • the journal upsert was `except Exception: pass` — a lost history row means the file is
+        re-downloaded and re-INGESTED every run, invisibly. Now counted + reported.
+      • DEDUP: `already` was EVERY recorded (filename, file_size) regardless of status, so a file that
+        ERRORED once was skipped FOREVER — the exact defect the email sweep was fixed for. Now only
+        real ingests and TERMINAL-zero outcomes ('empty'/'ignored') count as done, so a failure retries
+        and a file nothing can be done about stops being re-pulled.
+    """
     from starlette.datastructures import UploadFile as _UF
     client = sb()
     cfg = _ftp_cfg(client, org_id)
     if not cfg or not (cfg.get('host') or '').strip():
         return {"ok": False, "error": "FTP not configured"}
-    seen = client.schema('commcalc').table('ftp_processed').select('filename,file_size').eq('org_id', org_id).limit(100000).execute().data or []
-    already = {(r['filename'], r.get('file_size') or 0) for r in seen}
+    seen = (client.schema('commcalc').table('ftp_processed')
+            .select('filename,file_size,rows_saved,status').eq('org_id', org_id)
+            .limit(100000).execute().data) or []
+    # DEDUP CONTRACT — identical to the email sweep (see _sweep_ingest_outcome): done = it really
+    # ingested (ok + rows saved) OR the outcome was terminal-zero. An error / price-guard refusal /
+    # unmapped labels / parse miss retries next run instead of being skipped forever.
+    already = {(r.get('filename'), r.get('file_size') or 0) for r in seen
+               if (r.get('status') == 'ok' and (r.get('rows_saved') or 0) > 0)
+               or r.get('status') in SWEEP_TERMINAL_ZERO_STATUSES}
+    _prior_nonterminal = {(r.get('filename'), r.get('file_size') or 0) for r in seen
+                          if (r.get('filename'), r.get('file_size') or 0) not in already}
     try:
         files = _ftp.fetch_new_files(cfg, already)
     except Exception as e:
@@ -15245,38 +15454,66 @@ async def _run_ftp_sweep(org_id):
             {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': f"connect error: {e}"}).eq('org_id', org_id).execute()
         return {"ok": False, "error": str(e)}
     results = []
+    shrinks = []   # row-count guardrail hits (a truncated/partial export) → alert after the loop
+    journal_failures, journal_first_error, retried = 0, None, 0
     for f in files:
         name, size, ut = f['name'], f['size'], f.get('upload_type')
         if f.get('bytes') is None:   # download failed — don't record (retry next run)
-            results.append({"file": name, "status": "download_failed", "detail": f.get('error')})
+            results.append({"file": name, "upload_type": ut, "status": "download_failed",
+                            "rows_saved": 0, "detail": f.get('error'), "terminal": False})
             continue
-        period = "" if ut == "daily_sales" else _ftp_current_period()
-        status, detail, rows_saved = "ok", None, 0
+        # Periodless set matches the email sweep's: all four DATE-KEYED reports derive their period per
+        # ROW, so passing the current month is meaningless for them (it is discarded during mapping —
+        # this is a consistency fix, not a behaviour change).
+        period = "" if ut in ("daily_sales", "ma_commission", "ma_daily_tx", "ma_fulfillment") else _ftp_current_period()
+        status, detail, rows_saved, shrink, skipped_flag, terminal = "ok", None, 0, [], None, True
+        if (name, size) in _prior_nonterminal:
+            retried += 1
         try:
             uf = _UF(io.BytesIO(f['bytes']), filename=name)
             # org_id passed as a KEYWORD (was the 5th positional, which landed in `close_date` while org_id
             # silently defaulted to the house org — a latent multi-tenant misroute, inert today because
             # sweeps run as the house org; see PARKED note). trace_source tags the mig-202 upload_trace.
             res = await upload_file(ut, uf, period, force=False, org_id=org_id, trace_source='ftp_sweep')
-            rows_saved = (res or {}).get('saved', 0)
+            _o = _sweep_ingest_outcome(res, upload_type=ut)
+            status, detail = _o['status'], _o['detail']
+            rows_saved, shrink, skipped_flag, terminal = (_o['rows_saved'], _o['shrink'],
+                                                          _o['skipped'], _o['terminal'])
         except HTTPException as he:
-            status, detail = "error", str(he.detail)[:300]
+            # An error is NEVER terminal — the dedup above must let it retry next sweep.
+            status, detail, terminal = "error", str(he.detail)[:300], False
         except Exception as e:
-            status, detail = "error", str(e)[:300]
+            status, detail, terminal = "error", str(e)[:300], False
         try:
             client.schema('commcalc').table('ftp_processed').upsert(
                 {'org_id': org_id, 'filename': name, 'file_size': size, 'upload_type': ut,
                  'rows_saved': rows_saved, 'status': status, 'detail': detail,
                  'processed_at': _datetime.now(_timezone.utc).isoformat()},
                 on_conflict='org_id,filename,file_size').execute()
-        except Exception:
-            pass
-        results.append({"file": name, "upload_type": ut, "status": status, "rows_saved": rows_saved, "detail": detail})
+        except Exception as _je:
+            # WAS `except Exception: pass`. A lost journal row makes this file re-download and
+            # re-INGEST on every sweep — never swallow it.
+            journal_failures += 1
+            if journal_first_error is None:
+                journal_first_error = str(_je)[:300]
+            print(f'WARN ftp_processed upsert failed for {name}: {_je}')
+        for s in shrink:
+            shrinks.append({'file': name, 'upload_type': ut, **s})
+        results.append({"file": name, "upload_type": ut, "status": status, "rows_saved": rows_saved,
+                        "detail": detail, "shrink": shrink, "skipped": skipped_flag,
+                        "terminal": terminal})
     ok = sum(1 for r in results if r['status'] == 'ok')
+    await _sweep_shrink_alert(client, org_id, shrinks,
+                              source_line=f"FTP: {cfg.get('host')}{cfg.get('remote_dir') or '/'}")
+    status_msg = f"{ok}/{len(results)} files ingested"
+    status_msg += _sweep_status_suffix(results, journal_failures=journal_failures,
+                                       journal_first_error=journal_first_error, retried=retried,
+                                       shrinks=shrinks)
     client.schema('commcalc').table('ftp_sweep_config').update(
         {'last_run_at': _datetime.now(_timezone.utc).isoformat(),
-         'last_status': f"{ok}/{len(results)} files ingested"}).eq('org_id', org_id).execute()
-    return {"ok": True, "ingested": ok, "files": results}
+         'last_status': status_msg}).eq('org_id', org_id).execute()
+    return {"ok": True, "ingested": ok, "files": results, "retried": retried,
+            "journal_failures": journal_failures, "journal_first_error": journal_first_error}
 
 
 @router.get("/ftp-sweep/config")
@@ -15498,11 +15735,18 @@ async def _run_email_sweep(org_id, account='default'):
         return {"ok": False, "account": account,
                 "error": "This mailbox has no filename rules — add a rule (e.g. *Sales*Transaction*Details* → daily sales) and Save."}
     seen = client.schema('commcalc').table('email_processed').select('message_id,filename,rows_saved,status').eq('org_id', org_id).limit(100000).execute().data or []
-    # Skip a file ONLY if it ACTUALLY ingested (status ok + rows saved). A prior attempt that errored or
-    # saved 0 rows is NOT treated as done, so it auto-retries on the next sweep — fixes "a file that failed
-    # once is skipped forever (0 ingested)" without any manual email_processed cleanup.
+    # DEDUP CONTRACT (see _sweep_ingest_outcome): a message is done when it ACTUALLY ingested (status ok +
+    # rows saved) OR its outcome was TERMINAL-zero — 'empty' (read fine, carried nothing ingestable) /
+    # 'ignored' (no importer for that report). Everything else — an error, a price-guard refusal, unmapped
+    # tender labels, a parse miss — auto-retries on the next sweep, so a file that failed once is never
+    # skipped forever AND a file nothing can be done about stops being re-pulled every hour.
     already = {(r.get('message_id'), r.get('filename')) for r in seen
-               if r.get('status') == 'ok' and (r.get('rows_saved') or 0) > 0}
+               if (r.get('status') == 'ok' and (r.get('rows_saved') or 0) > 0)
+               or r.get('status') in SWEEP_TERMINAL_ZERO_STATUSES}
+    # Messages we are about to RE-attempt after a previous non-terminal outcome — reported so an operator
+    # can see a file is being retried rather than silently looping.
+    _prior_nonterminal = {(r.get('message_id'), r.get('filename')) for r in seen
+                          if (r.get('message_id'), r.get('filename')) not in already}
     try:
         files = _email.fetch_new_attachments(cfg, already)
     except Exception as e:
@@ -15511,10 +15755,13 @@ async def _run_email_sweep(org_id, account='default'):
         return {"ok": False, "error": str(e), "account": account}
     results = []
     shrinks = []   # row-count guardrail hits (a truncated/partial export) → alert after the loop
+    journal_failures, journal_first_error, retried = 0, None, 0
     for f in files:
         name, size, ut, mid = f['name'], f['size'], f.get('upload_type'), f.get('message_id')
         period = "" if ut in ("daily_sales", "ma_commission", "ma_daily_tx", "ma_fulfillment") else _ftp_current_period()
-        status, detail, rows_saved, shrink, skipped_flag = "ok", None, 0, [], None
+        status, detail, rows_saved, shrink, skipped_flag, terminal = "ok", None, 0, [], None, True
+        if (mid, name) in _prior_nonterminal:
+            retried += 1
         try:
             uf = _UF(io.BytesIO(f['bytes']), filename=name)
             # org_id passed as a KEYWORD (was the 5th positional, which landed in `close_date` while org_id
@@ -15522,113 +15769,51 @@ async def _run_email_sweep(org_id, account='default'):
             # mailbox's swept sales into Boost the moment that mailbox is filed under its own org; inert
             # today because sweeps run as the house org). trace_source tags the mig-202 upload_trace.
             res = await upload_file(ut, uf, period, force=False, org_id=org_id, trace_source='email_sweep')
-            rows_saved = (res or {}).get('saved', 0)
-            shrink = (res or {}).get('shrink') or []
-            skipped_flag = (res or {}).get('skipped')
-            # The PRICE-COVERAGE GUARD refuses a degraded/price-less re-delivery with
-            # {saved:0, skipped:'price_guard', shrink:[{reason}]} (HTTP 200, not an error). Record it as
-            # a distinct 'skipped' status carrying the guard's reason so the history shows an honest amber
-            # "refused to protect existing data" instead of a green "✓ 0 rows" (indistinguishable from a
-            # broken upload — the luxelink incident 2026-07-14). NO behavior change: rows_saved is still 0
-            # so the dedup at the top of this sweep keeps auto-retrying, the price-guard `shrink` entry
-            # still rides the row-count alert path below, and the money-writing auto-promote/recalc trigger
-            # further down treats 'skipped' the same as it treated this row before (it was 'ok' + 0 rows).
-            if (res or {}).get('skipped') == 'price_guard':
-                status = 'skipped'
-                detail = ((shrink[0].get('reason') if shrink else None)
-                          or 'refused: fuller priced data already stored for that day (price guard)')[:300]
-            elif (res or {}).get('skipped') == 'price_guard_partial':
-                # PARTIAL price-guard: the file's fresh day(s) DID ingest (rows_saved > 0) while degraded
-                # day(s) were kept as stored. It's a real ingest with a warning, NOT a full refusal — leave
-                # status='ok' so the sweep dedup treats the file as done (its useful data is in) and so the
-                # money-writing auto-promote/recalc below runs on the fresh days. Carry the guard reason in
-                # `detail` so the history row can flag it amber, and the shrink entry still rides the
-                # partial-export alert path below. guarded_dates is available on `res` for callers that want it.
-                _gd = (res or {}).get('guarded_dates') or []
-                detail = ((shrink[0].get('reason') if shrink else None)
-                          or f"ingested fresh day(s); kept existing data for {', '.join(map(str, _gd))} (price guard)")[:300]
-            elif (res or {}).get('skipped') == 'inventory_no_stores':
-                # HONEST-ZERO for Inventory Aging: the attachment WAS read but produced 0 per-store values
-                # (renamed/unknown store or value column, or a layout we don't yet flatten). This used to be
-                # recorded as status='ok' + 0 rows — a green ✓ on a file that ingested nothing (luxelink,
-                # 2026-07-14). Record a distinct 'skipped' carrying the parser's honest reason (expected
-                # columns vs the columns actually found) so the history shows WHAT is wrong. rows_saved stays
-                # 0, so the sweep dedup keeps auto-retrying → it self-heals the moment a synonym/flatten
-                # matches or the source report is corrected. Not a money path (no daily_sales promote/recalc).
-                status = 'skipped'
-                detail = (str((res or {}).get('note') or 'Inventory Aging parsed 0 stores'))[:300]
-            elif (res or {}).get('skipped') == 'inventory_devices_only':
-                # DEVICE-ONLY Inventory Aging (luxelink 2026-07-25): the export has no store column, so 0
-                # per-store values were written, but N per-DEVICE rows DID save. It IS a real ingest →
-                # status stays 'ok'. Two honest corrections: (a) rows_saved comes from res['devices']
-                # (`saved` keeps its store-count meaning) so this row stops reading "ok · 0 rows" AND the
-                # dedup at the top of this sweep finally marks the message done — before this, every sweep
-                # re-pulled and re-ingested the same attachment forever (15x on 2026-07-24); (b) `detail`
-                # carries the parser's note so the history says what actually happened. NOT a money path
-                # (inventory aging feeds the Balance-Sheet inventory line + device-cost lookup, never pay).
-                rows_saved = int((res or {}).get('devices') or 0)
-                detail = (str((res or {}).get('note')
-                              or f"0 stores (no store column) · {rows_saved} device row(s) saved"))[:300]
-            elif (res or {}).get('skipped') in XREPORT_ZERO_REASONS:
-                # HONEST-ZERO for the POS X-Report (owner live bug 2026-07-28). The attachment WAS read
-                # but produced 0 tender rows — a header wording drift, unmapped tender labels, a
-                # non-X-Report shape, or every DB write failing. This used to record status='ok' +
-                # 0 rows: a green ✓ on a file that ingested nothing (pos_tender_summary is EMPTY
-                # org-wide). Record a distinct 'skipped' carrying the parser's own reason. rows_saved
-                # stays 0 so the sweep dedup keeps retrying → it self-heals the moment a tender label
-                # is mapped or the source report is corrected. NOT a money path (tender recon only).
-                status = 'skipped'
-                detail = (str((res or {}).get('note')
-                              or f"X-Report saved 0 tender rows ({(res or {}).get('skipped')})"))[:300]
-            elif (res or {}).get('skipped') in ('x_report_partial_save', 'x_report_unmapped_labels'):
-                # A REAL X-Report ingest with a caveat (some writes failed / some tender labels are
-                # unmapped and therefore missing from the recon). Rows DID land, so status stays 'ok'
-                # (the dedup marks the message done); the caveat rides in `detail`.
-                detail = (str((res or {}).get('note') or ''))[:300]
+            # ONE honest reading of the result (_sweep_ingest_outcome), shared with the FTP sweep. It
+            # replaces the per-marker if/elif ladder that used to live here: every branch that ladder
+            # handled keeps its EXACT status + detail wording (price-guard full/partial refusal,
+            # Inventory-Aging 0-store parse, device-only ingest incl. reading the real `devices` count,
+            # the X-Report zero reasons and its two partial-save caveats), and the outcomes the ladder
+            # had no branch for — a file that read fine but mapped 0 rows, a custom sheet with no data
+            # rows, a KNOWN_IGNORED_TYPES attachment — stop being recorded as a green 'ok · 0 rows'.
+            _o = _sweep_ingest_outcome(res, upload_type=ut)
+            status, detail = _o['status'], _o['detail']
+            rows_saved, shrink, skipped_flag, terminal = (_o['rows_saved'], _o['shrink'],
+                                                          _o['skipped'], _o['terminal'])
         except HTTPException as he:
-            status, detail = "error", str(he.detail)[:300]
+            # An error is NEVER terminal — the dedup above must let it retry next sweep.
+            status, detail, terminal = "error", str(he.detail)[:300], False
         except Exception as e:
-            status, detail = "error", str(e)[:300]
+            status, detail, terminal = "error", str(e)[:300], False
         try:
             client.schema('commcalc').table('email_processed').upsert(
                 {'org_id': org_id, 'account': account, 'message_id': mid, 'filename': name, 'file_size': size,
                  'upload_type': ut, 'rows_saved': rows_saved, 'status': status, 'detail': detail,
                  'processed_at': _datetime.now(_timezone.utc).isoformat()},
                 on_conflict='org_id,account,message_id,filename').execute()
-        except Exception:
-            pass
+        except Exception as _je:
+            # WAS `except Exception: pass`. A LOST journal row is not cosmetic: this message is then
+            # re-fetched and re-INGESTED on every sweep (the hourly-duplicate class). Count it, keep the
+            # first real error, and report it on the sweep's status line — never swallow it.
+            journal_failures += 1
+            if journal_first_error is None:
+                journal_first_error = str(_je)[:300]
+            print(f'WARN email_processed upsert failed for {name}: {_je}')
         for s in shrink:
             shrinks.append({'file': name, 'upload_type': ut, **s})
         results.append({"file": name, "upload_type": ut, "status": status, "rows_saved": rows_saved,
-                        "detail": detail, "shrink": shrink, "skipped": skipped_flag})
+                        "detail": detail, "shrink": shrink, "skipped": skipped_flag,
+                        "terminal": terminal})
     ok = sum(1 for r in results if r['status'] == 'ok')
     # A truncated/partial emailed export (far fewer rows than the day/period it replaced) would silently
     # corrupt reports — alert the connector recipients (same scope as connector-health) so it's caught.
-    if shrinks:
-        try:
-            from app.modules.closing.router import _send_alert  # lazy: avoids a commcalc<->closing cycle
-            _today = _datetime.now(_timezone.utc).date()
-            for s in shrinks:
-                subject = f"⚠️ Partial data export: {s['upload_type']} dropped to {s['new']} rows for {s['key']}"
-                text = (f"MetricsPro — an emailed {s['upload_type']} file ingested FAR fewer rows than the data "
-                        f"it replaced for {s['key']}: {s['new']} rows vs {s['prior']} previously.\n\n"
-                        f"File: {s['file']}\nMailbox: {account}\n\nThis is the signature of a truncated or "
-                        f"partial export. Verify the source report is complete before trusting {s['upload_type']} "
-                        f"numbers for {s['key']}; re-sending the full report self-heals (the ingest replaces it).")
-                ref = f"datadrop:{org_id}:{s['upload_type']}:{s['key']}:{_today}"
-                await _send_alert(client, org_id, "connector", subject, text, ref)
-        except Exception as e:
-            print(f"WARN row-count guardrail alert failed: {e}")
-    errs = [r for r in results if r['status'] == 'error']
-    skipped = [r for r in results if r['status'] == 'skipped']
+    # Shared with the FTP sweep now (which raised no alert at all before).
+    await _sweep_shrink_alert(client, org_id, shrinks, source_line=f"Mailbox: {account}")
     status_msg = (f"{ok}/{len(results)} attachments ingested" if results
                   else "no new attachments to import — matched files already imported OK, or none match your rules (use Test connection)")
-    if errs:
-        status_msg += " · errors: " + "; ".join(f"{e['file']}: {e['detail']}" for e in errs[:2])[:240]
-    if skipped:
-        status_msg += f" ⚠️ {len(skipped)} refused by price guard (kept existing data)"
-    if shrinks:
-        status_msg += f" ⚠️ {len(shrinks)} partial-export drop(s)"
+    status_msg += _sweep_status_suffix(results, journal_failures=journal_failures,
+                                       journal_first_error=journal_first_error, retried=retried,
+                                       shrinks=shrinks)
     _email_status_update(client, org_id, account,
         {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': status_msg})
     # Auto-derive the monthly commission basis (raw_sales) from the feed — best-effort + guarded,
@@ -15636,11 +15821,12 @@ async def _run_email_sweep(org_id, account='default'):
     # the row the house has, so their raw_sales silently stayed empty and plan-mode pay was $0
     # (luxelink, 2026-07-14). An explicit auto=false row still opts a tenant out.
     try:
-        # 'skipped' is treated the same as 'ok' here ONLY to keep this money-writing trigger byte-identical
-        # to before the honest-history change above: a price-guard skip used to be recorded as status='ok'
-        # (with 0 rows) and thus reached this promote/recalc exactly as it does now. The promote reads the
-        # unchanged (guard-protected) feed, so it is a no-op on the same data either way.
-        if (any(r['upload_type'] == 'daily_sales' and r['status'] in ('ok', 'skipped') for r in results)
+        # EVERY non-'error' outcome fires this trigger, which is EXACTLY the pre-change firing set and
+        # deliberately so: before the honest-status work, every daily_sales result that did not raise was
+        # recorded 'ok' or 'skipped', so `!= 'error'` reproduces it byte-for-byte now that 'empty' and
+        # 'ignored' exist as distinct statuses. Nothing about which periods promote or recompute moves —
+        # the promote reads the (unchanged) feed, so it is a no-op on unchanged data either way.
+        if (any(r.get('upload_type') == 'daily_sales' and r.get('status') != 'error' for r in results)
                 and _registry_auto_map(client, org_id).get('sales', True)):
             _pr = _promote_feed_to_raw_sales(client, org_id, _ftp_current_period())
             # Plan-mode tenants have no other automatic recompute (the DLAR auto-recalc is Boost-only),
@@ -15657,7 +15843,9 @@ async def _run_email_sweep(org_id, account='default'):
                 print(f"WARN auto-recalc after promote failed: {e2}")
     except Exception as e:
         print(f"WARN auto-promote feed->raw_sales failed: {e}")
-    return {"ok": True, "account": account, "ingested": ok, "files": results}
+    return {"ok": True, "account": account, "ingested": ok, "files": results,
+            "retried": retried, "journal_failures": journal_failures,
+            "journal_first_error": journal_first_error}
 
 
 async def _run_email_sweep_all(org_id):
