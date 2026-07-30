@@ -7010,6 +7010,13 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
         except Exception:
             pass
 
+        # READ-SIDE cache bust — the ONLY line this package adds to the calc path. The My-Team
+        # snapshot TTL-memoizes its coaching rollup, which reads the rep_commissions rows this calc
+        # just rewrote; drop this org+period's entry so the next load shows the new numbers instead of
+        # waiting out the TTL. Pure in-memory dict work, spelling-tolerant, and _team_snap_invalidate
+        # swallows its own errors — it can neither change nor fail a recompute.
+        _team_snap_invalidate(org_id, period)
+
     except Exception as e:
         try:
             client.schema('commcalc').table('calc_status').upsert({
@@ -13133,14 +13140,52 @@ async def roll_forward_targets(period: str, body: dict = None, org_id: str = ORG
             'skipped': skipped, 'overwrite': overwrite, 'stores': written}
 
 
+# ── SHARED period normalizer for the targets / coaching / exec family ────────────────────────────
+# Every endpoint below takes `{period}` straight from the platform period selector, which emits
+# 'Month YYYY' (frontend/src/lib/period-context.tsx). Each of them ALSO gets called with the machine
+# spelling '2026-07' by some paths, and each handled that differently: _period_bounds raised a 400
+# (/targets/{period}/summary + /calendar), while calculator.parse_period silently resolved it to
+# JANUARY (/exec-overview's P&L lookup -> the wrong month's numbers, no error). One normalizer at the
+# entry point makes all of them accept both spellings and refuse garbage with an actionable 400
+# instead of a 500 or a silently-wrong month. (Period-duality is a recurring bug class here — cf. the
+# retail P&L '2026-06' vs 'June 2026' fix.)
+def _period_or_400(period, what="period"):
+    """The canonical 'Month YYYY' spelling for a period that may arrive in EITHER shape — 'July 2026'
+    (what the platform period selector emits) or '2026-07' (what raw_sales / the daily feed / a
+    machine caller use). 'Month YYYY' is the canonical direction HERE because `_period_bounds` only
+    understands the month-name form and raises 400 on '2026-07'; this is the same canonical string
+    `_canon_period` produces (and that calc_status / rep_commissions are keyed on).
+
+    STRICT parse, deliberately mirroring `_pvariants` rather than leaning on
+    `calculator.parse_period` — that helper silently maps anything unknown to January (so 'banana'
+    became 'January 2026') and IndexErrors on an empty string, which is an unhandled 500. Anything
+    that is not clearly a month-period raises a clean, actionable 400."""
+    p = str(period or "").strip()
+    if len(p) >= 7 and p[:4].isdigit() and p[4] == "-" and p[5:7].isdigit():
+        mo, yr = int(p[5:7]), int(p[:4])
+    else:
+        parts = p.split()
+        names = {m.lower(): i for i, m in enumerate(_calendar.month_name) if m}
+        if len(parts) == 2 and parts[0].lower() in names and parts[1].isdigit():
+            mo, yr = names[parts[0].lower()], int(parts[1])
+        else:
+            mo, yr = 0, 0
+    if not (1 <= mo <= 12) or yr < 1900:
+        raise HTTPException(400, f"Unrecognized {what} '{period}' - expected 'July 2026' or '2026-07'.")
+    return f"{_calendar.month_name[mo]} {yr}"
+
+
 @router.get("/targets/{period}/calendar")
 async def get_target_calendar(
     period: str, store_code: str, scope: str = "store",
     rep: str = "", today: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID,
 ):
     """Schedule-weighted daily targets + catch-up + pace + day-by-day calendar
-    for a single store (scope=store) or a single rep within it (scope=rep)."""
+    for a single store (scope=store) or a single rep within it (scope=rep).
+
+    Accepts either period spelling ('July 2026' or '2026-07'); unparseable -> clean 400."""
     client = sb()
+    cperiod = _period_or_400(period)
     from app.modules.storeops.router import scope_keyset, in_keyset
     # Only a manager WITH a span (non-empty keyset) is restricted here. None = admin/unrestricted;
     # an empty set = a self-scope rep (no managed stores) viewing their OWN store from the portal —
@@ -13148,11 +13193,11 @@ async def get_target_calendar(
     ks = scope_keyset(authorization, org_id)
     if ks and not in_keyset(ks, store_code):
         raise HTTPException(403, "That store is outside your assigned area.")
-    start, end, today = _period_bounds(period, today)
-    byod_def = _byod_pct_default(client, period, org_id)
+    start, end, today = _period_bounds(cperiod, today)
+    byod_def = _byod_pct_default(client, cperiod, org_id)
 
     trow = (client.schema('commcalc').table('targets')
-            .select('*').eq('org_id', org_id).in_('period', _pvariants(period))
+            .select('*').eq('org_id', org_id).in_('period', _pvariants(cperiod))
             .eq('store_code', store_code).limit(1).execute().data) or []
     target_row = trow[0] if trow else {}
     # Seed accessories from store monthly_target when no explicit row yet.
@@ -13164,7 +13209,7 @@ async def get_target_calendar(
     monthly = targets_engine.derive_monthly_by_cat(target_row, byod_def)
 
     shifts = _fetch_shifts(client, start, end, org_id)
-    actuals = _fetch_actuals(client, org_id, period)
+    actuals = _fetch_actuals(client, org_id, cperiod)
     rep_arg = rep if scope == 'rep' and rep else None
 
     hours_by_day = targets_engine.scope_hours_by_day(shifts, store_code, rep_arg)
@@ -13258,6 +13303,35 @@ def _caller_self_keyset(authorization: str, org_id: str):
         return (False, None)
 
 
+def _as_filter_list(val):
+    """Normalize a repeated-query-param filter into a list of non-blank, stripped strings. Tolerates
+    EVERY shape the value can arrive in:
+      * None / '' / [] ................ -> []          (no filter)
+      * one value ('S1') ............... -> ['S1']     (?store=S1, or an internal Python caller)
+      * a repeated param (['S1','S2']) . -> ['S1','S2']
+      * a fastapi.params.Query DEFAULT . -> []         (see below)
+
+    That last case is NOT hypothetical — it is the confirmed root cause of the 2026-07-30 My-Team
+    incident (masked ref 3bf51b4d, "Unhandled server error on /api/v1/commcalc/team/July 2026/
+    snapshot"). An endpoint function declared `stores: Optional[List[str]] = Query(default=None)` and
+    called INTERNALLY as a plain Python function receives the fastapi Query OBJECT as the default —
+    which is TRUTHY and NOT iterable, so `for x in (stores or [])` raises
+    `TypeError: 'Query' object is not iterable`. get_targets_summary grew its RULE FIVE filter params
+    on 2026-07-17 (e36c0b2) and team_snapshot has called it without them ever since, so EVERY
+    /team/{period}/snapshot request has 500'd since that date — after burning the full whole-org
+    aggregation first (which is why the box also went slow). Internal callers now pass the params
+    explicitly AND this normalizer refuses to raise, so the class cannot come back silently."""
+    if val is None:
+        return []
+    if isinstance(val, str):
+        val = [val]
+    try:
+        items = list(val)
+    except TypeError:          # a Query default object, or anything else non-iterable
+        return []
+    return [s for s in (str(v).strip() for v in items if v is not None) if s]
+
+
 @router.get("/targets/{period}/summary")
 async def get_targets_summary(period: str, today: str = "", include_untargeted: bool = False,
                               stores: Optional[List[str]] = Query(default=None),
@@ -13280,11 +13354,12 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     read DIRECTLY from Executive MTD's `_exec_mtd` (`_targets_trending_by_code`) so the Targets pages show
     the SAME trending numbers as Exec MTD — one shared aggregation + trend formula, both move together."""
     client = sb()
-    start, end, today = _period_bounds(period, today)
-    byod_def = _byod_pct_default(client, period, org_id)
+    cperiod = _period_or_400(period)
+    start, end, today = _period_bounds(cperiod, today)
+    byod_def = _byod_pct_default(client, cperiod, org_id)
 
     trows = (client.schema('commcalc').table('targets')
-             .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
+             .select('*').eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
     tgt_by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
     store_rows = (client.schema('storeops').table('stores')
                   .select('store_code,address,market,monthly_target').eq('org_id', org_id).execute().data) or []
@@ -13295,11 +13370,11 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     except Exception as e:
         print(f"WARN targets summary shifts failed: {e}"); shifts = []
     try:
-        actuals = _fetch_actuals(client, org_id, period)
+        actuals = _fetch_actuals(client, org_id, cperiod)
     except Exception as e:
         print(f"WARN targets summary actuals failed: {e}"); actuals = []
     # Whole-store projected-month-end trending, straight from Executive MTD (one source, moves together).
-    trend_by_code, trend_meta = _targets_trending_by_code(client, org_id, period, today=today)
+    trend_by_code, trend_meta = _targets_trending_by_code(client, org_id, cperiod, today=today)
 
     # ── UNIVERSAL store universe: storeops.stores roster UNION every targeted store_code. A tenant can have
     #    Target Settings saved for stores that are NOT in its storeops roster (or whose roster store_codes
@@ -13340,9 +13415,12 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     rep_opts = sorted({str(a.get('rep_name') or '').strip() for a in actuals if str(a.get('rep_name') or '').strip()})
     filters = {'stores': store_opts, 'markets': market_opts, 'reps': rep_opts}
 
-    store_sel = {str(x).strip().lower() for x in (stores or []) if str(x).strip()}
-    market_sel = {str(x).strip().lower() for x in (markets or []) if str(x).strip()}
-    rep_sel = {str(x).strip().upper() for x in (reps or []) if str(x).strip()}
+    # Same selections as before for every real input (list / single value / None); routed through
+    # _as_filter_list so an INTERNAL caller that omits a repeated-Query param can no longer crash the
+    # endpoint with `TypeError: 'Query' object is not iterable` (ref 3bf51b4d — see _as_filter_list).
+    store_sel = {x.lower() for x in _as_filter_list(stores)}
+    market_sel = {x.lower() for x in _as_filter_list(markets)}
+    rep_sel = {x.upper() for x in _as_filter_list(reps)}
     applied = {'stores': sorted(store_sel), 'markets': sorted(market_sel), 'reps': sorted(rep_sel)}
 
     out = []
@@ -13513,24 +13591,42 @@ def delete_carrier_kpi_metric(metric_id: str, org_id: str = ORG_ID):
 
 
 @router.get("/coaching/{period}")
-def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
+                 market: Optional[List[str]] = Query(default=None), rep: str = "",
+                 authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Per-rep COACHING view: which KPIs each rep met vs missed, and WHY they're losing money
     (commission at risk below tier 1.0 + chargebacks deducted) + flags & coaching notes. Reuses
     the KPI defs + tier/at-risk logic from the action plan; adds per-rep chargebacks + flags.
-    Powers the admin/DM coaching dashboard and the employee's own coaching card (rep filter)."""
+    Powers the admin/DM coaching dashboard and the employee's own coaching card (rep filter).
+
+    `store` / `market` accept EITHER one value (?store=X — the historical shape, and what every
+    existing caller sends) or a repeated list (?store=X&store=Y), so a manager's whole span can be
+    pushed DOWN into this aggregation instead of being computed for the org and filtered out in Python
+    afterwards (team_snapshot). Single-value behaviour is unchanged: one value = a one-element set,
+    matched exactly as before (store case-insensitively against the rep's store key, market as an
+    EXACT string). `rep` stays a single value."""
     require_org(org_id)
+    cperiod = _period_or_400(period)
     client = sb()
+    store_sel = {x.upper() for x in _as_filter_list(store)}
+    market_sel = set(_as_filter_list(market))     # market compares EXACT, as it always has
     cfg_rows = (client.schema('commcalc').table('payout_config')
-                .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute().data) or []
+                .select('*').eq('org_id', org_id).in_('period', _pvariants(cperiod)).limit(1).execute().data) or []
     cfg = cfg_rows[0] if cfg_rows else {}
-    kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in _kpi_defs(org_id)}
+    # ONE read of the KPI definitions for the whole request. This used to be re-read INSIDE the
+    # per-rep loop below — an N+1 (one commcalc.carrier_kpi_metric round trip per rep) on a hot page,
+    # and a latent unhandled 500: _kpi_defs falls back to ACTION_KPI_DEFS when its read fails, so a
+    # tenant with a CUSTOM metric key plus one transient failure mid-loop hit `kpi_targets[k]` with a
+    # key that no longer existed -> KeyError out of the handler. One list, read once, can't disagree.
+    kpi_defs = _kpi_defs(org_id)
+    kpi_targets = {k: (safe_float(cfg.get(col)) or float(dv)) for (k, _l, col, dv) in kpi_defs}
     t100 = int(cfg.get('tier_100_min_kpis') or 7)
-    comms = (client.schema('commcalc').table('rep_commissions').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
+    comms = (client.schema('commcalc').table('rep_commissions').select('*').eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
     cb = (client.schema('commcalc').table('chargeback_items')
-          .select('epay_salesperson,amount,deduct').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
-    ops_lines_by = _ops_chargeback_deductions(client, org_id, period)
+          .select('epay_salesperson,amount,deduct').eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
+    ops_lines_by = _ops_chargeback_deductions(client, org_id, cperiod)
     flags = (client.schema('commcalc').table('flags')
-             .select('epay_salesperson,severity,description,coaching_note').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
+             .select('epay_salesperson,severity,description,coaching_note').eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
     stores = (client.schema('storeops').table('stores').select('store_code,address,market').eq('org_id', org_id).execute().data) or []
     mkt_by = {}
     for s in stores:
@@ -13570,17 +13666,18 @@ def rep_coaching(period: str, store: str = "", market: str = "", rep: str = "", 
         if rep and rep.strip().upper() not in (name.upper(), eslp.upper()):
             continue
         st = (cr.get('store') or '').strip()
-        if store and store.strip().upper() != st.upper():
+        if store_sel and st.upper() not in store_sel:
             continue
         mk = mkt_by.get(st.upper(), '')
-        if market and mk != market:
+        if market_sel and mk not in market_sel:
             continue
         tier = safe_float(cr.get('tier'))
         subtotal = safe_float(cr.get('subtotal'))
         kv = cr.get('kpi_values') or {}
-        kpis = [{'kpi': k, 'label': lab, 'target': kpi_targets[k],
-                 'actual': round(safe_float(kv.get(k)), 1), 'met': safe_float(kv.get(k)) >= kpi_targets[k]}
-                for (k, lab, _c, _d) in _kpi_defs(org_id)]
+        kpis = [{'kpi': k, 'label': lab, 'target': kpi_targets.get(k, safe_float(_d)),
+                 'actual': round(safe_float(kv.get(k)), 1),
+                 'met': safe_float(kv.get(k)) >= kpi_targets.get(k, safe_float(_d))}
+                for (k, lab, _c, _d) in kpi_defs]
         kpis_met = cr.get('kpis_met')
         kpis_met = sum(1 for x in kpis if x['met']) if kpis_met is None else kpis_met
         at_risk = round(subtotal * (1.0 - tier), 2) if tier < 1.0 else 0.0
@@ -13646,14 +13743,96 @@ def _team_totals(stores):
     return cats
 
 
+# ── TEAM-SNAPSHOT TTL MEMO (read side only) ──────────────────────────────────────────────────────
+# `/team/{period}/snapshot` is the ONLY fetch gating the My-Team page's spinner, and it recomputed the
+# FULL targets + coaching rollup on every single load: the sales union + `_compute_feed_actuals_py` +
+# `_exec_mtd` (trending) + a nested store x rep Python pass in get_targets_summary, plus the whole
+# coaching aggregation. FastAPI runs this in the shared worker, so a couple of loads in a row starved
+# every other request on the box (2026-07-30 incident: public /health 21.5s, recovered after).
+# Pushing the caller's span down (TIER 1, below) fixes a manager; for an OWNER whose span IS the org
+# there is nothing to narrow, so the heavy pair is memoized per (org_id, canonical period, today,
+# span) for _TEAM_SNAP_TTL seconds. DISPLAY-ONLY: this caches a read-side rollup of already-computed
+# data — no payout number is produced, stored or altered anywhere in it.
+#
+# Traps this deliberately avoids (the 2026-07-25 Gate-1 rework):
+#   * `get_supabase()` is a PROCESS-WIDE SINGLETON, so the key is PLAIN VALUES ONLY — never the client
+#     object, which would make an entry live for the whole process lifetime.
+#   * `time.monotonic()`, not wall time, so a clock adjustment can neither expire nor extend an entry.
+#   * BOUNDED (_TEAM_SNAP_MAX) — cleared wholesale rather than allowed to grow without limit.
+#   * Deep-copied IN and OUT, so no caller can mutate a cached payload.
+#   * Staleness is bounded THREE ways: the TTL, an explicit bust when a commission recompute for that
+#     org+period finishes (`_run_calculation`), and `?refresh=1` on the endpoint.
+# TTL follows the platform-core `_DERIVE_TTL` precedent (core/import_health.py, 900s).
+_TEAM_SNAP_TTL = 900.0
+_TEAM_SNAP_MAX = 200
+_TEAM_SNAP_LOCK = threading.Lock()
+_team_snap_memo: dict = {}      # key -> (monotonic_expiry, [targets_summary, coaching])
+
+
+def _team_snap_key(org_id, cperiod, today_key, span):
+    """Cache key. Every element is a plain str/tuple (see the trap note above)."""
+    return (str(org_id), str(cperiod), str(today_key), tuple(str(s) for s in (span or ())))
+
+
+def _team_snap_get(key):
+    """The memoized [summary, coaching] pair for `key`, or None. Returns a DEEP COPY."""
+    import time as _t, copy as _cp
+    with _TEAM_SNAP_LOCK:
+        ent = _team_snap_memo.get(key)
+        if not ent:
+            return None
+        if ent[0] <= _t.monotonic():
+            _team_snap_memo.pop(key, None)
+            return None
+        return _cp.deepcopy(ent[1])
+
+
+def _team_snap_put(key, value):
+    import time as _t, copy as _cp
+    with _TEAM_SNAP_LOCK:
+        if len(_team_snap_memo) >= _TEAM_SNAP_MAX:
+            _team_snap_memo.clear()
+        _team_snap_memo[key] = (_t.monotonic() + _TEAM_SNAP_TTL, _cp.deepcopy(value))
+
+
+def _team_snap_invalidate(org_id=None, period=None):
+    """Drop memoized team-snapshot rollups. Called when a commission recompute for an org+period
+    FINISHES — the coaching half reads rep_commissions, which that recompute just rewrote, so the
+    next My-Team load must not serve the pre-recompute numbers for up to the TTL. Period-spelling
+    tolerant (a calc can run as '2026-07' while the page asked for 'July 2026'). No args = drop
+    everything (deploy / ops escape hatch). NEVER raises: it is called from the calc path."""
+    try:
+        with _TEAM_SNAP_LOCK:
+            if org_id is None and period is None:
+                _team_snap_memo.clear()
+                return None
+            pv = {str(p) for p in _pvariants(period)} if period is not None else None
+            for k in [k for k in _team_snap_memo
+                      if (org_id is None or k[0] == str(org_id)) and (pv is None or k[1] in pv)]:
+                _team_snap_memo.pop(k, None)
+    except Exception as e:
+        print(f"WARN _team_snap_invalidate skipped ({org_id}/{period}): {e}")
+    return None
+
+
 @router.get("/team/{period}/snapshot")
 async def team_snapshot(period: str, authorization: str = Header(default=""),
-                        unit_id: str = "", today: str = "", org_id: str = ORG_ID):
+                        unit_id: str = "", today: str = "", refresh: bool = False,
+                        org_id: str = ORG_ID):
     """Manager TEAM snapshot for the signed-in caller's span (or a chosen unit_id within it).
     Reuses get_targets_summary (per-store today/pace/need/achieved) + rep_coaching (per-rep
     money-at-risk/KPIs/chargebacks), filtered to the span's store_codes. Per-rep drill-down uses the
-    existing GET /core/employee-dashboard. Default-scoped (no hard refusal yet — Phase 5 enforces)."""
+    existing GET /core/employee-dashboard. Default-scoped (no hard refusal yet — Phase 5 enforces).
+
+    PERIOD: either spelling is accepted ('July 2026' — what the platform period selector emits — or
+    '2026-07'); both resolve to the ONE canonical 'Month YYYY' this chain needs (`_period_bounds`
+    rejects '2026-07'). An unparseable period is a clean 400, never a 500.
+
+    PERFORMANCE (2026-07-30 incident, ref 3bf51b4d): the caller's span is pushed DOWN into both
+    aggregations, and the heavy pair is TTL-memoized — see the `_TEAM_SNAP_TTL` note above.
+    `?refresh=1` forces a fresh pass. READ-ONLY: nothing in this chain writes."""
     from app.modules.storeops.router import _caller_span_codes, _unit_store_codes, caller_scope
+    cperiod = _period_or_400(period)
     if unit_id:
         codes = _unit_store_codes(org_id, unit_id)
     else:
@@ -13678,9 +13857,28 @@ async def team_snapshot(period: str, authorization: str = Header(default=""),
             ad = str(s.get('address') or '').strip().upper()
             if ad:
                 keys.add(ad)
-    summ = await get_targets_summary(period, today=today, org_id=org_id)
+    # ── TIER 1: push the caller's span DOWN into both aggregations. `stores=` already existed on
+    #    get_targets_summary and was never passed (which is also what crashed this endpoint — an
+    #    unpassed repeated-Query param arrives as the truthy, non-iterable Query object; see
+    #    _as_filter_list); rep_coaching's store filter now takes a list. The SAME Python span filters
+    #    still run underneath, so the response is byte-identical — the pushdown only stops work that
+    #    was going to be discarded. `markets`/`reps` are passed EXPLICITLY for the same crash reason.
+    #    For an owner whose span is the whole org this is a no-op; TIER 2 (the memo) is their fix.
+    push_stores = sorted(c for c in codes_set if c)
+    # A blank span key means "reps whose store is blank" to the Python filter below but "no filter" to
+    # the pushdown, so only push the coaching keys when every one of them is a real, non-blank key.
+    push_keys = sorted(keys) if all(str(k).strip() for k in keys) else None
+    ckey = _team_snap_key(org_id, cperiod, today or _date.today().isoformat(),
+                          tuple(push_stores) + ('|',) + tuple(push_keys or ()))
+    pair = None if refresh else _team_snap_get(ckey)
+    if pair is None:
+        summ = await get_targets_summary(cperiod, today=today, stores=push_stores or None,
+                                        markets=None, reps=None, org_id=org_id)
+        coach = rep_coaching(cperiod, store=push_keys, org_id=org_id)
+        _team_snap_put(ckey, [summ, coach])
+    else:
+        summ, coach = pair[0], pair[1]
     in_span = [s for s in summ.get('stores', []) if str(s.get('store_code') or '').strip().upper() in codes_set]
-    coach = rep_coaching(period, org_id=org_id)
     team_reps = [r for r in coach.get('reps', []) if str(r.get('store') or '').strip().upper() in keys]
     return {"period": period, "today": summ.get('today'), "is_manager": True,
             "span_store_codes": sorted(codes_set), "stores": in_span, "reps": team_reps,
@@ -13691,9 +13889,14 @@ async def team_snapshot(period: str, authorization: str = Header(default=""),
 @router.get("/exec-overview/{period}")
 def exec_overview(period: str, org_id: str = ORG_ID):
     """Owner/exec single-pane: headline tiles + a store leaderboard, rolled up from the per-rep
-    coaching aggregation (commissions paid / at-risk / chargebacks / flags / reps below tier)."""
+    coaching aggregation (commissions paid / at-risk / chargebacks / flags / reps below tier).
+
+    Accepts either period spelling. This one MATTERED silently: the P&L headline below resolves the
+    period with `calculator.parse_period`, which maps '2026-07' to JANUARY — so a machine caller using
+    the dashed spelling got January's P&L stapled to this month's commission tiles, with no error."""
     require_org(org_id)
-    cd = rep_coaching(period, org_id=org_id)
+    cperiod = _period_or_400(period)
+    cd = rep_coaching(cperiod, org_id=org_id)
     reps = cd.get("reps", [])
     s = cd.get("summary", {})
     try:
@@ -13719,7 +13922,7 @@ def exec_overview(period: str, org_id: str = ORG_ID):
     # P&L headline from the Account module's consolidated statement (period stored as YYYY-MM).
     pl = {}
     try:
-        pm = parse_period(period)
+        pm = parse_period(cperiod)
         ym = f"{pm['year']}-{pm['month']:02d}"
         prow = (sb().schema('commcalc').table('account_statements').select('payload')
                 .eq('org_id', org_id).eq('period', ym).eq('statement_type', 'pl')
