@@ -429,9 +429,11 @@ check("A6a0-v WITHOUT the cache ONE /catalog request re-read the catalog tables 
       f"{pre_cat}")
 check("A6a-v WITH it those 6 collapse to 2 (one read per table)", cat_reads_cold == 2,
       f"{cat_reads_cold}")
-check("A6a2-v one COLD /catalog request drops from 17 queries to 12", pre_total == 17 and reads_cold == 12,
+check("A6a2-v one COLD /catalog request drops from 18 queries to 13", pre_total == 18 and reads_cold == 13,
       f"now={reads_cold} pre={pre_total}")
-# NOTE (deliberate non-change): the 12 that remain are _accessory_config's per-COLUMN single-row probes.
+# 17→18 / 12→13 on 2026-07-30: mig 250 (`accessory_config.apply_to_gp`, gp-luxelink-columns @ 21279fc)
+# legitimately adds ONE per-column probe — the exact degrade-safe pattern the NOTE below documents.
+# NOTE (deliberate non-change): the 13 that remain are _accessory_config's per-COLUMN single-row probes.
 # Each lives in its OWN try/except precisely so a pre-migration missing column cannot disturb the others
 # (migs 213/214/217/218/224/231 all degrade that way) — collapsing them into one select would break that.
 check("A6b-v a second request within the TTL costs 0 (process-lifetime memo, honestly stated)",
