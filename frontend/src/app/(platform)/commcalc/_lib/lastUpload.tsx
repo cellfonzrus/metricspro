@@ -60,12 +60,17 @@ export function fmtDay(ymd?: string | null): string {
   return isNaN(d.getTime()) ? String(ymd) : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-/** The "which data" half of the line: a period label, a day span, or nothing. */
+/** The "which data" half of the line: a period label, a day span, or nothing.
+ *  A day span is the MORE precise statement, so it wins over a period label — but when the same load
+ *  touched more than one period (a multi-month historical MA import) the period count is appended, or
+ *  the tile would silently imply one month. */
 export function coverageText(rec: LastUpload): string {
+  const nPeriods = Object.keys(rec.periods || {}).length
   if (rec.span && rec.span[0]) {
     const [a, b] = rec.span
     const span = a === b ? fmtDay(a) : `${fmtDay(a)} – ${fmtDay(b)}`
-    return rec.days && rec.days > 1 ? `${span} (${rec.days} days)` : span
+    const days = rec.days && rec.days > 1 ? `${span} (${rec.days} days)` : span
+    return nPeriods > 1 ? `${days} · ${nPeriods} periods` : days
   }
   if (rec.period) return rec.period
   const keys = Object.keys(rec.periods || {})
