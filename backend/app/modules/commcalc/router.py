@@ -19015,3 +19015,278 @@ try:                                                                  # pragma: 
     from app.modules.commcalc import import_audit as _import_audit    # noqa: F401
 except Exception as _e:                                               # pragma: no cover
     print(f"WARN commcalc attention providers not registered: {_e}")
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# MARKETPLACE HANDSET COGS  (owner-approved package 2026-07-29 · appended as ONE contiguous block so a
+# concurrent router.py package merges clean)
+#
+# "What did the handsets we ordered cost us — by product, by month, by ship-to — and what is still
+# open?" Source: commcalc.raw_ma_fulfillment (mig 083, the MA Marketplace Handset Fulfillment Orders
+# report). COGS = qty × unit price, computed in the PURE, unit-proved module `commcalc.ma_handset_cogs`;
+# this endpoint only READS (org-scoped, date-indexed) and composes.
+#
+# READ-ONLY, NOT MONEY-TOUCHING: a cost report over what the distributor already invoiced. No rate, tier,
+# plan rule or payout is read; NOTHING is written (in particular never `asset_ledger`, which belongs to
+# mod-asset); no recompute is reachable. Folding these costs into a unified device-cost ledger / the P&L
+# WOULD be money-touching and is a design note pending the owner (docs/designs/device-cost-ledger.md).
+#
+# WHOLE-REPORT GATE: DEFAULT-CLOSED behind the 'ma_handset_cogs' DATA_GRANT (`_require_ma_handset_cogs`,
+# the `_can_view_imei_rebates` pattern) — what the dealer pays for inventory is commercially sensitive,
+# so the lines, quantities and costs are restricted, not merely the totals. The 403 is raised BEFORE a
+# single row is read.
+#
+# NO PERIOD-SPELLING DUALITY HERE, deliberately: raw_ma_fulfillment has NO `period` column (its
+# report_pull spec is `has_period: False`, so ingest never derives one), so the month is resolved from
+# `date_ordered` through the indexed (org_id, date_ordered) range read — `_pvariants` has nothing to
+# apply to. A row with NO order date cannot be attributed to a month: it is EXCLUDED and COUNTED in a
+# note, never guessed into the window.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+_MHC_READ_CAP = 200000          # hard ceiling on rows pulled (a runaway read is a 502, not a report)
+_MHC_COLS = ("id,order_number,order_status,order_type,tspid,business_name,business_address,city,state,"
+             "zip,product_name,number_ordered,price,tracking_number,date_ordered,date_filled,date_shipped")
+
+
+def _can_view_ma_handset_cogs(authorization, org_id):
+    """PAGE gate for the Marketplace Handset COGS report. ADMIN-ONLY BY DEFAULT, grantable via the
+    DATA_GRANTS 'ma_handset_cogs' key — the same resolution shape as `_can_view_imei_rebates`: it gates
+    the WHOLE report (lines, quantities and costs), not a money section inside an open page. Frontend
+    mirror: `hasDataGrant(perms, 'ma_handset_cogs')`.
+
+    Degrades CLOSED on any resolution error — an unresolvable caller can only ever be refused, never
+    handed the report."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller
+        from app.modules.commcalc import ma_handset_cogs as _mhc_gate
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid) if uid else None
+        return _mhc_gate.ma_handset_cogs_allowed(caller)
+    except Exception:
+        return False
+
+
+def _require_ma_handset_cogs(authorization, org_id):
+    """Raise 403 naming the permission. The detail carries the literal grant key `ma_handset_cogs` so the
+    page can recognise its own gate in the thrown message (client.ts `api()` surfaces only `detail`, not
+    the status code) and render the lock note instead of a raw error."""
+    if not _can_view_ma_handset_cogs(authorization, org_id):
+        raise HTTPException(403, "The Marketplace handset COGS report is restricted — you need the "
+                                 "'ma_handset_cogs' permission to view it. Ask an admin to grant "
+                                 "'Marketplace handset COGS report' on your role.")
+
+
+def _mhc_month_range(period, window_months=1):
+    """(date_from, date_to) covering `window_months` calendar months ENDING with `period` (any spelling),
+    or (None, None) when the period cannot be parsed. window 1 = that month only."""
+    from app.modules.commcalc import ma_handset_cogs as _mhc
+    ym = _mhc.period_ym(period)
+    if not ym:
+        return None, None
+    y, m = ym
+    n = max(1, min(36, int(window_months or 1)))
+    sy, sm = y, m - (n - 1)
+    while sm < 1:
+        sm += 12
+        sy -= 1
+    nm, ny = (m % 12) + 1, y + (1 if m == 12 else 0)
+    return f"{sy:04d}-{sm:02d}-01", (_date(ny, nm, 1) - _timedelta(days=1)).isoformat()
+
+
+def _mhc_paged(client, org_id, date_from, date_to):
+    """Org-scoped, DATE-INDEXED paged read of raw_ma_fulfillment over [date_from, date_to]. Returns
+    (rows, ok); a missing table (mig 083 unrun) or a read error degrades to ([], False) so the page
+    renders an honest note instead of a 500."""
+    rows = []
+    try:
+        start = 0
+        while True:
+            chunk = (client.schema("commcalc").table("raw_ma_fulfillment").select(_MHC_COLS)
+                     .eq("org_id", org_id).gte("date_ordered", date_from).lte("date_ordered", date_to)
+                     .range(start, start + 999).execute().data) or []
+            rows.extend(chunk)
+            if len(chunk) < 1000 or len(rows) >= _MHC_READ_CAP:
+                break
+            start += 1000
+    except Exception as e:
+        print(f"WARN ma-handset-cogs raw_ma_fulfillment read failed: {e}")
+        return rows, False
+    return rows, True
+
+
+def _mhc_undated(client, org_id, cap=5000):
+    """Fulfillment lines with NO order date — org-scoped, capped. They cannot belong to a month, so they
+    are reported in a note (count + $) rather than dropped in silence or guessed into the window."""
+    try:
+        return (client.schema("commcalc").table("raw_ma_fulfillment").select(_MHC_COLS)
+                .eq("org_id", org_id).is_("date_ordered", "null")
+                .limit(cap).execute().data) or []
+    except Exception as e:
+        print(f"WARN ma-handset-cogs undated read failed: {e}")
+        return []
+
+
+@router.get("/ma-handset-cogs")
+def ma_handset_cogs_endpoint(period: str = "", window_months: int = 1, group_by: str = "product",
+                             price_basis: str = "unit", products: str = "", ship_to: str = "",
+                             stores: str = "", markets: str = "", statuses: str = "",
+                             order_types: str = "", states: str = "", months: str = "",
+                             open_only: int = 0, min_days_open: int = 0, reps: str = "",
+                             carrier_id: str = "", limit: int = 5000,
+                             authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """MARKETPLACE HANDSET COGS — one row per fulfillment ORDER LINE, extended at qty × unit price, with
+    per-dimension rollups (product · month · ship-to · market · order type · status · state · order) and
+    the OPEN/unfulfilled orders surfaced first.
+
+    Params: `period` (anchor month, any spelling; blank = current month) · `window_months` (1–36 months
+    ENDING with `period`, default 1) · `group_by` (see `ma_handset_cogs.GROUP_BY`) · `price_basis`
+    unit|line (how the feed's Price column is read — stated on the page and in every export) · the
+    RULE FIVE filters `stores`/`ship_to` (the same dimension: this feed's store is the ship-to) and
+    `markets`, plus the appended pick-don't-type facets `products` / `statuses` / `order_types` /
+    `states` / `months`, and the open-order controls `open_only` / `min_days_open` · `limit` (display
+    cap; the tiles and groups always describe the FULL filtered set) · `carrier_id` (optional — includes
+    that carrier's SAVED manual mapping in the cost-field panel; the org default is used without it).
+
+    RULE FIVE deviation, stated out loud: the fulfillment feed carries NO rep/salesperson dimension
+    (orders are placed against the dealer account, not a seller), so the rep control is not rendered. A
+    `reps` value is honoured by SAYING SO in `note` and narrowing nothing — never a silent no-op.
+
+    Markets come from the org's EXISTING /store-match chain (`_ir_store_resolver`, shared with the IMEI
+    rebate report): business address → business name → TSPID, first key that resolves wins. Anything
+    unresolved lands in the SELECTABLE "(no market)" bucket and is counted, so a market filter can never
+    quietly swallow rows.
+
+    READ-ONLY. Gated DEFAULT-CLOSED by the 'ma_handset_cogs' DATA_GRANT before any read."""
+    require_org(org_id)
+    _require_ma_handset_cogs(authorization, org_id)
+    from app.modules.commcalc import ma_handset_cogs as _mhc
+    client = sb()
+
+    per = (period or "").strip() or _date.today().strftime("%B %Y")
+    try:
+        win = max(1, min(36, int(window_months or 1)))
+    except (TypeError, ValueError):
+        win = 1
+    basis = (price_basis or "unit").strip().lower()
+    if basis not in _mhc.PRICE_BASIS:
+        basis = "unit"
+    gb = (group_by or "product").strip().lower()
+    if gb not in _mhc.GROUP_BY:
+        gb = "product"
+    date_from, date_to = _mhc_month_range(per, win)
+    notes = []
+
+    if not date_from:
+        return {"ready": True, "period": per, "window_months": win, "rows": [], "groups": [],
+                "tiles": _mhc.tiles_for([]), "group_by": gb, "price_basis": basis,
+                "note": f"'{period}' is not a month this report can read — pick a month.",
+                "product_options": [], "ship_to_options": [], "market_options": [],
+                "status_options": [], "order_type_options": [], "state_options": [],
+                "month_options": [], "total_rows": 0, "truncated": False, "unfiltered_rows": 0,
+                "no_market_label": _mhc.NO_MARKET, "unmapped_market_rows": 0,
+                "cost_fields": [], "definition_note": _mhc.definition_note(basis),
+                "open_note": _mhc.open_note(), "basis_note": _mhc.basis_note(basis)}
+
+    raw, ok = _mhc_paged(client, org_id, date_from, date_to)
+    if not ok:
+        notes.append("The marketplace fulfillment feed could not be read (is the MA Handset Ordering "
+                     "report imported for this tenant?). Nothing is missing from your permissions — "
+                     "import it at Data Imports → MA upload and reload.")
+
+    # Store/market resolution through the org's EXISTING /store-match chain — shared with the IMEI
+    # rebate report so the two surfaces can never disagree about which market a ship-to belongs to.
+    try:
+        _store_for = _ir_store_resolver(client, org_id)
+    except Exception:
+        _store_for = None
+
+    all_rows = _mhc.build_rows(raw, store_of=_store_for, price_basis=basis)
+    opts = _mhc.filter_options(all_rows)
+
+    # `stores` (the RULE FIVE core-set name) and `ship_to` (this feed's own word) are the SAME dimension
+    # — unioned so either spelling of the filter works and neither is silently ignored.
+    ship_sel = ",".join([s for s in [(stores or "").strip(), (ship_to or "").strip()] if s])
+    rows = _mhc.apply_filters(all_rows, products=products, ship_to=ship_sel, markets=markets,
+                              statuses=statuses, order_types=order_types, states=states, months=months,
+                              open_only=bool(open_only), min_days_open=min_days_open)
+    tiles = _mhc.tiles_for(rows)
+    groups = _mhc.group_rows(rows, gb)
+
+    try:
+        cap = max(1, min(50000, int(limit)))
+    except (TypeError, ValueError):
+        cap = 5000
+    total_rows, truncated = len(rows), len(rows) > cap
+    shown = rows[:cap]
+
+    # Undated lines: counted + costed in a note, never guessed into the month.
+    und = _mhc.build_rows(_mhc_undated(client, org_id), store_of=_store_for, price_basis=basis) if ok else []
+    if und:
+        _u_amt = round(sum(r["ext_cost"] or 0 for r in und), 2)
+        notes.append(f"{len(und)} fulfillment line(s) carry NO order date and are excluded from the "
+                     f"month (≈ ${_u_amt:,.2f}) rather than guessed into it — fix the Date Ordered "
+                     "column on the import and they will appear in their real month.")
+
+    # Empty window but the org HAS marketplace rows → say which, so an empty page is diagnosable.
+    if ok and not all_rows:
+        try:
+            probe = (client.schema("commcalc").table("raw_ma_fulfillment").select("id")
+                     .eq("org_id", org_id).limit(1).execute().data) or []
+        except Exception:
+            probe = []
+        notes.append("This org has marketplace fulfillment rows, but none were ordered in the selected "
+                     "window — widen the month range." if probe else
+                     "No marketplace handset fulfillment data has been imported for this org yet "
+                     "(Data Imports → MA upload → “MA - Marketplace Handset Fulfillment Orders”).")
+
+    _unmapped = _mhc.unresolved_market_count(all_rows)
+    if _unmapped:
+        notes.append(f"{_unmapped} of {len(all_rows)} line(s) could not be resolved to a market and are "
+                     f"grouped under \"{_mhc.NO_MARKET}\" — map the ship-to store at "
+                     "/commcalc/store-match (Store Matching) and they will filter by market with no "
+                     "other change.")
+    if tiles.get("priceless_lines"):
+        notes.append(f"{tiles['priceless_lines']} line(s) carry no price and are counted but NOT summed "
+                     "into COGS (a $0 total there means the Price column is unmapped or blank, not a "
+                     "free handset).")
+    if (reps or "").strip():
+        notes.append("This feed carries no rep/salesperson (marketplace orders are placed against the "
+                     "dealer account, not a seller), so the rep filter was NOT applied.")
+
+    # The NAMED COST TARGETS behind these numbers, from the EXISTING manual_report_mapping mechanism —
+    # so a $0 column is traceable to an unmapped field instead of looking like a data problem. Read-only
+    # view of the mapping; this endpoint never writes one.
+    cost_fields, map_src = [], None
+    try:
+        _spec = _ma_effective_spec(org_id, "ma_marketplace_orders") or {}
+        _eff = _spec.get("column_map") or {}
+        if (carrier_id or "").strip():
+            _saved = _ma_saved_mapping(org_id, carrier_id.strip(), "ma_marketplace_orders")
+            _eff = ma_upload.effective_column_map((_saved or {}).get("column_map"), _eff)
+            map_src = "saved" if (_saved or {}).get("column_map") else "default"
+        else:
+            map_src = "default"
+        cost_fields = ma_upload.cost_field_catalog("ma_marketplace_orders", _eff)
+    except Exception as e:
+        print(f"WARN ma-handset-cogs cost-field catalog unavailable: {e}")
+
+    return {
+        "ready": True,
+        "period": _mhc.month_label(_mhc.month_of(date_to)) or per,
+        "window_months": win, "window_from": date_from, "window_to": date_to,
+        "group_by": gb, "group_label": _mhc.GROUP_LABEL.get(gb, gb),
+        "group_by_options": [{"id": g, "label": _mhc.GROUP_LABEL[g]} for g in _mhc.GROUP_BY],
+        "price_basis": basis,
+        "tiles": tiles, "groups": groups,
+        "rows": shown, "total_rows": total_rows, "truncated": truncated,
+        "unfiltered_rows": len(all_rows),
+        "definition_note": _mhc.definition_note(basis),
+        "basis_note": _mhc.basis_note(basis, tiles),
+        "open_note": _mhc.open_note(),
+        "product_options": opts["product_options"], "ship_to_options": opts["ship_to_options"],
+        "market_options": opts["market_options"], "status_options": opts["status_options"],
+        "order_type_options": opts["order_type_options"], "state_options": opts["state_options"],
+        "month_options": opts["month_options"],
+        "no_market_label": _mhc.NO_MARKET, "unmapped_market_rows": _unmapped,
+        "undated_rows": len(und),
+        "cost_fields": cost_fields, "cost_map_source": map_src,
+        "source_table": "commcalc.raw_ma_fulfillment",
+        "note": (" ".join(notes) or None),
+    }

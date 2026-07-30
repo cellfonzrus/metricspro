@@ -250,9 +250,145 @@ def mapping_status(saved_row, default_column_map):
     return {"mapped": False, "source": "none", "columns": 0, "saved_at": None, "saved_by": None}
 
 
-def target_field_catalog(column_map):
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# NAMED MAPPING TARGETS + ASSET-LENDING FIELD-LABEL PARITY (owner-approved 2026-07-29)
+#
+# The MA reports' dest fields were previously shown to the mapper as bare column names
+# (`number_ordered`, `price`), because their field list is DERIVED from report_pull's column_map, which
+# carries no human labels. That is fine for a developer and useless for an operator — and it is
+# especially bad for the FULFILLMENT COST fields, which are the same real-world facts the ASSET-LENDING
+# (Asset_Lending.xlsx → commcalc.asset_ledger) file already names. Two files describing the same handset
+# cost with two different vocabularies is how a mapping gets made wrong.
+#
+# So: one label registry, keyed on the DEST COLUMN, layered onto the EXISTING manual_report_mapping
+# mechanism. No new mapping system, no new table, no new endpoint — `target_field_catalog` (already the
+# single source the `/manual-upload/mapping` + `/manual-upload/detect` responses build from) simply
+# starts emitting `label`, `role`, `cost`, and the asset-lending PARITY of each field. Every existing
+# consumer keys off `col` and is unaffected; unknown columns keep today's derived label.
+#
+# READ-ONLY TOWARD ASSET: parity is DOCUMENTATION ("this column means what asset-lending calls X"), not
+# a pipe. Nothing here reads or WRITES commcalc.asset_ledger — that table belongs to mod-asset, and
+# joining the two cost sources into one ledger is money-touching (see the design note in
+# docs/designs/device-cost-ledger.md, owner decision pending).
+#
+# `asset_label` = the header as it appears in Asset_Lending.xlsx (asset_parser.COL_MAP / DATE_SRC);
+# `asset_field` = the asset_ledger column it lands in. Both are stated ONLY where the concept is
+# genuinely the same; where asset-lending has no equivalent the parity is explicitly None + a reason,
+# rather than a forced pairing.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+FIELD_LABELS = {
+    # ── the FULFILLMENT COST fields (the point of this registry) ─────────────────────────────────
+    "price": {
+        "label": "Unit price (handset cost)", "role": "cost", "cost": True, "unit": "$ per device",
+        "asset_field": "owed_to_vip", "asset_label": "Owed to VIP",
+        "parity_note": "Asset-lending states the per-device dollar the distributor bills (Owed to VIP / "
+                       "On Inventory); on a marketplace PURCHASE the same fact is the unit price. Same "
+                       "question — what this handset costs the dealer — different arrangement.",
+    },
+    "number_ordered": {
+        "label": "Quantity ordered", "role": "cost", "cost": True, "unit": "devices",
+        "asset_field": None, "asset_label": None,
+        "parity_note": "Asset-lending is ONE ROW PER DEVICE (ESN), so quantity is implicitly 1 there; "
+                       "the marketplace feed is one row per order LINE, so qty is explicit and the "
+                       "extended cost is qty × unit price.",
+    },
+    "product_name": {
+        "label": "Device / item", "role": "device",
+        "asset_field": "device_model", "asset_label": "item",
+    },
+    "date_ordered": {
+        "label": "Date ordered (acquired)", "role": "date",
+        "asset_field": "acquired_date", "asset_label": "Date",
+    },
+    "business_address": {
+        "label": "Ship-to store (billing address)", "role": "store",
+        "asset_field": "store", "asset_label": "Billing Address 1",
+    },
+    "order_status": {
+        "label": "Order status", "role": "status",
+        "asset_field": "status", "asset_label": "Status",
+    },
+    "tspid": {
+        "label": "TSPID (dealer / store id)", "role": "store",
+        "asset_field": "sfid", "asset_label": "SFID",
+        "parity_note": "Both are the carrier-side identifier of the dealer/store the device went to — "
+                       "different issuing system, same role in a join.",
+    },
+    # ── the rest of the fulfillment report: named, no asset-lending equivalent ───────────────────
+    "order_number": {"label": "Order number", "role": "key", "asset_field": None,
+                     "parity_note": "Asset-lending has no purchase order; it keys on the ESN."},
+    "order_type": {"label": "Order type"},
+    "date_filled": {"label": "Date filled", "role": "date", "asset_field": None,
+                    "parity_note": "Marketplace fulfillment stage; asset-lending's dates are billing "
+                                   "dates (Due Date / ESN Added Pay as You Go), not fulfillment ones."},
+    "date_shipped": {"label": "Date shipped", "role": "date"},
+    "tracking_number": {"label": "Tracking number"},
+    "business_name": {"label": "Business name (ship-to)", "role": "store"},
+    "city": {"label": "City"}, "state": {"label": "State"}, "zip": {"label": "ZIP"},
+    # ── shared MA columns whose bare names are the most misread ──────────────────────────────────
+    "retail_cost": {"label": "Retail cost / amount", "role": "money", "unit": "$"},
+    "merchant_invoice": {"label": "Merchant invoice #", "role": "key"},
+    "activation_order": {"label": "Activation order #", "role": "key"},
+    "imei": {"label": "IMEI / device serial", "role": "device",
+             "asset_field": "esn_imei", "asset_label": "ESN"},
+    "sim": {"label": "SIM / ICCID", "role": "device"},
+    "sku": {"label": "SKU"},
+    "sub_type": {"label": "Subscriber type"},
+    "tx_date": {"label": "Transaction date", "role": "date"},
+    "account_id": {"label": "Merchant account id", "role": "store"},
+    "account_name": {"label": "Merchant account name", "role": "store"},
+}
+
+# The COST-bearing dest fields per report — the named targets an operator must get right for the
+# Marketplace Handset COGS report to be correct (qty × unit price). Ordered as the mapper should read
+# them, not alphabetically.
+COST_FIELDS = {
+    "ma_marketplace_orders": ("number_ordered", "price", "product_name", "date_ordered",
+                              "business_address", "order_status", "order_number"),
+    "ma_daily_tx": ("retail_cost", "product_name", "tx_date", "order_number"),
+}
+
+
+def derived_label(col):
+    """Today's behaviour for a column with no registry entry: 'number_ordered' -> 'Number ordered'.
+    Kept as a named function so the fallback is explicit rather than inlined magic."""
+    return str(col or "").replace("_", " ").strip().capitalize() or str(col or "")
+
+
+def field_meta(col):
+    """Label + role + asset-lending parity for ONE dest column. Always returns a dict (an unknown column
+    gets the derived label and no parity), so callers never branch on presence.
+
+    Keyed on the dest COLUMN rather than (report, column) on purpose: `price`, `product_name`,
+    `date_ordered` mean the same thing in every MA report that carries them, and a per-report table would
+    drift the moment a new report reuses a column. A future report needing a different label for the same
+    column can pass `report_key` to `target_field_catalog`, which layers per-report overrides on top.
+    """
+    m = dict(FIELD_LABELS.get(col) or {})
+    out = {"col": col, "label": m.pop("label", None) or derived_label(col),
+           "role": m.pop("role", None), "cost": bool(m.pop("cost", False)),
+           "unit": m.pop("unit", None),
+           "asset_field": m.pop("asset_field", None), "asset_label": m.pop("asset_label", None),
+           "parity_note": m.pop("parity_note", None)}
+    out["labeled"] = col in FIELD_LABELS
+    return out
+
+
+# Per-(report_key, col) label overrides — empty today, the documented seam for a report that needs a
+# different word for a shared column. Kept here so no caller invents a second registry.
+REPORT_FIELD_LABELS = {}
+
+
+def target_field_catalog(column_map, report_key=None):
     """From a column_map ({source_header: dest|{col,type}}) build the list of DEST fields for the
-    mapping UI (pick-don't-type): [{col, type, default_source}]. Deterministic order (dest col name)."""
+    mapping UI (pick-don't-type). Deterministic order (dest col name).
+
+    Each entry: {col, type, default_source} — the original contract, unchanged — PLUS the named-target
+    metadata every mapping surface should show a human: `label`, `role`, `cost` (is this a cost field the
+    COGS report depends on), `unit`, and the ASSET-LENDING parity (`asset_field` / `asset_label` /
+    `parity_note`) so one handset cost is described the same way in both files. Consumers that only read
+    `col` are byte-for-byte unaffected.
+    """
     out = {}
     for src_h, spec_v in (column_map or {}).items():
         if isinstance(spec_v, dict):
@@ -262,8 +398,34 @@ def target_field_catalog(column_map):
         if not col:
             continue
         # keep the first source header seen as the default suggestion for this dest col
-        out.setdefault(col, {"col": col, "type": typ, "default_source": src_h})
+        if col in out:
+            continue
+        meta = field_meta(col)
+        meta.update(REPORT_FIELD_LABELS.get((report_key, col)) or {})
+        out[col] = {**meta, "col": col, "type": typ, "default_source": src_h}
     return [out[c] for c in sorted(out.keys())]
+
+
+def cost_field_catalog(report_key="ma_marketplace_orders", column_map=None):
+    """The report's NAMED COST TARGETS and whether each is currently mapped — the thing the COGS report
+    needs to be right, and the panel it shows so a $0 column is traceable to an unmapped field rather
+    than looking like a data problem.
+
+    Returns [{col, label, role, cost, unit, asset_field, asset_label, parity_note, mapped,
+    source_header}] in the COST_FIELDS order (mapping-relevance order, not alphabetical). With no
+    column_map the entries still describe the targets, all `mapped: False`.
+    """
+    by_col = {}
+    for src_h, spec_v in (column_map or {}).items():
+        col = spec_v.get("col") if isinstance(spec_v, dict) else spec_v
+        if col:
+            by_col.setdefault(col, src_h)
+    out = []
+    for col in COST_FIELDS.get(report_key, ()):
+        meta = field_meta(col)
+        meta.update(REPORT_FIELD_LABELS.get((report_key, col)) or {})
+        out.append({**meta, "mapped": col in by_col, "source_header": by_col.get(col)})
+    return out
 
 
 def suggest_sources(headers, column_map):
