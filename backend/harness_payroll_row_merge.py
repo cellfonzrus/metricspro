@@ -760,7 +760,17 @@ check("H1b ...with the deleted shift's employee/store/date and the DM's identity
       del_shift_logs[0]["employee_id"] == "E45" and del_shift_logs[0]["store_code"] == "S1"
       and del_shift_logs[0]["work_date"] == "2026-07-06"
       and del_shift_logs[0]["changed_by_email"] == "dm@luxelink.example", del_shift_logs)
-check("H1c the shift is actually gone", fake.store[("storeops", "shifts")] == [], fake.store[("storeops", "shifts")])
+# 2026-07-30 failure-log fix (mod-people, fix_request 9b342c54): delete_shift now soft-deletes via
+# an app-level UPDATE instead of a real DELETE (storeops.shifts' BEFORE DELETE trigger self-updates
+# the same row mid-delete, a Postgres anti-pattern that raised an unhandled APIError on every real
+# DELETE — see backend/harness_people_failure_leads.py Section A for the full repro/fix proof). The
+# row therefore now STAYS in the table with is_deleted=True (exactly what every reader's
+# `.eq("is_deleted", False)` filter already expects — behaviorally invisible either way) instead of
+# being physically removed; this assertion is updated to match the corrected behavior.
+del_row = next(r for r in fake.store[("storeops", "shifts")] if r["id"] == 500)
+check("H1c the shift is soft-deleted (is_deleted True, deleted_at/deleted_by stamped) rather than "
+      "physically removed", del_row.get("is_deleted") is True and bool(del_row.get("deleted_at"))
+      and del_row.get("deleted_by") == "dm@luxelink.example", del_row)
 
 # ── H2: shift-swap approval (_apply_swap) logs the reassignment ═══════════════════════════════════
 fake.store[("storeops", "shifts")] = [

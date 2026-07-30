@@ -274,10 +274,33 @@ def delete_shift(shift_id: int, authorization: str = Header(default=""), org_id:
 
     Gate-1 N3 (2026-07-27): deleting a shift IS a manual hours fix (the sharpest gap the reviewer
     found — a DM removing a scheduled shift entirely is at least as consequential as editing its
-    hours) — logs the deletion's full before-state (best-effort, never blocks the delete itself)."""
+    hours) — logs the deletion's full before-state (best-effort, never blocks the delete itself).
+
+    2026-07-30 failure-log fix (fix_request 9b342c54, real-world repro: shift_id 4535): soft-deletes
+    via an app-level UPDATE instead of a real DELETE. storeops.shifts carries a BEFORE DELETE
+    trigger (storeops.soft_delete_shift(), migration 003) whose body runs
+    `UPDATE storeops.shifts SET is_deleted = true, deleted_at = NOW() WHERE id = OLD.id` against the
+    SAME row the outer DELETE is currently processing — a documented Postgres anti-pattern that
+    raises "tuple to be updated was already modified by an operation triggered by the current
+    command" on EVERY invocation (not intermittent), which postgrest-py surfaces as an unhandled
+    APIError -> unhandled 500. Every reader of storeops.shifts in this file already filters
+    `.eq("is_deleted", False)`, so flipping that flag here (exactly what the trigger was trying,
+    and failing, to do) produces the identical observable result the feature always intended,
+    without ever exercising the broken trigger. `.update()` is a plain UPDATE — it does not fire a
+    DELETE trigger at all. The whole write is wrapped in try/except so any OTHER DB error becomes a
+    clean 400 instead of an unhandled 500 (org-scoping unchanged: still `.eq(id).eq(org_id)`, a
+    foreign/nonexistent shift_id still zero-matches and no-ops with a 200, same as before)."""
     before = dict((sb().table("shifts").select("*").eq("id", shift_id).eq("org_id", org_id)
                    .limit(1).execute().data or [{}])[0])
-    sb().table("shifts").delete().eq("id", shift_id).eq("org_id", org_id).execute()
+    who = _who_for_log(authorization, org_id)
+    try:
+        sb().table("shifts").update({
+            "is_deleted": True,
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+            "deleted_by": (who or {}).get("email"),
+        }).eq("id", shift_id).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't delete this shift — please retry, or contact support if it keeps happening.")
     if before:
         try:
             _log_payroll_change(org_id, field="shift_deleted", entry_point="shift_edit",
@@ -285,7 +308,7 @@ def delete_shift(shift_id: int, authorization: str = Header(default=""), org_id:
                                  store_code=before.get("store_code"), work_date=before.get("shift_date"),
                                  before=f"{before.get('scheduled_hours')}h scheduled ({before.get('start_time')}-{before.get('end_time')})",
                                  after=None, source_table="shifts", source_id=shift_id,
-                                 who=_who_for_log(authorization, org_id))
+                                 who=who)
         except Exception:
             pass
     return {"deleted": shift_id}
