@@ -47,11 +47,19 @@ MULTI-TENANT (RULE ONE)
 DEGRADES GRACEFULLY: mig 718 un-run ⇒ every endpoint returns an honest empty payload + `hint`, and the
   board shows an empty state. No unrelated page is affected. Mirrors mig 112 / 716 / 717 style.
 
+USER ACTIONS (mig 719, owner directive 2026-07-30). A shipped fix is often INERT until a human does
+  something outside the codebase — run the SQL, set the env var, correct a mapping row, re-upload a
+  reduced export. `user_actions` is that checklist as structured data on the row, so the board can say
+  FIXED and, in the same breath, "…and here is what YOU still have to do". Automation may WRITE the
+  checklist (it knows which SQL it needs run); only a SUPER-ADMIN may tick an item done — see
+  `action_write`, which is in ALL_CAPS and deliberately NOT in SECRET_CAPS.
+
 NOT MONEY-TOUCHING: nothing here reads or writes a rate, plan, tier, payout, commission or P&L row.
   `cost_usd` is INTERNAL AI-spend reporting for the owner — not a payable, not in any P&L feed.
 """
 import hmac
 import re
+import uuid
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Header
@@ -103,6 +111,88 @@ FIX_SUPER_ONLY_TARGETS = ("approved", "pushed")
 # automation is refused outright, a super-admin may do it deliberately.
 FIX_MONEY_GUARDED_TARGETS = ("building", "gate1_parked", "approved", "pushed")
 FIX_TERMINAL = ("pushed",)
+
+# ══ USER ACTIONS (mig 719) — "FIXED, and here is what YOU still have to do" ═══════════════════════
+# Owner directive 2026-07-30. Half the fixes this pipeline ships do nothing until a human acts outside
+# the codebase; that step used to live only in a handoff paragraph, so a shipped fix could sit dead for
+# weeks while the board said "pushed" and everyone believed it was done.
+USER_ACTION_KINDS = ("sql", "env", "config", "data", "other")
+USER_ACTION_STATUSES = ("pending", "done")
+MAX_USER_ACTIONS = 40          # bounded — one row can never grow an unbounded checklist
+MAX_INSTRUCTION = 8000         # a full SQL block fits comfortably; a pasted logfile does not
+
+
+def normalize_user_actions(raw, existing=None):
+    """PURE. Validate + normalize a user_actions list; raises ValueError with a human reason (the routes
+    turn that into a 422). Rules, all default-DENY:
+      1. `kind` MUST be one of USER_ACTION_KINDS — an unknown kind is REJECTED, never silently coerced
+         into 'other' (a mistyped kind is a mistake worth surfacing at write time);
+      2. `instruction` is required — it IS the action — and is length-bounded;
+      3. ids are stable + unique, and a missing one is generated, so the mark-done endpoint can always
+         address a specific item;
+      4. an id that already exists KEEPS its done state unless the caller explicitly restates `status`.
+         Rewriting the checklist at ship time can therefore never silently un-tick something the operator
+         already completed (`existing` is the row's current list).
+    Returns the normalized list."""
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list):
+        raise ValueError("user_actions must be a list of {id, kind, instruction} objects")
+    if len(raw) > MAX_USER_ACTIONS:
+        raise ValueError(f"at most {MAX_USER_ACTIONS} user actions per fix request")
+    prior = {str(a["id"]): a for a in (existing or [])
+             if isinstance(a, dict) and a.get("id")}
+    out, seen = [], set()
+    for i, a in enumerate(raw):
+        if not isinstance(a, dict):
+            raise ValueError("each user action must be an object with kind + instruction")
+        kind = str(a.get("kind") or "").strip().lower()
+        if kind not in USER_ACTION_KINDS:
+            raise ValueError(f"user action kind must be one of {', '.join(USER_ACTION_KINDS)} "
+                             f"(got {a.get('kind')!r})")
+        instruction = str(a.get("instruction") or "").strip()
+        if not instruction:
+            raise ValueError("each user action needs an instruction — that IS the action")
+        aid = str(a.get("id") or "").strip() or f"{kind}-{i + 1}-{uuid.uuid4().hex[:8]}"
+        if aid in seen:
+            raise ValueError(f"duplicate user action id {aid!r}")
+        seen.add(aid)
+        was = prior.get(aid) or {}
+        status = str(a.get("status") or "").strip().lower()
+        if not status:
+            status = str(was.get("status") or "pending").strip().lower()   # rule 4: keep a done tick
+        if status not in USER_ACTION_STATUSES:
+            raise ValueError(f"user action status must be one of {', '.join(USER_ACTION_STATUSES)}")
+        done = status == "done"
+        out.append({
+            "id": aid,
+            "kind": kind,
+            "instruction": instruction[:MAX_INSTRUCTION],
+            "status": status,
+            "done_by": ((a.get("done_by") or was.get("done_by")) if done else None),
+            "done_at": ((a.get("done_at") or was.get("done_at")) if done else None),
+        })
+    return out
+
+
+def user_actions_of(row):
+    """PURE. The checklist on a row. Tolerates an UN-RUN mig 719 (column absent → []) and any junk
+    element, so no read path can ever blow up on this field."""
+    v = (row or {}).get("user_actions")
+    return [a for a in v if isinstance(a, dict)] if isinstance(v, list) else []
+
+
+def pending_user_actions(row):
+    """PURE. How many checklist steps are still outstanding on this row."""
+    return sum(1 for a in user_actions_of(row)
+               if str(a.get("status") or "pending").strip().lower() != "done")
+
+
+def action_required(row):
+    """PURE. The board's amber flag: this fix SHIPPED but a human step is still outstanding, so what the
+    owner asked for is NOT actually working yet. Deliberately restricted to 'pushed' — a parked fix's
+    checklist is a plan, not a debt."""
+    return str((row or {}).get("status") or "") == "pushed" and pending_user_actions(row) > 0
 
 
 def pipeline_status_change(current, target, *, is_super_admin=False, actor_kind="user",
@@ -347,7 +437,7 @@ def rollup(rows):
     """PURE period rollup for the board tile — computed over the rows the CALLER already filtered, so the
     tile always agrees with the table and with the export (RULE FIVE: filters drive everything)."""
     out = {"fixes": 0, "tokens": 0, "cost_usd": 0.0, "priced": 0, "unpriced": 0,
-           "by_status": {}, "shipped": 0, "parked": 0}
+           "by_status": {}, "shipped": 0, "parked": 0, "action_required": 0, "pending_actions": 0}
     for r in (rows or []):
         out["fixes"] += 1
         out["tokens"] += tokens_total(r)
@@ -366,6 +456,9 @@ def rollup(rows):
             out["shipped"] += 1
         elif st in ("gate1_parked", "approved"):
             out["parked"] += 1
+        if action_required(r):                  # shipped, but the human step is still outstanding
+            out["action_required"] += 1
+            out["pending_actions"] += pending_user_actions(r)
     out["cost_usd"] = round(out["cost_usd"], 4)
     return out
 
@@ -375,7 +468,11 @@ SECRET_HEADER = "x-fix-pipeline-secret"
 # EXACTLY what the agent service secret may do. Anything not listed here needs a super-admin browser
 # session. Keep this tuple as the single source of truth — the harness asserts against it.
 SECRET_CAPS = frozenset({"feed_read", "registry_read", "registry_write"})
-ALL_CAPS = frozenset({"feed_read", "registry_read", "registry_write", "config_read", "config_write"})
+# `action_write` = ticking a user-action checklist item done on a shipped fix. It is in ALL_CAPS and
+# deliberately NOT in SECRET_CAPS: automation may WRITE the checklist (the triage agent knows which SQL a
+# config/data finding needs run) but it must never be able to claim a human did it.
+ALL_CAPS = frozenset({"feed_read", "registry_read", "registry_write", "config_read", "config_write",
+                      "action_write"})
 
 
 def _secret_ok(presented):
@@ -470,6 +567,42 @@ def _audit(row, *, actor, actor_kind, frm, to, note=""):
     return trail[-200:]        # bounded so one pathological row can't grow without limit
 
 
+# Columns that only exist once mig 719 has been run. A write that carries them must never take the
+# whole update down with it (AGENT_CONTRACT §5: a missing migration degrades, it does not break).
+MIG719_FIELDS = ("user_actions", "resolved_note")
+MIG719_HINT = ("Saved — but the FIXED checklist needs migration 719 "
+               "(core.fix_requests.user_actions + resolved_note); those two fields were NOT stored.")
+
+
+def _update_request(client, rid, org, patch):
+    """Org-scoped UPDATE (RULE ONE: org stamped on the write path) with a mig-719 fallback. If the write
+    fails and the payload carried the 719 columns, retry WITHOUT them so the status transition and the
+    audit trail still land, and return the hint. A second failure is NOT a missing-column problem and
+    propagates. Returns "" (clean) or MIG719_HINT."""
+    def _do(p):
+        (client.schema("core").table("fix_requests").update(p)
+         .eq("org_id", org).eq("id", rid).execute())
+
+    try:
+        _do(patch)
+        return ""
+    except Exception as first:
+        rest = {k: v for k, v in patch.items() if k not in MIG719_FIELDS}
+        if len(rest) == len(patch) or not rest:
+            raise first
+        _do(rest)
+        return MIG719_HINT
+
+
+def _decorate_actions(row):
+    """Attach the checklist + the DERIVED flags the board renders, so the UI never recomputes them and a
+    pre-719 row degrades to an empty checklist instead of `undefined`."""
+    row["user_actions"] = user_actions_of(row)
+    row["pending_actions"] = pending_user_actions(row)
+    row["action_required"] = action_required(row)
+    return row
+
+
 def _fetch_request(client, rid, org_id, all_orgs=False):
     q = client.schema("core").table("fix_requests").select("*").eq("id", rid)
     if not all_orgs:
@@ -558,9 +691,13 @@ async def list_pipeline_requests(org_id: str = ORG_ID, all_orgs: int = 0, status
         r["cost_usd"] = cost
         r["cost_basis"] = basis
         r["tokens_total"] = tokens_total(r)
+        _decorate_actions(r)            # user_actions + pending_actions + action_required (mig 719)
     return {"fix_requests": rows, "rollup": rollup(rows), "statuses": list(FIX_STATUSES),
             "classifications": list(FIX_CLASSIFICATIONS), "transitions":
                 {k: list(v) for k, v in FIX_TRANSITIONS.items()},
+            "user_action_kinds": list(USER_ACTION_KINDS),
+            "action_note": ("A fix shown as FIXED with outstanding steps is NOT working yet — the "
+                            "checklist on the row is what still has to be done by a human."),
             "org_id": org, "all_orgs": cross, "phase": 1,
             "approval_note": ("Phase 1: approval is given by the owner IN CHAT and recorded here by a "
                               "super-admin. There is no approve action in the app."),
@@ -590,6 +727,7 @@ async def get_pipeline_request(rid: str, org_id: str = ORG_ID, all_orgs: int = 0
     cost, basis = _price(row, _rate_rows(client, row_org), row_org)
     row["cost_usd"], row["cost_basis"] = cost, basis
     row["tokens_total"] = tokens_total(row)
+    _decorate_actions(row)
     ids = [str(i) for i in (row.get("failure_ids") or []) if i][:200]
     failures = []
     if ids:
@@ -638,6 +776,13 @@ async def create_pipeline_request(body: dict, org_id: str = ORG_ID,
     ids = [str(i) for i in (body.get("failure_ids") or []) if i][:500]
     affected = body.get("affected_orgs")
     affected = affected if isinstance(affected, list) else []
+    # The triage routine already writes prose about "what config/data needs fixing" — this structures it.
+    # Validated here so a bad `kind` is a 422 BEFORE anything is written.
+    try:
+        new_actions = (normalize_user_actions(body.get("user_actions"))
+                       if body.get("user_actions") is not None else None)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     client = sb()
     try:
         existing = (client.schema("core").table("fix_requests").select("*")
@@ -663,13 +808,17 @@ async def create_pipeline_request(body: dict, org_id: str = ORG_ID,
                             frm=cur.get("status"), to=cur.get("status"),
                             note=f"folded {len(ids)} more occurrence(s) into this signature"),
         }
-        for f in ("sample_path", "exc_type", "title", "first_ref"):
+        for f in ("sample_path", "exc_type", "title", "first_ref", "resolved_note"):
             if not cur.get(f) and body.get(f):
                 patch[f] = body[f]
-        (client.schema("core").table("fix_requests").update(patch)
-         .eq("org_id", org).eq("id", cur["id"]).execute())
+        # A re-file NEVER clobbers a checklist the operator has been ticking off — it only fills an empty
+        # one. Editing an existing checklist is an explicit PATCH.
+        if new_actions and not user_actions_of(cur):
+            patch["user_actions"] = new_actions
+        hint = _update_request(client, cur["id"], org, patch)
         return {"ok": True, "id": cur["id"], "deduped": True, "signature": sig,
-                "occurrence_count": patch["occurrence_count"], "status": cur.get("status")}
+                "occurrence_count": patch["occurrence_count"], "status": cur.get("status"),
+                "hint": hint}
     row = {
         "org_id": org,                                  # RULE ONE: stamp the tenant on the INSERT
         "signature": sig,
@@ -684,24 +833,41 @@ async def create_pipeline_request(body: dict, org_id: str = ORG_ID,
         "classification": cls,
         "module_agent": (body.get("module_agent") or None),
         "triage_summary": (body.get("triage_summary") or None),
+        "resolved_note": (body.get("resolved_note") or None),
         "model": (body.get("model") or None),
         "created_by": actor["actor"],
         "created_at": now, "updated_at": now,
         "audit": [{"at": now, "actor": actor["actor"], "actor_kind": actor["kind"],
                    "from": None, "to": status, "note": "registered"}],
     }
+    if new_actions:
+        row["user_actions"] = new_actions
+    if row.get("resolved_note") is None:
+        row.pop("resolved_note")          # keep the payload byte-identical to pre-719 when unused
+    hint = ""
     try:
         r = client.schema("core").table("fix_requests").insert(row).execute()
     except Exception as e:
-        raise HTTPException(500, f"could not register the fix request — run migration 718 first: {e}")
+        rest = {k: v for k, v in row.items() if k not in MIG719_FIELDS}
+        if len(rest) == len(row):
+            raise HTTPException(500,
+                                f"could not register the fix request — run migration 718 first: {e}")
+        try:
+            r = client.schema("core").table("fix_requests").insert(rest).execute()
+            hint = MIG719_HINT
+        except Exception:
+            raise HTTPException(500,
+                                f"could not register the fix request — run migration 718 first: {e}")
     return {"ok": True, "id": (r.data[0]["id"] if r.data else None), "deduped": False,
-            "signature": sig, "status": status}
+            "signature": sig, "status": status, "hint": hint}
 
 
 # Fields a PATCH may set that are NOT the status (each is plain evidence/metadata about a parked build).
 _PATCHABLE = ("classification", "module_agent", "branch", "commit_sha", "worktree", "triage_summary",
               "proofs_summary", "model", "title", "sample_path", "exc_type", "first_ref",
-              "tokens_triage", "tokens_build", "tokens_review", "occurrence_count", "pushed_commit")
+              "tokens_triage", "tokens_build", "tokens_review", "occurrence_count", "pushed_commit",
+              "resolved_note")
+_TEXT_FIELDS = ("resolved_note",)
 _INT_FIELDS = ("tokens_triage", "tokens_build", "tokens_review", "occurrence_count")
 
 
@@ -742,7 +908,17 @@ async def patch_pipeline_request(rid: str, body: dict, org_id: str = ORG_ID,
             v = str(v or "").strip().lower() or None    # "" clears it rather than storing a blank
             if v and v not in FIX_CLASSIFICATIONS:
                 raise HTTPException(422, f"classification must be one of {', '.join(FIX_CLASSIFICATIONS)}")
+        elif f in _TEXT_FIELDS:
+            v = (str(v or "").strip()[:4000] or None)   # "" clears it
         patch[f] = v
+
+    # The ship-time checklist (mig 719). Validated against USER_ACTION_KINDS, and merged against the
+    # CURRENT list so a rewrite can never un-tick a step the operator already completed.
+    if "user_actions" in body:
+        try:
+            patch["user_actions"] = normalize_user_actions(body["user_actions"], user_actions_of(cur))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
 
     target = str(body.get("status") or "").strip().lower()
     note = str(body.get("note") or "")
@@ -778,12 +954,85 @@ async def patch_pipeline_request(rid: str, body: dict, org_id: str = ORG_ID,
     patch["audit"] = _audit(cur, actor=actor["actor"], actor_kind=actor["kind"],
                             frm=cur.get("status"), to=(target or cur.get("status")), note=note)
     try:
-        (client.schema("core").table("fix_requests").update(patch)
-         .eq("org_id", org).eq("id", rid).execute())
+        hint = _update_request(client, rid, org, patch)
     except Exception as e:
         raise HTTPException(500, f"could not update the fix request: {e}")
+    saved = {**cur, **({k: v for k, v in patch.items() if k not in MIG719_FIELDS} if hint else patch)}
     return {"ok": True, "id": rid, "status": patch.get("status", cur.get("status")),
-            "cost_usd": patch.get("cost_usd", cur.get("cost_usd"))}
+            "cost_usd": patch.get("cost_usd", cur.get("cost_usd")),
+            "user_actions": user_actions_of(saved),
+            "pending_actions": pending_user_actions(saved),
+            "action_required": action_required(saved),
+            "hint": hint}
+
+
+@router.patch("/requests/{rid}/actions/{action_id}")
+async def patch_pipeline_request_action(rid: str, action_id: str, body: dict, org_id: str = ORG_ID,
+                                        all_orgs: int = 0,
+                                        authorization: str = Header(default=""),
+                                        x_active_org: str = Header(default=""),
+                                        x_fix_pipeline_secret: str = Header(default="")):
+    """Tick ONE checklist item done — or put it back to pending. body: {"status": "done"|"pending"}.
+
+    SUPER-ADMIN ONLY, on purpose. The service secret may WRITE the checklist (the triage agent knows which
+    SQL / env var / config row a finding needs) but it can never mark one DONE: only the human who
+    actually did the thing may say so. Enforced by `action_write` living in ALL_CAPS and NOT in
+    SECRET_CAPS, so _authorize refuses the secret door with a 403 before this handler runs.
+
+    Every tick appends to the append-only audit trail, so "who said that SQL was run, and when" stays
+    answerable forever.
+
+    MULTI-TENANT (RULE ONE). org_id is an explicit QUERY PARAM, and `all_orgs=1` is the SAME explicit
+    platform scope the board's reads already use (a code bug spans tenants, so the board is cross-tenant
+    by default; _scope clamps a non-platform caller, who in any case never reaches this handler). It only
+    widens the LOOKUP: the UPDATE is stamped with the ROW'S OWN org_id, never with the caller-supplied
+    value, so the write can only ever land on the row the caller actually read."""
+    actor = _authorize("action_write", authorization=authorization, x_active_org=x_active_org,
+                       secret=x_fix_pipeline_secret)
+    org, cross = _scope(actor, org_id, all_orgs)
+    status = str(body.get("status") or "done").strip().lower()
+    if status not in USER_ACTION_STATUSES:
+        raise HTTPException(422, f"status must be one of {', '.join(USER_ACTION_STATUSES)}")
+    client = sb()
+    try:
+        cur = _fetch_request(client, rid, org, cross)
+    except Exception:
+        raise HTTPException(500, MIG_HINT)
+    if not cur:
+        raise HTTPException(404, "fix request not found")
+    actions = user_actions_of(cur)
+    if not actions:
+        raise HTTPException(404, "this fix request has no user-action checklist "
+                                 "(if you expected one, has migration 719 been run?)")
+    target = next((a for a in actions if str(a.get("id")) == str(action_id)), None)
+    if target is None:
+        raise HTTPException(404, "no such action on this fix request")
+    done = status == "done"
+    now = _now_iso()
+    updated = []
+    for a in actions:
+        if str(a.get("id")) != str(action_id):
+            updated.append(a)
+            continue
+        updated.append({**a, "status": status,
+                        "done_by": (actor["actor"] if done else None),
+                        "done_at": (now if done else None)})
+    note = (("marked done" if done else "reopened")
+            + f": [{target.get('kind')}] {str(target.get('instruction') or '')[:160]}")
+    patch = {"user_actions": updated, "updated_at": now,
+             "audit": _audit(cur, actor=actor["actor"], actor_kind=actor["kind"],
+                             frm=cur.get("status"), to=cur.get("status"), note=note)}
+    row_org = cur.get("org_id") or org       # stamp the ROW's own tenant, never the query param's guess
+    try:
+        hint = _update_request(client, rid, row_org, patch)
+    except Exception as e:
+        raise HTTPException(500, f"could not update the checklist: {e}")
+    if hint:                                     # the column is gone — say so instead of faking success
+        raise HTTPException(500, MIG719_HINT)
+    merged = {**cur, "user_actions": updated}
+    return {"ok": True, "id": rid, "action_id": action_id, "status": status,
+            "user_actions": updated, "pending_actions": pending_user_actions(merged),
+            "action_required": action_required(merged)}
 
 
 @router.get("/token-rates")

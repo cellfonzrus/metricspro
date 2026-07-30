@@ -62,11 +62,18 @@ const controls = [...BOARD.matchAll(/<button[\s\S]{0,400}?<\/button>/g)].map(m =
 const approveish = controls.filter(c => /approve|reject|push|merge|deploy|ship it/i.test(c))
 ok('B1 no button on the board mentions approve / reject / push / merge / deploy',
   approveish.length === 0, approveish)
-ok('B2 the page never PATCHes a status from the UI',
-  !/method:\s*'PATCH'/.test(BOARD) && !/"status"\s*:/.test(BOARD), BOARD.match(/method: '[A-Z]+'/g))
+// mig 719 sharpened this: the board DOES now PATCH — but only a user-action CHECKLIST item on an
+// already-shipped fix. It must never PATCH the fix's own lifecycle status (that is still chat-only).
+const patchCalls = [...BOARD.matchAll(/api\(\s*`([^`]+)`[\s\S]{0,200}?method:\s*'PATCH'/g)].map(m => m[1])
+ok('B2 the ONLY PATCH the board performs targets a checklist ITEM, never the fix lifecycle',
+  patchCalls.length === 1 && /\/requests\/\$\{fix\.id\}\/actions\//.test(patchCalls[0]), patchCalls)
+const lifecycleStatuses = ['approved', 'pushed', 'rejected', 'building', 'gate1_parked', 'triaged', 'reported', 'not_code']
+ok('B2b …and the only status value it can ever send is done|pending',
+  !new RegExp(`status:\\s*'(${lifecycleStatuses.join('|')})'`).test(BOARD)
+  && /next: 'done' \| 'pending'/.test(BOARD), BOARD.match(/status: '[a-z_]+'/g))
 const writeVerbs = [...BOARD.matchAll(/method:\s*'([A-Z]+)'/g)].map(m => m[1])
-ok('B3 the ONLY write the board performs is the token-rate PUT (config), nothing lifecycle',
-  writeVerbs.length === 1 && writeVerbs[0] === 'PUT', writeVerbs)
+ok('B3 the board writes exactly twice: the token-rate PUT (config) + the checklist PATCH',
+  writeVerbs.slice().sort().join(',') === 'PATCH,PUT', writeVerbs)
 ok('B4 a parked fix shows the "approve in chat" NOTE instead',
   /Awaiting push approval — approve in chat/.test(BOARD))
 ok('B5 …and the page states plainly that nothing here deploys',
@@ -132,6 +139,62 @@ ok('G2 a non-super-admin gets an explainer, not a blank page or a crash',
   /if \(!isSuper\) return \(/.test(BOARD) && /platform super-admins<\/b> only/.test(BOARD))
 ok('G3 …and is pointed at the surface they CAN use', /href="\/failures"/.test(BOARD))
 ok('G4 nothing loads before the gate passes', /if \(isSuper\) \{ load\(\); loadFeed\(\); loadRates\(\) \}/.test(BOARD))
+
+console.log('\nH. FIXED + "what YOU must do" (mig 719, owner directive 2026-07-30)')
+ok('H1 a pushed fix reads as FIXED, not as pipeline jargon — everywhere, incl. exports',
+  /pushed: 'FIXED'/.test(BOARD) && /STATUS_LABEL\[r\.status\]/.test(BOARD))
+ok('H2 …and pushed is the GREEN status colour (unchanged from 718)', /pushed: '#16a34a'/.test(BOARD))
+ok('H3 an outstanding step shows an amber "Action required (N)" badge with the COUNT',
+  /Action required \(\{pendingOf\(sel\)\}\)/.test(BOARD)
+  && /⚠️ Action required \(\$\{pendingOf\(r\)\}\)/.test(BOARD))
+ok('H4 the derived flags come from the SERVER, with a local fallback (never a UI-only truth)',
+  /r\.pending_actions \?\? /.test(BOARD) && /r\.action_required \?\? /.test(BOARD))
+ok('H5 ONE checklist component is shared by the top panel and the row detail (they cannot drift)',
+  /function ActionChecklist\(/.test(BOARD)
+  && (BOARD.match(/<ActionChecklist /g) || []).length === 2)
+ok('H6 a `sql` action renders in a copyable <pre> block (the owner pastes it into Supabase)',
+  /isSql \?/.test(BOARD) && /<pre style=\{\{ fontSize: 11\.5[\s\S]{0,200}\{a\.instruction\}<\/pre>/.test(BOARD)
+  && /clipboard\?\.writeText\(a\.instruction\)/.test(BOARD))
+ok('H7 every action carries a kind BADGE from a fixed vocabulary matching the backend',
+  /const KIND: Record<string/.test(BOARD)
+  && ['sql', 'env', 'config', 'data', 'other'].every(k => new RegExp(`\\n  ${k}: \\{ label:`).test(BOARD))
+  && /KIND\[k\] \|\| KIND\.other/.test(BOARD))
+ok('H8 the checklist is READ + TICK only — the board never authors an action (no free-text kind box, RULE THREE)',
+  !/setRateForm\(f => \(\{ \.\.\.f, kind/.test(BOARD) && !/<input[^>]*kind/.test(BOARD)
+  && !/user_actions:\s*\[/.test(BOARD))
+ok('H9 mark-done is optimistic AND reverts on failure (the server stays the truth)',
+  /setRows\(rs => rs\.map\(apply\)\)/.test(BOARD) && /setRows\(before\)/.test(BOARD)
+  && /revert/.test(BOARD))
+const markCall = patchCalls[0] || ''
+ok('H10 the mark-done call carries org_id as a QUERY PARAM from the ROW (never a constant) + the board scope',
+  /org_id=\$\{encodeURIComponent\(fix\.org_id\)\}/.test(markCall) && /all_orgs=\$\{allOrgs \? 1 : 0\}/.test(markCall)
+  && markCall.startsWith('/api/v1/core/fix-pipeline/'), markCall)
+ok('H11 an "Action required only" filter toggle exists and narrows the SAME filtered array that drives '
+  + 'the tiles and the exports (RULE FIVE)',
+  /Action required only/.test(BOARD) && /if \(onlyAction && !needsAction\(r\)\) return false/.test(BOARD)
+  && /\}\), \[rows, status, classification, moduleAgent, tenant, onlyAction, filters\]\)/.test(BOARD))
+ok('H12 the export column set gains the actions + "what shipped" (RULE FOUR: what you see, exports)',
+  /header: 'Your actions'/.test(BOARD) && /header: 'What shipped'/.test(BOARD))
+ok('H13 a shipped-but-blocked fix is surfaced at the TOP of the board, not only inside a row',
+  /blockedRows\.length > 0 &&/.test(BOARD) && /shipped but not live yet/.test(BOARD))
+ok('H14 …and the row itself is tinted amber in the table', /rowStyle=\{\(r: Fix\) => \(needsAction\(r\)/.test(BOARD))
+
+// Verbatim re-impl of the shipped derivations — the arithmetic the badge/filter/tile all depend on.
+const pendingOf = r => r.pending_actions ?? (r.user_actions || []).filter(a => a.status !== 'done').length
+const needsAction = r => r.action_required ?? (r.status === 'pushed' && pendingOf(r) > 0)
+const A = (s) => ({ id: 'a' + s, kind: 'sql', instruction: 'x', status: s === 1 ? 'done' : 'pending' })
+ok('H15 pushed + an outstanding step ⇒ action required',
+  needsAction({ status: 'pushed', user_actions: [A(1), A(2)] }) === true
+  && pendingOf({ status: 'pushed', user_actions: [A(1), A(2)] }) === 1)
+ok('H16 pushed + everything ticked ⇒ clean green',
+  needsAction({ status: 'pushed', user_actions: [A(1)] }) === false)
+ok('H17 a PARKED fix with steps is never "action required" (its checklist is a plan, not a debt)',
+  needsAction({ status: 'gate1_parked', user_actions: [A(2)] }) === false)
+ok('H18 a pre-719 row (no user_actions at all) renders safely',
+  needsAction({ status: 'pushed' }) === false && pendingOf({ status: 'pushed' }) === 0)
+ok('H19 the SERVER value wins over the local fallback when present',
+  needsAction({ status: 'pushed', action_required: false, user_actions: [A(2)] }) === false
+  && pendingOf({ status: 'pushed', pending_actions: 7, user_actions: [] }) === 7)
 
 console.log(`\n${pass} passed, ${fail} failed${fail ? '' : '  ✅'}`)
 process.exit(fail ? 1 : 0)

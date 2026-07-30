@@ -9,6 +9,12 @@
 //
 // RULE FOUR: the board renders through <ReportShell> → Excel / PDF / Print / Send (email + WhatsApp) for
 //   free, over the CURRENTLY FILTERED rows.
+// MIG 719 — "FIXED, and here is what YOU still have to do" (owner directive 2026-07-30). A shipped fix is
+//   often INERT until a human acts outside the codebase (run the SQL, set the env var, correct a mapping
+//   row, re-upload an export). Those steps live on the row as `user_actions`; a pushed fix with any step
+//   outstanding is amber "Action required (N)", never a clean green FIXED. Ticking a step is a SUPER-ADMIN
+//   action (the pipeline's service secret may WRITE the checklist but can never claim a human did it) and
+//   every tick lands in the row's audit trail.
 // RULE FIVE: <StandardFilterBar> supplies the universal period filter; store / market / rep are omitted
 //   with an explicit, documented deviation — a fix request is a property of the CODE, not of a store or a
 //   rep, so those three controls would be permanently empty here. The meaningful "who" dimension on a
@@ -25,6 +31,15 @@ import EntityPicker from '@/components/EntityPicker'
 import type { ExportColumn } from '@/lib/export'
 import { emptyStandardFilter, matchesStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 
+// One step a HUMAN must take for a shipped fix to actually work (mig 719).
+type UserAction = {
+  id: string
+  kind: 'sql' | 'env' | 'config' | 'data' | 'other'
+  instruction: string
+  status: 'pending' | 'done'
+  done_by: string | null
+  done_at: string | null
+}
 type Fix = {
   id: string; org_id: string; signature: string; first_ref: string | null
   occurrence_count: number; sample_path: string | null; exc_type: string | null
@@ -38,8 +53,11 @@ type Fix = {
   pushed_commit: string | null; pushed_at: string | null
   audit: { at: string; actor: string; actor_kind: string; from: string | null; to: string | null; note: string }[] | null
   created_by: string | null; created_at: string; updated_at: string
+  // mig 719 — the server DERIVES action_required/pending_actions so the UI never recomputes them.
+  user_actions: UserAction[] | null; pending_actions?: number; action_required?: boolean
+  resolved_note: string | null
 }
-type Rollup = { fixes: number; tokens: number; cost_usd: number; priced: number; unpriced: number; shipped: number; parked: number; by_status: Record<string, number> }
+type Rollup = { fixes: number; tokens: number; cost_usd: number; priced: number; unpriced: number; shipped: number; parked: number; by_status: Record<string, number>; action_required?: number; pending_actions?: number }
 type Candidate = {
   signature: string; sample_path: string; exc_type: string; category: string | null
   module_hint: string; label: string; count: number; latest_at: string | null
@@ -60,16 +78,96 @@ const STATUS_COLOR: Record<string, string> = {
 }
 const STATUS_LABEL: Record<string, string> = {
   reported: 'Reported', triaged: 'Triaged', building: 'Building', gate1_parked: 'Parked — Gate 1',
-  approved: 'Approved (recorded)', pushed: 'Pushed', rejected: 'Rejected', not_code: 'Not a code bug',
+  // 'pushed' reads as FIXED everywhere — on the chip, in the table and in every export. "Pushed" is
+  // pipeline jargon; the owner asked to see that the thing they reported is FIXED.
+  approved: 'Approved (recorded)', pushed: 'FIXED', rejected: 'Rejected', not_code: 'Not a code bug',
 }
 const CLASS_LABEL: Record<string, string> = {
   code_bug: 'Code bug', config: 'Config', data: 'Data', transient: 'Transient',
   duplicate: 'Duplicate', money_touching: 'Money-touching (owner-first)',
 }
+// The five user-action kinds the backend validates against (fix_pipeline.USER_ACTION_KINDS). Kept as a
+// lookup, so an unknown kind from a future backend still renders (falls back to `other`) instead of
+// blanking the row.
+const KIND: Record<string, { label: string; bg: string; fg: string; head: string }> = {
+  sql: { label: 'SQL', bg: '#ede9fe', fg: '#6d28d9', head: 'Run this SQL in the Supabase SQL editor' },
+  env: { label: 'ENV VAR', bg: '#e0f2fe', fg: '#0369a1', head: 'Set this environment variable (Railway → Variables)' },
+  config: { label: 'CONFIG', bg: '#fef3c7', fg: '#b45309', head: 'Fix this setting in the app' },
+  data: { label: 'DATA', bg: '#dcfce7', fg: '#15803d', head: 'Correct / re-upload this data' },
+  other: { label: 'ACTION', bg: '#f1f5f9', fg: '#475569', head: 'Do this' },
+}
+const kindOf = (k: string) => KIND[k] || KIND.other
+const pendingOf = (r: Fix) =>
+  r.pending_actions ?? (r.user_actions || []).filter(a => a.status !== 'done').length
+const needsAction = (r: Fix) => r.action_required ?? (r.status === 'pushed' && pendingOf(r) > 0)
 const when = (iso?: string | null) => { if (!iso) return '—'; try { return new Date(iso).toLocaleString() } catch { return iso } }
 const usd = (n: number | null | undefined) =>
   n == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(n)
 const nf = (n: number | null | undefined) => (n == null ? '—' : Number(n).toLocaleString())
+
+// ── The per-fix checklist (mig 719) ───────────────────────────────────────────────────────────────
+// Used in BOTH places a checklist appears — the "Action required" panel at the top and the row detail —
+// so the two can never drift. `sql` instructions render in a copyable <pre> (the owner pastes them into
+// the Supabase SQL editor); everything else renders as wrapped text.
+function ActionChecklist({ fix, busyId, onMark }: {
+  fix: Fix
+  busyId: string | null
+  onMark: (fix: Fix, a: UserAction, status: 'done' | 'pending') => void
+}) {
+  const actions = fix.user_actions || []
+  const [copied, setCopied] = useState('')
+  if (actions.length === 0) {
+    return <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>
+      No user actions were recorded for this fix — there is nothing for you to do.
+    </div>
+  }
+  return (
+    <div style={{ display: 'grid', gap: 8 }}>
+      {actions.map(a => {
+        const done = a.status === 'done'
+        const k = kindOf(a.kind)
+        const lines = String(a.instruction || '').split('\n')
+        const isSql = a.kind === 'sql'
+        const head = isSql ? k.head : (lines[0] || k.head)
+        const body = isSql ? a.instruction : lines.slice(1).join('\n').trim()
+        return (
+          <div key={a.id} style={{
+            border: `1px solid ${done ? 'var(--border)' : '#fcd34d'}`, borderRadius: 9,
+            padding: '9px 11px', background: done ? 'var(--surface2)' : 'var(--surface)',
+          }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, padding: '2px 7px', borderRadius: 8, background: k.bg, color: k.fg }}>{k.label}</span>
+              <b style={{ fontSize: 13, textDecoration: done ? 'line-through' : 'none', color: done ? 'var(--text3)' : 'inherit' }}>{head}</b>
+              <span style={{ flex: 1 }} />
+              {done && (
+                <span style={{ fontSize: 11.5, color: '#16a34a' }}>
+                  ✅ done{a.done_by ? ` · ${a.done_by}` : ''}{a.done_at ? ` · ${when(a.done_at)}` : ''}
+                </span>
+              )}
+              <button className={done ? 'btn btn-sm' : 'btn btn-sm btn-primary'} disabled={busyId === a.id}
+                onClick={() => onMark(fix, a, done ? 'pending' : 'done')}>
+                {busyId === a.id ? '…' : done ? 'Undo' : '✓ Mark done'}
+              </button>
+            </div>
+            {isSql ? (
+              <div style={{ marginTop: 6 }}>
+                <pre style={{ fontSize: 11.5, background: 'var(--surface2)', padding: 10, borderRadius: 8, overflow: 'auto', maxHeight: 260, whiteSpace: 'pre-wrap', margin: 0 }}>{a.instruction}</pre>
+                <button className="btn btn-sm" style={{ marginTop: 5 }}
+                  onClick={() => {
+                    navigator.clipboard?.writeText(a.instruction)
+                      .then(() => { setCopied(a.id); setTimeout(() => setCopied(''), 1800) })
+                      .catch(() => { })
+                  }}>{copied === a.id ? '✅ Copied' : '📋 Copy SQL'}</button>
+              </div>
+            ) : body ? (
+              <div style={{ marginTop: 5, fontSize: 12.5, color: 'var(--text2)', whiteSpace: 'pre-wrap' }}>{body}</div>
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 export default function FixRequestsBoard() {
   const { user, loading: authLoading } = useAuth()
@@ -92,6 +190,11 @@ export default function FixRequestsBoard() {
   const [classification, setClassification] = useState('')
   const [moduleAgent, setModuleAgent] = useState('')
   const [tenant, setTenant] = useState('')
+  const [onlyAction, setOnlyAction] = useState(false)     // "show me only what I still have to do"
+
+  // Checklist (mig 719): which item is mid-flight + the last result message.
+  const [busyAction, setBusyAction] = useState<string | null>(null)
+  const [actionMsg, setActionMsg] = useState('')
 
   // Feed (not-yet-registered signatures) + rate editor
   const [feed, setFeed] = useState<Candidate[]>([])
@@ -143,19 +246,24 @@ export default function FixRequestsBoard() {
     if (classification && (r.classification || '') !== classification) return false
     if (moduleAgent && (r.module_agent || '') !== moduleAgent) return false
     if (tenant && !(r.org_id === tenant || (r.affected_orgs || []).some(a => a.org_id === tenant))) return false
+    if (onlyAction && !needsAction(r)) return false
     return matchesStandardFilter(r, filters, { date: (x: Fix) => x.created_at })
-  }), [rows, status, classification, moduleAgent, tenant, filters])
+  }), [rows, status, classification, moduleAgent, tenant, onlyAction, filters])
 
   const tile = useMemo(() => {
-    let tokens = 0, cost = 0, priced = 0, unpriced = 0, parked = 0, shipped = 0
+    let tokens = 0, cost = 0, priced = 0, unpriced = 0, parked = 0, shipped = 0, blocked = 0, steps = 0
     for (const r of filtered) {
       tokens += (r.tokens_triage || 0) + (r.tokens_build || 0) + (r.tokens_review || 0)
       if (r.cost_usd == null) unpriced++; else { cost += Number(r.cost_usd) || 0; priced++ }
       if (r.status === 'pushed') shipped++
       else if (r.status === 'gate1_parked' || r.status === 'approved') parked++
+      if (needsAction(r)) { blocked++; steps += pendingOf(r) }
     }
-    return { fixes: filtered.length, tokens, cost: Math.round(cost * 10000) / 10000, priced, unpriced, parked, shipped }
+    return { fixes: filtered.length, tokens, cost: Math.round(cost * 10000) / 10000, priced, unpriced, parked, shipped, blocked, steps }
   }, [filtered])
+
+  // Shipped fixes that are NOT actually working yet, newest first — the panel at the top of the board.
+  const blockedRows = useMemo(() => filtered.filter(needsAction), [filtered])
 
   const statusOpts = useMemo(() => Array.from(new Set(rows.map(r => r.status))).sort(), [rows])
   const classOpts = useMemo(() => Array.from(new Set(rows.map(r => r.classification).filter(Boolean))) as string[], [rows])
@@ -172,6 +280,36 @@ export default function FixRequestsBoard() {
       .then((d: any) => setDetail({ failures: d.failures || [], tracebacks: d.tracebacks || [] }))
       .catch(() => setDetail({ failures: [], tracebacks: [] }))
       .finally(() => setDetailBusy(false))
+  }
+
+  // Tick ONE checklist step done / undone (mig 719). OPTIMISTIC: the UI flips immediately and reverts on
+  // failure, so ticking twenty SQL steps never feels like twenty round trips.
+  //   • org_id is an explicit QUERY PARAM carrying the ROW's own tenant (never a constant) and `all_orgs`
+  //     mirrors the board's current scope — the backend still stamps the write with the row's org.
+  //   • /api/v1 prefix: a bare /core/... path passes a curl check and 404s silently here.
+  async function markAction(fix: Fix, a: UserAction, next: 'done' | 'pending') {
+    const apply = (r: Fix): Fix => {
+      if (r.id !== fix.id) return r
+      const ua = (r.user_actions || []).map(x => x.id === a.id
+        ? { ...x, status: next, done_by: next === 'done' ? (user?.email || 'you') : null, done_at: next === 'done' ? new Date().toISOString() : null }
+        : x)
+      const pending = ua.filter(x => x.status !== 'done').length
+      return { ...r, user_actions: ua, pending_actions: pending, action_required: r.status === 'pushed' && pending > 0 }
+    }
+    const before = rows
+    const selBefore = sel
+    setBusyAction(a.id); setActionMsg('')
+    setRows(rs => rs.map(apply))
+    setSel(s => (s ? apply(s) : s))
+    try {
+      await api(`/api/v1/core/fix-pipeline/requests/${fix.id}/actions/${encodeURIComponent(a.id)}?org_id=${encodeURIComponent(fix.org_id)}&all_orgs=${allOrgs ? 1 : 0}`,
+        { method: 'PATCH', body: JSON.stringify({ status: next }) })
+      setActionMsg(next === 'done' ? '✅ Marked done — recorded against this fix with your name and the time.' : '↩︎ Reopened.')
+    } catch (e) {
+      setRows(before)                                  // revert: the server is the truth
+      setSel(selBefore)
+      setActionMsg('❌ ' + String((e as Error)?.message || e))
+    } finally { setBusyAction(null) }
   }
 
   async function saveRate() {
@@ -198,6 +336,15 @@ export default function FixRequestsBoard() {
     { header: 'Classification', field: 'classification', get: (r: Fix) => CLASS_LABEL[r.classification || ''] || r.classification || '' },
     { header: 'Module agent', field: 'module_agent', get: (r: Fix) => r.module_agent || '' },
     { header: 'Status', field: 'status', get: (r: Fix) => STATUS_LABEL[r.status] || r.status },
+    // What the OWNER still has to do for a shipped fix to actually work (mig 719) — on screen and in
+    // every export, so an emailed board is as actionable as the page.
+    {
+      header: 'Your actions', field: 'action_required', get: (r: Fix) =>
+        needsAction(r) ? `⚠️ Action required (${pendingOf(r)})`
+          : (r.user_actions || []).length ? '✅ All done'
+            : r.status === 'pushed' ? 'Nothing to do' : ''
+    },
+    { header: 'What shipped', field: 'resolved_note', get: (r: Fix) => r.resolved_note || '' },
     { header: 'Branch', field: 'branch', get: (r: Fix) => r.branch || '' },
     { header: 'Commit', field: 'commit_sha', get: (r: Fix) => (r.commit_sha || '').slice(0, 10) },
     { header: 'Proofs', field: 'proofs_summary', get: (r: Fix) => r.proofs_summary || '' },
@@ -235,6 +382,10 @@ export default function FixRequestsBoard() {
           bug = one row). Each row shows where the fix is parked, what proved it, and what the AI work cost.
           <b> Nothing here deploys anything:</b> a parked fix ships only when you say “push it” in chat, and
           that decision is then recorded on the row. There is deliberately no approve button on this page.
+          {' '}Once a fix ships it shows as <b style={{ color: '#16a34a' }}>FIXED</b> — and if it needs
+          something from you before it actually works (run a SQL block, set an environment variable, correct
+          a setting, re-upload data), it stays <b style={{ color: '#b45309' }}>Action required</b> with a
+          checklist you tick off.
         </p>
       </div>
 
@@ -248,7 +399,12 @@ export default function FixRequestsBoard() {
         <div style={tileBox}><div style={sub}>Cost (blended)</div><div style={{ fontSize: 21, fontWeight: 700 }}>{usd(tile.cost)}</div>
           {tile.unpriced > 0 && <div style={{ ...sub, color: '#b45309' }}>{tile.unpriced} unpriced (no rate for that model)</div>}</div>
         <div style={tileBox}><div style={sub}>Awaiting your push</div><div style={{ fontSize: 21, fontWeight: 700, color: '#d97706' }}>{nf(tile.parked)}</div></div>
-        <div style={tileBox}><div style={sub}>Shipped</div><div style={{ fontSize: 21, fontWeight: 700, color: '#16a34a' }}>{nf(tile.shipped)}</div></div>
+        <div style={tileBox}><div style={sub}>Fixed</div><div style={{ fontSize: 21, fontWeight: 700, color: '#16a34a' }}>{nf(tile.shipped)}</div></div>
+        <div style={{ ...tileBox, ...(tile.blocked > 0 ? { borderColor: '#fbbf24', background: '#fffbeb' } : {}) }}>
+          <div style={sub}>Needs YOU</div>
+          <div style={{ fontSize: 21, fontWeight: 700, color: tile.blocked > 0 ? '#b45309' : 'inherit' }}>{nf(tile.blocked)}</div>
+          <div style={sub}>{tile.blocked > 0 ? `${nf(tile.steps)} step${tile.steps === 1 ? '' : 's'} outstanding` : 'nothing outstanding'}</div>
+        </div>
       </div>
 
       {/* The $ caveat, stated on-page and never hidden (design §2e) */}
@@ -289,6 +445,16 @@ export default function FixRequestsBoard() {
               <EntityPicker options={tenantOpts} value={tenant} onChange={v => setTenant(v || '')}
                 placeholder="Affected company…" width={190} ariaLabel="Filter by affected company" />
             )}
+            {/* mig 719: "show me only the fixes that still need something from me" */}
+            <label style={{
+              fontSize: 12, display: 'inline-flex', gap: 5, alignItems: 'center', padding: '4px 8px',
+              borderRadius: 8, fontWeight: onlyAction ? 700 : 400,
+              border: `1px solid ${onlyAction ? '#fbbf24' : 'var(--border)'}`,
+              background: onlyAction ? '#fffbeb' : 'transparent', color: onlyAction ? '#b45309' : 'var(--text2)',
+            }}>
+              <input type="checkbox" checked={onlyAction} onChange={e => setOnlyAction(e.target.checked)} />
+              ⚠️ Action required only
+            </label>
             <label style={{ fontSize: 12, color: 'var(--text2)', display: 'inline-flex', gap: 5, alignItems: 'center' }}>
               <input type="checkbox" checked={allOrgs} onChange={e => setAllOrgs(e.target.checked)} />
               All companies
@@ -298,11 +464,42 @@ export default function FixRequestsBoard() {
         }
       />
 
+      {/* ── FIXED, but not working yet: the things only YOU can do (mig 719) ─────────────────────── */}
+      {blockedRows.length > 0 && (
+        <div className="card" style={{ padding: 16, margin: '12px 0', background: '#fffbeb', borderColor: '#fcd34d' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+            <b style={{ fontSize: 15, color: '#b45309' }}>⚠️ {blockedRows.length} fix{blockedRows.length === 1 ? '' : 'es'} shipped but not live yet — {nf(tile.steps)} step{tile.steps === 1 ? '' : 's'} need you</b>
+            <span style={{ flex: 1 }} />
+            {actionMsg && <span style={{ fontSize: 12.5 }}>{actionMsg}</span>}
+          </div>
+          <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '4px 0 10px', maxWidth: 900 }}>
+            The code is deployed, but each of these needs something done outside the app before it actually
+            works — a SQL block run in Supabase, an environment variable set, a setting corrected, or data
+            re-uploaded. Tick each step off as you do it; your name and the time are recorded on the fix.
+          </p>
+          {blockedRows.map(r => (
+            <details key={r.id} className="card" style={{ padding: 12, marginTop: 8, background: 'var(--surface)' }} open={blockedRows.length === 1}>
+              <summary style={{ cursor: 'pointer', fontSize: 13.5, fontWeight: 600 }}>
+                {r.title || r.signature}
+                <span style={{ fontSize: 11, marginLeft: 8, padding: '1px 7px', borderRadius: 8, background: '#fef3c7', color: '#b45309', fontWeight: 700 }}>
+                  {pendingOf(r)} step{pendingOf(r) === 1 ? '' : 's'} left
+                </span>
+              </summary>
+              {r.resolved_note && <div style={{ fontSize: 12.5, color: 'var(--text2)', margin: '7px 0' }}><b>What shipped:</b> {r.resolved_note}</div>}
+              <div style={{ marginTop: 8 }}>
+                <ActionChecklist fix={r} busyId={busyAction} onMark={markAction} />
+              </div>
+            </details>
+          ))}
+        </div>
+      )}
+
       {loading ? <div className="card" style={{ padding: 16 }}>Loading…</div> : (
         <ReportShell
           title="Auto-Fix Pipeline" subtitle="One row per distinct problem · tokens and cost per fix"
           filename="fix_requests" columns={cols} rows={filtered} totals stickyHeader
           onRowClick={openDetail}
+          rowStyle={(r: Fix) => (needsAction(r) ? { background: '#fffbeb' } : undefined)}
         />
       )}
 
@@ -312,9 +509,14 @@ export default function FixRequestsBoard() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
             <span style={{ width: 9, height: 9, borderRadius: 9, background: STATUS_COLOR[sel.status] || '#888' }} />
             <b style={{ fontSize: 15 }}>{sel.title || sel.signature}</b>
-            <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: (STATUS_COLOR[sel.status] || '#888') + '22', color: STATUS_COLOR[sel.status] || '#888', fontWeight: 600 }}>
-              {STATUS_LABEL[sel.status] || sel.status}
+            <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: (STATUS_COLOR[sel.status] || '#888') + '22', color: STATUS_COLOR[sel.status] || '#888', fontWeight: 700 }}>
+              {sel.status === 'pushed' ? '✅ ' : ''}{STATUS_LABEL[sel.status] || sel.status}
             </span>
+            {needsAction(sel) && (
+              <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: '#fef3c7', color: '#b45309', fontWeight: 700 }}>
+                ⚠️ Action required ({pendingOf(sel)})
+              </span>
+            )}
             {sel.classification && <span style={{ ...sub }}>· {CLASS_LABEL[sel.classification] || sel.classification}</span>}
             <span style={{ flex: 1 }} />
             <button className="btn btn-sm" onClick={() => { setSel(null); setDetail(null) }}>Close</button>
@@ -333,6 +535,26 @@ export default function FixRequestsBoard() {
               ✔️ Your chat approval was recorded by <b>{sel.approved_by || '—'}</b> at {when(sel.approved_at)}. The
               merge/push itself is still done by the operator — this board never deploys.
             </div>
+          )}
+          {/* FIXED banner + the "what shipped" note (mig 719) */}
+          {sel.status === 'pushed' && (
+            <div style={{
+              padding: '9px 12px', borderRadius: 8, fontSize: 13, marginBottom: 10,
+              background: needsAction(sel) ? '#fffbeb' : '#f0fdf4',
+              border: `1px solid ${needsAction(sel) ? '#fcd34d' : '#bbf7d0'}`,
+            }}>
+              {needsAction(sel)
+                ? <><b>✅ FIXED — but not working yet.</b> The code shipped{sel.pushed_at ? ` ${when(sel.pushed_at)}` : ''}
+                  {sel.pushed_commit ? <> (<code style={{ fontSize: 11.5 }}>{sel.pushed_commit.slice(0, 10)}</code>)</> : null}
+                  , and {pendingOf(sel)} step{pendingOf(sel) === 1 ? '' : 's'} below still need you.</>
+                : <><b>✅ FIXED.</b> Shipped{sel.pushed_at ? ` ${when(sel.pushed_at)}` : ''}
+                  {sel.pushed_commit ? <> (<code style={{ fontSize: 11.5 }}>{sel.pushed_commit.slice(0, 10)}</code>)</> : null}
+                  {(sel.user_actions || []).length ? ' — and every step you had to take is ticked off.' : ' — nothing was needed from you.'}</>}
+              {sel.resolved_note && <div style={{ marginTop: 5 }}>{sel.resolved_note}</div>}
+            </div>
+          )}
+          {sel.status !== 'pushed' && sel.resolved_note && (
+            <div style={{ fontSize: 13, marginBottom: 10 }}><b>What shipped:</b> {sel.resolved_note}</div>
           )}
           {sel.classification === 'money_touching' && (
             <div style={{ padding: '9px 12px', borderRadius: 8, background: '#fef2f2', border: '1px solid #fecaca', fontSize: 13, marginBottom: 10 }}>
@@ -362,6 +584,17 @@ export default function FixRequestsBoard() {
               </pre>
             </details>
           )}
+
+          {/* The per-row checklist (mig 719) — the same component the top panel uses */}
+          <details style={{ marginTop: 12 }} open={(sel.user_actions || []).length > 0}>
+            <summary style={{ fontSize: 12.5, cursor: 'pointer', color: 'var(--text2)' }}>
+              What YOU have to do ({(sel.user_actions || []).filter(a => a.status !== 'done').length} of {(sel.user_actions || []).length} outstanding)
+            </summary>
+            <div style={{ marginTop: 8 }}>
+              <ActionChecklist fix={sel} busyId={busyAction} onMark={markAction} />
+              {actionMsg && <div style={{ fontSize: 12.5, marginTop: 7 }}>{actionMsg}</div>}
+            </div>
+          </details>
 
           {sel.triage_summary && <div style={{ marginTop: 10, fontSize: 13 }}><b>Triage:</b> {sel.triage_summary}</div>}
           {sel.proofs_summary && <div style={{ marginTop: 6, fontSize: 13 }}><b>Proofs:</b> {sel.proofs_summary}</div>}
