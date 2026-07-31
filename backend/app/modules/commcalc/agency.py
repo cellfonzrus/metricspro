@@ -18,8 +18,11 @@ Tables: mig 220 (link/carrier/store/holdback/margin/charge), mig 222 (invoice/in
 DB touch is wrapped so a missing migration degrades to a clear 400 "run migration …" notice, never a 500.
 """
 import io
+import os
 import uuid
+import asyncio
 import calendar as _cal
+import concurrent.futures
 from datetime import datetime, timezone
 from fastapi import HTTPException
 
@@ -616,31 +619,83 @@ def parse_csv_bytes(data):
     return recs
 
 
-def _ocr_parse_transfer(data, filename, mimetype):
-    """OCR a vendor/transfer invoice into transfer rows via Claude (accounts-module ANTHROPIC precedent).
-    Returns (rows, model, confidence). Degrades to ([], 'deterministic', None) with no key / on any error —
-    callers then create nothing and surface the notice. Kept separable so the row-landing path is testable
-    without the live API (the proof harness stubs this)."""
+# ── OCR intake: outbound-AI event-loop safety (SEV-1 2026-07-30 bug class) ──────────────────────
+# The Anthropic SDK defaults to a 600s timeout with 2 automatic retries (≈30 min worst case). A SYNC
+# client call made from inside an `async def` FastAPI handler blocks the ONE uvicorn event loop for
+# that whole window, so a single stalled request froze EVERY endpoint on 2026-07-30 (Ask-AI). This
+# module uses the ASYNC client with an explicit short timeout + bounded retries. Env-tunable so the
+# operator can widen/narrow without a code deploy; a garbage env value falls back to the default
+# rather than breaking module import. Worst case for one OCR call =
+# AGENCY_AI_TIMEOUT_S x (1 + AGENCY_AI_MAX_RETRIES), which stays well under Railway's 300s cutoff.
+try:
+    AGENCY_AI_TIMEOUT_S = max(1.0, float(os.getenv("AGENCY_AI_TIMEOUT_S") or 60))
+except Exception:
+    AGENCY_AI_TIMEOUT_S = 60.0
+try:
+    AGENCY_AI_MAX_RETRIES = max(0, int(os.getenv("AGENCY_AI_MAX_RETRIES") or 1))
+except Exception:
+    AGENCY_AI_MAX_RETRIES = 1
+# Hard wall for the sync bridge below: the SDK's own budget plus a small margin, so the bridge can
+# never outlive the request even if the SDK's timeout misfires.
+_AGENCY_AI_WALL_S = AGENCY_AI_TIMEOUT_S * (1 + AGENCY_AI_MAX_RETRIES) + 5
+
+
+async def _ocr_parse_transfer_async(data, filename, mimetype):
+    """Async form of the OCR extraction — this is the real implementation; `_ocr_parse_transfer`
+    is a sync bridge onto it. Same inputs, same (rows, model, confidence) 3-tuple, same degradation
+    (no key → 'deterministic'; any failure → 'error'). An `async def` caller should await THIS
+    function directly: awaiting is the only thing that actually hands the event loop back while the
+    model thinks."""
     if not settings.ANTHROPIC_API_KEY:
         return ([], "deterministic", None)
     try:
         import base64
-        from anthropic import Anthropic
-        cli = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        # SEV-1 2026-07-30 — this MUST be the ASYNC client and MUST be awaited. Do NOT reintroduce
+        # `Anthropic(` here: the sync client blocks the event loop for the entire HTTP call.
+        from anthropic import AsyncAnthropic
+        cli = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY,
+                             timeout=AGENCY_AI_TIMEOUT_S, max_retries=AGENCY_AI_MAX_RETRIES)
         media = "application/pdf" if (mimetype or "").endswith("pdf") or str(filename).lower().endswith(".pdf") else "image/png"
         block = {"type": "document" if media == "application/pdf" else "image",
                  "source": {"type": "base64", "media_type": media, "data": base64.b64encode(data).decode()}}
         prompt = ("Extract the equipment line items from this transfer/purchase invoice as STRICT JSON: "
                   '{"lines":[{"equip_class_value":"device|accessory","product_desc":"","qty":0,"unit_cost":0}]}. '
                   "equip_class_value must be 'device' for phones/handsets and 'accessory' otherwise. Return ONLY the JSON.")
-        msg = cli.messages.create(model=getattr(settings, "ACCOUNT_ENGINE_MODEL", "claude-3-5-sonnet-latest"),
-                                  max_tokens=1500,
-                                  messages=[{"role": "user", "content": [block, {"type": "text", "text": prompt}]}])
+        msg = await cli.messages.create(model=getattr(settings, "ACCOUNT_ENGINE_MODEL", "claude-3-5-sonnet-latest"),
+                                        max_tokens=1500,
+                                        messages=[{"role": "user", "content": [block, {"type": "text", "text": prompt}]}])
         text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
         import json as _json
         text = text[text.find("{"): text.rfind("}") + 1]
         rows = (_json.loads(text) or {}).get("lines") or []
         return (rows, getattr(settings, "ACCOUNT_ENGINE_MODEL", "claude"), 0.9)
+    except Exception:
+        return ([], "error", None)
+
+
+def _ocr_parse_transfer(data, filename, mimetype):
+    """OCR a vendor/transfer invoice into transfer rows via Claude (accounts-module ANTHROPIC precedent).
+    Returns (rows, model, confidence). Degrades to ([], 'deterministic', None) with no key / on any error —
+    callers then create nothing and surface the notice. Kept separable so the row-landing path is testable
+    without the live API (the proof harness stubs this).
+
+    SYNC BRIDGE onto `_ocr_parse_transfer_async` — the signature and return contract are unchanged so
+    existing sync callers keep working. Off the event loop (scripts, a FastAPI threadpool worker) this
+    runs the coroutine directly. Called from a thread that already has a running loop, it runs the
+    coroutine on a private worker loop and waits with a hard wall: that does NOT free the caller's loop
+    (only `await _ocr_parse_transfer_async(...)` at the call site can), but it caps the stall at
+    ~AGENCY_AI_TIMEOUT_S x (1 + AGENCY_AI_MAX_RETRIES) instead of the SDK's ~30 minutes."""
+    try:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(_ocr_parse_transfer_async(data, filename, mimetype))
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="agency-ocr")
+        try:
+            fut = ex.submit(lambda: asyncio.run(_ocr_parse_transfer_async(data, filename, mimetype)))
+            return fut.result(timeout=_AGENCY_AI_WALL_S)
+        finally:
+            ex.shutdown(wait=False)      # never block the caller waiting on a timed-out worker
     except Exception:
         return ([], "error", None)
 
