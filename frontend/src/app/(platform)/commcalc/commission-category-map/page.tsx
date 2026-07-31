@@ -81,6 +81,12 @@ export default function CommissionCategoryMapPage() {
         new tenant can adopt a preconfigured one or fork it. See results on{' '}
         <a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,#2563eb)' }}>Commission Ledger →</a>
       </p>
+      <p style={{ color: 'var(--text2)', fontSize: 12.5, marginBottom: 8, maxWidth: 900, lineHeight: 1.5 }}>
+        Looking for what KIND of money each MA Daily Tx line is — commission vs spiff vs residual vs a
+        customer bill payment vs a device sale? That is a separate, exact-match classification of the
+        <code> product_name</code> column and it does <b>not</b> feed these five payout buckets:{' '}
+        <a href="/commcalc/ma-product-class" style={{ color: 'var(--accent,#2563eb)' }}>MA Product Name Classification →</a>
+      </p>
       {!ready && (
         <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
           Run migration <code>071_commission_ledger.sql</code> to edit + persist rules. Until then the classifier uses the built-in defaults (shown below, read-only).

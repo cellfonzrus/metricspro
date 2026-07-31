@@ -34,6 +34,7 @@ from app.modules.commcalc import ma_upload
 from app.modules.commcalc import target_registry
 from app.modules.commcalc import commission_ledger
 from app.modules.commcalc import ledger_ma_sync
+from app.modules.commcalc import ma_product_class
 from app.modules.commcalc import device_history
 from app.modules.commcalc import template_clone
 from app.modules.commcalc import custom_report
@@ -4268,6 +4269,359 @@ def delete_commission_category_map(rid: str, org_id: str = ORG_ID):
     require_org(org_id)
     sb().schema("commcalc").table("commission_category_map").delete().eq("org_id", org_id).eq("id", rid).execute()
     return {"ok": True}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# MA DAILY TX — PRODUCT-NAME CLASSIFICATION  (mig 254; engine: commcalc/ma_product_class.py)
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# The `product_name` column on commcalc.raw_ma_daily_tx mixes MANY payment types in one column — a
+# commission installment, a spiff installment, a residual, a customer PLAN PURCHASE, a DEVICE SALE, a
+# dealer FEE, a credit memo. These endpoints classify it per EXACT product name, per tenant.
+#
+# READ-ONLY WITH RESPECT TO MONEY. Nothing below is read by calculator.py, commission_engine.py,
+# _run_calculation, rep_commissions, commission_ledger/commission_category_map, ledger_ma_sync or
+# whatif's carrier income. GET /ma-product-class/preview is an IMPACT PREVIEW, not an impact: it shows
+# what the classification WOULD reclassify. Wiring a class into a payout/ledger/P&L number is a
+# separate, owner-gated change (OPEN item in docs/handoffs/commission.md).
+#
+# SIGNS ARE NEVER TOUCHED. The export's convention is that a NEGATIVE amount is money paid TO the
+# dealer; normalizing that is whatif's `ma_commission_sign`, not this surface's. Every total below is
+# the raw signed sum, and each name reports the sign mix actually observed.
+
+
+def _mpc_who(authorization: str):
+    """Best-effort acting-user id for confirmed_by (never blocks — None when unresolved)."""
+    try:
+        from app.modules.core.router import _uid_from_token
+        return _uid_from_token(authorization) or None
+    except Exception:
+        return None
+
+
+def _mpc_source(client, org_id, source_report):
+    """(source_def, ready). The built-in registry overlaid with the tenant's own product_class_source
+    row. `ready` is False when migration 254 has not been run — the caller degrades to the built-ins."""
+    override, ready = None, True
+    try:
+        rows = (client.schema("commcalc").table(ma_product_class.SOURCE_TABLE).select("*")
+                .eq("org_id", org_id).eq("source_report", source_report).limit(1).execute().data) or []
+        override = rows[0] if rows else None
+    except Exception:
+        ready = False
+    return ma_product_class.source_def(source_report, override), ready
+
+
+def _mpc_classes(client, org_id):
+    """(class_rows, ready). The tenant's vocabulary, else the built-in one."""
+    rows, ready = [], True
+    try:
+        rows = (client.schema("commcalc").table(ma_product_class.CLASS_TABLE).select("*")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows, ready = [], False
+    return ma_product_class.classes_from(rows), ready
+
+
+def _mpc_map_rows(client, org_id, source_report):
+    """(map_rows, ready). Saved per-name mappings for this tenant + source."""
+    try:
+        rows = (client.schema("commcalc").table(ma_product_class.MAP_TABLE).select("*")
+                .eq("org_id", org_id).eq("source_report", source_report)
+                .limit(100000).execute().data) or []
+        return rows, True
+    except Exception:
+        return [], False
+
+
+_MPC_ROW_CAP = 200000
+
+
+def _mpc_raw_rows(client, org_id, sdef, period="", store="", rep="", cap=_MPC_ROW_CAP):
+    """Paged, ORG-SCOPED read of the source table. Only the columns the classifier needs. Filters are
+    applied in the QUERY (never fetch-all-then-filter); `period` matches BOTH spellings via _pvariants.
+    Returns (rows, meta) — meta carries the honesty counters, including truncation."""
+    cols = [c for c in (sdef.get("name_column"), sdef.get("amount_column"), sdef.get("date_column"),
+                        sdef.get("period_column"), sdef.get("store_column"), sdef.get("rep_column"))
+            if c]
+    sel = ",".join(sorted(set(cols)))
+    rows, start, page, truncated = [], 0, 1000, False
+    err = None
+    while True:
+        try:
+            q = (client.schema("commcalc").table(sdef["source_table"]).select(sel)
+                 .eq("org_id", org_id))
+            if period and sdef.get("period_column"):
+                q = q.in_(sdef["period_column"], _pvariants(period))
+            if store and sdef.get("store_column"):
+                q = q.eq(sdef["store_column"], store)
+            if rep and sdef.get("rep_column"):
+                q = q.eq(sdef["rep_column"], rep)
+            chunk = q.range(start, start + page - 1).execute().data or []
+        except Exception as e:
+            err = str(e)[:200]
+            break
+        rows.extend(chunk)
+        if len(chunk) < page:
+            break
+        start += page
+        if len(rows) >= cap:
+            truncated = True
+            break
+    return rows, {"rows_read": len(rows), "truncated": truncated, "cap": cap, "error": err,
+                  "source_table": sdef["source_table"], "columns": sel,
+                  "filters": {"period": period or None, "store": store or None, "rep": rep or None}}
+
+
+@router.get("/ma-product-class/classes")
+def ma_product_class_classes(org_id: str = ORG_ID):
+    """The class vocabulary for the dropdown (RULE THREE: pick, don't type). Tenant rows when migration
+    254 is applied, the built-in vocabulary otherwise. `assignable` excludes the reserved 'unmapped'."""
+    require_org(org_id)
+    classes, ready = _mpc_classes(sb(), org_id)
+    return {"classes": classes, "assignable": ma_product_class.assignable(classes),
+            "unmapped_key": ma_product_class.UNMAPPED, "statuses": list(ma_product_class.STATUSES),
+            "ready": ready, "migration": None if ready else "254_commission_ma_product_class.sql"}
+
+
+@router.get("/ma-product-class/facets")
+def ma_product_class_facets(source_report: str = "ma_daily_tx", org_id: str = ORG_ID):
+    """Filter options built from the org's REAL data (RULE THREE + RULE FIVE): periods, stores and reps
+    actually present in the source table, plus the money columns that may be summed. Never a hard-coded
+    list. NOTE: `market` is not carried on raw_ma_daily_tx, so the standard bar here is
+    period / store / rep — the store column is the processor ACCOUNT NAME."""
+    require_org(org_id)
+    client = sb()
+    sdef, _ready = _mpc_source(client, org_id, source_report)
+    rows, meta = _mpc_raw_rows(client, org_id, sdef)
+    periods, stores, reps = {}, set(), set()
+    for r in rows:
+        p = (r.get(sdef.get("period_column")) or "").strip()
+        if p:
+            periods[p] = ma_product_class.month_key(p, r.get(sdef.get("date_column")))
+        s = (r.get(sdef.get("store_column")) or "").strip()
+        if s:
+            stores.add(s)
+        u = (r.get(sdef.get("rep_column")) or "").strip()
+        if u:
+            reps.add(u)
+    ordered = sorted(periods.items(), key=lambda kv: kv[1], reverse=True)
+    return {"periods": [p for p, _k in ordered], "stores": sorted(stores), "reps": sorted(reps),
+            "money_columns": sdef.get("money_columns") or [], "source": sdef, "read": meta}
+
+
+@router.get("/ma-product-class/preview")
+def ma_product_class_preview(source_report: str = "ma_daily_tx", period: str = "", store: str = "",
+                             rep: str = "", amount_column: str = "", org_id: str = ORG_ID):
+    """IMPACT PREVIEW (read-only) — per class per month: line count + signed total, computed twice:
+
+      · `confirmed` — only owner-CONFIRMED mappings count; every other line is 'unmapped'.
+      · `proposed`  — confirmed + proposed count, i.e. what confirming every proposal as-is would give.
+
+    The pair is the whole point: `delta` says how many lines / dollars confirming would move OUT of
+    unmapped. This endpoint writes nothing and no money surface reads it."""
+    require_org(org_id)
+    client = sb()
+    sdef, src_ready = _mpc_source(client, org_id, source_report)
+    if amount_column:
+        if not ma_product_class.is_money_column(source_report, amount_column):
+            raise HTTPException(400, f"`{amount_column}` is not a money column on this source — it is an "
+                                     f"identifier. Allowed: {', '.join(sdef.get('money_columns') or [])}")
+        sdef = dict(sdef, amount_column=amount_column)
+    classes, cls_ready = _mpc_classes(client, org_id)
+    map_rows, map_ready = _mpc_map_rows(client, org_id, source_report)
+    index = ma_product_class.build_index(map_rows)
+    rows, meta = _mpc_raw_rows(client, org_id, sdef, period, store, rep)
+    pv = ma_product_class.preview(rows, index, amount_column=sdef["amount_column"],
+                                  date_column=sdef["date_column"], period_column=sdef["period_column"],
+                                  name_column=sdef["name_column"])
+    obs = ma_product_class.observed(rows, index, amount_column=sdef["amount_column"],
+                                    date_column=sdef["date_column"],
+                                    period_column=sdef["period_column"],
+                                    name_column=sdef["name_column"])
+    ready = src_ready and cls_ready and map_ready
+    return {"source_report": source_report, "source": sdef, "read": meta,
+            "preview": pv, "unmapped": ma_product_class.unmapped_summary(obs),
+            "class_labels": {c["class_key"]: c["label"] for c in classes},
+            "ready": ready, "using_builtin_proposals": not map_rows,
+            "migration": None if ready else "254_commission_ma_product_class.sql",
+            "note": ("READ-ONLY PREVIEW. Nothing here changes a payout, a ledger row, carrier income or "
+                     "the P&L — it shows what this classification WOULD reclassify. Amounts are the RAW "
+                     "SIGNED values from `%s`; on this export a negative is money paid TO the dealer and "
+                     "no sign is normalized here." % sdef["amount_column"])}
+
+
+@router.get("/ma-product-class")
+def get_ma_product_class(source_report: str = "ma_daily_tx", period: str = "", store: str = "",
+                         rep: str = "", status: str = "", product_class: str = "", search: str = "",
+                         amount_column: str = "", org_id: str = ORG_ID):
+    """The admin grid: every DISTINCT product_name the org actually has in the source table, with its
+    observed line count / signed total / sign mix / months, and the class + status it maps to.
+
+    Rows come from the tenant's REAL data (never a hard-coded list). A name with no mapping shows as
+    'unmapped' and sorts FIRST, with its dollars, so a gap is impossible to miss."""
+    require_org(org_id)
+    client = sb()
+    sdef, src_ready = _mpc_source(client, org_id, source_report)
+    if amount_column:
+        if not ma_product_class.is_money_column(source_report, amount_column):
+            raise HTTPException(400, f"`{amount_column}` is not a money column on this source — it is an "
+                                     f"identifier. Allowed: {', '.join(sdef.get('money_columns') or [])}")
+        sdef = dict(sdef, amount_column=amount_column)
+    classes, cls_ready = _mpc_classes(client, org_id)
+    map_rows, map_ready = _mpc_map_rows(client, org_id, source_report)
+    index = ma_product_class.build_index(map_rows)
+    rows, meta = _mpc_raw_rows(client, org_id, sdef, period, store, rep)
+    items = ma_product_class.observed(rows, index, amount_column=sdef["amount_column"],
+                                      date_column=sdef["date_column"],
+                                      period_column=sdef["period_column"],
+                                      name_column=sdef["name_column"])
+    # names that are MAPPED but not present in the filtered data — shown so a mapping is never invisible
+    seen = {i["product_name"] for i in items}
+    for name, ent in sorted(index.items()):
+        if name in seen:
+            continue
+        items.append({"product_name": name, "product_class": ent["product_class"],
+                      "status": ent["status"], "note": ent.get("note") or "", "matched": True,
+                      "lines": 0, "total": 0.0, "min": None, "max": None, "sign": "zero",
+                      "negatives": 0, "positives": 0, "zeros": 0, "months": [], "month_count": 0,
+                      "raw_variants": [], "first_seen": None, "last_seen": None, "not_in_data": True})
+    ids = {(r.get("product_name") or "").strip(): r.get("id") for r in map_rows}
+    for it in items:
+        it["id"] = ids.get(it["product_name"])
+        it["saved"] = it["id"] is not None
+    counts = {"total": len(items), "unmapped": 0, "proposed": 0, "confirmed": 0}
+    dollars = {"unmapped": 0.0, "proposed": 0.0, "confirmed": 0.0}
+    for it in items:
+        k = ("unmapped" if it["product_class"] == ma_product_class.UNMAPPED
+             else ("confirmed" if it["status"] == "confirmed" else "proposed"))
+        counts[k] += 1
+        dollars[k] = round(dollars[k] + safe_float(it["total"]), 2)
+    if status:
+        want = status.strip().lower()
+        items = [i for i in items
+                 if (i["product_class"] == ma_product_class.UNMAPPED) == (want == "unmapped")
+                 and (want == "unmapped" or i["status"] == want)]
+    if product_class:
+        items = [i for i in items if i["product_class"] == product_class.strip()]
+    if search:
+        s = search.strip().lower()
+        items = [i for i in items if s in i["product_name"].lower()]
+    ready = src_ready and cls_ready and map_ready
+    return {"source_report": source_report, "source": sdef, "read": meta, "items": items,
+            "counts": counts, "dollars": dollars,
+            "classes": classes, "assignable": ma_product_class.assignable(classes),
+            "unmapped_key": ma_product_class.UNMAPPED, "statuses": list(ma_product_class.STATUSES),
+            "using_builtin_proposals": not map_rows, "builtin_proposal_count": len(ma_product_class.DEFAULT_PROPOSALS),
+            "ready": ready, "migration": None if ready else "254_commission_ma_product_class.sql"}
+
+
+@router.post("/ma-product-class")
+def upsert_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+    """Create/update ONE product-name -> class mapping.
+    body: {product_name, product_class, source_report?, status?, note?}.
+
+    The name is stored TRIMMED (the export's 'Trac Autopay Residual ' carries a trailing space) and
+    matched byte-exact thereafter. The reserved class 'unmapped' can never be assigned — to unmap a
+    name, DELETE its row. 400 (not 500) until migration 254 is applied."""
+    require_org(org_id)
+    sr = (body.get("source_report") or "ma_daily_tx").strip()
+    name = ma_product_class.normalize(body.get("product_name"))
+    cls = ma_product_class.normalize(body.get("product_class"))
+    if not name or not cls:
+        raise HTTPException(400, "product_name and product_class are required")
+    client = sb()
+    classes, _r = _mpc_classes(client, org_id)
+    allowed = ma_product_class.assignable(classes)
+    if cls == ma_product_class.UNMAPPED:
+        raise HTTPException(400, "'unmapped' is a reserved class — delete the mapping instead of assigning it")
+    if cls not in allowed:
+        raise HTTPException(400, f"unknown class `{cls}` — allowed: {', '.join(allowed)}")
+    status = (body.get("status") or "proposed").strip().lower()
+    if status not in ma_product_class.STATUSES:
+        raise HTTPException(400, f"status must be one of {', '.join(ma_product_class.STATUSES)}")
+    row = {"org_id": org_id, "source_report": sr, "product_name": name, "product_class": cls,
+           "status": status, "note": (body.get("note") or None),
+           "updated_at": column_mapping.now_iso()}
+    if status == "confirmed":
+        row["confirmed_by"] = _mpc_who(authorization)
+        row["confirmed_at"] = column_mapping.now_iso()
+    else:
+        row["confirmed_by"] = None
+        row["confirmed_at"] = None
+    try:
+        r = client.schema("commcalc").table(ma_product_class.MAP_TABLE).upsert(
+            row, on_conflict="org_id,source_report,product_name").execute()
+        return {"ok": True, "row": (r.data[0] if r.data else row)}
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — run migration 254_commission_ma_product_class.sql first. [{e}]")
+
+
+@router.post("/ma-product-class/confirm")
+def confirm_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+    """CONFIRM proposals — the owner's decision step. body: {product_names: [..]} or {all: true} to
+    confirm every proposed row for the source. Confirming only changes `status`; it never re-classifies
+    a name and never touches a payout. Returns what it confirmed."""
+    require_org(org_id)
+    sr = (body.get("source_report") or "ma_daily_tx").strip()
+    names = [ma_product_class.normalize(n) for n in (body.get("product_names") or []) if str(n).strip()]
+    if not names and not body.get("all"):
+        raise HTTPException(400, "product_names[] or all=true is required")
+    client = sb()
+    map_rows, ready = _mpc_map_rows(client, org_id, sr)
+    if not ready:
+        raise HTTPException(400, "Run migration 254_commission_ma_product_class.sql first.")
+    who, now = _mpc_who(authorization), column_mapping.now_iso()
+    targets = [r for r in map_rows
+               if (r.get("status") or "proposed") != "confirmed"
+               and (body.get("all") or ma_product_class.normalize(r.get("product_name")) in names)]
+    done = []
+    for r in targets:
+        try:
+            (client.schema("commcalc").table(ma_product_class.MAP_TABLE)
+             .update({"status": "confirmed", "confirmed_by": who, "confirmed_at": now,
+                      "updated_at": now})
+             .eq("org_id", org_id).eq("id", r["id"]).execute())
+            done.append(ma_product_class.normalize(r.get("product_name")))
+        except Exception:
+            pass
+    missing = [n for n in names if n not in {ma_product_class.normalize(r.get("product_name")) for r in map_rows}]
+    return {"ok": True, "confirmed": done, "confirmed_count": len(done),
+            "already_confirmed": len([r for r in map_rows if (r.get("status") or "") == "confirmed"]),
+            "not_found": missing}
+
+
+@router.post("/ma-product-class/seed-proposals")
+def seed_ma_product_class(body: dict = None, org_id: str = ORG_ID):
+    """Materialise the built-in PROPOSALS as rows for THIS tenant (status='proposed'), skipping names
+    already mapped. Migration 254 seeds the house org only; every other tenant seeds itself here, with
+    org_id stamped on every insert (RULE ONE: config rows carry the tenant). Idempotent."""
+    require_org(org_id)
+    sr = ((body or {}).get("source_report") or "ma_daily_tx").strip()
+    client = sb()
+    map_rows, ready = _mpc_map_rows(client, org_id, sr)
+    if not ready:
+        raise HTTPException(400, "Run migration 254_commission_ma_product_class.sql first.")
+    have = [r.get("product_name") for r in map_rows]
+    rows = ma_product_class.seed_rows(org_id, sr, have)
+    if not rows:
+        return {"ok": True, "inserted": 0, "skipped": len(have), "note": "every built-in proposal already exists"}
+    try:
+        client.schema("commcalc").table(ma_product_class.MAP_TABLE).insert(rows).execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not seed — [{e}]")
+    return {"ok": True, "inserted": len(rows), "skipped": len(have), "status": "proposed"}
+
+
+@router.delete("/ma-product-class/{rid}")
+def delete_ma_product_class(rid: str, org_id: str = ORG_ID):
+    """Remove ONE mapping — the name reverts to 'unmapped' (loud), which is the only way to unmap."""
+    require_org(org_id)
+    try:
+        (sb().schema("commcalc").table(ma_product_class.MAP_TABLE).delete()
+         .eq("org_id", org_id).eq("id", rid).execute())
+    except Exception as e:
+        raise HTTPException(400, f"Could not delete — [{e}]")
+    return {"ok": True, "id": rid}
 
 
 @router.post("/commission-import/analyze")
