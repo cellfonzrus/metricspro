@@ -419,7 +419,7 @@ export default function MaProductClassPage() {
             filename="ma-product-class-preview"
             columns={pvCols}
             rows={pvRows}
-            defaultGroupBy="Month"
+            defaultGroupBy="month"
             compact
           />
         </>
