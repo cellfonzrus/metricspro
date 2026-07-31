@@ -49,8 +49,16 @@ def _month_start(now: datetime) -> datetime:
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
-def _anthropic_cost(cred: str) -> dict:
-    """Anthropic Admin Cost report → this calendar month's total. Defensive parse (schema may evolve)."""
+async def _anthropic_cost(cred: str) -> dict:
+    """Anthropic Admin Cost report → this calendar month's total. Defensive parse (schema may evolve).
+
+    ASYNC on purpose (SEV-1 2026-07-30): this paginates up to 20 SEQUENTIAL HTTP calls at 30s each,
+    i.e. up to ~10 minutes of network wait. The synchronous httpx.Client ran that on the single
+    uvicorn event loop (its only caller, POST /billing/platform-costs/refresh, is `async def`), so
+    one cost refresh stalled EVERY endpoint — the same class of bug that froze the backend via
+    /helpdesk/ai-assist. httpx.AsyncClient + await yields the loop between pages. Do NOT reintroduce
+    `httpx.Client(` here, and keep `fetch_cost` awaited by its caller.
+    """
     import httpx
     now = datetime.now(timezone.utc)
     start = _month_start(now)
@@ -59,9 +67,9 @@ def _anthropic_cost(cred: str) -> dict:
               "ending_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "limit": "31"}
     url = "https://api.anthropic.com/v1/organizations/cost_report"
     total, currency, seen = 0.0, "USD", False
-    with httpx.Client(timeout=30) as c:
+    async with httpx.AsyncClient(timeout=30) as c:
         for _ in range(20):  # paginate defensively
-            r = c.get(url, headers=headers, params=params)
+            r = await c.get(url, headers=headers, params=params)
             if r.status_code in (401, 403):
                 return {"cost": None, "currency": currency, "status": "error",
                         "detail": "auth failed — this needs an ADMIN key (sk-ant-admin…), not a regular API key"}
@@ -91,16 +99,20 @@ def _anthropic_cost(cred: str) -> dict:
             "detail": f"month-to-date since {start.date()}"}
 
 
-def fetch_cost(connector: dict) -> dict:
+async def fetch_cost(connector: dict) -> dict:
     """Dispatch to the provider's live fetcher; fall back to the connector's manual flat figure.
-    Returns {cost, currency, status, detail}. status ∈ ok | manual | error | unconfigured."""
+    Returns {cost, currency, status, detail}. status ∈ ok | manual | error | unconfigured.
+
+    ASYNC (SEV-1 2026-07-30) because the live Anthropic fetcher does real network I/O — callers MUST
+    `await` it. Dispatch, fallbacks and every returned figure are unchanged.
+    """
     provider = (connector.get("provider") or "").lower()
     cred = (connector.get("credential") or "").strip()
     flat = _num(connector.get("flat_monthly_cost"))
 
     if provider == "anthropic" and cred:
         try:
-            out = _anthropic_cost(cred)
+            out = await _anthropic_cost(cred)
             if out.get("status") == "ok":
                 return out
             if flat is not None:  # live failed but we have a manual figure

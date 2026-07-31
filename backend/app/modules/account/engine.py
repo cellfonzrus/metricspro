@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from app.core.config import settings
 from app.modules.commcalc.calculator import safe_float
 from app.modules.account import coa
+from app.modules.account.ai_limits import ACCOUNT_AI_TIMEOUT_S, ACCOUNT_AI_MAX_RETRIES
 
 ORG_ID = coa.ORG_ID
 
@@ -138,8 +139,23 @@ def _narrate(pl, bs, scope_label, period):
                 f"Balance sheet {bal}. (Set ANTHROPIC_API_KEY for the full narrative.)",
                 "deterministic")
     try:
+        # SEV-1 2026-07-30 (event-loop safety). This is the SYNCHRONOUS Anthropic client, which is
+        # correct ONLY because compute_and_store() runs in a WORKER THREAD: both async callers
+        # (/account/compute/{period} and /account/run-due) hop via run_in_threadpool. Two rules, do
+        # not break either:
+        #   1. NEVER call compute_and_store() straight from an `async def`. The sync HTTP call would
+        #      then run ON the single uvicorn event loop and stall EVERY endpoint (including /health)
+        #      — exactly what /helpdesk/ai-assist did to the whole backend on 2026-07-30.
+        #   2. Keep the explicit timeout + max_retries. The SDK defaults to 600s x 2 retries (~30
+        #      min); uncapped, one stalled narrative pins a worker thread and hangs this request for
+        #      half an hour. Env-tunable (ACCOUNT_AI_TIMEOUT_S / ACCOUNT_AI_MAX_RETRIES) so the
+        #      operator can widen it for slow extended-thinking responses with no deploy.
+        # A timeout lands in the `except` below -> "(Narrative unavailable: APITimeoutError.)". The
+        # narrative is commentary only; every P&L / Balance-Sheet FIGURE is deterministic and
+        # unaffected either way.
         from anthropic import Anthropic
-        client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        client = Anthropic(api_key=settings.ANTHROPIC_API_KEY,
+                           timeout=ACCOUNT_AI_TIMEOUT_S, max_retries=ACCOUNT_AI_MAX_RETRIES)
         prompt = (
             "You are the financial analyst for a multi-store cellular retailer (cash-basis books). "
             "Below are a finalized, deterministically-computed Profit & Loss and Balance Sheet for one "

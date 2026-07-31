@@ -448,7 +448,7 @@ async def refresh_platform_costs(body: dict = None, authorization: str = Header(
             continue
         if not r.get("is_enabled", True):
             continue
-        out = _pc.fetch_cost(r)
+        out = await _pc.fetch_cost(r)
         try:
             _pcstore().update({
                 "last_cost": out.get("cost"), "last_currency": out.get("currency") or "USD",

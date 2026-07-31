@@ -1,6 +1,7 @@
 """Account Module router — companies + store assignment (#multi-company), manual journal
 entries, the compute/compute-on-demand engine, P&L, Balance Sheet, and the #10 reconciliation."""
 from fastapi import APIRouter, HTTPException, Header
+from fastapi.concurrency import run_in_threadpool
 from datetime import datetime, timezone
 
 from app.core.database import get_supabase
@@ -300,7 +301,14 @@ async def put_config(body: dict, org_id: str = ORG_ID):
 async def compute(period: str, org_id: str = ORG_ID):
     require_org(org_id)
     try:
-        return engine.compute_and_store(sb(), org_id, period)
+        # SEV-1 2026-07-30 — compute_and_store() is SYNCHRONOUS and blocking end to end (dozens of
+        # Supabase round-trips plus, when ANTHROPIC_API_KEY is set, one Claude narrative call). Called
+        # directly from this `async def` it ran ON the single uvicorn event loop, so a slow compute
+        # stalled EVERY endpoint; with the SDK's 600s x 2-retry default that was a ~30-minute
+        # platform-wide freeze from one request (same failure that hit /helpdesk/ai-assist).
+        # run_in_threadpool moves the identical sync code to a worker thread: same calls, same order,
+        # same exceptions, byte-identical numbers — the loop just stays free to serve other requests.
+        return await run_in_threadpool(engine.compute_and_store, sb(), org_id, period)
     except Exception as e:
         raise HTTPException(500, f"compute failed: {type(e).__name__}: {e}")
 
@@ -317,7 +325,12 @@ async def run_due(x_notify_secret: str = Header(default=""), only_org: str = "",
     compute runs, never WHAT it computes."""
     if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
         raise HTTPException(403, "forbidden")
-    return autocompute.recompute_due(sb(), only_org=(only_org or None), force=force)
+    # SEV-1 2026-07-30 — same reason as /compute, and worse here: this sweep walks EVERY tenant x 2
+    # periods, so it is N x (all the blocking Supabase work + one Claude narrative). On the event loop
+    # a single slow tick froze the whole backend. Off to a worker thread; the sweep itself is
+    # unchanged (still sequential, still one tenant at a time, still WHEN not WHAT).
+    return await run_in_threadpool(autocompute.recompute_due, sb(),
+                                   only_org=(only_org or None), force=force)
 
 
 # ── read snapshots ────────────────────────────────────────────────────────────────────────────
@@ -412,7 +425,11 @@ async def get_recon(period: str, tolerance: float = 1.0, date_col: str = "mi_act
                     analyze: bool = False, org_id: str = ORG_ID):
     require_org(org_id)
     from app.modules.account import recon
-    return recon.reconcile(sb(), org_id, period, tolerance, date_col, analyze=analyze)
+    # SEV-1 2026-07-30 — reconcile() is blocking (bulk Supabase reads; with analyze=true also one
+    # Claude missed-days call). On the event loop, `?analyze=true` could freeze the whole backend for
+    # up to ~30 min. Worker thread: identical sync code, identical output.
+    return await run_in_threadpool(recon.reconcile, sb(), org_id, period, tolerance, date_col,
+                                   analyze=analyze)
 
 
 @router.post("/recon/{period}/sync-flags")
