@@ -9,6 +9,7 @@ returned. CODE-class issues are escalated, never auto-fixed. Everything is audit
 import hashlib
 import hmac
 import json
+import os
 import secrets
 from datetime import datetime, timezone
 
@@ -67,6 +68,20 @@ def upsert_playbook(body: dict, org_id: str = ORG_ID):
 
 
 # ── AI diagnosis (reuses the helpdesk Anthropic key) ───────────────────────────────────────────────
+# Event-loop safety limits for the ONE outbound AI call on this path (same SEV-1 class as the helpdesk
+# /ai-assist freeze, 2026-07-30). The Anthropic SDK defaults to a 600s timeout with 2 automatic retries;
+# these defaults cap a single /propose diagnosis at ~60s worst case (timeout x (1 + retries)). Env-tunable
+# so the operator can widen/narrow without a code deploy; a garbage env value falls back to the default
+# rather than breaking module import.
+try:
+    REMEDIATION_AI_TIMEOUT_S = max(1.0, float(os.getenv("REMEDIATION_AI_TIMEOUT_S") or 30))
+except Exception:
+    REMEDIATION_AI_TIMEOUT_S = 30.0
+try:
+    REMEDIATION_AI_MAX_RETRIES = max(0, int(os.getenv("REMEDIATION_AI_MAX_RETRIES") or 1))
+except Exception:
+    REMEDIATION_AI_MAX_RETRIES = 1
+
 _DIAGNOSE_SYSTEM = (
     "You are the MetricsPro auto-remediation triage agent. You are given an operational ISSUE and a "
     "CATALOG of whitelisted remediation playbooks. Decide:\n"
@@ -81,18 +96,28 @@ _DIAGNOSE_SYSTEM = (
 )
 
 
-def _ai_diagnose(catalog, issue):
-    """Returns a dict (issue_class/playbook_key/params/proposed_action/diagnosis) or None if AI is off."""
+async def _ai_diagnose(catalog, issue):
+    """Returns a dict (issue_class/playbook_key/params/proposed_action/diagnosis) or None if AI is off.
+
+    ASYNC ON PURPOSE — see the comment on the client below. Do NOT make this a plain `def` again."""
     if not settings.ANTHROPIC_API_KEY:
         return None
     cat = [{"key": c["key"], "name": c["name"], "description": c.get("description"),
             "params_schema": c.get("params_schema")} for c in catalog]
     user = f"CATALOG:\n{json.dumps(cat)}\n\nISSUE:\n{issue[:3000]}"
     try:
-        from anthropic import Anthropic
-        cli = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        resp = cli.messages.create(model=settings.ACCOUNT_ENGINE_MODEL, max_tokens=700,
-                                   system=_DIAGNOSE_SYSTEM, messages=[{"role": "user", "content": user}])
+        # SEV-1 class (2026-07-30, helpdesk /ai-assist) — this call MUST be the ASYNC client and MUST
+        # be awaited. The synchronous client blocks the FastAPI event loop for the entire HTTP call, and
+        # the SDK defaults to a 600s timeout with 2 automatic retries, so one stalled /propose would
+        # freeze EVERY endpoint (including /health) for up to ~30 minutes. Awaiting the async client
+        # hands the loop back while the model thinks; the explicit timeout + single retry cap the worst
+        # case for THIS request at ~60s. Do NOT reintroduce `Anthropic(` here.
+        from anthropic import AsyncAnthropic
+        cli = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY,
+                             timeout=REMEDIATION_AI_TIMEOUT_S, max_retries=REMEDIATION_AI_MAX_RETRIES)
+        resp = await cli.messages.create(model=settings.ACCOUNT_ENGINE_MODEL, max_tokens=700,
+                                         system=_DIAGNOSE_SYSTEM,
+                                         messages=[{"role": "user", "content": user}])
         text = "".join(getattr(b, "text", "") for b in resp.content
                        if getattr(b, "type", None) == "text").strip()
         # tolerate stray fences/prose around the JSON
@@ -191,7 +216,7 @@ async def propose(body: dict, org_id: str = ORG_ID):
     issue_class = "data"
 
     if not playbook_key:  # let the agent decide
-        ai = _ai_diagnose(catalog, issue)
+        ai = await _ai_diagnose(catalog, issue)
         if ai:
             issue_class = (ai.get("issue_class") or "data").lower()
             playbook_key = ai.get("playbook_key") or None
