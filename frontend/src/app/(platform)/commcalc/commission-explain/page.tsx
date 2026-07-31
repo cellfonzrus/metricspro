@@ -32,6 +32,10 @@ const PLAN_COLS: ExportColumn[] = [
   { header: 'MDN', get: r => r.mdn }, { header: 'Product', get: r => r.product },
   { header: 'Contract', get: r => r.contract_type }, { header: 'Basis', get: r => r.basis },
   { header: 'Ext Price', get: r => r.ext_price, money: true }, { header: 'GP', get: r => r.gp, money: true },
+  // raw_sales has NO cost column — cost is IMPLIED (ext_price − gp). Showing it is what turns
+  // "why did this pay $0" into "because the catalog says this item costs exactly what it sells for".
+  { header: 'Implied cost', get: r => r.implied_cost, money: true },
+  { header: 'Data check', get: r => r.cost_flag_labels || '' },
   { header: 'Line $', get: r => r.amount, money: true },
 ]
 const INST_COLS: ExportColumn[] = [
@@ -47,6 +51,9 @@ const INST_COLS: ExportColumn[] = [
   { header: 'Withheld $', get: r => r.withheld_amount, money: true },
   { header: 'MRC', get: r => r.mrc_at_pay, money: true },
   { header: 'MA says paid', get: r => r.ma_says_paid ? 'yes' : 'no' },
+  // A month can be PAID and still be $0 (a %-of-MRC month with no identifiable rate-plan line). The
+  // engine always knew why; the page never said. Now it does — and it exports (RULE FOUR).
+  { header: 'Why $0', get: r => r.zero_note || '' },
 ]
 
 export default function CommissionExplainPage() {
@@ -103,7 +110,9 @@ export default function CommissionExplainPage() {
     for (const r of (pc?.rules || [])) for (const l of (r.lines || []))
       out.push({ rule: r.label, basis: BASIS[r.payout_kind] || r.payout_kind, date: l.date, trans_id: l.trans_id,
         imei: l.imei, mdn: l.mdn, product: l.product, contract_type: l.contract_type,
-        ext_price: l.ext_price, gp: l.gp, amount: l.flat_once ? null : l.amount })
+        ext_price: l.ext_price, gp: l.gp, amount: l.flat_once ? null : l.amount,
+        implied_cost: l.implied_cost, cost_flags: l.cost_flags || [],
+        cost_flag_labels: (l.cost_flag_labels || []).join(' ') })
     return out
   }, [pc])
   const instRows = useMemo(() => {
@@ -113,7 +122,8 @@ export default function CommissionExplainPage() {
         device_category: i.device_category || d.device_category,
         month_index: i.month_index, pay_period: i.pay_period,
         status_label: REASON_LABEL[i.hold_reason] || i.status, hold_detail: i.hold_detail, amount: i.amount,
-        withheld_amount: i.withheld_amount, mrc_at_pay: i.mrc_at_pay, ma_says_paid: d.ma_says_paid })
+        withheld_amount: i.withheld_amount, mrc_at_pay: i.mrc_at_pay, ma_says_paid: d.ma_says_paid,
+        zero_note: i.zero_note || '' })
     return out
   }, [mm])
 
@@ -197,6 +207,7 @@ export default function CommissionExplainPage() {
                 </div>
               )}
               <AssignmentTrace considered={pc?.considered} />
+              <DataQualityBanner dq={pc?.data_quality} />
               {planRows.length > 0 ? (
                 <ReportShell title={`Plan line detail — ${data.rep}`} subtitle={`${period} · ${pc?.plan_name || ''}`}
                   filename={`plan-detail-${data.rep}-${period}`.replace(/\s+/g, '-')} columns={PLAN_COLS} rows={planRows} totals compact />
@@ -223,6 +234,7 @@ export default function CommissionExplainPage() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {mm.devices.map((d: any, i: number) => <DeviceCard key={i} d={d} />)}
                   </div>
+                  <EngineWarnings warnings={mm?.warnings} />
                   <div style={{ marginTop: 12 }}>
                     <ReportShell title={`Installment detail — ${data.rep}`} subtitle={period}
                       filename={`installments-${data.rep}-${period}`.replace(/\s+/g, '-')} columns={INST_COLS} rows={instRows} totals compact />
@@ -247,6 +259,75 @@ export default function CommissionExplainPage() {
             )}
           </div>
         )}
+    </div>
+  )
+}
+
+// ── PAY-INPUT DATA QUALITY (owner report 2026-07-31) — DISPLAY ONLY ────────────────────────────────
+// A %-of-GP payout is only as good as the GP it is paid on, and raw_sales has NO cost column (cost is
+// implied: ext_price − gp). When the POS catalog carries cost == retail the GP is $0 and the payout is
+// $0 by arithmetic; when cost is negative the payout inflates. Separately, a plan rule's rate is a
+// FRACTION (0.10 = 10%) — a rate typed as a whole percent pays 100×. Nothing here changes a number;
+// it explains the ones already on screen.
+function DataQualityBanner({ dq }: { dq: any }) {
+  if (!dq || (!dq.suspect_lines && !(dq.rate_issues || []).length)) return null
+  return (
+    <div style={{ border: '1px solid #f59e0b', background: '#fffbeb', borderRadius: 8, padding: 10, marginBottom: 10 }}>
+      <div style={{ fontWeight: 700, fontSize: 13, color: '#92400e', marginBottom: 4 }}>
+        ⚠ Check the inputs, not the maths — this is a source-data finding. Nothing below was changed.
+      </div>
+      {(dq.rate_issues || []).map((r: any, i: number) => (
+        <div key={`r${i}`} style={{ fontSize: 12.5, color: '#92400e', marginBottom: 4 }}>
+          <b>Rule “{r.label || r.rule_id}”</b> pays <b>{r.payout_kind}</b> at a stored rate of <b>{r.pct}</b>.
+          {' '}{(r.labels || []).join(' ')}
+        </div>
+      ))}
+      {dq.suspect_lines > 0 && (
+        <div style={{ fontSize: 12.5, color: '#92400e' }}>
+          <b>{dq.suspect_lines}</b> of <b>{dq.checked_lines}</b> matched lines have an unusable cost:
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {(dq.by_flag || []).map((f: any, i: number) => (
+              <li key={i}>
+                <b>{f.lines}</b> line{f.lines === 1 ? '' : 's'} ({fmt(f.ext_price)} sold, {fmt(f.paid)} paid) — {f.label}
+              </li>
+            ))}
+          </ul>
+          <div style={{ marginTop: 6 }}>
+            <a href="/commcalc/accessory-cost-audit" style={{ color: 'var(--accent)' }}>
+              Open the Accessory Cost Audit → the item list + what each option would have paid
+            </a>
+          </div>
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: '#92400e', marginTop: 6, opacity: 0.85 }}>{dq.note}</div>
+    </div>
+  )
+}
+
+// The multi-month engine already records WHY a chain resolved to $0 (no rate-plan line found, an
+// ambiguous MRC, an unclassifiable category). Those warnings never reached this page.
+function EngineWarnings({ warnings }: { warnings: any[] }) {
+  const [open, setOpen] = useState(false)
+  const w = warnings || []
+  if (!w.length) return null
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button className="btn btn-secondary" style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => setOpen(o => !o)}>
+        {open ? '▾' : '▸'} Engine notes for this rep ({w.length})
+      </button>
+      {open && (
+        <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: 'var(--text2)', lineHeight: 1.6 }}>
+          {w.map((x: any, i: number) => (
+            <li key={i}>
+              <b>{x.type}</b>{x.month_index ? ` · M${x.month_index}` : ''}
+              {x.trans_id ? ` · trans ${x.trans_id}` : ''}{x.imei ? ` · ${x.imei}` : ''} — {x.detail}
+              {(x.products || []).length > 0 && (
+                <div style={{ color: 'var(--text3)' }}>lines seen: {(x.products || []).join(' · ')}</div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
@@ -313,7 +394,10 @@ function DeviceCard({ d }: { d: any }) {
               <td style={{ padding: '3px 6px', color: 'var(--red)' }}>{i.status !== 'paid' && i.withheld_amount != null ? fmt(i.withheld_amount) : '—'}</td>
               <td style={{ padding: '3px 6px' }}>{i.mrc_at_pay != null ? fmt(i.mrc_at_pay) : '—'}</td>
               <td style={{ padding: '3px 6px' }}>{i.mi_ref ? `${i.mi_ref.subscriber_status || 'found'}` : 'none'}</td>
-              <td style={{ padding: '3px 6px', color: 'var(--text3)' }}>{i.hold_detail}</td>
+              <td style={{ padding: '3px 6px', color: 'var(--text3)' }}>
+                {i.hold_detail}
+                {i.zero_note ? <div style={{ color: '#b45309', marginTop: 2 }}>⚠ {i.zero_note}</div> : null}
+              </td>
             </tr>
           ))}
         </tbody>
