@@ -19624,7 +19624,7 @@ async def agency_upload_ocr(link_id: str, file: UploadFile = File(...), period: 
     _agency._get_link(sb(), org_id, link_id)   # m3: validate link/org BEFORE the bucket write + Anthropic call
     data = await file.read()
     path, ok, notice = _agency._upload_agency_doc(link_id, file.filename, data, file.content_type)
-    rows, model, conf = _agency._ocr_parse_transfer(data, file.filename, file.content_type)
+    rows, model, conf = await _agency._ocr_parse_transfer_async(data, file.filename, file.content_type)
     res = _agency.ingest_ocr(sb(), org_id, link_id, period or None, rows, path, file.filename, model, conf,
                              _agency_who(authorization, org_id))
     res["bucket_ready"] = ok
