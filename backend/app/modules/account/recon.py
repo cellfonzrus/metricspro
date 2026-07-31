@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.modules.commcalc.calculator import safe_float
 from app.modules.account import coa
 from app.modules.account import _period
+from app.modules.account.ai_limits import ACCOUNT_AI_TIMEOUT_S, ACCOUNT_AI_MAX_RETRIES
 
 DEFAULT_TOLERANCE = 1.0
 DEFAULT_DATE_COL = "mi_activation_date"
@@ -69,8 +70,16 @@ def _missed_days(flagged):
         return {}
     try:
         import json
+        # SEV-1 2026-07-30 (event-loop safety). SYNCHRONOUS client on purpose: reconcile() runs in
+        # a WORKER THREAD because /account/recon/{period} hops via run_in_threadpool. Never call
+        # reconcile(..., analyze=True) straight from an `async def` — the sync HTTP call would run ON
+        # the event loop and stall every endpoint (see /helpdesk/ai-assist, 2026-07-30). The explicit
+        # timeout + max_retries cap a stalled call at ~ACCOUNT_AI_TIMEOUT_S x (1 + retries) instead of
+        # the SDK's 600s x 2 retries (~30 min). Any failure still degrades to {} (no note), which is
+        # the pre-existing behaviour — the recon DOLLARS never depend on this call.
         from anthropic import Anthropic
-        cli = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        cli = Anthropic(api_key=settings.ANTHROPIC_API_KEY,
+                        timeout=ACCOUNT_AI_TIMEOUT_S, max_retries=ACCOUNT_AI_MAX_RETRIES)
         payload = [{"store": r["store"], "diff": r["diff"], "memo_total": r["memo_total"],
                     "mi_atu_total": r["mi_atu_total"], "memos": r.get("memos"),
                     "mi_atu_by_day": r.get("by_day", {})} for r in flagged[:25]]
