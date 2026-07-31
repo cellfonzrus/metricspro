@@ -300,15 +300,46 @@ async def _bridge_on_loop(stall, wall=None):
 
 
 out, ticks, dt = asyncio.run(_bridge_on_loop(0.20))
-check("E4 bridge ON a running loop still returns the right rows (call-site compat kept)",
-      out == async_out, str(out))
-check("E5 DOCUMENTED LIMITATION: the bridge does NOT free the caller's loop "
-      "(only the companion `await` at the router call site can)", ticks <= 3,
-      f"ticks={ticks} — if this ever passes with many ticks, the bridge changed shape")
+check("E4 bridge ON a running loop still returns the right rows (belt-and-braces for a future "
+      "sync caller — nothing on the endpoint path uses it any more)", out == async_out, str(out))
+check("E5-rationale the bridge inherently CANNOT free a caller's loop — which is exactly why the "
+      "endpoint now awaits the async fn instead (see §E5 below)", ticks <= 3,
+      f"ticks={ticks} — if this ever ticks freely, the bridge changed shape")
 out, ticks, dt = asyncio.run(_bridge_on_loop(5.0, wall=0.30))
 check("E6 hard wall fires: a hung model call is cut off at _AGENCY_AI_WALL_S, not 30 minutes",
       out == ([], "error", None) and dt < 1.5, f"out={out} dt={dt:.2f}s")
 check("E7 wall path returns promptly (executor is NOT waited on)", dt < 1.5, f"dt={dt:.2f}s")
+
+print()
+print("=" * 78)
+print("E5 (FLIPPED 2026-07-31, Gate-1 scope lift) — the ENDPOINT now awaits the async fn")
+print("=" * 78)
+# This check previously asserted the LIMITATION (the sync bridge cannot free the loop). The operator
+# lifted the router.py file-scope restriction for exactly one hunk, so it now asserts the OPPOSITE:
+# `agency_upload_ocr` awaits `_ocr_parse_transfer_async` and never touches the bridge.
+ROUTER = os.path.join(HERE, "app", "modules", "commcalc", "router.py")
+RSRC = open(ROUTER, encoding="utf-8").read()
+RTREE = ast.parse(RSRC, ROUTER)
+ep = fn(RTREE, "agency_upload_ocr")
+check("E5a endpoint agency_upload_ocr exists and is an async def",
+      ep is not None and isinstance(ep, ast.AsyncFunctionDef))
+awaited_async = [n for n in ast.walk(ep) if isinstance(n, ast.Await)
+                 and isinstance(n.value, ast.Call)
+                 and getattr(n.value.func, "attr", "") == "_ocr_parse_transfer_async"]
+check("E5b endpoint AWAITS _agency._ocr_parse_transfer_async", len(awaited_async) == 1,
+      f"found {len(awaited_async)}")
+check("E5c endpoint no longer calls the sync bridge _ocr_parse_transfer anywhere",
+      not [n for n in ast.walk(ep) if isinstance(n, ast.Call)
+           and getattr(n.func, "attr", "") == "_ocr_parse_transfer"])
+check("E5d the awaited call still passes (data, file.filename, file.content_type) unchanged",
+      [ast.unparse(a) for a in awaited_async[0].value.args]
+      == ["data", "file.filename", "file.content_type"] if awaited_async else False,
+      str([ast.unparse(a) for a in awaited_async[0].value.args]) if awaited_async else "n/a")
+check("E5e no un-awaited call to the async fn anywhere in router.py (a missing await returns a "
+      "coroutine and the tuple unpack would TypeError at runtime)",
+      RSRC.count("_ocr_parse_transfer_async") == RSRC.count("await _agency._ocr_parse_transfer_async"))
+check("E5f router.py has no sync `Anthropic(` on this path either",
+      "_agency._ocr_parse_transfer(" not in RSRC)
 
 print()
 print("=" * 78)
@@ -380,13 +411,34 @@ check("G1 exactly ONE new function (_ocr_parse_transfer_async), none removed/ren
       f"+{set(names_now) - set(names_base)} -{set(names_base) - set(names_now)}")
 changed = subprocess.run(["git", "diff", "--name-only", "origin/main", "--"], cwd=REPO,
                          capture_output=True, text=True).stdout.split()
-check("G2 only agency.py + this package's two proof files are modified vs origin/main",
+check("G2 only agency.py + router.py + this package's two proof files are modified vs origin/main",
       set(changed) <= {"backend/app/modules/commcalc/agency.py",
+                       "backend/app/modules/commcalc/router.py",
                        "backend/harness_agency_ocr_async.py",
                        "backend/scratchpad/agency_ocr_async_asgi_smoke.py"},
       str(changed))
-check("G3 router.py untouched (parallel carrier-income package owns it this cycle)",
-      "backend/app/modules/commcalc/router.py" not in changed)
+# Gate-1 lifted the router.py restriction for EXACTLY one hunk. The parallel carrier-income agent may
+# edit router.py in a different region, so this asserts the hunk stays confined and both merge cleanly.
+rdiff = subprocess.run(["git", "diff", "--unified=0", "origin/main", "--",
+                        "backend/app/modules/commcalc/router.py"],
+                       cwd=REPO, capture_output=True, text=True).stdout.splitlines()
+radd = [l for l in rdiff if l.startswith("+") and not l.startswith("+++")]
+rdel = [l for l in rdiff if l.startswith("-") and not l.startswith("---")]
+rhunks = [l for l in rdiff if l.startswith("@@")]
+check("G3a router.py diff is EXACTLY one line changed (1 added, 1 removed)",
+      len(radd) == 1 and len(rdel) == 1, f"+{len(radd)} -{len(rdel)}")
+check("G3b router.py diff is a SINGLE hunk (confined — merges cleanly beside carrier-income)",
+      len(rhunks) == 1, str(rhunks))
+check("G3c that one line is the awaited OCR call",
+      bool(radd) and radd[0][1:].strip() ==
+      "rows, model, conf = await _agency._ocr_parse_transfer_async(data, file.filename, file.content_type)"
+      and bool(rdel) and rdel[0][1:].strip() ==
+      "rows, model, conf = _agency._ocr_parse_transfer(data, file.filename, file.content_type)",
+      f"+{radd[0] if radd else 'n/a'} / -{rdel[0] if rdel else 'n/a'}")
+check("G3d the hunk sits in the agency upload-ocr region (~19620), far from the carrier-income "
+      "endpoints the parallel package edits",
+      rhunks and 19500 < int(rhunks[0].split("+")[1].split(",")[0].split(" ")[0]) < 19800,
+      str(rhunks))
 check("G4 whatif.py / custom_report.py untouched",
       not any(f.endswith(("whatif.py", "custom_report.py")) for f in changed))
 check("G5 no SHARED file touched (core/**, main.py, client.ts, rbac.ts, layout.tsx)",

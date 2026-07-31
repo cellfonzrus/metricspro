@@ -11,8 +11,14 @@ TestClient at the exact URL and asserts:
     shape (ok/count/transfers/bucket_ready), rows extracted by the ASYNC client
   • the bare `/commcalc/agency/...` (no /api/v1) is 404 — the page MUST use the prefix
   • the model call really went through `AsyncAnthropic` with timeout+max_retries bound
-  • a hung model call is cut off by the wall (no 30-minute freeze), and the endpoint still 200s with
-    the same graceful "no rows parsed" degradation
+  • THE POINT (§C): with the app driven over httpx ASGITransport on THIS event loop — the production
+    condition, unlike TestClient's portal thread — a stalled upload-ocr request no longer freezes the
+    app: a heartbeat keeps ticking and `/health` (the endpoint that went dark on 2026-07-30) keeps
+    answering 200 for the whole stall. A sync client here would have served ZERO of them.
+  • a hung model call is bounded by the SDK timeout, and the endpoint still 200s with the same
+    graceful "no rows parsed" degradation
+  • a TRIPWIRE replaces the sync bridge `_ocr_parse_transfer`, so a regression to the blocking call
+    site fails loudly rather than silently
   • ZERO writes to the live DB / storage: _get_link, ingest_ocr and _upload_agency_doc are stubbed.
 
 Run: `python3 scratchpad/agency_ocr_async_asgi_smoke.py` from the backend dir.
@@ -54,13 +60,19 @@ class _Resp:
         self.content = [_Blk(t)]
 
 
-def install_fake_anthropic(stall=0.05):
+class APITimeoutError(Exception):
+    pass
+
+
+def install_fake_anthropic(stall=0.05, mode="ok"):
     mod = types.ModuleType("anthropic")
 
     class _Msgs:
         async def create(self, **kw):
             AsyncAnthropic.seen = kw
             await asyncio.sleep(stall)
+            if mode == "timeout":
+                raise APITimeoutError("Request timed out.")
             return _Resp(GOOD_JSON)
 
     class AsyncAnthropic:
@@ -72,6 +84,7 @@ def install_fake_anthropic(stall=0.05):
             self.messages = _Msgs()
 
     mod.AsyncAnthropic = AsyncAnthropic
+    mod.APITimeoutError = APITimeoutError
     mod.Anthropic = None                      # a sync-client regression would TypeError loudly
     sys.modules["anthropic"] = mod
     return AsyncAnthropic
@@ -103,6 +116,17 @@ def _fake_ingest(client, org_id, link_id, period, rows, doc_path, doc_name, mode
 
 A.ingest_ocr = _fake_ingest
 A.settings = types.SimpleNamespace(ANTHROPIC_API_KEY="sk-test", ACCOUNT_ENGINE_MODEL="claude-opus-4-8")
+
+
+def _bridge_tripwire(*a, **kw):
+    """TRIPWIRE: the endpoint must NOT reach the sync bridge any more. The bridge survives in agency.py
+    as belt-and-braces for a future sync caller, but if `agency_upload_ocr` ever regresses to calling it,
+    every assertion below fails loudly instead of silently re-introducing the freeze."""
+    raise AssertionError("REGRESSION: agency_upload_ocr called the SYNC bridge _ocr_parse_transfer — "
+                        "it must await _ocr_parse_transfer_async (SEV-1 2026-07-30 class)")
+
+
+A._ocr_parse_transfer = _bridge_tripwire
 
 URL = f"/api/v1/commcalc/agency/links/{LINK}/transfers/upload-ocr"
 FILES = {"file": ("vendor-invoice.pdf", b"%PDF-1.4 fake invoice bytes", "application/pdf")}
@@ -147,38 +171,97 @@ check("B8 the ASYNC client was used, with timeout + max_retries bound",
 check("B9 PDF still sent as a base64 document block, max_tokens 1500",
       Cli.seen["messages"][0]["content"][0]["type"] == "document" and Cli.seen["max_tokens"] == 1500)
 check("B10 request completed promptly", dt < 10, f"dt={dt:.2f}s")
+check("B11 the endpoint took the ASYNC path — the sync-bridge tripwire never fired",
+      A._ocr_parse_transfer is _bridge_tripwire and body.get("count") == 2)
 
 print()
 print("=" * 78)
-print("C. A hung model call cannot freeze the app for 30 minutes")
+print("C. THE POINT — a stalled OCR no longer freezes the app, through the REAL endpoint")
 print("=" * 78)
-install_fake_anthropic(30.0)                 # model that never comes back within the wall
-saved = A._AGENCY_AI_WALL_S
-A._AGENCY_AI_WALL_S = 0.4                    # stand-in for the 125s default, kept test-fast
+# TestClient drives the app on a portal thread, which hides loop-blocking. ASGITransport runs the app
+# on THIS event loop — the production condition. While one upload-ocr request sits inside a model call
+# that never returns, /health (the endpoint that went dark on 2026-07-30) must keep answering.
+import httpx                                                    # noqa: E402
+
+STALL_S = 1.0
+
+
+async def _loop_liveness(stall):
+    install_fake_anthropic(stall)
+    ticks = 0
+    healths = []
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url="http://smoke") as ac:
+        async def heartbeat():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.02)
+                ticks += 1
+
+        async def pinger():
+            while True:
+                hr = await ac.get("/health")
+                healths.append(hr.status_code)
+                await asyncio.sleep(0.01)
+
+        hb = asyncio.create_task(heartbeat())
+        pg = asyncio.create_task(pinger())
+        await asyncio.sleep(0.10)                      # let both get going
+        t_base, h_base = ticks, len(healths)
+        t0 = time.monotonic()
+        resp = await ac.post(URL, params={"org_id": ORG}, data={"period": "July 2026"}, files=FILES)
+        dt = time.monotonic() - t0
+        hb.cancel()
+        pg.cancel()
+    return resp, ticks - t_base, healths[h_base:], dt
+
+
+resp, ticks, healths, dt = asyncio.run(_loop_liveness(STALL_S))
+check("C1 the stalled upload still returns 200 with its rows",
+      resp.status_code == 200 and resp.json().get("count") == 2, f"{resp.status_code} {resp.text[:160]}")
+check(f"C2 the OCR call really did stall for ~{STALL_S}s", dt >= STALL_S * 0.9, f"dt={dt:.2f}s")
+check("C3 the event loop kept running the whole time (heartbeat ticked)", ticks >= 20, f"ticks={ticks}")
+check(f"C4 /health kept answering DURING the stalled OCR ({len(healths)} requests served)",
+      len(healths) >= 10 and set(healths) == {200}, f"served={len(healths)} codes={set(healths)}")
+check("C5 this is the 2026-07-30 regression test: a sync client here would have served ZERO "
+      "concurrent requests", len(healths) >= 10)
+
+print()
+print("=" * 78)
+print("D. A model call that never comes back is bounded by the SDK timeout, not ~30 min")
+print("=" * 78)
+# With `timeout=AGENCY_AI_TIMEOUT_S` bound on the client, a hung model raises APITimeoutError instead
+# of hanging for 600s x 2 retries. The stub raises it after a short sleep to keep the proof fast.
+install_fake_anthropic(0.05, mode="timeout")
 t0 = time.monotonic()
 r = c.post(URL, params={"org_id": ORG}, data={"period": "July 2026"}, files=FILES)
 dt = time.monotonic() - t0
-A._AGENCY_AI_WALL_S = saved
 body = r.json() if r.status_code == 200 else {}
-check("C1 still 200 (graceful), not a 500", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
-check("C2 cut off at the wall, nowhere near the SDK's ~30 min", dt < 5, f"dt={dt:.2f}s")
-check("C3 degrades to zero rows created (nothing half-parsed lands)", body.get("count") == 0, str(body))
-check("C4 model recorded as 'error' — same degradation as before the change",
+check("D1 still 200 (graceful), not a 500", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
+check("D2 returns promptly", dt < 5, f"dt={dt:.2f}s")
+check("D3 degrades to zero rows created (nothing half-parsed lands)", body.get("count") == 0, str(body))
+check("D4 model recorded as 'error' — same degradation as before the change",
       LANDED.get("model") == "error", str(LANDED.get("model")))
+check("D5 the client that was built carried timeout=60.0 / max_retries=1 (what bounds it in prod)",
+      sys.modules["anthropic"].AsyncAnthropic.last.get("timeout") == 60.0
+      and sys.modules["anthropic"].AsyncAnthropic.last.get("max_retries") == 1,
+      str(sys.modules["anthropic"].AsyncAnthropic.last))
 
 print()
 print("=" * 78)
-print("D. Unconfigured key still degrades exactly as before")
+print("E. Unconfigured key still degrades exactly as before")
 print("=" * 78)
 A.settings.ANTHROPIC_API_KEY = ""
 r = c.post(URL, params={"org_id": ORG}, data={"period": "July 2026"}, files=FILES)
 body = r.json() if r.status_code == 200 else {}
 A.settings.ANTHROPIC_API_KEY = "sk-test"
-check("D1 200 with zero rows", r.status_code == 200 and body.get("count") == 0, str(body)[:200])
-check("D2 the 'needs ANTHROPIC_API_KEY' notice is still surfaced",
+check("E1 200 with zero rows", r.status_code == 200 and body.get("count") == 0, str(body)[:200])
+check("E2 the 'needs ANTHROPIC_API_KEY' notice is still surfaced",
       "ANTHROPIC_API_KEY" in (body.get("notice") or ""), str(body.get("notice")))
-check("D3 model recorded as 'deterministic'", LANDED.get("model") == "deterministic",
+check("E3 model recorded as 'deterministic'", LANDED.get("model") == "deterministic",
       str(LANDED.get("model")))
+check("E4 the sync-bridge tripwire never fired across the whole smoke",
+      A._ocr_parse_transfer is _bridge_tripwire)
 
 print()
 print("=" * 78)
