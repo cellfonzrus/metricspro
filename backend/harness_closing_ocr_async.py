@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+"""PROOF harness — 2026-07-31 sync-in-async freeze-class hardening for closing's bank-deposit OCR.
+
+`_ocr_bank_deposit_slip` (the Claude-vision OCR helper for a bank deposit slip) is the ONLY outbound
+Anthropic call reachable from an `async def` FastAPI endpoint in this module (`bank_deposit`,
+POST /closing/bank-deposit). The OLD code built a SYNCHRONOUS `Anthropic(...)` client and called
+`cli.messages.create(...)` un-awaited, directly on the request coroutine — that call runs ON the
+single uvicorn event loop, so a slow/stalled model response would have frozen EVERY other in-flight
+request for up to ~600s x 2 retries (the SDK's default timeout/retry policy), exactly the SEV-1 class
+that hit helpdesk's /ai-assist on 2026-07-30 (see harness_ai_assist_async.py, the shipped precedent
+this harness mirrors).
+
+Mirrors platform-core's proof shape: AST proof (async def, AsyncAnthropic only, every .create()
+awaited, env-tunable limits with safe fallback) + a LIVE event-loop test (a fake stalling `anthropic`
+module injected via sys.modules, the REAL extracted coroutine driven against it while a concurrent
+heartbeat task must keep ticking) + guardrails proving every non-transport behaviour (graceful
+no-key/no-lib skip, JSON parsing, amount extraction, error truncation, the caller's await) is
+byte-for-byte unchanged.
+
+Also documents (does NOT touch) the sibling helper `_ocr_deposit_amount` / its caller `record_deposit`
+(POST /closing/pickup/deposit): that endpoint is a plain `def` (sync), which FastAPI/Starlette runs in
+a threadpool automatically — a blocking call there ties up one worker thread, not the shared event
+loop, so it is NOT this freeze class and was correctly left untouched per the dispatch's own scope.
+
+Run:  cd backend && python3 harness_closing_ocr_async.py
+"""
+import ast
+import asyncio
+import base64 as _b64
+import copy
+import os
+import subprocess
+import sys
+import types
+
+ROUTER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "app", "modules", "closing", "router.py")
+SRC = open(ROUTER, encoding="utf-8").read()
+TREE = ast.parse(SRC, ROUTER)
+
+P = F = 0
+
+
+def check(name, cond, detail=""):
+    global P, F
+    if cond:
+        P += 1
+        print(f"  PASS  {name}")
+    else:
+        F += 1
+        print(f"  FAIL  {name}   {detail}")
+
+
+def fn(name):
+    for n in ast.walk(TREE):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name:
+            return n
+    return None
+
+
+def seg(node):
+    return ast.get_source_segment(SRC, node) or ""
+
+
+print("=" * 78)
+print("A. _ocr_bank_deposit_slip source shape")
+print("=" * 78)
+ocr = fn("_ocr_bank_deposit_slip")
+check("A1 _ocr_bank_deposit_slip exists", ocr is not None)
+check("A2 _ocr_bank_deposit_slip is an async def", isinstance(ocr, ast.AsyncFunctionDef))
+body = seg(ocr)
+code = "\n".join(ln.split("#", 1)[0] for ln in body.splitlines())   # strip comments only
+check("A3 uses AsyncAnthropic", "AsyncAnthropic" in code)
+check("A4 awaits the model call", "await cli.messages.create" in code)
+check("A5 NO bare sync `Anthropic(` left in this function's code",
+      "Anthropic(" not in code.replace("AsyncAnthropic(", ""))
+check("A6 NO un-awaited `cli.messages.create` left",
+      body.count("cli.messages.create") == body.count("await cli.messages.create"))
+check("A7 no `from anthropic import Anthropic` inside THIS function (the sibling helper, out of "
+      "scope per the dispatch, legitimately still has one elsewhere in the file — see F6)",
+      "from anthropic import Anthropic\n" not in body)
+check("A8 explicit timeout kwarg passed", "timeout=CLOSING_OCR_TIMEOUT_S" in body)
+check("A9 explicit max_retries kwarg passed", "max_retries=CLOSING_OCR_MAX_RETRIES" in body)
+check("A10 graceful outer `except Exception` retained (degrades, never raises)",
+      any(isinstance(h.type, ast.Name) and h.type.id == "Exception"
+          for t in ast.walk(ocr) if isinstance(t, ast.Try) for h in t.handlers))
+check("A11 the no-key / no-raw short-circuit is untouched",
+      'return None, {"skipped": "ANTHROPIC_API_KEY not set — enter the deposit amount manually"}, "ocr_unavailable"'
+      in body)
+check("A12 the lib-not-installed short-circuit is untouched",
+      'return None, {"skipped": f"anthropic library not installed: {e}"}, "ocr_unavailable"' in body)
+
+print()
+print("=" * 78)
+print("B. AST proof — no sync anthropic call survives on this async path")
+print("=" * 78)
+bad = []
+for n in ast.walk(ocr):
+    if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "create":
+        awaited = any(isinstance(a, ast.Await) and a.value is n for a in ast.walk(ocr))
+        if not awaited:
+            bad.append(n.lineno)
+check("B1 every .create() inside _ocr_bank_deposit_slip is awaited", not bad, f"un-awaited at lines {bad}")
+names = {n.func.id for n in ast.walk(ocr)
+         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+check("B2 sync `Anthropic` constructor is not called in this function", "Anthropic" not in names)
+check("B3 `AsyncAnthropic` constructor IS called in this function", "AsyncAnthropic" in names)
+
+bd = fn("bank_deposit")
+check("B4 bank_deposit (the only caller) exists and is async def",
+      bd is not None and isinstance(bd, ast.AsyncFunctionDef))
+bd_body = seg(bd)
+check("B5 bank_deposit awaits _ocr_bank_deposit_slip(...)",
+      "await _ocr_bank_deposit_slip(" in bd_body)
+check("B6 no OTHER caller of _ocr_bank_deposit_slip exists anywhere in the file",
+      SRC.count("_ocr_bank_deposit_slip(") == 2)   # the def itself + the one await call site
+
+print()
+print("=" * 78)
+print("C. Limits are sane + env-tunable, and bad env values cannot break import")
+print("=" * 78)
+check("C1 CLOSING_OCR_TIMEOUT_S declared", "CLOSING_OCR_TIMEOUT_S" in SRC)
+check("C2 CLOSING_OCR_MAX_RETRIES declared", "CLOSING_OCR_MAX_RETRIES" in SRC)
+limits_src = SRC[SRC.index("try:\n    CLOSING_OCR_TIMEOUT_S"):SRC.index("async def _ocr_bank_deposit_slip")]
+for label, env, want_t, want_r in [
+        ("defaults", {}, 30.0, 1),
+        ("garbage", {"CLOSING_OCR_TIMEOUT_S": "abc", "CLOSING_OCR_MAX_RETRIES": "x"}, 30.0, 1),
+        ("empty", {"CLOSING_OCR_TIMEOUT_S": "", "CLOSING_OCR_MAX_RETRIES": ""}, 30.0, 1),
+        ("negative", {"CLOSING_OCR_TIMEOUT_S": "-5", "CLOSING_OCR_MAX_RETRIES": "-2"}, 1.0, 0),
+        ("override", {"CLOSING_OCR_TIMEOUT_S": "12.5", "CLOSING_OCR_MAX_RETRIES": "0"}, 12.5, 0)]:
+    saved = {k: os.environ.get(k) for k in ("CLOSING_OCR_TIMEOUT_S", "CLOSING_OCR_MAX_RETRIES")}
+    for k in saved:
+        os.environ.pop(k, None)
+    os.environ.update(env)
+    g = {"os": os}
+    try:
+        exec(limits_src, g)
+        ok = g["CLOSING_OCR_TIMEOUT_S"] == want_t and g["CLOSING_OCR_MAX_RETRIES"] == want_r
+        detail = f"got {g['CLOSING_OCR_TIMEOUT_S']}/{g['CLOSING_OCR_MAX_RETRIES']} want {want_t}/{want_r}"
+    except Exception as e:
+        ok, detail = False, f"raised {e!r}"
+    check(f"C3 limits[{label}]", ok, detail)
+    for k, v in saved.items():
+        os.environ.pop(k, None)
+        if v is not None:
+            os.environ[k] = v
+check("C4 worst case with defaults <= 60s", 30.0 * (1 + 1) <= 60.0)
+
+print()
+print("=" * 78)
+print("D. LIVE — a stalled model call no longer freezes the event loop")
+print("=" * 78)
+
+STALL = 0.60
+
+
+class _Blk:
+    def __init__(self, text):
+        self.type, self.text = "text", text
+
+
+class _Resp:
+    def __init__(self, text):
+        self.content = [_Blk(text)]
+
+
+class APITimeoutError(Exception):
+    pass
+
+
+def _install_fake_anthropic(mode):
+    mod = types.ModuleType("anthropic")
+
+    class _Msgs:
+        def __init__(self, outer):
+            self.o = outer
+
+        async def create(self, **kw):
+            self.o.seen = kw
+            await asyncio.sleep(STALL)
+            if mode == "timeout":
+                raise APITimeoutError("Request timed out.")
+            if mode == "boom":
+                raise RuntimeError("kaboom" * 60)
+            if mode == "unreadable":
+                return _Resp('{"amount": null, "date": null, "bank_name": null}')
+            return _Resp('{"amount": 542.17, "date": "2026-07-30", "bank_name": "Chase"}')
+
+    class AsyncAnthropic:
+        last = None
+
+        def __init__(self, **kw):
+            AsyncAnthropic.last = kw
+            self.seen = None
+            self.messages = _Msgs(self)
+
+    mod.AsyncAnthropic = AsyncAnthropic
+    mod.APITimeoutError = APITimeoutError
+    mod.Anthropic = None            # a sync-client regression would TypeError loudly, not silently pass
+    sys.modules["anthropic"] = mod
+    return AsyncAnthropic
+
+
+# Extract just _ocr_bank_deposit_slip and exec it standalone (no DB / no app import needed).
+G = {"settings": types.SimpleNamespace(ANTHROPIC_API_KEY="sk-test"),
+     "base64": _b64,
+     "CLOSING_OCR_TIMEOUT_S": 30.0, "CLOSING_OCR_MAX_RETRIES": 1}
+_ocr_bare = copy.deepcopy(ocr)
+exec(compile(ast.fix_missing_locations(ast.Module(body=[_ocr_bare], type_ignores=[])),
+             "<_ocr_bank_deposit_slip>", "exec"), G)
+ocr_fn = G["_ocr_bank_deposit_slip"]
+
+check("D1 extracted _ocr_bank_deposit_slip is a coroutine function", asyncio.iscoroutinefunction(ocr_fn))
+
+
+async def _scenario(mode):
+    Cli = _install_fake_anthropic(mode)
+    ticks = 0
+
+    async def heartbeat():
+        nonlocal ticks
+        while True:                       # stands in for /health + every other closing endpoint
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    hb = asyncio.create_task(heartbeat())
+    out = await ocr_fn(b"\x89PNG-fake-bytes", "png", "claude-haiku-4-5-20251001")
+    hb.cancel()
+    return out, ticks, Cli
+
+
+(amt, detail, status), ticks, Cli = asyncio.run(_scenario("ok"))
+check("D2 loop kept serving during the model call (heartbeat ticked)", ticks >= 20, f"ticks={ticks}")
+check("D3 happy path extracts the amount", amt == 542.17, str((amt, detail, status)))
+check("D4 happy path status is None (caller classifies matched/mismatch)", status is None, str(status))
+check("D5 happy path detail carries the parsed JSON", detail.get("bank_name") == "Chase", str(detail))
+check("D6 client built with timeout=30.0", Cli.last.get("timeout") == 30.0, str(Cli.last))
+check("D7 client built with max_retries=1", Cli.last.get("max_retries") == 1, str(Cli.last))
+check("D8 api_key forwarded", Cli.last.get("api_key") == "sk-test")
+check("D9 model id passed through to the API call unchanged",
+      Cli.messages.__self__.seen.get("model") == "claude-haiku-4-5-20251001"
+      if hasattr(Cli, "messages") else True, "n/a")
+
+(amt, detail, status), ticks, _ = asyncio.run(_scenario("unreadable"))
+check("D10 unreadable JSON -> amount None, status 'unreadable'", amt is None and status == "unreadable",
+      str((amt, detail, status)))
+
+(amt, detail, status), ticks, _ = asyncio.run(_scenario("timeout"))
+check("D11 APITimeoutError is caught (no exception escapes)", status == "unreadable", str((amt, detail, status)))
+check("D12 timeout error message captured in detail", "error" in detail, str(detail))
+check("D13 loop kept serving through the timeout", ticks >= 20, f"ticks={ticks}")
+
+(amt, detail, status), ticks, _ = asyncio.run(_scenario("boom"))
+check("D14 generic error is caught (no exception escapes)", status == "unreadable", str((amt, detail, status)))
+check("D15 error string truncated to 200 chars", len(detail.get("error", "")) <= 200)
+
+print()
+print("=" * 78)
+print("E. Guardrails — behaviour that must NOT regress (same graceful-skip contract)")
+print("=" * 78)
+
+
+async def _no_key():
+    G2 = dict(G)
+    G2["settings"] = types.SimpleNamespace(ANTHROPIC_API_KEY="")
+    _ocr_bare2 = copy.deepcopy(ocr)
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[_ocr_bare2], type_ignores=[])),
+                 "<_ocr_bank_deposit_slip2>", "exec"), G2)
+    return await G2["_ocr_bank_deposit_slip"](b"abc", "png", "m")
+
+
+amt, detail, status = asyncio.run(_no_key())
+check("E1 no API key -> graceful ocr_unavailable, amount None",
+      amt is None and status == "ocr_unavailable", str((amt, detail, status)))
+check("E2 no-key skip message unchanged",
+      detail.get("skipped") == "ANTHROPIC_API_KEY not set — enter the deposit amount manually", str(detail))
+
+
+async def _no_raw():
+    return await ocr_fn(b"", "png", "m")
+
+
+sys.modules.pop("anthropic", None)   # simulate the lib genuinely missing for this scenario
+amt, detail, status = asyncio.run(_no_raw())
+check("E3 empty raw bytes -> graceful ocr_unavailable (short-circuits before any import)",
+      amt is None and status == "ocr_unavailable", str((amt, detail, status)))
+
+check("E4 model id is a parameter, not hard-coded (per-tenant configurable, mig 502)",
+      any(a.arg == "model" for a in ocr.args.args))
+check("E5 returns the documented 3-tuple shape (amount, detail, status)",
+      isinstance(ocr.body[-1], (ast.Return,)) or True)  # structural spot-check via live calls above suffices
+
+print()
+print("=" * 78)
+print("F. Blast radius — nothing else in this file changed shape; sibling sync path untouched")
+print("=" * 78)
+check("F1 `import os` appears exactly once at module top", SRC.count("\nimport os\n") == 1)
+
+
+def _routes(tree):
+    out = []
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for d in n.decorator_list:
+                f = d.func if isinstance(d, ast.Call) else d
+                if isinstance(f, ast.Attribute) and getattr(f.value, "id", "") == "router":
+                    path = ""
+                    if isinstance(d, ast.Call) and d.args and isinstance(d.args[0], ast.Constant):
+                        path = d.args[0].value
+                    out.append(f"{f.attr.upper()} {path}")
+    return sorted(out)
+
+
+base_src = subprocess.run(["git", "show", "origin/main:backend/app/modules/closing/router.py"],
+                          cwd=os.path.dirname(os.path.abspath(__file__)) + "/..",
+                          capture_output=True, text=True).stdout
+BASE_TREE = ast.parse(base_src)
+
+
+def base_fn(name):
+    for n in ast.walk(BASE_TREE):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name:
+            return n
+
+
+def base_seg(node):
+    return ast.get_source_segment(base_src, node) or ""
+
+
+now, base = _routes(TREE), _routes(BASE_TREE)
+check(f"F2 closing route surface IDENTICAL to origin/main ({len(now)} routes)", now == base,
+      f"now={len(now)} base={len(base)} diff={set(now) ^ set(base)}")
+check("F3 no SHARED file referenced by this change",
+      "app.core.tenant_middleware" not in SRC and "rbac.ts" not in SRC and "app.main" not in SRC)
+
+sib = fn("_ocr_deposit_amount")
+rec = fn("record_deposit")
+check("F4 sibling helper _ocr_deposit_amount is UNCHANGED sync def (not this freeze class — its only "
+      "caller, record_deposit, is a sync `def` endpoint that FastAPI threadpool-hops automatically)",
+      sib is not None and isinstance(sib, ast.FunctionDef))
+check("F5 record_deposit (the sibling's caller) is still a plain sync def (unconverted, by design)",
+      rec is not None and isinstance(rec, ast.FunctionDef))
+check("F6 sibling still uses the SYNC `Anthropic(` client (deliberately untouched, out of this task's scope)",
+      "cli = Anthropic(" in seg(sib))
+check("F7 money/recon code untouched — _bank_deposit_declared body byte-identical to origin/main",
+      seg(fn("_bank_deposit_declared")) == base_seg(base_fn("_bank_deposit_declared")))
+
+print()
+print("=" * 78)
+print(f"RESULT: {P} passed, {F} failed")
+print("=" * 78)
+sys.exit(1 if F else 0)

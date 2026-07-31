@@ -13,6 +13,7 @@ from dateutil import parser as dateparser
 import pandas as pd
 import io
 import base64
+import os
 from . import gsheet
 from . import ops_chargebacks
 
@@ -2327,24 +2328,47 @@ def _bank_deposit_declared(client, org_id: str, store_code: str, close_date: str
     return round(total, 2), len(rows)
 
 
-def _ocr_bank_deposit_slip(raw: bytes, ext: str, model: str):
+# Event-loop safety limits for the ONE outbound AI call this module makes on a live request path
+# (mirrors helpdesk's ai-assist 2026-07-30 SEV-1 fix: `Anthropic(` used synchronously inside an
+# `async def` FastAPI endpoint blocks the WHOLE uvicorn event loop for the entire HTTP call — the SDK
+# defaults to a 600s timeout with 2 automatic retries, so one stalled OCR call would have frozen every
+# endpoint, not just this one. Env-tunable so the operator can widen/narrow with no deploy; a garbage
+# env value falls back to the coded default rather than breaking module import.
+try:
+    CLOSING_OCR_TIMEOUT_S = max(1.0, float(os.getenv("CLOSING_OCR_TIMEOUT_S") or 30))
+except Exception:
+    CLOSING_OCR_TIMEOUT_S = 30.0
+try:
+    CLOSING_OCR_MAX_RETRIES = max(0, int(os.getenv("CLOSING_OCR_MAX_RETRIES") or 1))
+except Exception:
+    CLOSING_OCR_MAX_RETRIES = 1
+
+
+async def _ocr_bank_deposit_slip(raw: bytes, ext: str, model: str):
     """Read {amount, date, bank_name} off a bank DEPOSIT SLIP with Claude vision (reuses the account
     module's Anthropic client pattern — see account/engine.py). Returns (amount_or_None, detail_dict,
     status) where status is one of: 'ocr_unavailable' (no key / lib missing — degrade to manual entry),
     'unreadable' (ran but couldn't extract an amount), or None (amount extracted; caller classifies
-    matched/mismatch/pending once it knows the declared basis)."""
+    matched/mismatch/pending once it knows the declared basis).
+
+    ASYNC + AWAITED on purpose (2026-07-31, sync-in-async freeze-class hardening): the ONLY caller,
+    `bank_deposit`, is `async def`, so the OLD synchronous vision-model call ran directly ON the event
+    loop and would have frozen every other in-flight request for the duration of the call (worst case
+    ~600s x 2 retries). Do NOT reintroduce the SYNC client here.
+    """
     if not settings.ANTHROPIC_API_KEY or not raw:
         return None, {"skipped": "ANTHROPIC_API_KEY not set — enter the deposit amount manually"}, "ocr_unavailable"
     try:
-        from anthropic import Anthropic
+        from anthropic import AsyncAnthropic
     except Exception as e:
         return None, {"skipped": f"anthropic library not installed: {e}"}, "ocr_unavailable"
     try:
         import json as _json
-        cli = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        cli = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY,
+                             timeout=CLOSING_OCR_TIMEOUT_S, max_retries=CLOSING_OCR_MAX_RETRIES)
         media = "image/png" if ext == "png" else "image/jpeg"
         b64 = base64.b64encode(raw).decode("ascii")
-        msg = cli.messages.create(
+        msg = await cli.messages.create(
             model=model, max_tokens=300,
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}},
@@ -2359,6 +2383,9 @@ def _ocr_bank_deposit_slip(raw: bytes, ext: str, model: str):
         amt = data.get("amount")
         return (float(amt) if amt is not None else None), data, (None if amt is not None else "unreadable")
     except Exception as e:
+        # anthropic.APITimeoutError / APIConnectionError subclass Exception, so a timeout/connection
+        # failure already lands here with no extra import — same graceful "unreadable" degrade as any
+        # other OCR failure, never a raised exception back to the caller.
         return None, {"error": str(e)[:200]}, "unreadable"
 
 
@@ -2425,7 +2452,7 @@ async def bank_deposit(body: dict, org_id: str = ORG_ID):
             path = _upload_envelope(org_id, slip)   # reuse the private closing-envelopes bucket
             if path:
                 row["receipt_path"] = path
-            ocr_amount, ocr_detail, ocr_status = _ocr_bank_deposit_slip(raw, ext, cfg["ocr_model"])
+            ocr_amount, ocr_detail, ocr_status = await _ocr_bank_deposit_slip(raw, ext, cfg["ocr_model"])
         except Exception as e:
             ocr_detail, ocr_status = {"error": str(e)[:200]}, "unreadable"
     elif body.get("manual_confirmed"):
