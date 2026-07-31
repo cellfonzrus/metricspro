@@ -109,6 +109,10 @@ export default function MaCommissionPage() {
             Rebate Reconciliation</a> breaks the same data down to one row per activated IMEI — and shows the
             activations with <i>no</i> rebate against them.
           </>}
+          {' '}The MA Daily Tx <code>product_name</code> column mixes commissions, spiffs, residuals, customer
+          bill payments and device sales in one field —{' '}
+          <a href="/commcalc/ma-product-class" style={{ color: 'var(--accent,#2563eb)' }}>classify each product name</a>{' '}
+          to see what kind of money each line actually is.
         </p>
       </div>
 
