@@ -357,7 +357,11 @@ function CarrierIncome({ carrierId }: { carrierId: string }) {
   if (!months.length) return <div className="card" style={{ ...card }}><p style={{ color: 'var(--text2)' }}>{trend.note || 'No carrier income data yet.'}</p></div>
   const cur = months.find(m => m.period === period) || months[months.length - 1] || {}
   const comp = cur.components || {}
-  const isMA = trend.income_source === 'ma'
+  // `income_source` is what is CONFIGURED; `income_source_effective` is what actually fed the numbers
+  // (they differ only when the ledger is configured but unreadable — then a loud ledger_note explains it).
+  const effSource = trend.income_source_effective || trend.income_source
+  const isMA = effSource === 'ma' || effSource === 'ma_ledger'
+  const isLedger = effSource === 'ma_ledger'
   const residual = isMA ? num(cur.residual_mi_atu) : num(cur.residual)
   const totalIncome = num(cur.total_comp) + residual
   const repPay = num(base?.actuals?.total_payout)
@@ -365,30 +369,35 @@ function CarrierIncome({ carrierId }: { carrierId: string }) {
   const noComp = num(cur.total_comp) === 0
 
   const HEADINGS: [string, number, string][] = [
-    ['Commission' + (isMA ? ' (M1–M6)' : ' (promo)'), num(comp.COMMISSION), '#2e75b6'],
-    [isMA ? 'Rebate / bounty' : 'SPIFF / bounty', num(comp.SPIFF), '#7c3aed'],
+    [isLedger ? 'Commission' : 'Commission' + (isMA ? ' (M1–M6)' : ' (promo)'), num(comp.COMMISSION), '#2e75b6'],
+    [isLedger ? 'Spiff' : (isMA ? 'Rebate / bounty' : 'SPIFF / bounty'), num(comp.SPIFF), '#7c3aed'],
+    ...(isLedger ? [['Equipment rebate', num(comp.EQUIPMENT_REBATE), '#db2777'] as [string, number, string]] : []),
     ['Reimbursement', num(comp.REIMBURSEMENT), '#0891b2'],
     [isMA ? 'Residual (Postpaid Residual Orders)' : 'Residual (MI + ATU)', residual, '#16a34a'],
     [isMA ? 'Airtime margin' : 'Unmapped', num(comp.UNMAPPED), '#f59e0b'],
+    ...(isLedger ? [['Unmapped payout (ledger)', num(comp.LEDGER_OTHER), '#b45309'] as [string, number, string]] : []),
   ]
-  const chartData = months.map(m => ({ name: m.period, commission: num(m.components?.COMMISSION), spiff: num(m.components?.SPIFF), reimbursement: num(m.components?.REIMBURSEMENT), residual: isMA ? num(m.residual_mi_atu) : num(m.residual) }))
+  const chartData = months.map(m => ({ name: m.period, commission: num(m.components?.COMMISSION), spiff: num(m.components?.SPIFF), equipment_rebate: num(m.components?.EQUIPMENT_REBATE), reimbursement: num(m.components?.REIMBURSEMENT), residual: isMA ? num(m.residual_mi_atu) : num(m.residual) }))
 
   return (
     <div>
       {trend.residual_field_warning && <NoteBanner tone="warn" text={`⚠ ${trend.residual_field_warning}`} />}
+      {trend.ledger_note && <NoteBanner tone="warn" text={`⚠ ${trend.ledger_note}`} />}
       {trend.data_note && <NoteBanner tone="info" text={trend.data_note} />}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <label style={{ fontSize: 13, color: 'var(--text2)' }}>Period:</label>
         <select value={period} onChange={e => setPeriod(e.target.value)}
           style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }}>
-          {months.map(m => <option key={m.period} value={m.period}>{m.period}{num(m.total_comp) > 0 ? '' : (m.comp_source_missing ? ' (no MA Commission rows)' : ' (comp not posted)')}</option>)}
+          {months.map(m => <option key={m.period} value={m.period}>{m.period}{num(m.total_comp) > 0 ? '' : (m.comp_source_missing ? (isLedger ? ' (no ledger lines)' : ' (no MA Commission rows)') : ' (comp not posted)')}</option>)}
         </select>
-        <span style={{ fontSize: 12, color: 'var(--text3)' }}>What {trend.carrier?.name || 'the carrier'} pays the company — source: {isMA ? 'MA Commission + MA Daily Tx' : 'Comprehensive Comp + MI+ATU'}</span>
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>What {trend.carrier?.name || 'the carrier'} pays the company — source: {isLedger ? 'Commission Ledger (canonical) + MA Daily Tx' : isMA ? 'MA Commission Details + MA Daily Tx' : 'Comprehensive Comp + MI+ATU'}</span>
       </div>
 
       {noComp && <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 13, color: '#92400e', background: '#fffbeb', borderLeft: '3px solid #f59e0b' }}>
         {cur.comp_source_missing
-          ? <>Carrier compensation for {period} reads $0 because <b>MA Commission Details has no rows for that month</b> ({cur.daily_tx_rows} MA Daily Tx row(s), 0 commission row(s)) — a data gap, not a calculation error. Showing residual only; pull that report for the month on Data&nbsp;Imports.</>
+          ? (isLedger
+            ? <>Carrier compensation for {period} reads $0 because <b>the Commission Ledger has no lines for that month</b> ({cur.daily_tx_rows} MA Daily Tx row(s), 0 ledger line(s){num(cur.commission_rows) > 0 ? `, ${cur.commission_rows} raw MA Commission row(s) waiting to be synced` : ''}) — a data gap, not a calculation error. Showing residual only; {num(cur.commission_rows) > 0 ? 'refresh the ledger from MA data on the Commission Report page.' : 'pull MA Commission Details for the month on Data\u00a0Imports, then refresh the ledger.'}</>
+            : <>Carrier compensation for {period} reads $0 because <b>MA Commission Details has no rows for that month</b> ({cur.daily_tx_rows} MA Daily Tx row(s), 0 commission row(s)) — a data gap, not a calculation error. Showing residual only; pull that report for the month on Data&nbsp;Imports.</>)
           : <>Carrier compensation for {period} isn’t posted yet — showing residual only. Pick a month with data for the full split.</>}
       </div>}
 
@@ -413,14 +422,83 @@ function CarrierIncome({ carrierId }: { carrierId: string }) {
           data={chartData}
           series={[
             { key: 'commission', name: 'Commission', type: 'bar', axis: 'left', money: true, color: '#2e75b6' },
-            { key: 'spiff', name: isMA ? 'Rebate' : 'SPIFF', type: 'bar', axis: 'left', money: true, color: '#7c3aed' },
+            { key: 'spiff', name: isLedger ? 'Spiff' : (isMA ? 'Rebate' : 'SPIFF'), type: 'bar', axis: 'left', money: true, color: '#7c3aed' },
+            ...(isLedger ? [{ key: 'equipment_rebate', name: 'Equip. rebate', type: 'bar' as const, axis: 'left' as const, money: true, color: '#db2777' }] : []),
             { key: 'reimbursement', name: 'Reimbursement', type: 'bar', axis: 'left', money: true, color: '#0891b2' },
             { key: 'residual', name: 'Residual', type: 'line', axis: 'left', money: true, color: '#16a34a' },
           ]} />
       </div>
+      <SourceSwap swap={trend.source_swap} />
       <p style={{ fontSize: 12, color: 'var(--text3)' }}>
         Company payout / carrier income = what {trend.carrier?.name || 'the carrier / master-agent'} pays the company. Net = carrier income − employee payout ({period}). Source is resolved per carrier (⚙️ Sources).
+        {isLedger && <> Commission, Spiff and Equipment rebate come from the <b>canonical Commission Ledger</b> (origin-agnostic: file imports and MA-data refreshes both count, classified by your own category map). Residual and airtime margin come from MA Daily Tx — ledger residual lines are excluded here so the same dollars are never counted twice.</>}
       </p>
+    </div>
+  )
+}
+
+// ─── Source-swap reconciliation: legacy raw_ma_commission vs the canonical Commission Ledger ───────
+// Always rendered (collapsed) whenever the backend ships the comparison, whichever source is ACTIVE, so
+// the dollar impact of the swap is auditable on the page itself — before it is switched on and after.
+function SourceSwap({ swap }: { swap: any }) {
+  const [open, setOpen] = useState(false)
+  if (!swap || !(swap.by_month || []).length) return null
+  const t = swap.totals || {}
+  const rows: any[] = swap.by_month || []
+  const isLedgerActive = swap.active === 'ma_ledger'
+  const th: React.CSSProperties = { textAlign: 'right', padding: '6px 8px', fontWeight: 700, whiteSpace: 'nowrap' }
+  const td: React.CSSProperties = { textAlign: 'right', padding: '6px 8px', whiteSpace: 'nowrap' }
+  const delta = (v: number) => <span style={{ color: v > 0 ? '#059669' : v < 0 ? '#dc2626' : 'var(--text3)' }}>{v > 0 ? '+' : ''}{fmt(v)}</span>
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 18 }}>
+      <button onClick={() => setOpen(!open)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontWeight: 700, fontSize: 14, color: 'var(--text)' }}>
+        {open ? '▾' : '▸'} Source reconciliation — legacy MA Commission Details vs Commission Ledger
+        <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}>
+          ({isLedgerActive ? 'ledger ACTIVE' : 'legacy ACTIVE'}; Commission + Spiff legs only, total delta {fmt(num(t.delta_total))})
+        </span>
+      </button>
+      {open && <div style={{ marginTop: 12 }}>
+        <p style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6, margin: '0 0 10px' }}>{swap.note}</p>
+        <p style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.6, margin: '0 0 12px' }}>
+          <b>Old:</b> {swap.old_source}<br /><b>New:</b> {swap.new_source}<br />
+          Residual and airtime margin are not compared — the swap does not touch them.
+        </p>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead><tr style={{ borderBottom: '2px solid var(--border)' }}>
+              <th style={{ ...th, textAlign: 'left' }}>Month</th>
+              <th style={th}>Old commission</th><th style={th}>Old spiff</th><th style={th}>Old total</th>
+              <th style={th}>New commission</th><th style={th}>New spiff</th><th style={th}>New equip. rebate</th>
+              <th style={th}>New unmapped</th><th style={th}>New total</th><th style={th}>Δ</th>
+              <th style={th}>MA rows</th><th style={th}>Ledger lines</th><th style={{ ...th, textAlign: 'left' }}>Ledger origin</th>
+            </tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.period} style={{ borderBottom: '1px solid var(--border)', opacity: r.on_payload === false ? 0.65 : 1 }}>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{r.period}{r.on_payload === false ? ' *' : ''}</td>
+                  <td style={td}>{fmt(num(r.old_commission))}</td><td style={td}>{fmt(num(r.old_spiff))}</td><td style={td}>{fmt(num(r.old_total))}</td>
+                  <td style={td}>{fmt(num(r.new_commission))}</td><td style={td}>{fmt(num(r.new_spiff))}</td><td style={td}>{fmt(num(r.new_equipment_rebate))}</td>
+                  <td style={td}>{fmt(num(r.new_other))}</td><td style={td}>{fmt(num(r.new_total))}</td><td style={td}>{delta(num(r.delta_total))}</td>
+                  <td style={td}>{r.commission_rows}</td><td style={td}>{r.ledger_lines}</td>
+                  <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{(r.ledger_origins || []).join(', ') || '—'}</td>
+                </tr>
+              ))}
+              <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
+                <td style={{ padding: '6px 8px' }}>TOTAL</td>
+                <td style={td}>{fmt(num(t.old_commission))}</td><td style={td}>{fmt(num(t.old_spiff))}</td><td style={td}>{fmt(num(t.old_total))}</td>
+                <td style={td}>{fmt(num(t.new_commission))}</td><td style={td}>{fmt(num(t.new_spiff))}</td><td style={td}>{fmt(num(t.new_equipment_rebate))}</td>
+                <td style={td}>{fmt(num(t.new_other))}</td><td style={td}>{fmt(num(t.new_total))}</td><td style={td}>{delta(num(t.delta_total))}</td>
+                <td style={td}>{t.commission_rows}</td><td style={td}>{t.ledger_lines}</td><td />
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10, lineHeight: 1.6 }}>
+          * a month the ledger knows about that the MA tables do not cover — accounted for here, but not shown above while the legacy source is active.
+          {num(t.residual_overlap_lines) > 0 && <> {t.residual_overlap_lines} ledger line(s) totalling {fmt(num(t.residual_overlap_total))} carry the configured residual order type; they are EXCLUDED from the new totals because the Residual heading already counts those dollars.</>}
+          {num(t.new_other) !== 0 && <> “New unmapped” is real carrier money whose label no rule classifies yet — map those labels on Commission Categories to move it into a named bucket.</>}
+        </p>
+      </div>}
     </div>
   )
 }

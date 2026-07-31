@@ -1763,9 +1763,12 @@ def whatif_accessory_byod(months: int = 4, org_id: str = ORG_ID):
 @router.get("/whatif/carrier-income")
 def whatif_carrier_income(months: int = 6, carrier_id: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     """What-If tool #4 — the COMPANY perspective: what the carrier / master-agent pays the company, by
-    heading, month over month. Boost → Comprehensive Comp + MI+ATU (unchanged shape); MA-fed →
-    raw_ma_commission (M1-M6 spiffs + rebate) + raw_ma_daily_tx (residual + airtime margin). Company
-    payout / carrier income = residual-class money → gated behind the carrier-residual visibility grant."""
+    heading, month over month. Boost → Comprehensive Comp + MI+ATU (unchanged shape); MA-fed → the
+    canonical Commission Ledger for COMMISSION/SPIFF/EQUIPMENT REBATE (origin-agnostic; `income_source`
+    'ma' reverts to the legacy raw_ma_commission M1-M6 + rebate) + raw_ma_daily_tx for residual + airtime
+    margin. The payload always carries `source_swap` — the per-month old-vs-new comparison — whichever
+    source is active. Company payout / carrier income = residual-class money → gated behind the
+    carrier-residual visibility grant."""
     require_org(org_id)
     _require_carrier_residual(authorization, org_id)
     return whatif.carrier_income(sb(), org_id, max(1, min(months, 24)), carrier_id=(carrier_id or None))
@@ -1795,7 +1798,12 @@ def whatif_get_source_config(carrier_id: str = "", org_id: str = ORG_ID):
         "options": {
             "residual_source": ["boost_mi_atu", "ma_daily_tx", "none"],
             "residual_sign": ["as_is", "negate", "abs"],
-            "income_source": ["boost_comp_mi_atu", "ma"],
+            # ma_ledger FIRST = the recommended (and now code-default) MA-fed carrier-income source:
+            # COMMISSION/SPIFF read the canonical Commission Ledger (origin-agnostic — file imports AND
+            # MA-sync rows), instead of the two thin raw_ma_commission columns. Legacy 'ma' stays
+            # selectable so an operator can revert in one click with no deploy. RESIDUAL/airtime are
+            # unaffected either way (always raw_ma_daily_tx).
+            "income_source": ["boost_comp_mi_atu", "ma_ledger", "ma"],
             "retail_cost_source": ["none", "ma_pr_activation"],
             # retail_cost FIRST = the recommended (and now default) residual $ column — the same signed
             # column the Commission Ledger books MA payout lines from. merchant_invoice stays selectable
@@ -1815,6 +1823,11 @@ def whatif_get_source_config(carrier_id: str = "", org_id: str = ORG_ID):
                 "negate": "negate — export is negative when paid to the dealer (recommended)",
                 "as_is": "as_is — export already arrives positive",
                 "abs": "abs — take the magnitude",
+            },
+            "income_source": {
+                "boost_comp_mi_atu": "boost_comp_mi_atu — Comprehensive Comp + MI/ATU (Boost/ePay)",
+                "ma_ledger": "ma_ledger — Commission Ledger (canonical, recommended) + MA Daily Tx residual",
+                "ma": "ma — legacy: MA Commission Details M1–M6 + rebate only",
             },
         },
     }

@@ -13,8 +13,10 @@ Four tools, all read-only:
                             rebate per IMEI/phone).
   3. accessory_byod_corr  → per store/period BYOD activations vs accessory revenue vs total revenue.
   4. carrier_income       → the COMPANY perspective: what the carrier / master-agent pays the company.
-                            Boost → Comprehensive Comp + MI+ATU; MA-fed → raw_ma_commission (M1-M6 spiffs +
-                            rebate) + raw_ma_daily_tx (residual + airtime margin).
+                            Boost → Comprehensive Comp + MI+ATU; MA-fed → the canonical Commission
+                            Ledger (COMMISSION / SPIFF / EQUIPMENT REBATE, origin-agnostic) +
+                            raw_ma_daily_tx (residual + airtime margin). income_source='ma' keeps the
+                            legacy thin source (raw_ma_commission spiff_m1..m6 / rebate) one click away.
 
 Source selection is CONFIG (commcalc.whatif_source_config, mig 209 + mig 252): the residual order-type
 string, the residual $ column, the sign normalization, the MA-commission sign and which source feeds each
@@ -25,6 +27,15 @@ MONEY-COLUMN RULE (2026-07-30, after the -$492,946,277,716 "residual"): raw_ma_d
 is the Merchant Invoice NUMBER, not money. Only _MA_MONEY_COLUMNS may be summed as dollars; the residual
 default is `retail_cost` — the same signed column the canonical Commission Ledger books from. Read-only
 module: nothing here writes, pays, or recomputes.
+
+CARRIER-INCOME SOURCE SWAP (owner-authorised 2026-07-31). The MA-fed COMMISSION and SPIFF legs read
+`commcalc.commission_ledger` — the canonical, ORIGIN-AGNOSTIC payout record (file imports AND ma_sync rows
+both count, classified once by the tenant's own commission_category_map) — instead of the thin
+`raw_ma_commission.spiff_m1..m6` / `rebate` pair, which sees only 2 of that report's 12 payout components
+and nothing at all from MA Daily Tx. RESIDUAL and airtime stay on raw_ma_daily_tx: the ledger books
+daily-tx payout lines too, so reading its residual buckets here would double-count the residual leg.
+BOTH sources are always computed and the per-month old-vs-new comparison ships in the payload
+(`source_swap`), so the dollar delta is quantified in-app before and after the switch.
 """
 import calendar
 from app.modules.commcalc.calculator import classify_contract_type, safe_float
@@ -139,6 +150,10 @@ def _carrier_ctx(client, org_id, carrier_id=None):
 # boost mode (Boost residual comes from raw_mi) but set anyway, so no future MA-fed carrier inherits the
 # wrong default. `ma_commission_sign` normalizes raw_ma_commission money columns to INCOME the way
 # residual_sign does for daily-tx rows: on the MA Commission Details export NEGATIVE = paid to the dealer.
+# `income_source` for plan mode is `ma_ledger` (mig 253 applies the same correction to the mig-209 seed
+# row): the MA-fed COMMISSION/SPIFF legs read the canonical Commission Ledger rather than the two thin
+# raw_ma_commission columns. Legacy `ma` stays a first-class option so an operator can revert from the
+# ⚙️ Sources dropdown with no deploy. Boost is untouched (`boost_comp_mi_atu` → comp_trend + raw_mi).
 _CFG_DEFAULTS = {
     "boost": {"residual_source": "boost_mi_atu", "residual_order_type": None,
               "residual_amount_field": "retail_cost", "residual_sign": "as_is",
@@ -146,7 +161,7 @@ _CFG_DEFAULTS = {
               "ma_commission_sign": "negate"},
     "plan": {"residual_source": "ma_daily_tx", "residual_order_type": "Postpaid Residual Order",
              "residual_amount_field": "retail_cost", "residual_sign": "negate",
-             "income_source": "ma", "retail_cost_source": "ma_pr_activation",
+             "income_source": "ma_ledger", "retail_cost_source": "ma_pr_activation",
              "ma_commission_sign": "negate"},
 }
 _CFG_KEYS = ("residual_source", "residual_order_type", "residual_amount_field", "residual_sign",
@@ -919,6 +934,69 @@ def accessory_byod_correlation(client, org_id, months=4):
     }
 
 
+# ─── the canonical Commission Ledger as the CARRIER-INCOME source ──────────────────────────────────
+# Owner-authorised 2026-07-31. `commcalc.commission_ledger` (mig 071 + provenance mig 251) is the canonical
+# record of what a carrier/master-agent paid: every line is classified ONCE, by the TENANT'S OWN rules
+# (`commcalc.commission_category_map`), into five canonical buckets, whatever file or raw table it came
+# from. Reading it here replaces `raw_ma_commission.spiff_m1..m6` (→ COMMISSION) and `.rebate` (→ SPIFF),
+# which between them see 2 of that report's 12 payout components and nothing at all from MA Daily Tx.
+#
+# ORIGIN-AGNOSTIC by design: a period populated by a hand-uploaded carrier file (origin='file') and one
+# refreshed from the raw MA tables (origin='ma_sync') both count, exactly as the ledger's own report pages
+# read it. The per-month origin mix is reported so an operator can see which provenance a number came from.
+#
+# WHAT IS DELIBERATELY *NOT* READ — the two residual buckets. The ledger also books MA Daily Tx payout
+# lines, so `residual_monthly` / `autopay_residual` are the SAME dollars the RESIDUAL leg already sums off
+# `raw_ma_daily_tx`; reading both would double-count. RESIDUAL and airtime margin therefore stay exactly
+# where they are. For the same reason a ledger line whose order_type matches the configured residual
+# order type is skipped even when it classifies as commission/spiff — it is counted, reported and
+# excluded, never silently added on top of the residual leg.
+MA_INCOME_SOURCES = ("ma", "ma_ledger")
+LEDGER_INCOME_SOURCE = "ma_ledger"      # canonical Commission Ledger (default for plan mode)
+LEGACY_MA_INCOME_SOURCE = "ma"          # legacy thin source (raw_ma_commission spiff_m1..m6 / rebate)
+
+# ledger bucket -> the carrier-income heading it feeds. `residual_monthly` / `autopay_residual` are absent
+# on purpose (see above). 'other' is a payout the tenant's category map has not classified YET: it is real
+# money, so it gets its own heading rather than being dropped or folded into a bucket nobody chose.
+LEDGER_INCOME_BUCKETS = {"commission": "COMMISSION", "spiff": "SPIFF",
+                         "equipment_rebate": "EQUIPMENT_REBATE"}
+LEDGER_RESIDUAL_BUCKETS = ("residual_monthly", "autopay_residual")
+_LEDGER_COLS = ("period,source_report,origin,order_type,category,commission,spiff,equipment_rebate,"
+                "residual_monthly,autopay_residual,payout_total")
+_LEDGER_COLS_PRE251 = ("period,source_report,order_type,category,commission,spiff,equipment_rebate,"
+                       "residual_monthly,autopay_residual,payout_total")
+
+
+def _ledger_income_rows(client, org_id):
+    """Every commission_ledger row for ONE org, paged. Returns (rows, ready, origin_ready).
+
+    ORG-SCOPED on every page (RULE ONE). `ready` is False only when the table itself cannot be read
+    (migration 071 never run) — the caller then keeps the legacy source and SAYS so, instead of showing a
+    fabricated $0. `origin_ready` is False before migration 251 (no provenance column); the read degrades
+    to the pre-251 column list and the origin mix is simply reported as unknown."""
+    rows, start, page = [], 0, 1000
+    cols, origin_ready, ready = _LEDGER_COLS, True, False
+    while True:
+        try:
+            # .order("id") makes the PAGING deterministic. An unordered range() query can hand back
+            # overlapping or skipped pages, which on a money figure is a silent miscount — the ledger is
+            # the one table here that can realistically exceed one page.
+            chunk = (client.schema("commcalc").table("commission_ledger").select(cols)
+                     .eq("org_id", org_id).order("id")
+                     .range(start, start + page - 1).execute().data) or []
+        except Exception:
+            if cols == _LEDGER_COLS:                 # retry the SAME page without the mig-251 column
+                cols, origin_ready = _LEDGER_COLS_PRE251, False
+                continue
+            return rows, ready, origin_ready
+        ready = True
+        rows.extend(chunk)
+        if len(chunk) < page:
+            break
+        start += page
+    return rows, ready, origin_ready
+
+
 # ─── 4. Carrier income (company perspective, carrier-agnostic) ──────────────────────────────────────
 def carrier_income(client, org_id, months=6, carrier_id=None):
     """What-If tool #4 — what the carrier / master-agent pays the COMPANY, by heading, month over month.
@@ -928,7 +1006,10 @@ def carrier_income(client, org_id, months=6, carrier_id=None):
     cfg = _whatif_source_config(client, org_id, (picked or {}).get("id"), mode)
     carrier_meta = ({"id": picked.get("id"), "name": picked.get("name"), "code": picked.get("code")} if picked else None)
     src = (cfg.get("income_source") or "boost_comp_mi_atu").strip().lower()
-    if src == "ma":
+    if src in MA_INCOME_SOURCES:
+        # ONE handler for both MA-fed sources: which pair of legs is DISPLAYED depends on `src`, but the
+        # legacy and the ledger totals are both computed either way so `source_swap` can quantify the
+        # difference before and after the switch. Boost (`boost_comp_mi_atu`) never enters here.
         out = _ma_carrier_income(client, org_id, months, cfg)
     else:
         from app.modules.commcalc import comp_trend
@@ -942,22 +1023,45 @@ def carrier_income(client, org_id, months=6, carrier_id=None):
 
 
 def _ma_carrier_income(client, org_id, months, cfg):
-    """Master-agent carrier income per period, in comp_trend's totals_by_month shape:
-      components.COMMISSION = Σ M1-M6 spiffs (first-6-month commission), SPIFF = Σ rebate,
-      UNMAPPED = Σ daily-tx non-residual airtime margin; residual (residual_mi_atu) = Σ daily-tx
-      residual-order rows. total_comp = COMMISSION+SPIFF+REIMBURSEMENT+UNMAPPED (matches the tab math)."""
+    """Master-agent carrier income per period, in comp_trend's totals_by_month shape.
+
+    COMMISSION / SPIFF / EQUIPMENT_REBATE / LEDGER_OTHER come from the canonical Commission Ledger when
+    `income_source` is 'ma_ledger' (the plan-mode default since 2026-07-31), and from raw_ma_commission's
+    spiff_m1..m6 / rebate pair when it is the legacy 'ma'. RESIDUAL (residual-order rows → residual_mi_atu)
+    and UNMAPPED (airtime margin) ALWAYS come from raw_ma_daily_tx, in both modes, unchanged.
+
+    total_comp = COMMISSION + SPIFF + EQUIPMENT_REBATE + LEDGER_OTHER + REIMBURSEMENT + UNMAPPED. In
+    legacy mode the two ledger-only headings are 0.0, so every displayed number is byte-identical to
+    before the swap — merging this code alone moves NOTHING until `income_source` is flipped.
+
+    BOTH sources are computed on every call: `source_swap` carries the per-month old-vs-new comparison
+    (totals, deltas, row counts on both sides) so the swap's dollar impact is quantified in-app BEFORE it
+    is switched on, and stays auditable after."""
     order_type = (cfg.get("residual_order_type") or "Postpaid Residual Order").strip().lower()
+    wanted = (cfg.get("income_source") or "").strip().lower()
+    use_ledger = wanted == LEDGER_INCOME_SOURCE
     per = {}
 
+    def _blank():
+        return {"COMMISSION": 0.0, "SPIFF": 0.0, "REIMBURSEMENT": 0.0,
+                "RESIDUAL": 0.0, "UNMAPPED": 0.0, "accounts": set(),
+                "commission_rows": 0, "daily_tx_rows": 0,
+                # canonical-ledger legs, accumulated ALONGSIDE the legacy ones (never instead of them)
+                "L_COMMISSION": 0.0, "L_SPIFF": 0.0, "L_EQUIPMENT_REBATE": 0.0, "L_OTHER": 0.0,
+                "ledger_lines": 0, "ledger_income_lines": 0, "ledger_origins": set(),
+                "ledger_reports": set(), "ledger_overlap_lines": 0, "ledger_overlap_total": 0.0}
+
     def _slot(p):
-        return per.setdefault(p, {"COMMISSION": 0.0, "SPIFF": 0.0, "REIMBURSEMENT": 0.0,
-                                  "RESIDUAL": 0.0, "UNMAPPED": 0.0, "accounts": set(),
-                                  "commission_rows": 0, "daily_tx_rows": 0})
+        return per.setdefault(p, _blank())
 
     # How the MA Commission Details rows actually arrive, so an operator can tell whether their export
     # matches the negative-is-payable convention `ma_commission_sign` assumes (diagnostic only).
     raw_signs = {"negative": 0, "positive": 0, "zero": 0}
 
+    # ── legacy leg: raw_ma_commission (spiff_m1..m6 → COMMISSION, rebate → SPIFF) ──────────────────
+    # Still read in BOTH modes: it is the "old" side of `source_swap`, it supplies the account count and
+    # the sign diagnostic, and it tells the DATA-GAP note whether an empty ledger month is un-synced
+    # (raw rows present) or un-pulled (no raw rows either).
     start, page = 0, 1000
     while True:
         try:
@@ -985,6 +1089,7 @@ def _ma_carrier_income(client, org_id, months, cfg):
             break
         start += page
 
+    # ── residual + airtime leg: raw_ma_daily_tx (UNCHANGED by the swap) ───────────────────────────
     start = 0
     while True:
         try:
@@ -1011,13 +1116,81 @@ def _ma_carrier_income(client, org_id, months, cfg):
             break
         start += page
 
+    # ── canonical leg: commcalc.commission_ledger (origin-agnostic) ───────────────────────────────
+    ledger_rows, ledger_ready, ledger_origin_ready = _ledger_income_rows(client, org_id)
+    orphan = {}      # ledger-only months, held OUT of the payload while the legacy source is active
+
+    def _ledger_slot(p):
+        """Land a ledger row on the month the MA legs already opened, across BOTH period spellings
+        ('June 2026' vs '2026-06' — the recurring bug class). A month the MA tables do not cover gets a
+        real slot when the ledger IS the source (residual/airtime honestly 0), and an off-payload slot
+        when the legacy source is active — so the legacy payload stays byte-identical while `source_swap`
+        still accounts for every ledger dollar."""
+        if p in per:
+            return per[p]
+        for v in _pvariants(p):
+            if v in per:
+                return per[v]
+        if use_ledger:
+            return _slot(p)
+        if p in orphan:
+            return orphan[p]
+        for v in _pvariants(p):
+            if v in orphan:
+                return orphan[v]
+        return orphan.setdefault(p, _blank())
+
+    for r in ledger_rows:
+        p = (r.get("period") or "").strip()
+        if not p:
+            continue
+        s = _ledger_slot(p)
+        s["ledger_lines"] += 1
+        rep = (r.get("source_report") or "").strip()
+        if rep:
+            s["ledger_reports"].add(rep)
+        s["ledger_origins"].add((str(r.get("origin") or "").strip() or "file")
+                                if ledger_origin_ready else "unknown")
+        # A residual-order line's dollars are ALREADY in the RESIDUAL leg (same rows, same signed column).
+        # Count it, report it, exclude it — never stack it on top.
+        if order_type and order_type in str(r.get("order_type") or "").strip().lower():
+            s["ledger_overlap_lines"] += 1
+            s["ledger_overlap_total"] = round(s["ledger_overlap_total"] +
+                                              safe_float(r.get("payout_total")), 2)
+            continue
+        booked = 0.0
+        for bucket, heading in LEDGER_INCOME_BUCKETS.items():
+            v = safe_float(r.get(bucket))
+            if v:
+                s["L_" + heading] += v
+                booked += v
+        if (str(r.get("category") or "").strip().lower() == "other"):
+            v = safe_float(r.get("payout_total"))
+            s["L_OTHER"] += v
+            booked += v
+        if booked:
+            s["ledger_income_lines"] += 1
+
+    # Configured for the ledger but the table cannot be read at all (mig 071 never applied) → do NOT
+    # display a fabricated $0: keep the legacy source and say so, loudly.
+    ledger_note = None
+    if use_ledger and not ledger_ready:
+        use_ledger = False
+        ledger_note = ("Carrier income is configured to read the canonical Commission Ledger, but "
+                       "commcalc.commission_ledger could not be read (migration 071 not applied). The "
+                       "figures below are the LEGACY MA Commission Details source, not the ledger.")
+
     kept = sorted(per.keys(), key=_ma_pkey)
     if months and months > 0:
         kept = kept[-months:]
     totals_by_month, prev = [], None
     for p in kept:
         s = per[p]
-        comp_total = round(s["COMMISSION"] + s["SPIFF"] + s["REIMBURSEMENT"] + s["UNMAPPED"], 2)
+        if use_ledger:
+            comm, spf, eqr, oth = s["L_COMMISSION"], s["L_SPIFF"], s["L_EQUIPMENT_REBATE"], s["L_OTHER"]
+        else:
+            comm, spf, eqr, oth = s["COMMISSION"], s["SPIFF"], 0.0, 0.0
+        comp_total = round(comm + spf + eqr + oth + s["REIMBURSEMENT"] + s["UNMAPPED"], 2)
         residual = round(s["RESIDUAL"], 2)
         delta = None if prev is None else round(comp_total - prev, 2)
         pct = None if prev in (None, 0) else round((comp_total - prev) / abs(prev) * 100, 1)
@@ -1025,39 +1198,160 @@ def _ma_carrier_income(client, org_id, months, cfg):
             "period": p, "residual": comp_total, "total_comp": comp_total,
             "residual_mi_atu": residual, "accounts": len(s["accounts"]), "qty": len(s["accounts"]),
             "delta_vs_prev": delta, "pct_vs_prev": pct,
-            "components": {"COMMISSION": round(s["COMMISSION"], 2), "SPIFF": round(s["SPIFF"], 2),
+            "components": {"COMMISSION": round(comm, 2), "SPIFF": round(spf, 2),
                           "REIMBURSEMENT": round(s["REIMBURSEMENT"], 2), "RESIDUAL": residual,
-                          "UNMAPPED": round(s["UNMAPPED"], 2)},
-            # Per-report ingest coverage for THIS month (§④.3): COMMISSION/SPIFF come only from MA
-            # Commission Details, RESIDUAL/airtime only from MA Daily Tx. A month with daily-tx rows and
-            # no commission rows reads $0 comp HONESTLY — it is a data gap, not a stale ledger.
+                          "UNMAPPED": round(s["UNMAPPED"], 2),
+                          "EQUIPMENT_REBATE": round(eqr, 2), "LEDGER_OTHER": round(oth, 2)},
+            # Per-source ingest coverage for THIS month. COMMISSION/SPIFF come from the ledger (or, in
+            # legacy mode, from MA Commission Details); RESIDUAL/airtime only ever from MA Daily Tx. A
+            # month with daily-tx rows and no rows on the comp side reads $0 HONESTLY — a data gap, not
+            # a stale figure.
             "commission_rows": s["commission_rows"], "daily_tx_rows": s["daily_tx_rows"],
-            "comp_source_missing": bool(s["daily_tx_rows"] and not s["commission_rows"]),
+            "ledger_lines": s["ledger_lines"], "ledger_income_lines": s["ledger_income_lines"],
+            "ledger_origins": sorted(s["ledger_origins"]),
+            "comp_source_missing": bool(s["daily_tx_rows"] and
+                                        not (s["ledger_lines"] if use_ledger else s["commission_rows"])),
         })
         prev = comp_total
     coverage = [{"period": p, "commission_rows": per[p]["commission_rows"],
-                 "daily_tx_rows": per[p]["daily_tx_rows"]} for p in kept]
-    gaps = [c["period"] for c in coverage if c["daily_tx_rows"] and not c["commission_rows"]]
+                 "daily_tx_rows": per[p]["daily_tx_rows"],
+                 "ledger_lines": per[p]["ledger_lines"],
+                 "ledger_income_lines": per[p]["ledger_income_lines"],
+                 "ledger_origins": sorted(per[p]["ledger_origins"])} for p in kept]
+
+    # ── the DATA-GAP note, worded for whichever source is actually feeding the comp legs ───────────
     data_note = None
-    if gaps:
-        data_note = (
-            "DATA GAP (not a calculation error) — " + ", ".join(gaps) + ": these month(s) have MA Daily "
-            "Tx rows but NO MA Commission Details rows, so Commission (M1–M6) and Rebate honestly read "
-            "$0 for them. Pull MA Commission Details for those months (Data Imports → payment-processor "
-            "sources; that report supports up to 12 months back). Note the Commission Ledger classifies "
-            "MA Daily Tx payout lines, so its totals for the SAME month can be non-zero while this view "
-            "reads $0 — a different, thinner source, NOT a stale ledger.")
+    if use_ledger:
+        gaps = [c["period"] for c in coverage if c["daily_tx_rows"] and not c["ledger_lines"]]
+        if gaps:
+            unsynced = [c["period"] for c in coverage
+                        if c["daily_tx_rows"] and not c["ledger_lines"] and c["commission_rows"]]
+            unpulled = [p for p in gaps if p not in unsynced]
+            data_note = (
+                "DATA GAP (not a calculation error) — " + ", ".join(gaps) + ": these month(s) have MA "
+                "Daily Tx rows but NO Commission Ledger lines, so Commission and Spiff honestly read $0 "
+                "for them. Carrier income reads the canonical Commission Ledger, which is "
+                "origin-agnostic — a hand-uploaded carrier file and an MA-data refresh both count. "
+                "Residual and airtime margin still come straight from MA Daily Tx, which is why those "
+                "months can still show a residual.")
+            if unsynced:
+                data_note += (" The raw MA Commission Details rows are ALREADY loaded for "
+                              + ", ".join(unsynced) + " — nothing needs pulling; refresh the ledger from "
+                              "MA data (Commission Report → Refresh from MA) to book them.")
+            if unpulled:
+                data_note += (" For " + ", ".join(unpulled) + " the raw source is missing too — pull MA "
+                              "Commission Details (Data Imports → payment-processor sources; that report "
+                              "supports up to 12 months back), then refresh the ledger.")
+    else:
+        gaps = [c["period"] for c in coverage if c["daily_tx_rows"] and not c["commission_rows"]]
+        if gaps:
+            data_note = (
+                "DATA GAP (not a calculation error) — " + ", ".join(gaps) + ": these month(s) have MA Daily "
+                "Tx rows but NO MA Commission Details rows, so Commission (M1–M6) and Rebate honestly read "
+                "$0 for them. Pull MA Commission Details for those months (Data Imports → payment-processor "
+                "sources; that report supports up to 12 months back). Note the Commission Ledger classifies "
+                "MA Daily Tx payout lines, so its totals for the SAME month can be non-zero while this view "
+                "reads $0 — a different, thinner source, NOT a stale ledger.")
+
     field, field_warning = _residual_amount_field(cfg)
     return {
         "months": kept, "totals_by_month": totals_by_month, "dips": [], "dip_count": 0,
-        "params": {"months": months, "source": "ma", "residual_amount_field": field,
+        "params": {"months": months, "source": wanted or "ma", "residual_amount_field": field,
                    "ma_commission_sign": _ma_commission_sign(cfg),
-                   "commission_row_signs": raw_signs},
+                   "commission_row_signs": raw_signs,
+                   "income_leg_source": ("commission_ledger" if use_ledger else "raw_ma_commission"),
+                   "residual_leg_source": "raw_ma_daily_tx"},
         "ma_coverage": coverage,
         "data_note": data_note,
+        "ledger_ready": ledger_ready,
+        "ledger_origin_ready": ledger_origin_ready,
+        "ledger_note": ledger_note,
+        "income_source_effective": (LEDGER_INCOME_SOURCE if use_ledger else LEGACY_MA_INCOME_SOURCE),
+        "income_legs": {"commission": ("commission_ledger" if use_ledger else "raw_ma_commission"),
+                        "spiff": ("commission_ledger" if use_ledger else "raw_ma_commission"),
+                        "equipment_rebate": ("commission_ledger" if use_ledger else None),
+                        "residual": "raw_ma_daily_tx", "airtime": "raw_ma_daily_tx"},
+        "source_swap": _income_source_swap(per, orphan, months, use_ledger),
         "residual_amount_field": field,
         "residual_field_warning": field_warning,
         "note": (None if kept else
                  "No master-agent commission/daily-tx rows yet — pull the MA Commission + MA Daily Tx "
                  "reports (Data Imports → payment-processor sources)."),
+    }
+
+
+def _income_source_swap(per, orphan, months, use_ledger):
+    """The Gate-2 artifact, computed on every call: OLD source vs NEW source for the COMMISSION and SPIFF
+    legs, per month, with row counts on both sides.
+
+    OLD = raw_ma_commission (Σ spiff_m1..m6 → Commission, Σ rebate → Spiff), sign-normalized to income.
+    NEW = commcalc.commission_ledger canonical buckets (commission / spiff / equipment_rebate, plus the
+          'other' bucket = payouts the tenant's category map has not classified yet), origin-agnostic,
+          EXCLUDING residual-order lines (already counted by the RESIDUAL leg — reported separately).
+
+    RESIDUAL and airtime margin are not compared because the swap does not touch them. The window is the
+    same last-`months` window the payload shows, taken over the UNION of both sources' months, so a month
+    only one side knows about is still visible."""
+    merged = dict(per)
+    for k, v in (orphan or {}).items():
+        merged.setdefault(k, v)
+    keys = sorted(merged.keys(), key=_ma_pkey)
+    if months and months > 0:
+        keys = keys[-months:]
+    rows, tot = [], {"old_commission": 0.0, "old_spiff": 0.0, "old_total": 0.0,
+                     "new_commission": 0.0, "new_spiff": 0.0, "new_equipment_rebate": 0.0,
+                     "new_other": 0.0, "new_total": 0.0, "delta_total": 0.0,
+                     "commission_rows": 0, "ledger_lines": 0,
+                     "residual_overlap_lines": 0, "residual_overlap_total": 0.0}
+    for p in keys:
+        s = merged[p]
+        old_c, old_s = round(s["COMMISSION"], 2), round(s["SPIFF"], 2)
+        new_c, new_s = round(s["L_COMMISSION"], 2), round(s["L_SPIFF"], 2)
+        new_e, new_o = round(s["L_EQUIPMENT_REBATE"], 2), round(s["L_OTHER"], 2)
+        old_t = round(old_c + old_s, 2)
+        new_t = round(new_c + new_s + new_e + new_o, 2)
+        rows.append({
+            "period": p,
+            "old_commission": old_c, "old_spiff": old_s, "old_total": old_t,
+            "new_commission": new_c, "new_spiff": new_s,
+            "new_equipment_rebate": new_e, "new_other": new_o, "new_total": new_t,
+            "delta_commission": round(new_c - old_c, 2), "delta_spiff": round(new_s - old_s, 2),
+            "delta_total": round(new_t - old_t, 2),
+            "commission_rows": s["commission_rows"], "ledger_lines": s["ledger_lines"],
+            "ledger_income_lines": s["ledger_income_lines"],
+            "ledger_origins": sorted(s["ledger_origins"]),
+            "ledger_reports": sorted(s["ledger_reports"]),
+            "residual_overlap_lines": s["ledger_overlap_lines"],
+            "residual_overlap_total": round(s["ledger_overlap_total"], 2),
+            "on_payload": p in per,
+        })
+        tot["old_commission"] += old_c
+        tot["old_spiff"] += old_s
+        tot["old_total"] += old_t
+        tot["new_commission"] += new_c
+        tot["new_spiff"] += new_s
+        tot["new_equipment_rebate"] += new_e
+        tot["new_other"] += new_o
+        tot["new_total"] += new_t
+        tot["commission_rows"] += s["commission_rows"]
+        tot["ledger_lines"] += s["ledger_lines"]
+        tot["residual_overlap_lines"] += s["ledger_overlap_lines"]
+        tot["residual_overlap_total"] += s["ledger_overlap_total"]
+    for k in list(tot):
+        if isinstance(tot[k], float):
+            tot[k] = round(tot[k], 2)
+    tot["delta_total"] = round(tot["new_total"] - tot["old_total"], 2)
+    tot["delta_commission"] = round(tot["new_commission"] - tot["old_commission"], 2)
+    tot["delta_spiff"] = round(tot["new_spiff"] - tot["old_spiff"], 2)
+    return {
+        "active": LEDGER_INCOME_SOURCE if use_ledger else LEGACY_MA_INCOME_SOURCE,
+        "old_source": "raw_ma_commission — Σ spiff_m1..m6 → Commission, Σ rebate → Spiff",
+        "new_source": ("commcalc.commission_ledger — canonical buckets (commission / spiff / equipment "
+                       "rebate / unmapped 'other'), origin-agnostic, residual-order lines excluded"),
+        "by_month": rows, "totals": tot,
+        "note": ("Displayed figures come from the CANONICAL LEDGER; 'old' is what the legacy "
+                 "raw_ma_commission source would have shown." if use_ledger else
+                 "Displayed figures come from the LEGACY raw_ma_commission source; 'new' is what the "
+                 "canonical Commission Ledger would show if income_source were set to 'ma_ledger'. "
+                 "Nothing on this page has moved."),
     }
