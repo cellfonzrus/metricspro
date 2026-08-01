@@ -10715,6 +10715,68 @@ def _rule_scope_cols_present(client):
     return _RULE_SCOPE_COLS_OK["ok"]
 
 
+@router.get("/commission-plans/accessory-basis-impact/{period}")
+async def accessory_basis_impact(period: str, enabled: str = "", assumed_margin_pct: str = "",
+                                 clamp_negative: str = "", org_id: str = ORG_ID):
+    """READ-ONLY per-rep BEFORE / AFTER for the ACCESSORY %-of-GP BASIS GUARD (mig 260). Writes nothing.
+
+    OWNER 2026-08-01: "accessories not being paid , they should be paid as all of these have been
+    mapped". The %-of-GP accessory lines pay $0 because their GP is $0 — the POS catalog carries cost
+    == retail on the "* BYOD" class — and three of them pay NEGATIVE because their GP is negative. The
+    guard pays the tenant's rate on the PRICE when the GP trips one of their own mig-255 cost-integrity
+    flags, and never lets an accessory line pay a negative amount.
+
+    THE GUARD IS OFF BY DEFAULT FLEET-WIDE. This endpoint runs the engine twice IN MEMORY — once as
+    configured, once with the guard hypothetically ON — so the dollars are visible BEFORE anyone
+    switches it on. `assumed_margin_pct` has NO default: without one the rate is paid on the FULL
+    selling price, and the response echoes exactly what was used.
+    """
+    require_org(org_id)
+    from app.modules.commcalc import plan_pay_gate as ppg
+    client = sb()
+    cfg = ppg.load_gate_config(client, org_id)
+    cfg.pop("_stored", None)
+    hypo = {k: (dict(v) if isinstance(v, dict) else v) for k, v in cfg.items()}
+    hypo["accessory_basis_guard"] = dict(cfg.get("accessory_basis_guard") or {})
+    hypo["accessory_basis_guard"]["enabled"] = (
+        True if str(enabled or "").strip().lower() in ("", "1", "true", "yes") else False)
+    _m = ppg._num_or_none(assumed_margin_pct)
+    hypo["accessory_basis_guard"]["assumed_margin_pct"] = _m
+    if str(clamp_negative or "").strip():
+        hypo["accessory_basis_guard"]["clamp_negative"] = (
+            str(clamp_negative).strip().lower() in ("1", "true", "yes"))
+    try:
+        now = commission_engine.preview(client, org_id, period)
+        alt = commission_engine.preview(client, org_id, period, gate_override=hypo)
+    except Exception as e:
+        raise HTTPException(500, f"accessory basis impact failed: {type(e).__name__}: {e}")
+    a = {str(r.get("rep")): safe_float(r.get("total_payout")) for r in (now.get("by_rep") or [])}
+    b = {str(r.get("rep")): safe_float(r.get("total_payout")) for r in (alt.get("by_rep") or [])}
+    rows = [{"rep": rep, "now": round(a.get(rep, 0.0), 2), "with_guard": round(b.get(rep, 0.0), 2),
+             "delta": round(b.get(rep, 0.0) - a.get(rep, 0.0), 2)} for rep in sorted(set(a) | set(b))]
+    rows.sort(key=lambda x: -x["delta"])
+    g = (alt.get("pay_gate") or {}).get("accessory_basis") or {}
+    ta = round(safe_float((now.get("totals") or {}).get("payout")), 2)
+    tb = round(safe_float((alt.get("totals") or {}).get("payout")), 2)
+    return {"period": period, "org_id": org_id,
+            "hypothesis": hypo["accessory_basis_guard"],
+            "hypothesis_note": ("The rate is paid on the FULL selling price — no margin was supplied "
+                                "and this endpoint never invents one. Pass ?assumed_margin_pct=0.35 to "
+                                "model a margin." if _m is None else None),
+            "currently_enabled": bool((cfg.get("accessory_basis_guard") or {}).get("enabled")),
+            "totals": {"now": ta, "with_guard": tb, "delta": round(tb - ta, 2)},
+            "by_rep": [r for r in rows if r["delta"]],
+            "lines_changed": g.get("lines", 0),
+            "amount_before": g.get("amount_before", 0.0), "amount_after": g.get("amount_after", 0.0),
+            "by_flag": g.get("by_flag") or {}, "samples": g.get("samples") or [],
+            "accessory_definition_loaded": (alt.get("pay_gate") or {}).get(
+                "accessory_definition_loaded"),
+            "note": ("Which lines are accessories comes from the tenant's OWN accessory definition "
+                     "(mig 257) — the mapping the owner already curates. A line that is flagged but "
+                     "NOT mapped as an accessory is left alone and does not appear here; map it first "
+                     "rather than letting the guard guess.")}
+
+
 @router.get("/commission-plans/rule-scope-impact/{period}")
 async def rule_scope_impact(period: str, rule_id: str = "", scope_kind: str = "",
                             scope_value: str = "", org_id: str = ORG_ID):

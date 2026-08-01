@@ -182,6 +182,14 @@ export default function CommissionPlansPage() {
     try { setExclImpact(await api(`/api/v1/commcalc/commission-plans/exclusion-impact/${encodeURIComponent(period)}`)) }
     catch (e: any) { setExclImpact({ error: String(e?.message || e) }) } finally { setExclImpactBusy(false) }
   }
+  // ACCESSORY %-OF-GP BASIS GUARD (mig 260, default OFF fleet-wide).
+  const [accImpact, setAccImpact] = useState<any>(null)
+  const [accBusy, setAccBusy] = useState(false)
+  async function runAccImpact() {
+    setAccBusy(true); setAccImpact(null)
+    try { setAccImpact(await api(`/api/v1/commcalc/commission-plans/accessory-basis-impact/${encodeURIComponent(period)}`)) }
+    catch (e: any) { setAccImpact({ error: String(e?.message || e) }) } finally { setAccBusy(false) }
+  }
 
   async function loadRoster() {
     try {
@@ -1038,6 +1046,71 @@ export default function CommissionPlansPage() {
             </div>
           )}
           {exclImpact?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{exclImpact.error}</div>}
+        </div>
+
+        {/* ── ACCESSORY %-OF-GP BASIS GUARD (mig 260) ────────────────────────────────────────────
+            OWNER 2026-08-01: "accessories not being paid , they should be paid as all of these have
+            been mapped". Their GP is $0 because the POS catalog carries cost == retail on the "* BYOD"
+            class, so a %-of-GP payout is $0 by arithmetic — and three lines pay NEGATIVE. OFF by
+            default fleet-wide: switching it on is an explicit tenant decision, previewed first. */}
+        <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>🎧 Accessories whose GP is unusable</div>
+            <span style={{ flex: 1 }} />
+            <button className="btn btn-secondary" disabled={accBusy} onClick={runAccImpact}>{accBusy ? '…' : `Preview for ${period}`}</button>
+          </div>
+          {gate?.config?.accessory_basis_guard && (
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 6 }}>
+              <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input type="checkbox" checked={!!gate.config.accessory_basis_guard.enabled} disabled={gateBusy}
+                  onChange={e => saveGate({ ...gate.config, accessory_basis_guard: { ...gate.config.accessory_basis_guard, enabled: e.target.checked } })} />
+                <span>Pay the rate on the PRICE when the GP is not believable</span>
+              </label>
+              <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input type="checkbox" checked={gate.config.accessory_basis_guard.clamp_negative !== false} disabled={gateBusy}
+                  onChange={e => saveGate({ ...gate.config, accessory_basis_guard: { ...gate.config.accessory_basis_guard, clamp_negative: e.target.checked } })} />
+                <span>Never pay a negative accessory line</span>
+              </label>
+              <label style={{ fontSize: 12 }}>
+                <div style={{ color: 'var(--text3)', marginBottom: 2 }}>Assumed margin (blank = full price)</div>
+                <input style={{ ...sel, width: 100 }} placeholder="e.g. 0.35" disabled={gateBusy}
+                  defaultValue={gate.config.accessory_basis_guard.assumed_margin_pct ?? ''}
+                  onBlur={e => saveGate({ ...gate.config, accessory_basis_guard: { ...gate.config.accessory_basis_guard, assumed_margin_pct: e.target.value === '' ? null : Number(e.target.value) } })} />
+              </label>
+            </div>
+          )}
+          {accImpact && !accImpact.error && (
+            <div style={{ fontSize: 12.5 }}>
+              <b>{period}</b>: {accImpact.lines_changed} accessory line(s) would move from
+              {' '}<b>{fmt(accImpact.amount_before)}</b> to <b>{fmt(accImpact.amount_after)}</b>
+              {' '}(total {fmt(accImpact.totals?.delta)} across all reps).
+              {accImpact.hypothesis_note && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{accImpact.hypothesis_note}</div>}
+              {accImpact.accessory_definition_loaded === false && (
+                <div style={{ fontSize: 11.5, color: '#92400e', marginTop: 4 }}>
+                  No accessory definition is mapped for this tenant yet, so the guard has nothing to act on.
+                  Map the products under <a href="/commcalc/accessory-definition" style={{ color: 'var(--accent)' }}>Accessory Definition</a> first.
+                </div>
+              )}
+              {!!(accImpact.samples || []).length && (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 6 }}>
+                  <thead><tr>{['Rep', 'Product', 'Price', 'GP', 'Was', 'Would be', 'Why'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {accImpact.samples.slice(0, 20).map((s: any, i: number) => (
+                      <tr key={i}>
+                        <td style={td}>{s.rep}</td><td style={td}>{s.product}</td>
+                        <td style={td}>{fmt(s.ext_price)}</td><td style={td}>{fmt(s.gp)}</td>
+                        <td style={td}>{fmt(s.was)}</td>
+                        <td style={{ ...td, fontWeight: 700, color: '#15803d' }}>{fmt(s.now)}</td>
+                        <td style={{ ...td, fontSize: 11, color: 'var(--text3)' }}>{s.note}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>{accImpact.note}</div>
+            </div>
+          )}
+          {accImpact?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{accImpact.error}</div>}
         </div>
       </div>
 
