@@ -46,7 +46,14 @@ from app.modules.commcalc import sale_installment_engine as sie
 from app.modules.commcalc import accessory_cost_audit as aca
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-BASE_REF = "origin/main"
+# PINNED TO A LITERAL COMMIT, DELIBERATELY (2026-08-01).
+# This was `origin/main`, resolved at RUN TIME — which is a trap this repo has now sprung three times.
+# `origin/main` MOVED mid-session when this package's own push landed, so the harness began vendoring
+# a BASE that already contained the very changes it exists to prove are additive: it was diffing
+# itself against itself, and B2/B5/B8/G2 went red for a reason that has nothing to do with the code.
+# Pinning to the commit this suite was WRITTEN against restores the intended comparison and makes the
+# result reproducible forever, whatever origin/main does next. No assertion is weakened or removed.
+BASE_REF = "4923001"          # origin/main as it stood when this package was built
 OK = FAIL = 0
 FAILS = []
 
@@ -395,13 +402,26 @@ if base_sie:
             out.append(w)
         return out
 
-    stripped = {k: v for k, v in new_out.items() if k != "flat_guard"}
+    # mig 258 (a LATER package) adds `expected_guard` + two additive REPORTING row keys. Neither is
+    # money — `amount` is untouched — so they are stripped here exactly as `flat_guard` is, keeping
+    # this a real byte-identity check on the flat feature rather than a stale one.
+    LATER_TOP = ("flat_guard", "expected_guard")
+    LATER_ROW = ("expected_amount", "expected_in_window")
+
+    def _strip_later(d):
+        d = {k: v for k, v in d.items() if k not in LATER_TOP}
+        d["ledger"] = [{k: v for k, v in r.items() if k not in LATER_ROW}
+                       for r in (d.get("ledger") or [])]
+        return d
+
+    stripped = _strip_later(new_out)
     stripped["warnings"] = _wnorm(new_out["warnings"], base_out["warnings"])
     chk("B2 UNCONFIGURED: the whole payload equals BASE once `flat_guard` + the appended "
         "mrc_unresolved sentence are removed", stripped == base_out,
         [k for k in set(stripped) | set(base_out) if stripped.get(k) != base_out.get(k)])
     chk("B3 ...including `totals` exactly", new_out["totals"] == base_out["totals"], new_out["totals"])
-    chk("B4 ...and every ledger row key for key", new_out["ledger"] == base_out["ledger"])
+    chk("B4 ...and every ledger row key for key",
+        _strip_later(new_out)["ledger"] == base_out["ledger"])
     chk("B5 the mrc_unresolved change is an APPEND ONLY — the base wording is still the prefix",
         all(w["detail"].startswith(bw["detail"]) and len(w["detail"]) > len(bw["detail"])
             for w, bw in zip([x for x in new_out["warnings"] if x["type"] == "mrc_unresolved"],
@@ -423,7 +443,7 @@ bnew = sie.compute_sale_installments(FakeClient(bstore), BOOST_ORG, PER, persist
 if base_sie:
     bbase = base_sie.compute_sale_installments(FakeClient(build_store(org=BOOST_ORG)), BOOST_ORG, PER,
                                                persist=False)
-    bstrip = {k: v for k, v in bnew.items() if k != "flat_guard"}
+    bstrip = _strip_later(bnew)
     bstrip["warnings"] = _wnorm(bnew["warnings"], bbase["warnings"])
     chk("B8 BOOST tenant: payload equals BASE once `flat_guard` + the appended sentence are removed",
         bstrip == bbase,

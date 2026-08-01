@@ -428,6 +428,15 @@ def explain_rep(client, org_id, period, rep, carrier_mode="plan"):
             "mrc_at_pay": r.get("mrc_at_pay"), "mrc_source": r.get("mrc_source"),
             "payout_kind": r.get("payout_kind"), "mi_ref": _mi_ref(mi_row),
             "zero_note": _installment_zero_note(r),
+            # mig 258 (owner 2026-08-01) — EXPECTED beside EARNED, purely additive. `expected_amount`
+            # is what this month WOULD pay; `amount` above remains the only figure that is money and
+            # the only one any total reads. `promoted` says a human moved it across, and who.
+            "expected_amount": safe_float(r.get("expected_amount")),
+            "expected_in_window": bool(r.get("expected_in_window")),
+            "promoted": str(r.get("status") or "") == "paid_manual_promote",
+            "promoted_by": r.get("promoted_by"), "promoted_at": r.get("promoted_at"),
+            "promote_reason": r.get("promote_reason"),
+            "promote_stale": bool(r.get("promote_stale")),
         })
 
     for d in devices.values():

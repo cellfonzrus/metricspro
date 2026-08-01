@@ -48,6 +48,7 @@ from app.modules.commcalc.commission_engine import (
 )
 from app.modules.commcalc import installment_category as icat
 from app.modules.commcalc import installment_category_payout as icpay
+from app.modules.commcalc import expected_commission as xcomm
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -1080,6 +1081,14 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
     # qualification switch above: per schedule -> per org -> code defaults, where the code default is
     # EVERY category on 'installments' — i.e. today's behaviour. Degrades with mig 256 unapplied.
     org_payout = icpay.load_org_payout(client, org_id)
+    # EXPECTED vs EARNED + the permission-gated manual promote (mig 258; owner 2026-08-01).
+    # `expected_amount` is the PRE-GATE amount — the number the month WOULD pay — and is never
+    # summed into by_rep/totals. The promote index is the ONLY new money path: it lets an
+    # authorised person pay a month whose gate is unmet, and it SURVIVES RECOMPUTE because it
+    # lives in its own table which `_persist` never touches.
+    xcfg = xcomm.load_config(client, org_id)
+    xpromotes = xcomm.load_promotes(client, org_id, pay_period, _pvariants(pay_period))
+    xindex = xcomm.build_index(xpromotes)
     # READ-ONLY A/B OVERRIDE (never used by a calculate — only by the category-impact preview, which
     # runs this engine twice to show the operator the exact per-rep delta BEFORE anything is recomputed).
     qual_override = None
@@ -1181,8 +1190,9 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
     cat_excluded_amt = 0.0
     # mig 256 flat-payout accounting. All zero/empty unless a tenant actually configured a flat
     # category, so an unconfigured tenant's `flat_guard` is a constant and nothing else moves.
+    x_applied, x_stale, x_redundant, x_seen_keys = [], [], [], set()
     flat_paid, flat_suppressed, flat_unconfigured = {}, {}, {}
-    flat_sources, flat_active_keys = set(), set()
+    flat_sources, flat_active_keys, _flat_suppressed_keys = set(), set(), set()
     n_flat_paid = n_flat_suppressed = 0
     flat_paid_amt = flat_suppressed_amt = 0.0
 
@@ -1564,6 +1574,7 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 # ("the %-of-MRC installment resolved to $0") is moot for it too — withdraw it with
                 # the same key set rather than sending the operator to fix an unread input.
                 flat_active_keys.add((str(line.get("trans_id") or "").strip(), month_index))
+                _flat_suppressed_keys.add((str(line.get("trans_id") or "").strip(), month_index))
                 continue
 
             # ONE consistent row label (owner 2026-07-27 deliverable 3): DEVICE + RATE PLAN together,
@@ -1619,13 +1630,70 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 gate_met, mi_row = _gate_met(gate_line, mi_index, gate_mode) if gated else (True, None)
                 gate_kind = None
 
+            # ── EXPECTED vs EARNED (mig 258; owner 2026-08-01) ────────────────────────────────
+            # `expected` is the amount this month WOULD pay — exactly what the gate is about to
+            # throw away when it is unmet. It is carried on the row and NEVER added to by_rep or
+            # totals: "calculate the expected commission as a separate column but not use that to
+            # pay out". EARNED auto-fill needs no code — it IS `gate_met` below, unchanged.
+            expected = round(safe_float(amount), 2)
+            x_in_window = xcomm.in_window(month_index, xcfg)
+            x_prov = None
+            if not gate_met and xcfg.get("enabled") and x_in_window:
+                _pk = xcomm.promote_key(pay_period, line.get("trans_id"), mdn, month_index)
+                _pr = xindex.get(_pk)
+                if _pr is not None:
+                    x_seen_keys.add(_pk)
+                    _ev = xcomm.evaluate(_pr, expected, xcfg)
+                    _rec = {"rep": rep, "store": store, "trans_id": str(line.get("trans_id") or "").strip(),
+                            "mdn": mdn, "imei": serial, "month_index": month_index,
+                            "sale_period": sale_period, "pay_period": pay_period,
+                            "expected_now": _ev["expected_now"],
+                            "expected_at_promote": _ev["expected_at_promote"],
+                            "promoted_by": _pr.get("promoted_by"),
+                            "promoted_at": _pr.get("promoted_at"),
+                            "reason": _pr.get("reason"), "promote_id": _pr.get("id")}
+                    if _ev["stale"]:
+                        x_stale.append({**_rec, "mode": _ev["mode"], "paid": bool(_ev["apply"])})
+                        if len(warnings) < 200:
+                            warnings.append({
+                                "type": "promote_expected_changed", "rep": rep, "store": store,
+                                "trans_id": _rec["trans_id"], "imei": serial, "mdn": mdn,
+                                "month_index": month_index,
+                                "expected_at_promote": _ev["expected_at_promote"],
+                                "expected_now": _ev["expected_now"], "paid": bool(_ev["apply"]),
+                                "detail": (
+                                    f"Month {month_index} for {mdn or serial} was manually moved to "
+                                    f"EARNED at ${safe_float(_ev['expected_at_promote']):,.2f}, but "
+                                    f"this recalculation expects ${safe_float(_ev['expected_now']):,.2f}. "
+                                    + ("It was PAID at the current figure, not the approved one — "
+                                       "confirm that is right." if _ev["apply"] else
+                                       "It was NOT paid: the approved figure no longer matches, so it "
+                                       "is being held for re-approval rather than paid at a number "
+                                       "nobody approved. Re-approve it to release it."))})
+                    if _ev["apply"]:
+                        gate_met = True
+                        amount = _ev["amount"]
+                        x_prov = {**_rec, "stale": _ev["stale"], "amount": _ev["amount"]}
+                        x_applied.append(x_prov)
+            elif gate_met and xcfg.get("enabled") and x_in_window:
+                # The gate met on its own AND a promote exists: the carrier statement caught up, so
+                # the promote is now REDUNDANT. Not an error — reported so it can be cleaned up, and
+                # explicitly NOT double-counted (the row pays once, through the gate).
+                _pk = xcomm.promote_key(pay_period, line.get("trans_id"), mdn, month_index)
+                if _pk in xindex:
+                    x_seen_keys.add(_pk)
+                    x_redundant.append({"rep": rep, "trans_id": _pk[1], "mdn": mdn, "imei": serial,
+                                        "month_index": month_index, "amount": expected,
+                                        "promote_id": xindex[_pk].get("id"),
+                                        "promoted_by": xindex[_pk].get("promoted_by")})
+
             repU = rep.upper()
             if gate_met:
                 if amount:
                     by_rep[repU] = round(by_rep.get(repU, 0.0) + amount, 2)
                     total_amt += amount
                 n_paid += 1
-                status = "paid"
+                status = "paid_manual_promote" if x_prov is not None else "paid"
             else:
                 n_withheld += 1
                 status = "withheld_unpaid"
@@ -1696,6 +1764,10 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 "payout_kind": ("category_flat" if _flat["active"] else iline.get("payout_kind")),
                 "mrc_at_pay": mrc, "mrc_source": mrc_src,
                 "amount": round(safe_float(amount) if gate_met else 0.0, 2),
+                # mig 258: the number this month WOULD pay, carried on every row and summed into
+                # NOTHING. `amount` above is untouched — expected is a column, not a payout.
+                "expected_amount": expected,
+                "expected_in_window": bool(x_in_window),
                 "paid_gate_met": gate_met, "gate_mode": gate_mode, "status": status,
                 "matched_mi_period": pay_period if mi_row is not None else None,
             }
@@ -1720,6 +1792,16 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             # OPT-IN provenance (absent unless this chain actually needed the new logic, so an
             # ordinary one-line activation keeps the pre-fix ledger shape byte-for-byte). In-memory
             # only — _persist writes a fixed column list.
+            # OPT-IN provenance: only a row that a human actually promoted carries these, so every
+            # ordinary row keeps its exact pre-258 shape apart from the two expected keys above.
+            if x_prov is not None:
+                ledger_row["status"] = "paid_manual_promote"
+                ledger_row["gate_kind"] = "manual_promote"
+                ledger_row["promote_id"] = x_prov.get("promote_id")
+                ledger_row["promoted_by"] = x_prov.get("promoted_by")
+                ledger_row["promoted_at"] = x_prov.get("promoted_at")
+                ledger_row["promote_reason"] = x_prov.get("reason")
+                ledger_row["promote_stale"] = bool(x_prov.get("stale"))
             if _flat["active"]:
                 ledger_row["category_flat"] = True
                 ledger_row["category_flat_amount"] = _flat["amount"]
@@ -1836,6 +1918,43 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                        f"They were treated per the 'Could not be classified' switch. Add a rule under "
                        f"Plan Installments → Qualifying categories so they stop being guesses.")})
 
+    # mig 258 — a promote that matched NO chain-month this run is REPORTED, never swallowed. The
+    # reason matters: a flat-paid category has no months 2..N (mig 256 suppressed them), a
+    # non-qualifying category emits nothing (mig 245), a month can fall outside the window, or the
+    # transaction simply is not in this period any more.
+    x_unapplied = []
+    for _k, _pr in sorted(xindex.items()):
+        if _k in x_seen_keys:
+            continue
+        if not xcfg.get("enabled"):
+            _why = "disabled"
+        elif not xcomm.in_window(_k[3], xcfg):
+            _why = "out_of_window"
+        elif (_k[1], _k[3]) in _flat_suppressed_keys:
+            _why = "month_suppressed"
+        else:
+            _why = "chain_not_found"
+        x_unapplied.append({"trans_id": _k[1], "mdn": _k[2], "month_index": _k[3],
+                            "pay_period": _k[0], "promote_id": _pr.get("id"),
+                            "promoted_by": _pr.get("promoted_by"),
+                            "expected_at_promote": _pr.get("expected_at_promote"),
+                            "reason_code": _why,
+                            "reason": xcomm.UNAPPLIED_REASONS.get(_why, _why)})
+    if x_unapplied:
+        warnings.append({
+            "type": "promote_unapplied", "count": len(x_unapplied), "items": x_unapplied[:20],
+            "detail": (f"{len(x_unapplied)} manual expected-to-earned promote(s) did not apply to any "
+                       f"installment this period. Nothing was paid for them and nothing was lost — "
+                       f"each one is listed with the reason (the month may not exist because the "
+                       f"category is paid as a one-time flat amount, the month may be outside the "
+                       f"expected window, or the transaction may not be in this period).")})
+    if x_redundant:
+        warnings.append({
+            "type": "promote_redundant", "count": len(x_redundant), "items": x_redundant[:20],
+            "detail": (f"{len(x_redundant)} manual promote(s) are no longer needed — the carrier/"
+                       f"master-agent statement has since proved these months paid, so they paid "
+                       f"through the normal gate. Each paid ONCE. You can revoke the promotes.")})
+
     _persisted = None
     if persist:
         _persisted = _persist(client, org_id, pay_period, ledger)
@@ -1875,6 +1994,19 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                            "flat_categories": icpay.configured_categories(
                                icpay.normalize_payout({k2: v2 for k2, v2 in org_payout.items()
                                                        if k2 in icpay.CATEGORY_KEYS}))},
+            # EXPECTED vs EARNED (mig 258) — kept OUT of `totals` so that dict stays byte-identical
+            # for every existing consumer/harness. `expected_total` is a REPORTING figure: it is the
+            # sum of what the in-window months WOULD pay, and no payout reads it.
+            "expected_guard": {**xcomm.summarize(x_applied, x_unapplied, x_stale, x_redundant),
+                               "config": {k: v for k, v in xcfg.items() if not k.startswith("_")},
+                               "config_stored": bool(xcfg.get("_stored")),
+                               "expected_total": round(sum(safe_float(r.get("expected_amount"))
+                                                          for r in ledger
+                                                          if r.get("expected_in_window")), 2),
+                               "expected_unearned_total": round(
+                                   sum(safe_float(r.get("expected_amount")) for r in ledger
+                                       if r.get("expected_in_window") and not r.get("paid_gate_met")), 2),
+                               "persist_columns": (_persisted or {}).get("columns") if _persisted else None},
             "warnings": warnings,
             "note": None}
 
@@ -1899,6 +2031,9 @@ def _persist(client, org_id, pay_period, ledger):
             "epay_salesperson", "sale_period", "pay_period", "month_index", "payout_kind",
             "mrc_at_pay", "mrc_source", "amount", "paid_gate_met", "gate_mode", "status",
             "matched_mi_period")
+    # mig 258 adds four columns. They are written ONLY if the migration has been run — see the
+    # ADAPTIVE write below. This list is deliberately separate so the base set can always be used.
+    extra = ("expected_amount", "promote_id", "promoted_by", "promoted_at")
     rows, seen, dropped = [], set(), 0
     for d in ledger:
         if not (d.get("trans_id") or d.get("mdn")):
@@ -1909,7 +2044,7 @@ def _persist(client, org_id, pay_period, ledger):
             dropped += 1
             continue
         seen.add(key)
-        rows.append({k: d.get(k) for k in cols})
+        rows.append({k: d.get(k) for k in (cols + extra)})
     deleted = False
     if rows:
         try:
@@ -1918,13 +2053,30 @@ def _persist(client, org_id, pay_period, ledger):
             deleted = True
         except Exception:
             deleted = False
+    # ADAPTIVE WRITE (mig 258). The delete above has ALREADY run, so a write that fails for every
+    # batch would leave the period EMPTY — and the original `except: pass` would have hidden it. If the
+    # extended column set is rejected (migration 258 not applied yet), fall back to the BASE columns
+    # for this and every later batch and REPORT it, rather than silently losing the period.
+    used, wrote, failed = "extended", 0, 0
     for i in range(0, len(rows), 500):
+        batch = rows[i:i + 500]
+        if used == "extended":
+            try:
+                client.schema("commcalc").table("sale_installment_ledger").upsert(
+                    batch, on_conflict="org_id,trans_id,mdn,month_index,pay_period").execute()
+                wrote += len(batch)
+                continue
+            except Exception:
+                used = "base"          # 258 not applied (or the columns are absent) — degrade once
         try:
             client.schema("commcalc").table("sale_installment_ledger").upsert(
-                rows[i:i + 500], on_conflict="org_id,trans_id,mdn,month_index,pay_period").execute()
+                [{k: r.get(k) for k in cols} for r in batch],
+                on_conflict="org_id,trans_id,mdn,month_index,pay_period").execute()
+            wrote += len(batch)
         except Exception:
-            pass
-    return {"rows": len(rows), "dropped": dropped, "deleted": deleted}
+            failed += len(batch)
+    return {"rows": len(rows), "dropped": dropped, "deleted": deleted,
+            "columns": used, "written": wrote, "write_failed": failed}
 
 
 # ── IMPACT PREVIEW (read-only; Gate-2 review artifact for mig 223) ──────────────────────────────────

@@ -179,8 +179,14 @@ def _drop_additive(res):
     # config_source:[], flat_categories:[]}; no money field, ledger row or flag moves. Extending this
     # helper is the maintenance contract this function already documents for migs 233 and 245 above.
     out.pop("flat_guard", None)
+    # mig 258 (2026-08-01, expected-vs-earned) adds ONE more purely-additive top-level key,
+    # `expected_guard`, and two purely-additive REPORTING row keys, `expected_amount` /
+    # `expected_in_window`. `expected_amount` is what the month WOULD pay (the pre-gate figure); it is
+    # summed into nothing and `amount` remains the only money field. Same maintenance contract.
+    out.pop("expected_guard", None)
     out["ledger"] = [{k: v for k, v in r.items()
-                      if k not in ("device_category", "device_product", "plan_product", "display_label")}
+                      if k not in ("device_category", "device_product", "plan_product",
+                                   "display_label", "expected_amount", "expected_in_window")}
                      for r in (out.get("ledger") or [])]
     return out
 

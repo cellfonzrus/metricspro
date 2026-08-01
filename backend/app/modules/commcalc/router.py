@@ -36,6 +36,7 @@ from app.modules.commcalc import commission_ledger
 from app.modules.commcalc import ledger_ma_sync
 from app.modules.commcalc import ma_product_class
 from app.modules.commcalc import accessory_definition
+from app.modules.commcalc import expected_commission
 from app.modules.commcalc import device_history
 from app.modules.commcalc import template_clone
 from app.modules.commcalc import custom_report
@@ -9669,6 +9670,331 @@ async def category_payout_impact(period: str, category: str = "", amount: str = 
             "warnings": [w for w in (alt.get("warnings") or [])
                          if str(w.get("type") or "").startswith("flat_")
                          or w.get("type") == "mrc_unresolved"][:100]}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# EXPECTED vs EARNED + the permission-gated manual promote  (mig 258; engine: expected_commission.py)
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER 2026-08-01: "let the system calculate the expected commission as a separate column but not use
+# that to pay out, if the company gets paid the employee commission auto fills from there, there should
+# be an option to move the expected commission to the earned column if the system malfunctions or the
+# report is not updated on time, this will be done as an edit function gated per permission."
+#
+# EXPECTED pays nobody — it is the pre-gate amount, surfaced as a column and summed into nothing.
+# EARNED is the EXISTING paid gate, untouched. The PROMOTE is the only new money path: permission-
+# gated, fully audited, and it SURVIVES RECOMPUTE (its own table; the calc never deletes it).
+#
+# ROUTE ORDER MATTERS: every literal /expected-commission/<word> route below is declared BEFORE
+# /expected-commission/{period}, or FastAPI would bind 'config' and 'promotes' as a period.
+
+
+def _xc_can_promote(authorization, org_id):
+    """(allowed, reason, caller) — may this caller move an EXPECTED amount into EARNED?
+
+    Gated on the `commission_promote` settings area via core's `_can_edit_setting` (the established
+    per-setting pattern — `roles.permissions.settings['commission_promote']`). Until that area is
+    registered in core.SETTING_AREAS + the Roles UI (filed NEEDS CORE), `_can_edit_setting` DEGRADES to
+    admin-only (scope='all' / role='admin') — a SAFE default that never OPENS a money write to a
+    non-admin.
+
+    DELIBERATELY STRICTER THAN THE REST OF THIS MODULE on one point: an UNIDENTIFIABLE caller is
+    REFUSED by default, where `_require_commission_admin` and `_can_edit_classification` degrade open.
+    This is a money write whose whole purpose is an audit trail, and "promoted by: unknown" is not one.
+    A genuinely RBAC-off deployment can set `expected_commission_config.promote_allow_unidentified`."""
+    cfg = expected_commission.load_config(sb(), org_id)
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller, _can_edit_setting
+    except Exception:
+        return (bool(cfg.get("promote_allow_unidentified")), "core_rbac_unavailable", None)
+    try:
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid, org_id) if uid else None
+    except Exception:
+        caller = None
+    if caller is None:
+        if cfg.get("promote_allow_unidentified"):
+            return (True, "unidentified_allowed_by_config", None)
+        return (False, "unidentified_caller", None)
+    return (bool(_can_edit_setting(caller, "commission_promote")), "setting_area", caller)
+
+
+def _xc_who(authorization):
+    try:
+        from app.modules.core.router import _uid_from_token
+        return _uid_from_token(authorization) or None
+    except Exception:
+        return None
+
+
+def _xc_rows(client, org_id, period):
+    """(engine result, error). ONE read-only installment computation for the period. Never persists."""
+    try:
+        return sale_installment_engine.compute_sale_installments(
+            client, org_id, period, persist=False), None
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
+@router.get("/expected-commission/config")
+async def get_expected_commission_config(org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """The tenant's expected-commission window + posture, and whether THIS caller may promote.
+    Read-only. Degrades to the code defaults (months 2..6) with migration 258 unapplied."""
+    require_org(org_id)
+    cfg = expected_commission.load_config(sb(), org_id)
+    allowed, why, _caller = _xc_can_promote(authorization, org_id)
+    ready = True
+    try:
+        (sb().schema("commcalc").table(expected_commission.TABLE).select("id")
+         .eq("org_id", org_id).limit(1).execute())
+    except Exception:
+        ready = False
+    return {"config": {k: v for k, v in cfg.items() if not k.startswith("_")},
+            "is_default": not cfg.get("_stored"),
+            "defaults": dict(expected_commission.DEFAULT_CONFIG),
+            "on_change_modes": list(expected_commission.ON_CHANGE_MODES),
+            "can_promote": allowed, "can_promote_reason": why,
+            "setting_area": "commission_promote",
+            "ready": ready,
+            "migration": None if ready else "258_commission_expected_earned_promote.sql"}
+
+
+@router.put("/expected-commission/config")
+async def put_expected_commission_config(body: dict, authorization: str = Header(default=""),
+                                         org_id: str = ORG_ID):
+    """Admin-only. Save the expected-commission window + posture (mig 258).
+    body: {config:{enabled,from_month,to_month,on_expected_change,promote_allow_unidentified}}
+          or {reset:true}.
+
+    MONEY-ADJACENT, NOT MONEY: narrowing the window stops months being PROMOTABLE and removes their
+    EXPECTED column; it never changes what the paid gate pays. Widening it does not pay anything
+    either — only a promote does."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    cfg = None
+    if not body.get("reset"):
+        raw = body.get("config") if isinstance(body.get("config"), dict) else body
+        mode = str((raw or {}).get("on_expected_change") or "").strip().lower()
+        if mode and mode not in expected_commission.ON_CHANGE_MODES:
+            raise HTTPException(400, "on_expected_change must be one of "
+                                     f"{list(expected_commission.ON_CHANGE_MODES)}")
+        cfg = {k: v for k, v in expected_commission.normalize_config(raw).items()
+               if not k.startswith("_")}
+    row = {"org_id": org_id, "expected_commission_config": cfg,
+           "updated_by": _caller_uid(authorization),
+           "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    try:
+        sb().schema("commcalc").table("commission_org_config").upsert(row, on_conflict="org_id").execute()
+    except Exception as e:
+        raise HTTPException(400, "could not save — run migration "
+                                 f"258_commission_expected_earned_promote.sql first. [{e}]")
+    return {"saved": True, "is_default": cfg is None,
+            "config": cfg or dict(expected_commission.DEFAULT_CONFIG)}
+
+
+@router.get("/expected-commission/promotes")
+async def list_expected_commission_promotes(period: str = "", status: str = "",
+                                            org_id: str = ORG_ID):
+    """The AUDIT LIST: every promote for the tenant (optionally one period / one status), newest first.
+    Revoked rows are KEPT and returned — the audit trail is the point. Read-only."""
+    require_org(org_id)
+    try:
+        q = (sb().schema("commcalc").table(expected_commission.TABLE).select("*")
+             .eq("org_id", org_id))
+        if period:
+            q = q.in_("pay_period", _pvariants(period))
+        if status:
+            q = q.eq("status", status)
+        rows = (q.limit(100000).execute().data) or []
+    except Exception:
+        return {"promotes": [], "count": 0, "ready": False,
+                "migration": "258_commission_expected_earned_promote.sql"}
+    rows.sort(key=lambda r: str(r.get("promoted_at") or ""), reverse=True)
+    return {"promotes": rows, "count": len(rows),
+            "active": len([r for r in rows if str(r.get("status") or "active") == "active"]),
+            "revoked": len([r for r in rows if str(r.get("status") or "") == "revoked"]),
+            "ready": True, "migration": None}
+
+
+@router.post("/expected-commission/promote")
+async def promote_expected_commission(body: dict, authorization: str = Header(default=""),
+                                      org_id: str = ORG_ID):
+    """💰 MONEY WRITE — move ONE chain-month's EXPECTED amount into EARNED.
+    body: {period, trans_id, mdn, month_index, reason} (`reason` is REQUIRED — this is an audit row).
+
+    The owner's use case: "if the system malfunctions or the report is not updated on time". It does
+    NOT change the gate; it records an approval that `compute_sale_installments` re-applies on every
+    run, so the payment survives recompute.
+
+    REFUSALS, all explicit: no permission (403) · unidentifiable caller (403, unless the tenant allows
+    it) · no reason (400) · the month is outside the tenant's expected window (400) · the chain-month
+    does not exist in that period (404) · the month is already earned through the normal gate (400 —
+    promoting it would be a no-op, and pretending otherwise would imply a second payment) · migration
+    258 not applied (400).
+
+    The APPROVED amount is stored. If a later recompute expects something different the month is HELD
+    (or paid at the CURRENT figure, per the tenant's posture) and shouted about — never paid at the
+    stored number."""
+    require_org(org_id)
+    allowed, why, caller = _xc_can_promote(authorization, org_id)
+    if not allowed:
+        raise HTTPException(403, (
+            "You do not have permission to move expected commission into earned. This is a money "
+            "action gated by the 'commission_promote' settings permission."
+            if why == "setting_area" else
+            "This action must be performed by an identified, signed-in user — it writes a money "
+            "record naming who approved it."))
+    period = str(body.get("period") or "").strip()
+    trans_id = str(body.get("trans_id") or "").strip()
+    mdn = str(body.get("mdn") or "").strip()
+    reason = str(body.get("reason") or "").strip()
+    try:
+        month_index = int(body.get("month_index"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "month_index is required")
+    if not period or not trans_id:
+        raise HTTPException(400, "period and trans_id are required")
+    if not reason:
+        raise HTTPException(400, "A reason is required — this writes a money audit record.")
+    client = sb()
+    cfg = expected_commission.load_config(client, org_id)
+    if not cfg.get("enabled"):
+        raise HTTPException(400, "Expected-to-earned promotion is switched off for this tenant.")
+    if not expected_commission.in_window(month_index, cfg):
+        raise HTTPException(400, f"Month {month_index} is outside this tenant's expected-commission "
+                                 f"window (months {cfg['from_month']}–{cfg['to_month']}).")
+    res, err = _xc_rows(client, org_id, period)
+    if err:
+        raise HTTPException(500, f"could not compute installments: {err}")
+    key = expected_commission.promote_key(period, trans_id, mdn, month_index)
+    row = next((r for r in (res.get("ledger") or [])
+                if expected_commission.row_key(r) == key), None)
+    if row is None:
+        raise HTTPException(404, "No installment for that transaction / mobile number / month exists "
+                                 "in this pay period. (If the category is paid as a one-time flat "
+                                 "amount it has no monthly installments at all.)")
+    if row.get("paid_gate_met") and str(row.get("status") or "") == "paid":
+        raise HTTPException(400, "That month is already EARNED through the normal paid gate — there is "
+                                 "nothing to promote.")
+    who, now = _xc_who(authorization), _datetime.now(_timezone.utc).isoformat()
+    prow = expected_commission.promote_row(org_id, row, reason, who, now)
+    try:
+        r = (client.schema("commcalc").table(expected_commission.TABLE)
+             .upsert(prow, on_conflict="org_id,pay_period,trans_id,mdn,month_index").execute())
+    except Exception as e:
+        raise HTTPException(400, "Could not save — run migration "
+                                 f"258_commission_expected_earned_promote.sql first. [{e}]")
+    return {"ok": True, "promoted": (r.data[0] if r.data else prow),
+            "expected_amount": prow["expected_at_promote"],
+            "note": ("Recorded. This month pays its expected amount from the next calculation onward, "
+                     "and the approval survives every recompute. If a later run expects a DIFFERENT "
+                     "amount it will be held for your re-approval rather than paid at a figure nobody "
+                     "approved.")}
+
+
+@router.post("/expected-commission/revoke")
+async def revoke_expected_commission(body: dict, authorization: str = Header(default=""),
+                                     org_id: str = ORG_ID):
+    """💰 MONEY WRITE — revoke a promote. body: {id, reason?}. The row is KEPT with status='revoked'
+    (an audit trail you can delete is not an audit trail); the month reverts to the normal gate on the
+    next calculation."""
+    require_org(org_id)
+    allowed, why, _caller = _xc_can_promote(authorization, org_id)
+    if not allowed:
+        raise HTTPException(403, "You do not have permission to change expected-to-earned promotions.")
+    rid = str(body.get("id") or "").strip()
+    if not rid:
+        raise HTTPException(400, "id is required")
+    try:
+        (sb().schema("commcalc").table(expected_commission.TABLE)
+         .update({"status": "revoked", "revoked_by": _xc_who(authorization),
+                  "revoked_at": _datetime.now(_timezone.utc).isoformat(),
+                  "revoke_reason": (body.get("reason") or None),
+                  "updated_at": _datetime.now(_timezone.utc).isoformat()})
+         .eq("org_id", org_id).eq("id", rid).execute())
+    except Exception as e:
+        raise HTTPException(400, f"Could not revoke — [{e}]")
+    return {"ok": True, "id": rid, "status": "revoked",
+            "note": "The month reverts to the normal paid gate from the next calculation."}
+
+
+@router.get("/expected-commission/{period}")
+async def expected_commission_report(period: str, rep: str = "", store: str = "",
+                                     org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """READ-ONLY: EXPECTED vs EARNED per chain-month for one pay period. Writes nothing, recomputes
+    nothing, persists nothing.
+
+    Every row carries what the month WOULD pay (`expected`), what it DID pay (`earned`), why, and
+    whether a human promoted it. The two are deliberately separate columns and `expected` is never
+    added into any total — the tiles say so."""
+    require_org(org_id)
+    client = sb()
+    res, err = _xc_rows(client, org_id, period)
+    if err:
+        raise HTTPException(500, f"could not compute installments: {err}")
+    cfg = expected_commission.load_config(client, org_id)
+    allowed, why, _caller = _xc_can_promote(authorization, org_id)
+    rows, by_rep = [], {}
+    for r in (res.get("ledger") or []):
+        if rep and str(r.get("epay_salesperson") or "").strip().lower() != rep.strip().lower():
+            continue
+        if store and str(r.get("store") or "").strip().lower() != store.strip().lower():
+            continue
+        earned = safe_float(r.get("amount"))
+        exp = safe_float(r.get("expected_amount"))
+        in_win = bool(r.get("expected_in_window"))
+        promoted = str(r.get("status") or "") == "paid_manual_promote"
+        rows.append({
+            "rep": r.get("epay_salesperson"), "store": r.get("store"),
+            "label": r.get("display_label"), "device_category": r.get("device_category"),
+            "trans_id": r.get("trans_id"), "mdn": r.get("mdn"), "imei": r.get("serial_1"),
+            "sale_period": r.get("sale_period"), "pay_period": r.get("pay_period"),
+            "month_index": r.get("month_index"), "payout_kind": r.get("payout_kind"),
+            "expected": exp, "earned": earned,
+            "expected_in_window": in_win,
+            "unearned": round(exp - earned, 2) if in_win else 0.0,
+            "status": r.get("status"), "gate_met": bool(r.get("paid_gate_met")),
+            "gate_mode": r.get("gate_mode"), "gate_kind": r.get("gate_kind"),
+            "promoted": promoted, "promoted_by": r.get("promoted_by"),
+            "promoted_at": r.get("promoted_at"), "promote_reason": r.get("promote_reason"),
+            "promote_id": r.get("promote_id"), "promote_stale": bool(r.get("promote_stale")),
+            "promotable": bool(in_win and not r.get("paid_gate_met")),
+        })
+        k = str(r.get("epay_salesperson") or "")
+        b = by_rep.setdefault(k, {"rep": k, "store": r.get("store"), "expected": 0.0, "earned": 0.0,
+                                  "unearned": 0.0, "months": 0, "promoted_months": 0})
+        b["months"] += 1
+        b["earned"] = round(b["earned"] + earned, 2)
+        if in_win:
+            b["expected"] = round(b["expected"] + exp, 2)
+            b["unearned"] = round(b["unearned"] + max(0.0, exp - earned), 2)
+        if promoted:
+            b["promoted_months"] += 1
+    rows.sort(key=lambda x: (-(x["unearned"] or 0), str(x["rep"] or ""), x["month_index"] or 0))
+    xg = res.get("expected_guard") or {}
+    return {
+        "period": period, "org_id": org_id,
+        "config": {k: v for k, v in cfg.items() if not k.startswith("_")},
+        "can_promote": allowed, "can_promote_reason": why,
+        "rows": rows, "by_rep": sorted(by_rep.values(), key=lambda x: -x["unearned"]),
+        "totals": {
+            # EARNED is the only figure that is money. EXPECTED is reported beside it and summed into
+            # nothing anywhere in the system — that is the whole point of the directive.
+            "earned": round(safe_float((res.get("totals") or {}).get("amount")), 2),
+            "expected_in_window": safe_float(xg.get("expected_total")),
+            "expected_not_yet_earned": safe_float(xg.get("expected_unearned_total")),
+            "promoted_amount": safe_float(xg.get("promoted_amount")),
+            "promotes_applied": xg.get("promotes_applied", 0),
+        },
+        "expected_guard": xg,
+        "warnings": [w for w in (res.get("warnings") or [])
+                     if str(w.get("type") or "").startswith("promote_")][:100],
+        "money_note": ("EXPECTED is what a month would pay once the carrier pays us. It is a column, "
+                       "not a payment: it is never added to anyone's commission, to rep_commissions or "
+                       "to the P&L. EARNED is what actually paid — automatically when the dealer is "
+                       "shown paid, or because someone with permission promoted it and said why."),
+        "ready": res.get("schedules", 0) > 0,
+        "note": res.get("note"),
+    }
 
 
 # ── PARAMETRIZED schedule EDIT/DELETE — REGISTERED LAST ON PURPOSE (routing bug fixed 2026-07-27).

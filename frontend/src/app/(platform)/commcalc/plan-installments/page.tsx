@@ -576,6 +576,19 @@ export default function PlanInstallmentsPage() {
         </div>
       </div>
 
+      {/* ── Expected vs Earned pointer (mig 258, owner directive 2026-08-01) ───────────── */}
+      <div className="card" style={{ marginBottom: 20, borderLeft: '4px solid var(--blue)' }}>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>Expected vs Earned — months 2–6</div>
+        <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 8px', maxWidth: 860 }}>
+          Every month on these schedules now shows what it <b>will</b> pay (expected) next to what it{' '}
+          <b>has</b> paid (earned). Earned fills in on its own the moment the carrier shows us paid.
+          Expected is a column only — it is never added to anyone&rsquo;s commission. If a statement is
+          late or the system misses one, someone with permission can move a single month across, with a
+          reason, and that decision survives every recalculation.
+        </p>
+        <a className="btn" href="/commcalc/expected-commission">Open Expected vs Earned →</a>
+      </div>
+
       {/* ── Qualifying device categories (mig 245, owner directive 2026-07-27) ─────────── */}
       <div className="card" style={{ marginBottom: 20 }} id="categories">
         <div style={{ fontWeight: 600, marginBottom: 6 }}>Qualifying device categories</div>
