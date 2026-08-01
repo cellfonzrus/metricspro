@@ -35,6 +35,7 @@ from app.modules.commcalc import target_registry
 from app.modules.commcalc import commission_ledger
 from app.modules.commcalc import ledger_ma_sync
 from app.modules.commcalc import ma_product_class
+from app.modules.commcalc import accessory_definition
 from app.modules.commcalc import device_history
 from app.modules.commcalc import template_clone
 from app.modules.commcalc import custom_report
@@ -4624,6 +4625,522 @@ def delete_ma_product_class(rid: str, org_id: str = ORG_ID):
     return {"ok": True, "id": rid}
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# WHAT COUNTS AS AN ACCESSORY — the per-tenant DEFINITION  (mig 257; engine: accessory_definition.py)
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER DIRECTIVE 2026-08-01: "accessory option will be as per mapped manually and anything which says
+# accesspories or category accesory since every company defines in a different way, generally all
+# screen protectors, cases headset, earphones, charger, cables, adapters fall under the category of
+# accessories."
+#
+# PAYS NOBODY. None of these endpoints is read by calculator.py, commission_engine.py,
+# sale_installment_engine.py, _run_calculation, rep_commissions, targets_engine.py or the P&L. The five
+# EXISTING accessory classifiers are untouched and still decide every existing number. What ships here
+# is the definition + a READ-ONLY agreement report that shows, per item, where each existing surface
+# agrees with it and where it does not. Adopting it as the PAY basis is a separate, owner-gated change.
+
+
+def _ad_classes(client, org_id):
+    """(class_rows, ready). The tenant's vocabulary, else the built-in list as proposals."""
+    rows, ready = [], True
+    try:
+        rows = (client.schema("commcalc").table(accessory_definition.CLASS_TABLE).select("*")
+                .eq("org_id", org_id).limit(1000).execute().data) or []
+    except Exception:
+        rows, ready = [], False
+    return accessory_definition.classes_from(rows), ready
+
+
+def _ad_map_rows(client, org_id):
+    """(map_rows, ready). Saved manual mappings for this tenant."""
+    try:
+        rows = (client.schema("commcalc").table(accessory_definition.MAP_TABLE).select("*")
+                .eq("org_id", org_id).limit(100000).execute().data) or []
+        return rows, True
+    except Exception:
+        return [], False
+
+
+def _ad_field_rule(client, org_id):
+    """(rule, refused_fields, ready). accessory_config.definition_field_rule, else the code default."""
+    stored, ready = None, True
+    try:
+        rows = (client.schema("commcalc").table("accessory_config")
+                .select("definition_field_rule").eq("org_id", org_id).limit(1).execute().data) or []
+        if rows:
+            stored = rows[0].get("definition_field_rule")
+    except Exception:
+        ready = False
+    rule, refused = accessory_definition.normalize_field_rule(stored)
+    return rule, refused, ready
+
+
+def _ad_sales(client, org_id, period="", store="", rep="", cap=200000):
+    """ORG-SCOPED, paged read of the period's sale lines — only the columns the definition needs.
+    Filters go in the QUERY (never fetch-all-then-filter); `period` matches BOTH spellings."""
+    cols = "trans_id,trans_date,period,store,salesperson,department,category,product_desc,sku,ext_price,gp,voided,trans_type"
+    rows, start, page, truncated, err = [], 0, 1000, False, None
+    while True:
+        try:
+            q = (client.schema("commcalc").table("raw_sales").select(cols).eq("org_id", org_id))
+            if period:
+                q = q.in_("period", _pvariants(period))
+            if store:
+                q = q.eq("store", store)
+            if rep:
+                q = q.eq("salesperson", rep)
+            chunk = q.range(start, start + page - 1).execute().data or []
+        except Exception as e:
+            err = str(e)[:200]
+            break
+        rows.extend(chunk)
+        if len(chunk) < page:
+            break
+        start += page
+        if len(rows) >= cap:
+            truncated = True
+            break
+    return rows, {"rows_read": len(rows), "truncated": truncated, "cap": cap, "error": err,
+                  "filters": {"period": period or None, "store": store or None, "rep": rep or None}}
+
+
+def _ad_verdict_builder(client, org_id, map_rows, rule, setup_kws):
+    """A `verdicts_of(row)` closure over EVERY existing accessory surface plus this definition.
+
+    It CALLS the real classifiers rather than reimplementing them, so the report cannot drift from what
+    the surfaces actually do — and so this module can never become a ninth classifier."""
+    from app.modules.commcalc import accessory_catalog as _accat
+    from app.modules.commcalc import sales_analyzer as _san
+    from app.modules.commcalc import sale_installment_engine as _sie
+    clf = _accat.build(client, org_id)                       # legacy sets + catalog layer
+    try:
+        ccmap = (client.schema("commcalc").table("carrier_category_map").select("*")
+                 .eq("org_id", org_id).eq("is_active", True).execute().data) or []
+    except Exception:
+        ccmap = []
+    acc_sets = {"departments": set(clf.depts), "categories": set(clf.cats), "products": set(clf.kws)}
+    gp_depts = set()
+    try:
+        for r in ((client.schema("commcalc").table("gp_category_map").select("department,category")
+                   .eq("org_id", org_id).eq("category", "accessory").limit(1000).execute().data) or []):
+            d = str(r.get("department") or "").strip().lower()
+            if d:
+                gp_depts.add(d)
+    except Exception:
+        pass
+    index = accessory_definition.build_index(map_rows)
+
+    def verdicts_of(row):
+        dc = accessory_definition.classify(row, index, rule, setup_kws, mode="confirmed")
+        dp = accessory_definition.classify(row, index, rule, setup_kws, mode="proposed")
+        try:
+            inst = _sie.classify_line(row, acc_sets, ccmap) == "accessory"
+        except Exception:
+            inst = False
+        return {
+            "legacy": bool(clf.is_legacy_accessory_row(row)),
+            "catalog": bool(clf.is_catalog_accessory_row(row)),
+            "combined": bool(clf.is_accessory_row(row)),
+            "installment": inst,
+            "analyzer": bool(_san._is_accessory_line(row.get("department"), row.get("category"))),
+            "gp_map": str(row.get("department") or "").strip().lower() in gp_depts,
+            "definition_confirmed": bool(dc.get("is_accessory")),
+            "definition_proposed": bool(dp.get("is_accessory")),
+            "_detail": {"confirmed": dc, "proposed": dp},
+        }
+    return verdicts_of
+
+
+@router.get("/accessory-definition/classes")
+def accessory_definition_classes(org_id: str = ORG_ID):
+    """The accessory-class vocabulary for the dropdown (RULE THREE: pick, don't type). Tenant rows when
+    migration 257 is applied, the owner's built-in list (as PROPOSALS) otherwise."""
+    require_org(org_id)
+    classes, ready = _ad_classes(sb(), org_id)
+    return {"classes": classes, "statuses": list(accessory_definition.STATUSES),
+            "match_fields": [{"key": f, "label": accessory_definition.MATCH_FIELD_LABELS[f]}
+                             for f in accessory_definition.MATCH_FIELDS],
+            "token_fields": list(accessory_definition.TOKEN_FIELDS),
+            "ready": ready,
+            "migration": None if ready else "257_commission_accessory_definition.sql"}
+
+
+@router.get("/accessory-definition/facets")
+def accessory_definition_facets(org_id: str = ORG_ID):
+    """Org-scoped option lists for the standard filter bar (RULE FIVE): the periods / stores / reps this
+    tenant's own sale lines actually carry. `market` is NOT carried on raw_sales, so it is honestly
+    absent rather than faked."""
+    require_org(org_id)
+    periods, stores, reps = set(), set(), set()
+    try:
+        rows = (sb().schema("commcalc").table("raw_sales").select("period,store,salesperson")
+                .eq("org_id", org_id).limit(100000).execute().data) or []
+        for r in rows:
+            if str(r.get("period") or "").strip():
+                periods.add(str(r["period"]).strip())
+            if str(r.get("store") or "").strip():
+                stores.add(str(r["store"]).strip())
+            if str(r.get("salesperson") or "").strip():
+                reps.add(str(r["salesperson"]).strip())
+    except Exception:
+        pass
+    return {"periods": sorted(periods), "stores": sorted(stores), "reps": sorted(reps),
+            "market_note": "raw_sales carries no market column, so the market filter is not offered here."}
+
+
+@router.get("/accessory-definition")
+def get_accessory_definition(period: str = "", store: str = "", rep: str = "",
+                             match_field: str = "", org_id: str = ORG_ID):
+    """The editable grid: this tenant's REAL distinct values per mappable field (from its own
+    raw_sales) with line counts + dollars, each value's current mapping, and the field rule.
+
+    PICK-DON'T-TYPE by construction — every row IS an observed value; there is no free-text key."""
+    require_org(org_id)
+    client = sb()
+    classes, cls_ready = _ad_classes(client, org_id)
+    map_rows, map_ready = _ad_map_rows(client, org_id)
+    rule, refused, rule_ready = _ad_field_rule(client, org_id)
+    rows, meta = _ad_sales(client, org_id, period, store, rep)
+    index = accessory_definition.build_index(map_rows)
+    setup_kws = set()
+    try:
+        setup_kws = set((_accessory_config(client, org_id) or {}).get("setup_fee_products") or ())
+    except Exception:
+        setup_kws = set()
+    observed = accessory_definition.observed_values(rows, index, rule, setup_kws)
+    mf = str(match_field or "").strip().lower()
+    if mf and mf not in accessory_definition.MATCH_FIELDS:
+        raise HTTPException(400, f"match_field must be one of {list(accessory_definition.MATCH_FIELDS)}")
+    if mf:
+        observed = {mf: observed.get(mf, [])}
+    # mappings whose value no longer appears in the filtered data are still shown, never hidden
+    seen = {(f, accessory_definition.normalize(v["match_value"]))
+            for f, vals in observed.items() for v in vals}
+    orphans = [{"match_field": m.get("match_field"), "match_value": m.get("match_value"),
+                "lines": 0, "ext_price": 0.0, "gp": 0.0, "mapped": True, "id": m.get("id"),
+                "is_accessory": bool(m.get("is_accessory", True)),
+                "accessory_class": accessory_definition.normalize_class(m.get("accessory_class")),
+                "status": str(m.get("status") or "proposed").strip().lower(),
+                "note": m.get("note"), "token_hit": None, "not_in_data": True}
+               for m in map_rows
+               if (not mf or str(m.get("match_field") or "") == mf)
+               and (str(m.get("match_field") or ""),
+                    accessory_definition.normalize(m.get("match_value"))) not in seen]
+    ready = cls_ready and map_ready
+    return {"observed": observed, "orphan_mappings": orphans,
+            "sku_coverage": accessory_definition.sku_coverage(
+                rows, is_accessory=lambda r: bool(
+                    accessory_definition.classify(r, index, rule, setup_kws,
+                                                  mode="proposed").get("is_accessory"))),
+            "classes": classes, "field_rule": rule, "field_rule_refused": refused,
+            "field_rule_ready": rule_ready,
+            "match_fields": [{"key": f, "label": accessory_definition.MATCH_FIELD_LABELS[f]}
+                             for f in accessory_definition.MATCH_FIELDS],
+            "token_fields": list(accessory_definition.TOKEN_FIELDS),
+            "statuses": list(accessory_definition.STATUSES),
+            "counts": {"mappings": len(map_rows),
+                       "confirmed": len([m for m in map_rows if str(m.get("status") or "") == "confirmed"]),
+                       "proposed": len([m for m in map_rows if str(m.get("status") or "proposed") != "confirmed"]),
+                       "classes_confirmed": len([c for c in classes if c["status"] == "confirmed"])},
+            "meta": meta, "ready": ready,
+            "migration": None if ready else "257_commission_accessory_definition.sql"}
+
+
+@router.post("/accessory-definition")
+def upsert_accessory_definition(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+    """Create/update ONE mapping. body: {match_field, match_value, is_accessory?, accessory_class?,
+    status?, note?}.
+
+    `match_value` must be a value this tenant's raw_sales actually contains OR an existing mapping —
+    free text is refused with the closest matches suggested (RULE THREE). 400 (not 500) until 257 runs.
+    """
+    require_org(org_id)
+    mf = str(body.get("match_field") or "").strip().lower()
+    if mf not in accessory_definition.MATCH_FIELDS:
+        raise HTTPException(400, f"match_field must be one of {list(accessory_definition.MATCH_FIELDS)}")
+    mv = str(body.get("match_value") or "").strip()
+    if not mv:
+        raise HTTPException(400, "match_value is required — pick a real value from your own sales data.")
+    client = sb()
+    cls = accessory_definition.normalize_class(body.get("accessory_class"))
+    classes, _cr = _ad_classes(client, org_id)
+    allowed = {c["class_key"] for c in classes}
+    if cls and cls not in allowed:
+        raise HTTPException(400, f"unknown accessory class `{cls}` — allowed: {sorted(allowed)}")
+    status = str(body.get("status") or "proposed").strip().lower()
+    if status not in accessory_definition.STATUSES:
+        raise HTTPException(400, f"status must be one of {list(accessory_definition.STATUSES)}")
+    # RULE THREE: the value must EXIST in the tenant's own data (or already be mapped).
+    if not body.get("force"):
+        rows, _m = _ad_sales(client, org_id, str(body.get("period") or ""))
+        have = {accessory_definition.normalize(r.get(mf)) for r in rows}
+        map_rows, _mr = _ad_map_rows(client, org_id)
+        have |= {accessory_definition.normalize(m.get("match_value")) for m in map_rows
+                 if str(m.get("match_field") or "") == mf}
+        if have and accessory_definition.normalize(mv) not in have:
+            near = sorted([h for h in have if h and accessory_definition.normalize(mv)[:4] in h])[:6]
+            raise HTTPException(400, f"`{mv}` is not a {mf} value present in your sales data. "
+                                     + (f"Closest: {near}." if near else "Pick one from the list."))
+    row = {"org_id": org_id, "match_field": mf, "match_value": mv,
+           "is_accessory": bool(body.get("is_accessory", True)),
+           "accessory_class": cls, "status": status, "note": (body.get("note") or None),
+           "updated_at": column_mapping.now_iso()}
+    if status == "confirmed":
+        row["confirmed_by"] = _mpc_who(authorization)
+        row["confirmed_at"] = column_mapping.now_iso()
+    else:
+        row["confirmed_by"] = None
+        row["confirmed_at"] = None
+    try:
+        r = client.schema("commcalc").table(accessory_definition.MAP_TABLE).upsert(
+            row, on_conflict="org_id,match_field,match_value").execute()
+        return {"ok": True, "row": (r.data[0] if r.data else row)}
+    except Exception as e:
+        raise HTTPException(400, f"Could not save — run migration 257_commission_accessory_definition.sql first. [{e}]")
+
+
+@router.post("/accessory-definition/confirm")
+def confirm_accessory_definition(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+    """CONFIRM proposals — the owner's decision step, for mappings and/or the seeded classes.
+    body: {ids:[..]} | {all: true} | {classes:[class_key,..]} | {all_classes: true}.
+    Confirming only changes `status`; it never re-classifies anything and never touches a payout."""
+    require_org(org_id)
+    client = sb()
+    who, now = _mpc_who(authorization), column_mapping.now_iso()
+    ids = [str(i) for i in (body.get("ids") or []) if str(i).strip()]
+    done_maps, done_classes = [], []
+    if ids or body.get("all"):
+        map_rows, ready = _ad_map_rows(client, org_id)
+        if not ready:
+            raise HTTPException(400, "Run migration 257_commission_accessory_definition.sql first.")
+        for r in map_rows:
+            if str(r.get("status") or "proposed") == "confirmed":
+                continue
+            if not (body.get("all") or str(r.get("id")) in ids):
+                continue
+            try:
+                (client.schema("commcalc").table(accessory_definition.MAP_TABLE)
+                 .update({"status": "confirmed", "confirmed_by": who, "confirmed_at": now,
+                          "updated_at": now})
+                 .eq("org_id", org_id).eq("id", r["id"]).execute())
+                done_maps.append(str(r.get("id")))
+            except Exception:
+                pass
+    keys = [accessory_definition.normalize_class(k) for k in (body.get("classes") or [])]
+    if keys or body.get("all_classes"):
+        try:
+            rows = (client.schema("commcalc").table(accessory_definition.CLASS_TABLE).select("*")
+                    .eq("org_id", org_id).limit(1000).execute().data) or []
+        except Exception:
+            raise HTTPException(400, "Run migration 257_commission_accessory_definition.sql first.")
+        for r in rows:
+            if str(r.get("status") or "proposed") == "confirmed":
+                continue
+            if not (body.get("all_classes") or accessory_definition.normalize_class(r.get("class_key")) in keys):
+                continue
+            try:
+                (client.schema("commcalc").table(accessory_definition.CLASS_TABLE)
+                 .update({"status": "confirmed", "confirmed_by": who, "confirmed_at": now,
+                          "updated_at": now})
+                 .eq("org_id", org_id).eq("id", r["id"]).execute())
+                done_classes.append(str(r.get("class_key")))
+            except Exception:
+                pass
+    if not ids and not keys and not body.get("all") and not body.get("all_classes"):
+        raise HTTPException(400, "ids[] / classes[] / all / all_classes is required")
+    return {"ok": True, "confirmed_mappings": done_maps, "confirmed_classes": done_classes,
+            "confirmed_count": len(done_maps) + len(done_classes)}
+
+
+@router.post("/accessory-definition/seed-classes")
+def seed_accessory_definition_classes(body: dict = None, org_id: str = ORG_ID):
+    """Materialise the owner's built-in accessory CLASSES as rows for THIS tenant (status='proposed'),
+    skipping keys that already exist. Migration 257 seeds the house org only; every other tenant seeds
+    itself here, with org_id stamped on every insert (RULE ONE). Idempotent. No MAPPINGS are seeded —
+    a mapping keys on a value this tenant's own data contains."""
+    require_org(org_id)
+    client = sb()
+    try:
+        have = {accessory_definition.normalize_class(r.get("class_key"))
+                for r in ((client.schema("commcalc").table(accessory_definition.CLASS_TABLE)
+                           .select("class_key").eq("org_id", org_id).limit(1000).execute().data) or [])}
+    except Exception:
+        raise HTTPException(400, "Run migration 257_commission_accessory_definition.sql first.")
+    rows = [r for r in accessory_definition.class_seed_rows(org_id) if r["class_key"] not in have]
+    if not rows:
+        return {"ok": True, "inserted": 0, "skipped": len(have),
+                "note": "every built-in class already exists"}
+    try:
+        client.schema("commcalc").table(accessory_definition.CLASS_TABLE).insert(rows).execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not seed — [{e}]")
+    return {"ok": True, "inserted": len(rows), "skipped": len(have), "status": "proposed"}
+
+
+@router.put("/accessory-definition/field-rule")
+def put_accessory_definition_field_rule(body: dict, authorization: str = Header(default=""),
+                                        org_id: str = ORG_ID):
+    """Admin-only. Save the field rule — "treat a line as an accessory when its DEPARTMENT or CATEGORY
+    field says accessor…". body: {enabled, token_fields:[...], tokens:[...]} or {reset:true}.
+
+    token_fields is validated against department/category. product_desc and sku are REFUSED and the
+    refusal is returned: a product-NAME keyword matcher is a known bug class here ('case' hits
+    'Casement', 'charger' hits 'Charger Port Repair'), and this rule must never become one."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    rule, refused = (None, [])
+    if not body.get("reset"):
+        rule, refused = accessory_definition.normalize_field_rule(body)
+    try:
+        (sb().schema("commcalc").table("accessory_config")
+         .upsert({"org_id": org_id, "definition_field_rule": rule}, on_conflict="org_id").execute())
+    except Exception as e:
+        raise HTTPException(400, "could not save the field rule — run migration "
+                                 f"257_commission_accessory_definition.sql first. [{e}]")
+    _invalidate_accessory_config(org_id)
+    return {"saved": True, "is_default": rule is None,
+            "field_rule": rule or dict(accessory_definition.DEFAULT_FIELD_RULE),
+            "refused_fields": refused,
+            "note": (None if not refused else
+                     "These fields were refused because the rule may only read a DEPARTMENT or CATEGORY "
+                     "field, never a product name: " + ", ".join(refused))}
+
+
+@router.post("/accessory-definition/propose-from-data")
+def propose_accessory_definition_from_data(body: dict = None, org_id: str = ORG_ID):
+    """Infer PROPOSED product-description mappings from THIS tenant's own sale lines, and (unless
+    `dry_run`) write them as status='proposed' for the owner to confirm.
+
+    WHY IT EXISTS — a live finding, not a hypothetical. The luxelink July export spells the SAME
+    product's department/category two different ways inside one month ('BrandedHandset'/'HandsetBranded'
+    to 07-08, then 'Handset'/'Accessories' from 07-09), so a category-field rule catches the second half
+    of the month and misses the first. The product DESCRIPTION does not change, so mapping it closes the
+    hole.
+
+    EVIDENCE-BOUND: a description is proposed ONLY IF at least one of its own lines already qualifies as
+    an accessory under the current definition, and every proposal carries the line that proved it.
+    Nothing is inferred from a product NAME, nothing is proposed for a product no evidence touched, and
+    set-up fees are excluded first. `dry_run=true` returns the list without writing anything."""
+    require_org(org_id)
+    body = body or {}
+    client = sb()
+    map_rows, map_ready = _ad_map_rows(client, org_id)
+    rule, _refused, _rr = _ad_field_rule(client, org_id)
+    setup_kws = set()
+    try:
+        setup_kws = set((_accessory_config(client, org_id) or {}).get("setup_fee_products") or ())
+    except Exception:
+        setup_kws = set()
+    rows, meta = _ad_sales(client, org_id, str(body.get("period") or ""),
+                           str(body.get("store") or ""), str(body.get("rep") or ""))
+    live = [r for r in rows
+            if str(r.get("voided") or "").strip().upper() not in ("YES", "Y", "TRUE", "1")
+            and str(r.get("trans_type") or "").strip() != "Return"]
+    index = accessory_definition.build_index(map_rows)
+    proposals = accessory_definition.propose_from_data(live, index, rule, setup_kws)
+    if body.get("dry_run"):
+        return {"ok": True, "dry_run": True, "proposals": proposals, "count": len(proposals),
+                "meta": meta, "ready": map_ready}
+    if not map_ready:
+        raise HTTPException(400, "Run migration 257_commission_accessory_definition.sql first.")
+    rows_to_write = [{"org_id": org_id, "match_field": "product_desc",
+                      "match_value": p["match_value"], "is_accessory": True,
+                      "accessory_class": None, "status": "proposed",
+                      "note": ("Proposed from your own %s data: this product is already an accessory on "
+                               "%d of its %d line(s) (%s said so on %s). Mapping the description also "
+                               "covers the %d line(s) whose department/category is spelled differently."
+                               % (str(body.get("period") or "sales"), p["covered_lines"], p["lines"],
+                                  (p["evidence"] or {}).get("matched_by") or "the definition",
+                                  (p["evidence"] or {}).get("date") or "an earlier line",
+                                  p["uncovered_lines"]))}
+                     for p in proposals]
+    written = 0
+    for i in range(0, len(rows_to_write), 200):
+        try:
+            (client.schema("commcalc").table(accessory_definition.MAP_TABLE)
+             .upsert(rows_to_write[i:i + 200],
+                     on_conflict="org_id,match_field,match_value").execute())
+            written += len(rows_to_write[i:i + 200])
+        except Exception as e:
+            raise HTTPException(400, f"Could not write proposals — [{e}]")
+    return {"ok": True, "dry_run": False, "inserted": written, "proposals": proposals,
+            "count": len(proposals), "status": "proposed", "meta": meta,
+            "note": ("Nothing is confirmed and nothing is paid differently — these are proposals. "
+                     "Review them on this page and confirm the ones you agree with.")}
+
+
+@router.delete("/accessory-definition/{rid}")
+def delete_accessory_definition(rid: str, org_id: str = ORG_ID):
+    """Remove ONE mapping — the value reverts to whatever the field rule says (or to 'not an
+    accessory'), which is the only way to unmap."""
+    require_org(org_id)
+    try:
+        (sb().schema("commcalc").table(accessory_definition.MAP_TABLE).delete()
+         .eq("org_id", org_id).eq("id", rid).execute())
+    except Exception as e:
+        raise HTTPException(400, f"Could not delete — [{e}]")
+    return {"ok": True, "id": rid}
+
+
+@router.get("/accessory-definition/agreement/{period}")
+def accessory_definition_agreement(period: str, store: str = "", rep: str = "",
+                                   org_id: str = ORG_ID):
+    """READ-ONLY: where every accessory surface agrees with this definition, and where it does not.
+
+    Writes nothing, recomputes nothing, changes nothing. The reference column is `combined` — the
+    classifier the MONEY path actually reads (the synthetic `accessory` match_field goes through
+    accessory_catalog.AccessoryClassifier.is_accessory_row), so "only_reference" is exactly the set of
+    lines that are being PAID as accessories today but the definition would not count, and
+    "only_here" is the set the definition would add.
+
+    Every surface is the REAL function, called — not a reimplementation — so this report cannot drift
+    from what the surfaces do."""
+    require_org(org_id)
+    client = sb()
+    map_rows, map_ready = _ad_map_rows(client, org_id)
+    rule, refused, rule_ready = _ad_field_rule(client, org_id)
+    setup_kws = set()
+    try:
+        setup_kws = set((_accessory_config(client, org_id) or {}).get("setup_fee_products") or ())
+    except Exception:
+        setup_kws = set()
+    rows, meta = _ad_sales(client, org_id, period, store, rep)
+    # voided / returned lines are excluded exactly as the money path excludes them
+    live = [r for r in rows
+            if str(r.get("voided") or "").strip().upper() not in ("YES", "Y", "TRUE", "1")
+            and str(r.get("trans_type") or "").strip() != "Return"]
+    try:
+        verdicts_of = _ad_verdict_builder(client, org_id, map_rows, rule, setup_kws)
+    except Exception as e:
+        raise HTTPException(500, f"could not build the classifier set: {type(e).__name__}: {e}")
+    rep_out = accessory_definition.agreement(live, verdicts_of)
+    classes, cls_ready = _ad_classes(client, org_id)
+    return {"period": period, "org_id": org_id, **rep_out,
+            # SPELLING DRIFT — the live-data finding that makes the manual map load-bearing: the same
+            # product sold under two different department/category spellings in one month, one of which
+            # the field rule catches and one of which it does not.
+            "spelling_drift": accessory_definition.spelling_drift(live, rule),
+            "sku_coverage": accessory_definition.sku_coverage(
+                live, is_accessory=lambda r: bool(
+                    accessory_definition.classify(r, accessory_definition.build_index(map_rows),
+                                                  rule, setup_kws, mode="proposed").get("is_accessory")
+                    or (verdicts_of(r) or {}).get("combined"))),
+            "lines_excluded_void_return": len(rows) - len(live),
+            "field_rule": rule, "field_rule_refused": refused,
+            "setup_fee_keywords": sorted(setup_kws),
+            "setup_fee_note": ("Set-up fee lines are NEVER accessories under this definition (standing "
+                               "owner rule). They are excluded before anything else is considered."),
+            "counts": {"mappings": len(map_rows),
+                       "confirmed": len([m for m in map_rows if str(m.get("status") or "") == "confirmed"]),
+                       "classes_confirmed": len([c for c in classes if c["status"] == "confirmed"])},
+            "meta": meta, "ready": map_ready and cls_ready and rule_ready,
+            "migration": None if (map_ready and cls_ready and rule_ready)
+                         else "257_commission_accessory_definition.sql",
+            "money_note": ("Nothing on this page changes what anyone is paid. The PAY BASIS column is "
+                           "what the commission rules read today; the definition columns are what they "
+                           "WOULD read if the definition were adopted, which is a separate decision.")}
+
+
 @router.post("/commission-import/analyze")
 async def commission_import_analyze(file: UploadFile = File(...), report_key: str = Form("carrier_commission"),
                                     carrier_id: str = Form(""), org_id: str = ORG_ID):
@@ -8974,6 +9491,184 @@ async def category_impact(period: str, org_id: str = ORG_ID):
             "by_rep": rows, "category_guard": cur.get("category_guard"),
             "warnings": cur.get("warnings"), "chain_guard": cur.get("chain_guard"),
             "mrc_moves": mrc_moves[:200], "mrc_moves_count": len(mrc_moves)}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# FLAT (ONE-TIME) PAYOUT BY DEVICE CATEGORY  (mig 256; engine: commcalc/installment_category_payout.py)
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER DIRECTIVE 2026-08-01: "fwa is paid on flat rate should not be in monthly payments - fix but
+# dont hard code". A tenant can take a DEVICE CATEGORY out of the M1..M6 monthly chain and pay it once,
+# as a flat dollar amount THEY type. Nothing here is branched on a carrier, tenant or product name —
+# the category comes from the tenant's own installment_category rules (mig 245).
+#
+# MONEY: the GET + the impact endpoint are read-only and recompute nothing. The PUT is the owner's own
+# entry point (admin-gated) and still moves nothing until the next Run Calculation. A category set to
+# flat with NO amount is NOT active — the chain keeps paying monthly and the engine warns.
+
+
+@router.get("/plan-installments/category-payout")
+async def get_category_payout(org_id: str = ORG_ID):
+    """The tenant's per-category payout MODE (monthly installments vs a one-time flat amount).
+
+    Returns the ORG-level config (falling back to the code default — every category on monthly
+    installments, i.e. today's behaviour), each schedule's own override, the category vocabulary and
+    the mode vocabulary for pick-don't-type editing (§3b). Read-only; writes nothing.
+
+    NO AMOUNT IS EVER INVENTED HERE: an unconfigured category reports `amount: null`, and the UI shows
+    an empty box for the owner to type into."""
+    require_org(org_id)
+    from app.modules.commcalc import installment_category as icat
+    from app.modules.commcalc import installment_category_payout as icpay
+    client = sb()
+    stored, ready = None, True
+    try:
+        rows = (client.schema('commcalc').table('commission_org_config')
+                .select('installment_category_payout')
+                .eq('org_id', org_id).limit(1).execute().data) or []
+        if rows:
+            stored = rows[0].get('installment_category_payout')
+    except Exception:
+        ready = False          # migration 256 not applied — the engine still uses the code defaults
+    payout = icpay.normalize_payout(stored)
+    scheds, sched_ready = [], True
+    try:
+        scheds = (client.schema('commcalc').table('plan_installment_schedule')
+                  .select('*').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        sched_ready = False
+    out_scheds = []
+    for s in scheds:
+        try:
+            own = s.get('category_payout')
+        except Exception:
+            own = None
+        out_scheds.append({"id": s.get("id"), "name": s.get("name"), "plan_id": s.get("plan_id"),
+                           "num_months": s.get("num_months"), "is_active": s.get("is_active"),
+                           "category_payout": own if isinstance(own, dict) else None})
+    return {
+        "payout": {k: dict(payout.get(k) or {}) for k in icpay.CATEGORY_KEYS},
+        "is_default": not (isinstance(stored, dict) and bool(stored)),
+        "defaults": {k: dict(v) for k, v in icpay.DEFAULT_PAYOUT.items()},
+        "categories": [{"key": k, "label": icat.CATEGORY_LABELS[k]} for k in icpay.CATEGORY_KEYS],
+        "modes": [{"key": m, "label": icpay.MODE_LABELS[m]} for m in icpay.PAYOUT_MODES],
+        "max_pay_month": icpay.MAX_PAY_MONTH,
+        "flat_categories": icpay.configured_categories(payout),
+        "schedules": out_scheds, "schedules_ready": sched_ready,
+        "ready": ready,
+        "migration": None if ready else "256_commission_installment_category_flat_payout.sql",
+    }
+
+
+@router.put("/plan-installments/category-payout")
+async def put_category_payout(body: dict, authorization: str = Header(default=""),
+                              org_id: str = ORG_ID):
+    """Admin-only. Save the tenant's per-category payout mode + flat amount (mig 256).
+    body: {payout: {home_internet: {mode:'flat_once', amount: 25, pay_month: 1}, ...}}
+          OR {reset: true} to revert every category to monthly installments (stored NULL).
+
+    MONEY. Switching a category to a one-time flat amount changes what those activations pay on the
+    NEXT Run Calculation (nothing moves now): the configured month pays the flat amount and the other
+    installment months of that chain stop paying. Both effects are reported in the Calculate/preview
+    warnings with per-rep dollars — never a silent zero.
+
+    THE AMOUNT IS YOURS. There is no default and no seed. Saving mode='flat_once' with a blank amount
+    is accepted and stored, but it does NOT take effect: the chains keep paying monthly and the engine
+    raises a `flat_amount_unconfigured` warning until an amount is entered."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    from app.modules.commcalc import installment_category_payout as icpay
+    payout = None
+    if not body.get("reset"):
+        raw = body.get("payout") if isinstance(body.get("payout"), dict) else body
+        norm = icpay.normalize_payout(raw)
+        bad = []
+        for k, v in (raw or {}).items():
+            if k in icpay.CATEGORY_KEYS or k.startswith("_"):
+                continue
+            bad.append(k)
+        if bad:
+            raise HTTPException(400, f"unknown category key(s) {bad} — allowed: {list(icpay.CATEGORY_KEYS)}")
+        for k, v in ((raw or {}).items() if isinstance(raw, dict) else []):
+            if isinstance(v, dict) and str(v.get("mode") or "").strip().lower() not in ("", *icpay.PAYOUT_MODES):
+                raise HTTPException(400, f"mode for '{k}' must be one of {list(icpay.PAYOUT_MODES)}")
+        payout = {k: dict(norm[k]) for k in icpay.CATEGORY_KEYS}
+    row = {"org_id": org_id, "installment_category_payout": payout,
+           "updated_by": _caller_uid(authorization), "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    try:
+        sb().schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
+    except Exception as e:
+        raise HTTPException(400, "could not save the flat payout config — run migration "
+                                 f"256_commission_installment_category_flat_payout.sql first. [{e}]")
+    unconfigured = sorted(k for k, v in (payout or {}).items()
+                          if v.get("mode") == "flat_once" and v.get("amount") is None)
+    return {"saved": True, "is_default": payout is None,
+            "payout": payout or {k: dict(v) for k, v in icpay.DEFAULT_PAYOUT.items()},
+            "flat_categories": icpay.configured_categories(payout or {}),
+            "unconfigured_amount": unconfigured,
+            "note": (None if not unconfigured else
+                     "Saved, but these categories have no amount yet, so they are STILL paying monthly "
+                     "installments (nothing was zeroed): " + ", ".join(unconfigured))}
+
+
+@router.get("/plan-installments/category-payout-impact/{period}")
+async def category_payout_impact(period: str, category: str = "", amount: str = "",
+                                 pay_month: int = 1, org_id: str = ORG_ID):
+    """READ-ONLY per-rep delta for the flat-payout switch. Writes nothing; recomputes nothing.
+
+    Runs the installment engine TWICE in memory:
+      A = the settings exactly as they stand now (what the next Run Calculation would pay),
+      B = the same settings PLUS the hypothetical the caller asked about
+          (`?category=home_internet&amount=25`).
+
+    `amount` has NO DEFAULT. Called without one, B is the saved config only — so the endpoint can
+    never quote a dollar figure nobody entered. The response echoes the exact amount used in
+    `hypothesis`, which is what makes the Gate-2 table honest ("at $X per activation").
+    """
+    require_org(org_id)
+    from app.modules.commcalc import installment_category_payout as icpay
+    client = sb()
+    amt = icpay._num(amount)
+    cat = str(category or "").strip().lower()
+    if cat and cat not in icpay.CATEGORY_KEYS:
+        raise HTTPException(400, f"category must be one of {list(icpay.CATEGORY_KEYS)}")
+    override = None
+    if cat and amt is not None:
+        saved = icpay.load_org_payout(client, org_id)
+        override = {k: dict(saved.get(k) or {}) for k in icpay.CATEGORY_KEYS}
+        override[cat] = {"mode": "flat_once", "amount": amt,
+                         "pay_month": max(1, min(icpay.MAX_PAY_MONTH, int(pay_month or 1)))}
+    try:
+        cur = sale_installment_engine.compute_sale_installments(client, org_id, period, persist=False)
+        alt = (cur if override is None else
+               sale_installment_engine.compute_sale_installments(
+                   client, org_id, period, persist=False,
+                   _config_override={"category_payout": override}))
+    except Exception as e:
+        raise HTTPException(500, f"flat payout impact failed: {type(e).__name__}: {e}")
+    reps = sorted(set(cur.get("by_rep") or {}) | set(alt.get("by_rep") or {}))
+    rows = []
+    for r in reps:
+        a = safe_float((cur.get("by_rep") or {}).get(r))
+        b = safe_float((alt.get("by_rep") or {}).get(r))
+        rows.append({"rep": r, "now": round(a, 2), "with_flat": round(b, 2), "delta": round(b - a, 2)})
+    rows.sort(key=lambda x: x["delta"])
+    return {"period": period, "org_id": org_id,
+            "hypothesis": ({"category": cat, "amount": amt, "pay_month": pay_month} if override
+                           else None),
+            "hypothesis_note": (None if override else
+                                "No hypothesis was supplied (pass ?category=<key>&amount=<dollars>), so "
+                                "both columns are the SAVED configuration — the delta is 0 by "
+                                "construction. This endpoint never invents an amount."),
+            "totals": {"now": round(safe_float((cur.get("totals") or {}).get("amount")), 2),
+                       "with_flat": round(safe_float((alt.get("totals") or {}).get("amount")), 2),
+                       "delta": round(safe_float((alt.get("totals") or {}).get("amount"))
+                                      - safe_float((cur.get("totals") or {}).get("amount")), 2)},
+            "by_rep": rows,
+            "flat_guard_now": cur.get("flat_guard"), "flat_guard_with": alt.get("flat_guard"),
+            "category_guard": cur.get("category_guard"),
+            "warnings": [w for w in (alt.get("warnings") or [])
+                         if str(w.get("type") or "").startswith("flat_")
+                         or w.get("type") == "mrc_unresolved"][:100]}
 
 
 # ── PARAMETRIZED schedule EDIT/DELETE — REGISTERED LAST ON PURPOSE (routing bug fixed 2026-07-27).

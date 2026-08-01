@@ -30,6 +30,16 @@ type CatCfg = {
   departments: string[]; categories_seen: string[]; products: string[]
 }
 type Matcher = { departments: string[]; categories: string[]; product_keywords: string[]; value_field: string; min_amount: any }
+// mig 256 — FLAT (one-time) payout by device category. `amount: null` means NOT CONFIGURED, which is
+// deliberately different from 0: an unconfigured flat category keeps paying monthly installments.
+type PayoutEntry = { mode: string; amount: number | null; pay_month: number }
+type PayCfg = {
+  payout: Record<string, PayoutEntry>; is_default: boolean; defaults: Record<string, PayoutEntry>
+  categories: { key: string; label: string }[]; modes: { key: string; label: string }[]
+  max_pay_month: number; flat_categories: string[]
+  schedules: { id: string; name?: string; num_months?: number; category_payout?: any }[]
+  ready: boolean; migration: string | null
+}
 
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const GATES = [
@@ -115,6 +125,12 @@ export default function PlanInstallmentsPage() {
   const [ruleDraft, setRuleDraft] = useState<any>({ category_key: 'tablet', match_field: 'product_desc', match_op: 'word', match_value: '', priority: 50 })
   const [showBuiltins, setShowBuiltins] = useState(false)
   const [impact, setImpact] = useState<any>(null)
+  // mig 256 — flat (one-time) payout by category. `payDraft` mirrors the saved config; a blank
+  // amount box stays BLANK (never coerced to 0) so "not configured" survives a round trip.
+  const [payCfg, setPayCfg] = useState<PayCfg | null>(null)
+  const [payDraft, setPayDraft] = useState<Record<string, { mode: string; amount: string; pay_month: string }>>({})
+  const [payImpact, setPayImpact] = useState<any>(null)
+  const [payHypo, setPayHypo] = useState<{ category: string; amount: string; pay_month: string }>({ category: 'home_internet', amount: '', pay_month: '1' })
   const [audit, setAudit] = useState<{ sid: string; rows: any[] } | null>(null)
   const [showAdvMatcher, setShowAdvMatcher] = useState(false)
   const [msg, setMsg] = useState('')
@@ -125,13 +141,14 @@ export default function PlanInstallmentsPage() {
 
   async function load() {
     try {
-      const [pl, sc, st, mt, plm, cq] = await Promise.all([
+      const [pl, sc, st, mt, plm, cq, cp] = await Promise.all([
         api(`/api/v1/commcalc/commission-plans?org_id=${ORG_ID}`),
         api(`/api/v1/commcalc/plan-installments?org_id=${ORG_ID}`),
         api(`/api/v1/commcalc/commission-settings?org_id=${ORG_ID}`),
         api(`/api/v1/commcalc/plan-installments/activation-matcher?org_id=${ORG_ID}`),
         api(`/api/v1/commcalc/plan-installments/plan-line-matcher?org_id=${ORG_ID}`),
         api(`/api/v1/commcalc/plan-installments/category-qualification?org_id=${ORG_ID}&period=${encodeURIComponent(period || '')}`).catch(() => null),
+        api(`/api/v1/commcalc/plan-installments/category-payout?org_id=${ORG_ID}`).catch(() => null),
       ])
       setPlans(pl?.plans || [])
       setScheds(sc?.schedules || [])
@@ -140,6 +157,16 @@ export default function PlanInstallmentsPage() {
       if (mt?.matcher) { setMatcher(mt.matcher); setMatcherOpts({ departments: mt.departments || [], categories: mt.categories || [], value_fields: mt.value_fields || ['ext_price', 'gp'], is_default: !!mt.is_default }) }
       if (plm?.matcher) { setPlanLine(plm.matcher); setPlanLineOpts({ departments: plm.departments || [], categories: plm.categories || [], is_default: !!plm.is_default, ready: plm.ready !== false }) }
       if (cq?.qualification) { setCatCfg(cq); setCatDraft({ ...cq.qualification }) }
+      if (cp?.payout) {
+        setPayCfg(cp)
+        const d: Record<string, { mode: string; amount: string; pay_month: string }> = {}
+        Object.entries(cp.payout as Record<string, PayoutEntry>).forEach(([k, v]) => {
+          d[k] = { mode: v?.mode || 'installments',
+                   amount: v?.amount === null || v?.amount === undefined ? '' : String(v.amount),
+                   pay_month: String(v?.pay_month ?? 1) }
+        })
+        setPayDraft(d)
+      }
     } catch (e: any) { setMsg(e.message) }
     // read-only; never blocks the page (the picker degrades to the engine's field list + free text)
     try {
@@ -252,6 +279,42 @@ export default function PlanInstallmentsPage() {
       setMsg(reset ? 'Reset to the defaults (tablets + SIM excluded). Applies on the next Run Calculation.'
         : 'Qualifying categories saved. Applies on the next Run Calculation — run the impact check below first.')
       load()
+    } catch (e: any) { setMsg(e.message) }
+  }
+
+  // MONEY CONFIG (mig 256; owner 2026-08-01 "fwa is paid on flat rate should not be in monthly
+  // payments"). A category switched to one-time pays the amount YOU type, once, and its other
+  // installment months stop. A blank amount is saved but does NOT take effect — those chains keep
+  // paying monthly and the Run-Calculation warnings say so. Nothing moves until Run Calculation.
+  async function savePayout(reset = false) {
+    setMsg('')
+    try {
+      const payout: Record<string, any> = {}
+      Object.entries(payDraft).forEach(([k, v]) => {
+        payout[k] = { mode: v.mode || 'installments',
+                      amount: String(v.amount ?? '').trim() === '' ? null : Number(v.amount),
+                      pay_month: Number(v.pay_month || 1) }
+      })
+      const r = await api(`/api/v1/commcalc/plan-installments/category-payout?org_id=${ORG_ID}`, { method: 'PUT', body: JSON.stringify(reset ? { reset: true } : { payout }) })
+      setMsg(reset ? 'Reset — every category is back on monthly installments. Applies on the next Run Calculation.'
+        : (r?.note || 'Flat payout saved. Applies on the next Run Calculation — check the impact below first.'))
+      load()
+    } catch (e: any) { setMsg(e.message) }
+  }
+
+  // READ-ONLY "what would it cost" — the amount is ALWAYS the one typed above; this never
+  // invents a dollar and never recomputes anything.
+  async function runPayoutImpact() {
+    setMsg('')
+    setPayImpact(null)
+    try {
+      const q = new URLSearchParams({ org_id: ORG_ID })
+      if (payHypo.category && String(payHypo.amount).trim() !== '') {
+        q.set('category', payHypo.category)
+        q.set('amount', String(payHypo.amount).trim())
+        q.set('pay_month', String(payHypo.pay_month || 1))
+      }
+      setPayImpact(await api(`/api/v1/commcalc/plan-installments/category-payout-impact/${encodeURIComponent(period)}?${q.toString()}`))
     } catch (e: any) { setMsg(e.message) }
   }
 
@@ -679,6 +742,132 @@ export default function PlanInstallmentsPage() {
                 ))}
               </tbody>
             </table>
+          )}
+        </div>
+      </div>
+
+      {/* ── Flat (one-time) payout by category (mig 256, owner directive 2026-08-01) ──── */}
+      <div className="card" style={{ marginBottom: 20 }} id="flat-payout">
+        <div style={{ fontWeight: 600, marginBottom: 6 }}>Flat (one-time) payout by category</div>
+        <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 12px', maxWidth: 860 }}>
+          Some products are not paid month after month — home internet / FWA is the usual one. Switch a
+          category to <b>one-time</b> and its activations leave the monthly chain entirely: they pay the
+          flat amount <b>you type</b>, once, and the schedule's other months stop paying for that
+          category. Nothing moves until the next <b>Run Calculation</b>, and every month that stops is
+          listed in the warnings with the dollars involved.
+        </p>
+        <div style={{ marginBottom: 10, padding: '8px 10px', borderLeft: '3px solid var(--amber)', background: 'var(--surface2)', fontSize: 12, maxWidth: 860 }}>
+          <b>The amount is yours to enter.</b> There is no default and nothing is pre-filled. If you set a
+          category to one-time and leave the amount <i>blank</i>, it does <b>not</b> take effect — those
+          activations keep paying monthly exactly as they do today and the calculation warns you. We never
+          guess a payout and we never turn a blank into $0.
+        </div>
+        {payCfg && !payCfg.ready && (
+          <div style={{ marginBottom: 10, padding: '8px 10px', borderLeft: '3px solid var(--amber)', background: 'var(--surface2)', fontSize: 12 }}>
+            Migration <code>{payCfg.migration}</code> isn't applied yet, so this can't be saved. Every
+            category is on monthly installments — which is exactly today's behaviour.
+          </div>
+        )}
+        <div className="table-wrapper" style={{ border: 'none', marginBottom: 10 }}>
+          <table>
+            <thead><tr><th>Category</th><th>How it pays</th><th>Flat amount</th><th>Paid in month</th><th>Status</th></tr></thead>
+            <tbody>
+              {(payCfg?.categories || []).map(c => {
+                const d = payDraft[c.key] || { mode: 'installments', amount: '', pay_month: '1' }
+                const isFlat = d.mode === 'flat_once'
+                const blank = String(d.amount ?? '').trim() === ''
+                return (
+                  <tr key={c.key}>
+                    <td>{c.label}</td>
+                    <td>
+                      <select style={sel} value={d.mode}
+                        onChange={e => setPayDraft({ ...payDraft, [c.key]: { ...d, mode: e.target.value } })}>
+                        {(payCfg?.modes || []).map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+                      </select>
+                    </td>
+                    <td>
+                      <input style={{ ...sel, width: 110 }} inputMode="decimal" placeholder="you type it"
+                        value={d.amount} disabled={!isFlat}
+                        onChange={e => setPayDraft({ ...payDraft, [c.key]: { ...d, amount: e.target.value } })} />
+                    </td>
+                    <td>
+                      <select style={{ ...sel, width: 80 }} value={d.pay_month} disabled={!isFlat}
+                        onChange={e => setPayDraft({ ...payDraft, [c.key]: { ...d, pay_month: e.target.value } })}>
+                        {Array.from({ length: payCfg?.max_pay_month || 12 }, (_, i) => String(i + 1)).map(m => <option key={m} value={m}>M{m}</option>)}
+                      </select>
+                    </td>
+                    <td style={{ fontSize: 12 }}>
+                      {!isFlat ? <span style={{ color: 'var(--text3)' }}>monthly installments</span>
+                        : blank ? <span style={{ color: 'var(--amber)', fontWeight: 600 }}>⚠ no amount — still paying monthly</span>
+                          : <span style={{ color: 'var(--green)', fontWeight: 600 }}>one-time ${Number(d.amount).toFixed(2)}</span>}
+                    </td>
+                  </tr>
+                )
+              })}
+              {!payCfg && <tr><td colSpan={5} style={{ color: 'var(--text3)' }}>Loading…</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button className="btn btn-primary" onClick={() => savePayout(false)}>Save flat payout</button>
+          <button className="btn" onClick={() => savePayout(true)}>Reset — all monthly</button>
+          {payCfg?.is_default && <span style={{ fontSize: 12, color: 'var(--text3)' }}>nothing configured — every category pays monthly</span>}
+        </div>
+
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 13 }}>What would it cost? (read-only)</div>
+          <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 8px', maxWidth: 860 }}>
+            Try an amount without saving it. This runs the engine twice in memory for <b>{period}</b> and
+            shows the per-rep difference. It writes nothing and recalculates nothing — and it will not
+            produce a number unless you type an amount.
+          </p>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+            <select style={sel} value={payHypo.category} onChange={e => setPayHypo({ ...payHypo, category: e.target.value })}>
+              {(payCfg?.categories || []).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+            <input style={{ ...sel, width: 120 }} inputMode="decimal" placeholder="flat $ amount"
+              value={payHypo.amount} onChange={e => setPayHypo({ ...payHypo, amount: e.target.value })} />
+            <select style={{ ...sel, width: 80 }} value={payHypo.pay_month} onChange={e => setPayHypo({ ...payHypo, pay_month: e.target.value })}>
+              {Array.from({ length: payCfg?.max_pay_month || 12 }, (_, i) => String(i + 1)).map(m => <option key={m} value={m}>M{m}</option>)}
+            </select>
+            <button className="btn" onClick={runPayoutImpact}>Check impact for {period}</button>
+          </div>
+          {payImpact && (
+            <div style={{ fontSize: 12 }}>
+              {payImpact.hypothesis_note && (
+                <div style={{ color: 'var(--amber)', marginBottom: 6 }}>{payImpact.hypothesis_note}</div>
+              )}
+              {payImpact.hypothesis && (
+                <div style={{ color: 'var(--text2)', marginBottom: 6 }}>
+                  At <b>{fmt(payImpact.hypothesis.amount)}</b> per {(payCfg?.categories || []).find(c => c.key === payImpact.hypothesis.category)?.label || payImpact.hypothesis.category} activation,
+                  paid in M{payImpact.hypothesis.pay_month}: total multi-month pay {fmt(payImpact.totals?.now || 0)} →{' '}
+                  <b>{fmt(payImpact.totals?.with_flat || 0)}</b> · change{' '}
+                  <b style={{ color: (payImpact.totals?.delta || 0) < 0 ? 'var(--red)' : 'var(--green)' }}>{fmt(payImpact.totals?.delta || 0)}</b>
+                </div>
+              )}
+              <table>
+                <thead><tr><th>Rep</th><th style={{ textAlign: 'right' }}>Now</th><th style={{ textAlign: 'right' }}>With the flat amount</th><th style={{ textAlign: 'right' }}>Change</th></tr></thead>
+                <tbody>
+                  {(payImpact.by_rep || []).map((r: any) => (
+                    <tr key={r.rep}>
+                      <td>{r.rep}</td>
+                      <td style={{ textAlign: 'right' }}>{fmt(r.now)}</td>
+                      <td style={{ textAlign: 'right' }}>{fmt(r.with_flat)}</td>
+                      <td style={{ textAlign: 'right', color: r.delta < 0 ? 'var(--red)' : r.delta > 0 ? 'var(--green)' : 'var(--text3)' }}>{fmt(r.delta)}</td>
+                    </tr>
+                  ))}
+                  {(payImpact.by_rep || []).length === 0 && <tr><td colSpan={4} style={{ color: 'var(--text3)' }}>No multi-month pay in this period.</td></tr>}
+                </tbody>
+              </table>
+              {(payImpact.warnings || []).length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 3 }}>What the engine says</div>
+                  {(payImpact.warnings || []).slice(0, 10).map((w: any, i: number) => (
+                    <div key={i} style={{ color: w.type === 'flat_amount_unconfigured' ? 'var(--amber)' : 'var(--text2)' }}>• {w.detail}</div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>

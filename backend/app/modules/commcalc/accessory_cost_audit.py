@@ -32,6 +32,14 @@ per-line numbers, so they need no second engine either.
                                              in `pct`, "the same rules with the rate divided by 100"
                                              is exactly today's pay / 100 — no re-derivation.
 
+ACCESSORY-DEFINITION ANNOTATION (mig 257, added 2026-08-01). Every matched line and every item also
+carries the verdict of the tenant's own ACCESSORY DEFINITION (accessory_definition.py) — is this line
+something the owner actually calls an accessory, and under which class. It is PURE ANNOTATION: no
+option amount, no total, no delta and no existing key is derived from it, and the audit's arithmetic
+is byte-identical with the annotation removed. It exists because this is the surface the owner already
+opens to ask "why did that accessory pay that", and the first thing to check is whether the line is an
+accessory at all.
+
 MULTI-TENANT: org_id is the caller's on EVERY read. Nothing here is branched on a carrier or tenant
 name; every threshold comes from `pay_data_quality` config (migration 255, degrading to defaults).
 """
@@ -165,6 +173,35 @@ def _sale_key_index(client, org_id, period):
     return out
 
 
+def _definition_ctx(client, org_id):
+    """(index, rule, setup_keywords, ready) for the tenant's ACCESSORY DEFINITION (mig 257). Read-only
+    and org-scoped; every failure degrades to "no definition configured" rather than raising, so this
+    annotation can never take the audit down."""
+    from app.modules.commcalc import accessory_definition as adef
+    idx, rule, kws, ready = {f: {} for f in adef.MATCH_FIELDS}, dict(adef.DEFAULT_FIELD_RULE), set(), True
+    try:
+        rows = (client.schema("commcalc").table(adef.MAP_TABLE).select("*")
+                .eq("org_id", org_id).limit(100000).execute().data) or []
+        idx = adef.build_index(rows)
+    except Exception:
+        ready = False
+    try:
+        cfg = (client.schema("commcalc").table("accessory_config")
+               .select("definition_field_rule").eq("org_id", org_id).limit(1).execute().data) or []
+        rule, _refused = adef.normalize_field_rule(cfg[0].get("definition_field_rule") if cfg else None)
+    except Exception:
+        rule, _refused = adef.normalize_field_rule(None)
+    try:
+        srows = (client.schema("commcalc").table("accessory_config")
+                 .select("setup_fee_keywords").eq("org_id", org_id).limit(1).execute().data) or []
+        kws = {str(k).strip().lower() for k in ((srows[0].get("setup_fee_keywords") if srows else None) or []) if str(k).strip()}
+    except Exception:
+        kws = set()
+    if not kws:
+        kws = {"device setup charge"}
+    return idx, rule, kws, ready
+
+
 def audit(client, org_id, period, c_basis="price", assume_gp_pct=None, rep=None, max_lines=4000):
     """The full read-only audit for ONE period. Writes nothing; recomputes nothing.
 
@@ -205,6 +242,11 @@ def audit(client, org_id, period, c_basis="price", assume_gp_pct=None, rep=None,
     cat_idx = _catalog_index(client, org_id)
     out["catalog_rows"] = cat_idx.get("rows", 0)
     key_idx = _sale_key_index(client, org_id, period)
+    # mig 257 — PURE ANNOTATION (see the header). Nothing below reads it into a dollar.
+    from app.modules.commcalc import accessory_definition as _adef
+    _d_idx, _d_rule, _d_kws, _d_ready = _definition_ctx(client, org_id)
+    _d_counts = {"lines": 0, "is_accessory": 0, "not_accessory": 0, "setup_fee": 0,
+                 "ext_is_accessory": 0.0, "ext_not_accessory": 0.0, "by_class": {}}
 
     flagged, item_agg, rule_agg = [], {}, {}
     reps_out = []
@@ -239,6 +281,22 @@ def audit(client, org_id, period, c_basis="price", assume_gp_pct=None, rep=None,
                 meta = key_idx.get((str(ldet.get("trans_id") or "").strip(), dkey), {})
                 ccost = _catalog_cost_for(cat_idx, meta.get("sku"), desc, meta.get("product_id"))
                 opts = _line_options(ext, gp, amt, pct, kind, suspect, c_basis, assume_gp_pct, ccost)
+                # ANNOTATION ONLY — computed AFTER every option amount above, and never fed back in.
+                _dv = _adef.classify({"product_desc": desc, "sku": meta.get("sku"),
+                                      "department": meta.get("department"),
+                                      "category": meta.get("category")},
+                                     _d_idx, _d_rule, _d_kws, mode="proposed")
+                _d_counts["lines"] += 1
+                if _dv.get("matched_by") == "setup_fee":
+                    _d_counts["setup_fee"] += 1
+                if _dv.get("is_accessory"):
+                    _d_counts["is_accessory"] += 1
+                    _d_counts["ext_is_accessory"] = round(_d_counts["ext_is_accessory"] + ext, 2)
+                    _ck = _dv.get("accessory_class") or "(no class)"
+                    _d_counts["by_class"][_ck] = int(_d_counts["by_class"].get(_ck, 0)) + 1
+                else:
+                    _d_counts["not_accessory"] += 1
+                    _d_counts["ext_not_accessory"] = round(_d_counts["ext_not_accessory"] + ext, 2)
 
                 total_matched += 1
                 rep_lines += 1
@@ -259,7 +317,10 @@ def audit(client, org_id, period, c_basis="price", assume_gp_pct=None, rep=None,
                     "department": meta.get("department"), "category": meta.get("category"),
                     "lines": 0, "ext_price": 0.0, "gp": 0.0, "paid": 0.0,
                     "implied_cost_min": None, "implied_cost_max": None,
-                    "catalog_cost": ccost, "flags": set()})
+                    "catalog_cost": ccost, "flags": set(),
+                    "acc_def": bool(_dv.get("is_accessory")),
+                    "acc_def_class": _dv.get("accessory_class"),
+                    "acc_def_by": _dv.get("matched_by")})
                 ia["lines"] += 1
                 ia["ext_price"] = round(ia["ext_price"] + ext, 2)
                 ia["gp"] = round(ia["gp"] + gp, 2)
@@ -277,6 +338,9 @@ def audit(client, org_id, period, c_basis="price", assume_gp_pct=None, rep=None,
                         "ext_price": ext, "gp": gp, "implied_cost": ic,
                         "catalog_cost": ccost, "amount": amt, "flags": flags,
                         "flag_labels": [pdq.FLAG_LABELS.get(c, c) for c in flags],
+                        "acc_def": bool(_dv.get("is_accessory")),
+                        "acc_def_class": _dv.get("accessory_class"),
+                        "acc_def_by": _dv.get("matched_by"),
                         **{k: opts.get(k) for k in OPTION_KEYS}})
         if rep_lines:
             reps_out.append({"rep": rep_name, "store": rrow.get("store"), "market": rrow.get("market"),
@@ -310,6 +374,13 @@ def audit(client, org_id, period, c_basis="price", assume_gp_pct=None, rep=None,
     out["counts"] = {"reps": len(reps_out), "rules": len(rule_agg),
                      "matched_lines": total_matched, "suspect_lines": total_suspect,
                      "flagged_shown": len(flagged)}
+    # mig 257 — the annotation's roll-up. Additive: no existing key is derived from it.
+    out["accessory_definition"] = {
+        **_d_counts, "ready": _d_ready,
+        "note": ("Of the lines a %-of-basis rule actually paid on, this is how many your own accessory "
+                 "definition counts as accessories. It changes no number on this page — it says whether "
+                 "the lines being paid an accessory rate are things you call accessories."),
+        "migration": None if _d_ready else "257_commission_accessory_definition.sql"}
     out["deltas"] = {
         "option_b": round(out["totals"]["option_b"] - out["totals"]["current"], 2),
         "option_c": round(out["totals"]["option_c"] - out["totals"]["current"], 2),
