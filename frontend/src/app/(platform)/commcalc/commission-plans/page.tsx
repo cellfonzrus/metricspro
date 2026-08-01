@@ -20,7 +20,9 @@ import {
 // what the plan WOULD pay for a period from raw_sales — it does NOT change live commissions.
 
 type Rule = { id?: string; label?: string; match_field: string; match_op: string; match_value: string
-  qualifies: boolean; payout_kind: string; amount: number; pct: number; tiered: boolean }
+  qualifies: boolean; payout_kind: string; amount: number; pct: number; tiered: boolean
+  // PAY GATE (mig 260) — how often this rule pays inside ONE transaction. '' = auto.
+  unit_basis?: string }
 type Tier = { id?: string; metric?: string; min_count: number; multiplier: number }
 type Assign = { id?: string; scope: string; scope_value?: string | null; priority?: number }
 type Plan = { id?: string; name: string; carrier_id?: string | null; base_tier_metric?: string | null
@@ -74,7 +76,15 @@ const ScopeBadge = ({ scope }: { scope: string }) => {
   return <span title={m.help} style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 8, background: m.bg, color: m.color, whiteSpace: 'nowrap' }}>{scope}</span>
 }
 
-const blankRule = (): Rule => ({ label: '', match_field: 'contract_type', match_op: 'equals', match_value: '', qualifies: true, payout_kind: 'flat_per_unit', amount: 0, pct: 0, tiered: false })
+const blankRule = (): Rule => ({ label: '', match_field: 'contract_type', match_op: 'equals', match_value: '', qualifies: true, payout_kind: 'flat_per_unit', amount: 0, pct: 0, tiered: false, unit_basis: '' })
+
+// PAY GATE (mig 260) — "how often does this rule pay on ONE sale?"
+const UNIT_BASES: { value: string; label: string; help: string }[] = [
+  { value: '', label: 'auto', help: 'A $/unit rule keyed on a transaction-level field (the tender) pays once per DEVICE; everything else pays per line. This is the default and it implements the owner ruling of 2026-08-01.' },
+  { value: 'per_line', label: 'per line', help: 'Pay once for EVERY matching line — correct for a rule that genuinely pays per line item (e.g. $2 per accessory).' },
+  { value: 'per_device', label: 'per device', help: 'Pay once per distinct device serial on the sale. The payment lands on the line carrying the serial, so accessory / rate-plan / fee lines never carry it.' },
+  { value: 'per_transaction', label: 'per sale', help: 'Pay exactly once per transaction, however many devices or lines it has.' },
+]
 const blankPlan = (): Plan => ({ name: '', carrier_id: '', base_tier_metric: 'none', is_active: true, notes: '', rules: [], tiers: [], assignments: [] })
 
 export default function CommissionPlansPage() {
@@ -111,6 +121,36 @@ export default function CommissionPlansPage() {
   const [bulkBusy, setBulkBusy] = useState(false)
   const [bulkResult, setBulkResult] = useState<any>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  // PAY GATE (mig 260) — how often a rule pays on one sale + the before/after it produces.
+  const [gate, setGate] = useState<any>(null)
+  const [gateBusy, setGateBusy] = useState(false)
+  const [impact, setImpact] = useState<any>(null)
+  const [impactBusy, setImpactBusy] = useState(false)
+  const [audit, setAudit] = useState<any>(null)
+  const [auditBusy, setAuditBusy] = useState(false)
+  const txnLevelFields: string[] = gate?.config?.unit_basis?.auto_txn_level_fields || ['tender_type']
+
+  async function loadGate() {
+    try { setGate(await api('/api/v1/commcalc/commission-plans/pay-gate')) } catch { setGate(null) }
+  }
+  async function saveGate(next: any) {
+    setGateBusy(true)
+    try {
+      const r = await api('/api/v1/commcalc/commission-plans/pay-gate', { method: 'PUT', body: JSON.stringify({ config: next }) })
+      setGate({ ...(gate || {}), config: r.config, is_default: false })
+      setMsg('Pay-gate settings saved. Nothing was recalculated — run Calculate for the period(s) concerned.')
+    } catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) } finally { setGateBusy(false) }
+  }
+  async function runImpact() {
+    setImpactBusy(true); setImpact(null)
+    try { setImpact(await api(`/api/v1/commcalc/commission-plans/unit-dedup-impact/${encodeURIComponent(period)}`)) }
+    catch (e: any) { setImpact({ error: String(e?.message || e) }) } finally { setImpactBusy(false) }
+  }
+  async function runAudit() {
+    setAuditBusy(true); setAudit(null)
+    try { setAudit(await api(`/api/v1/commcalc/commission-plans/unit-multiplication-audit/${encodeURIComponent(period)}`)) }
+    catch (e: any) { setAudit({ error: String(e?.message || e) }) } finally { setAuditBusy(false) }
+  }
 
   async function loadRoster() {
     try {
@@ -157,7 +197,7 @@ export default function CommissionPlansPage() {
       } catch { setPlanOpts({ ready: false, vocab: FALLBACK_VOCAB, fields: {}, facets: null, periods: [] }) }
     }
   }
-  useEffect(() => { load(); loadRoster() }, [])
+  useEffect(() => { load(); loadRoster(); loadGate() }, [])
   // re-read the options when the operator changes the period (server-side TTL cache makes this cheap)
   useEffect(() => {
     const t = setTimeout(() => { loadOptions(period) }, 400)
@@ -513,7 +553,7 @@ export default function CommissionPlansPage() {
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Rules — which line items qualify + how they pay</div>
           <div style={{ overflowX: 'auto', marginBottom: 8 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 920 }}>
-              <thead><tr>{['Label', 'Match field', 'Op', 'Value', 'Qualifies', 'Payout', 'Amount / %', 'Tiered', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <thead><tr>{['Label', 'Match field', 'Op', 'Value', 'Qualifies', 'Payout', 'Amount / %', 'Pays', 'Tiered', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
               <tbody>
                 {(draft.rules || []).map((r, i) => (
                   <tr key={i}>
@@ -554,6 +594,23 @@ export default function CommissionPlansPage() {
                       {usesPct(r.payout_kind)
                         ? <input style={{ ...sel, width: 80 }} type="number" step="0.01" placeholder="0.10" value={r.pct} onChange={e => updRule(i, { pct: Number(e.target.value) })} title="fraction, e.g. 0.10 = 10%" />
                         : <input style={{ ...sel, width: 80 }} type="number" step="0.01" placeholder="$" value={r.amount} onChange={e => updRule(i, { amount: Number(e.target.value) })} />}
+                    </td>
+                    <td style={td}>
+                      {/* PAY GATE (mig 260): how often this rule pays on ONE sale. Only $/unit rules
+                          can be deduped — collapsing a %-of-basis rule would delete real dollars. */}
+                      <select style={{ ...sel, width: 118 }} value={r.unit_basis || ''}
+                        disabled={r.payout_kind !== 'flat_per_unit'}
+                        title={r.payout_kind !== 'flat_per_unit'
+                          ? 'Only a $/unit rule can be paid once per device — a %-of-basis rule reads each line’s own price/GP/MRC.'
+                          : (UNIT_BASES.find(u => u.value === (r.unit_basis || ''))?.help || '')}
+                        onChange={e => updRule(i, { unit_basis: e.target.value })}>
+                        {UNIT_BASES.map(u => <option key={u.value} value={u.value} title={u.help}>{u.label}</option>)}
+                      </select>
+                      {r.payout_kind === 'flat_per_unit' && !(r.unit_basis || '') && txnLevelFields.includes(r.match_field) && (
+                        <div style={{ fontSize: 10, color: '#b45309', marginTop: 2, maxWidth: 130 }}>
+                          auto → per device (this field describes the whole sale)
+                        </div>
+                      )}
                     </td>
                     <td style={{ ...td, textAlign: 'center' }}><input type="checkbox" checked={r.tiered} onChange={e => updRule(i, { tiered: e.target.checked })} /></td>
                     <td style={td}><button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }} onClick={() => delRule(i)}>✕</button></td>
@@ -735,6 +792,115 @@ export default function CommissionPlansPage() {
           )
         )}
         {!preview && <div style={{ fontSize: 13, color: 'var(--text3)' }}>Enter a period and Preview to see what a plan would pay.</div>}
+      </div>
+
+      {/* ── PAY GATE (mig 260) — how often does a rule pay on ONE sale? ────────────────────────────
+          OWNER 2026-08-01: one financed sale paid 8 x $25 because the rule keys on the TENDER (which
+          the POS stamps on every line of the receipt) and "$/unit" meant "per matching LINE". The
+          settings below are the tenant's; the impact panel quotes the real engine, twice, before and
+          after, and writes nothing. */}
+      <div className="card" style={{ padding: 16, marginTop: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>🧾 Pay gate — how often a rule pays on one sale
+            <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text3)' }}> (money-touching · takes effect on the next Calculate)</span>
+          </div>
+          <span style={{ flex: 1 }} />
+          <button className="btn btn-secondary" disabled={impactBusy} onClick={runImpact}>{impactBusy ? '…' : `Check impact for ${period}`}</button>
+          <button className="btn btn-secondary" disabled={auditBusy} onClick={runAudit}>{auditBusy ? '…' : 'Which rules multiply?'}</button>
+        </div>
+        {gate?.config?.unit_basis && (
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 10 }}>
+            <label style={{ fontSize: 12 }}>
+              <div style={{ color: 'var(--text3)', marginBottom: 2 }}>One payment per…</div>
+              <select style={sel} value={gate.config.unit_basis.default_basis} disabled={gateBusy}
+                onChange={e => saveGate({ ...gate.config, unit_basis: { ...gate.config.unit_basis, default_basis: e.target.value } })}>
+                <option value="per_device">device (owner rule: one IMEI, one payment)</option>
+                <option value="per_transaction">sale</option>
+                <option value="per_line">line (no dedup)</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 12 }}>
+              <div style={{ color: 'var(--text3)', marginBottom: 2 }}>…for $/unit rules keyed on</div>
+              <select style={sel} value={(gate.config.unit_basis.auto_txn_level_fields || []).join(',')} disabled={gateBusy}
+                onChange={e => saveGate({ ...gate.config, unit_basis: { ...gate.config.unit_basis, auto_txn_level_fields: e.target.value ? e.target.value.split(',') : [] } })}>
+                <option value="tender_type">tender type (the sale's payment method)</option>
+                <option value="tender_type,trans_type">tender type + transaction type</option>
+                <option value="">nothing — never auto-dedup</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 12 }}>
+              <div style={{ color: 'var(--text3)', marginBottom: 2 }}>If no line has a device serial</div>
+              <select style={sel} value={gate.config.unit_basis.no_unit_fallback} disabled={gateBusy}
+                onChange={e => saveGate({ ...gate.config, unit_basis: { ...gate.config.unit_basis, no_unit_fallback: e.target.value } })}>
+                <option value="once_per_transaction">pay once for the sale (and warn)</option>
+                <option value="skip">pay nothing (and warn)</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input type="checkbox" checked={!!gate.config.unit_basis.enabled} disabled={gateBusy}
+                onChange={e => saveGate({ ...gate.config, unit_basis: { ...gate.config.unit_basis, enabled: e.target.checked } })} />
+              <span>Dedup enabled</span>
+            </label>
+            {gate.is_default && <span style={{ fontSize: 11, color: 'var(--text3)' }}>(showing the code defaults — nothing saved for this tenant yet)</span>}
+          </div>
+        )}
+        {!gate && <div style={{ fontSize: 13, color: 'var(--text3)' }}>Pay-gate settings unavailable (the endpoint did not answer). The code defaults are in force.</div>}
+        {impact && !impact.error && (
+          <div style={{ marginTop: 6 }}>
+            <div style={{ fontSize: 12.5, marginBottom: 6 }}>
+              <b>{period}</b>: total <b>{fmt(impact.totals?.before)}</b> before → <b>{fmt(impact.totals?.after)}</b> after
+              (<b style={{ color: (impact.totals?.delta || 0) < 0 ? '#b91c1c' : '#15803d' }}>{fmt(impact.totals?.delta)}</b>),
+              {' '}{impact.by_rep?.length || 0} rep(s) move, {impact.reps_unchanged} unchanged.
+            </div>
+            {!!(impact.by_rep || []).length && (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead><tr>{['Rep', 'Before', 'After', 'Delta'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {(impact.by_rep || []).map((r: any, i: number) => (
+                      <tr key={i}>
+                        <td style={td}>{r.rep}</td><td style={td}>{fmt(r.before)}</td><td style={td}>{fmt(r.after)}</td>
+                        <td style={{ ...td, color: r.delta < 0 ? '#b91c1c' : '#15803d', fontWeight: 700 }}>{fmt(r.delta)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {!!impact.pay_gate?.unit?.notes?.length && (
+              <ul style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 6, paddingLeft: 18 }}>
+                {impact.pay_gate.unit.notes.slice(0, 12).map((n: any, i: number) => <li key={i}>{n.rep} — {n.detail}</li>)}
+              </ul>
+            )}
+          </div>
+        )}
+        {impact?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{impact.error}</div>}
+        {audit && !audit.error && (
+          <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+            <div style={{ fontSize: 12.5, marginBottom: 4 }}>
+              <b>$/unit rules that pay more than once on one transaction</b> — {audit.totals?.rules} rule(s),
+              {' '}{audit.totals?.transactions} transaction(s), {fmt(audit.totals?.extra_amount)} of extra payments.
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6 }}>{audit.note}</div>
+            {!!(audit.rules || []).length && (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead><tr>{['Rule', 'Keyed on', 'Txns', 'Extra lines', 'Extra $', 'Deduped now?'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {(audit.rules || []).map((r: any, i: number) => (
+                    <tr key={i}>
+                      <td style={td}>{r.label || r.rule_id}</td>
+                      <td style={td}>{r.match_field} {r.match_op} “{r.match_value ?? ''}”</td>
+                      <td style={td}>{r.transactions}</td><td style={td}>{r.extra_lines}</td>
+                      <td style={{ ...td, fontWeight: 700 }}>{fmt(r.extra_amount)}</td>
+                      <td style={td}>{r.auto_deduped ? '✅ yes' : (r.unit_basis && r.unit_basis !== 'per_line' ? '✅ by rule' : '— no')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+        {audit?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{audit.error}</div>}
       </div>
 
       {/* PLAN COVERAGE — why isn't the plan paying what I configured? (read-only diagnostic, mig 232) */}

@@ -10609,6 +10609,14 @@ async def save_commission_plan(body: dict, org_id: str = ORG_ID):
                 "tiered": bool(rl.get("tiered")),
                 "sort": int(rl.get("sort") if rl.get("sort") is not None else i),
             })
+            # PAY GATE per-rule settings (mig 260). This save path is DELETE-THEN-INSERT with an
+            # explicit column list, so a new column that is not round-tripped here would be silently
+            # WIPED on every plan save. Written only when the caller sent it AND the column exists, so
+            # a pre-migration database saves exactly as before instead of 500-ing.
+            if _rule_gate_cols_present(client) and "unit_basis" in rl:
+                _ub = str(rl.get("unit_basis") or "").strip().lower()
+                rules[-1]["unit_basis"] = _ub if _ub in ("per_line", "per_device",
+                                                         "per_transaction") else None
         if rules:
             client.schema('commcalc').table('commission_rule').insert(rules).execute()
 
@@ -10648,6 +10656,184 @@ async def delete_commission_plan(plan_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema('commcalc').table('commission_plan').delete().eq('org_id', org_id).eq('id', plan_id).execute()
     return {"deleted": plan_id}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# THE PAY GATE — which matched lines pay, how many times, on what basis   (mig 260; plan_pay_gate.py)
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER REPORT 2026-08-01 (luxelink, transaction 3207 of 2026-07-12): one financed sale paid EIGHT
+# times at $25/unit — the rate plan, the activation fee, the handset, a case, an access charge, a
+# protection plan, a screen protector and a wallet load were each treated as a separate `edge` unit.
+# Owner ruling: "one imie ca be paid only once for the edge sale" and "any accessory or rate plan wil
+# not paid for the edge sale".
+#
+# ROOT CAUSE, both halves: the rule is correctly keyed on the sale's TENDER (a TRANSACTION-level
+# attribute the POS stamps on every line), and `flat_per_unit` has always meant "flat per matching
+# LINE". The gate collapses such a rule to one payment per DEVICE, anchored on the line that carries
+# a device serial — which is also why an accessory or a rate-plan line can never carry it.
+#
+# EVERY endpoint below is READ-ONLY except the two config savers, which write ONLY config rows.
+_RULE_GATE_COLS_OK = {}
+
+
+def _rule_gate_cols_present(client):
+    """True when commcalc.commission_rule carries the mig-260 pay-gate columns. Probed ONCE per
+    process (the schema cannot change under us mid-run)."""
+    if "ok" not in _RULE_GATE_COLS_OK:
+        try:
+            (client.schema('commcalc').table('commission_rule')
+             .select('unit_basis').limit(1).execute())
+            _RULE_GATE_COLS_OK["ok"] = True
+        except Exception:
+            _RULE_GATE_COLS_OK["ok"] = False
+    return _RULE_GATE_COLS_OK["ok"]
+
+
+@router.get("/commission-plans/pay-gate")
+async def get_pay_gate(org_id: str = ORG_ID):
+    """The tenant's pay-gate configuration + what each setting means. READ-ONLY."""
+    require_org(org_id)
+    from app.modules.commcalc import plan_pay_gate as ppg
+    client = sb()
+    cfg = ppg.load_gate_config(client, org_id)
+    stored = bool(cfg.pop("_stored", False))
+    return {"org_id": org_id, "config": cfg, "is_default": not stored,
+            "defaults": {"unit_basis": ppg.UNIT_DEFAULTS, "exclusions": {"enabled": True},
+                         "accessory_basis_guard": ppg.ACC_BASIS_DEFAULTS},
+            "unit_bases": list(ppg.UNIT_BASES),
+            "rule_columns_ready": _rule_gate_cols_present(client),
+            "migration": "260_commission_plan_pay_gate.sql",
+            "note": ("With migration 260 unapplied these are the CODE defaults and they are already "
+                     "in force — they implement the owner ruling of 2026-08-01. Running the migration "
+                     "only makes them tenant-editable.")}
+
+
+@router.put("/commission-plans/pay-gate")
+async def save_pay_gate(body: dict, org_id: str = ORG_ID):
+    """Save the tenant's pay-gate configuration. MONEY-TOUCHING: takes effect on the next Calculate."""
+    require_org(org_id)
+    from app.modules.commcalc import plan_pay_gate as ppg
+    cfg = ppg.normalize_gate_config(body.get("config") if isinstance(body.get("config"), dict) else body)
+    cfg.pop("_stored", None)
+    client = sb()
+    try:
+        rows = (client.schema('commcalc').table('commission_org_config').select('org_id')
+                .eq('org_id', org_id).limit(1).execute().data) or []
+        if rows:
+            (client.schema('commcalc').table('commission_org_config').update({"plan_pay_gate": cfg})
+             .eq('org_id', org_id).execute())
+        else:
+            (client.schema('commcalc').table('commission_org_config')
+             .insert({"org_id": org_id, "plan_pay_gate": cfg}).execute())
+    except Exception as e:
+        raise HTTPException(400, "could not save the pay-gate config — run migration "
+                                 f"260_commission_plan_pay_gate.sql first. [{e}]")
+    return {"saved": True, "config": cfg,
+            "note": "Saved. Nothing recalculated — run Calculate for the period(s) concerned."}
+
+
+@router.get("/commission-plans/unit-dedup-impact/{period}")
+async def unit_dedup_impact(period: str, org_id: str = ORG_ID):
+    """READ-ONLY per-rep BEFORE / AFTER / DELTA for the pay gate. Writes nothing, recomputes nothing.
+
+    Drives the REAL `commission_engine.preview` TWICE in memory: once with `gate_override='off'`
+    (byte-identically the pre-2026-08-01 engine) and once as the tenant is actually configured. The
+    difference is quoted, never derived — arithmetic un-doing would be wrong the moment a rule is
+    tiered, because the tier metric counts units and the units changed.
+    """
+    require_org(org_id)
+    client = sb()
+    try:
+        before = commission_engine.preview(client, org_id, period, gate_override="off")
+        after = commission_engine.preview(client, org_id, period)
+    except Exception as e:
+        raise HTTPException(500, f"unit dedup impact failed: {type(e).__name__}: {e}")
+    a = {str(r.get("rep")): safe_float(r.get("total_payout")) for r in (before.get("by_rep") or [])}
+    b = {str(r.get("rep")): safe_float(r.get("total_payout")) for r in (after.get("by_rep") or [])}
+    rows = []
+    for rep in sorted(set(a) | set(b)):
+        rows.append({"rep": rep, "before": round(a.get(rep, 0.0), 2),
+                     "after": round(b.get(rep, 0.0), 2),
+                     "delta": round(b.get(rep, 0.0) - a.get(rep, 0.0), 2)})
+    rows.sort(key=lambda x: x["delta"])
+    ta = round(safe_float((before.get("totals") or {}).get("payout")), 2)
+    tb = round(safe_float((after.get("totals") or {}).get("payout")), 2)
+    return {"period": period, "org_id": org_id,
+            "totals": {"before": ta, "after": tb, "delta": round(tb - ta, 2)},
+            "by_rep": [r for r in rows if r["delta"]],
+            "reps_unchanged": len([r for r in rows if not r["delta"]]),
+            "pay_gate": after.get("pay_gate"),
+            "note": ("'before' is the engine with the pay gate switched off entirely — i.e. exactly "
+                     "what was paid before this package. Nothing here writes or recalculates.")}
+
+
+@router.get("/commission-plans/unit-multiplication-audit/{period}")
+async def unit_multiplication_audit(period: str, org_id: str = ORG_ID):
+    """WHICH $/unit rules pay more than once inside a single transaction — the CLASS question.
+
+    Field-agnostic on purpose: it reports every `flat_per_unit` rule that pays two or more times on
+    one transaction, whatever it keys on, so the operator can see whether anything besides the tender
+    is multiplying. It changes nothing — a rule listed here is only deduped once its match field is in
+    the tenant's `auto_txn_level_fields` or its own `unit_basis` says so.
+    """
+    require_org(org_id)
+    from app.modules.commcalc import plan_pay_gate as ppg
+    client = sb()
+    try:
+        res = commission_engine.preview(client, org_id, period, detail=True, gate_override="off")
+    except Exception as e:
+        raise HTTPException(500, f"unit multiplication audit failed: {type(e).__name__}: {e}")
+    cfg = ppg.load_gate_config(client, org_id)
+    auto = set((cfg.get("unit_basis") or {}).get("auto_txn_level_fields") or [])
+    by_rule = {}
+    for rep in (res.get("by_rep") or []):
+        for rb in (rep.get("rules") or []):
+            if str(rb.get("payout_kind") or "").strip().lower() != "flat_per_unit":
+                continue
+            per_tx = {}
+            for ln in (rb.get("lines") or []):
+                tid = str(ln.get("trans_id") or "").strip()
+                if not tid:
+                    continue
+                d = per_tx.setdefault(tid, {"lines": 0, "serials": set(), "amount": 0.0})
+                d["lines"] += 1
+                d["amount"] = round(d["amount"] + safe_float(ln.get("amount")), 2)
+                if str(ln.get("imei") or "").strip():
+                    d["serials"].add(str(ln.get("imei")).strip())
+            multi = {t: d for t, d in per_tx.items() if d["lines"] > max(1, len(d["serials"]))}
+            if not multi:
+                continue
+            key = str(rb.get("rule_id"))
+            e = by_rule.setdefault(key, {
+                "rule_id": key, "label": rb.get("label"), "match_field": rb.get("match_field"),
+                "match_op": rb.get("match_op"), "match_value": rb.get("match_value"),
+                "amount": rb.get("amount"), "unit_basis": rb.get("unit_basis"),
+                "transactions": 0, "extra_lines": 0, "extra_amount": 0.0, "reps": {}, "samples": [],
+                "auto_deduped": str(rb.get("match_field") or "").strip().lower() in auto})
+            for t, d in sorted(multi.items()):
+                units = max(1, len(d["serials"]))
+                extra = d["lines"] - units
+                e["transactions"] += 1
+                e["extra_lines"] += extra
+                e["extra_amount"] = round(
+                    e["extra_amount"] + extra * safe_float(rb.get("amount")), 2)
+                e["reps"][rep.get("rep")] = round(
+                    e["reps"].get(rep.get("rep"), 0.0) + extra * safe_float(rb.get("amount")), 2)
+                if len(e["samples"]) < 25:
+                    e["samples"].append({"rep": rep.get("rep"), "trans_id": t, "lines": d["lines"],
+                                         "device_serials": len(d["serials"]),
+                                         "paid": d["amount"]})
+    rules = sorted(by_rule.values(), key=lambda x: -x["extra_amount"])
+    return {"period": period, "org_id": org_id, "rules": rules,
+            "auto_txn_level_fields": sorted(auto),
+            "totals": {"rules": len(rules),
+                       "transactions": sum(r["transactions"] for r in rules),
+                       "extra_lines": sum(r["extra_lines"] for r in rules),
+                       "extra_amount": round(sum(r["extra_amount"] for r in rules), 2)},
+            "note": ("A rule listed here pays more than once on a single transaction. That is CORRECT "
+                     "for a rule that genuinely pays per line item (e.g. $2 per accessory) and WRONG "
+                     "for a rule that describes the whole sale (the tender). `auto_deduped` says "
+                     "whether this tenant's configuration already collapses it.")}
 
 
 _PLAN_TIER_COLS_OK = {}
