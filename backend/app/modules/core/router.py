@@ -888,6 +888,7 @@ SETTING_AREAS = [
     {"key": "carriers",          "label": "Carrier Selection"},
     {"key": "commission_rates",  "label": "Boost Commission Rates"},
     {"key": "commission_plans",  "label": "Commission Plans & Payout Schedules"},
+    {"key": "commission_promote", "label": "Expected → Earned promote (multi-month commission)"},
     {"key": "targets",           "label": "Target Settings"},
     {"key": "closing",           "label": "Daily Closing / Tender Fields"},
     {"key": "kpi",               "label": "KPI Metrics"},
