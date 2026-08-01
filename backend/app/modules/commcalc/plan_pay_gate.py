@@ -86,7 +86,13 @@ EXCLUSION_OPS = ("word", "equals", "contains", "prefix", "suffix")
 # "there shgould be no paymentfor any rtr trasactions ... map it in teh back end but let the user
 # define going forward". A tenant row in commcalc.payout_exclusion_map with the same (field, op,
 # value) REPLACES this seed; a row with enabled=false switches it off.
-DEFAULT_EXCLUSIONS = []
+DEFAULT_EXCLUSIONS = [
+    {"code": "rtr", "label": "RTR (real-time refill / bill payment) transactions",
+     "match_field": "product_desc", "match_op": "word", "match_value": "RTR",
+     "enabled": True, "status": "confirmed", "source": "seed",
+     "reason": ("RTR (real-time refill / bill payment) lines are not commissionable "
+                "— owner directive 2026-08-01.")},
+]
 
 # ── ⑤ ACCESSORY BASIS GUARD ──────────────────────────────────────────────────────────────────────
 ACC_BASIS_DEFAULTS = {

@@ -151,6 +151,35 @@ export default function CommissionPlansPage() {
     try { setAudit(await api(`/api/v1/commcalc/commission-plans/unit-multiplication-audit/${encodeURIComponent(period)}`)) }
     catch (e: any) { setAudit({ error: String(e?.message || e) }) } finally { setAuditBusy(false) }
   }
+  // PAYOUT EXCLUSIONS (mig 261) — classes of line that never pay, whatever a rule says.
+  const [excl, setExcl] = useState<any>(null)
+  const [exclDraft, setExclDraft] = useState<any>({ match_field: 'product_desc', match_op: 'word', match_value: '', label: '', reason: '' })
+  const [exclSaving, setExclSaving] = useState(false)
+  const [exclImpact, setExclImpact] = useState<any>(null)
+  const [exclImpactBusy, setExclImpactBusy] = useState(false)
+
+  async function loadExclusions() {
+    try { setExcl(await api('/api/v1/commcalc/commission-plans/payout-exclusions')) } catch { setExcl(null) }
+  }
+  async function saveExclusion(row: any) {
+    setExclSaving(true)
+    try {
+      await api('/api/v1/commcalc/commission-plans/payout-exclusions', { method: 'POST', body: JSON.stringify(row) })
+      setExclDraft({ match_field: 'product_desc', match_op: 'word', match_value: '', label: '', reason: '' })
+      await loadExclusions()
+      setMsg('Exclusion saved. Nothing was recalculated — run Calculate for the period(s) concerned.')
+    } catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) } finally { setExclSaving(false) }
+  }
+  async function deleteExclusion(id: string) {
+    setExclSaving(true)
+    try { await api(`/api/v1/commcalc/commission-plans/payout-exclusions/${id}`, { method: 'DELETE' }); await loadExclusions() }
+    catch (e: any) { setMsg('Delete failed: ' + (e?.message || e)) } finally { setExclSaving(false) }
+  }
+  async function runExclImpact() {
+    setExclImpactBusy(true); setExclImpact(null)
+    try { setExclImpact(await api(`/api/v1/commcalc/commission-plans/exclusion-impact/${encodeURIComponent(period)}`)) }
+    catch (e: any) { setExclImpact({ error: String(e?.message || e) }) } finally { setExclImpactBusy(false) }
+  }
 
   async function loadRoster() {
     try {
@@ -197,7 +226,7 @@ export default function CommissionPlansPage() {
       } catch { setPlanOpts({ ready: false, vocab: FALLBACK_VOCAB, fields: {}, facets: null, periods: [] }) }
     }
   }
-  useEffect(() => { load(); loadRoster(); loadGate() }, [])
+  useEffect(() => { load(); loadRoster(); loadGate(); loadExclusions() }, [])
   // re-read the options when the operator changes the period (server-side TTL cache makes this cheap)
   useEffect(() => {
     const t = setTimeout(() => { loadOptions(period) }, 400)
@@ -901,6 +930,83 @@ export default function CommissionPlansPage() {
           </div>
         )}
         {audit?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{audit.error}</div>}
+
+        {/* ── PAYOUT EXCLUSIONS (mig 261) ────────────────────────────────────────────────────────
+            OWNER 2026-08-01: "there shgould be no paymentfor any rtr trasactions … but with mapping
+            … let the user define going forward". A class of line that never pays, whatever a rule
+            says — because a rule with "qualifies" off only stops ITS OWN payment (the plan engine has
+            no exclusivity), so this could not be expressed in the existing config at all. */}
+        <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>🚫 Never pay these lines</div>
+            <span style={{ flex: 1 }} />
+            <button className="btn btn-secondary" disabled={exclImpactBusy} onClick={runExclImpact}>{exclImpactBusy ? '…' : `What would this exclude in ${period}?`}</button>
+          </div>
+          {excl?.ready === false && (
+            <div style={{ fontSize: 11.5, color: '#92400e', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 6, padding: '6px 8px', marginBottom: 6 }}>
+              Run <b>{excl.migration}</b> to make this list editable. The built-in mapping below is already in force.
+            </div>
+          )}
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginBottom: 6 }}>
+            <thead><tr>{['What', 'Field', 'Match', 'Value', 'On', 'Source', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {(excl?.rules || []).map((r: any, i: number) => (
+                <tr key={i}>
+                  <td style={td}>{r.label || r.code || '—'}</td>
+                  <td style={td}>{r.match_field}</td>
+                  <td style={td}>{r.match_op}{r.match_op === 'word' && <span title="matches the whole token only — a substring match on a short token would hit unrelated products (‘contains RTR’ also matches CARTRIDGE)" style={{ marginLeft: 4, color: '#2563eb' }}>ⓘ</span>}</td>
+                  <td style={td}><code>{r.match_value}</code></td>
+                  <td style={td}>{r.enabled ? '✅' : '—'}{r.status === 'proposed' ? ' (proposed)' : ''}</td>
+                  <td style={td}>{r.source === 'seed' ? 'built-in' : 'yours'}</td>
+                  <td style={td}>
+                    {r.source === 'seed'
+                      ? <button className="btn btn-secondary" style={{ fontSize: 11, padding: '1px 8px' }} disabled={exclSaving}
+                          onClick={() => saveExclusion({ ...r, enabled: false, source: 'tenant' })}>switch off</button>
+                      : <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }} disabled={exclSaving}
+                          onClick={() => deleteExclusion(r.id)}>✕</button>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select style={{ ...sel, width: 140 }} value={exclDraft.match_field}
+              onChange={e => setExclDraft({ ...exclDraft, match_field: e.target.value, match_value: '' })}>
+              {(excl?.match_fields || ['product_desc']).map((f: string) => <option key={f} value={f}>{f}</option>)}
+            </select>
+            <select style={{ ...sel, width: 110 }} value={exclDraft.match_op}
+              onChange={e => setExclDraft({ ...exclDraft, match_op: e.target.value })}>
+              {(excl?.match_ops || ['word']).map((o: string) => <option key={o} value={o}>{o}</option>)}
+            </select>
+            {/* RULE THREE §3b — the value is PICKED from what this tenant's sales actually contain. */}
+            <MatchValuePicker opts={planOpts} field={exclDraft.match_field} op={exclDraft.match_op === 'word' ? 'contains' : exclDraft.match_op}
+              value={exclDraft.match_value || ''} width={220}
+              onChange={(v: string) => setExclDraft({ ...exclDraft, match_value: v })} />
+            <input style={{ ...sel, width: 150 }} placeholder="what to call it" value={exclDraft.label}
+              onChange={e => setExclDraft({ ...exclDraft, label: e.target.value })} />
+            <input style={{ ...sel, flex: 1, minWidth: 180 }} placeholder="reason shown on the drill-down" value={exclDraft.reason}
+              onChange={e => setExclDraft({ ...exclDraft, reason: e.target.value })} />
+            <button className="btn btn-secondary" disabled={exclSaving || !exclDraft.match_value}
+              onClick={() => saveExclusion(exclDraft)}>➕ Add</button>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
+            “word” matches the token and never a substring — use it for short codes. A built-in mapping switched off stays visible and can be switched back on.
+          </div>
+          {exclImpact && !exclImpact.error && (
+            <div style={{ marginTop: 8, fontSize: 12.5 }}>
+              <b>{period}</b>: {exclImpact.excluded_lines} line(s) would stop paying,
+              {' '}{fmt(exclImpact.excluded_amount)} total ({fmt(exclImpact.totals?.delta)} across all reps).
+              {!!(exclImpact.samples || []).length && (
+                <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 11.5, color: 'var(--text3)' }}>
+                  {exclImpact.samples.slice(0, 10).map((s: any, i: number) => (
+                    <li key={i}>{s.date} · trans {s.trans_id} · {s.rep} · {s.product} — {fmt(s.would_have_paid)}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {exclImpact?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{exclImpact.error}</div>}
+        </div>
       </div>
 
       {/* PLAN COVERAGE — why isn't the plan paying what I configured? (read-only diagnostic, mig 232) */}

@@ -10836,6 +10836,125 @@ async def unit_multiplication_audit(period: str, org_id: str = ORG_ID):
                      "whether this tenant's configuration already collapses it.")}
 
 
+# ── PAYOUT EXCLUSION MAP (mig 261) — lines that never pay, whatever a rule says ───────────────────
+# OWNER 2026-08-01: "there shgould be no paymentfor any rtr trasactions , again nothing hardocded, but
+# with mapping, map it in teh back end but let the user define going forward". Evidence: luxelink
+# 2026-07-12 trans 3215, "Total Wireless Protect+ RTR. Phone#: (773) 648-1456." collected commission.
+#
+# CONFIG-FIRST CHECK, DONE FIRST: `commission_rule.qualifies=false` cannot do this. The plan engine has
+# NO EXCLUSIVITY — every rule is tested against every line independently — so a non-qualifying rule
+# stops its OWN payment and nothing else. Excluding a CLASS across all rules had no representation in
+# the schema. Hence a new mapping table, editable per tenant, with ONE code-seeded row.
+
+@router.get("/commission-plans/payout-exclusions")
+async def list_payout_exclusions(include_proposed: bool = True, org_id: str = ORG_ID):
+    """The tenant's exclusion map, with the code seed layered in and labelled `source='seed'`."""
+    require_org(org_id)
+    from app.modules.commcalc import plan_pay_gate as ppg
+    client = sb()
+    rules, ready = ppg.load_exclusions(client, org_id, include_proposed=include_proposed)
+    stored = []
+    try:
+        stored = (client.schema('commcalc').table(ppg.EXCLUSION_TABLE).select('*')
+                  .eq('org_id', org_id).limit(2000).execute().data) or []
+    except Exception:
+        stored = []
+    return {"org_id": org_id, "ready": ready, "rules": rules, "stored": stored,
+            "seed": ppg.DEFAULT_EXCLUSIONS,
+            "match_fields": list(ppg.EXCLUSION_FIELDS), "match_ops": list(ppg.EXCLUSION_OPS),
+            "migration": None if ready else "261_commission_payout_exclusion_map.sql",
+            "note": ("An empty table still yields the code seed (the owner-ordered RTR rule). A row "
+                     "with the same field/operator/value REPLACES the seed — including with "
+                     "enabled=false, which switches it off without deleting anything.")}
+
+
+@router.post("/commission-plans/payout-exclusions")
+async def save_payout_exclusion(body: dict, org_id: str = ORG_ID):
+    """Add or update ONE exclusion mapping. MONEY-TOUCHING: applies on the next Calculate."""
+    require_org(org_id)
+    from app.modules.commcalc import plan_pay_gate as ppg
+    row = ppg.normalize_exclusion({**body, "match_op": body.get("match_op") or "word"})
+    if not row:
+        raise HTTPException(400, f"match_field must be one of {list(ppg.EXCLUSION_FIELDS)} and "
+                                 f"match_value must be non-empty")
+    if row["match_op"] == "contains" and len(row["match_value"].strip()) <= 4:
+        # the model-name collision class, refused at the boundary rather than discovered in payroll
+        raise HTTPException(400,
+                            f"'{row['match_value']}' is {len(row['match_value'].strip())} characters — a "
+                            f"'contains' match on a short token also hits unrelated products (a "
+                            f"'contains RTR' rule matches CARTRIDGE). Use the 'word' operator, which "
+                            f"matches the token and never a substring.")
+    payload = {"org_id": org_id, "code": row.get("code"), "label": row.get("label"),
+               "match_field": row["match_field"], "match_op": row["match_op"],
+               "match_value": row["match_value"], "reason": row.get("reason"),
+               "enabled": bool(row.get("enabled", True)), "status": row.get("status") or "confirmed",
+               "source": "tenant"}
+    client = sb()
+    try:
+        if body.get("id"):
+            (client.schema('commcalc').table(ppg.EXCLUSION_TABLE).update(payload)
+             .eq('org_id', org_id).eq('id', body["id"]).execute())
+        else:
+            (client.schema('commcalc').table(ppg.EXCLUSION_TABLE)
+             .upsert(payload, on_conflict='org_id,match_field,match_op,match_value').execute())
+    except Exception as e:
+        raise HTTPException(400, "could not save the exclusion — run migration "
+                                 f"261_commission_payout_exclusion_map.sql first. [{e}]")
+    return {"saved": True, "rule": payload,
+            "note": "Saved. Nothing recalculated — run Calculate for the period(s) concerned."}
+
+
+@router.delete("/commission-plans/payout-exclusions/{row_id}")
+async def delete_payout_exclusion(row_id: str, org_id: str = ORG_ID):
+    """Delete ONE tenant exclusion row. Deleting a row that overrode the code seed restores the seed."""
+    require_org(org_id)
+    from app.modules.commcalc import plan_pay_gate as ppg
+    client = sb()
+    try:
+        (client.schema('commcalc').table(ppg.EXCLUSION_TABLE).delete()
+         .eq('org_id', org_id).eq('id', row_id).execute())
+    except Exception as e:
+        raise HTTPException(400, f"delete failed (is migration 261 applied?): {e}")
+    return {"deleted": row_id,
+            "note": ("If this row overrode a code-seeded exclusion, the seed is now back in force.")}
+
+
+@router.get("/commission-plans/exclusion-impact/{period}")
+async def exclusion_impact(period: str, org_id: str = ORG_ID):
+    """READ-ONLY per-rep BEFORE / AFTER for the exclusion map alone, plus every excluded line.
+
+    Runs the REAL engine twice: once with the whole gate off, once with ONLY the exclusions on (the
+    unit dedup and the basis guard are neutralised in the override), so the number attributed to the
+    exclusions is the exclusions' own.
+    """
+    require_org(org_id)
+    client = sb()
+    only_excl = {"unit_basis": {"enabled": False}, "exclusions": {"enabled": True},
+                 "accessory_basis_guard": {"enabled": False}}
+    try:
+        before = commission_engine.preview(client, org_id, period, gate_override="off")
+        after = commission_engine.preview(client, org_id, period, gate_override=only_excl)
+    except Exception as e:
+        raise HTTPException(500, f"exclusion impact failed: {type(e).__name__}: {e}")
+    a = {str(r.get("rep")): safe_float(r.get("total_payout")) for r in (before.get("by_rep") or [])}
+    b = {str(r.get("rep")): safe_float(r.get("total_payout")) for r in (after.get("by_rep") or [])}
+    rows = [{"rep": rep, "before": round(a.get(rep, 0.0), 2), "after": round(b.get(rep, 0.0), 2),
+             "delta": round(b.get(rep, 0.0) - a.get(rep, 0.0), 2)} for rep in sorted(set(a) | set(b))]
+    rows.sort(key=lambda x: x["delta"])
+    g = (after.get("pay_gate") or {}).get("excluded") or {}
+    ta = round(safe_float((before.get("totals") or {}).get("payout")), 2)
+    tb = round(safe_float((after.get("totals") or {}).get("payout")), 2)
+    return {"period": period, "org_id": org_id,
+            "totals": {"before": ta, "after": tb, "delta": round(tb - ta, 2)},
+            "by_rep": [r for r in rows if r["delta"]],
+            "excluded_lines": g.get("lines", 0), "excluded_amount": g.get("amount_suppressed", 0.0),
+            "by_rule": g.get("by_rule") or {}, "samples": g.get("samples") or [],
+            "exclusions_active": (after.get("pay_gate") or {}).get("exclusions_active") or [],
+            "note": ("Only the exclusion map is active in the 'after' column — the unit dedup and the "
+                     "accessory basis guard are switched off in this comparison, so the delta is the "
+                     "exclusions' own. Nothing here writes or recalculates.")}
+
+
 _PLAN_TIER_COLS_OK = {}
 
 
