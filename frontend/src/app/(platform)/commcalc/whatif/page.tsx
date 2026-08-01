@@ -429,10 +429,108 @@ function CarrierIncome({ carrierId }: { carrierId: string }) {
           ]} />
       </div>
       <SourceSwap swap={trend.source_swap} />
+      <ClassLegSwap swap={trend.class_swap} mode={trend.class_mode} note={trend.class_note} wiring={trend.class_wiring} />
       <p style={{ fontSize: 12, color: 'var(--text3)' }}>
         Company payout / carrier income = what {trend.carrier?.name || 'the carrier / master-agent'} pays the company. Net = carrier income − employee payout ({period}). Source is resolved per carrier (⚙️ Sources).
         {isLedger && <> Commission, Spiff and Equipment rebate come from the <b>canonical Commission Ledger</b> (origin-agnostic: file imports and MA-data refreshes both count, classified by your own category map). Residual and airtime margin come from MA Daily Tx — ledger residual lines are excluded here so the same dollars are never counted twice.</>}
       </p>
+    </div>
+  )
+}
+
+// ─── Product-class reconciliation: order-type legs vs the CONFIRMED MA product classes (mig 265) ───
+// Same two-mode pattern as SourceSwap: rendered (collapsed) whichever mode is ACTIVE, so the dollar
+// impact of selecting the residual/airtime legs by product class is auditable BEFORE it is switched on.
+// Nothing here changes a number — the switch lives on /commcalc/ma-class-wiring.
+function ClassLegSwap({ swap, mode, note, wiring }: { swap: any; mode?: string; note?: string | null; wiring?: any }) {
+  const [open, setOpen] = useState(false)
+  if (!swap || !(swap.by_month || []).length) return null
+  const t = swap.totals || {}
+  const rows: any[] = swap.by_month || []
+  const active = mode === 'class'
+  const th: React.CSSProperties = { textAlign: 'right', padding: '6px 8px', fontWeight: 700, whiteSpace: 'nowrap' }
+  const td: React.CSSProperties = { textAlign: 'right', padding: '6px 8px', whiteSpace: 'nowrap' }
+  const delta = (v: number) => <span style={{ color: v > 0 ? '#059669' : v < 0 ? '#dc2626' : 'var(--text3)' }}>{v > 0 ? '+' : ''}{fmt(v)}</span>
+  const pending = wiring?.class_map?.ambiguous_pending || []
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 18 }}>
+      <button onClick={() => setOpen(!open)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontWeight: 700, fontSize: 14, color: 'var(--text)' }}>
+        {open ? '▾' : '▸'} Product-class reconciliation — order-type legs vs the confirmed MA product classes
+        <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}>
+          ({active ? 'classes ACTIVE' : 'order type ACTIVE'}; residual + airtime legs, total delta {fmt(num(t.delta_total))})
+        </span>
+      </button>
+      {open && <div style={{ marginTop: 12 }}>
+        {note && <p style={{ fontSize: 12, color: '#9a3412', background: '#fff7ed', border: '1px solid #fdba74', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6, margin: '0 0 10px' }}>{note}</p>}
+        <p style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6, margin: '0 0 10px' }}>{swap.note}</p>
+        <p style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.6, margin: '0 0 12px' }}>
+          <b>Old:</b> {swap.old_source}<br /><b>New:</b> {swap.new_source}<br />
+          Change the switch and the class → leg map on <a href="/commcalc/ma-class-wiring" style={{ color: 'var(--accent,#2563eb)' }}>MA Product Class → Money</a>.
+        </p>
+        {!!pending.length && (
+          <p style={{ fontSize: 12, color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6, margin: '0 0 12px' }}>
+            {pending.length} product name(s) flagged AMBIGUOUS are still unconfirmed, so they classify nothing and their dollars sit in “not classified”: {pending.map((a2: any) => a2.product_name).join(' · ')}
+          </p>
+        )}
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead><tr style={{ borderBottom: '2px solid var(--border)' }}>
+              <th style={{ ...th, textAlign: 'left' }}>Month</th>
+              <th style={th}>Old residual</th><th style={th}>Old airtime</th>
+              <th style={th}>New residual</th><th style={th}>New airtime</th>
+              <th style={th}>Δ residual</th><th style={th}>Δ airtime</th><th style={th}>Δ total</th>
+              <th style={th}>Left total (classified)</th><th style={th}>Left total (unclassified)</th>
+            </tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.period} style={{ borderBottom: '1px solid var(--border)', opacity: r.on_payload === false ? 0.65 : 1 }}>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{r.period}{r.on_payload === false ? ' *' : ''}</td>
+                  <td style={td}>{fmt(num(r.old_residual))}</td><td style={td}>{fmt(num(r.old_airtime))}</td>
+                  <td style={td}>{fmt(num(r.new_residual))}</td><td style={td}>{fmt(num(r.new_airtime))}</td>
+                  <td style={td}>{delta(num(r.delta_residual))}</td><td style={td}>{delta(num(r.delta_airtime))}</td>
+                  <td style={td}>{delta(num(r.delta_total))}</td>
+                  <td style={td}>{fmt(num(r.class_excluded_discount))}</td>
+                  <td style={{ ...td, color: num(r.class_unclassified_lines) ? '#b91c1c' : undefined }}>{fmt(num(r.class_unclassified_discount))}</td>
+                </tr>
+              ))}
+              <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
+                <td style={{ padding: '6px 8px' }}>TOTAL</td>
+                <td style={td}>{fmt(num(t.old_residual))}</td><td style={td}>{fmt(num(t.old_airtime))}</td>
+                <td style={td}>{fmt(num(t.new_residual))}</td><td style={td}>{fmt(num(t.new_airtime))}</td>
+                <td style={td}>{delta(num(t.delta_residual))}</td><td style={td}>{delta(num(t.delta_airtime))}</td>
+                <td style={td}>{delta(num(t.delta_total))}</td>
+                <td style={td}>{fmt(num(t.class_excluded_discount))}</td>
+                <td style={td}>{fmt(num(t.class_unclassified_discount))}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        {!!(swap.by_class || []).length && (
+          <div style={{ marginTop: 12, overflowX: 'auto' }}>
+            <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text3)', fontWeight: 700, marginBottom: 6 }}>By product class</div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead><tr style={{ borderBottom: '2px solid var(--border)' }}>
+                <th style={{ ...th, textAlign: 'left' }}>Class</th><th style={{ ...th, textAlign: 'left' }}>Leg</th>
+                <th style={th}>Lines</th><th style={th}>→ Residual</th><th style={th}>→ Airtime</th><th style={th}>Left the total</th>
+              </tr></thead>
+              <tbody>
+                {(swap.by_class || []).map((c: any) => (
+                  <tr key={c.product_class} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td style={{ padding: '6px 8px' }}>{c.product_class}</td>
+                    <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{c.leg}</td>
+                    <td style={td}>{c.lines}</td><td style={td}>{fmt(num(c.residual))}</td>
+                    <td style={td}>{fmt(num(c.airtime))}</td><td style={td}>{fmt(num(c.excluded_discount))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10, lineHeight: 1.6 }}>
+          Only CONFIRMED classifications count. Anything with no confirmed class — and any class mapped to “not carrier income” — leaves the total and is shown above in dollars, never dropped silently.
+          {num(t.ledger_class_overlap_lines) > 0 && <> {t.ledger_class_overlap_lines} ledger line(s) totalling {fmt(num(t.ledger_class_overlap_total))} carry a residual-class label; they are excluded from the Commission heading because the Residual heading already counts those dollars.</>}
+        </p>
+      </div>}
     </div>
   )
 }

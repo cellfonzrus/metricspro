@@ -25,6 +25,9 @@ export default function CommissionCategoryMapPage() {
   const [labels, setLabels] = useState<Record<string, string>>({})
   const [meta, setMeta] = useState<{ match_fields: string[]; match_ops: string[]; sign_rules: string[] }>({ match_fields: ['product_name', 'order_type'], match_ops: ['contains', 'equals'], sign_rules: ['negative_only', 'any'] })
   const [obs, setObs] = useState<Obs[]>([])
+  // the MA product-class vocabulary — the PATTERN for a `product_class` rule is a class key,
+  // never free text (RULE THREE: pick, don't type). Loaded from the tenant's own vocabulary.
+  const [classKeys, setClassKeys] = useState<string[]>([])
   const [msg, setMsg] = useState('')
   const [nr, setNr] = useState<Rule>({ source_report: 'ma_daily_tx', match_field: 'product_name', match_op: 'contains', pattern: '', category: 'commission', sign_rule: 'negative_only', priority: 100 })
 
@@ -44,7 +47,10 @@ export default function CommissionCategoryMapPage() {
   async function loadObserved(s: string) {
     try { const d = await api('/api/v1/commcalc/commission-ledger/observed-types?source_report=' + encodeURIComponent(s)); setObs(d?.types || []) } catch { setObs([]) }
   }
-  useEffect(() => { loadTemplates() }, [])         // eslint-disable-line react-hooks/exhaustive-deps
+  async function loadClasses() {
+    try { const d = await api('/api/v1/commcalc/ma-product-class/classes'); setClassKeys(d?.assignable || []) } catch { setClassKeys([]) }
+  }
+  useEffect(() => { loadTemplates(); loadClasses() }, [])         // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadMap(src); loadObserved(src) }, [src])  // eslint-disable-line react-hooks/exhaustive-deps
 
   function flash(m: string) { setMsg(m); setTimeout(() => setMsg(''), 4000) }
@@ -84,8 +90,15 @@ export default function CommissionCategoryMapPage() {
       <p style={{ color: 'var(--text2)', fontSize: 12.5, marginBottom: 8, maxWidth: 900, lineHeight: 1.5 }}>
         Looking for what KIND of money each MA Daily Tx line is — commission vs spiff vs residual vs a
         customer bill payment vs a device sale? That is a separate, exact-match classification of the
-        <code> product_name</code> column and it does <b>not</b> feed these five payout buckets:{' '}
+        <code> product_name</code> column:{' '}
         <a href="/commcalc/ma-product-class" style={{ color: 'var(--accent,#2563eb)' }}>MA Product Name Classification →</a>
+      </p>
+      <p style={{ color: 'var(--text2)', fontSize: 12.5, marginBottom: 8, maxWidth: 900, lineHeight: 1.5 }}>
+        A rule can now match on <b>is product class</b> instead of a keyword — one rule per class, and a
+        <b> confirmed</b> class always beats a keyword rule whatever its priority. Class rules are
+        <b> inert</b> until the Commission Ledger switch is set to “Product class”, and only CONFIRMED
+        classifications ever match. Switch, class → leg map and the before/after delta live on{' '}
+        <a href="/commcalc/ma-class-wiring" style={{ color: 'var(--accent,#2563eb)' }}>MA Product Class → Money →</a>
       </p>
       {!ready && (
         <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
@@ -144,8 +157,8 @@ export default function CommissionCategoryMapPage() {
             <tr key={r.id || i} style={{ borderTop: '1px solid var(--border)' }}>
               <td style={{ padding: '5px 8px', color: 'var(--text2)' }}>{r.priority}</td>
               <td style={{ padding: '5px 8px' }}>{r.match_field}</td>
-              <td style={{ padding: '5px 8px' }}>{r.match_op}</td>
-              <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{r.pattern}</td>
+              <td style={{ padding: '5px 8px' }}>{r.match_op === 'product_class' ? 'is product class' : r.match_op}</td>
+              <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{r.pattern}{r.match_op === 'product_class' && <span style={{ fontFamily: 'inherit', fontSize: 11, color: 'var(--text3)', marginLeft: 6 }}>(class)</span>}</td>
               <td style={{ padding: '5px 8px', fontWeight: 600 }}>{labels[r.category] || r.category}</td>
               <td style={{ padding: '5px 8px', color: 'var(--text2)' }}>{r.sign_rule === 'any' ? 'any' : 'neg'}</td>
               <td style={{ padding: '5px 8px' }}>{r.id ? <button onClick={() => del(r)} style={{ ...inp, cursor: 'pointer', fontSize: 11, padding: '3px 8px' }}>✕</button> : <span style={{ fontSize: 11, color: 'var(--text3)' }}>default</span>}</td>
@@ -157,9 +170,16 @@ export default function CommissionCategoryMapPage() {
       {/* add-rule form */}
       <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, marginBottom: 22, background: 'var(--surface)', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)' }}>Add rule:</span>
-        <select style={inp} value={nr.match_field} onChange={e => setNr({ ...nr, match_field: e.target.value })}>{meta.match_fields.map(f => <option key={f} value={f}>{f}</option>)}</select>
-        <select style={inp} value={nr.match_op} onChange={e => setNr({ ...nr, match_op: e.target.value })}>{meta.match_ops.map(o => <option key={o} value={o}>{o}</option>)}</select>
-        <input style={{ ...inp, width: 170 }} placeholder="pattern (e.g. Spiff)" value={nr.pattern} onChange={e => setNr({ ...nr, pattern: e.target.value })} />
+        <select style={inp} disabled={nr.match_op === 'product_class'} value={nr.match_field} onChange={e => setNr({ ...nr, match_field: e.target.value })}>{meta.match_fields.map(f => <option key={f} value={f}>{f}</option>)}</select>
+        <select style={inp} value={nr.match_op} onChange={e => setNr({ ...nr, match_op: e.target.value, pattern: '' })}>{meta.match_ops.map(o => <option key={o} value={o}>{o === 'product_class' ? 'is product class' : o}</option>)}</select>
+        {nr.match_op === 'product_class' ? (
+          <select style={{ ...inp, width: 190 }} value={nr.pattern} onChange={e => setNr({ ...nr, pattern: e.target.value })}>
+            <option value="">— pick a product class —</option>
+            {classKeys.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        ) : (
+          <input style={{ ...inp, width: 170 }} placeholder="pattern (e.g. Spiff)" value={nr.pattern} onChange={e => setNr({ ...nr, pattern: e.target.value })} />
+        )}
         <span style={{ fontSize: 13 }}>→</span>
         <select style={inp} value={nr.category} onChange={e => setNr({ ...nr, category: e.target.value })}>{cats.map(c => <option key={c} value={c}>{labels[c] || c}</option>)}</select>
         <select style={inp} value={nr.sign_rule} onChange={e => setNr({ ...nr, sign_rule: e.target.value })}>{meta.sign_rules.map(s => <option key={s} value={s}>{s === 'any' ? 'any sign' : 'negative only'}</option>)}</select>
