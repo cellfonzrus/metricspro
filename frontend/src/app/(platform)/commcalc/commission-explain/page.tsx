@@ -36,6 +36,11 @@ const PLAN_COLS: ExportColumn[] = [
   // "why did this pay $0" into "because the catalog says this item costs exactly what it sells for".
   { header: 'Implied cost', get: r => r.implied_cost, money: true },
   { header: 'Data check', get: r => r.cost_flag_labels || '' },
+  // PAY GATE (mig 260/261): a line the gate stopped is still SHOWN, with the reason and the money it
+  // would have paid. Silence is how a $0 becomes unexplainable — and how an overpayment hides.
+  { header: 'Paid?', get: r => r.suppressed ? 'NOT PAID' : '' },
+  { header: 'Why not', get: r => r.suppressed_reason || '' },
+  { header: 'Would have paid', get: r => r.suppressed ? r.would_have_paid : '', money: true },
   { header: 'Line $', get: r => r.amount, money: true },
 ]
 const INST_COLS: ExportColumn[] = [
@@ -112,7 +117,10 @@ export default function CommissionExplainPage() {
         imei: l.imei, mdn: l.mdn, product: l.product, contract_type: l.contract_type,
         ext_price: l.ext_price, gp: l.gp, amount: l.flat_once ? null : l.amount,
         implied_cost: l.implied_cost, cost_flags: l.cost_flags || [],
-        cost_flag_labels: (l.cost_flag_labels || []).join(' ') })
+        cost_flag_labels: (l.cost_flag_labels || []).join(' '),
+        suppressed: !!l.suppressed, suppressed_by: l.suppressed_by || '',
+        suppressed_reason: l.suppressed_reason || '', would_have_paid: l.would_have_paid ?? 0,
+        basis_note: l.basis_note || '', amount_before_guard: l.amount_before_guard ?? null })
     return out
   }, [pc])
   const instRows = useMemo(() => {
@@ -208,6 +216,7 @@ export default function CommissionExplainPage() {
               )}
               <AssignmentTrace considered={pc?.considered} />
               <DataQualityBanner dq={pc?.data_quality} />
+              <PayGateBanner rows={planRows} />
               {planRows.length > 0 ? (
                 <ReportShell title={`Plan line detail — ${data.rep}`} subtitle={`${period} · ${pc?.plan_name || ''}`}
                   filename={`plan-detail-${data.rep}-${period}`.replace(/\s+/g, '-')} columns={PLAN_COLS} rows={planRows} totals compact />
@@ -300,6 +309,38 @@ function DataQualityBanner({ dq }: { dq: any }) {
         </div>
       )}
       <div style={{ fontSize: 11, color: '#92400e', marginTop: 6, opacity: 0.85 }}>{dq.note}</div>
+    </div>
+  )
+}
+
+// PAY GATE (mig 260/261) — the lines a rule matched but the gate did not pay, and why. This is the
+// surface the owner reads after "why did this one sale pay $200": the seven suppressed lines are named
+// here with the dollars they would have paid, instead of quietly disappearing from the drill-down.
+function PayGateBanner({ rows }: { rows: any[] }) {
+  const supp = (rows || []).filter(r => r.suppressed)
+  const guarded = (rows || []).filter(r => r.amount_before_guard != null)
+  if (!supp.length && !guarded.length) return null
+  const byReason: Record<string, { n: number; amt: number }> = {}
+  for (const r of supp) {
+    const k = r.suppressed_reason || r.suppressed_by || 'suppressed'
+    byReason[k] = byReason[k] || { n: 0, amt: 0 }
+    byReason[k].n += 1; byReason[k].amt += Number(r.would_have_paid || 0)
+  }
+  return (
+    <div style={{ border: '1px solid #93c5fd', background: '#eff6ff', borderRadius: 8, padding: 10, margin: '8px 0' }}>
+      <div style={{ fontWeight: 700, fontSize: 13, color: '#1e3a8a', marginBottom: 4 }}>
+        🧾 Pay gate — {supp.length} matched line{supp.length === 1 ? '' : 's'} did not pay
+        {guarded.length > 0 ? `, ${guarded.length} paid on a guarded basis` : ''}
+      </div>
+      <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 12.5, color: '#1e3a8a' }}>
+        {Object.entries(byReason).map(([k, v]) => (
+          <li key={k}><b>{v.n}</b> line{v.n === 1 ? '' : 's'} ({fmt(v.amt)} not paid) — {k}</li>
+        ))}
+        {guarded.length > 0 && <li><b>{guarded.length}</b> line(s) had an unusable GP, so the rate was paid on the price instead — see “Why not”.</li>}
+      </ul>
+      <div style={{ fontSize: 11, color: '#1e3a8a', marginTop: 6, opacity: 0.85 }}>
+        Nothing is hidden: every one of these lines is still listed below with the money it would have paid.
+      </div>
     </div>
   )
 }

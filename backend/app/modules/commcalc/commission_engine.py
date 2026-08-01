@@ -1062,7 +1062,7 @@ def _unmatched_record(row, why, rep, store, market, plan_name=None):
 
 # ── preview ────────────────────────────────────────────────────────────────────────────────────
 def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, coverage=False,
-            rule_overrides=None, unmatched_detail=False):
+            rule_overrides=None, unmatched_detail=False, gate_override=None):
     """READ-ONLY: apply plan rules to a period's raw_sales. Writes nothing.
 
     Returns {ready, period, by_rep:[...], totals, plans, note}. If plan_id is given, that plan is applied
@@ -1186,6 +1186,67 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     _unmatched_rows = [] if (coverage and unmatched_detail) else None
     _unmatched_excluded_lines = 0
 
+    # PAY GATE (owner directives 2026-08-01; engine: plan_pay_gate.py)
+    # FOUR concerns, all at the same point - which matched lines pay, how many times, on what basis:
+    #   (1) one payment per DEVICE for a rule that matches on a TRANSACTION-LEVEL field (the tender),
+    #       so one financed sale can no longer pay once per receipt line;
+    #   (2) the tenant's payout-EXCLUSION mapping (code-seeded with the owner's RTR rule);
+    #   (3) a rule's optional WHERE-IT-APPLIES scope (unscoped = everywhere = today);
+    #   (4) the accessory %-of-GP basis guard (default OFF fleet-wide).
+    # Every loader degrades to the code defaults, so a missing migration changes nothing but the
+    # tenant's ability to tune it. `_gate is None` (import failure) = the pre-2026-08-01 engine.
+    # `gate_override='off'` reproduces the PRE-2026-08-01 engine exactly (no gate at all). It is how
+    # the impact endpoints quote an honest before/after: they drive the REAL engine twice rather than
+    # arithmetically un-doing the gate, which tiering would make wrong.
+    try:
+        if gate_override == "off":
+            raise RuntimeError("gate disabled by caller")
+        from app.modules.commcalc import plan_pay_gate as _gate
+        _gate_cfg = (_gate.normalize_gate_config(gate_override) if isinstance(gate_override, dict)
+                     else _gate.load_gate_config(client, org_id))
+        _excl_rules, _excl_ready = _gate.load_exclusions(client, org_id)
+    except Exception:
+        _gate, _gate_cfg, _excl_rules, _excl_ready = None, None, [], False
+    _ucfg = (_gate_cfg or {}).get("unit_basis") or {}
+    _accg = (_gate_cfg or {}).get("accessory_basis_guard") or {}
+    _accg_on = bool(_gate is not None and _accg.get("enabled"))
+    if _gate is not None and not ((_gate_cfg or {}).get("exclusions") or {}).get("enabled", True):
+        _excl_rules = []
+    # Resolve every rule's unit basis ONCE (rules are shared by every rep) and decide whether the
+    # tenant's accessory definition needs loading at all - for a tenant with nothing deduped and the
+    # basis guard off this whole block costs one config read and builds no classifier.
+    _basis_by_rule, _needs_acc = {}, _accg_on
+    if _gate is not None:
+        for _p in plans:
+            for _r in (_p.get("rules") or []):
+                _b, _s = _gate.resolve_unit_basis(_r, _ucfg)
+                _basis_by_rule[id(_r)] = (_b, _s)
+                if _b != "per_line" and _ucfg.get("exclude_accessory_units"):
+                    _needs_acc = True
+    _acc_fn = _gate.accessory_predicate(client, org_id) if (_gate is not None and _needs_acc) else None
+    _cost_cfg = None
+    if _accg_on:
+        try:
+            from app.modules.commcalc import pay_data_quality as _pdq_cfg
+            _cost_cfg = _pdq_cfg.load_cost_config(client, org_id)
+        except Exception:
+            _cost_cfg = None
+    # NEVER SILENT: everything the gate changes is reported here. Emitted as a TOP-LEVEL `pay_gate`
+    # key (deliberately OUT of `totals`) ONLY when it actually did something, so a tenant it does not
+    # touch receives a byte-identical result dict.
+    _guard = {
+        "unit": {"transactions": 0, "lines_suppressed": 0, "amount_suppressed": 0.0,
+                 "units_paid": 0, "by_rule": {}, "by_rep": {}, "notes": []},
+        "excluded": {"lines": 0, "amount_suppressed": 0.0, "by_rule": {}, "by_rep": {}, "samples": []},
+        "scope": {"lines": 0, "amount_suppressed": 0.0, "by_rule": {}, "by_rep": {}},
+        "accessory_basis": {"lines": 0, "amount_before": 0.0, "amount_after": 0.0,
+                            "by_rep": {}, "by_flag": {}, "samples": []},
+    }
+    _GUARD_CAP = 200
+
+    def _guard_add(sec, rep, amt):
+        _guard[sec]["by_rep"][rep] = round(_guard[sec]["by_rep"].get(rep, 0.0) + safe_float(amt), 2)
+
     # group lines per rep
     reps = {}  # key (upper rep name) -> {name, store, lines:[...]}
     for r in valid:
@@ -1293,9 +1354,49 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                 rb["match_value"] = rule.get("match_value")
                 rb["amount"] = safe_float(rule.get("amount"))
                 rb["pct"] = safe_float(rule.get("pct"))
-            for row in e["lines"]:
-                if not _rule_matches(row, rule):
-                    continue
+            # PAY GATE. The matched set is computed ONCE (same predicate, same order as e["lines"],
+            # so the display order of `lines` is unchanged), then three gates decide which of those
+            # lines may turn into dollars. With the gate absent/inert `_blocked` stays empty and every
+            # branch below is the pre-2026-08-01 code path.
+            _matched = [row for row in e["lines"] if _rule_matches(row, rule)]
+            _blocked = {}          # id(row) -> (reason_code, extra)
+            if _gate is not None and _matched:
+                _sc_ok, _sc_why = _gate.rule_applies_here(rule, store, market, e["name"], _skeys)
+                if detail:
+                    rb["scope_reason"] = _sc_why
+                if not _sc_ok:
+                    for _row in _matched:
+                        _blocked[id(_row)] = ("scope", {"reason": _sc_why})
+                else:
+                    if _excl_rules:
+                        for _row in _matched:
+                            _hit = _gate.exclusion_hit(_row, _excl_rules)
+                            if _hit is not None:
+                                _blocked[id(_row)] = ("excluded", _hit)
+                    _ub, _usrc = _basis_by_rule.get(id(rule), ("per_line", "default"))
+                    if detail:
+                        rb["unit_basis"] = _ub
+                        rb["unit_basis_source"] = _usrc
+                    if _ub != "per_line":
+                        _elig = [r for r in _matched if id(r) not in _blocked]
+                        _payers, _supp, _notes = _gate.select_paying_lines(
+                            _elig, _ub, _ucfg, _acc_fn)
+                        for _r2, _why in _supp:
+                            _blocked[id(_r2)] = (_why, None)
+                        if _supp:
+                            _u = _guard["unit"]
+                            _u["units_paid"] += len(_payers)
+                            _pr = _u["by_rule"].setdefault(
+                                str(rid), {"label": rb.get("label"), "basis": _ub, "source": _usrc,
+                                           "matched_lines": 0, "units_paid": 0})
+                            _pr["matched_lines"] += len(_elig)
+                            _pr["units_paid"] += len(_payers)
+                        for _n in _notes:
+                            if _n.get("code") == "unit_collapsed":
+                                _guard["unit"]["transactions"] += 1
+                            if len(_guard["unit"]["notes"]) < _GUARD_CAP:
+                                _guard["unit"]["notes"].append(dict(_n, rep=e["name"]))
+            for row in _matched:
                 rb["matched_lines"] += 1
                 if matched_ids is not None:
                     matched_ids.add(id(row))
@@ -1309,6 +1410,49 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                             "gp": round(safe_float(row.get("gp")), 2),
                             "qualifies": bool(qualifies), "amount": 0.0}
                     rb.setdefault("lines", []).append(ldet)
+                _blk = _blocked.get(id(row))
+                if _blk is not None:
+                    # MATCHED AND SHOWN, PAYING NOTHING - with the reason attached. A suppressed line
+                    # is never removed from the drill-down: silence is how a $0 becomes unexplainable.
+                    _code, _extra = _blk
+                    _would = 0.0
+                    if qualifies and kind != "flat":
+                        _would = _line_payout(row, rule, mrc_by_mdn, mrc_by_sub, cost_by_pid)
+                    _sec = ("excluded" if _code == "excluded"
+                            else ("scope" if _code == "scope" else "unit"))
+                    if _sec == "unit":
+                        _guard["unit"]["lines_suppressed"] += 1
+                        _guard["unit"]["amount_suppressed"] = round(
+                            _guard["unit"]["amount_suppressed"] + _would, 2)
+                    else:
+                        _guard[_sec]["lines"] += 1
+                        _guard[_sec]["amount_suppressed"] = round(
+                            _guard[_sec]["amount_suppressed"] + _would, 2)
+                        _br = _guard[_sec]["by_rule"].setdefault(
+                            str(rid), {"label": rb.get("label"), "lines": 0, "amount": 0.0})
+                        _br["lines"] += 1
+                        _br["amount"] = round(_br["amount"] + _would, 2)
+                    _guard_add(_sec, e["name"], _would)
+                    if _code == "excluded" and len(_guard["excluded"]["samples"]) < _GUARD_CAP:
+                        _guard["excluded"]["samples"].append({
+                            "rep": e["name"], "trans_id": str(row.get("trans_id") or "").strip(),
+                            "date": str(row.get("trans_date") or "")[:10],
+                            "product": row.get("product_desc"),
+                            "matched_field": (_extra or {}).get("match_field"),
+                            "matched_value": (_extra or {}).get("match_value"),
+                            "code": (_extra or {}).get("code"),
+                            "would_have_paid": round(_would, 2)})
+                    if ldet is not None:
+                        ldet["amount"] = 0.0
+                        ldet["suppressed"] = True
+                        ldet["suppressed_by"] = _code
+                        ldet["suppressed_reason"] = (
+                            (_extra or {}).get("reason") or _gate.SUPPRESS_LABELS.get(_code, _code))
+                        ldet["would_have_paid"] = round(_would, 2)
+                        if _code == "excluded":
+                            ldet["excluded_by"] = ((_extra or {}).get("code")
+                                                   or (_extra or {}).get("label"))
+                    continue
                 if not qualifies:
                     continue
                 rb["qualifying_units"] += 1
@@ -1319,6 +1463,36 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                         ldet["flat_once"] = True
                     continue
                 pay = _line_payout(row, rule, mrc_by_mdn, mrc_by_sub, cost_by_pid)
+                # ACCESSORY BASIS GUARD (default OFF fleet-wide)
+                if _accg_on and kind == "pct_gp":
+                    _g_amt, _g_basis, _g_flags, _g_note = _gate.guarded_pct_gp(
+                        row, safe_float(rule.get("pct")), _accg, _cost_cfg,
+                        bool(_acc_fn(row)) if _acc_fn else False)
+                    if _g_amt is not None and round(_g_amt, 2) != round(pay, 2):
+                        _ab = _guard["accessory_basis"]
+                        _ab["lines"] += 1
+                        _ab["amount_before"] = round(_ab["amount_before"] + pay, 2)
+                        _ab["amount_after"] = round(_ab["amount_after"] + _g_amt, 2)
+                        _guard_add("accessory_basis", e["name"], round(_g_amt - pay, 2))
+                        for _fc in (_g_flags or []):
+                            _bf = _ab["by_flag"].setdefault(_fc, {"lines": 0, "delta": 0.0})
+                            _bf["lines"] += 1
+                            _bf["delta"] = round(_bf["delta"] + (_g_amt - pay), 2)
+                        if len(_ab["samples"]) < _GUARD_CAP:
+                            _ab["samples"].append({
+                                "rep": e["name"], "trans_id": str(row.get("trans_id") or "").strip(),
+                                "product": row.get("product_desc"),
+                                "ext_price": round(safe_float(row.get("ext_price")), 2),
+                                "gp": round(safe_float(row.get("gp")), 2),
+                                "was": round(pay, 2), "now": round(_g_amt, 2),
+                                "basis": _g_basis, "flags": _g_flags, "note": _g_note})
+                        if ldet is not None:
+                            ldet["basis_guarded"] = True
+                            ldet["basis_used"] = _g_basis
+                            ldet["basis_flags"] = _g_flags
+                            ldet["basis_note"] = _g_note
+                            ldet["amount_before_guard"] = round(pay, 2)
+                        pay = _g_amt
                 rb["payout"] = round(rb["payout"] + pay, 2)
                 if ldet is not None:
                     ldet["amount"] = pay
@@ -1388,6 +1562,18 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
            "totals": {"payout": round(grand, 2), "reps": len(out_rows),
                       "sale_lines": len(valid), "plans": len(plans)},
            "note": None}
+    # PAY GATE REPORT - emitted ONLY when the gate actually changed something, so every tenant it
+    # does not touch receives a result dict byte-identical to the pre-2026-08-01 engine.
+    if _gate is not None and (_guard["unit"]["lines_suppressed"] or _guard["excluded"]["lines"]
+                              or _guard["scope"]["lines"] or _guard["accessory_basis"]["lines"]):
+        _guard["config_source"] = "tenant" if (_gate_cfg or {}).get("_stored") else "code_default"
+        _guard["exclusion_map_ready"] = bool(_excl_ready)
+        _guard["exclusions_active"] = [
+            {"code": r.get("code"), "label": r.get("label"), "match_field": r.get("match_field"),
+             "match_op": r.get("match_op"), "match_value": r.get("match_value"),
+             "source": r.get("source")} for r in (_excl_rules or [])]
+        _guard["accessory_definition_loaded"] = bool(_acc_fn)
+        out["pay_gate"] = _guard
     if coverage:
         # suspected POS artifacts sink to the BOTTOM (still listed) so the real people needing an
         # assignment are the first thing the owner reads.
