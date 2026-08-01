@@ -47,6 +47,7 @@ from app.modules.commcalc.commission_engine import (
     _read_employee_roles, _canon_person,
 )
 from app.modules.commcalc import installment_category as icat
+from app.modules.commcalc import installment_category_payout as icpay
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -1074,14 +1075,22 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
     cat_rules = icat.load_category_rules(client, org_id)
     org_qual = icat.load_org_qualification(client, org_id)
     cat_lookup = icat.build_catalog_category_lookup(client, org_id)
+    # FLAT (ONE-TIME) PAYOUT BY CATEGORY (mig 256; owner 2026-08-01 "fwa is paid on flat rate should
+    # not be in monthly payments - fix but dont hard code"). Same three-layer ladder as the
+    # qualification switch above: per schedule -> per org -> code defaults, where the code default is
+    # EVERY category on 'installments' — i.e. today's behaviour. Degrades with mig 256 unapplied.
+    org_payout = icpay.load_org_payout(client, org_id)
     # READ-ONLY A/B OVERRIDE (never used by a calculate — only by the category-impact preview, which
     # runs this engine twice to show the operator the exact per-rep delta BEFORE anything is recomputed).
     qual_override = None
+    payout_override = None
     if _config_override:
         if "hardware_guard" in _config_override:
             hw_guard = _norm_hw(hw_guard, bool(_config_override.get("hardware_guard")))
         if _config_override.get("qualification") is not None:
             qual_override = icat.normalize_qualification(_config_override.get("qualification"))
+        if _config_override.get("category_payout") is not None:
+            payout_override = icpay.normalize_payout(_config_override.get("category_payout"))
 
     def _is_acc_row(r):
         try:
@@ -1170,6 +1179,12 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
     cat_counts, cat_excluded, cat_sources = {}, {}, set()
     n_cat_excluded = n_cat_unknown = 0
     cat_excluded_amt = 0.0
+    # mig 256 flat-payout accounting. All zero/empty unless a tenant actually configured a flat
+    # category, so an unconfigured tenant's `flat_guard` is a constant and nothing else moves.
+    flat_paid, flat_suppressed, flat_unconfigured = {}, {}, {}
+    flat_sources, flat_active_keys = set(), set()
+    n_flat_paid = n_flat_suppressed = 0
+    flat_paid_amt = flat_suppressed_amt = 0.0
 
     for sale_period in sale_periods:
         s_idx = _period_index(sale_period)
@@ -1401,7 +1416,10 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                                            "%-of-MRC installment resolved to $0 instead of paying a "
                                            "percentage of a device price. Confirm the plan under Plan "
                                            "Installments → MRC mapping, or add its wording to the "
-                                           "rate-plan line matcher.")})
+                                           "rate-plan line matcher. If this category is not meant to be "
+                                           "paid monthly at all, set it to a one-time FLAT amount under "
+                                           "Plan Installments → Flat payout by category."),
+                                "fix_routes": ["mrc_mapping", "plan_line_matcher", "category_flat_payout"]})
                     elif len({round(safe_float(c[2]), 2) for c in _cs if c[1] == _rk}) > 1:
                         # two equally-ranked lines disagree on the MRC — the catalog is the tie-breaker
                         n_mrc_ambiguous += 1
@@ -1435,6 +1453,53 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             _cat, _cev = icat.resolve_chain_category(_chain_lines or [line], cat_rules,
                                                      catalog_cat_of=cat_lookup,
                                                      is_accessory=_is_acc_row)
+
+            # ── FLAT (ONE-TIME) PAYOUT BY CATEGORY (mig 256; owner 2026-08-01) ─────────────────
+            # "fwa is paid on flat rate should not be in monthly payments - fix but dont hard code".
+            # The category is whatever the TENANT's own rules said above — there is no carrier,
+            # tenant or product literal in this branch. A category on 'flat_once' WITH an
+            # owner-entered amount pays that amount ONCE (month `pay_month`, default the sale
+            # month) and its other months emit nothing. A category on 'flat_once' with NO amount
+            # is NOT active: the chain keeps paying exactly as it does today and we shout. We never
+            # guess a payout and never manufacture a $0.
+            _pay_cfg, _pay_src = ((payout_override, "override") if payout_override is not None
+                                  else icpay.payout_for(sched, org_payout))
+            _flat = icpay.resolve_flat(_cat, _pay_cfg, num_months=int(sched.get("num_months") or 1))
+            if _flat["mode"] == "flat_once":
+                flat_sources.add(_pay_src)
+            if _flat["active"] and month_index == _flat["pay_month"]:
+                # The ONE payment. Substituted BEFORE the category counters so every downstream
+                # number (category_guard, by_rep, the ledger row, the withheld-flag text) reports
+                # the amount actually decided rather than the installment it replaced.
+                _fp = flat_paid.setdefault(_cat, {"chains": 0, "amount": 0.0, "replaced": 0.0,
+                                                  "flat_amount": _flat["amount"],
+                                                  "pay_month": _flat["pay_month"],
+                                                  "clamped": bool(_flat["clamped"]),
+                                                  "reps": {}, "examples": []})
+                _fp["chains"] += 1
+                _fp["replaced"] = round(_fp["replaced"] + safe_float(amount), 2)
+                _fp["amount"] = round(_fp["amount"] + safe_float(_flat["amount"]), 2)
+                _fp["reps"][repU_cat(rep)] = round(_fp["reps"].get(repU_cat(rep), 0.0)
+                                                    + safe_float(_flat["amount"]), 2)
+                if len(_fp["examples"]) < 8:
+                    _fp["examples"].append({
+                        "trans_id": str(line.get("trans_id") or "").strip(),
+                        "imei": _norm_mdn(line.get("serial_1")), "rep": rep,
+                        "month_index": month_index,
+                        "installment_amount": round(safe_float(amount), 2),
+                        "flat_amount": round(safe_float(_flat["amount"]), 2),
+                        "product": (_cev or {}).get("product")})
+                n_flat_paid += 1
+                flat_paid_amt = round(flat_paid_amt + safe_float(_flat["amount"]), 2)
+                flat_active_keys.add((str(line.get("trans_id") or "").strip(), month_index))
+                amount = round(safe_float(_flat["amount"]), 2)
+            elif _flat["mode"] == "flat_once" and not _flat["active"]:
+                # LOUD, never silent. Reported once per category with its chain count + the dollars
+                # that are STILL being paid monthly because no amount was entered.
+                _fu = flat_unconfigured.setdefault(_cat, {"chains": 0, "amount": 0.0,
+                                                          "reason": _flat["reason"]})
+                _fu["chains"] += 1
+                _fu["amount"] = round(_fu["amount"] + safe_float(amount), 2)
             _cc = cat_counts.setdefault(_cat, {"chains": 0, "amount": 0.0, "qualifies": bool(_qual.get(_cat, True))})
             _cc["chains"] += 1
             _cc["amount"] = round(_cc["amount"] + safe_float(amount), 2)
@@ -1472,6 +1537,33 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                         "product": (_cev or {}).get("product"),
                         "matched_field": (_cev or {}).get("matched_field"),
                         "matched_value": (_cev or {}).get("matched_value")})
+                continue
+
+            # mig 256: under an ACTIVE flat payout the chain pays ONCE. Every other month of it
+            # emits nothing — no ledger row, no withheld flag — because those months do not exist,
+            # exactly as a non-qualifying category emits nothing. Counted with the dollars they
+            # would have paid, per rep, so the change is never invisible.
+            if _flat["active"] and month_index != _flat["pay_month"]:
+                n_flat_suppressed += 1
+                flat_suppressed_amt = round(flat_suppressed_amt + safe_float(amount), 2)
+                _fs = flat_suppressed.setdefault(_cat, {"chains": 0, "amount": 0.0, "reps": {},
+                                                        "months": {}, "examples": []})
+                _fs["chains"] += 1
+                _fs["amount"] = round(_fs["amount"] + safe_float(amount), 2)
+                _fs["reps"][repU_cat(rep)] = round(_fs["reps"].get(repU_cat(rep), 0.0)
+                                                    + safe_float(amount), 2)
+                _fs["months"][str(month_index)] = int(_fs["months"].get(str(month_index), 0)) + 1
+                if len(_fs["examples"]) < 8:
+                    _fs["examples"].append({
+                        "trans_id": str(line.get("trans_id") or "").strip(),
+                        "imei": _norm_mdn(line.get("serial_1")), "rep": rep, "mdn": mdn,
+                        "month_index": month_index,
+                        "amount": round(safe_float(amount), 2),
+                        "product": (_cev or {}).get("product")})
+                # A suppressed month does not pay at all, so its earlier `mrc_unresolved` warning
+                # ("the %-of-MRC installment resolved to $0") is moot for it too — withdraw it with
+                # the same key set rather than sending the operator to fix an unread input.
+                flat_active_keys.add((str(line.get("trans_id") or "").strip(), month_index))
                 continue
 
             # ONE consistent row label (owner 2026-07-27 deliverable 3): DEVICE + RATE PLAN together,
@@ -1592,12 +1684,17 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 "device_category": _cat, "device_product": device_product,
                 "plan_product": plan_product,
                 "display_label": installment_label(device_product, plan_product,
-                                                   mrc if str(iline.get("payout_kind") or "").strip().lower() == "pct_mrc" else None),
+                                                   None if _flat["active"] else
+                                                   (mrc if str(iline.get("payout_kind") or "").strip().lower() == "pct_mrc" else None)),
                 "org_id": org_id, "trans_id": str(line.get("trans_id") or "").strip(),
                 "mdn": mdn, "serial_1": serial, "plan_id": plan.get("id"),
                 "schedule_id": sched.get("id"), "store": store, "epay_salesperson": rep,
                 "sale_period": sale_period, "pay_period": pay_period, "month_index": month_index,
-                "payout_kind": iline.get("payout_kind"), "mrc_at_pay": mrc, "mrc_source": mrc_src,
+                # mig 256: a flat-paid chain says so in the audit trail rather than claiming the
+                # schedule's kind ('pct_mrc') while paying a flat dollar. Only ever set when the
+                # tenant configured a flat category, so every existing row is byte-identical.
+                "payout_kind": ("category_flat" if _flat["active"] else iline.get("payout_kind")),
+                "mrc_at_pay": mrc, "mrc_source": mrc_src,
                 "amount": round(safe_float(amount) if gate_met else 0.0, 2),
                 "paid_gate_met": gate_met, "gate_mode": gate_mode, "status": status,
                 "matched_mi_period": pay_period if mi_row is not None else None,
@@ -1623,11 +1720,29 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             # OPT-IN provenance (absent unless this chain actually needed the new logic, so an
             # ordinary one-line activation keeps the pre-fix ledger shape byte-for-byte). In-memory
             # only — _persist writes a fixed column list.
+            if _flat["active"]:
+                ledger_row["category_flat"] = True
+                ledger_row["category_flat_amount"] = _flat["amount"]
+                ledger_row["category_flat_pay_month"] = _flat["pay_month"]
+                ledger_row["category_flat_source"] = _pay_src
             if _mrc_line is not None and _mrc_line is not line:
                 ledger_row["mrc_from_product"] = str(_mrc_line.get("product_desc") or "")[:200]
             if len(_cands) > 1:
                 ledger_row["chain_lines_merged"] = len(_cands)
             ledger.append(ledger_row)
+
+    # mig 256: a chain paid as a FLAT one-time amount does not care what its MRC resolved to, so the
+    # `mrc_unresolved` warning it raised earlier in the loop (before its category was known) is no
+    # longer true and would send the operator to fix an input the payout no longer reads. Dropped
+    # ONLY for chains that actually went flat, and the counter is corrected with it. No flat
+    # configuration => `flat_active_keys` is empty => this is a no-op.
+    if flat_active_keys:
+        _kept = [w for w in warnings
+                 if not (w.get("type") == "mrc_unresolved"
+                         and (str(w.get("trans_id") or ""), int(w.get("month_index") or 0))
+                         in flat_active_keys)]
+        n_mrc_unresolved -= (len(warnings) - len(_kept))
+        warnings = _kept
 
     # SAME DEVICE, SAME MONTH, TWICE (owner 2026-07-27: IMEI 358662802056452 appears twice at $2.75).
     # The chain guard (mig 233) collapses duplicate LINES of one activation, but two chains can still
@@ -1678,6 +1793,40 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                        f"pay a multi-month installment (${_v['amount']:,.2f} not paid) because "
                        f"'{icat.CATEGORY_LABELS.get(_k, _k)}' is unchecked under Plan Installments → "
                        f"Qualifying categories. Tick it to include them again.")})
+    for _k, _v in sorted(flat_unconfigured.items()):
+        warnings.append({
+            "type": "flat_amount_unconfigured", "category": _k,
+            "category_label": icat.CATEGORY_LABELS.get(_k, _k),
+            "chains": _v["chains"], "amount": round(_v["amount"], 2),
+            "detail": (f"'{icat.CATEGORY_LABELS.get(_k, _k)}' is set to a ONE-TIME FLAT payout but no "
+                       f"amount has been entered, so {_v['chains']} activation(s) are STILL being paid "
+                       f"as monthly installments (${_v['amount']:,.2f} this period) — nothing was "
+                       f"zeroed and nothing was guessed. Enter the flat amount under Plan Installments "
+                       f"-> Flat payout by category to make the switch take effect.")})
+    for _k, _v in sorted(flat_suppressed.items()):
+        warnings.append({
+            "type": "flat_months_suppressed", "category": _k,
+            "category_label": icat.CATEGORY_LABELS.get(_k, _k),
+            "chains": _v["chains"], "amount": round(_v["amount"], 2),
+            "by_rep": _v["reps"], "by_month": _v["months"], "examples": _v["examples"],
+            "detail": (f"{_v['chains']} {icat.CATEGORY_LABELS.get(_k, _k).lower()} installment month(s) "
+                       f"did NOT pay (${_v['amount']:,.2f}) because '{icat.CATEGORY_LABELS.get(_k, _k)}' "
+                       f"is configured to pay a ONE-TIME FLAT amount instead of monthly installments. "
+                       f"Change it back under Plan Installments -> Flat payout by category.")})
+    for _k, _v in sorted(flat_paid.items()):
+        warnings.append({
+            "type": "flat_paid_summary", "category": _k,
+            "category_label": icat.CATEGORY_LABELS.get(_k, _k),
+            "chains": _v["chains"], "amount": round(_v["amount"], 2),
+            "replaced_amount": round(_v["replaced"], 2), "by_rep": _v["reps"],
+            "flat_amount": _v["flat_amount"], "pay_month": _v["pay_month"],
+            "clamped": _v["clamped"], "examples": _v["examples"],
+            "detail": (f"{_v['chains']} {icat.CATEGORY_LABELS.get(_k, _k).lower()} activation(s) were "
+                       f"paid a ONE-TIME FLAT ${_v['flat_amount']:,.2f} in month {_v['pay_month']} "
+                       f"(${_v['amount']:,.2f} in total) instead of the schedule's installment "
+                       f"(${_v['replaced']:,.2f})."
+                       + (" The configured pay month was beyond this schedule's length, so it landed "
+                          "on the last month rather than never paying." if _v["clamped"] else ""))})
     if n_cat_unknown:
         warnings.append({
             "type": "category_unknown_summary", "chains": n_cat_unknown,
@@ -1715,6 +1864,17 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                                                  icat.normalize_qualification(
                                                      {k2: v2 for k2, v2 in org_qual.items()
                                                       if k2 in icat.CATEGORY_KEYS}).items()}},
+            # FLAT (ONE-TIME) PAYOUT BY CATEGORY (mig 256) — kept OUT of `totals` so that dict stays
+            # byte-identical for every existing consumer/harness.
+            "flat_guard": {"flat_chains": n_flat_paid, "flat_amount": round(flat_paid_amt, 2),
+                           "suppressed_months": n_flat_suppressed,
+                           "suppressed_amount": round(flat_suppressed_amt, 2),
+                           "paid": flat_paid, "suppressed": flat_suppressed,
+                           "unconfigured": flat_unconfigured,
+                           "config_source": sorted(flat_sources),
+                           "flat_categories": icpay.configured_categories(
+                               icpay.normalize_payout({k2: v2 for k2, v2 in org_payout.items()
+                                                       if k2 in icpay.CATEGORY_KEYS}))},
             "warnings": warnings,
             "note": None}
 

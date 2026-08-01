@@ -11,6 +11,7 @@ const ITEMS: Item[] = [
   { href: '/commcalc/column-mapping', icon: '🧩', label: 'Column Mapping', desc: 'Map any carrier’s spreadsheet columns → our fields. Config-driven ingest for new carriers.' },
   { href: '/commcalc/item-mapping', icon: '🧩', label: 'Item / Model Mapping', desc: 'Classify items (accessory vs phone) + set phone model — the SU sheet. Drives Accessory Flags.' },
   { href: '/commcalc/ma-product-class', icon: '🏷️', label: 'MA Product Name Classification', desc: 'Classify each MA Daily Tx product name — commission vs spiff vs residual vs bill payment vs device sale. Exact match, owner-confirmed.' },
+  { href: '/commcalc/accessory-definition', icon: '🎧', label: 'Accessory Definition', desc: 'What YOUR company counts as an accessory — map your own items/departments, plus the “department or category says accessory” rule. Read-only vs money; compares every existing classifier.' },
   { href: '/commcalc/rep-aliases', icon: '🔗', label: 'Rep Aliases', desc: 'Merge name variants of the same rep into one canonical person.' },
   { href: '/commcalc/asset/hotsheet-recon', icon: '🏷️', label: 'Pricing Hotsheet', desc: 'Carrier promo pricing by device model — expected-vs-paid reconciliation.' },
 ]

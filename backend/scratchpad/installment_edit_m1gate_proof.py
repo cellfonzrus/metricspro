@@ -172,6 +172,13 @@ def _drop_additive(res):
     # (`category_guard`) and four DISPLAY-ONLY row keys. No money field moves — dropping them here is
     # exactly what makes the byte-identity claim below a real differential on the money shape.
     out.pop("category_guard", None)
+    # mig 256 (2026-08-01, flat one-time payout by category) adds ONE more purely-additive top-level
+    # key, `flat_guard`. With no tenant flat config — which is this fixture, and every tenant until an
+    # owner types a dollar amount — it is the CONSTANT {flat_chains:0, flat_amount:0.0,
+    # suppressed_months:0, suppressed_amount:0.0, paid:{}, suppressed:{}, unconfigured:{},
+    # config_source:[], flat_categories:[]}; no money field, ledger row or flag moves. Extending this
+    # helper is the maintenance contract this function already documents for migs 233 and 245 above.
+    out.pop("flat_guard", None)
     out["ledger"] = [{k: v for k, v in r.items()
                       if k not in ("device_category", "device_product", "plan_product", "display_label")}
                      for r in (out.get("ledger") or [])]
