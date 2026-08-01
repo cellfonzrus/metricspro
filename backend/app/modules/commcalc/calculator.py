@@ -5,6 +5,8 @@ All business logic in Python - verified formulas
 from typing import Any
 import re
 
+from app.modules.commcalc import setup_fee_pay as _sfp
+
 # ONE shared voided token set for pay + display (owner 2026-07-25) — see gp_report.VOID_TOKENS.
 from app.modules.commcalc.gp_report import is_voided as _is_voided, VOID_TOKENS as _VOID_TOKENS
 
@@ -100,6 +102,12 @@ def calc_rep_commissions(
         'trade_in_spiff':   cfg.get('trade_in_spiff') if cfg.get('trade_in_spiff') is not None else 20,
         'acima_spiff':      cfg.get('acima_spiff') if cfg.get('acima_spiff') is not None else 25,
         'acc_rate':         cfg.get('acc_rate') or 0.10,
+        # The employee's share of the set-up fee COLLECTED. `payout_config.setup_fee_rate` remains the
+        # source of truth for this (Boost) engine and still wins, so Boost pay is unchanged; the
+        # per-carrier `setup_fee_pay` config (mig 263) is what the PLAN engine reads for every other
+        # carrier. `or 0.10` is preserved verbatim, including its known quirk that a stored 0 falls back
+        # to 10% — changing that here would silently move money for any tenant who stored a 0, so it is
+        # REPORTED in the park record instead of fixed in the same breath as everything else.
         'setup_rate':       cfg.get('setup_fee_rate') or 0.10,
         'acc_target_on':    bool(cfg.get('acc_target_enabled', False)),
         'acc_target_pct':   cfg.get('acc_target_pct') or 0.10,
@@ -116,6 +124,16 @@ def calc_rep_commissions(
     _acc_depts = {str(d).strip().lower() for d in (cfg.get('accessory_departments') or []) if str(d).strip()}
     _acc_cats = {str(c).strip().lower() for c in (cfg.get('accessory_categories') or []) if str(c).strip()}
     _acc_kws = {str(k).strip().lower() for k in (cfg.get('accessory_product_keywords') or []) if str(k).strip()}
+    # DEVICE SET-UP FEE recognition (owner 2026-08-01). Historically this was the hard-coded literal
+    # `'Device Setup Charge' in product` RIGHT HERE on the pay path, while the REPORT path
+    # (router._is_setup_fee, mig 217) read the tenant's own `accessory_config.setup_fee_keywords`. So a
+    # tenant who edited that list moved every report and NOT their pay. Both now read the SAME list.
+    # BYTE-IDENTICAL BY CONSTRUCTION: the default mode is `legacy_case_sensitive`, which reproduces the
+    # old predicate exactly, and the default list IS ['Device Setup Charge']. A tenant only gets the
+    # looser (report-shaped) matching by explicitly choosing it — because unifying two classifiers that
+    # disagree on case is a MONEY change (see setup_fee_pay.divergence(), which measures it first).
+    _setup_kws = _sfp.normalize_keywords(cfg.get('setup_fee_keywords'))
+    _setup_mode = str(cfg.get('setup_fee_match_mode') or 'legacy_case_sensitive').strip().lower()
     if not _acc_depts and not _acc_cats and not _acc_kws:
         _acc_depts = {'ondigo'}
     # Configurable ACIMA-lease tender (mig 094): which Tender Type value(s) mark an ACIMA lease
@@ -256,7 +274,7 @@ def calc_rep_commissions(
         if _is_acc(dept, cat, product):
             entry['acc_gp'] += gp
             entry['acc_sales'] += ext
-        if 'Device Setup Charge' in product:
+        if _sfp.is_setup_fee(product, _setup_kws, _setup_mode):
             entry['setup_fee_gp'] += gp
             entry['setup_fee_sales'] += ext
         

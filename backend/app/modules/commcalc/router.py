@@ -6492,6 +6492,17 @@ def _is_accessory(dept, category, product, acfg):
     return False
 
 
+def _sfp_cfg_mode(client, org_id):
+    """The tenant's set-up-fee MATCH MODE for the pay path (mig 263). Defaults to the historic
+    case-sensitive predicate, so an un-configured tenant's pay is byte-identical. Never raises."""
+    try:
+        from app.modules.commcalc import setup_fee_pay as _sfp
+        cfg = _sfp.load_pay_config(client, org_id)
+        return (cfg.get("default") or {}).get("match_mode") or "legacy_case_sensitive"
+    except Exception:
+        return "legacy_case_sensitive"
+
+
 def _is_setup_fee(product, acfg):
     """A sale line is a DEVICE SET-UP FEE if its product description contains a configured set-up-fee
     keyword (mig 217; default ['Device Setup Charge']). Config-driven (RULE TWO) — no engine hard-codes the
@@ -7893,7 +7904,20 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
             for r in (pr.get("by_rep") or []):
                 rn = str(r.get("rep") or "").strip().upper()
                 if rn:
-                    plan_by_rep[rn] = {"amount": safe_float(r.get("total_payout")), "plan_name": r.get("plan_name")}
+                    plan_by_rep[rn] = {"amount": safe_float(r.get("total_payout")),
+                                       "plan_name": r.get("plan_name"),
+                                       # SET-UP / ACTIVATION FEE (mig 263): its OWN component, recorded
+                                       # on the existing rep_commissions column so the number is visible
+                                       # in the Custom Report instead of hiding inside the plan total.
+                                       # 0.0 for every tenant that has not switched it on.
+                                       "setup_fee_comm": safe_float(r.get("setup_fee_comm"))}
+            # OPERATOR-VISIBLE NOTICE: fees were collected, the tenant said they should pay, and no
+            # percentage has been entered. The engine never invents a rate — it says so instead.
+            if notices is not None:
+                for _w in ((pr.get("setup_fee") or {}).get("warnings") or [])[:20]:
+                    notices.append({"type": "setup_fee_pct_unconfigured", "severity": "warning",
+                                    "rep": _w.get("rep"), "collected": _w.get("collected"),
+                                    "message": _w.get("message")})
         except Exception:
             plan_by_rep = {}
         # carrier commission STATEMENT (Total/VidaPay etc.): sum total_commission per rep for the period.
@@ -7920,7 +7944,8 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
             return comms
 
         cols = {}
-        for c in ("residual_installment_comm", "installment_comm_sale", "plan_comm", "plan_name", "carrier_statement_comm"):
+        for c in ("residual_installment_comm", "installment_comm_sale", "plan_comm", "plan_name",
+                  "carrier_statement_comm", "setup_fee_comm"):
             try:
                 client.schema('commcalc').table('rep_commissions').select(c).limit(1).execute()
                 cols[c] = True
@@ -7953,6 +7978,10 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
                     row["plan_comm"] = pv["amount"]
                 if cols["plan_name"]:
                     row["plan_name"] = pv.get("plan_name")
+                if cols["setup_fee_comm"] and pv.get("setup_fee_comm"):
+                    # only written when the plan engine actually produced one, so a Boost row (pv is
+                    # None) and an unconfigured plan tenant are both untouched.
+                    row["setup_fee_comm"] = pv["setup_fee_comm"]
                 base = safe_float(pv["amount"])                       # a plan REPLACES the spiff subtotal
             else:
                 base = safe_float(row.get("total_payout"))            # keep the standard calc
@@ -8091,7 +8120,14 @@ async def _run_calculation(period: str, org_id: str, force: bool = False):
         cfg = {**cfg, 'accessory_departments': _acfg['departments_list'],
                'accessory_categories': _acfg['categories_list'],
                'accessory_product_keywords': _acfg['products_list'],
-               'acima_tenders': _acfg['acima_tenders_list']}
+               'acima_tenders': _acfg['acima_tenders_list'],
+               # DEVICE SET-UP FEE keywords (mig 217) reach the PAY path for the first time (owner
+               # 2026-08-01). calculator.py used to carry the literal 'Device Setup Charge' itself, so a
+               # tenant editing this list moved every REPORT and none of their PAY. The code default IS
+               # that literal and the default match mode is the historic case-sensitive one, so Boost is
+               # byte-identical; only a tenant who edits the list or the mode changes anything.
+               'setup_fee_keywords': _acfg['setup_fee_keywords_list'],
+               'setup_fee_match_mode': _sfp_cfg_mode(client, org_id)}
 
         # Resolve payment categories
         cat_map = {r['description'].strip(): r['category'] for r in pay_cats if r.get('description')}
@@ -11039,6 +11075,181 @@ def _rule_scope_cols_present(client):
         except Exception:
             _RULE_SCOPE_COLS_OK["ok"] = False
     return _RULE_SCOPE_COLS_OK["ok"]
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# DEVICE SET-UP FEE / ACTIVATION FEE — mapping, per-carrier economics, employee pay item (mig 263)
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER 2026-08-01: "the device set up fee is the same as activation fee on luxelink , an option should
+# be there in commission payout if this has to be a part of commission and what % is used to pay out
+# comp … boost payd 100% of the device set up fee collected to the dealer and the employee get 10%, but
+# total collects actiuvation fee and payd the dealer 50% … the employee is npot being paid anythting
+# right now … if criclet delaer uses metrics pro they should be able to design based on their payouts".
+#
+# RECOGNITION IS NOT FORKED: it reuses `accessory_config.setup_fee_keywords` (mig 217) — the SAME list
+# _is_setup_fee already drives the Sales Report / Executive MTD / accessory-target basis from. This
+# block adds the MONEY and the per-carrier economics on top.
+
+
+@router.get("/setup-fee/config")
+async def get_setup_fee_config(org_id: str = ORG_ID):
+    """The tenant's set-up-fee mapping + per-carrier economics. READ-ONLY."""
+    require_org(org_id)
+    from app.modules.commcalc import setup_fee_pay as sfp
+    client = sb()
+    cfg = sfp.load_pay_config(client, org_id)
+    stored = bool(cfg.pop("_stored", False))
+    carriers = []
+    try:
+        carriers = (client.schema('commcalc').table('carrier').select('id,name')
+                    .eq('org_id', org_id).execute().data) or []
+    except Exception:
+        carriers = []
+    return {"org_id": org_id, "config": cfg, "is_default": not stored,
+            "keywords": sfp.load_keywords(client, org_id),
+            "keywords_are_default": sfp.load_keywords(client, org_id) == sfp.LEGACY_SETUP_KEYWORDS,
+            "defaults": sfp.PAY_DEFAULTS, "match_modes": list(sfp.MATCH_MODES),
+            "carriers": carriers, "migration": "263_commission_setup_fee_pay.sql",
+            "owner_reference": {
+                "note": ("The owner's stated facts, for the human filling this in — they are NOT "
+                         "applied anywhere by this endpoint."),
+                "boost": {"dealer_share_pct": 1.0, "employee_pct_of_collected": 0.10},
+                "total": {"dealer_share_pct": 0.50, "employee_pct_of_collected": 0.0}},
+            "note": ("The keyword list is shared with the Sales Report / Executive MTD (mig 217) — "
+                     "editing it here moves those reports too, which is the point: one definition, one "
+                     "number. The employee percentage is what moves PAY, and only on the next "
+                     "Calculate.")}
+
+
+@router.put("/setup-fee/config")
+async def save_setup_fee_config(body: dict, org_id: str = ORG_ID):
+    """Save the per-carrier economics. MONEY-TOUCHING: applies on the next Calculate."""
+    require_org(org_id)
+    from app.modules.commcalc import setup_fee_pay as sfp
+    cfg = sfp.normalize_pay_config(body.get("config") if isinstance(body.get("config"), dict) else body)
+    cfg.pop("_stored", None)
+    client = sb()
+    try:
+        rows = (client.schema('commcalc').table('commission_org_config').select('org_id')
+                .eq('org_id', org_id).limit(1).execute().data) or []
+        if rows:
+            (client.schema('commcalc').table('commission_org_config').update({"setup_fee_pay": cfg})
+             .eq('org_id', org_id).execute())
+        else:
+            (client.schema('commcalc').table('commission_org_config')
+             .insert({"org_id": org_id, "setup_fee_pay": cfg}).execute())
+    except Exception as e:
+        raise HTTPException(400, "could not save the set-up-fee config — run migration "
+                                 f"263_commission_setup_fee_pay.sql first. [{e}]")
+    _unset = [k for k, v in (cfg.get("default") or {}).items()
+              if k == "employee_pct_of_collected" and v is None
+              and (cfg.get("default") or {}).get("include_in_commission")]
+    return {"saved": True, "config": cfg,
+            "note": ("Saved. Nothing recalculated — run Calculate for the period(s) concerned."
+                     if not _unset else
+                     "Saved, but no employee percentage was entered, so the fee still pays $0 and the "
+                     "next calculation will say so. Nothing was zeroed.")}
+
+
+@router.get("/setup-fee/candidates/{period}")
+async def setup_fee_candidates(period: str, org_id: str = ORG_ID):
+    """PICK-DON'T-TYPE (contract RULE THREE): the tenant's own product descriptions that could BE the
+    set-up / activation fee, ranked by the money they carry, each flagged with whether the current
+    mapping already catches it. READ-ONLY; proposes nothing and auto-selects nothing — naming the fee
+    is a money decision and it is the owner's."""
+    require_org(org_id)
+    from app.modules.commcalc import setup_fee_pay as sfp
+    client = sb()
+    rows = _ad_sales(client, org_id, period=period)
+    if isinstance(rows, tuple):
+        rows = rows[0]
+    kws = sfp.load_keywords(client, org_id)
+    cand = sfp.candidates(rows or [], kws)
+    return {"period": period, "org_id": org_id, "keywords": kws,
+            "candidates": cand,
+            "mapped_total": round(sum(c["ext_price"] for c in cand if c["mapped_now"]), 2),
+            "lines_read": len(rows or []),
+            "note": ("`collects_money=false` means every line of that product sold for $0 — a "
+                     "bookkeeping line, not a fee the store collected. Mapping one would add nothing "
+                     "to the collected total and pay nobody.")}
+
+
+@router.get("/setup-fee/recognition-divergence/{period}")
+async def setup_fee_recognition_divergence(period: str, org_id: str = ORG_ID):
+    """The two historic set-up-fee matchers, MEASURED against each other on this tenant's real data.
+
+    The PAY path was a case-SENSITIVE literal; the REPORT path lower-cases both sides. Unifying them is
+    a money change, so this reports the disagreement instead of quietly resolving it (contract: an
+    operator OK before touching a classifier). An empty list means switching `match_mode` to
+    `case_insensitive` moves $0."""
+    require_org(org_id)
+    from app.modules.commcalc import setup_fee_pay as sfp
+    client = sb()
+    rows = _ad_sales(client, org_id, period=period)
+    if isinstance(rows, tuple):
+        rows = rows[0]
+    kws = sfp.load_keywords(client, org_id)
+    diff = sfp.divergence(rows or [], kws)
+    return {"period": period, "org_id": org_id, "keywords": kws,
+            "diverging_lines": len(diff), "samples": diff[:100],
+            "amount": round(sum(d["ext_price"] for d in diff), 2),
+            "safe_to_unify": not diff,
+            "note": ("If diverging_lines is 0, the pay path and the report path already agree on this "
+                     "data and switching match_mode is a no-op. If it is not 0, each listed line is a "
+                     "dollar amount that would start or stop counting.")}
+
+
+@router.get("/setup-fee/impact/{period}")
+async def setup_fee_impact(period: str, employee_pct: str = "", org_id: str = ORG_ID):
+    """READ-ONLY per-rep dollars for the set-up-fee pay item, at a hypothetical percentage.
+
+    Drives the REAL `commission_engine.preview` twice — as configured, and with the hypothesis — so a
+    number here cannot drift from what a recalculation would produce. Writes nothing, recalculates
+    nothing. `employee_pct` has NO DEFAULT: called without one it reports the SAVED configuration only
+    and says so, so this endpoint can never quote a percentage nobody entered."""
+    require_org(org_id)
+    from app.modules.commcalc import setup_fee_pay as sfp
+    client = sb()
+    pct = sfp._pct_or_none(employee_pct)
+    saved = sfp.load_pay_config(client, org_id)
+    saved.pop("_stored", None)
+    hypo = None
+    if pct is not None:
+        hypo = {"default": {**(saved.get("default") or {}), "include_in_commission": True,
+                            "employee_pct_of_collected": pct},
+                "by_carrier": saved.get("by_carrier") or {}}
+    try:
+        now = commission_engine.preview(client, org_id, period)
+        alt = (now if hypo is None
+               else commission_engine.preview(client, org_id, period, setup_fee_override=hypo))
+    except Exception as e:
+        raise HTTPException(500, f"set-up fee impact failed: {type(e).__name__}: {e}")
+    a = {str(r.get("rep")): safe_float(r.get("total_payout")) for r in (now.get("by_rep") or [])}
+    b = {str(r.get("rep")): safe_float(r.get("total_payout")) for r in (alt.get("by_rep") or [])}
+    coll = {k: v for k, v in ((alt.get("setup_fee") or {}).get("by_rep") or {}).items()}
+    rows = []
+    for rep in sorted(set(a) | set(b) | set(coll)):
+        rows.append({"rep": rep, "collected": (coll.get(rep) or {}).get("collected", 0.0),
+                     "lines": (coll.get(rep) or {}).get("lines", 0),
+                     "now": round(a.get(rep, 0.0), 2), "with_pct": round(b.get(rep, 0.0), 2),
+                     "delta": round(b.get(rep, 0.0) - a.get(rep, 0.0), 2),
+                     "status": (coll.get(rep) or {}).get("status")})
+    rows.sort(key=lambda x: -x["delta"])
+    g = alt.get("setup_fee") or {}
+    return {"period": period, "org_id": org_id,
+            "hypothesis": ({"employee_pct_of_collected": pct} if hypo else None),
+            "hypothesis_note": (None if hypo else
+                                "No percentage was supplied (pass ?employee_pct=0.10), so both columns "
+                                "are the SAVED configuration and the delta is 0 by construction. This "
+                                "endpoint never invents a percentage."),
+            "collected_total": g.get("collected", 0.0), "collected_lines": g.get("lines", 0),
+            "paid_total": g.get("paid", 0.0),
+            "dealer_share": (g.get("dealer_share") if g.get("dealer_share_stated") else None),
+            "keywords": g.get("keywords") or sfp.load_keywords(client, org_id),
+            "by_rep": rows, "warnings": (g.get("warnings") or [])[:50],
+            "note": ("The set-up / activation fee is its OWN pay item — it is never folded into the "
+                     "accessory basis (standing owner rule) and it is added AFTER the tier multiplier, "
+                     "because it is a share of money actually collected, not a spiff.")}
 
 
 @router.get("/commission-plans/accessory-basis-impact/{period}")
@@ -16603,6 +16814,19 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
             d['activation_fee'] += a['activation_fee']
             d['protect'] += a['protect']
 
+    # The tenant's set-up-fee economics, read ONCE (mig 263). Unset -> None -> the two new columns are
+    # em-dashes and every pre-existing number is untouched.
+    _sf_emp_pct = _sf_dealer_pct = None
+    _sf_settings = {}
+    try:
+        from app.modules.commcalc import setup_fee_pay as _sfp_exec
+        _sf_settings, _ = _sfp_exec.resolve_for_carrier(_sfp_exec.load_pay_config(client, org_id))
+        _sf_emp_pct = (_sf_settings.get("employee_pct_of_collected")
+                       if _sf_settings.get("include_in_commission") else None)
+        _sf_dealer_pct = _sf_settings.get("dealer_share_pct")
+    except Exception:
+        _sf_emp_pct = _sf_dealer_pct = None
+
     def _row(name, label_key, d):
         ta = d['activation'] + d['port'] + d['byod'] + d['upgrade']
         return {label_key: name,
@@ -16621,6 +16845,14 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
                 #    is what the Accessory Targets page tracks its achieved/target against. Reporting
                 #    both, labelled, is the ONLY honest way to show two legitimately different bases.
                 'setup_fee': round(d['setup_fee'], 2),
+                # SET-UP / ACTIVATION FEE ECONOMICS (owner 2026-08-01, mig 263). Derived from the SAME
+                # `setup_fee` cell above — no second classifier, no extra pass, no per-row query. Both
+                # are None until the tenant states the percentage, and a None renders as an em-dash
+                # rather than a $0 that looks like a real answer.
+                'setup_fee_dealer_share': (None if _sf_dealer_pct is None
+                                           else round(d['setup_fee'] * _sf_dealer_pct, 2)),
+                'setup_fee_employee_pay': (None if _sf_emp_pct is None
+                                           else round(d['setup_fee'] * _sf_emp_pct, 2)),
                 'acc_plus_setup': round(d['acc_sales'] + d['setup_fee'], 2),
                 'trending_acc_plus_setup': round((d['acc_sales'] + d['setup_fee']) * trend_factor, 2),
                 'activation_fee': round(d['activation_fee'], 2),
@@ -16639,6 +16871,11 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
                   'setup_fee', 'acc_plus_setup', 'trending_acc_plus_setup',
                   'activation_fee', 'total_protect'):
             t[k] = round(sum(r.get(k, 0) for r in rowset), 2)
+        # The two set-up-fee economics totals PRESERVE None. Summing an unset percentage to $0.00 would
+        # print a total that looks like a real answer to a question nobody has answered.
+        for k in ('setup_fee_dealer_share', 'setup_fee_employee_pay'):
+            _vals = [r.get(k) for r in rowset if r.get(k) is not None]
+            t[k] = round(sum(_vals), 2) if _vals else None
         t['conv'] = round(t['total_activation'] / t['bill_payment_qty'], 4) if t['bill_payment_qty'] else 0.0
         t['apb'] = round(t['acc_sales'] / t['total_activation'], 2) if t['total_activation'] else 0.0
         return t

@@ -97,6 +97,10 @@ export default function ExecMtdPage() {
     { header: 'Activation Fee', field: 'activation_fee', money: true, get: (r) => r.activation_fee },
     { header: 'Total Protect', field: 'total_protect', type: 'number', get: (r) => r.total_protect },
     { header: 'Set-up Fee', field: 'setup_fee', money: true, get: (r) => r.setup_fee },
+    // SET-UP FEE ECONOMICS (owner 2026-08-01, mig 263). Both are null until the tenant states the
+    // percentage — rendered as an em-dash, never as a $0.00 that looks like a real answer.
+    { header: 'Dealer share', field: 'setup_fee_dealer_share', money: true, get: (r) => r.setup_fee_dealer_share },
+    { header: 'Employee pay', field: 'setup_fee_employee_pay', money: true, get: (r) => r.setup_fee_employee_pay },
     { header: 'Acc.+Set-up (target basis)', field: 'acc_plus_setup', money: true, get: (r) => r.acc_plus_setup },
   ]
   // Export BOTH tabs (like the file's two sheets), each with its own totals row appended.
@@ -108,19 +112,24 @@ export default function ExecMtdPage() {
 
   const HEADERS = ['Total Activation', 'Activation', 'Port', 'BYOD', 'Upgrade', 'Total Phones', 'Trending Box',
     'Bill Payment Qty', '$', 'Conv.', 'Acc. Sales', 'APB', 'Trending Acc. Sales', 'Activation Fee', 'Total Protect',
-    'Set-up Fee', 'Acc.+Set-up']
+    'Set-up Fee', 'Dealer share', 'Employee pay', 'Acc.+Set-up']
   // Tooltips only on the two appended reconciliation columns (the b2bsoft 15 are unchanged).
   const HEADER_TIPS: Record<string, string> = {
     'Acc. Sales': 'Accessory sales revenue ONLY — the device set-up fee is excluded (it is a separate pay item). Same number as the Sales Report.',
     'Set-up Fee': 'Device set-up fee sold. A separate pay item, so it is NOT in Acc. Sales — but it DOES count toward the accessory target.',
     'Acc.+Set-up': 'Accessory sales + device set-up fee = the basis the Accessory Targets page measures achieved vs target on. THIS is the number to compare with that page.',
+    'Dealer share': 'What the CARRIER pays the dealer of the set-up / activation fee collected (e.g. Boost 100%, Total 50%). Informational — no employee payout reads it. “—” means nobody has entered the percentage yet.',
+    'Employee pay': 'The employee’s share of the set-up / activation fee collected, at the percentage configured for this tenant. “—” means the fee is not part of employee commission here, or no percentage has been entered.',
   }
 
+  // A percentage nobody has entered is NOT zero dollars. Render it as an em-dash so the column
+  // cannot be read as "the dealer gets nothing".
+  const dash = (v: any) => (v === null || v === undefined ? '—' : fmt(v))
   const cellVals = (r: any) => [
     int(r.total_activation), int(r.activation), int(r.port), int(r.byod), int(r.upgrade), int(r.total_phones),
     int(r.trending_box), int(r.bill_payment_qty), fmt(r.amount), pct(r.conv), fmt(r.acc_sales), n2(r.apb),
     fmt(r.trending_acc_sales), fmt(r.activation_fee), int(r.total_protect),
-    fmt(r.setup_fee), fmt(r.acc_plus_setup),
+    fmt(r.setup_fee), dash(r.setup_fee_dealer_share), dash(r.setup_fee_employee_pay), fmt(r.acc_plus_setup),
   ]
 
   return (
