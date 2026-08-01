@@ -35,7 +35,13 @@ CATEGORY_LABELS = {
     "other": "Other payout (unmapped)",
 }
 MATCH_FIELDS = ["product_name", "order_type"]
-MATCH_OPS = ["contains", "equals"]
+# `product_class` (2026-08-01, owner-gated) is NOT a text matcher: the pattern is a CLASS KEY and the
+# rule matches when the LINE'S OWN CONFIRMED CLASS equals it. This module has NO dependency on the
+# classification — the caller compiles a {label: class} index onto the rule (the way a compiled regex
+# would be attached) and a rule WITHOUT that index can never match, so a tenant whose wiring mode is
+# 'legacy' classifies byte-identically whether or not such rows exist. See ma_class_wiring.py.
+MATCH_OPS = ["contains", "equals", "product_class"]
+CLASS_MATCH_OP = "product_class"
 SIGN_RULES = ["negative_only", "any"]
 
 # Fallback rules when commission_category_map is empty/un-migrated. (match_field, op, pattern, category,
@@ -123,22 +129,46 @@ def parse_payment_month(product_name):
 
 
 def _match(rule, order_type, product_name):
-    field = rule.get("match_field") or "product_name"
-    val = (product_name if field == "product_name" else order_type) or ""
-    val = str(val).lower()
+    op = rule.get("match_op") or "contains"
     pat = str(rule.get("pattern") or "").lower()
     if not pat:
         return False
-    op = rule.get("match_op") or "contains"
+    if op == CLASS_MATCH_OP:
+        # FAIL-CLOSED: no compiled index -> no match, ever. The index holds ONLY owner-CONFIRMED
+        # (product_name -> class) mappings, so a proposed/ambiguous classification cannot move a dollar.
+        idx = rule.get("_class_index")
+        if not idx:
+            return False
+        cls = idx.get(str(product_name if product_name is not None else "").strip())
+        return bool(cls) and str(cls).strip().lower() == pat
+    field = rule.get("match_field") or "product_name"
+    val = (product_name if field == "product_name" else order_type) or ""
+    val = str(val).lower()
     return val == pat if op == "equals" else (pat in val)
 
 
 def classify(raw_amount, order_type, product_name, rules):
     """Return (category, is_payout) for one source line. Negative amount = payout → the first matching
     rule's category; positive = a dealer 'charge' (never a payout bucket); an unmatched payout = 'other'
-    (surfaced, never silently dropped). A rule with sign_rule='any' can also classify a positive line."""
+    (surfaced, never silently dropped). A rule with sign_rule='any' can also classify a positive line.
+
+    TWO PASSES since 2026-08-01: a `product_class` rule (the line's owner-CONFIRMED MA product class) is
+    tried first, then every rule in priority order as before. A tenant with no product_class rules — or
+    with ledger wiring left in its default 'legacy' mode, where no class index is ever compiled onto the
+    rules — gets exactly the same answer as before, which the differential proof asserts name by name."""
     amt = _sf(raw_amount)
     is_payout = amt < 0
+    # PASS 1 — the line's CONFIRMED product class, if the tenant wired it (design of record: the class is
+    # consulted FIRST and the keyword rules are the fallback for names nobody has classified). When no
+    # product_class rule exists, or none carries a compiled index, this loop matches nothing and the
+    # result is bit-for-bit what PASS 2 alone produced before this existed.
+    for rule in rules:
+        if rule.get("match_op") != CLASS_MATCH_OP:
+            continue
+        if rule.get("sign_rule") == "any" or is_payout:
+            if _match(rule, order_type, product_name):
+                return rule.get("category") or "other", (rule.get("category") not in ("charge", "exclude"))
+    # PASS 2 — today's rules, in priority order, unchanged.
     for rule in rules:
         if rule.get("sign_rule") == "any" or is_payout:
             if _match(rule, order_type, product_name):

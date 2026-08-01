@@ -36,9 +36,20 @@ and nothing at all from MA Daily Tx. RESIDUAL and airtime stay on raw_ma_daily_t
 daily-tx payout lines too, so reading its residual buckets here would double-count the residual leg.
 BOTH sources are always computed and the per-month old-vs-new comparison ships in the payload
 (`source_swap`), so the dollar delta is quantified in-app before and after the switch.
+
+MA PRODUCT-CLASS LEGS (owner-gated, 2026-08-01 — see commcalc/ma_class_wiring.py). The RESIDUAL leg
+selects rows by `order_type LIKE <residual_order_type>` and the airtime leg sums `merchant_discount` for
+EVERY other row — so a device sale, a customer bill payment and a wallet funding all land in "airtime
+margin". When the tenant's carrier-income wiring mode is 'class', the legs are selected instead by the
+line's owner-CONFIRMED MA product class: `residual` feeds RESIDUAL, `billpayment` feeds airtime, and
+device sales / wallet funding / memos / fees LEAVE the income total (and are reported, per class, with
+their dollars — never silently dropped). BOTH readings are computed on every call and ship as
+`class_swap`, the same two-mode pattern as `source_swap`. DEFAULT IS 'legacy': absent config, an
+unreadable table, or zero CONFIRMED classifications all keep today's numbers to the cent.
 """
 import calendar
 from app.modules.commcalc.calculator import classify_contract_type, safe_float
+from app.modules.commcalc import ma_class_wiring
 from app.modules.account import residual_subs
 
 _MONTHS = {m: i for i, m in enumerate(calendar.month_name) if m}
@@ -57,6 +68,12 @@ _HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
 _MA_MONEY_COLUMNS = ("retail_cost", "merchant_discount")    # signed $ (negative = paid to the dealer)
 _MA_IDENTIFIER_COLUMNS = ("merchant_invoice",)              # NUMERIC, but an ID — never a $ amount
 _MA_SPIFF_FIELDS = tuple(f"spiff_m{i}" for i in range(1, 7))
+# The residual/airtime read. `product_name` was added 2026-08-01 for the PRODUCT-CLASS legs; it is a
+# LABEL, never summed, and the read degrades to the pre-class column list if a tenant's table cannot
+# serve it — losing the class legs, never the residual leg (the failure mode this guards against is the
+# whole month reading $0 because one optional column was unavailable).
+_MA_TX_COLS_BASE = "period,order_type,account_id,merchant_invoice,merchant_discount,retail_cost"
+_MA_TX_COLS = _MA_TX_COLS_BASE + ",product_name"
 _MA_COLUMN_ROLE_DRIFT = []
 try:
     from app.modules.commcalc.ma_upload import FIELD_LABELS as _MA_FIELD_LABELS
@@ -965,17 +982,28 @@ _LEDGER_COLS = ("period,source_report,origin,order_type,category,commission,spif
                 "residual_monthly,autopay_residual,payout_total")
 _LEDGER_COLS_PRE251 = ("period,source_report,order_type,category,commission,spiff,equipment_rebate,"
                        "residual_monthly,autopay_residual,payout_total")
+# `product_name` is read so the residual double-count guard can compose with the PRODUCT-CLASS residual
+# leg (a row can never appear in both a ledger income bucket and the residual leg). It is a label, never
+# summed; reading one extra column changes no displayed figure, and the tiers below degrade if a tenant's
+# ledger predates it.
+_LEDGER_COLS_CLASS = _LEDGER_COLS + ",product_name"
+_LEDGER_COLS_PRE251_CLASS = _LEDGER_COLS_PRE251 + ",product_name"
+# (columns, origin_ready, name_ready) — tried in order, first one the database accepts wins.
+_LEDGER_COL_TIERS = ((_LEDGER_COLS_CLASS, True, True), (_LEDGER_COLS, True, False),
+                     (_LEDGER_COLS_PRE251_CLASS, False, True), (_LEDGER_COLS_PRE251, False, False))
 
 
 def _ledger_income_rows(client, org_id):
-    """Every commission_ledger row for ONE org, paged. Returns (rows, ready, origin_ready).
+    """Every commission_ledger row for ONE org, paged. Returns (rows, ready, origin_ready, name_ready).
 
     ORG-SCOPED on every page (RULE ONE). `ready` is False only when the table itself cannot be read
     (migration 071 never run) — the caller then keeps the legacy source and SAYS so, instead of showing a
-    fabricated $0. `origin_ready` is False before migration 251 (no provenance column); the read degrades
-    to the pre-251 column list and the origin mix is simply reported as unknown."""
+    fabricated $0. `origin_ready` is False before migration 251 (no provenance column) and `name_ready`
+    is False if the label column cannot be read; the read walks DOWN _LEDGER_COL_TIERS and simply reports
+    which capabilities it lost. No money column is ever in the degraded set."""
     rows, start, page = [], 0, 1000
-    cols, origin_ready, ready = _LEDGER_COLS, True, False
+    tier, ready = 0, False
+    cols, origin_ready, name_ready = _LEDGER_COL_TIERS[0]
     while True:
         try:
             # .order("id") makes the PAGING deterministic. An unordered range() query can hand back
@@ -985,16 +1013,17 @@ def _ledger_income_rows(client, org_id):
                      .eq("org_id", org_id).order("id")
                      .range(start, start + page - 1).execute().data) or []
         except Exception:
-            if cols == _LEDGER_COLS:                 # retry the SAME page without the mig-251 column
-                cols, origin_ready = _LEDGER_COLS_PRE251, False
+            tier += 1
+            if tier < len(_LEDGER_COL_TIERS):        # retry the SAME page with fewer optional columns
+                cols, origin_ready, name_ready = _LEDGER_COL_TIERS[tier]
                 continue
-            return rows, ready, origin_ready
+            return rows, ready, origin_ready, name_ready
         ready = True
         rows.extend(chunk)
         if len(chunk) < page:
             break
         start += page
-    return rows, ready, origin_ready
+    return rows, ready, origin_ready, name_ready
 
 
 # ─── 4. Carrier income (company perspective, carrier-agnostic) ──────────────────────────────────────
@@ -1040,6 +1069,24 @@ def _ma_carrier_income(client, org_id, months, cfg):
     order_type = (cfg.get("residual_order_type") or "Postpaid Residual Order").strip().lower()
     wanted = (cfg.get("income_source") or "").strip().lower()
     use_ledger = wanted == LEDGER_INCOME_SOURCE
+
+    # ── the PRODUCT-CLASS legs (owner-gated, default OFF — ma_class_wiring.py) ─────────────────────
+    # Read on EVERY call in BOTH modes, exactly like the ledger/legacy pair above: `class_swap` has to
+    # quantify the move BEFORE anyone flips it. All three reads degrade to the code default, so a tenant
+    # without migration 265 (or without migration 254) is byte-identical to today.
+    class_mode, class_cfg = ma_class_wiring.load_mode(client, org_id, ma_class_wiring.CONSUMER_INCOME)
+    class_legs, class_legs_ready = ma_class_wiring.load_income_legs(client, org_id)
+    class_index, class_meta = ma_class_wiring.load_class_index(client, org_id)
+    use_class = class_mode == ma_class_wiring.MODE_CLASS
+    class_note = None
+    if use_class and not class_index:
+        # Configured for classes but nothing is CONFIRMED — do NOT display a fabricated $0 income.
+        use_class = False
+        class_note = ("Carrier income is configured to select its residual / airtime legs by MA PRODUCT "
+                      "CLASS, but this tenant has no CONFIRMED product classifications, so every line "
+                      "would be unclassified and the income total would read $0. The figures below are "
+                      "the LEGACY order-type selection. Confirm the classes on "
+                      "/commcalc/ma-product-class, then re-open this tab.")
     per = {}
 
     def _blank():
@@ -1049,7 +1096,14 @@ def _ma_carrier_income(client, org_id, months, cfg):
                 # canonical-ledger legs, accumulated ALONGSIDE the legacy ones (never instead of them)
                 "L_COMMISSION": 0.0, "L_SPIFF": 0.0, "L_EQUIPMENT_REBATE": 0.0, "L_OTHER": 0.0,
                 "ledger_lines": 0, "ledger_income_lines": 0, "ledger_origins": set(),
-                "ledger_reports": set(), "ledger_overlap_lines": 0, "ledger_overlap_total": 0.0}
+                "ledger_reports": set(), "ledger_overlap_lines": 0, "ledger_overlap_total": 0.0,
+                # product-class legs, likewise accumulated ALONGSIDE the order-type ones
+                "C_RESIDUAL": 0.0, "C_AIRTIME": 0.0,
+                "class_residual_lines": 0, "class_airtime_lines": 0,
+                "class_excluded_lines": 0, "class_excluded_discount": 0.0,
+                "class_unclassified_lines": 0, "class_unclassified_discount": 0.0,
+                "class_by_class": {},
+                "ledger_class_overlap_lines": 0, "ledger_class_overlap_total": 0.0}
 
     def _slot(p):
         return per.setdefault(p, _blank())
@@ -1089,14 +1143,18 @@ def _ma_carrier_income(client, org_id, months, cfg):
             break
         start += page
 
-    # ── residual + airtime leg: raw_ma_daily_tx (UNCHANGED by the swap) ───────────────────────────
+    # ── residual + airtime leg: raw_ma_daily_tx (order-type selection UNCHANGED by either swap) ────
     start = 0
+    tx_cols, tx_name_ready = _MA_TX_COLS, True
     while True:
         try:
             chunk = (client.schema("commcalc").table("raw_ma_daily_tx")
-                     .select("period,order_type,account_id,merchant_invoice,merchant_discount,retail_cost")
-                     .eq("org_id", org_id).range(start, start + page - 1).execute().data) or []
+                     .select(tx_cols).eq("org_id", org_id)
+                     .range(start, start + page - 1).execute().data) or []
         except Exception:
+            if tx_cols == _MA_TX_COLS:      # retry the SAME page without the optional label column
+                tx_cols, tx_name_ready = _MA_TX_COLS_BASE, False
+                continue
             chunk = []
         for r in chunk:
             p = (r.get("period") or "").strip()
@@ -1109,6 +1167,33 @@ def _ma_carrier_income(client, org_id, months, cfg):
                 s["RESIDUAL"] += _ma_residual_amount(r, cfg)
             else:
                 s["UNMAPPED"] += safe_float(r.get("merchant_discount"))
+            # ── the SAME row, read by its CONFIRMED product class (accumulated, not displayed unless
+            # the tenant flipped this consumer to 'class'). A class with no leg row is EXCLUDED, and an
+            # unclassified label is EXCLUDED — both counted, in dollars, so nothing vanishes quietly.
+            _cls = ma_class_wiring.class_of(r.get("product_name"), class_index)
+            _leg = ma_class_wiring.leg_for(_cls, class_legs) if _cls else None
+            _disc = safe_float(r.get("merchant_discount"))
+            _cb = s["class_by_class"].setdefault(_cls or ma_class_wiring.UNCLASSIFIED, {
+                "lines": 0, "residual": 0.0, "airtime": 0.0, "excluded_discount": 0.0,
+                "leg": _leg or ma_class_wiring.LEG_EXCLUDED})
+            _cb["lines"] += 1
+            if _leg == ma_class_wiring.LEG_RESIDUAL:
+                _amt = _ma_residual_amount(r, cfg)
+                s["C_RESIDUAL"] += _amt
+                s["class_residual_lines"] += 1
+                _cb["residual"] = round(_cb["residual"] + _amt, 2)
+            elif _leg == ma_class_wiring.LEG_AIRTIME:
+                s["C_AIRTIME"] += _disc
+                s["class_airtime_lines"] += 1
+                _cb["airtime"] = round(_cb["airtime"] + _disc, 2)
+            elif _cls:
+                s["class_excluded_lines"] += 1
+                s["class_excluded_discount"] += _disc
+                _cb["excluded_discount"] = round(_cb["excluded_discount"] + _disc, 2)
+            else:
+                s["class_unclassified_lines"] += 1
+                s["class_unclassified_discount"] += _disc
+                _cb["excluded_discount"] = round(_cb["excluded_discount"] + _disc, 2)
             acc = str(r.get("account_id") or "").strip()
             if acc:
                 s["accounts"].add(acc)
@@ -1116,8 +1201,16 @@ def _ma_carrier_income(client, org_id, months, cfg):
             break
         start += page
 
+    if use_class and not tx_name_ready:
+        # Without the label column every line is unclassified, i.e. the class legs would read $0. Keep
+        # the legacy selection and say so, exactly like the ledger's own missing-table posture.
+        use_class = False
+        class_note = ("Carrier income is configured to select its legs by MA PRODUCT CLASS, but the "
+                      "product_name column could not be read from raw_ma_daily_tx, so no line can be "
+                      "classified. The figures below are the LEGACY order-type selection.")
+
     # ── canonical leg: commcalc.commission_ledger (origin-agnostic) ───────────────────────────────
-    ledger_rows, ledger_ready, ledger_origin_ready = _ledger_income_rows(client, org_id)
+    ledger_rows, ledger_ready, ledger_origin_ready, ledger_name_ready = _ledger_income_rows(client, org_id)
     orphan = {}      # ledger-only months, held OUT of the payload while the legacy source is active
 
     def _ledger_slot(p):
@@ -1152,8 +1245,20 @@ def _ma_carrier_income(client, org_id, months, cfg):
         s["ledger_origins"].add((str(r.get("origin") or "").strip() or "file")
                                 if ledger_origin_ready else "unknown")
         # A residual-order line's dollars are ALREADY in the RESIDUAL leg (same rows, same signed column).
-        # Count it, report it, exclude it — never stack it on top.
-        if order_type and order_type in str(r.get("order_type") or "").strip().lower():
+        # Count it, report it, exclude it — never stack it on top. The guard COMPOSES with the
+        # product-class residual leg: when the residual leg is selected by CLASS, a line whose confirmed
+        # class feeds RESIDUAL is excluded here too, so a row can never appear in both places under any
+        # combination of the two flags.
+        _ot_hit = bool(order_type and order_type in str(r.get("order_type") or "").strip().lower())
+        _cls_hit = False
+        if use_class:
+            _lc = ma_class_wiring.class_of(r.get("product_name"), class_index) if ledger_name_ready else None
+            _cls_hit = bool(_lc and ma_class_wiring.leg_for(_lc, class_legs) == ma_class_wiring.LEG_RESIDUAL)
+            if _cls_hit and not _ot_hit:
+                s["ledger_class_overlap_lines"] += 1
+                s["ledger_class_overlap_total"] = round(s["ledger_class_overlap_total"] +
+                                                        safe_float(r.get("payout_total")), 2)
+        if _ot_hit or _cls_hit:
             s["ledger_overlap_lines"] += 1
             s["ledger_overlap_total"] = round(s["ledger_overlap_total"] +
                                               safe_float(r.get("payout_total")), 2)
@@ -1190,8 +1295,12 @@ def _ma_carrier_income(client, org_id, months, cfg):
             comm, spf, eqr, oth = s["L_COMMISSION"], s["L_SPIFF"], s["L_EQUIPMENT_REBATE"], s["L_OTHER"]
         else:
             comm, spf, eqr, oth = s["COMMISSION"], s["SPIFF"], 0.0, 0.0
-        comp_total = round(comm + spf + eqr + oth + s["REIMBURSEMENT"] + s["UNMAPPED"], 2)
-        residual = round(s["RESIDUAL"], 2)
+        # RESIDUAL + airtime: order-type selection (legacy) or CONFIRMED product class, per the tenant's
+        # carrier-income wiring mode. In legacy mode these are literally s["RESIDUAL"] / s["UNMAPPED"],
+        # i.e. every displayed figure is what it was before this existed.
+        airtime = s["C_AIRTIME"] if use_class else s["UNMAPPED"]
+        comp_total = round(comm + spf + eqr + oth + s["REIMBURSEMENT"] + airtime, 2)
+        residual = round(s["C_RESIDUAL"] if use_class else s["RESIDUAL"], 2)
         delta = None if prev is None else round(comp_total - prev, 2)
         pct = None if prev in (None, 0) else round((comp_total - prev) / abs(prev) * 100, 1)
         totals_by_month.append({
@@ -1200,8 +1309,11 @@ def _ma_carrier_income(client, org_id, months, cfg):
             "delta_vs_prev": delta, "pct_vs_prev": pct,
             "components": {"COMMISSION": round(comm, 2), "SPIFF": round(spf, 2),
                           "REIMBURSEMENT": round(s["REIMBURSEMENT"], 2), "RESIDUAL": residual,
-                          "UNMAPPED": round(s["UNMAPPED"], 2),
+                          "UNMAPPED": round(airtime, 2),
                           "EQUIPMENT_REBATE": round(eqr, 2), "LEDGER_OTHER": round(oth, 2)},
+            # what the CLASS legs left out of this month, in dollars — visible even in legacy mode
+            "class_excluded_lines": s["class_excluded_lines"],
+            "class_unclassified_lines": s["class_unclassified_lines"],
             # Per-source ingest coverage for THIS month. COMMISSION/SPIFF come from the ledger (or, in
             # legacy mode, from MA Commission Details); RESIDUAL/airtime only ever from MA Daily Tx. A
             # month with daily-tx rows and no rows on the comp side reads $0 HONESTLY — a data gap, not
@@ -1260,7 +1372,9 @@ def _ma_carrier_income(client, org_id, months, cfg):
                    "ma_commission_sign": _ma_commission_sign(cfg),
                    "commission_row_signs": raw_signs,
                    "income_leg_source": ("commission_ledger" if use_ledger else "raw_ma_commission"),
-                   "residual_leg_source": "raw_ma_daily_tx"},
+                   "residual_leg_source": "raw_ma_daily_tx",
+                   "residual_leg_selector": ("product_class" if use_class else "order_type"),
+                   "airtime_leg_selector": ("product_class" if use_class else "order_type")},
         "ma_coverage": coverage,
         "data_note": data_note,
         "ledger_ready": ledger_ready,
@@ -1272,11 +1386,118 @@ def _ma_carrier_income(client, org_id, months, cfg):
                         "equipment_rebate": ("commission_ledger" if use_ledger else None),
                         "residual": "raw_ma_daily_tx", "airtime": "raw_ma_daily_tx"},
         "source_swap": _income_source_swap(per, orphan, months, use_ledger),
+        # ── the MA PRODUCT-CLASS legs (owner-gated; default 'legacy' = today) ─────────────────────
+        "class_mode": (ma_class_wiring.MODE_CLASS if use_class else ma_class_wiring.MODE_LEGACY),
+        "class_mode_configured": class_mode,
+        "class_note": class_note,
+        "class_wiring": {"config_ready": class_cfg.get("ready"),
+                         "config_migration": class_cfg.get("migration"),
+                         "legs_ready": class_legs_ready, "legs": class_legs,
+                         "class_map": class_meta,
+                         "label_column_read": tx_name_ready,
+                         "ledger_label_column_read": ledger_name_ready,
+                         "leg_labels": ma_class_wiring.LEG_LABELS,
+                         "mode_labels": ma_class_wiring.MODE_LABELS},
+        "class_swap": _class_leg_swap(per, orphan, months, use_class, class_legs),
         "residual_amount_field": field,
         "residual_field_warning": field_warning,
         "note": (None if kept else
                  "No master-agent commission/daily-tx rows yet — pull the MA Commission + MA Daily Tx "
                  "reports (Data Imports → payment-processor sources)."),
+    }
+
+
+def _class_leg_swap(per, orphan, months, use_class, legs):
+    """The Gate-2 artifact for CONSUMER 2, computed on every call in BOTH modes: the ORDER-TYPE selection
+    vs the PRODUCT-CLASS selection, per month, for the residual and airtime legs.
+
+    OLD = `order_type LIKE <residual_order_type>` -> RESIDUAL; EVERY other row's merchant discount ->
+          airtime margin. That is why a device sale, a bill payment and a wallet funding are all
+          "airtime" today.
+    NEW = the line's owner-CONFIRMED MA product class -> the leg its class is mapped to. Classes mapped
+          to `excluded`, and labels with no CONFIRMED class at all, LEAVE the income total — and are
+          reported here with their line counts and dollars, per class, so nothing leaves quietly.
+
+    Writes nothing, reads nothing; it is arithmetic over the two sets of accumulators the caller already
+    filled. PURE."""
+    merged = dict(per)
+    for k, v in (orphan or {}).items():
+        merged.setdefault(k, v)
+    keys = sorted(merged.keys(), key=_ma_pkey)
+    if months and months > 0:
+        keys = keys[-months:]
+    rows = []
+    tot = {"old_residual": 0.0, "old_airtime": 0.0, "old_total": 0.0,
+           "new_residual": 0.0, "new_airtime": 0.0, "new_total": 0.0,
+           "daily_tx_rows": 0, "class_residual_lines": 0, "class_airtime_lines": 0,
+           "class_excluded_lines": 0, "class_excluded_discount": 0.0,
+           "class_unclassified_lines": 0, "class_unclassified_discount": 0.0,
+           "ledger_class_overlap_lines": 0, "ledger_class_overlap_total": 0.0}
+    by_class = {}
+    for p in keys:
+        s = merged[p]
+        old_r, old_a = round(s["RESIDUAL"], 2), round(s["UNMAPPED"], 2)
+        new_r, new_a = round(s["C_RESIDUAL"], 2), round(s["C_AIRTIME"], 2)
+        old_t, new_t = round(old_r + old_a, 2), round(new_r + new_a, 2)
+        cls_rows = []
+        for cls in sorted(s["class_by_class"]):
+            c = s["class_by_class"][cls]
+            cls_rows.append({"product_class": cls, "leg": c["leg"], "lines": c["lines"],
+                             "residual": c["residual"], "airtime": c["airtime"],
+                             "excluded_discount": c["excluded_discount"]})
+            g = by_class.setdefault(cls, {"product_class": cls, "leg": c["leg"], "lines": 0,
+                                          "residual": 0.0, "airtime": 0.0, "excluded_discount": 0.0})
+            g["lines"] += c["lines"]
+            for k in ("residual", "airtime", "excluded_discount"):
+                g[k] = round(g[k] + c[k], 2)
+        rows.append({
+            "period": p,
+            "old_residual": old_r, "old_airtime": old_a, "old_total": old_t,
+            "new_residual": new_r, "new_airtime": new_a, "new_total": new_t,
+            "delta_residual": round(new_r - old_r, 2), "delta_airtime": round(new_a - old_a, 2),
+            "delta_total": round(new_t - old_t, 2),
+            "daily_tx_rows": s["daily_tx_rows"],
+            "class_residual_lines": s["class_residual_lines"],
+            "class_airtime_lines": s["class_airtime_lines"],
+            "class_excluded_lines": s["class_excluded_lines"],
+            "class_excluded_discount": round(s["class_excluded_discount"], 2),
+            "class_unclassified_lines": s["class_unclassified_lines"],
+            "class_unclassified_discount": round(s["class_unclassified_discount"], 2),
+            "ledger_class_overlap_lines": s["ledger_class_overlap_lines"],
+            "ledger_class_overlap_total": round(s["ledger_class_overlap_total"], 2),
+            "by_class": cls_rows, "on_payload": p in per,
+        })
+        tot["old_residual"] += old_r
+        tot["old_airtime"] += old_a
+        tot["old_total"] += old_t
+        tot["new_residual"] += new_r
+        tot["new_airtime"] += new_a
+        tot["new_total"] += new_t
+        for k in ("daily_tx_rows", "class_residual_lines", "class_airtime_lines",
+                  "class_excluded_lines", "class_unclassified_lines", "ledger_class_overlap_lines"):
+            tot[k] += s[k]
+        for k in ("class_excluded_discount", "class_unclassified_discount", "ledger_class_overlap_total"):
+            tot[k] += s[k]
+    for k in list(tot):
+        if isinstance(tot[k], float):
+            tot[k] = round(tot[k], 2)
+    tot["delta_residual"] = round(tot["new_residual"] - tot["old_residual"], 2)
+    tot["delta_airtime"] = round(tot["new_airtime"] - tot["old_airtime"], 2)
+    tot["delta_total"] = round(tot["new_total"] - tot["old_total"], 2)
+    return {
+        "active": ma_class_wiring.MODE_CLASS if use_class else ma_class_wiring.MODE_LEGACY,
+        "old_source": ("order type — rows matching the configured residual order type feed RESIDUAL, "
+                       "EVERY other row's merchant discount feeds airtime margin"),
+        "new_source": ("MA product class (CONFIRMED mappings only) — each class feeds the leg it is "
+                       "mapped to; classes mapped to 'not carrier income', and labels with no confirmed "
+                       "class, leave the income total"),
+        "legs": dict(legs or {}),
+        "by_month": rows, "totals": tot,
+        "by_class": [by_class[c] for c in sorted(by_class)],
+        "note": ("Displayed figures select the legs by PRODUCT CLASS; 'old' is what the order-type "
+                 "selection would have shown." if use_class else
+                 "Displayed figures use the ORDER-TYPE selection; 'new' is what selecting by MA product "
+                 "class would show. Nothing on this page has moved."),
     }
 
 

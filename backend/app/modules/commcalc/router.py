@@ -35,6 +35,7 @@ from app.modules.commcalc import target_registry
 from app.modules.commcalc import commission_ledger
 from app.modules.commcalc import ledger_ma_sync
 from app.modules.commcalc import ma_product_class
+from app.modules.commcalc import ma_class_wiring
 from app.modules.commcalc import accessory_definition
 from app.modules.commcalc import device_history
 from app.modules.commcalc import template_clone
@@ -3587,6 +3588,10 @@ async def commission_ledger_import(
     client = sb()
     hdr_rules = _ledger_source_rules(client, org_id, carrier_id)
     cat_rules = commission_ledger.load_rules(client, org_id, source_report)
+    # MA PRODUCT-CLASS WIRING (mig 265, default 'legacy'): in legacy mode this returns the rules
+    # UNTOUCHED, so classification is byte-identical. In 'class' mode it attaches the tenant's CONFIRMED
+    # product-class index to any product_class rule.
+    cat_rules, _class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
     base = {"org_id": org_id, "source_report": source_report}
     if period:
         base["period"] = period
@@ -3654,6 +3659,7 @@ async def commission_ledger_analyze(
     suggestions = column_mapping.suggest(headers, "commission_ledger", saved, client, org_id)
     hdr_rules = _ledger_source_rules(client, org_id, carrier_id)
     cat_rules = commission_ledger.load_rules(client, org_id, source_report)
+    cat_rules, class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
     rows = []
     for r in df.to_dict("records"):
         src = column_mapping.apply_mapping(r, hdr_rules, {})
@@ -3672,7 +3678,20 @@ async def commission_ledger_analyze(
     return {"headers": headers, "row_count": int(len(df)), "usable_rows": len(rows),
             "suggestions": suggestions, "amount_source": amount_src,
             "summary": commission_ledger.summarize(rows), "observed": observed,
+            "class_wiring": class_meta,
             "categories": commission_ledger.CATEGORIES, "category_labels": commission_ledger.CATEGORY_LABELS}
+
+
+def _ledger_class_wiring_meta(client, org_id, source_report):
+    """Which classification mode the ledger is in for this tenant + template, for the preview payloads.
+    Read-only, degrades to 'legacy' when migration 265 is absent (contract §5)."""
+    mode, meta = ma_class_wiring.load_mode(client, org_id, ma_class_wiring.CONSUMER_LEDGER)
+    out = {"mode": mode, "config_ready": meta["ready"], "migration": meta["migration"],
+           "mode_labels": ma_class_wiring.MODE_LABELS, "classified_names": 0}
+    if mode == ma_class_wiring.MODE_CLASS:
+        idx, imeta = ma_class_wiring.load_class_index(client, org_id, source_report)
+        out.update({"classified_names": len(idx), "class_status": imeta})
+    return out
 
 
 @router.get("/commission-ledger/summary")
@@ -3963,6 +3982,7 @@ def _ledger_ma_derive(client, org_id, source_report, period, carrier_id="", repo
         degraded.append(f"the saved ledger column mapping could not be read ({str(e)[:120]}) — the "
                         f"built-in default layout was used")
     cat_rules = commission_ledger.load_rules(client, org_id, source_report)
+    cat_rules, class_meta = ma_class_wiring.ledger_rules_with_class(client, org_id, source_report, cat_rules)
     field_defs = column_mapping.target_fields("commission_ledger", client, org_id)
     # the tenant's saved per-(carrier, report) MA column-map overrides (mig 212), keyed by report_key
     saved_maps = {}
@@ -4063,6 +4083,8 @@ def _ledger_ma_payload(client, org_id, source_report, period, carrier_id="", rep
         "unmapped": [o for o in observed if o.get("category") == "other"],
         "guard": guard, "existing_by_origin": list(existing.values()), "overlap_note": note,
         "warnings": warnings,
+        # which classification mode this derivation ran in (mig 265; 'legacy' == keyword rules only)
+        "class_wiring": _ledger_class_wiring_meta(client, org_id, source_report),
         "categories": commission_ledger.CATEGORIES,
         "category_labels": commission_ledger.CATEGORY_LABELS,
         "origin_labels": ledger_ma_sync.ORIGIN_LABELS,
@@ -4623,6 +4645,321 @@ def delete_ma_product_class(rid: str, org_id: str = ORG_ID):
     except Exception as e:
         raise HTTPException(400, f"Could not delete — [{e}]")
     return {"ok": True, "id": rid}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# MA PRODUCT CLASS -> MONEY  (mig 265; engine: commcalc/ma_class_wiring.py)   *** OWNER-GATED ***
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# Owner go-ahead in chat 2026-08-01, AFTER confirming the classes on /commcalc/ma-product-class:
+# "go ahead and fix, it updated the classes".
+#
+# TWO consumers, each behind its OWN per-tenant mode whose default is 'legacy' = today to the cent:
+#   ledger          commission_ledger.classify() gains match_op='product_class' — one rule per canonical
+#                   bucket instead of keyword guessing. Re-buckets rows on the NEXT refresh/import.
+#   carrier_income  whatif._ma_carrier_income selects its residual/airtime legs by CONFIRMED class
+#                   instead of order_type — device sales / wallet funding / memos leave the total.
+#
+# ONLY CONFIRMED MAPPINGS CLASSIFY MONEY (ma_class_wiring.confirmed_index). A proposal — including the
+# four the seed flagged AMBIGUOUS — classifies NOTHING and is surfaced here, loudly.
+#
+# NOT wired, ever: calculator.py / commission_engine.py / rep_commissions (rep pay = POS x Plans).
+# NOT wired yet: the P&L / GP leg (account/coa.py, residual_subs.py) — sequenced behind the
+# device-cost-recognition policy decision; a mod-finance package, owner-gated. See the handoff.
+
+
+def _mcw_ledger_rows(client, org_id, source_report="ma_daily_tx", period="", cap=200000):
+    """Paged, ORG-SCOPED read of commcalc.commission_ledger for the delta panel. Deterministically
+    ordered so paging cannot silently skip or repeat a money row (the same discipline whatif uses)."""
+    cols = "id,period,source_report,order_type,product_name,raw_amount,category,payout_total,origin"
+    cols_pre251 = "id,period,source_report,order_type,product_name,raw_amount,category,payout_total"
+    rows, start, page, truncated, err = [], 0, 1000, False, None
+    use = cols
+    while True:
+        try:
+            q = (client.schema("commcalc").table("commission_ledger").select(use)
+                 .eq("org_id", org_id).eq("source_report", source_report).order("id"))
+            if period:
+                q = q.in_("period", _pvariants(period))
+            chunk = q.range(start, start + page - 1).execute().data or []
+        except Exception as e:
+            if use == cols:
+                use = cols_pre251
+                continue
+            err = str(e)[:200]
+            break
+        rows.extend(chunk)
+        if len(chunk) < page:
+            break
+        start += page
+        if len(rows) >= cap:
+            truncated = True
+            break
+    return rows, {"rows_read": len(rows), "truncated": truncated, "cap": cap, "error": err,
+                  "source_report": source_report, "period": period or None}
+
+
+@router.get("/ma-class-wiring")
+def get_ma_class_wiring(source_report: str = "ma_daily_tx", org_id: str = ORG_ID,
+                        authorization: str = Header(None)):
+    """The control room: both consumers' modes, the class -> carrier-income leg map, the tenant's
+    product_class rules, what is still unconfirmed (loudly), and the cross-consumer conflict check.
+
+    Read-only. Degrades to the code defaults ('legacy' everywhere) when migration 265 is absent."""
+    require_org(org_id)
+    client = sb()
+    cfg_rows, cfg_ready = ma_class_wiring.load_config_rows(client, org_id)
+    legs, legs_ready = ma_class_wiring.load_income_legs(client, org_id)
+    classes, _cls_ready = _mpc_classes(client, org_id)
+    idx, idx_meta = ma_class_wiring.load_class_index(client, org_id, source_report)
+    try:
+        rules = commission_ledger.load_rules(client, org_id, source_report)
+    except Exception:
+        rules = []
+    class_rules = [r for r in rules if (r or {}).get("match_op") == ma_class_wiring.MATCH_OP]
+    return {
+        "source_report": source_report,
+        "modes": ma_class_wiring.modes_from(cfg_rows) if cfg_ready else
+                 {c: ma_class_wiring.DEFAULT_MODE for c in ma_class_wiring.CONSUMERS},
+        "consumers": [{"key": c, "label": ma_class_wiring.CONSUMER_LABELS[c]}
+                      for c in ma_class_wiring.CONSUMERS],
+        "mode_options": [{"key": m, "label": ma_class_wiring.MODE_LABELS[m]}
+                         for m in ma_class_wiring.MODES],
+        "default_mode": ma_class_wiring.DEFAULT_MODE,
+        "legs": ma_class_wiring.leg_rows(legs, classes),
+        "leg_options": [{"key": l, "label": ma_class_wiring.LEG_LABELS[l]}
+                        for l in ma_class_wiring.INCOME_LEGS],
+        "class_status": idx_meta, "classified_names": len(idx),
+        "class_rules": class_rules,
+        "categories": commission_ledger.CATEGORIES,
+        "category_labels": commission_ledger.CATEGORY_LABELS,
+        "charge_bucket": ma_class_wiring.CHARGE_BUCKET,
+        "conflicts": ma_class_wiring.conflicts(rules, legs),
+        "can_edit": _can_edit_ma_class_wiring(authorization, org_id),
+        "ready": cfg_ready and legs_ready,
+        "migration": None if (cfg_ready and legs_ready) else ma_class_wiring.MIGRATION,
+        "class_migration": idx_meta.get("migration"),
+        "note": ("Both consumers default to LEGACY — today's behaviour to the cent. Flipping one is a "
+                 "money-visible change; the delta panels on this page show exactly what moves BEFORE "
+                 "you flip, and reverting is this same dropdown, not a deploy."),
+    }
+
+
+def _can_edit_ma_class_wiring(authorization, org_id):
+    """Flipping a wiring mode changes displayed money, so it takes the module's money-posture gate
+    (_require_commission_admin). Reported on the GET so the page can hide the control."""
+    try:
+        _require_commission_admin(authorization, org_id)
+        return True
+    except HTTPException:
+        return False
+    except Exception:
+        return True
+
+
+@router.put("/ma-class-wiring/mode")
+def put_ma_class_wiring_mode(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+    """Flip ONE consumer between 'legacy' and 'class'. body: {consumer, mode, source_report?, note?}.
+    Admin-gated (money posture). 400 — never 500 — until migration 265 is applied."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    consumer = (body.get("consumer") or "").strip()
+    mode = (body.get("mode") or "").strip().lower()
+    if consumer not in ma_class_wiring.CONSUMERS:
+        raise HTTPException(400, "consumer must be one of %s" % ", ".join(ma_class_wiring.CONSUMERS))
+    if mode not in ma_class_wiring.MODES:
+        raise HTTPException(400, "mode must be one of %s" % ", ".join(ma_class_wiring.MODES))
+    row = {"org_id": org_id, "consumer": consumer, "mode": mode,
+           "source_report": (body.get("source_report") or "ma_daily_tx").strip(),
+           "note": (body.get("note") or None),
+           "updated_by": _mpc_who(authorization), "updated_at": column_mapping.now_iso()}
+    try:
+        (sb().schema("commcalc").table(ma_class_wiring.CONFIG_TABLE)
+         .upsert(row, on_conflict="org_id,consumer").execute())
+    except Exception as e:
+        raise HTTPException(400, "Could not save — run migration %s first. [%s]"
+                            % (ma_class_wiring.MIGRATION, e))
+    return {"ok": True, "consumer": consumer, "mode": mode,
+            "effect": ("This consumer now reads the CONFIRMED MA product classes."
+                       if mode == ma_class_wiring.MODE_CLASS else
+                       "This consumer is back on its legacy selection — nothing here reads a class.")}
+
+
+@router.put("/ma-class-wiring/leg")
+def put_ma_class_wiring_leg(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+    """Map ONE product class to a carrier-income leg. body: {product_class, income_leg}.
+    Only takes effect while carrier_income is in 'class' mode. Admin-gated."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    cls = ma_class_wiring.normalize(body.get("product_class"))
+    leg = ma_class_wiring.normalize(body.get("income_leg")).lower()
+    if not cls or cls == ma_product_class.UNMAPPED:
+        raise HTTPException(400, "product_class is required and may not be the reserved 'unmapped'")
+    if leg not in ma_class_wiring.INCOME_LEGS:
+        raise HTTPException(400, "income_leg must be one of %s" % ", ".join(ma_class_wiring.INCOME_LEGS))
+    row = {"org_id": org_id, "product_class": cls, "income_leg": leg,
+           "updated_by": _mpc_who(authorization), "updated_at": column_mapping.now_iso()}
+    try:
+        (sb().schema("commcalc").table(ma_class_wiring.LEG_TABLE)
+         .upsert(row, on_conflict="org_id,product_class").execute())
+    except Exception as e:
+        raise HTTPException(400, "Could not save — run migration %s first. [%s]"
+                            % (ma_class_wiring.MIGRATION, e))
+    return {"ok": True, "product_class": cls, "income_leg": leg}
+
+
+@router.get("/ma-class-wiring/ledger-delta")
+def ma_class_wiring_ledger_delta(source_report: str = "ma_daily_tx", period: str = "",
+                                 org_id: str = ORG_ID):
+    """CONSUMER 1's two-mode delta panel: every ledger line re-classified BOTH ways through the REAL
+    `commission_ledger.classify()` / `build_row()` — once with the keyword rules alone (legacy) and once
+    with the CONFIRMED product-class index compiled on (class) — per canonical bucket, per month.
+
+    WRITES NOTHING. It re-derives in memory; the stored rows are untouched until a refresh/import runs.
+    `drift` counts rows whose STORED category already differs from what today's rules produce (rules were
+    edited since the last refresh) — that is pre-existing, not caused by this wiring, and is reported
+    separately so it can never be mistaken for the delta."""
+    require_org(org_id)
+    client = sb()
+    rules = []
+    try:
+        rules = commission_ledger.load_rules(client, org_id, source_report)
+    except Exception:
+        rules = []
+    idx, idx_meta = ma_class_wiring.load_class_index(client, org_id, source_report)
+    legacy_rules = [dict(r) for r in rules]
+    for r in legacy_rules:
+        r.pop("_class_index", None)
+    class_rules = ma_class_wiring.compile_rules(rules, idx)
+    rows, meta = _mcw_ledger_rows(client, org_id, source_report, period)
+    by_month, drift, moves = {}, 0, {}
+    old_all, new_all = [], []
+    for r in rows:
+        p = (r.get("period") or "").strip() or "(no period)"
+        src = {"order_type": r.get("order_type"), "product_name": r.get("product_name"),
+               "raw_amount": r.get("raw_amount")}
+        base = {"org_id": org_id, "source_report": source_report, "period": p}
+        o = commission_ledger.build_row(src, base, legacy_rules)
+        n = commission_ledger.build_row(src, base, class_rules)
+        old_all.append(o)
+        new_all.append(n)
+        m = by_month.setdefault(p, {"period": p, "lines": 0, "old": [], "new": [], "moved": 0,
+                                    "moved_payout": 0.0})
+        m["lines"] += 1
+        m["old"].append(o)
+        m["new"].append(n)
+        if (r.get("category") or "") and (r.get("category") or "") != o.get("category"):
+            drift += 1
+        if o.get("category") != n.get("category"):
+            m["moved"] += 1
+            m["moved_payout"] = round(m["moved_payout"] + safe_float(n.get("payout_total")), 2)
+            k = "%s -> %s" % (o.get("category"), n.get("category"))
+            mv = moves.setdefault(k, {"from": o.get("category"), "to": n.get("category"), "lines": 0,
+                                      "old_payout": 0.0, "new_payout": 0.0, "examples": []})
+            mv["lines"] += 1
+            mv["old_payout"] = round(mv["old_payout"] + safe_float(o.get("payout_total")), 2)
+            mv["new_payout"] = round(mv["new_payout"] + safe_float(n.get("payout_total")), 2)
+            nm = ma_class_wiring.normalize(r.get("product_name"))
+            if nm and nm not in mv["examples"] and len(mv["examples"]) < 10:
+                mv["examples"].append(nm)
+    months = []
+    for p in sorted(by_month):
+        m = by_month[p]
+        months.append({"period": p, "lines": m["lines"], "moved_lines": m["moved"],
+                       "moved_payout": m["moved_payout"],
+                       "legacy": commission_ledger.summarize(m["old"]),
+                       "class": commission_ledger.summarize(m["new"])})
+    return {
+        "source_report": source_report, "period": period or None, "read": meta,
+        "mode": ma_class_wiring.load_mode(client, org_id, ma_class_wiring.CONSUMER_LEDGER)[0],
+        "class_rules": [r for r in rules if (r or {}).get("match_op") == ma_class_wiring.MATCH_OP],
+        "class_status": idx_meta, "classified_names": len(idx),
+        "totals": {"lines": len(rows),
+                   "legacy": commission_ledger.summarize(old_all),
+                   "class": commission_ledger.summarize(new_all),
+                   "moved_lines": sum(m["moved_lines"] for m in months),
+                   "moved_payout": round(sum(m["moved_payout"] for m in months), 2)},
+        "by_month": months,
+        "movements": sorted(moves.values(), key=lambda x: -x["lines"]),
+        "drift_rows": drift,
+        "category_labels": commission_ledger.CATEGORY_LABELS,
+        "note": ("READ-ONLY. This re-classifies in memory and writes nothing — the stored ledger rows "
+                 "only change on the NEXT refresh/import after the mode is flipped. `drift_rows` is a "
+                 "PRE-EXISTING difference between what is stored and what today's rules say; it is not "
+                 "part of the delta."),
+    }
+
+
+@router.get("/ma-class-wiring/rule-proposals")
+def ma_class_wiring_rule_proposals(source_report: str = "ma_daily_tx", period: str = "",
+                                   org_id: str = ORG_ID):
+    """Evidence-bound `product_class -> canonical bucket` rule proposals for CONSUMER 1: one per class
+    the tenant actually has ledger lines for, with how many lines, how many dollars, which buckets they
+    sit in TODAY, and the warning that makes it a decision (the residual collapse; the non-payout
+    classes). Nothing is applied — the apply endpoint takes an explicit list."""
+    require_org(org_id)
+    client = sb()
+    try:
+        rules = commission_ledger.load_rules(client, org_id, source_report)
+    except Exception:
+        rules = []
+    idx, idx_meta = ma_class_wiring.load_class_index(client, org_id, source_report)
+    rows, meta = _mcw_ledger_rows(client, org_id, source_report, period)
+    props = ma_class_wiring.bucket_proposals(idx, rows, rules)
+    return {"source_report": source_report, "read": meta, "proposals": props,
+            "class_status": idx_meta, "classified_names": len(idx),
+            "categories": commission_ledger.CATEGORIES,
+            "category_labels": commission_ledger.CATEGORY_LABELS,
+            "charge_bucket": ma_class_wiring.CHARGE_BUCKET,
+            "note": ("Proposals only — nothing is saved until you pick the ones you want. A class with "
+                     "no CONFIRMED names has no proposal here, by design.")}
+
+
+@router.post("/ma-class-wiring/rule-proposals/apply")
+def apply_ma_class_wiring_rule_proposals(body: dict, org_id: str = ORG_ID,
+                                         authorization: str = Header(None)):
+    """Write the CHOSEN product_class rules into commcalc.commission_category_map.
+    body: {source_report?, rules: [{product_class, category, sign_rule?, priority?}]}.
+
+    Explicit list only — there is no 'apply all'. Admin-gated (money posture). Each rule is upserted on
+    the map's own unique shape, so re-applying is idempotent."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    sr = (body.get("source_report") or "ma_daily_tx").strip()
+    wanted = body.get("rules") or []
+    if not isinstance(wanted, list) or not wanted:
+        raise HTTPException(400, "rules[] is required — this endpoint never applies everything")
+    client = sb()
+    classes, _r = _mpc_classes(client, org_id)
+    allowed = set(ma_product_class.assignable(classes))
+    ok_cats = set(commission_ledger.CATEGORIES) | {ma_class_wiring.CHARGE_BUCKET}
+    written, rejected = [], []
+    for w in wanted:
+        cls = ma_class_wiring.normalize((w or {}).get("product_class"))
+        cat = ma_class_wiring.normalize((w or {}).get("category")).lower()
+        if cls not in allowed:
+            rejected.append({"product_class": cls, "why": "not an assignable product class"})
+            continue
+        if cat not in ok_cats:
+            rejected.append({"product_class": cls,
+                             "why": "category must be one of %s" % ", ".join(sorted(ok_cats))})
+            continue
+        sign = ((w or {}).get("sign_rule") or "negative_only").strip()
+        if sign not in commission_ledger.SIGN_RULES:
+            rejected.append({"product_class": cls, "why": "invalid sign_rule"})
+            continue
+        row = {"org_id": org_id, "source_report": sr, "match_field": "product_name",
+               "match_op": ma_class_wiring.MATCH_OP, "pattern": cls, "category": cat,
+               "sign_rule": sign, "priority": int((w or {}).get("priority") or 5),
+               "is_seeded": False, "updated_at": column_mapping.now_iso()}
+        try:
+            (client.schema("commcalc").table("commission_category_map")
+             .upsert(row, on_conflict="org_id,source_report,match_field,match_op,pattern").execute())
+            written.append({"product_class": cls, "category": cat})
+        except Exception as e:
+            rejected.append({"product_class": cls, "why": str(e)[:200]})
+    return {"ok": True, "written": written, "written_count": len(written), "rejected": rejected,
+            "note": ("Rules saved. They only classify anything once the LEDGER consumer's mode is set "
+                     "to 'class' AND the names are CONFIRMED — until then they are inert.")}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════════
