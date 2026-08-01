@@ -26,6 +26,7 @@ from app.modules.commcalc import plan_impact
 from app.modules.commcalc import b2b_sweep
 from app.modules.commcalc import sales_analyzer
 from app.modules.commcalc import sales_recon
+from app.modules.commcalc import sales_derive
 from app.modules.commcalc import comp_trend
 from app.modules.commcalc import carrier_map
 from app.modules.commcalc import column_mapping
@@ -19053,6 +19054,19 @@ async def _run_email_sweep(org_id, account='default'):
         if (any(r.get('upload_type') == 'daily_sales' and r.get('status') != 'error' for r in results)
                 and _registry_auto_map(client, org_id).get('sales', True)):
             _pr = _promote_feed_to_raw_sales(client, org_id, _ftp_current_period())
+            # MONTH-BOUNDARY GRACE (2026-08-01). The feed keeps FINALIZING the old month after midnight
+            # (luxelink's July feed grew 283→313→317 across the 00:09–04:05 runs of August 1) while this
+            # line, which asks the wall clock, had already moved on to the new month — leaving 45 July
+            # transactions in the feed and out of the paid basis. Re-derive the prior month too while the
+            # tenant's window is open. Deliberately AFTER the current-month promote and deliberately
+            # OUTSIDE the recompute block below: a grace re-derive NEVER triggers a recompute — money
+            # moves attended, so the owner runs Calculate for the closed month. Best-effort: a failure
+            # here can no more break the sweep than the current-month promote can.
+            for _gp, _g, _gret in _sales_derive_plan(client, org_id)[1:]:
+                try:
+                    _promote_feed_to_raw_sales(client, org_id, _gp, grace=_g, retain=_gret)
+                except Exception as _ge:
+                    print(f"WARN month-boundary grace re-derive of {_gp} failed: {_ge}")
             # Plan-mode tenants have no other automatic recompute (the DLAR auto-recalc is Boost-only),
             # so a promotion that actually wrote rows recalculates the period — sales flow to pay every
             # sweep with nobody pressing Run Calculation. Best-effort; the zero-wipe guard protects the
@@ -19086,7 +19100,22 @@ async def _run_email_sweep_all(org_id):
             "ingested": sum((r.get('ingested') or 0) for r in out)}
 
 
-def _promote_feed_to_raw_sales(client, org_id, period, dry_run=False, force=False, retain=0.85):
+def _sales_derive_plan(client, org_id, now=None, base_retain=0.85):
+    """Which period(s) the AUTOMATIC derivation must cover for THIS tenant right now, as
+    [(period, grace, retain), ...]. Entry 0 is always the current month with grace=False and the normal
+    guard — i.e. exactly what ran before the month-boundary fix. Any further entry is the PRIOR month,
+    re-derived because the B2B feed keeps finalizing it for a few days past midnight (see
+    sales_derive.py for the incident this exists for).
+
+    Per-tenant by construction: the window comes from that org's own
+    commission_org_config.sales_derive_grace (RULE ONE + RULE TWO). A tenant with the window switched
+    off — or migration 266 unapplied on a tenant that never had a row — gets [(current, False, 0.85)],
+    which is today's behaviour with nothing added."""
+    return sales_derive.plan(now or _datetime.now(), sales_derive.load(client, org_id), base_retain)
+
+
+def _promote_feed_to_raw_sales(client, org_id, period, dry_run=False, force=False, retain=0.85,
+                               grace=False):
     """Derive the authoritative monthly raw_sales for `period` from the accumulated daily B2B email
     feed (daily_sales_feed), so the monthly Sales file no longer has to be uploaded by hand.
 
@@ -19108,7 +19137,16 @@ def _promote_feed_to_raw_sales(client, org_id, period, dry_run=False, force=Fals
     one (accepted; the authoritative monthly re-upload restores exact per-line truth); (3) an in-process
     per-(org_id, period) mutex serializes the hourly email-sweep promotion against the scheduled
     _promote_all_due — a second concurrent run for the same org+period SKIPS ('promotion already running')
-    rather than interleaving a delete/insert into a double-count. dry_run is read-only → not mutex-gated."""
+    rather than interleaving a delete/insert into a double-count. dry_run is read-only → not mutex-gated.
+
+    MONTH-BOUNDARY GRACE (2026-08-01, luxelink July→August): `grace=True` marks a re-derive of a period
+    that is NO LONGER the current month — the sweep re-runs the PRIOR month for a few days after
+    rollover because the B2B feed keeps finalizing it past midnight (see sales_derive.py). It changes
+    exactly two things and NOTHING else: (a) every upload_trace row it writes is labelled
+    `sales_derive.GRACE_NOTE` so the trace stays self-explanatory, and (b) a period whose feed is EMPTY
+    is SKIPPED OUTRIGHT instead of being rebuilt from its own monthly-only rows — a closed month is
+    never rewritten (nor content-deduped) on the strength of a feed that has nothing to say about it.
+    With grace=False every line below behaves exactly as it did before this parameter existed."""
     pv = _pvariants(period)
     canon = next((v for v in pv if v[:1].isalpha()), period)  # 'June 2026' form for raw_sales
     # DEFECT 3 mutex — real (writing) runs only; dry_run is read-only so it must never block/skip a real
@@ -19116,19 +19154,20 @@ def _promote_feed_to_raw_sales(client, org_id, period, dry_run=False, force=Fals
     _lock = None if dry_run else _promo_lock_for(org_id, canon)
     if _lock is not None and not _lock.acquire(blocking=False):
         note = "promotion already running for this org+period — skipped (concurrent run)"
+        _tnote = f"{sales_derive.GRACE_NOTE} — {note}" if grace else note
         _write_upload_trace(org_id, source="promotion", filename=None, upload_type="sales",
-                            period=canon, result={"saved": 0, "skipped": note, "note": note})
-        return {"period": canon, "dry_run": dry_run, "skipped": note}
+                            period=canon, result={"saved": 0, "skipped": note, "note": _tnote})
+        return {"period": canon, "dry_run": dry_run, "skipped": note, "grace": grace}
     try:
-        return _promote_feed_impl(client, org_id, pv, canon, dry_run, force, retain)
+        return _promote_feed_impl(client, org_id, pv, canon, dry_run, force, retain, grace)
     finally:
         if _lock is not None:
             _lock.release()
 
 
-def _promote_feed_impl(client, org_id, pv, canon, dry_run, force, retain):
+def _promote_feed_impl(client, org_id, pv, canon, dry_run, force, retain, grace=False):
     """Core feed→raw_sales merge, mutex-guarded by `_promote_feed_to_raw_sales` (which precomputes
-    pv/canon). See that wrapper's docstring for the full contract."""
+    pv/canon). See that wrapper's docstring for the full contract — including what `grace` does."""
 
     def _all(table):
         out, start = [], 0
@@ -19180,7 +19219,7 @@ def _promote_feed_impl(client, org_id, pv, canon, dry_run, force, retain):
     def _amt(rows):
         return round(sum((safe_float(x.get('ext_price')) or 0) for x in rows), 2)
     summary = {
-        "period": canon, "dry_run": dry_run,
+        "period": canon, "dry_run": dry_run, "grace": grace,
         "feed_lines": len(feed), "feed_trans": len(feed_trans),
         "existing_lines": len(existing), "existing_trans": len({r.get('trans_id') for r in existing}),
         "monthly_only_trans": len({r.get('trans_id') for r in monthly_only}),
@@ -19194,15 +19233,32 @@ def _promote_feed_impl(client, org_id, pv, canon, dry_run, force, retain):
         # (dupes_dropped) so the self-healing is observable in the trace even on a clean success.
         if dry_run:
             return
+        # grace runs SAY SO on the trace (dispatch item 6). grace=False ⇒ `note or skipped`, which is
+        # byte-for-byte what this wrote before.
+        _tnote = note or skipped
+        if grace:
+            _tnote = f"{sales_derive.GRACE_NOTE} — {_tnote}" if _tnote else sales_derive.GRACE_NOTE
         _write_upload_trace(org_id, source="promotion", filename=None, upload_type="sales",
                             period=canon,
-                            result={"saved": saved, "skipped": skipped, "note": note or skipped,
+                            result={"saved": saved, "skipped": skipped, "note": _tnote,
                                     "_trace": {"rows_in": summary.get("feed_lines"),
                                                "target_table": "raw_sales",
                                                "periods": {canon: summary.get("result_lines", 0)},
                                                "date_counts": {}}},
                             error=error)
 
+    # ★ MONEY-CRITICAL GUARD (grace runs only). The normal path treats "feed empty but raw_sales full"
+    # as a rewrite of the existing month from its own monthly-only rows — harmless for the OPEN month it
+    # was written for (it self-heals duplicates), but on a CLOSED month it would delete-then-reinsert a
+    # basis somebody is about to be PAID from, silently collapsing genuinely-identical line items on the
+    # way through (_dedupe_rows). A grace re-derive with nothing in the feed has, by definition, nothing
+    # to add — so it touches nothing at all. Each period is judged INDEPENDENTLY: an empty July feed can
+    # never wipe or churn July, and says nothing about August.
+    if grace and not feed:
+        summary["skipped"] = ("grace re-derive: no daily-feed rows for this period — raw_sales left "
+                              "exactly as it is (a closed month is never rebuilt from an empty feed)")
+        _trace_promo(0, skipped=summary["skipped"])
+        return summary
     if not new_rows:
         summary["skipped"] = "no feed or monthly rows for this period"
         _trace_promo(0, skipped=summary["skipped"])
@@ -19238,6 +19294,86 @@ def promote_feed(period: str, org_id: str = ORG_ID, dry_run: bool = True, force:
     return _promote_feed_to_raw_sales(sb(), org_id, period, dry_run=dry_run, force=force)
 
 
+@router.get("/sales/derive-config")
+def get_sales_derive_config(org_id: str = ORG_ID):
+    """This tenant's MONTH-BOUNDARY GRACE WINDOW: for how many days after rollover the automatic
+    feed→raw_sales derivation keeps re-deriving the month that just closed.
+
+    WHY IT EXISTS: the hourly derivation asks the wall clock for its period, so from 00:00 on the 1st it
+    only ever derived the NEW month — while the B2B daily feed carried on finalizing the OLD one for
+    hours (luxelink, 2026-08-01: 45 July transactions delivered to the feed after midnight, never
+    promoted into the July basis, invisible to every July report and unpaid in a July recompute).
+
+    Read-only. Returns the EFFECTIVE config, the code default it falls back to, and what the next
+    automatic run will cover for this tenant right now."""
+    require_org(org_id)
+    client = sb()
+    cfg = sales_derive.load(client, org_id)
+    now = _datetime.now()
+    return {
+        "org_id": org_id,
+        "config": cfg,
+        "default": dict(sales_derive.DEFAULT),
+        "max_days": sales_derive.MAX_GRACE_DAYS,
+        "today": now.strftime("%Y-%m-%d"),
+        "window_open": sales_derive.window_open(now, cfg),
+        "current_period": _ftp_current_period(),
+        "prior_period": sales_derive.prior_period_label(now),
+        "next_run_periods": [p for p, _g, _r in _sales_derive_plan(client, org_id, now=now)],
+        "grace_note": sales_derive.GRACE_NOTE,
+    }
+
+
+@router.put("/sales/derive-config")
+def put_sales_derive_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Save the tenant's month-boundary grace window (migration 266). Import-channel setting, so it is
+    gated on the SAME 'import_health' settings area as the mailbox/portal editors — not the commission
+    pay gate, because this changes WHEN sales are derived and never what anyone is paid.
+
+    Body: {enabled: bool, days: int (0..15), retain: float|null}. days=0 (or enabled=false) restores the
+    pre-fix behaviour for this tenant exactly: current month only, forever. `retain` is the shrink guard
+    for GRACE runs only — set 1.0 if this tenant hand-uploads authoritative monthly files and a closed
+    month must never come back with fewer lines than it had."""
+    require_org(org_id)
+    _require_import_admin(authorization, org_id)
+    cfg = sales_derive.resolve({
+        "enabled": body.get("enabled", True),
+        "days": body.get("days", sales_derive.DEFAULT["days"]),
+        "retain": body.get("retain"),
+    })
+    row = {"org_id": org_id, sales_derive.CONFIG_COLUMN: cfg,
+           "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    try:
+        sb().schema("commcalc").table("commission_org_config").upsert(row, on_conflict="org_id").execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not save the derive window (is migration 266 applied?): {e}")
+    return get_sales_derive_config(org_id=org_id)
+
+
+@router.get("/sales/derive-status")
+def get_sales_derive_status(org_id: str = ORG_ID, period: str = ""):
+    """Is the monthly basis for `period` actually in step with the daily feed? Count-only and read-only.
+
+    `missing_in_monthly` is the month-boundary defect's own number: transactions the feed delivered that
+    raw_sales never received. > 0 on a CLOSED month means that month's reports are short and a recompute
+    of it would underpay — re-derive it (POST /commcalc/sales/promote-feed) BEFORE calculating.
+
+    Default period = the month that just closed, which is the one the boundary puts at risk."""
+    require_org(org_id)
+    client = sb()
+    now = _datetime.now()
+    p = (period or "").strip() or sales_derive.prior_period_label(now)
+    gap = sales_recon.derive_gap(p, org_id=org_id, client=client)
+    cfg = sales_derive.load(client, org_id)
+    closed = _canon_period(p) != _canon_period(_ftp_current_period())
+    return {**gap, "is_closed_month": closed,
+            "grace_window_open": sales_derive.window_open(now, cfg),
+            "grace_config": cfg,
+            "auto_derive_enabled": bool(_registry_auto_map(client, org_id).get("sales", True)),
+            "action": ("re-derive this period from the daily feed, then re-calculate it"
+                       if gap.get("missing_in_monthly") else None)}
+
+
 def _promote_all_due(client, period=None):
     """ORG-AGNOSTIC, self-healing feed→raw_sales promotion. For the OPEN month (default) it reconciles
     EVERY tenant that has daily_sales_feed rows — so a tenant whose email sweep hasn't ingested a NEW
@@ -19253,43 +19389,82 @@ def _promote_all_due(client, period=None):
     on the OPEN month only, which the commission calculator (_fetch_sales_unified) reads from the FEED
     regardless — so Boost/house pay is byte-identical and no pay is recomputed here (the sweep path + manual
     /calculate own recompute). Per-org opt-out via report_definitions.auto for report_key='sales' (the same
-    gate the in-sweep promote uses)."""
+    gate the in-sweep promote uses).
+
+    MONTH-BOUNDARY GRACE (2026-08-01): when NO period is requested, each tenant ALSO gets the month that
+    just closed re-derived while its own grace window is open (commission_org_config.sales_derive_grace;
+    see sales_derive.py). Still no recompute — the closed month's pay stays a human's decision. Passing an
+    explicit `period` means EXACTLY that period, grace off, so the pg_cron/manual targeted call is
+    unchanged."""
+    explicit = bool(period)            # an explicitly-requested period means EXACTLY that period
     period = period or _ftp_current_period()
     pv = _pvariants(period)
-    # 1) every tenant with feed rows for this period — fast RPC (mig 204), else a bounded distinct scan so
+    _now = _datetime.now()
+
+    # 1) every tenant with feed rows for a period — fast RPC (mig 204), else a bounded distinct scan so
     #    the job still self-heals before the migration runs.
-    orgs = []
-    try:
-        rows = client.schema('commcalc').rpc('sales_feed_orgs_for_period', {'p_periods': pv}).execute().data or []
-        orgs = [r['org_id'] for r in rows if r.get('org_id')]
-    except Exception:
+    def _feed_orgs(periods):
+        try:
+            rows = client.schema('commcalc').rpc('sales_feed_orgs_for_period',
+                                                 {'p_periods': periods}).execute().data or []
+            return [r['org_id'] for r in rows if r.get('org_id')], None
+        except Exception:
+            pass
         try:
             seen, start = set(), 0
             while True:
                 batch = (client.schema('commcalc').table('daily_sales_feed').select('org_id')
-                         .in_('period', pv).range(start, start + 4999).execute().data) or []
+                         .in_('period', periods).range(start, start + 4999).execute().data) or []
                 for r in batch:
                     if r.get('org_id'):
                         seen.add(r['org_id'])
                 if len(batch) < 5000:
                     break
                 start += 5000
-            orgs = list(seen)
+            return list(seen), None
         except Exception as e:
-            return {"ok": False, "error": f"could not enumerate feed orgs: {e}", "period": period}
+            return [], f"could not enumerate feed orgs: {e}"
+
+    orgs, err = _feed_orgs(pv)
+    if err:
+        return {"ok": False, "error": err, "period": period}
+
+    # MONTH-BOUNDARY GRACE (2026-08-01): a tenant whose OLD month is still finalizing may legitimately
+    # have NO rows in the new month yet, so it would not appear in `orgs` at all. Enumerate the prior
+    # period separately — never merged into `orgs`, so an org found ONLY here gets its closed month
+    # re-derived and its current month left alone (exactly as today). Skipped entirely when a period was
+    # requested explicitly, and short-circuited for the back half of every month (enumeration_needed).
+    prior = sales_derive.prior_period_label(_now)
+    grace_orgs = []
+    if not explicit and sales_derive.enumeration_needed(_now):
+        grace_orgs, _gerr = _feed_orgs(_pvariants(prior))
+        if _gerr:
+            grace_orgs = []                 # never fail the whole sweep over the grace enumeration
+
+    cur_set = set(orgs)
     out = []
-    for oid in orgs:
+    for oid in list(orgs) + [o for o in grace_orgs if o not in cur_set]:
         try:
             if not _registry_auto_map(client, oid).get('sales', True):
                 out.append({"org_id": oid, "skipped": "sales auto=false"})
                 continue
-            pr = _promote_feed_to_raw_sales(client, oid, period)
-            out.append({"org_id": oid, "written": (pr or {}).get('written', 0),
-                        "result_lines": (pr or {}).get('result_lines'),
-                        "skipped": (pr or {}).get('skipped')})
+            if oid in cur_set:
+                pr = _promote_feed_to_raw_sales(client, oid, period)
+                out.append({"org_id": oid, "written": (pr or {}).get('written', 0),
+                            "result_lines": (pr or {}).get('result_lines'),
+                            "skipped": (pr or {}).get('skipped')})
+            if not explicit:
+                for _gp, _g, _gret in _sales_derive_plan(client, oid, now=_now)[1:]:
+                    gr = _promote_feed_to_raw_sales(client, oid, _gp, grace=_g, retain=_gret)
+                    out.append({"org_id": oid, "period": _gp, "grace": True,
+                                "written": (gr or {}).get('written', 0),
+                                "result_lines": (gr or {}).get('result_lines'),
+                                "skipped": (gr or {}).get('skipped')})
         except Exception as e:
             out.append({"org_id": oid, "error": str(e)[:200]})
     return {"ok": True, "period": period, "orgs": len(orgs),
+            "grace_period": None if explicit else prior,
+            "grace_orgs": sum(1 for r in out if r.get('grace')),
             "written_orgs": sum(1 for r in out if r.get('written')), "detail": out}
 
 
@@ -19299,7 +19474,8 @@ def sales_promote_due(x_notify_secret: str = Header(default=""), period: str = N
     EVERY tenant (see _promote_all_due). Reuses NOTIFY_RUN_SECRET (no new env var). DISPLAY-safe: OPEN
     month only, promotion dedups by trans_id, no pay recompute — a run can never change Boost numbers or
     double-count. Schedule hourly (offset from the email-sweep cron) so raw_sales never lags the feed for
-    any tenant."""
+    any tenant. With no `period` it also re-derives the JUST-CLOSED month inside each tenant's
+    month-boundary grace window (sales_derive.py) — still with no recompute anywhere."""
     if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
         raise HTTPException(403, "forbidden")
     return _promote_all_due(sb(), period)

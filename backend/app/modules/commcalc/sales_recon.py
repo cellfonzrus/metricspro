@@ -275,3 +275,80 @@ def sync_recon_flags(period: str, include_mismatch: bool = True, org_id: str = O
         "amount_mismatch": res["summary"]["amount_mismatch"] if include_mismatch else 0,
         "leak_total": res["summary"]["missing_in_monthly_total"],
     }
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# DERIVE GAP — the COUNT-ONLY feed-vs-basis divergence (mod-commission, 2026-08-01)
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# run_sales_recon() above is the full report: every row, every store, both directions. The month-boundary
+# work needs the same question answered CHEAPLY and repeatedly (an attention provider that must not make
+# a login slow, and a status strip on the derive console), so this pulls TWO columns instead of six and
+# returns counts instead of rows. Same aggregation semantics (voided lines excluded, trans_id grain).
+#
+# It also queries BOTH period spellings. raw_sales normally stores 'July 2026', but the derivation
+# deletes with `.in_('period', _pvariants(period))` precisely because the other spelling turns up — and a
+# gap report that missed half the rows because of the spelling would be worse than no report at all.
+
+DERIVE_GAP_ROW_CAP = 120000       # per table; a month that exceeds this is reported as `capped`
+
+
+def _period_variants(period: str):
+    """['July 2026', '2026-07'] — both spellings the database uses, deduped. PURE."""
+    plabel = _period_label(period)
+    out = [plabel]
+    parts = plabel.split()
+    if len(parts) == 2 and parts[0] in _MONTHS and parts[1].isdigit():
+        out.append("%s-%02d" % (parts[1], _MONTHS.index(parts[0]) + 1))
+    return list(dict.fromkeys(out))
+
+
+def _trans_ids(client, table, org_id, variants, cap=DERIVE_GAP_ROW_CAP):
+    """The set of non-void trans_ids for one org+period from a sales-shaped table. Bounded + org-scoped.
+    Returns (set, capped, lines). A missing table contributes an EMPTY set and capped=False — never a
+    false alarm (the caller checks 'is there a feed at all' before it says anything)."""
+    ids, start, PAGE, capped, lines = set(), 0, 1000, False, 0
+    while True:
+        try:
+            chunk = (client.schema("commcalc").table(table).select("trans_id,voided")
+                     .eq("org_id", org_id).in_("period", variants)
+                     .range(start, start + PAGE - 1).execute().data) or []
+        except Exception:
+            return set(), False, 0
+        for r in chunk:
+            lines += 1
+            if _is_void(r.get("voided")):
+                continue
+            tid = (r.get("trans_id") or "").strip()
+            if tid:
+                ids.add(tid)
+        if len(chunk) < PAGE:
+            break
+        start += PAGE
+        if start >= cap:
+            capped = True
+            break
+    return ids, capped, lines
+
+
+def derive_gap(period: str, org_id: str = ORG_ID, client=None):
+    """Count-only divergence between the daily feed and the monthly basis for one period, org-scoped.
+
+    `missing_in_monthly` is THE number the month-boundary defect produces: transactions the B2B feed
+    delivered that the authoritative raw_sales basis never received, which are invisible to every report
+    for that period and would be UNPAID in a recompute of it. Read-only; writes nothing; recomputes
+    nothing."""
+    client = client or get_supabase()
+    variants = _period_variants(period)
+    feed, fcap, flines = _trans_ids(client, "daily_sales_feed", org_id, variants)
+    monthly, mcap, mlines = _trans_ids(client, "raw_sales", org_id, variants)
+    missing = feed - monthly
+    return {
+        "period": _period_label(period), "org_id": org_id,
+        "feed_trans": len(feed), "monthly_trans": len(monthly),
+        "feed_lines": flines, "monthly_lines": mlines,
+        "has_feed": len(feed) > 0,
+        "missing_in_monthly": len(missing),
+        "missing_in_daily": len(monthly - feed),
+        "sample_missing": sorted(missing)[:25],
+        "capped": bool(fcap or mcap),
+    }
