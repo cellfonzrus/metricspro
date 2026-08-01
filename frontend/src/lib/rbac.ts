@@ -151,6 +151,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/carrier-mapping', label: 'Carrier Mapping', icon: '📡', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/commission-category-map', label: 'Category → Bucket Map', icon: '🗺️', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/ma-product-class', label: 'MA Product Name Classification', icon: '🏷️', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/accessory-definition', label: 'Accessory Definition', icon: '🎧', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/commission-import', label: 'Import Wizard', icon: '🪄', module: 'commissions', scopes: ['all'] },
   ]},
   { group: 'Targets & Coaching', module: 'targets', items: [
@@ -373,7 +374,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/ma-commission', 'comm'], ['/commcalc/device-history', 'comm'], ['/commcalc/whatif', 'comm'],
   ['/commcalc/discrepancy', 'comm'], ['/commcalc/recovery', 'comm'], ['/commcalc/flags', 'comm'],
   ['/commcalc/chargebacks', 'comm'], ['/commcalc/accessory-flags', 'comm'],
-  ['/commcalc/accessory-cost-audit', 'comm'],
+  ['/commcalc/accessory-cost-audit', 'comm'], ['/commcalc/accessory-definition', 'comm'],
   // Targets & Coaching
   ['/commcalc/targets', 'targets'], ['/commcalc/targets/action-plan', 'targets'],
   ['/commcalc/targets/accessories', 'targets'], ['/commcalc/targets/my', 'targets'],
