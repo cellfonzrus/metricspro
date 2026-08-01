@@ -44,7 +44,13 @@ FAIL = 0
 # mig 245 (2026-07-27): the engine now stamps four DISPLAY-ONLY keys on every ledger row (device +
 # rate-plan product, the one-line label, the resolved device category). They carry no money, so the
 # "byte-identical to the pre-change engine" claims below compare the MONEY shape with them removed.
-_DISPLAY_KEYS = ("device_category", "device_product", "plan_product", "display_label")
+# mig 258 (2026-08-01, expected-vs-earned) adds two more purely-additive REPORTING keys to every
+# ledger row — `expected_amount` (what the month WOULD pay: the pre-gate figure) and
+# `expected_in_window`. Neither is money: `amount` remains the only figure any total reads, and
+# the engine proves byte-identity to base once they are removed. Extending this list is what the
+# list is FOR.
+_DISPLAY_KEYS = ("device_category", "device_product", "plan_product", "display_label",
+                 "expected_amount", "expected_in_window")
 
 
 def _no_display(rows):

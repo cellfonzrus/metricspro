@@ -576,7 +576,13 @@ check("a tenant may instead hold unknowns — then they pay $0 AND are warned (s
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n── 5. NO COLLATERAL MOVEMENT — everything ON + guard OFF == the base engine, row for row ──")
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
-DISPLAY = ("device_category", "device_product", "plan_product", "display_label")
+# mig 258 (2026-08-01, expected-vs-earned) adds two more purely-additive REPORTING keys to every
+# ledger row — `expected_amount` (what the month WOULD pay: the pre-gate figure) and
+# `expected_in_window`. Neither is money: `amount` remains the only figure any total reads, and
+# the engine proves byte-identity to base once they are removed. Extending this list is what the
+# list is FOR.
+DISPLAY = ("device_category", "device_product", "plan_product", "display_label",
+           "expected_amount", "expected_in_window")
 
 
 def money_shape(res):
