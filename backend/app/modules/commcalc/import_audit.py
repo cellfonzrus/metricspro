@@ -615,3 +615,82 @@ def p_sales_export(client, org_id, ctx):
                              blank_ct, "/commcalc/upload", "Re-upload the sales file"))
         break                                         # judge the newest month that actually has data
     return out
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# 5) THE MONTH JUST CLOSED AND ITS BASIS WAS NEVER RE-DERIVED  (heavy — counts trans_ids on two tables)
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+@register_provider("commcalc_sales_derive_gap",
+                   label="A closed month's sales basis is behind the daily feed",
+                   group="import", cost="heavy")
+def p_sales_derive_gap(client, org_id, ctx):
+    """THE MONTH-BOUNDARY GAP, said out loud.
+
+    Provider 3 above catches the tenant who switched auto-derive OFF. This one catches the tenant whose
+    auto-derive is ON and working and whose closed month is short anyway — because the derivation asked
+    the WALL CLOCK for its period and moved to the new month at 00:00 while the B2B feed carried on
+    finalizing the old one. Owner-verified 2026-08-01: 45 luxelink transactions sat in the July feed and
+    not in the July basis, which makes every July report short and would UNDERPAY a July recompute, with
+    no error anywhere and every connector showing green.
+
+    Judges the month that JUST CLOSED (the one the boundary puts at risk) and says nothing at all when
+    the feed for it is empty — a tenant with no daily feed has nothing to be behind.
+
+    Severity is honest about whether anything will fix it by itself:
+      • grace window still OPEN  → warning; the next hourly derivation run is expected to close it.
+      • window closed / disabled → error; nothing automatic will ever pick these transactions up.
+
+    HEAVY (two bounded trans_id scans), so it runs on the admin page's full check, never on login.
+    READ-ONLY: it counts, it does not derive and it does not recompute."""
+    now = ctx.get("now") or _now()
+    prior = (now.replace(day=1) - timedelta(days=1)).strftime("%B %Y")
+    try:
+        from app.modules.commcalc import sales_recon as _recon
+        from app.modules.commcalc import sales_derive as _derive
+    except Exception:                                 # pragma: no cover - import shape
+        return []
+
+    try:
+        gap = _recon.derive_gap(prior, org_id=org_id, client=client)
+    except Exception:
+        return []                                     # never a false alarm on a read error
+    if not gap.get("has_feed"):
+        return []                                     # no daily feed for that month ⇒ nothing to compare
+    missing = int(gap.get("missing_in_monthly") or 0)
+    if missing <= 0:
+        return []                                     # in step — this is the healthy answer
+
+    cfg = _org_config(client, org_id)
+    grace = _derive.resolve(cfg.get(_derive.CONFIG_COLUMN))
+    open_now = _derive.window_open(now, grace)
+    auto_ok = True
+    for d in _rows(client, "report_definitions", org_id, limit=300, select="report_key,auto"):
+        if (d.get("report_key") or "").strip() == "sales" and not d.get("auto"):
+            auto_ok = False
+
+    if open_now and auto_ok:
+        sev = "warning"
+        tail = (f"The month-boundary grace window is still open ({grace.get('days')} day(s) after "
+                f"rollover), so the next automatic run should pick them up. If this is still here "
+                f"tomorrow, re-derive {prior} by hand before anyone calculates it.")
+    elif not auto_ok:
+        sev = "error"
+        tail = ("This tenant's monthly sales basis is set to MANUAL, so nothing will ever derive these "
+                f"automatically. Switch Sales Transactions to automatic on Connectors, or re-derive "
+                f"{prior} by hand — then re-calculate {prior}.")
+    else:
+        sev = "error"
+        tail = (f"The month-boundary grace window is closed"
+                f"{' (switched off for this tenant)' if not grace.get('enabled') else ''}, so nothing "
+                f"will pick these up on its own. Re-derive {prior} from the daily feed, then "
+                f"re-calculate {prior} — otherwise those sales are unpaid.")
+
+    return [_item("import", f"commcalc:derive_gap:{prior}", sev,
+                  f"{prior} sales basis is {missing} transaction(s) behind the daily feed",
+                  (f"The daily sales feed delivered {gap.get('feed_trans')} transactions for {prior} but "
+                   f"the monthly basis commissions are calculated from only has "
+                   f"{gap.get('monthly_trans')} — {missing} transaction(s) are in the feed and not in the "
+                   f"basis. Late-finalizing transactions land in the feed after the month has already "
+                   f"rolled over. Until the basis is re-derived they are missing from every {prior} "
+                   f"report and would not be paid. " + tail),
+                  missing, f"/commcalc/sales-derive?period={prior}", f"Re-derive {prior}")]
