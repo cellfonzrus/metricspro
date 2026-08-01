@@ -184,6 +184,7 @@ export default function CommCalcDashboard() {
             <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)', fontSize: 13 }}>Review Commission Plans →</a>
             <a href="/commcalc/plan-installments" style={{ color: 'var(--accent)', fontSize: 13 }}>Multi-month schedules →</a>
             <a href="/commcalc/commission-explain" style={{ color: 'var(--accent)', fontSize: 13 }}>Explain a rep's pay →</a>
+            <a href="/commcalc/accessory-cost-audit" style={{ color: 'var(--accent)', fontSize: 13 }}>Accessory cost audit →</a>
           </div>
         </div>
       )}

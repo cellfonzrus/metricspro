@@ -11894,6 +11894,31 @@ def commission_device(imei: str, period: str = "", org_id: str = ORG_ID):
         raise HTTPException(500, f"commission-device failed: {e}")
 
 
+@router.get("/accessory-cost-audit/{period}")
+def accessory_cost_audit(period: str, org_id: str = ORG_ID, c_basis: str = "price",
+                         assume_gp_pct: float = None, rep: str = ""):
+    """READ-ONLY audit of the INPUTS a %-of-GP / %-of-(price-cost) payout is computed from.
+
+    Writes nothing, recomputes nothing, changes no payout number and never touches POST /calculate.
+    `current` is read out of commission_engine.preview(detail=True) — the same function the live calc
+    pays from — so the "today" column can never drift from the money.
+
+    Answers, per rep and per item: which lines a %-of-basis rule matched, which of those lines have an
+    impossible cost (raw_sales has no cost column, so cost is implied as ext_price - gp), and what the
+    period WOULD have paid under each option (A: corrected POS catalog cost, where the catalog has one;
+    B: % of price; C: guarded fallback on suspect lines only; R: the same rules with the rate read as a
+    percent, i.e. rate / 100). Option C's fallback basis is a query param — no assumed margin is ever
+    invented.
+    """
+    require_org(org_id)
+    from app.modules.commcalc import accessory_cost_audit as aca
+    try:
+        return aca.audit(sb(), org_id, period, c_basis=c_basis, assume_gp_pct=assume_gp_pct,
+                         rep=(rep or None))
+    except Exception as e:
+        raise HTTPException(500, f"accessory-cost-audit failed: {type(e).__name__}: {e}")
+
+
 # ─────────────────────────────────────────────
 # SALES FEED RECON (Theme 5) — monthly authoritative vs daily B2B feed, trans_id grain
 # ─────────────────────────────────────────────

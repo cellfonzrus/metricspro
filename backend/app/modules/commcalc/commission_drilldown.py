@@ -26,6 +26,7 @@ from app.modules.commcalc.calculator import safe_float
 # ONE shared voided token set for pay + display (owner 2026-07-25) — see gp_report.VOID_TOKENS.
 from app.modules.commcalc.gp_report import is_voided as _is_voided
 from app.modules.commcalc.commission_engine import _norm_mdn, _canon_person
+from app.modules.commcalc import pay_data_quality as _pdq
 
 
 def _tok(s):
@@ -103,6 +104,93 @@ def _installment_reason(led_row, mi_row, stored=False):
                 "Held: raw_mi row found and Active, but no residual (MI+ATU) has been received yet for "
                 "the pay period.")
     return "withheld", "Held: gate not met."
+
+
+# ── DISPLAY-ONLY data-quality annotation (owner report 2026-07-31) ─────────────────────────────────
+# A %-of-GP payout is only as good as the GP it is paid on, and `commcalc.raw_sales` has NO cost
+# column — cost is IMPLIED (ext_price - gp). When the POS catalog carries cost == retail the GP is $0
+# and the payout is $0 by arithmetic; when cost is negative the GP (and the payout) inflate. Separately,
+# `commission_rule.pct` is a FRACTION (0.10 = 10%) with no clamp on save, so a rate typed as a whole
+# percent pays 100x. Both are INPUT problems the drill-down could not previously show, which is what
+# made the accessory payouts look "inconsistent".
+#
+# EVERYTHING BELOW IS PRESENTATION. It computes no money, mutates nothing the preview returned (the
+# annotated rules are NEW dicts), and is never imported by the calculate path.
+def _annotate_plan_component(pc, cfg):
+    """A COPY of the plan component with per-line `cost_flags`, per-rule `rate_flags`, and a
+    `data_quality` roll-up. Returns `pc` unchanged when there is nothing to annotate."""
+    if not isinstance(pc, dict) or not pc.get("rules"):
+        return pc
+    rules_out, flagged, n_lines, n_suspect = [], [], 0, 0
+    rate_issues = []
+    for rb in pc.get("rules") or []:
+        kind = str(rb.get("payout_kind") or "").strip().lower()
+        rf = _pdq.rate_flags(kind, rb.get("pct"), cfg)
+        r2 = dict(rb)
+        if rf:
+            r2["rate_flags"] = rf
+            r2["rate_flag_labels"] = [_pdq.RATE_FLAG_LABELS.get(c, c) for c in rf]
+            rate_issues.append({"rule_id": rb.get("rule_id"), "label": rb.get("label"),
+                                "payout_kind": kind, "pct": rb.get("pct"), "flags": rf,
+                                "labels": r2["rate_flag_labels"]})
+        if rb.get("lines"):
+            # `implied_cost` is attached to EVERY matched line (raw_sales has no cost column and the
+            # reader always wants it), but a line is only JUDGED when the rule's basis is actually
+            # derived from cost — flagging a flat-per-unit line's GP would be noise, not honesty.
+            judged = kind in _pdq.COST_BASED_KINDS
+            lines_out = []
+            for ln in rb.get("lines") or []:
+                l2 = dict(ln)
+                fl = _pdq.line_flags(ln.get("ext_price"), ln.get("gp"), cfg) if judged else []
+                l2["implied_cost"] = _pdq.derived_cost(ln.get("ext_price"), ln.get("gp"))
+                n_lines += 1 if judged else 0
+                if fl:
+                    n_suspect += 1
+                    l2["cost_flags"] = fl
+                    l2["cost_flag_labels"] = [_pdq.FLAG_LABELS.get(c, c) for c in fl]
+                    flagged.append({"flags": fl, "ext_price": ln.get("ext_price"),
+                                    "gp": ln.get("gp"), "amount": ln.get("amount")})
+                lines_out.append(l2)
+            r2["lines"] = lines_out
+        rules_out.append(r2)
+    out = dict(pc)
+    out["rules"] = rules_out
+    out["data_quality"] = {
+        "enabled": bool(cfg.get("enabled", True)),
+        "checked_lines": n_lines, "suspect_lines": n_suspect,
+        "by_flag": _pdq.summarize(flagged),
+        "rate_issues": rate_issues,
+        "note": ("raw_sales carries no cost column — a line's cost is implied as ext_price - gp. "
+                 "Flagged lines are a SOURCE-DATA finding, not a calculation change: nothing here "
+                 "alters what was paid."),
+    }
+    return out
+
+
+def _installment_zero_note(row):
+    """Plain-language reason a PAID multi-month installment still came out at $0, or None.
+
+    The engine already reports this in its own `warnings` (type `mrc_unresolved`), but that list never
+    reached the drill-down — so a %-of-MRC month with no identifiable rate-plan line rendered as a bare
+    'Paid ... $0.00'. Read-only narration of the ledger row the engine produced."""
+    kind = str(row.get("payout_kind") or "").strip().lower()
+    amt = safe_float(row.get("amount"))
+    if str(row.get("status") or "") != "paid" or amt > 0:
+        return None
+    if kind == "pct_mrc":
+        if safe_float(row.get("mrc_at_pay")) <= 0:
+            return ("Paid, but $0: this month pays a PERCENTAGE OF THE MONTHLY RATE PLAN and no "
+                    "rate-plan line could be identified on this activation, so the MRC resolved to "
+                    "$0.00. Fixed-wireless / home-internet and similar activations often carry the "
+                    "plan inside the device line's own description, with no separate airtime line. "
+                    "Map the plan's wording under Plan Installments -> MRC mapping (or add it to the "
+                    "rate-plan line matcher) and the percentage will have something to pay on.")
+        return ("Paid, but $0: this month pays a percentage of the monthly rate plan and the "
+                "schedule's percentage for this month is 0.")
+    if kind in ("flat", "flat_per_unit"):
+        return ("Paid, but $0: this month's amount on the installment schedule is $0.00. Set it under "
+                "Plan Installments -> the schedule's month rows.")
+    return None
 
 
 def _mi_ref(mi_row):
@@ -244,6 +332,8 @@ def explain_rep(client, org_id, period, rep, carrier_mode="plan"):
     out = {"period": period, "rep": rep, "carrier_mode": carrier_mode,
            "plan_component": None, "multimonth_component": None,
            "reconciliation": None, "zero_explanation": [], "note": None}
+    # Data-quality thresholds are per-tenant config (mig 255) and degrade to code defaults.
+    _dq_cfg = _pdq.load_cost_config(client, org_id)
 
     # 1. PLAN COMPONENT — one row from the single-source preview (detail mode carries the assignment
     #    narration + per-rule matched lines).
@@ -269,6 +359,7 @@ def explain_rep(client, org_id, period, rep, carrier_mode="plan"):
             "qualifying_units": plan_row.get("qualifying_units"), "total_payout": plan_row.get("total_payout"),
             "store": plan_row.get("store"), "market": plan_row.get("market"), "has_sale_lines": True,
         }
+        out["plan_component"] = _annotate_plan_component(out["plan_component"], _dq_cfg)
     else:
         out["plan_component"] = _no_plan_narration(client, org_id, period, rep, ce)
 
@@ -336,6 +427,7 @@ def explain_rep(client, org_id, period, rep, carrier_mode="plan"):
             "gate_mode": r.get("gate_mode"), "hold_reason": code, "hold_detail": text,
             "mrc_at_pay": r.get("mrc_at_pay"), "mrc_source": r.get("mrc_source"),
             "payout_kind": r.get("payout_kind"), "mi_ref": _mi_ref(mi_row),
+            "zero_note": _installment_zero_note(r),
         })
 
     for d in devices.values():
@@ -351,6 +443,12 @@ def explain_rep(client, org_id, period, rep, carrier_mode="plan"):
                    "withheld": sum(1 for r in rep_led if r.get("status") != "paid"),
                    "amount": round(sum(safe_float(r.get("amount")) for r in rep_led), 2)},
         "schedules": sr.get("schedules"), "note": sr.get("note"),
+        # The engine ALREADY reports why a chain resolved to $0 (mrc_unresolved / mrc_ambiguous /
+        # category_unknown ...). Those warnings never reached this page, so a $0 month looked
+        # unexplained. Only this rep's warnings, capped — read-only passthrough.
+        "warnings": [w for w in (sr.get("warnings") or [])
+                     if not w.get("rep") or _name_match(w.get("rep"), rep)][:40],
+        "category_guard": sr.get("category_guard"),
     }
 
     out["zero_explanation"] = _zero_reasons(period, rep, carrier_mode, out)
@@ -536,6 +634,7 @@ def device_story(client, org_id, imei, period=None):
                      "gate_mode": r.get("gate_mode"), "hold_reason": code, "hold_detail": text,
                      "mrc_at_pay": r.get("mrc_at_pay"), "mrc_source": r.get("mrc_source"),
                      "payout_kind": r.get("payout_kind"), "rep": r.get("epay_salesperson"),
+                     "zero_note": _installment_zero_note(r),
                      "mi_ref": _mi_ref(mi_row)})
     inst.sort(key=lambda x: (str(x.get("pay_period")), x.get("month_index") or 0))
     out["installments"] = inst
