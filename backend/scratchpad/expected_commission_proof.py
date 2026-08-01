@@ -46,9 +46,14 @@ from app.modules.commcalc import expected_commission as xc
 from app.modules.commcalc import sale_installment_engine as sie
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-# LOCAL main — origin/main is behind (4923001) while the previous package's push is in flight, so
-# vendoring from origin/main would diff against the wrong tree and silently pass.
-BASE_REF = "main"
+# PINNED TO A LITERAL COMMIT (2026-08-01). Two hazards, one fix:
+#   · `origin/main` was BEHIND (4923001) when this was written — vendoring from it would have diffed
+#     against a tree missing the previous package and silently passed.
+#   · a moving ref of ANY kind (`main` included) means that once THIS package merges, the harness
+#     vendors a BASE that already contains its own changes and starts diffing itself against itself.
+#     That is exactly what happened to the sibling fwa-flat proof an hour after its push landed.
+# So: the literal commit this suite was built against. Reproducible forever, whatever the refs do.
+BASE_REF = "79a969c"          # local main at build time (= the merged fwa-flat package)
 OK = FAIL = 0
 FAILS = []
 

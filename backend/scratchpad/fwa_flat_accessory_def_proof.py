@@ -46,7 +46,14 @@ from app.modules.commcalc import sale_installment_engine as sie
 from app.modules.commcalc import accessory_cost_audit as aca
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-BASE_REF = "origin/main"
+# PINNED TO A LITERAL COMMIT, DELIBERATELY (2026-08-01).
+# This was `origin/main`, resolved at RUN TIME — which is a trap this repo has now sprung three times.
+# `origin/main` MOVED mid-session when this package's own push landed, so the harness began vendoring
+# a BASE that already contained the very changes it exists to prove are additive: it was diffing
+# itself against itself, and B2/B5/B8/G2 went red for a reason that has nothing to do with the code.
+# Pinning to the commit this suite was WRITTEN against restores the intended comparison and makes the
+# result reproducible forever, whatever origin/main does next. No assertion is weakened or removed.
+BASE_REF = "4923001"          # origin/main as it stood when this package was built
 OK = FAIL = 0
 FAILS = []
 

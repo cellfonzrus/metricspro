@@ -31,6 +31,7 @@ sys.path.insert(0, _BACKEND)
 os.environ.setdefault("COMMCALC_CFG_CACHE_TTL", "0")
 
 BASE_ROUTES = 940          # pinned: local main @ 79a969c, measured
+BASE_COMMIT = "79a969c"    # the literal commit, not a moving ref (see the proof harness header)
 NEW_ROUTES = 6
 
 
@@ -384,11 +385,11 @@ total = len([r for r in app.routes if hasattr(r, "path")])
 check(f"route count = pinned base {BASE_ROUTES} + exactly {NEW_ROUTES}",
       total == BASE_ROUTES + NEW_ROUTES, total)
 try:
-    ok_ref = subprocess.check_output(["git", "-C", _REPO, "rev-parse", "--verify", "main"],
+    ok_ref = subprocess.check_output(["git", "-C", _REPO, "rev-parse", "--verify", BASE_COMMIT],
                                      stderr=subprocess.DEVNULL).decode().strip()
-    check("BASE_ROUTES is pinned to a real ref (local main exists)", bool(ok_ref))
+    check(f"BASE_ROUTES is pinned to a real COMMIT ({BASE_COMMIT}), not a moving ref", bool(ok_ref))
 except Exception:
-    check("BASE_ROUTES is pinned to a real ref (local main exists)", False)
+    check(f"BASE_ROUTES is pinned to a real COMMIT ({BASE_COMMIT}), not a moving ref", False)
 mine = {r.path for r in app.routes if hasattr(r, "path") and "expected-commission" in r.path}
 check("the five expected-commission paths are registered", len(mine) == 5, sorted(mine))
 
