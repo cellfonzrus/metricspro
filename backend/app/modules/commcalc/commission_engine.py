@@ -1062,7 +1062,8 @@ def _unmatched_record(row, why, rep, store, market, plan_name=None):
 
 # ── preview ────────────────────────────────────────────────────────────────────────────────────
 def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, coverage=False,
-            rule_overrides=None, unmatched_detail=False, gate_override=None):
+            rule_overrides=None, unmatched_detail=False, gate_override=None,
+            setup_fee_override=None):
     """READ-ONLY: apply plan rules to a period's raw_sales. Writes nothing.
 
     Returns {ready, period, by_rep:[...], totals, plans, note}. If plan_id is given, that plan is applied
@@ -1224,6 +1225,24 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                 if _b != "per_line" and _ucfg.get("exclude_accessory_units"):
                     _needs_acc = True
     _acc_fn = _gate.accessory_predicate(client, org_id) if (_gate is not None and _needs_acc) else None
+    # DEVICE SET-UP FEE / ACTIVATION FEE as its OWN pay item (owner 2026-08-01, mig 263).
+    # The Boost engine has paid a % of the set-up fee COLLECTED since day one (calculator.py); every
+    # other carrier had no way to. This is that pay item for the plan engine. It is NOT a commission
+    # rule: it needs no `commission_rule` row, and it is NEVER folded into the accessory basis
+    # (standing owner rule). It is OFF for every tenant until someone turns it on, so an unconfigured
+    # tenant's result is byte-identical.
+    try:
+        from app.modules.commcalc import setup_fee_pay as _sfp
+        _sf_cfg = (_sfp.normalize_pay_config(setup_fee_override)
+                   if isinstance(setup_fee_override, dict)
+                   else _sfp.load_pay_config(client, org_id))
+        _sf_on = bool((_sf_cfg.get("default") or {}).get("include_in_commission")) or any(
+            bool(v.get("include_in_commission")) for v in (_sf_cfg.get("by_carrier") or {}).values())
+        _sf_kws = _sfp.load_keywords(client, org_id) if _sf_on else None
+    except Exception:
+        _sfp, _sf_cfg, _sf_on, _sf_kws = None, None, False, None
+    _sf_guard = {"collected": 0.0, "lines": 0, "paid": 0.0, "by_rep": {}, "by_status": {},
+                 "dealer_share": 0.0, "dealer_share_stated": False, "carriers": {}, "warnings": []}
     _cost_cfg = None
     if _accg_on:
         try:
@@ -1520,6 +1539,45 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
         tier_units = qualifying_units if _tier_n is None else _tier_n
         mult = _tier_multiplier(plan, tier_units)
         total = round(base_total + tiered_total * mult, 2)
+        # ── SET-UP / ACTIVATION FEE PAY ITEM (mig 263) ─────────────────────────────────────────
+        # A SEPARATE component, added AFTER the tier multiplier on purpose: the fee is a straight
+        # percentage of money the store actually collected, not a spiff whose value depends on how many
+        # KPIs the rep hit. It composes with the pay gate — a line the tenant's exclusion map removes
+        # (mig 261) is not collected revenue for pay purposes either.
+        _sf_pay = 0.0
+        if _sf_on and _sfp is not None:
+            _sf_set, _sf_src = _sfp.resolve_for_carrier(_sf_cfg, plan.get("carrier_id"))
+            _skip = None
+            if _gate is not None and _excl_rules:
+                def _skip(_r, _rules=_excl_rules, _g=_gate):
+                    return _g.exclusion_hit(_r, _rules) is not None
+            _sf_amt, _sf_lines = _sfp.collected(
+                e["lines"], _sf_kws, _sf_set.get("match_mode"), skip=_skip)
+            _sf_pay, _sf_status = _sfp.employee_pay(_sf_amt, _sf_set)
+            _sf_dealer, _sf_stated = _sfp.dealer_share(_sf_amt, _sf_set)
+            if _sf_amt or _sf_pay:
+                _sf_guard["collected"] = round(_sf_guard["collected"] + _sf_amt, 2)
+                _sf_guard["lines"] += _sf_lines
+                _sf_guard["paid"] = round(_sf_guard["paid"] + _sf_pay, 2)
+                _sf_guard["by_rep"][e["name"]] = {
+                    "collected": _sf_amt, "lines": _sf_lines, "paid": _sf_pay,
+                    "pct": _sf_set.get("employee_pct_of_collected"), "status": _sf_status,
+                    "config_source": _sf_src}
+                _sf_guard["by_status"][_sf_status] = _sf_guard["by_status"].get(_sf_status, 0) + 1
+                _sf_guard["carriers"][str(plan.get("carrier_id") or "(none)")] = _sf_src
+                if _sf_stated:
+                    _sf_guard["dealer_share"] = round(_sf_guard["dealer_share"] + (_sf_dealer or 0), 2)
+                    _sf_guard["dealer_share_stated"] = True
+                if _sf_status == "unconfigured":
+                    # LOUD, never silent: the tenant said this fee should pay and did not say how much.
+                    # Nothing is guessed and nothing is zeroed elsewhere — it simply has not paid yet.
+                    _sf_guard["warnings"].append({
+                        "type": "setup_fee_pct_unconfigured", "rep": e["name"],
+                        "collected": _sf_amt, "plan": plan.get("name"),
+                        "message": (f"{e['name']} collected ${_sf_amt:,.2f} in set-up / activation fees "
+                                    f"and the employee percentage has not been entered, so it paid $0. "
+                                    f"Set it under Commission Plans -> Set-up / activation fee.")})
+            total = round(total + _sf_pay, 2)
         grand += total
         out_rows.append({
             "rep": e["name"], "store": store, "market": market,
@@ -1532,6 +1590,10 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
             "rules": sorted([rb for rb in rule_breakdown.values() if (detail or rb["matched_lines"])],
                             key=lambda x: -(x.get("payout") or 0)),
         })
+        if _sf_pay or (_sf_on and e["name"] in _sf_guard["by_rep"]):
+            # its OWN line on the rep row — never blended into base/tiered, never into an accessory total
+            out_rows[-1]["setup_fee_comm"] = _sf_pay
+            out_rows[-1]["setup_fee_collected"] = _sf_guard["by_rep"][e["name"]]["collected"]
         if coverage:
             _un = [r for r in e["lines"] if id(r) not in matched_ids]
             out_rows[-1]["tier_units"] = tier_units
@@ -1564,6 +1626,10 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
            "note": None}
     # PAY GATE REPORT - emitted ONLY when the gate actually changed something, so every tenant it
     # does not touch receives a result dict byte-identical to the pre-2026-08-01 engine.
+    if _sf_on and (_sf_guard["collected"] or _sf_guard["paid"]):
+        _sf_guard["config_source"] = "tenant" if (_sf_cfg or {}).get("_stored") else "code_default"
+        _sf_guard["keywords"] = _sf_kws
+        out["setup_fee"] = _sf_guard
     if _gate is not None and (_guard["unit"]["lines_suppressed"] or _guard["excluded"]["lines"]
                               or _guard["scope"]["lines"] or _guard["accessory_basis"]["lines"]):
         _guard["config_source"] = "tenant" if (_gate_cfg or {}).get("_stored") else "code_default"

@@ -190,6 +190,49 @@ export default function CommissionPlansPage() {
     try { setAccImpact(await api(`/api/v1/commcalc/commission-plans/accessory-basis-impact/${encodeURIComponent(period)}`)) }
     catch (e: any) { setAccImpact({ error: String(e?.message || e) }) } finally { setAccBusy(false) }
   }
+  // SET-UP / ACTIVATION FEE (mig 263) — mapping + per-carrier economics + the employee pay item.
+  const [sf, setSf] = useState<any>(null)
+  const [sfBusy, setSfBusy] = useState(false)
+  const [sfCand, setSfCand] = useState<any>(null)
+  const [sfCandBusy, setSfCandBusy] = useState(false)
+  const [sfImpact, setSfImpact] = useState<any>(null)
+  const [sfImpactBusy, setSfImpactBusy] = useState(false)
+  const [sfPctDraft, setSfPctDraft] = useState('')
+
+  async function loadSf() {
+    try { setSf(await api('/api/v1/commcalc/setup-fee/config')) } catch { setSf(null) }
+  }
+  async function saveSf(next: any) {
+    setSfBusy(true)
+    try {
+      const r = await api('/api/v1/commcalc/setup-fee/config', { method: 'PUT', body: JSON.stringify({ config: next }) })
+      setSf({ ...(sf || {}), config: r.config, is_default: false })
+      setMsg(r.note || 'Saved.')
+    } catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) } finally { setSfBusy(false) }
+  }
+  async function loadSfCandidates() {
+    setSfCandBusy(true); setSfCand(null)
+    try { setSfCand(await api(`/api/v1/commcalc/setup-fee/candidates/${encodeURIComponent(period)}`)) }
+    catch (e: any) { setSfCand({ error: String(e?.message || e) }) } finally { setSfCandBusy(false) }
+  }
+  async function runSfImpact() {
+    setSfImpactBusy(true); setSfImpact(null)
+    const q = sfPctDraft.trim() ? `?employee_pct=${encodeURIComponent(sfPctDraft.trim())}` : ''
+    try { setSfImpact(await api(`/api/v1/commcalc/setup-fee/impact/${encodeURIComponent(period)}${q}`)) }
+    catch (e: any) { setSfImpact({ error: String(e?.message || e) }) } finally { setSfImpactBusy(false) }
+  }
+  async function mapKeyword(kw: string) {
+    // The mapping lives in the SHARED mig-217 list (accessory_config.setup_fee_keywords) — the same
+    // list the Sales Report / Executive MTD read, so one definition drives the report and the pay.
+    const cur: string[] = sf?.keywords || []
+    if (cur.includes(kw)) return
+    setSfBusy(true)
+    try {
+      await api('/api/v1/commcalc/accessory-config', { method: 'PUT', body: JSON.stringify({ setup_fee_keywords: [...cur, kw] }) })
+      await loadSf(); await loadSfCandidates()
+      setMsg('Mapped. This also updates the Sales Report and Executive MTD — one definition, one number.')
+    } catch (e: any) { setMsg('Map failed: ' + (e?.message || e)) } finally { setSfBusy(false) }
+  }
 
   async function loadRoster() {
     try {
@@ -236,7 +279,7 @@ export default function CommissionPlansPage() {
       } catch { setPlanOpts({ ready: false, vocab: FALLBACK_VOCAB, fields: {}, facets: null, periods: [] }) }
     }
   }
-  useEffect(() => { load(); loadRoster(); loadGate(); loadExclusions() }, [])
+  useEffect(() => { load(); loadRoster(); loadGate(); loadExclusions(); loadSf() }, [])
   // re-read the options when the operator changes the period (server-side TTL cache makes this cheap)
   useEffect(() => {
     const t = setTimeout(() => { loadOptions(period) }, 400)
@@ -1112,6 +1155,142 @@ export default function CommissionPlansPage() {
           )}
           {accImpact?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{accImpact.error}</div>}
         </div>
+      </div>
+
+      {/* ── SET-UP / ACTIVATION FEE (mig 263) ──────────────────────────────────────────────────
+          OWNER 2026-08-01: "the device set up fee is the same as activation fee on luxelink , an
+          option should be there in commission payout if this has to be a part of commission and what
+          % is used to pay out comp … if criclet delaer uses metrics pro they should be able to design
+          based on their payouts". One pay concept, per-carrier names and per-carrier numbers. */}
+      <div className="card" style={{ padding: 16, marginTop: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>🧾 Set-up / activation fee
+            <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text3)' }}> (money-touching · takes effect on the next Calculate)</span>
+          </div>
+          <span style={{ flex: 1 }} />
+          <button className="btn btn-secondary" disabled={sfCandBusy} onClick={loadSfCandidates}>{sfCandBusy ? '…' : `Which line is it? (${period})`}</button>
+        </div>
+
+        {sf && (<>
+          <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>
+            Currently recognised as the fee:{' '}
+            {(sf.keywords || []).map((k: string) => (
+              <code key={k} style={{ background: 'var(--bg2)', padding: '1px 5px', borderRadius: 4, marginRight: 4 }}>{k}</code>
+            ))}
+            {sf.keywords_are_default && <span style={{ marginLeft: 6, color: '#b45309' }}>← the built-in default (Boost wording). Map your own below if your POS calls it something else.</span>}
+          </div>
+
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 8 }}>
+            <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input type="checkbox" checked={!!sf.config?.default?.include_in_commission} disabled={sfBusy}
+                onChange={e => saveSf({ ...sf.config, default: { ...sf.config.default, include_in_commission: e.target.checked } })} />
+              <span>Part of employee commission</span>
+            </label>
+            <label style={{ fontSize: 12 }}>
+              <div style={{ color: 'var(--text3)', marginBottom: 2 }}>Employee % of fee collected</div>
+              <input style={{ ...sel, width: 110 }} placeholder="e.g. 0.10" disabled={sfBusy}
+                defaultValue={sf.config?.default?.employee_pct_of_collected ?? ''}
+                onBlur={e => saveSf({ ...sf.config, default: { ...sf.config.default, employee_pct_of_collected: e.target.value === '' ? null : Number(e.target.value) } })} />
+            </label>
+            <label style={{ fontSize: 12 }}>
+              <div style={{ color: 'var(--text3)', marginBottom: 2 }}>Dealer share (carrier pays dealer)</div>
+              <input style={{ ...sel, width: 110 }} placeholder="e.g. 0.50" disabled={sfBusy}
+                defaultValue={sf.config?.default?.dealer_share_pct ?? ''}
+                onBlur={e => saveSf({ ...sf.config, default: { ...sf.config.default, dealer_share_pct: e.target.value === '' ? null : Number(e.target.value) } })} />
+            </label>
+            <div style={{ fontSize: 11, color: 'var(--text3)', maxWidth: 320 }}>
+              Fractions (0.10 = 10%). Leaving the employee % <b>blank</b> means “not decided yet”: the fee pays $0
+              and the next calculation says so by name. It is never read as 0%.
+            </div>
+          </div>
+
+          {sf.owner_reference && (
+            <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>
+              For reference (owner, 2026-08-01, <b>not applied</b>): Boost pays the dealer 100% of the set-up fee and the employee 10%;
+              Total pays the dealer 50% of the activation fee and the employee 0% today.
+            </div>
+          )}
+
+          {!!(sf.carriers || []).length && (
+            <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>
+              Per-carrier overrides available for: {(sf.carriers || []).map((c: any) => c.name).join(', ')} — a plan’s carrier picks its own numbers, so one tenant can run Boost and Cricket side by side.
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
+            <span style={{ fontSize: 12, color: 'var(--text3)' }}>Preview at</span>
+            <input style={{ ...sel, width: 90 }} placeholder="0.10" value={sfPctDraft} onChange={e => setSfPctDraft(e.target.value)} />
+            <button className="btn btn-secondary" disabled={sfImpactBusy} onClick={runSfImpact}>{sfImpactBusy ? '…' : `Preview ${period}`}</button>
+            <span style={{ fontSize: 11, color: 'var(--text3)' }}>Runs the real engine twice. Writes nothing, recalculates nothing.</span>
+          </div>
+        </>)}
+        {!sf && <div style={{ fontSize: 13, color: 'var(--text3)' }}>Set-up-fee settings unavailable (the endpoint did not answer). The code defaults pay nobody.</div>}
+
+        {sfCand && !sfCand.error && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 12.5, marginBottom: 4 }}>
+              <b>Your own product descriptions in {period}</b>, ranked by the money they carry. Pick the one your POS uses — nothing is chosen for you.
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead><tr>{['Product', 'Lines', 'Txns', 'Collected $', 'First', 'Last', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {(sfCand.candidates || []).map((c: any, i: number) => (
+                    <tr key={i} style={{ opacity: c.collects_money ? 1 : 0.55 }}>
+                      <td style={td}>{c.product_desc}</td>
+                      <td style={td}>{c.lines}</td>
+                      <td style={td}>{c.transactions}</td>
+                      <td style={{ ...td, fontWeight: 700 }}>{fmt(c.ext_price)}</td>
+                      <td style={td}>{c.first}</td><td style={td}>{c.last}</td>
+                      <td style={td}>
+                        {c.mapped_now
+                          ? <span style={{ color: '#15803d', fontWeight: 700 }}>✓ mapped</span>
+                          : c.collects_money
+                            ? <button className="btn btn-secondary" style={{ fontSize: 11, padding: '1px 8px' }} disabled={sfBusy}
+                                onClick={() => mapKeyword(c.product_desc)}>map as the fee</button>
+                            : <span title="every line of this product sold for $0 — it collects nothing, so mapping it would pay nobody" style={{ fontSize: 11, color: 'var(--text3)' }}>collects $0</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>{sfCand.note}</div>
+          </div>
+        )}
+        {sfCand?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{sfCand.error}</div>}
+
+        {sfImpact && !sfImpact.error && (
+          <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+            <div style={{ fontSize: 12.5, marginBottom: 4 }}>
+              <b>{period}</b>: {fmt(sfImpact.collected_total)} collected over {sfImpact.collected_lines} line(s);
+              employees paid <b>{fmt(sfImpact.paid_total)}</b>
+              {sfImpact.dealer_share !== null && sfImpact.dealer_share !== undefined && <> · dealer share {fmt(sfImpact.dealer_share)}</>}.
+            </div>
+            {sfImpact.hypothesis_note && <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>{sfImpact.hypothesis_note}</div>}
+            {!!(sfImpact.warnings || []).length && (
+              <ul style={{ fontSize: 11.5, color: '#92400e', paddingLeft: 18, margin: '4px 0' }}>
+                {sfImpact.warnings.slice(0, 8).map((w: any, i: number) => <li key={i}>{w.message}</li>)}
+              </ul>
+            )}
+            {!!(sfImpact.by_rep || []).length && (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead><tr>{['Rep', 'Fee collected', 'Lines', 'Pay now', 'At this %', 'Delta'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {sfImpact.by_rep.map((r: any, i: number) => (
+                    <tr key={i}>
+                      <td style={td}>{r.rep}</td><td style={td}>{fmt(r.collected)}</td><td style={td}>{r.lines}</td>
+                      <td style={td}>{fmt(r.now)}</td><td style={td}>{fmt(r.with_pct)}</td>
+                      <td style={{ ...td, fontWeight: 700, color: r.delta > 0 ? '#15803d' : 'var(--text3)' }}>{fmt(r.delta)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>{sfImpact.note}</div>
+          </div>
+        )}
+        {sfImpact?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{sfImpact.error}</div>}
       </div>
 
       {/* PLAN COVERAGE — why isn't the plan paying what I configured? (read-only diagnostic, mig 232) */}
