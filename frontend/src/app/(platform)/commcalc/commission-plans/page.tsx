@@ -22,7 +22,9 @@ import {
 type Rule = { id?: string; label?: string; match_field: string; match_op: string; match_value: string
   qualifies: boolean; payout_kind: string; amount: number; pct: number; tiered: boolean
   // PAY GATE (mig 260) — how often this rule pays inside ONE transaction. '' = auto.
-  unit_basis?: string }
+  unit_basis?: string
+  // RULE SCOPE (mig 262) — WHERE this rule applies. '' = everywhere (today's behaviour).
+  applies_scope_kind?: string; applies_scope_value?: string }
 type Tier = { id?: string; metric?: string; min_count: number; multiplier: number }
 type Assign = { id?: string; scope: string; scope_value?: string | null; priority?: number }
 type Plan = { id?: string; name: string; carrier_id?: string | null; base_tier_metric?: string | null
@@ -76,7 +78,7 @@ const ScopeBadge = ({ scope }: { scope: string }) => {
   return <span title={m.help} style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 8, background: m.bg, color: m.color, whiteSpace: 'nowrap' }}>{scope}</span>
 }
 
-const blankRule = (): Rule => ({ label: '', match_field: 'contract_type', match_op: 'equals', match_value: '', qualifies: true, payout_kind: 'flat_per_unit', amount: 0, pct: 0, tiered: false, unit_basis: '' })
+const blankRule = (): Rule => ({ label: '', match_field: 'contract_type', match_op: 'equals', match_value: '', qualifies: true, payout_kind: 'flat_per_unit', amount: 0, pct: 0, tiered: false, unit_basis: '', applies_scope_kind: '', applies_scope_value: '' })
 
 // PAY GATE (mig 260) — "how often does this rule pay on ONE sale?"
 const UNIT_BASES: { value: string; label: string; help: string }[] = [
@@ -582,7 +584,7 @@ export default function CommissionPlansPage() {
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Rules — which line items qualify + how they pay</div>
           <div style={{ overflowX: 'auto', marginBottom: 8 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 920 }}>
-              <thead><tr>{['Label', 'Match field', 'Op', 'Value', 'Qualifies', 'Payout', 'Amount / %', 'Pays', 'Tiered', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <thead><tr>{['Label', 'Match field', 'Op', 'Value', 'Qualifies', 'Payout', 'Amount / %', 'Pays', 'Applies to', 'Tiered', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
               <tbody>
                 {(draft.rules || []).map((r, i) => (
                   <tr key={i}>
@@ -638,6 +640,36 @@ export default function CommissionPlansPage() {
                       {r.payout_kind === 'flat_per_unit' && !(r.unit_basis || '') && txnLevelFields.includes(r.match_field) && (
                         <div style={{ fontSize: 10, color: '#b45309', marginTop: 2, maxWidth: 130 }}>
                           auto → per device (this field describes the whole sale)
+                        </div>
+                      )}
+                    </td>
+                    <td style={td}>
+                      {/* RULE SCOPE (mig 262): blank = everywhere, exactly as before. OWNER 2026-08-01:
+                          "All activations are being paid $10 flat , this is only for NY employees, but
+                          this empluee is in Chicago." Values are PICKED from the tenant's own markets /
+                          stores (RULE THREE §3b) — never typed. */}
+                      <select style={{ ...sel, width: 96 }} value={r.applies_scope_kind || ''}
+                        onChange={e => updRule(i, { applies_scope_kind: e.target.value, applies_scope_value: '' })}>
+                        <option value="">everywhere</option>
+                        <option value="market">market…</option>
+                        <option value="store">store…</option>
+                        <option value="employee">employee…</option>
+                      </select>
+                      {r.applies_scope_kind === 'market' && (
+                        <EntityPicker options={marketOptions(r.applies_scope_value)} value={r.applies_scope_value || null} width={150}
+                          placeholder="pick market…" onChange={v => updRule(i, { applies_scope_value: v || '' })} />
+                      )}
+                      {r.applies_scope_kind === 'store' && (
+                        <EntityPicker options={storeOptions(r.applies_scope_value)} value={r.applies_scope_value || null} width={150}
+                          placeholder="pick store…" onChange={v => updRule(i, { applies_scope_value: v || '' })} />
+                      )}
+                      {r.applies_scope_kind === 'employee' && (
+                        <EntityPicker options={employeeOptions} value={r.applies_scope_value || null} width={150}
+                          placeholder="pick employee…" onChange={v => updRule(i, { applies_scope_value: v || '' })} />
+                      )}
+                      {!!r.applies_scope_kind && !r.applies_scope_value && (
+                        <div style={{ fontSize: 10, color: '#b45309', marginTop: 2, maxWidth: 150 }}>
+                          pick a value — a scope with nothing chosen is saved as “everywhere”, never as “nobody”
                         </div>
                       )}
                     </td>

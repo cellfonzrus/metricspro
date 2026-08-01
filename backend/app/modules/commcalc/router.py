@@ -10617,6 +10617,17 @@ async def save_commission_plan(body: dict, org_id: str = ORG_ID):
                 _ub = str(rl.get("unit_basis") or "").strip().lower()
                 rules[-1]["unit_basis"] = _ub if _ub in ("per_line", "per_device",
                                                          "per_transaction") else None
+            if _rule_scope_cols_present(client) and (
+                    "applies_scope_kind" in rl or "applies_scope_value" in rl):
+                _sk = str(rl.get("applies_scope_kind") or "").strip().lower()
+                _sv = rl.get("applies_scope_value")
+                _sv = ",".join(str(x).strip() for x in _sv if str(x).strip()) if isinstance(
+                    _sv, (list, tuple)) else str(_sv or "").strip()
+                # a kind with no values is NOT a scope — storing it would silently stop the rule
+                # paying anybody. Both must be present or neither is written.
+                _ok = _sk in ("store", "market", "employee") and bool(_sv)
+                rules[-1]["applies_scope_kind"] = _sk if _ok else None
+                rules[-1]["applies_scope_value"] = _sv if _ok else None
         if rules:
             client.schema('commcalc').table('commission_rule').insert(rules).execute()
 
@@ -10687,6 +10698,87 @@ def _rule_gate_cols_present(client):
         except Exception:
             _RULE_GATE_COLS_OK["ok"] = False
     return _RULE_GATE_COLS_OK["ok"]
+
+
+_RULE_SCOPE_COLS_OK = {}
+
+
+def _rule_scope_cols_present(client):
+    """True when commcalc.commission_rule carries the mig-262 scope columns. Probed once per process."""
+    if "ok" not in _RULE_SCOPE_COLS_OK:
+        try:
+            (client.schema('commcalc').table('commission_rule')
+             .select('applies_scope_kind,applies_scope_value').limit(1).execute())
+            _RULE_SCOPE_COLS_OK["ok"] = True
+        except Exception:
+            _RULE_SCOPE_COLS_OK["ok"] = False
+    return _RULE_SCOPE_COLS_OK["ok"]
+
+
+@router.get("/commission-plans/rule-scope-impact/{period}")
+async def rule_scope_impact(period: str, rule_id: str = "", scope_kind: str = "",
+                            scope_value: str = "", org_id: str = ORG_ID):
+    """READ-ONLY: who is collecting a rule TODAY, and who would still collect it if it were scoped.
+
+    OWNER 2026-08-01: "All activations are being paid $10 flat , this is only for NY employees, but
+    this empluee is in Chicago." This answers it with the tenant's own data BEFORE anything is saved:
+    every rep currently paid by `rule_id`, their store and market, and — when a hypothetical scope is
+    supplied — whether they would keep or lose it, with the dollars.
+
+    `scope_kind`/`scope_value` have NO defaults. Without them the endpoint reports the CURRENT
+    distribution only and proposes nothing: which stores count as "NY" is the owner's mapping.
+    """
+    require_org(org_id)
+    from app.modules.commcalc import plan_pay_gate as ppg
+    client = sb()
+    try:
+        res = commission_engine.preview(client, org_id, period, detail=True, gate_override="off")
+    except Exception as e:
+        raise HTTPException(500, f"rule scope impact failed: {type(e).__name__}: {e}")
+    kind = str(scope_kind or "").strip().lower()
+    vals = [v.strip() for v in str(scope_value or "").split(",") if v.strip()]
+    hypo = {"applies_scope_kind": kind, "applies_scope_value": ",".join(vals)} if (kind and vals) else None
+    rows, rules_seen = [], {}
+    for rep in (res.get("by_rep") or []):
+        for rb in (rep.get("rules") or []):
+            rid = str(rb.get("rule_id"))
+            rules_seen.setdefault(rid, {"rule_id": rid, "label": rb.get("label"),
+                                        "match_field": rb.get("match_field"),
+                                        "match_value": rb.get("match_value"),
+                                        "payout_kind": rb.get("payout_kind"),
+                                        "amount": rb.get("amount"), "reps": 0, "paid": 0.0})
+            if not rb.get("payout"):
+                continue
+            rules_seen[rid]["reps"] += 1
+            rules_seen[rid]["paid"] = round(rules_seen[rid]["paid"] + safe_float(rb.get("payout")), 2)
+            if rule_id and rid != str(rule_id):
+                continue
+            keeps, why = (True, "unscoped")
+            if hypo is not None:
+                keeps, why = ppg.rule_applies_here(hypo, rep.get("store"), rep.get("market"),
+                                                   rep.get("rep"))
+            rows.append({"rep": rep.get("rep"), "store": rep.get("store"),
+                         "market": rep.get("market"), "rule_id": rid, "label": rb.get("label"),
+                         "lines": rb.get("matched_lines"), "paid": round(safe_float(rb.get("payout")), 2),
+                         "keeps_it": bool(keeps), "reason": why})
+    rows.sort(key=lambda x: (x["keeps_it"], -x["paid"]))
+    lost = round(sum(r["paid"] for r in rows if not r["keeps_it"]), 2)
+    return {"period": period, "org_id": org_id, "rule_id": rule_id or None,
+            "hypothesis": hypo,
+            "hypothesis_note": (None if hypo else
+                                "No scope was supplied (pass ?scope_kind=market&scope_value=NY,NJ), so "
+                                "every rep is shown as keeping the rule. This endpoint proposes no "
+                                "mapping — which stores are 'NY' is the owner's to state."),
+            "rules": sorted(rules_seen.values(), key=lambda x: -x["paid"]),
+            "by_rep": rows,
+            "totals": {"reps": len(rows), "paid": round(sum(r["paid"] for r in rows), 2),
+                       "would_lose": lost, "reps_losing": len([r for r in rows if not r["keeps_it"]])},
+            "scope_kinds": list(ppg.SCOPE_KINDS),
+            "scope_columns_ready": _rule_scope_cols_present(client),
+            "migration": "262_commission_rule_scope.sql",
+            "note": ("Read-only. Nothing is saved and no calculation is triggered. Scoping ALSO exists "
+                     "at PLAN level today (clone the plan, drop the rule, assign the clone to the other "
+                     "market) — this is the one-rule form of the same decision.")}
 
 
 @router.get("/commission-plans/pay-gate")
