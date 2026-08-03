@@ -1,6 +1,7 @@
 'use client'
-import { createContext, useContext, useEffect, useState, useCallback } from 'react'
-import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken, get2faToken } from './client'
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
+import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken, get2faToken,
+         onSessionInvalid, clearSessionInvalid } from './client'
 import type { Permissions, CarrierRef } from './rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -64,6 +65,10 @@ type AuthState = {
   // rbac_enabled when the ONE-call /core/bootstrap supplied it; null ⇒ unknown (older backend /
   // waterfall path) → the Guard keeps its own direct /core/auth-config fetch as the fallback.
   rbacEnabled: boolean | null
+  // The client holds a session the BACKEND rejects (stale/invalid token → 401 "authentication
+  // required" on module calls). client.ts detects it at the api() choke point; the Guard shows ONE
+  // "session expired" card instead of every page erroring. See client.ts DEAD CLIENT SESSION block.
+  sessionInvalid: boolean
   passwordPolicy: PasswordPolicy | null                        // active tenant policy (client-side hints)
   defaultCc: string                                            // tenant default phone country code ('+1')
   startTwoFactor: (channel?: string) => Promise<any>           // request an OTP over a channel
@@ -77,7 +82,8 @@ const Ctx = createContext<AuthState>({
   active: false, tenant: null, token: null, tenants: [], activeOrg: null, needsTenantChoice: false,
   switchTenant: async () => {}, pendingConnections: [], connectTenant: async () => {},
   disableAndSwitch: async () => ({}), dismissPending: () => {},
-  twofa: { required: false, verified: true }, needs2fa: false, rbacEnabled: null, passwordPolicy: null, defaultCc: '+1',
+  twofa: { required: false, verified: true }, needs2fa: false, rbacEnabled: null, sessionInvalid: false,
+  passwordPolicy: null, defaultCc: '+1',
   startTwoFactor: async () => ({}), verifyTwoFactor: async () => {},
   signOut: async () => {}, refresh: async () => {},
 })
@@ -102,6 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [passwordPolicy, setPasswordPolicy] = useState<PasswordPolicy | null>(null)
   const [defaultCc, setDefaultCc] = useState('+1')
   const [rbacEnabled, setRbacEnabled] = useState<boolean | null>(null)
+  const [sessionInvalid, setSessionInvalid] = useState(false)
 
   const resetProfile = useCallback(() => {
     setUser(null); setPermissions({}); setProvisioned(false); setActive(false)
@@ -309,8 +316,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => { mounted = false; sub.subscription.unsubscribe() }
   }, [loadProfile])
 
+  // ── Dead client session (auth-ux hardening 2026-08-03) ──────────────────────────────────────────
+  // client.ts latches this the first time a module call 401s with the middleware's "authentication
+  // required" WHILE a bearer token was attached. React to it ONCE: drop the dead Supabase session
+  // (so /login doesn't bounce straight back into the app on a session it still thinks is good) and
+  // flip sessionInvalid, which the platform Guard renders as ONE "session expired" card.
+  //
+  // NOT armed when login enforcement is explicitly OFF (rbacEnabled === false): the app is open in
+  // that mode and there is nothing to sign back in to. rbacEnabled === null (unknown / older
+  // backend) stays armed — a clear "please sign in again" beats a page full of red errors.
+  // handledRef makes the sign-out strictly once even though this effect re-subscribes when
+  // rbacEnabled resolves.
+  const handledRef = useRef(false)
+  useEffect(() => {
+    if (rbacEnabled === false) return
+    return onSessionInvalid(() => {
+      if (handledRef.current) return
+      handledRef.current = true
+      setSessionInvalid(true)
+      // Best-effort: clear the dead client session. onAuthStateChange then resets the profile.
+      supabase.auth.signOut().catch(() => { /* already gone / offline — the card still shows */ })
+    })
+  }, [rbacEnabled])
+
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
+    clearSessionInvalid(); handledRef.current = false; setSessionInvalid(false)
     setActiveOrg(null); set2faToken(null)
     resetProfile(); setSession(null); setTenants([]); setActiveOrgState(null); setNeedsTenantChoice(false)
     setPendingConnections([]); setDismissed([])
@@ -330,7 +361,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       loading, session, user, permissions, carriers, provisioned, active, tenant,
       token: session?.access_token || null, tenants, activeOrg, needsTenantChoice,
       switchTenant, pendingConnections: visiblePending, connectTenant, disableAndSwitch,
-      dismissPending, twofa, needs2fa, rbacEnabled, passwordPolicy, defaultCc, startTwoFactor, verifyTwoFactor,
+      dismissPending, twofa, needs2fa, rbacEnabled, sessionInvalid,
+      passwordPolicy, defaultCc, startTwoFactor, verifyTwoFactor,
       signOut, refresh,
     }}>
       {children}

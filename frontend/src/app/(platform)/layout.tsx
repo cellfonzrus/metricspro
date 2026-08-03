@@ -18,13 +18,24 @@ function Splash({ text }: { text: string }) {
   )
 }
 
-function Notice({ title, body, onSignOut }: { title: string; body: string; onSignOut: () => void }) {
+// One full-screen explanatory card. `actionLabel` renames the primary button (the "session expired"
+// state says "Sign in again", not "Sign out"); `secondary` adds an optional extra action; `hint`
+// adds a smaller line under the body. All optional — existing call sites are unchanged.
+function Notice({ title, body, onSignOut, actionLabel, hint, secondary }: {
+  title: string; body: string; onSignOut: () => void
+  actionLabel?: string; hint?: string
+  secondary?: { label: string; onClick: () => void }
+}) {
   return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
       <div className="card" style={{ maxWidth: 440, padding: 32, textAlign: 'center' }}>
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>{title}</div>
-        <div style={{ fontSize: 14, color: 'var(--text2)', marginBottom: 20 }}>{body}</div>
-        <button className="btn" onClick={onSignOut}>Sign out</button>
+        <div style={{ fontSize: 14, color: 'var(--text2)', marginBottom: hint ? 10 : 20 }}>{body}</div>
+        {hint && <div style={{ fontSize: 12.5, color: 'var(--text3)', marginBottom: 20 }}>{hint}</div>}
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+          {secondary && <button className="btn" onClick={secondary.onClick}>{secondary.label}</button>}
+          <button className="btn" onClick={onSignOut}>{actionLabel || 'Sign out'}</button>
+        </div>
       </div>
     </div>
   )
@@ -251,7 +262,8 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
 }
 
 function Guard({ children }: { children: React.ReactNode }) {
-  const { loading, session, user, permissions, provisioned, active, signOut, needsTenantChoice, rbacEnabled } = useAuth()
+  const { loading, session, user, permissions, provisioned, active, signOut, needsTenantChoice,
+          rbacEnabled, sessionInvalid } = useAuth()
   const pathname = usePathname()
   const router = useRouter()
   // Master switch: until the admin turns enforcement ON, the app stays fully open (today's
@@ -273,6 +285,11 @@ function Guard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (enforce !== true || loading) return
+    // Dead client session: auth-context has already signed the stale session out, so `session` is
+    // about to go null. HOLD here — otherwise this effect fires router.replace('/login') and the
+    // user never sees why they were thrown out (the exact experience of the 2026-08-03 incident).
+    // The "Sign in again" button below does the navigation deliberately.
+    if (sessionInvalid) return
     if (!session) { router.replace('/login'); return }
     // Login belongs to >1 tenant and none chosen yet → the picker lives on /login.
     if (needsTenantChoice) { router.replace('/login'); return }
@@ -282,12 +299,19 @@ function Guard({ children }: { children: React.ReactNode }) {
       const dest = safeHomeFor(permissions)
       if (dest !== pathname) router.replace(dest)   // guard against redirecting to a gated-off home (loop)
     }
-  }, [enforce, loading, session, provisioned, active, user, permissions, pathname, router, needsTenantChoice])
+  }, [enforce, loading, session, provisioned, active, user, permissions, pathname, router, needsTenantChoice, sessionInvalid])
 
   if (enforce === null) return <Splash text="Loading…" />
   if (enforce === false) return <PlatformShell open>{children}</PlatformShell>  // app open
 
   // enforcement ON ↓
+  // The client held a session the backend rejects. Before 2026-08-03 this rendered the full shell
+  // with EVERY page showing its own "authentication required" error — one clear card instead.
+  if (sessionInvalid) return <Notice title="Session expired"
+    body="Your session has expired or is no longer valid — please sign in again."
+    hint="You have been signed out on this device. Nothing you were working on was submitted."
+    actionLabel="Sign in again"
+    onSignOut={() => signOut().then(() => router.replace('/login'))} />
   if (loading) return <Splash text="Loading…" />
   if (!session) return <Splash text="Redirecting to sign-in…" />
   if (needsTenantChoice) return <Splash text="Choose a company…" />

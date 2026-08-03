@@ -138,6 +138,67 @@ function withOrgScope(path: string): string {
   return appendActiveOrg(substituteHouseOrg(scopeOrg(path)))
 }
 
+// ── DEAD CLIENT SESSION detection (auth-ux hardening 2026-08-03) ────────────────────────────────
+// Live incident (house org, 2026-08-03): a browser held a stale/invalid Supabase session. The shell
+// rendered (the client "had" a session) but EVERY module call came back 401
+// {"detail":"authentication required"} from tenant_middleware._reject_401 — the user experienced it
+// as "all modules are broken" instead of "you need to sign in again".
+//
+// api()/apiUpload() are the ONE choke point every page goes through, so the mismatch is detected
+// here and surfaced ONCE by the platform Guard (auth-context subscribes; layout.tsx renders the
+// single "session expired" card and routes to sign-in). Design constraints, all enforced below:
+//
+//   • FIRES ONLY when the client BELIEVED it had a session — i.e. a bearer token was actually
+//     attached to the failing request. No token ⇒ never fires, which is exactly what keeps the
+//     anonymous kiosk and the "login enforcement OFF" (open-app) mode untouched.
+//   • EXACT-MATCH on the middleware's own detail string. A 2FA challenge (`two-factor
+//     authentication required`), a handler-level 401, or any other message does NOT trigger it.
+//   • NEVER on the auth/bootstrap endpoints themselves — a 401 from those IS the login flow
+//     talking, and reacting to it is how you build a redirect storm.
+//   • NEVER on a public / token-authenticated browser route (login, signup, onboarding, kiosk,
+//     privacy): those pages authenticate by their own link token or not at all.
+//   • SINGLE-SHOT: the first detection latches the flag; the 30 other in-flight calls on the page
+//     see the latch and do nothing. Cleared only by an explicit sign-out.
+//   • api()'s THROWN ERROR IS UNCHANGED for every status including 401 (same errMsg(), same
+//     `new Error(...)`) — 210 files consume that contract and none of them may change behaviour.
+const DEAD_SESSION_DETAIL = 'authentication required'   // verbatim tenant_middleware.py::_reject_401
+
+// API paths whose own 401 must never be read as "the session died" (they ARE the sign-in path).
+const AUTH_FLOW_PATH_RE =
+  /\/api\/v1\/core\/(auth-config|auth\/|bootstrap|me(\/|$|\?)|my-tenants|pending-connections|connect-tenant|disable-and-switch|signup|password-policy)/
+// Browser routes that are public or authenticate by their own token — never bounce these.
+const PUBLIC_ROUTE_RE = /^\/(login|signup|onboard|portal|privacy)(\/|$)/
+
+let _sessionInvalid = false
+const _sessionInvalidCbs = new Set<() => void>()
+
+export function isSessionInvalid(): boolean { return _sessionInvalid }
+
+/** Clear the latch. Called by AuthProvider.signOut() — the ONLY way out of the expired state. */
+export function clearSessionInvalid() { _sessionInvalid = false }
+
+/** Subscribe to the dead-session signal. Fires immediately if it already happened (so a component
+ *  that mounts after the fact still sees it). Returns an unsubscribe fn. */
+export function onSessionInvalid(cb: () => void): () => void {
+  _sessionInvalidCbs.add(cb)
+  if (_sessionInvalid) { try { cb() } catch { /* a listener must never break a request */ } }
+  return () => { _sessionInvalidCbs.delete(cb) }
+}
+
+function markSessionInvalid(path: string, detail: unknown, hadToken: boolean) {
+  if (!hadToken) return                                            // no session believed → not our case
+  if (typeof detail !== 'string') return
+  if (detail.trim().toLowerCase() !== DEAD_SESSION_DETAIL) return  // exact middleware string only
+  if (AUTH_FLOW_PATH_RE.test(path)) return                         // no storms off the login path
+  if (typeof window === 'undefined') return
+  if (PUBLIC_ROUTE_RE.test(window.location.pathname)) return       // public / token-auth pages
+  if (_sessionInvalid) return                                      // latch: notify once, not N times
+  _sessionInvalid = true
+  for (const cb of Array.from(_sessionInvalidCbs)) {
+    try { cb() } catch { /* never let a listener break the failing request */ }
+  }
+}
+
 // Render a FastAPI error body as a readable string. `detail` may be a string, an ARRAY of
 // validation errors (422 → [{loc,msg,...}]), or an object — coercing those with `+`/template
 // strings is what produced the "[object Object]" error users saw on upload.
@@ -169,6 +230,8 @@ export async function api(path: string, opts: RequestInit = {}) {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
+    // Detect-only: never changes what is thrown (see DEAD CLIENT SESSION block above).
+    if (res.status === 401) markSessionInvalid(path, (err as any)?.detail, !!authHeader.Authorization)
     throw new Error(errMsg(err, res.status))
   }
   return res.json()
@@ -183,6 +246,7 @@ export async function apiUpload(path: string, form: FormData) {
     headers: { ...authHeader, ...activeOrgHeader(), ...twofaHeader() } })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
+    if (res.status === 401) markSessionInvalid(path, (err as any)?.detail, !!authHeader.Authorization)
     throw new Error(errMsg(err, res.status))
   }
   return res.json()
