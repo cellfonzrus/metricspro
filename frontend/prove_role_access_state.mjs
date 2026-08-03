@@ -117,13 +117,29 @@ console.log('H. no new backend read was introduced (multi-tenant surface unchang
   const calls = [...SRC.matchAll(/api\('([^']+)'/g)].map(m => m[1])
   const known = new Set([
     '/api/v1/core/auth-config', '/api/v1/core/roles', '/api/v1/core/employees',
-    '/api/v1/storeops/stores', '/api/v1/core/setting-areas', '/api/v1/core/users/assign',
+    // 2026-08-03 scope-split: the market/store GRANT pickers moved OFF the span-scoped
+    // /api/v1/storeops/stores onto the canonical org-scoped /api/v1/core/markets (union of
+    // storeops.stores.market + commcalc.store_mapping.market — the same source that RESOLVES a
+    // market grant). Still org-scoped, still no cross-tenant read.
+    '/api/v1/core/markets', '/api/v1/core/setting-areas', '/api/v1/core/users/assign',
     '/api/v1/core/employee-widgets', '/api/v1/core/employees/purge', '/api/v1/core/users/create-login',
     '/api/v1/core/users/resend-invite', '/api/v1/core/users/reveal-code',
     '/api/v1/core/users/bulk-provision', '/api/v1/core/users/bulk-assign',
   ])
   const unknown = calls.filter(c => !known.has(c))
-  ck(`no unexpected endpoint (${calls.length} literal api() calls)`, unknown.length === 0)
+  ck(`no unexpected endpoint (${calls.length} literal api() calls)`, unknown.length === 0,
+     unknown)
+  ck('the span-scoped store list is no longer the grant-picker source',
+     !SRC.includes("api('/api/v1/storeops/stores')"))
+  // Template-literal api() calls (path built at runtime) — enumerated separately so a new one can
+  // never slip past the literal scan above.
+  const tpl = [...SRC.matchAll(/api\(`([^`]+)`/g)].map(m => m[1].replace(/\$\{[^}]*\}/g, '{}'))
+  const knownTpl = new Set([
+    '/api/v1/core/roles/{}', '/api/v1/storeops/employees/{}',
+    '/api/v1/core/scope-preview?email={}',
+  ])
+  ck(`no unexpected templated endpoint (${tpl.length} calls)`,
+     tpl.every(t => knownTpl.has(t)), tpl.filter(t => !knownTpl.has(t)))
   if (unknown.length) console.error('   unexpected:', unknown)
 }
 

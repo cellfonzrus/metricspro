@@ -24,7 +24,7 @@
 // Run:  node frontend/prove_nav_scope_override.mjs      (no network, no DB, no React)
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -44,9 +44,13 @@ const OUT = mkdtempSync(join(tmpdir(), 'rbacproof-'))
 const SRC = readFileSync(RBAC, 'utf8')
 must(SRC.includes('export function canSeeItem'), 'rbac.ts no longer exports canSeeItem')
 writeFileSync(join(OUT, 'rbac.ts'), SRC)
+// --skipLibCheck + an empty --typeRoots so ambient @types in node_modules can never be pulled in
+// (they make this transpile fail or pass depending on the cwd it is launched from).
+mkdirSync(join(OUT, 'emptytypes'), { recursive: true })
 execFileSync(join(HERE, 'node_modules/.bin/tsc'),
-  [join(OUT, 'rbac.ts'), '--target', 'es2020', '--module', 'es2020', '--outDir', OUT],
-  { stdio: 'inherit' })
+  [join(OUT, 'rbac.ts'), '--target', 'es2020', '--module', 'es2020', '--outDir', OUT,
+   '--skipLibCheck', '--typeRoots', join(OUT, 'emptytypes')],
+  { stdio: 'inherit', cwd: OUT })
 const R = await import(pathToFileURL(join(OUT, 'rbac.js')).href)
 
 // ── faithful reimplementation of the PRE-change gates (the byte-identity oracle) ────────────────
