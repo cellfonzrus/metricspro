@@ -4,22 +4,37 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import { isSuperAdmin } from '@/lib/rbac'
 import { TrendChart } from '@/components/TrendChart'
+import { WHATIF_GRANTS, RestrictedWhatIf, useWhatIfAccess, type WhatIfTabKey } from './_components/WhatIfGate'
 
 const card = { padding: 18, borderRadius: 12 } as const
 const num = (v: any) => { const n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : 0 }
 
 type Carrier = { id: string; name: string; code?: string; is_default?: boolean }
 
-function TabBar({ tab, setTab }: { tab: string; setTab: (t: string) => void }) {
-  const tabs = [['mix', '🎯 Employee Payout'], ['byod', '📶 BYOD → Residuals'], ['corr', '🔗 Accessories ↔ BYOD ↔ Revenue'], ['carrier', '💵 Company Payout / Carrier Income']]
+export const WHATIF_TABS: [WhatIfTabKey, string][] = [
+  ['mix', '🎯 Employee Payout'], ['byod', '📶 BYOD → Residuals'],
+  ['corr', '🔗 Accessories ↔ BYOD ↔ Revenue'], ['carrier', '💵 Company Payout / Carrier Income'],
+]
+
+// Each tab is its OWN default-closed report (owner 2026-08-03). An ungranted tab stays visible but
+// disabled + 🔒 — hiding it entirely would make "the page looks different for me" unexplainable, and
+// the button carries the exact permission name in its tooltip so an admin knows what to grant.
+function TabBar({ tab, setTab, allowed }:
+  { tab: WhatIfTabKey; setTab: (t: WhatIfTabKey) => void; allowed: Record<string, boolean> }) {
   return (
     <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>
-      {tabs.map(([k, label]) => (
-        <button key={k} onClick={() => setTab(k)}
-          style={{ padding: '8px 14px', borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                   border: '1px solid var(--border)', background: tab === k ? 'var(--accent)' : 'var(--surface)',
-                   color: tab === k ? '#fff' : 'var(--text2)' }}>{label}</button>
-      ))}
+      {WHATIF_TABS.map(([k, label]) => {
+        const key = WHATIF_GRANTS[k]
+        const ok = !!allowed[key]
+        return (
+          <button key={k} onClick={() => ok && setTab(k)} disabled={!ok}
+            title={ok ? undefined : `Restricted — needs the '${key}' permission on your role.`}
+            style={{ padding: '8px 14px', borderRadius: 9, fontSize: 13, fontWeight: 600,
+                     cursor: ok ? 'pointer' : 'not-allowed', opacity: ok ? 1 : 0.5,
+                     border: '1px solid var(--border)', background: tab === k ? 'var(--accent)' : 'var(--surface)',
+                     color: tab === k ? '#fff' : 'var(--text2)' }}>{ok ? label : `🔒 ${label}`}</button>
+        )
+      })}
     </div>
   )
 }
@@ -704,22 +719,38 @@ function Field({ label, value, onChange }: { label: string; value: number; onCha
 
 export default function WhatIfPage() {
   const { permissions } = useAuth()
-  const [tab, setTab] = useState('mix')
+  const [tab, setTab] = useState<WhatIfTabKey>('mix')
   const [carriers, setCarriers] = useState<Carrier[]>([])
   const [carrierId, setCarrierId] = useState('')
   const [mode, setMode] = useState('boost')
   const canEditSources = isSuperAdmin(permissions) || permissions?.scope === 'all'
+  const { allowed, ready } = useWhatIfAccess()
+  const anyAllowed = WHATIF_TABS.some(([k]) => allowed[WHATIF_GRANTS[k]])
+  const tabGrant = WHATIF_GRANTS[tab]
+  const tabAllowed = !!allowed[tabGrant]
 
-  // load the org's carriers once (pick-don't-type source) + resolve default carrier + mode
+  // Land on the FIRST tab the caller may actually open, so a grantee of only one report doesn't open
+  // to a lock note. Runs once access resolves; never overrides a deliberate click on an allowed tab.
+  useEffect(() => {
+    if (!ready || tabAllowed) return
+    const first = WHATIF_TABS.find(([k]) => allowed[WHATIF_GRANTS[k]])
+    if (first) setTab(first[0])
+  }, [ready, tabAllowed, allowed])
+
+  // load the org's carriers once (pick-don't-type source) + resolve default carrier + mode.
+  // Gated read (any-one-of-four): a caller with no grant gets a 403 here — swallow it, the page
+  // already renders its own lock note.
   function loadCtx(cid: string) {
     api(`/api/v1/commcalc/whatif/source-config?org_id=${ORG_ID}&carrier_id=${cid}`).then((d: any) => {
       setCarriers(d.carriers || [])
       setMode(d.carrier_mode || 'boost')
       if (!cid && d.carrier?.id) setCarrierId(String(d.carrier.id))
-    }).catch(console.error)
+    }).catch(() => {})
   }
-  useEffect(() => { loadCtx('') }, [])
-  useEffect(() => { if (carrierId) loadCtx(carrierId) }, [carrierId])
+  useEffect(() => { if (ready && anyAllowed) loadCtx('') }, [ready, anyAllowed])
+  useEffect(() => { if (carrierId && anyAllowed) loadCtx(carrierId) }, [carrierId, anyAllowed])
+
+  if (!ready) return <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
 
   return (
     <div>
@@ -729,16 +760,30 @@ export default function WhatIfPage() {
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Carrier-agnostic scenario modeling — employee payout, company payout / carrier income, and BYOD residuals — for any carrier.</p>
       </div>
 
-      <div className="card" style={{ padding: 14, marginBottom: 18 }}>
-        <CarrierPicker carriers={carriers} carrierId={carrierId} setCarrierId={setCarrierId} mode={mode} />
-        {canEditSources && <SourcesPanel carrierId={carrierId} onSaved={() => loadCtx(carrierId)} />}
-      </div>
+      {!anyAllowed ? (
+        <RestrictedWhatIf title="What-If / Scenario Analysis" grantKey="whatif_employee_payout" />
+      ) : (
+        <>
+          <div className="card" style={{ padding: 14, marginBottom: 18 }}>
+            <CarrierPicker carriers={carriers} carrierId={carrierId} setCarrierId={setCarrierId} mode={mode} />
+            {canEditSources && <SourcesPanel carrierId={carrierId} onSaved={() => loadCtx(carrierId)} />}
+          </div>
 
-      <TabBar tab={tab} setTab={setTab} />
-      {tab === 'mix' && <ActivationMix carrierId={carrierId} />}
-      {tab === 'byod' && <ByodResidual carrierId={carrierId} />}
-      {tab === 'corr' && <AccessoryByod />}
-      {tab === 'carrier' && <CarrierIncome carrierId={carrierId} />}
+          <TabBar tab={tab} setTab={setTab} allowed={allowed} />
+          {!tabAllowed ? (
+            <RestrictedWhatIf
+              title={(WHATIF_TABS.find(([k]) => k === tab) || [, 'This report'])[1] as string}
+              grantKey={tabGrant} />
+          ) : (
+            <>
+              {tab === 'mix' && <ActivationMix carrierId={carrierId} />}
+              {tab === 'byod' && <ByodResidual carrierId={carrierId} />}
+              {tab === 'corr' && <AccessoryByod />}
+              {tab === 'carrier' && <CarrierIncome carrierId={carrierId} />}
+            </>
+          )}
+        </>
+      )}
     </div>
   )
 }

@@ -8,6 +8,8 @@ import re
 from app.core.database import get_supabase
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
 from app.modules.commcalc import whatif
+from app.modules.commcalc import whatif_gates
+from app.modules.commcalc import pay_simulator
 from app.modules.commcalc.gp_report import (calc_gp_report, VOID_TOKENS as _GP_VOID_TOKENS,
                                              is_voided as _gp_is_voided)
 from app.modules.commcalc.flags import calc_flags
@@ -1736,13 +1738,19 @@ async def _upload_file_impl(
 
 
 @router.get("/whatif/activation-baseline")
-def whatif_activation_baseline(period: str, carrier_id: str = "", org_id: str = ORG_ID):
+def whatif_activation_baseline(period: str, carrier_id: str = "",
+                               authorization: str = Header(default=""), org_id: str = ORG_ID):
     """What-If tool #1 — CARRIER-AGNOSTIC employee-payout template. Boost carriers keep the legacy 8
     components (byte-identical); non-Boost carriers' components auto-populate from their configured
     Commission Plans / rules / tiers + payout_schedule installments; a carrier with no pay source gets an
     explicit empty state pointing at /commcalc/commission-plans. Employee-payout perspective (no residual
-    money) → not gated behind the carrier-residual grant."""
+    money) → not gated behind the carrier-residual grant.
+
+    REPORT GATE (owner 2026-08-03): DEFAULT-CLOSED behind the 'whatif_employee_payout' DATA_GRANT —
+    before this, nav-hiding was the only thing standing between any authenticated caller and this
+    report's per-component payout template. Enforced BEFORE the first read."""
     require_org(org_id)
+    whatif_gates.require_whatif_report(authorization, whatif_gates.EMPLOYEE_PAYOUT, org_id)
     return whatif.activation_baseline(sb(), org_id, period, carrier_id=(carrier_id or None))
 
 
@@ -1753,15 +1761,23 @@ def whatif_byod_residual(months: int = 6, carrier_id: str = "", authorization: s
     rows (sign-normalized) joined with raw_ma_commission M1-M6 + rebate. Residual = carrier-income money →
     gated behind the carrier-residual visibility grant."""
     require_org(org_id)
+    # TWO INDEPENDENT GATES, both enforced, neither replacing the other:
+    #  1. the DEFAULT-CLOSED per-report grant (owner 2026-08-03) — may you open this report at all;
+    #  2. the tenant's carrier-residual visibility grant — may you see raw carrier residual money.
+    whatif_gates.require_whatif_report(authorization, whatif_gates.BYOD_RESIDUAL, org_id)
     _require_carrier_residual(authorization, org_id)   # carrier-residual visibility gate (mig 201)
     return whatif.byod_residual(sb(), org_id, max(1, min(months, 24)), carrier_id=(carrier_id or None))
 
 
 @router.get("/whatif/accessory-byod")
-def whatif_accessory_byod(months: int = 4, org_id: str = ORG_ID):
+def whatif_accessory_byod(months: int = 4, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """What-If tool #3 — per store/period BYOD activations vs accessory revenue vs total revenue,
-    with Pearson correlations."""
+    with Pearson correlations.
+
+    REPORT GATE (owner 2026-08-03): DEFAULT-CLOSED behind the 'whatif_accessory_corr' DATA_GRANT.
+    This report emits per-STORE revenue and accessory revenue — it had no gate of any kind."""
     require_org(org_id)
+    whatif_gates.require_whatif_report(authorization, whatif_gates.ACCESSORY_CORR, org_id)
     return whatif.accessory_byod_correlation(sb(), org_id, months)
 
 
@@ -1775,16 +1791,80 @@ def whatif_carrier_income(months: int = 6, carrier_id: str = "", authorization: 
     source is active. Company payout / carrier income = residual-class money → gated behind the
     carrier-residual visibility grant."""
     require_org(org_id)
+    # Same two independent gates as /whatif/byod-residual (report access, then residual-money visibility).
+    whatif_gates.require_whatif_report(authorization, whatif_gates.CARRIER_INCOME, org_id)
     _require_carrier_residual(authorization, org_id)
     return whatif.carrier_income(sb(), org_id, max(1, min(months, 24)), carrier_id=(carrier_id or None))
 
 
+@router.get("/whatif/access")
+def whatif_access(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Which of the FOUR What-If reports this caller may open — one caller resolution, four booleans.
+
+    The page renders only the granted tabs from this, so an ungranted caller never fires four requests
+    to collect four 403s, and a caller with zero grants sees ONE lock note instead of an empty page with
+    four red errors. The BACKEND endpoints remain the enforcement (each 403s on its own); this is the
+    frontend's honest tab list, never the gate itself.
+
+    Deliberately UNGATED (any authed caller may ask "what may I see?") and it leaks nothing: the reply
+    is four booleans about the CALLER, plus the static registry rows so the page can name the exact
+    permission an admin must grant."""
+    require_org(org_id)
+    return {"allowed": whatif_gates.allowed_map(authorization, org_id),
+            "reports": whatif_gates.GRANT_REGISTRY,
+            "labels": whatif_gates.REPORT_LABELS}
+
+
+# ══ EMPLOYEE PAY SIMULATOR (owner 2026-08-03) — self-service "what would I make if I sold X?" ══
+# READ-ONLY, NO PERSIST. Both endpoints resolve the caller from their BEARER TOKEN (pay_simulator
+# .require_self) and refuse any request aimed at another rep with a 403 — a `rep` param exists only so
+# that refusal is explicit, and only a super-admin / company-wide ('all') role (who already read every
+# rep's pay on the Rep Commission Report) may pass one.
+#
+# THE PAY MATH IS NOT HERE AND NOT IN THE BROWSER. The projection is produced by
+# `commission_engine.preview(..., sales_override=<synthetic lines>)` — the SAME function the live
+# plan-engine payout runs through — so a change to a matcher, a tier basis, the pay gate or the
+# set-up-fee item moves the simulator on the same deploy it moves real pay. See pay_simulator.py's
+# docstring for the exact list of engine functions reached.
+#
+# `org_id` is deliberately NOT trusted here: the acting tenant comes from the caller's own app_users
+# row (auth_id is globally unique), so a self-service simulation always lands in the employee's own
+# tenant. The query param stays on the signature only because tenant_middleware rewrites it.
+@router.get("/pay-simulator/context")
+def pay_simulator_context(period: str = "", rep: str = "",
+                          authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Who am I, which Commission Plan pays me, and what levers does that plan actually pay on.
+
+    401 when not signed in; 403 when the login isn't linked to an employee record, or when `rep`
+    names anybody but the caller. A rep with no plan assignment gets ok=false + a plain-language
+    reason (that is a CONFIG gap, not an error). Boost-mode tenants get an explicit unsupported
+    state — they are paid by the legacy component engine, so plan dollars would be a lie."""
+    return pay_simulator.context(sb(), authorization, period, requested_rep=rep)
+
+
+@router.post("/pay-simulator/simulate")
+def pay_simulator_simulate(body: dict = None, authorization: str = Header(default=""),
+                           org_id: str = ORG_ID):
+    """Projected pay for the caller's OWN levers. POST because the input is a lever map, NOT because
+    anything is written — this handler performs no insert/update/upsert/delete and triggers no
+    recalculation. body = {period, inputs:{<lever_key>:{units, amount}}, rep?}."""
+    b = body or {}
+    return pay_simulator.run(sb(), authorization, b.get("period") or "",
+                             b.get("inputs") or {}, requested_rep=(b.get("rep") or ""))
+
+
 @router.get("/whatif/source-config")
-def whatif_get_source_config(carrier_id: str = "", org_id: str = ORG_ID):
+def whatif_get_source_config(carrier_id: str = "", authorization: str = Header(default=""),
+                             org_id: str = ORG_ID):
     """The RESOLVED What-If source config (whatif_source_config, mig 209) for the selected carrier, plus
     the org's raw override rows. Drives the ⚙️ Sources admin panel. Read-only, degrades to code defaults
-    when mig 209 is absent."""
+    when mig 209 is absent.
+
+    GATE: requires ANY ONE of the four report grants (page chrome for reports you can't open is still
+    tenant source wiring). The WRITE below keeps its own, stricter `_require_commission_admin` — this
+    change narrows the read, it does not widen the write."""
     require_org(org_id)
+    whatif_gates.require_any_whatif(authorization, org_id)
     client = sb()
     carriers, picked, mode = whatif._carrier_ctx(client, org_id, (carrier_id or None))
     resolved = whatif._whatif_source_config(client, org_id, (picked or {}).get("id"), mode)
@@ -15914,6 +15994,59 @@ def _carry_forward_map(client, org_id, period, stores):
     return {'prior_period': prior, 'by_code': out}
 
 
+# ── TARGET-SETTING PERMISSION (owner directive 2026-08-03, the DM collective-target package) ─────
+# Target Settings has ALWAYS had a permission: core's SETTING_AREAS key 'targets' ("Target Settings"),
+# which the Roles UI already renders and `_can_edit_setting` already evaluates. What it did NOT have
+# was an enforcement point — `PUT /targets/{period}` took no Authorization header at all, so the rule
+# existed only as a nav-level `scopes: ['all']` hint on the settings page. Adding the check here
+# NARROWS the write to exactly the people the existing rule already named; it widens nothing, and the
+# owner's instruction for the DM drill-down was explicitly "respect the existing Target Settings
+# editability rules; do not widen who may edit".
+#
+# DEGRADE-OPEN ON RESOLUTION, FAIL-CLOSED ON DECISION — the same posture as
+# `_require_commission_plans_edit`: an unresolvable caller (RBAC off / no token / core unavailable)
+# passes, so the house org and existing automation are never locked out, but an error inside the
+# permission check itself propagates rather than silently allowing the write.
+def _can_edit_targets(authorization: str, org_id: str):
+    """(allowed, caller). Resolution failures → (True, None) per the house posture above."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller, _can_edit_setting
+    except Exception:
+        return True, None                     # core unavailable — module-wide posture (require_org only)
+    try:
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid, org_id) if uid else None
+    except Exception:
+        caller = None
+    if caller is None:
+        return True, None
+    return bool(_can_edit_setting(caller, "targets")), caller
+
+
+def _require_target_edit(authorization: str, org_id: str, store_code: str = ""):
+    """Raise 403 unless the caller may edit Target Settings AND — when RBAC span enforcement is on —
+    the store is inside their own span.
+
+    The SPAN half is what makes the DM per-store drill-down safe: a district manager who is granted
+    'targets' may set targets for the stores they manage and ONLY those. An unrestricted caller
+    (scope_keyset → None: admin, or enforcement off) is unaffected, exactly as today."""
+    ok, _caller = _can_edit_targets(authorization, org_id)
+    if not ok:
+        raise HTTPException(403, "You need the 'Target Settings' permission to set targets. "
+                                 "Ask an administrator to grant it on your role.")
+    code = str(store_code or "").strip()
+    if not code:
+        return
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)
+    except Exception:
+        return                                # scope resolution unavailable → today's behaviour
+    if ks is not None and not in_keyset(ks, code):
+        raise HTTPException(403, f"'{code}' is not one of your stores — you can only set targets for "
+                                 f"the stores assigned to you.")
+
+
 @router.get("/targets/{period}")
 async def get_targets(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """List per-store monthly target config. Stores without a row are SEEDED from the prior month —
@@ -15970,12 +16103,18 @@ async def get_targets(period: str, authorization: str = Header(default=""), org_
 
 
 @router.put("/targets/{period}")
-async def save_target(period: str, body: dict, org_id: str = ORG_ID):
-    """Upsert one store's monthly target config (Settings page save)."""
+async def save_target(period: str, body: dict, authorization: str = Header(default=""),
+                      org_id: str = ORG_ID):
+    """Upsert one store's monthly target config (Target Settings save, and the DM per-store
+    drill-down under My Targets).
+
+    GATED (2026-08-03) on the EXISTING 'targets' settings area + the caller's own store span — see
+    `_require_target_edit`. This endpoint previously took no Authorization header at all."""
     client = sb()
     code = str(body.get('store_code', '') or '').strip()
     if not code:
         raise HTTPException(400, "store_code required")
+    _require_target_edit(authorization, org_id, code)
     pm = parse_period(period)
     row = {
         'org_id': org_id, 'store_code': code, 'period': period,
@@ -15996,12 +16135,18 @@ async def save_target(period: str, body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/targets/{period}/roll-forward")
-async def roll_forward_targets(period: str, body: dict = None, org_id: str = ORG_ID):
+async def roll_forward_targets(period: str, body: dict = None,
+                               authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Persist the month-over-month carry-forward into `period`: each store's prior-month target
     carried forward, or +10% where last month's target was met (see _carry_forward_map). By default
     only stores WITHOUT a target row for this period are written (never overwrites a hand-set target);
-    pass {overwrite:true} to refresh them all. Stores with nothing to carry (all-zero) are skipped."""
+    pass {overwrite:true} to refresh them all. Stores with nothing to carry (all-zero) are skipped.
+
+    GATED (2026-08-03) on the same EXISTING 'targets' settings area as the single-store save — this is
+    a bulk write of the same rows and had no permission check at all. No store code is passed, so only
+    the settings-area half applies; the per-store span half is enforced on the row loop below."""
     client = sb()
+    _require_target_edit(authorization, org_id)
     pm = parse_period(period)
     overwrite = bool((body or {}).get('overwrite'))
     existing = {str(r.get('store_code', '')).upper()
@@ -16014,12 +16159,22 @@ async def roll_forward_targets(period: str, body: dict = None, org_id: str = ORG
     cf = _carry_forward_map(client, org_id, period, stores)
     prior = cf['prior_period']
     written, skipped = [], 0
+    try:
+        from app.modules.storeops.router import scope_keyset as _rf_scope, in_keyset as _rf_in
+        _rf_ks = _rf_scope(authorization, org_id)   # None = unrestricted (admin / enforcement off)
+    except Exception:
+        _rf_ks, _rf_in = None, (lambda *a, **k: True)
     for s in stores:
         code = str(s.get('store_code', '') or '').strip()
         if not code:
             continue
         cu = code.upper()
         if cu in existing and not overwrite:
+            skipped += 1
+            continue
+        # A span-restricted caller rolls forward only their OWN stores; an unrestricted admin (ks None)
+        # rolls the whole org exactly as before.
+        if _rf_ks is not None and not _rf_in(_rf_ks, code):
             skipped += 1
             continue
         cfrow = cf['by_code'].get(cu, {})
@@ -16449,8 +16604,36 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     elif setup_hint_unmapped:
         # PARTIAL mismatch — the loud "nothing matched" hint above never fires, so this was silent.
         setup_hint.append(setup_hint_unmapped)
+    # ── AREA / SPAN ROLL-UP (owner 2026-08-03) ────────────────────────────────────────────────────
+    # "the dm should have a collective target for all the stores assigned to them with a drill down for
+    # each area assigning them per store."
+    #
+    # `out` is ALREADY exactly the caller's stores: the RULE FIVE filters and the RBAC span keyset have
+    # both been applied above. So the collective total is a straight sum of the very rows the
+    # drill-down renders — aggregate == Σ per-store BY CONSTRUCTION, and a span-restricted viewer's
+    # total can only ever cover their own stores. An unrestricted admin gets the whole org's roll-up,
+    # unchanged from what the store rows already said.
+    #
+    # PURELY ADDITIVE: `stores` / `filters` / `applied` / `trending` / `setup_hint` are untouched, so
+    # every existing consumer of this endpoint is byte-identical.
+    #
+    # SCOPE SOURCE: `scope_keyset` — the SAME span mechanism every other reporting surface here uses.
+    # mod-platform-core is splitting reporting-vs-scheduling scope in a parallel package; this surface
+    # consumes whatever `scope_keyset` resolves to, so that change composes automatically with no edit
+    # here.
+    collective = targets_engine.aggregate_stores(out)
+    can_edit_targets, _caller = _can_edit_targets(authorization, org_id)
+    scope_block = {
+        'restricted': ks is not None,          # False = unrestricted admin / RBAC off
+        'self_scoped': bool(is_self),
+        'stores_in_scope': len(out),
+        'is_multi_store': len(out) > 1,        # the DM/area case the collective view is for
+        'can_edit_targets': bool(can_edit_targets),
+        'editable_store_codes': ([s.get('store_code') for s in out] if can_edit_targets else []),
+    }
     return {'period': period, 'today': today.isoformat(), 'stores': out,
-            'filters': filters, 'applied': applied, 'trending': trend_meta, 'setup_hint': setup_hint}
+            'filters': filters, 'applied': applied, 'trending': trend_meta,
+            'setup_hint': setup_hint, 'collective': collective, 'scope': scope_block}
 
 
 # KPI → commission tier inputs (mirrors calculator.py KPI defaults).
