@@ -59,6 +59,12 @@ class FakeQuery:
     def order(self, *_a, **_k):
         return self
 
+    def limit(self, *_a, **_k):
+        # app.core.scope.market_index() (2026-08-03 storeops-scope-wiring) calls .limit(5000) on
+        # every read — the real supabase-py client supports it, so the fake must too or every
+        # market_index() read silently degrades to empty via its try/except I/O guard.
+        return self
+
     def _matches(self, row):
         if not all(str(row.get(k)) == str(v) for _, k, v in self.filters):
             return False
