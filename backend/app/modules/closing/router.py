@@ -616,6 +616,15 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
     def blank():
         d = {k: 0.0 for k in MONEY}
         d.update({k: 0 for k in COUNT})
+        # retail-ops-22 (OWNER DIRECTIVE 2026-08-03 "Daily Closing dashboard should also show the epay
+        # bill payments"): the dashboard's cashTotal/cardTotal already read `epay_cash`/`epay_cc` (the
+        # legacy columns, MONEY tuple above) but never rendered them as their own figure — and for a
+        # mig103+ row those legacy columns are ALWAYS ZEROED (create_row folds epay into store_cash/
+        # t_cash instead; see `_row_epay_display`'s docstring), so naively surfacing epay_cash/epay_cc
+        # alone would show $0 for a modern tenant. `epay_on_cash`/`epay_on_cc` are the SAME era-aware
+        # display figure `/closing/summary` (DM verify) already proves correct — additive-only, never
+        # read by any recon/gate formula, never changes what store_cash/store_cc/totals compute.
+        d.update({"epay_on_cash": 0.0, "epay_on_cc": 0.0})
         d.update({"rows": 0, "_days": set()})
         return d
 
@@ -648,11 +657,14 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
         r_ = by_rep.setdefault(rep_key, {**blank(), "employee_name": (r.get("employee_name") or "—").strip(),
                                          "store_code": raw_code,
                                          "store_address": meta.get("address") or r.get("store_address"), "market": mk_bucket})
+        epd = _row_epay_display(r)   # {"cash":..., "cc":...} — era-aware, see blank()'s comment above
         for agg in (s_, r_, grand):
             for k in MONEY:
                 agg[k] = round(agg[k] + _f(r.get(k)), 2)
             for k in COUNT:
                 agg[k] += int(r.get(k) or 0)
+            agg["epay_on_cash"] = round(agg["epay_on_cash"] + epd["cash"], 2)
+            agg["epay_on_cc"] = round(agg["epay_on_cc"] + epd["cc"], 2)
             agg["rows"] += 1
             if r.get("close_date"):
                 agg["_days"].add(str(r.get("close_date")))

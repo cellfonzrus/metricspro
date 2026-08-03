@@ -796,6 +796,67 @@ try:
 finally:
     oc.detect_missed_dm_verifies = _orig_detect_n2
 
+# ═══ O. retail-ops-22 (OWNER DIRECTIVE 2026-08-03 "Daily Closing dashboard should also show the epay
+#      bill payments"): /closing/rollup gains the SAME era-aware epay_on_cash/epay_on_cc display total
+#      section L above already proved correct for /closing/summary — additive, byte-identical existing
+#      fields, never fed into store_cash/store_cc/any recon math ══════════════════════════════════════
+st = fresh_store(); wire(st)
+modern_epay_o = dc_row(id="modern_epay_o", store_code="S1", employee_name="Jane Rep",
+                       t_cash=90.0, t_credit=0.0, store_cash=90.0, store_cc=0.0,
+                       epay_cash=0.0, epay_cc=0.0, epay_on_cash=70.0, epay_on_credit=0.0, epay_on_acima=0.0)
+st["daily_closing"] = [modern_epay_o]
+roll_o = cr.closing_rollup(period="2026-07", authorization=AUTH_NONE, org_id=HOUSE)
+check("O1. rollup totals.epay_cash stays 0 (legacy column untouched, money_recon still reads it)",
+      roll_o["totals"]["epay_cash"] == 0.0, str(roll_o["totals"]["epay_cash"]))
+check("O2. rollup totals.epay_on_cash carries the REAL $70 (previously invisible on the dashboard)",
+      roll_o["totals"]["epay_on_cash"] == 70.0, str(roll_o["totals"]["epay_on_cash"]))
+check("O3. rollup totals.store_cash/store_cc UNCHANGED (byte-identical — nothing double-counted)",
+      roll_o["totals"]["store_cash"] == 90.0 and roll_o["totals"]["store_cc"] == 0.0,
+      str((roll_o["totals"]["store_cash"], roll_o["totals"]["store_cc"])))
+by_store_o = roll_o["by_store"][0]
+check("O4. by_store row ALSO carries epay_on_cash (dashboard's By-store tab can show it per store)",
+      by_store_o["epay_on_cash"] == 70.0, str(by_store_o))
+by_rep_o = roll_o["by_rep"][0]
+check("O5. by_rep row ALSO carries epay_on_cash (dashboard's By-rep tab can show it per rep)",
+      by_rep_o["epay_on_cash"] == 70.0, str(by_rep_o))
+
+# Legacy pre-mig103 row -> epay_on_cash/cc fall back to the real legacy epay_cash/epay_cc (same
+# era-fallback section L proved for /closing/summary), and multiple rows SUM correctly.
+st2 = fresh_store(); wire(st2)
+legacy_epay_o = dc_row(id="legacy_epay_o", store_code="S1", employee_name="Jane Rep",
+                       t_cash=None, t_credit=None, t_ext_cc=None, t_gift=None, t_store_acct=None,
+                       t_zelle=None, t_acima=None, store_cash=80.0, store_cc=20.0,
+                       epay_cash=30.0, epay_cc=5.0, other_account=0.0)
+modern_epay_o2 = dc_row(id="modern_epay_o2", store_code="S1", employee_name="John Rep",
+                        t_cash=10.0, t_credit=0.0, store_cash=10.0, store_cc=0.0,
+                        epay_cash=0.0, epay_cc=0.0, epay_on_cash=4.0, epay_on_credit=1.0, epay_on_acima=0.0)
+st2["daily_closing"] = [legacy_epay_o, modern_epay_o2]
+roll_o2 = cr.closing_rollup(period="2026-07", authorization=AUTH_NONE, org_id=HOUSE)
+check("O6. mixed legacy+modern rows SUM correctly: epay_on_cash = 30 (legacy fallback) + 4 (modern) = 34",
+      roll_o2["totals"]["epay_on_cash"] == 34.0, str(roll_o2["totals"]["epay_on_cash"]))
+check("O7. epay_on_cc = 5 (legacy epay_cc) + 1 (modern epay_on_credit + epay_on_acima) = 6",
+      roll_o2["totals"]["epay_on_cc"] == 6.0, str(roll_o2["totals"]["epay_on_cc"]))
+check("O8. epay_cash (legacy field) is unaffected by the new field's presence — still 30 (only the "
+      "legacy row had a real value there)", roll_o2["totals"]["epay_cash"] == 30.0, str(roll_o2["totals"]["epay_cash"]))
+
+# date_from/date_to range mode gets the same fields too (not just period= mode).
+st3 = fresh_store(); wire(st3)
+st3["daily_closing"] = [dc_row(id="range_epay", store_code="S1", employee_name="Jane Rep",
+                               close_date="2026-07-10", t_cash=50.0, store_cash=50.0,
+                               epay_cash=0.0, epay_cc=0.0, epay_on_cash=15.0, epay_on_credit=0.0, epay_on_acima=0.0)]
+roll_o3 = cr.closing_rollup(date_from="2026-07-01", date_to="2026-07-31", authorization=AUTH_NONE, org_id=HOUSE)
+check("O9. date_from/date_to range mode also carries epay_on_cash (not just period= mode)",
+      roll_o3["totals"]["epay_on_cash"] == 15.0, str(roll_o3["totals"]["epay_on_cash"]))
+
+# A row with no epay at all -> epay_on_cash/cc are 0.0, not missing/None (dashboard fmt() needs a number).
+st4 = fresh_store(); wire(st4)
+st4["daily_closing"] = [dc_row(id="no_epay", store_code="S1", employee_name="Jane Rep",
+                               t_cash=100.0, store_cash=100.0, epay_cash=0.0, epay_cc=0.0)]
+roll_o4 = cr.closing_rollup(period="2026-07", authorization=AUTH_NONE, org_id=HOUSE)
+check("O10. no-epay row -> totals.epay_on_cash/cc are 0.0 (present, numeric, not None/missing)",
+      roll_o4["totals"]["epay_on_cash"] == 0.0 and roll_o4["totals"]["epay_on_cc"] == 0.0,
+      str((roll_o4["totals"].get("epay_on_cash"), roll_o4["totals"].get("epay_on_cc"))))
+
 # ── Summary ──────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:
