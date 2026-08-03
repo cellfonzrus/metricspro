@@ -76,6 +76,16 @@ export default function ClosingDashboard() {
   const byRep: any[] = data?.by_rep || []
   const cashTotal = (r: any) => (r.store_cash || 0) + (r.epay_cash || 0)
   const cardTotal = (r: any) => (r.store_cc || 0) + (r.epay_cc || 0)
+  // retail-ops-22 (OWNER DIRECTIVE 2026-08-03 "Daily Closing dashboard should also show the epay bill
+  // payments"): `epay_cash`/`epay_cc` above are the LEGACY columns folded into cashTotal/cardTotal —
+  // create_row always zeroes them for a modern (mig103+) row, so they alone would show $0 forever.
+  // `epay_on_cash`/`epay_on_cc` (GET /closing/rollup, no new backend read — same daily_closing rows
+  // already loaded, just aggregated with the era-aware helper `/closing/summary`'s DM Verify page
+  // already proved correct) are the REAL figure for both eras. These are a SUBSET of cash/credit
+  // already counted above — display-only, never added into cashTotal/cardTotal or any other total.
+  const epayCash = (r: any) => r.epay_on_cash || 0
+  const epayCard = (r: any) => r.epay_on_cc || 0
+
   const cov = data ? `${data.verified_keys}/${data.submitted_keys}` : '—'
 
   const storeColumns: ExportColumn[] = useMemo(() => [
@@ -84,6 +94,8 @@ export default function ClosingDashboard() {
     { header: 'Days', field: 'days', type: 'number', get: (r: any) => r.days },
     { header: 'Cash $', field: 'cash', money: true, get: (r: any) => cashTotal(r) },
     { header: 'Credit $', field: 'credit', money: true, get: (r: any) => cardTotal(r) },
+    { header: 'ePay Cash $', field: 'epay_cash', money: true, get: (r: any) => epayCash(r) },
+    { header: 'ePay Credit $', field: 'epay_credit', money: true, get: (r: any) => epayCard(r) },
     { header: 'Accessory $', field: 'acc_sale', money: true, get: (r: any) => r.acc_sale },
     { header: 'Other $', field: 'other_account', money: true, get: (r: any) => r.other_account },
     { header: 'Upgrades #', field: 'upgrade_count', type: 'number', get: (r: any) => r.upgrade_count },
@@ -99,6 +111,8 @@ export default function ClosingDashboard() {
     { header: 'Days', field: 'days', type: 'number', get: (r: any) => r.days },
     { header: 'Cash $', field: 'cash', money: true, get: (r: any) => cashTotal(r) },
     { header: 'Credit $', field: 'credit', money: true, get: (r: any) => cardTotal(r) },
+    { header: 'ePay Cash $', field: 'epay_cash', money: true, get: (r: any) => epayCash(r) },
+    { header: 'ePay Credit $', field: 'epay_credit', money: true, get: (r: any) => epayCard(r) },
     { header: 'Accessory $', field: 'acc_sale', money: true, get: (r: any) => r.acc_sale },
     { header: 'Other $', field: 'other_account', money: true, get: (r: any) => r.other_account },
     { header: 'Upgrades #', field: 'upgrade_count', type: 'number', get: (r: any) => r.upgrade_count },
@@ -150,6 +164,8 @@ export default function ClosingDashboard() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginBottom: 18 }}>
             <Tile label="Cash collected" value={fmt(cashTotal(t))} />
             <Tile label="Credit collected" value={fmt(cardTotal(t))} />
+            <Tile label="ePay cash" value={fmt(epayCash(t))} sub="already inside Cash collected" />
+            <Tile label="ePay credit" value={fmt(epayCard(t))} sub="already inside Credit collected" />
             <Tile label="Accessory sales" value={fmt(t.acc_sale)} />
             <Tile label="Other (Zelle/CashApp)" value={fmt(t.other_account)} />
             <Tile label="Activations" value={`${(t.new_line_count || 0) + (t.postpaid_count || 0)}`} sub={`${t.new_line_count || 0} new · ${t.postpaid_count || 0} postpaid`} />
