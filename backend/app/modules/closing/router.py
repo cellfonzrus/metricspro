@@ -597,6 +597,17 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
         market_set = None
     store_set = _resolve_store_filter(stores)
     rep_set = _resolve_rep_filter(reps)
+    # retail-ops-24 (OWNER BUG REPORT 2026-08-03): the manager-span keyset used to be applied only to
+    # `by_store`/`by_rep` AFTER `grand` (the tiles) was already accumulated over every kept row — a
+    # span-restricted viewer (e.g. a DM) saw ORG-WIDE money in the top tiles while the table beneath
+    # showed only their stores (observed: ePay-cash tile $174,227 vs table footer $135,106, delta =
+    # out-of-span stores — a real privacy/span leak, not just a cosmetic mismatch). Fixed by resolving
+    # the keyset here, BEFORE the accumulation loop, and gating row admission on it in the loop itself
+    # (same place market_set/store_set/rep_set already gate) — so `grand`/`by_store`/`by_rep`/
+    # `verified_keys`/`submitted_keys` are all computed over the exact same visible row set. An
+    # unscoped caller (`ks is None`) is byte-identical to before (in_keyset() is a no-op unrestricted).
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
 
     # Verification coverage — filter by period prefix (period mode) or the explicit range (range mode).
     # "period + '-31'" would make an invalid date (e.g. 2026-06-31) that Postgres rejects on the date
@@ -649,6 +660,17 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
             continue
         if rep_set is not None and (r.get("employee_name") or "").strip().casefold() not in rep_set:
             continue
+        # retail-ops-24: same keyset a scoped viewer's `by_store`/`by_rep` rows must already satisfy —
+        # gating HERE (before `grand` sees the row) is what makes tiles == table footer for every
+        # viewer. Matches on store_code OR store_address, same as the bs/br filter below used to.
+        # A row with no store identity at all (`raw_code` blank, no resolvable address) can never
+        # match a real key in the keyset, so `in_keyset` returns False and a SCOPED viewer never sees
+        # it — deliberate: a span keyset is a privacy boundary, and an identity-less row is not
+        # provably inside a DM's span, so it must not silently inflate a scoped viewer's totals.
+        # (An unscoped viewer is unaffected — `ks is None` short-circuits `in_keyset` to True.)
+        row_address = meta.get("address") or r.get("store_address")
+        if not in_keyset(ks, raw_code, row_address):
+            continue
         kept_rows.append(r)
         s_ = by_store.setdefault(key, {**blank(), "store_code": raw_code,
                                        "store_address": meta.get("address") or r.get("store_address"),
@@ -677,11 +699,9 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
     bs = sorted((finalize(v) for v in by_store.values()),
                 key=lambda s: str(s.get("store_address") or s.get("store_name") or ""))
     br = sorted((finalize(v) for v in by_rep.values()), key=lambda s: -s.get("rows", 0))
-    from app.modules.storeops.router import scope_keyset, in_keyset
-    ks = scope_keyset(authorization, org_id)
-    if ks is not None:
-        bs = [s for s in bs if in_keyset(ks, s.get("store_code"), s.get("store_address"))]
-        br = [s for s in br if in_keyset(ks, s.get("store_code"), s.get("store_address"))]
+    # retail-ops-24: keyset scoping now happens up in the accumulation loop (row admission), so `bs`/
+    # `br` are already restricted to the caller's span — no second filter needed here, and `grand`/
+    # `verified_keys`/`submitted_keys` (computed from the SAME kept_rows) are consistent with them.
     return {
         "period": period, "date_from": date_from, "date_to": date_to,
         "by_store": bs, "by_rep": br, "totals": finalize(grand),
