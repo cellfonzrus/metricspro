@@ -37,6 +37,30 @@ else earliest-created). A single-membership login (which includes every mig-088 
 resolves to its one org regardless of the header — so nothing changes for them. Super-admins still
 bypass (no rewrite, client org_id honored). The token→identity cache holds the whole membership set,
 so switching tenants (a new header value on the same token) needs no re-auth and no cache bust.
+
+2026-08-03 auth-ux hardening (filed by tenant-triage after the house-org TEST DM incident) — TELL
+THE TRUTH ABOUT *WHY* IDENTITY FAILED:
+`_resolve_identity` used to wrap token verification AND the membership fetch in ONE broad
+`except Exception -> (False, ...)`, so an infrastructure hiccup (stale singleton pool,
+DatabaseUnavailable, PostgREST down) came back to the user as 401 "authentication required" and was
+never logged anywhere. Two consequences, both fixed here:
+
+  • HONESTY. Token verification failing is a 401 (byte-identical body, unchanged). The membership
+    store being UNREADABLE is now a 503 with its own message + a best-effort core.failure_log row,
+    so an outage stops looking like "your password is wrong" / "the app is broken".
+  • ISOLATION. `_fetch_memberships` used to swallow its LAST fallback's error and return `[]`. An
+    empty membership set means "verified user with no app_users row" ⇒ NO org_id rewrite ⇒ the
+    CLIENT-SUPPLIED org_id is honored. So a transient failure to read app_users silently degraded
+    tenant scoping to "whatever org_id the caller passed". That fallback now raises.
+
+The column-ladder in `_fetch_memberships` still exists for its original purpose (mig 706/711 columns
+un-run); only the FINAL, pre-706 `org_id,super_admin` select — which cannot fail for a schema reason
+— is treated as infrastructure.
+
+  • KILL SWITCH: env IDENTITY_BACKEND_503 (default ON when unset). IDENTITY_BACKEND_503=0 restores
+    the pre-2026-08-03 behaviour EXACTLY (membership-read failure -> `[]` -> pass-through), via a
+    single Railway env change and no code rollback. Same break-glass posture as REQUIRE_AUTH and
+    TWOFA_ENFORCE: a deploy must never be able to strand the operator.
 """
 import os
 import time
@@ -115,6 +139,25 @@ def _enabled() -> bool:
 def _require_auth() -> bool:
     """Kill switch. Default ON when unset; REQUIRE_AUTH=0/false/no/off reverts to old pass-through."""
     return os.environ.get("REQUIRE_AUTH", "1").lower() not in ("0", "false", "no", "off")
+
+
+def _identity_503() -> bool:
+    """Break-glass for the 2026-08-03 honesty change. Default ON when unset; IDENTITY_BACKEND_503=0
+    restores the old swallow-and-return-[] behaviour byte-for-byte (see module docstring)."""
+    return os.environ.get("IDENTITY_BACKEND_503", "1").lower() not in ("0", "false", "no", "off")
+
+
+class IdentityBackendUnavailable(Exception):
+    """The MEMBERSHIP STORE could not be read — as distinct from the token being bad.
+
+    Raised only after the bearer token has ALREADY verified, so it can never be confused with an
+    authentication failure. The middleware turns it into a 503; it must never reach the app (the one
+    call site catches it), and it never grants access: like the 401 path, no request carrying it ever
+    reaches a handler, so this is strictly fail-closed."""
+
+    def __init__(self, original: BaseException) -> None:
+        self.original = original
+        super().__init__(str(original))
 
 
 # ── 2FA enforcement (auth-hardening 2026-07-17) — ADDITIVE, super-admin always bypassed ─────────────
@@ -200,8 +243,20 @@ def _fetch_memberships(client, uid):
     """Every app_users row for this auth_id, earliest first. Also selects role + twofa_enabled (used by
     the 2FA gate). Tolerant of post-706/711 columns being un-run: falls back through progressively
     leaner column lists so a missing column never breaks identity resolution (pre-706 there is at most
-    one row anyway; a missing twofa_enabled just means 2FA-off)."""
-    tbl = client.schema("storeops").table("app_users")
+    one row anyway; a missing twofa_enabled just means 2FA-off).
+
+    2026-08-03: the LADDER still swallows-and-retries (that is what makes an un-run mig 706/711
+    harmless), but the FINAL rung — a pre-706 `org_id,super_admin` select that cannot fail for a
+    schema reason — now RAISES IdentityBackendUnavailable instead of returning `[]`. Returning `[]`
+    there was read upstream as "verified user with no app_users row", which skips the org_id rewrite
+    and honors the CLIENT-SUPPLIED org_id: a DB hiccup used to silently downgrade tenant isolation.
+    IDENTITY_BACKEND_503=0 restores the old `[]` exactly."""
+    try:
+        tbl = client.schema("storeops").table("app_users")
+    except Exception as exc:               # cannot even build the query → the client itself is dead
+        if not _identity_503():
+            return []
+        raise IdentityBackendUnavailable(exc)
     for cols in ("org_id,super_admin,is_default_org,role,twofa_enabled",
                  "org_id,super_admin,is_default_org,role",
                  "org_id,super_admin,is_default_org"):
@@ -211,8 +266,10 @@ def _fetch_memberships(client, uid):
             continue
     try:
         return (tbl.select("org_id,super_admin").eq("auth_id", uid).execute().data) or []
-    except Exception:
-        return []
+    except Exception as exc:
+        if not _identity_503():
+            return []                      # break-glass: pre-2026-08-03 behaviour, byte-for-byte
+        raise IdentityBackendUnavailable(exc)
 
 
 def _resolve_identity(token: str):
@@ -227,20 +284,43 @@ def _resolve_identity(token: str):
       (True,  False, (),         None,…) — verified user with NO app_users row → no rewrite.
       (False, False, (),         None,…) — token missing/expired/unverifiable → caller must REJECT.
 
+    RAISES `IdentityBackendUnavailable` (2026-08-03) when the token verified but the membership
+    store could not be READ — the caller answers 503, never 401. It is never raised for a
+    token problem, and never when there is no token at all (the caller skips this function).
+
     Blocking — call via to_thread. Negative results are NOT cached, so a transient Supabase hiccup
-    never pins a good user out for the TTL, and an expired token re-checks on refresh."""
+    never pins a good user out for the TTL, and an expired token re-checks on refresh. Nor is an
+    IdentityBackendUnavailable cached: the next request re-tries, so recovery is automatic."""
     now = time.time()
     hit = _cache.get(token)
     if hit and hit[1] > now:
         return hit[0]
+    # ── STEP 1 — TOKEN VERIFICATION. Missing / expired / forged / unverifiable, or the auth service
+    # itself refusing: ALL of these are genuine authentication failures and return the SAME
+    # unauthenticated tuple this function has always returned, so the caller emits the byte-identical
+    # 401. This block is deliberately as broad as the old one — nothing about 401 behaviour moves.
     try:
-        from app.core.database import get_supabase_admin, get_supabase
+        from app.core.database import get_supabase_admin
         resp = get_supabase_admin().auth.get_user(token)
         user = getattr(resp, "user", None) or resp
         uid = getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else None)
-        if not uid:
-            return (False, False, (), None, {}, None)   # token did not resolve → not authenticated
-        rows = _fetch_memberships(get_supabase(), uid)
+    except Exception:
+        return (False, False, (), None, {}, None)   # verification error / bad token → unauthenticated
+    if not uid:
+        return (False, False, (), None, {}, None)   # token did not resolve → not authenticated
+    # ── STEP 2 — MEMBERSHIP FETCH. The token is GOOD from here on, so a failure below is NOT an
+    # authentication problem: it is the membership store being unreachable. Raise, don't lie.
+    try:
+        from app.core.database import get_supabase
+        client = get_supabase()
+    except Exception as exc:
+        if not _identity_503():
+            return (False, False, (), None, {}, None)
+        raise IdentityBackendUnavailable(exc)
+    rows = _fetch_memberships(client, uid)          # may raise IdentityBackendUnavailable
+    # ── STEP 3 — pure assembly over `rows`. Cannot touch I/O; an unexpected shape here falls back to
+    # the historical unauthenticated tuple rather than escaping as a 500.
+    try:
         super_admin = any(r.get("super_admin") for r in rows)
         member_orgs = tuple(r.get("org_id") for r in rows if r.get("org_id"))
         # default membership: the row flagged is_default_org, else the earliest (rows are ordered).
@@ -248,11 +328,11 @@ def _resolve_identity(token: str):
                            (member_orgs[0] if member_orgs else None))
         org_info = {r.get("org_id"): {"role": r.get("role"), "twofa_enabled": bool(r.get("twofa_enabled"))}
                     for r in rows if r.get("org_id")}
-        result = (True, super_admin, member_orgs, default_org, org_info, uid)
-        _cache[token] = (result, now + _TTL)
-        return result
     except Exception:
-        return (False, False, (), None, {}, None)   # verification error / bad token → unauthenticated
+        return (False, False, (), None, {}, None)
+    result = (True, super_admin, member_orgs, default_org, org_info, uid)
+    _cache[token] = (result, now + _TTL)
+    return result
 
 
 def _pick_active_org(member_orgs, default_org, requested):
@@ -272,6 +352,60 @@ async def _reject_401(send):
     await send({"type": "http.response.body", "body": body})
 
 
+async def _reject_503(send):
+    """Identity could not be resolved because the MEMBERSHIP STORE is unreachable — the caller's
+    token was fine. Distinct body + code so the UI (and a human reading a log) can tell an outage
+    apart from a dead session; Retry-After mirrors db_resilience.DatabaseUnavailable."""
+    body = (b'{"detail":"Your sign-in could not be verified right now because a backend service is '
+            b'temporarily unavailable. Nothing was changed - please retry in a moment.",'
+            b'"code":"identity_backend_unavailable"}')
+    await send({"type": "http.response.start", "status": 503,
+                "headers": [(b"content-type", b"application/json"),
+                            (b"retry-after", b"1"),
+                            (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
+
+
+# Platform org the middleware files its own outage rows under (super-admins see every org's failures;
+# attributing them to the CALLER-DECLARED org_id would let an unauthenticated caller spam another
+# tenant's Failure Logs page). Env-overridable rather than hard-pinned.
+_PLATFORM_ORG_ID = os.environ.get("PLATFORM_ORG_ID", "00000000-0000-0000-0000-000000000001")
+_OUTAGE_LOG_MIN_GAP = 60.0        # seconds; one row per minute, not one per request
+_last_outage_log = [0.0]          # list = mutable module state without a `global`
+
+
+def _log_identity_outage(path: str, exc: BaseException) -> None:
+    """Best-effort core.failure_log row for a membership-store outage. THROTTLED: during an outage
+    every in-flight request would otherwise try to write, hammering the very database that just
+    failed. Follows the existing core write pattern (run_for_tenant._log_failure / router._masked_500)
+    and is wrapped end-to-end in try/except — a missing mig 112, or the DB still being down, must
+    never turn this into a second failure. Writes NOTHING else, ever."""
+    now = time.time()
+    if now - _last_outage_log[0] < _OUTAGE_LOG_MIN_GAP:
+        return
+    _last_outage_log[0] = now
+    try:
+        from app.core.database import get_supabase
+        get_supabase().schema("core").table("failure_log").insert({
+            "org_id": _PLATFORM_ORG_ID,
+            "category": "system_error",
+            "severity": "error",
+            "source": "core/tenant_middleware:_resolve_identity",
+            "message": ("Sign-in could not be verified: the membership store (storeops.app_users) "
+                        "was unreachable. Callers received 503, not 401.")[:1000],
+            "detail": {"path": str(path)[:300], "error": str(exc)[:1200],
+                       "error_type": type(exc).__name__,
+                       "throttle_seconds": _OUTAGE_LOG_MIN_GAP},
+            "remediation": ("This is an infrastructure fault, not a bad password. Check the database / "
+                            "PostgREST health and the connection pool; requests recover on their own "
+                            "once it does. Set IDENTITY_BACKEND_503=0 only as a break-glass - it "
+                            "restores the old behaviour, in which this fault silently stopped "
+                            "enforcing tenant scoping."),
+        }).execute()
+    except Exception:
+        pass    # the store that just failed is the store we are logging to - never raise from here
+
+
 class TenantScopeMiddleware:
     """Pure ASGI middleware (reliable scope mutation). Forces org_id=<token's org> on the query
     string, and (when REQUIRE_AUTH is on) rejects unauthenticated hits to non-public routes."""
@@ -287,9 +421,17 @@ class TenantScopeMiddleware:
         headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
         auth = headers.get("authorization", "")
         token = auth.split(" ", 1)[1].strip() if auth.lower().startswith("bearer ") else ""
-        ok, super_admin, member_orgs, default_org, org_info, uid = (
-            (await asyncio.to_thread(_resolve_identity, token)) if token
-            else (False, False, (), None, {}, None))
+        try:
+            ok, super_admin, member_orgs, default_org, org_info, uid = (
+                (await asyncio.to_thread(_resolve_identity, token)) if token
+                else (False, False, (), None, {}, None))
+        except IdentityBackendUnavailable as exc:
+            # The token verified; the membership store did not answer. Fail CLOSED with an honest
+            # 503 (the request still never reaches a handler) instead of the old, silent 401.
+            # NOTE: with no bearer token _resolve_identity is not called at all, so a tokenless
+            # request can never take this branch - it still gets the byte-identical 401 below.
+            await asyncio.to_thread(_log_identity_outage, path, exc)
+            return await _reject_503(send)
         if not ok:
             # No valid identity. Kill switch OFF (REQUIRE_AUTH=0) ⇒ old pass-through (client org_id
             # honored). Kill switch ON (default) ⇒ reject — no request reaches a tenant's data
