@@ -4248,20 +4248,14 @@ def caller_scope(authorization: str, org_id: str = ORG_ID):
 
 def scope_keyset(authorization: str, org_id: str = ORG_ID):
     """None = unrestricted; else a set of UPPER store keys (store_codes + their addresses) the caller
-    may see — so rows whose store field is EITHER a code or an address still match."""
+    may see — so rows whose store field is EITHER a code or an address still match. caller_scope()
+    is UNCHANGED; only the widening (code -> code+address) now runs off app.core.scope's cached,
+    unioned market index instead of a fresh storeops.stores scan per request — same contract, and it
+    additionally picks up the address for a store_code that exists only in commcalc.store_mapping."""
     codes = caller_scope(authorization, org_id)
     if codes is None:
         return None
-    keys = {c.strip().upper() for c in codes}
-    if keys:
-        meta = sb().table("stores").select("store_code,address").eq("org_id", org_id).execute().data or []
-        for s in meta:
-            sc = str(s.get("store_code") or "").strip().upper()
-            if sc in keys:
-                ad = str(s.get("address") or "").strip().upper()
-                if ad:
-                    keys.add(ad)
-    return keys
+    return _cscope.widen_codes_to_keys(get_supabase(), org_id, codes)
 
 
 def in_keyset(keyset, *vals) -> bool:
