@@ -1,7 +1,8 @@
 'use client'
 import { useState, useEffect, Fragment } from 'react'
 import { api } from '@/lib/client'
-import { REPORT_AREAS, DATA_GRANTS, NAV, reportAreaForPath } from '@/lib/rbac'
+import { REPORT_AREAS, DATA_GRANTS, NAV, reportAreaForPath, canSeeItem, navBlockReason,
+         schedulingReach, type Permissions } from '@/lib/rbac'
 import { ExportButtons } from '@/lib/export'
 
 // One-click templates for the roles most tenants need but the base 4 don't include.
@@ -32,6 +33,11 @@ const SCOPES = [
   { v: 'market', l: 'Their market(s)' },
   { v: 'store', l: 'Their store' },
   { v: 'self', l: 'Only their own data' },
+]
+// SCHEDULING reach — separate from the REPORTING scope above. See backend app/core/scope.py.
+const SCHEDULING_REACHES = [
+  { v: 'org', l: 'Any employee in the company' },
+  { v: 'span', l: 'Only employees in their stores' },
 ]
 // Employee Dashboard widgets this role can see on their own dashboard (default on).
 const EMP_WIDGETS = [
@@ -100,6 +106,7 @@ export default function RolesAdminPage() {
   const [stores, setStores] = useState<{ code: string; label: string }[]>([])  // store dropdown source
   const [newRole, setNewRole] = useState({ name: '', display: '' })            // add-a-role form
   const [settingAreas, setSettingAreas] = useState<{ key: string; label: string }[]>([])  // per-setting edit toggles
+  const [scopePrev, setScopePrev] = useState<Record<string, any>>({})   // email → /core/scope-preview result
 
   async function loadAll() {
     setLoading(true)
@@ -112,9 +119,17 @@ export default function RolesAdminPage() {
       setEmps(e.employees || [])
       setWithEmail(e.with_email || 0)
       try {
-        const st = await api('/api/v1/storeops/stores')
-        setMarkets(Array.from(new Set((st || []).map((s: any) => (s.market || '').trim()).filter(Boolean))).sort() as string[])
-        setStores((st || [])
+        // GRANT universe — deliberately GET /core/markets and NOT GET /storeops/stores.
+        // /storeops/stores is (a) SPAN-SCOPED, so whoever hands out grants could only offer the
+        // markets they personally cover, and (b) sourced from storeops.stores.market ALONE, while
+        // the tenant's real market vocabulary is the UNION of storeops.stores.market and
+        // commcalc.store_mapping.market. Owner, 2026-08-03: "the option to select PA from the roles
+        // and config is not there" — PA existed only in commcalc.store_mapping. /core/markets is
+        // that union, and it is THE SAME source the backend uses to RESOLVE a market grant into its
+        // member stores, so this picker can never offer a market the resolver cannot bind.
+        const gu = await api('/api/v1/core/markets')
+        setMarkets((gu?.markets || []) as string[])
+        setStores(((gu?.stores || []) as any[])
           .map((s: any) => ({ code: String(s.store_code || '').trim(), label: `${s.store_code}${s.address ? ' — ' + String(s.address).substring(0, 26) : ''}` }))
           .filter((s: any) => s.code)
           .sort((a: any, b: any) => a.code.localeCompare(b.code)))
@@ -154,15 +169,17 @@ export default function RolesAdminPage() {
     if (r && Object.keys(r).length) return !!r[key]
     return (p.scope || 'all') === 'all'
   }
-  // Effective visibility of a single nav function for a role: explicit per-function override wins,
-  // else the module gate (+ report-area gate for report pages). Mirrors canSeeItem in rbac.ts.
+  // Effective visibility of a single nav function for a role. This used to be a hand-copied version
+  // of canSeeItem that had DRIFTED — it ignored the item's `scopes` tier and the super-admin bypass,
+  // so the checkbox could read "granted" for a function the sidebar would never render (owner,
+  // 2026-08-03: "KPI Metrics is allowed for the DM role but doesn't show"). It now calls the REAL
+  // gate from rbac.ts, so what this page shows is what the user gets, permanently — no copy to drift.
   function fnEffective(p: any, item: any): boolean {
-    const ov = p.pages?.[item.href]
-    if (typeof ov === 'boolean') return ov
-    if (!p.modules?.[item.module]) return false
-    const area = reportAreaForPath(item.href)
-    if (area && !reportChecked(p, area)) return false
-    return true
+    return canSeeItem(p as Permissions, item)
+  }
+  // WHY a function is hidden, for the hint next to the checkbox. Same source as the sidebar.
+  function fnBlocked(p: any, item: any) {
+    return navBlockReason(p as Permissions, item)
   }
   async function saveRole(r: Role) {
     setMsg('')
@@ -187,6 +204,20 @@ export default function RolesAdminPage() {
     setMsg('')
     try { await api(`/api/v1/core/roles/${r.id}`, { method: 'DELETE' }); await loadAll(); setMsg(`Deleted ${r.display_name}`) }
     catch (e: any) { setMsg('Delete failed: ' + (e?.message || e)) }
+  }
+
+  // "What does this person's grant ACTUALLY resolve to?" — the answer to "I gave the DM 3 markets,
+  // why do they see everything?" without logging in as them. Read-only diagnostic; changes nothing.
+  // Crucially it separates the two answers (reporting stores vs scheduling reach) and calls out a
+  // market that resolved to NOTHING, which previously failed silently.
+  async function previewAccess(e: Emp) {
+    const email = (e.email || '').trim().toLowerCase()
+    if (!email) { setMsg(`${e.name} has no email — nothing to preview.`); return }
+    if (scopePrev[email]) { setScopePrev(s => { const n = { ...s }; delete n[email]; return n }); return }
+    try {
+      const r = await api(`/api/v1/core/scope-preview?email=${encodeURIComponent(email)}`)
+      setScopePrev(s => ({ ...s, [email]: r }))
+    } catch (err: any) { setMsg('Access preview failed: ' + (err?.message || err)) }
   }
 
   // ---- people editing ----
@@ -581,10 +612,28 @@ export default function RolesAdminPage() {
                     </div>
                   </div>
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Data scope</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Reporting scope
+                      <span style={{ fontWeight: 400, color: 'var(--text3)' }}> — whose numbers</span></div>
                     <select style={sel} value={p.scope || 'all'} onChange={ev => setPerm(r.id, pp => ({ ...pp, scope: ev.target.value }))}>
                       {SCOPES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
                     </select>
+                    {/* Scheduling reach is DELIBERATELY separate from the reporting scope. One
+                        grant set used to answer both "whose numbers may they see" (narrow) and
+                        "whom may they schedule" (wide — employees move around), which forced
+                        operators to grant every store just so a DM could schedule a borrowed rep,
+                        silently widening their reporting too. Default 'org' = exactly what the app
+                        does today. */}
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', margin: '12px 0 6px' }}>Scheduling reach
+                      <span style={{ fontWeight: 400, color: 'var(--text3)' }}> — whom they can schedule</span></div>
+                    <select style={sel} value={schedulingReach(p as Permissions)}
+                      onChange={ev => setPerm(r.id, pp => ({ ...pp, scheduling_reach: ev.target.value }))}>
+                      {SCHEDULING_REACHES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
+                    </select>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, maxWidth: 220 }}>
+                      {schedulingReach(p as Permissions) === 'org'
+                        ? 'Can put ANY employee in the company on a shift, while reports stay limited to the stores above. Use this instead of granting all stores.'
+                        : 'Can only schedule employees inside their reporting stores.'}
+                    </div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', margin: '12px 0 6px' }}>Landing page</div>
                     <input style={{ ...sel, width: 200 }} value={p.home || ''} placeholder="/commcalc"
                       onChange={ev => setPerm(r.id, pp => ({ ...pp, home: ev.target.value }))} />
@@ -636,13 +685,31 @@ export default function RolesAdminPage() {
                     {NAV.map(g => (
                       <div key={g.group}>
                         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>{g.group}</div>
-                        {g.items.map(it => (
-                          <label key={it.href} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '2px 0' }}>
-                            <input type="checkbox" checked={fnEffective(p, it)}
-                              onChange={ev => setPerm(r.id, pp => ({ ...pp, pages: { ...(pp.pages || {}), [it.href]: ev.target.checked } }))} />
-                            <span>{it.icon} {it.label}</span>
-                          </label>
-                        ))}
+                        {g.items.map(it => {
+                          // WHY it's hidden, inline. "It's ticked in Roles but the tab isn't there"
+                          // was untraceable before: four different gates can hide one function and
+                          // nothing on screen said which. Ticking the box always grants (rbac.ts
+                          // now lets an explicit grant lift the scope tier too).
+                          const blocked = fnBlocked(p, it)
+                          return (
+                            <div key={it.href} style={{ padding: '2px 0' }}>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                                <input type="checkbox" checked={fnEffective(p, it)}
+                                  onChange={ev => setPerm(r.id, pp => ({ ...pp, pages: { ...(pp.pages || {}), [it.href]: ev.target.checked } }))} />
+                                <span>{it.icon} {it.label}</span>
+                              </label>
+                              {blocked && (
+                                <div title={blocked.detail}
+                                  style={{ fontSize: 10, color: 'var(--text3)', marginLeft: 22, lineHeight: 1.3 }}>
+                                  hidden — {blocked.gate === 'module' ? `"${it.module}" module off`
+                                    : blocked.gate === 'report' ? 'report area off'
+                                    : blocked.gate === 'scope' ? `scope (${(it.scopes || []).join('/') || 'management'})`
+                                    : 'denied here'}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
                     ))}
                   </div>
@@ -813,9 +880,47 @@ export default function RolesAdminPage() {
                           onClick={() => setWidgetEmp(widgetEmp === e.id ? null : e.id)}>
                           🎛️ Widgets{ovCount ? ` (${ovCount})` : ''}</button>}{' '}
                         <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} title="Edit details / remove this person"
-                          onClick={() => setEditEmp(editEmp === e.id ? null : e.id)}>✏️ Edit</button>
+                          onClick={() => setEditEmp(editEmp === e.id ? null : e.id)}>✏️ Edit</button>{' '}
+                        {e.email && e.app_role && (
+                          <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }}
+                            title="What do this person's grants ACTUALLY resolve to? (reporting stores vs scheduling reach)"
+                            onClick={() => previewAccess(e)}>🔍 Access</button>)}
                       </td>
                     </tr>
+                    {e.email && scopePrev[(e.email || '').toLowerCase()] && (() => {
+                      const sp = scopePrev[(e.email || '').toLowerCase()]
+                      return (
+                        <tr style={{ background: '#f5f3ff' }}>
+                          <td colSpan={7} style={{ padding: '10px 16px', borderTop: '1px dashed var(--border)', fontSize: 12 }}>
+                            <div style={{ display: 'grid', gap: 6 }}>
+                              <div><strong>Reporting</strong> (whose numbers they see) —{' '}
+                                {sp.reporting?.unrestricted
+                                  ? <span style={{ color: '#b45309', fontWeight: 700 }}>EVERY store (role scope = all stores)</span>
+                                  : <span><strong>{(sp.reporting?.stores || []).length}</strong> store(s): {(sp.reporting?.stores || []).join(', ') || '— none —'}</span>}
+                              </div>
+                              <div><strong>Scheduling</strong> (whom they can put on a shift) —{' '}
+                                {sp.scheduling?.reach === 'org'
+                                  ? 'ANY employee in the company'
+                                  : 'only employees in the stores above'}
+                              </div>
+                              <div style={{ color: 'var(--text3)' }}>
+                                Markets granted: {(sp.granted_markets || []).join(', ') || '—'}
+                                {(sp.pinned_stores || []).length > 0 && <> · Stores pinned: {sp.pinned_stores.join(', ')}</>}
+                                {(sp.org_unit_stores || []).length > 0 && <> · Org-unit stores: {sp.org_unit_stores.join(', ')}</>}
+                              </div>
+                              {(sp.unresolved_markets || []).length > 0 && (
+                                <div style={{ color: '#b91c1c', fontWeight: 600 }}>
+                                  ⚠ These markets matched NO store and grant nothing: {sp.unresolved_markets.join(', ')}
+                                  <span style={{ fontWeight: 400 }}> — the tenant knows: {(sp.org_markets || []).join(', ') || '(none)'}</span>
+                                </div>
+                              )}
+                            </div>
+                            <button className="btn" style={{ fontSize: 11, padding: '2px 8px', marginTop: 8 }}
+                              onClick={() => previewAccess(e)}>Hide</button>
+                          </td>
+                        </tr>
+                      )
+                    })()}
                     {e.email && revealed[e.email] && (
                       <tr style={{ background: '#f0f9ff' }}>
                         <td colSpan={7} style={{ padding: '10px 16px', borderTop: '1px dashed var(--border)', fontSize: 12 }}>

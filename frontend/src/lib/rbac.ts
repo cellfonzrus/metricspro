@@ -1,13 +1,33 @@
 // RBAC: nav definition (module-tagged) + access helpers. Permissions come from
 // storeops.roles.permissions (resolved by the backend /core/me for the logged-in user).
 export type Scope = 'all' | 'market' | 'store' | 'self'
+// SCHEDULING reach — deliberately SEPARATE from `scope` (which is the REPORTING span). See
+// backend app/core/scope.py for the full rationale. Short version: one store-grant set used to
+// answer both "whose numbers may this person see?" (must be narrow) and "whom may this person put
+// on a shift?" (must be wide, because employees move around), so an operator who wanted a DM to
+// schedule a borrowed rep had to grant that DM every store — silently widening their reporting
+// access too. 'org' (DEFAULT) = the employee roster/picker is span-exempt, which is what every
+// scheduling surface already does today via /storeops/employees?all_company=true; 'span' = the old
+// coupling, for tenants that want the roster locked to the reporting span.
+export type SchedulingReach = 'org' | 'span'
 export type Permissions = {
   modules?: Record<string, boolean>
   reports?: Record<string, boolean>   // per-AREA report access (separate from the operational module)
   data?: Record<string, boolean>      // per-KEY sensitive-data grants (e.g. carrier_residual) — see DATA_GRANTS
   pages?: Record<string, boolean>     // per-FUNCTION override (by nav href): explicit true/false wins over module
-  scope?: Scope
+  scope?: Scope                       // REPORTING span (whose numbers) — NOT scheduling reach
+  scheduling_reach?: SchedulingReach  // SCHEDULING reach (whom you may schedule); default 'org'
   home?: string
+}
+// MIRROR of backend app/core/scope.scheduling_reach() — KEEP IN SYNC. Unknown/absent/garbage → 'org',
+// which is byte-identical to today's behaviour for every existing role.
+export function schedulingReach(perms: Permissions | undefined): SchedulingReach {
+  const v = String((perms as any)?.scheduling_reach || '').trim().toLowerCase()
+  return v === 'span' ? 'span' : 'org'
+}
+// True when a scheduling roster / employee-picker read may ignore the reporting span.
+export function rosterSpanExempt(perms: Permissions | undefined): boolean {
+  return schedulingReach(perms) === 'org'
 }
 
 // Report (analytical) pages are gated by a per-area `reports` permission that is SEPARATE from the
@@ -621,15 +641,55 @@ export function moduleGranted(mods: Record<string, boolean> | undefined, key: st
 export function canSeeItem(perms: Permissions, item: NavItem): boolean {
   if (isSuperAdmin(perms)) return true
   if (MGMT_ONLY.has(item.href)) return canManage(perms, item.href)
-  if (item.scopes && !item.scopes.includes(perms.scope || 'all')) return false
   // Per-function override wins (either direction) — lets an admin grant/deny each function per role.
+  // It is checked BEFORE the item's scope tier: the docs (and the Roles UI) have always promised
+  // "these per-function settings override the module/report toggles", but the scope gate used to
+  // sit in front and silently veto an explicit grant. An admin who ticked e.g. Rep Coaching for a
+  // store-scoped District Manager saw the box stay ticked and the tab never appear (owner report,
+  // 2026-08-03). Only an EXACT-href grant can lift a scope gate; an inherited/prefix override
+  // cannot, since it was never aimed at this item. Everything else is byte-identical: with no
+  // pages[href] entry, or with an entry of `false`, the outcome is exactly what it was before.
   const ov = perms.pages?.[item.href]
+  if (item.scopes && !item.scopes.includes(perms.scope || 'all') && ov !== true) return false
   if (typeof ov === 'boolean') return ov
   // Default: operational module gate (alias-aware) + (for report pages) the report-area gate.
   if (!moduleGranted(perms.modules, item.module)) return false
   const area = reportAreaForPath(item.href)
   if (area && !hasReport(perms, area)) return false
   return true
+}
+
+// WHY is this nav item hidden for this role? Returns null when it IS visible. Exists so the Roles
+// admin UI can explain a hidden function instead of leaving the operator to guess — the 2026-08-03
+// "KPI Metrics is allowed for the DM role but doesn't show" / "Rep Coaching doesn't show either"
+// reports were both invisible-by-configuration, but nothing on screen said which gate closed.
+// Ordered to MATCH canSeeItem exactly; keep the two in lockstep.
+export type NavBlockReason =
+  | { gate: 'scope'; detail: string }
+  | { gate: 'page'; detail: string }
+  | { gate: 'module'; detail: string }
+  | { gate: 'report'; detail: string }
+export function navBlockReason(perms: Permissions, item: NavItem): NavBlockReason | null {
+  if (isSuperAdmin(perms)) return null
+  if (MGMT_ONLY.has(item.href)) {
+    return canManage(perms, item.href) ? null
+      : { gate: 'scope', detail: 'management-only page (company-wide scope, or grant it per function)' }
+  }
+  const ov = perms.pages?.[item.href]
+  const scope = perms.scope || 'all'
+  if (item.scopes && !item.scopes.includes(scope) && ov !== true) {
+    return { gate: 'scope', detail: `built for scope ${item.scopes.join('/')} — this role is "${scope}". Tick this function to grant it anyway.` }
+  }
+  if (ov === false) return { gate: 'page', detail: 'explicitly denied for this role (untick/tick this function)' }
+  if (ov === true) return null
+  if (!moduleGranted(perms.modules, item.module)) {
+    return { gate: 'module', detail: `the "${item.module}" module is off for this role` }
+  }
+  const area = reportAreaForPath(item.href)
+  if (area && !hasReport(perms, area)) {
+    return { gate: 'report', detail: `report area "${area}" is off (Reports column) — separate from the module` }
+  }
+  return null
 }
 
 // The per-function override for a path (exact href, else the longest matching nav-href prefix).
@@ -658,12 +718,23 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
   const scope = perms.scope || 'all'
   if (scope === 'self') {
     const home = perms.home || '/commcalc/targets/my'
+    // An EXPLICIT per-function grant reaches a self-scoped rep too. Without this the sidebar shows a
+    // page the admin granted (canSeeItem honors `pages[href] === true` for every scope) and the guard
+    // then bounces it — the "the tab is there but clicking it does nothing" class. WIDENING ONLY:
+    // an explicit `false` is deliberately NOT honored here, so this can never remove access a rep has
+    // today (that half stays exactly as shipped).
+    if (perms.pages?.[path] === true) return true
     return SELF_ALLOWED.some(p => path.startsWith(p)) || path.startsWith(home)
   }
-  // For settings/manager-only sub-pages, honor the matching nav item's scope restriction.
+  // For settings/manager-only sub-pages, honor the matching nav item's scope restriction — unless an
+  // EXACT per-function grant lifts it, mirroring canSeeItem's precedence exactly. Without this
+  // mirror, a function an admin explicitly granted would render in the sidebar and then be bounced
+  // by the guard (sidebar and guard MUST agree; that disagreement is the "clicking it does nothing"
+  // class). Byte-identical whenever pages[path] is not exactly `true`.
+  const exactOv = perms.pages?.[path]
   for (const g of NAV) {
     for (const it of g.items) {
-      if (path === it.href && it.scopes && !it.scopes.includes(scope)) return false
+      if (path === it.href && it.scopes && !it.scopes.includes(scope) && exactOv !== true) return false
     }
   }
   if (MGMT_ONLY.has(path)) return canManage(perms, path)   // management-only pages, DMs excluded
