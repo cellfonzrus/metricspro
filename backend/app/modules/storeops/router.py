@@ -98,17 +98,24 @@ def timeclock_stores(org_id: str = ORG_ID):
 
 @router.get("/employees")
 def get_employees(include_inactive: bool = False, all_company: bool = False, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
-    """Employees in the caller's span. all_company=true returns the WHOLE org roster (still
-    org-scoped) — used by the schedule picker so a manager can borrow an employee from another
-    store/market onto a shift, even if they're outside the manager's span."""
+    """Employees in the caller's span. all_company=true is a SCHEDULING REACH question ("whom may
+    this login put on a shift"), never a reporting question — see app.core.scope's module docstring.
+    Role permission `scheduling_reach` defaults to 'org', which is byte-identical to today's live,
+    UNCONDITIONAL org-wide exemption; only a role explicitly configured scheduling_reach='span'
+    narrows the roster back to the caller's reporting span even when all_company=true is asked for."""
     q = sb().table("employees").select("*").eq("org_id", org_id)
     if not include_inactive:
         q = q.eq("is_active", True)
     rows = q.order("name").execute().data or []
-    if not all_company:
-        ks = scope_keyset(authorization, org_id)
-        if ks is not None:
-            rows = [e for e in rows if in_keyset(ks, e.get("home_store"))]
+    if all_company:
+        au = _caller_app_user(authorization, org_id)
+        perms = _role_permissions(org_id, (au.get("role") or "").strip()) if au else {}
+        if _cscope.roster_span_exempt(perms):
+            return rows
+        # scheduling_reach='span' — fall through and apply the reporting span below.
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [e for e in rows if in_keyset(ks, e.get("home_store"))]
     return rows
 
 @router.get("/shifts")
@@ -3789,6 +3796,19 @@ def _role_scope(org_id: str, role: str) -> str:
         return (((rr[0].get("permissions") or {}).get("scope")) if rr else "all") or "all"
     except Exception:
         return "all"
+
+
+def _role_permissions(org_id: str, role: str) -> dict:
+    """Full roles.permissions jsonb for a role name (scope, scheduling_reach, page/report
+    overrides, …). Empty dict on missing role / read failure — every consumer here treats a blank
+    dict as the safe default (app.core.scope.scheduling_reach -> 'org')."""
+    if not role:
+        return {}
+    try:
+        rr = sb().table("roles").select("permissions").eq("org_id", org_id).eq("name", role).limit(1).execute().data or []
+        return (rr[0].get("permissions") or {}) if rr else {}
+    except Exception:
+        return {}
 
 
 def _caller_span_codes(authorization: str, org_id: str = ORG_ID) -> list:
