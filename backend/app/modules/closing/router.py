@@ -597,7 +597,7 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
         market_set = None
     store_set = _resolve_store_filter(stores)
     rep_set = _resolve_rep_filter(reps)
-    # retail-ops-23 (OWNER BUG REPORT 2026-08-03): the manager-span keyset used to be applied only to
+    # retail-ops-24 (OWNER BUG REPORT 2026-08-03): the manager-span keyset used to be applied only to
     # `by_store`/`by_rep` AFTER `grand` (the tiles) was already accumulated over every kept row — a
     # span-restricted viewer (e.g. a DM) saw ORG-WIDE money in the top tiles while the table beneath
     # showed only their stores (observed: ePay-cash tile $174,227 vs table footer $135,106, delta =
@@ -660,7 +660,7 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
             continue
         if rep_set is not None and (r.get("employee_name") or "").strip().casefold() not in rep_set:
             continue
-        # retail-ops-23: same keyset a scoped viewer's `by_store`/`by_rep` rows must already satisfy —
+        # retail-ops-24: same keyset a scoped viewer's `by_store`/`by_rep` rows must already satisfy —
         # gating HERE (before `grand` sees the row) is what makes tiles == table footer for every
         # viewer. Matches on store_code OR store_address, same as the bs/br filter below used to.
         # A row with no store identity at all (`raw_code` blank, no resolvable address) can never
@@ -699,7 +699,7 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
     bs = sorted((finalize(v) for v in by_store.values()),
                 key=lambda s: str(s.get("store_address") or s.get("store_name") or ""))
     br = sorted((finalize(v) for v in by_rep.values()), key=lambda s: -s.get("rows", 0))
-    # retail-ops-23: keyset scoping now happens up in the accumulation loop (row admission), so `bs`/
+    # retail-ops-24: keyset scoping now happens up in the accumulation loop (row admission), so `bs`/
     # `br` are already restricted to the caller's span — no second filter needed here, and `grand`/
     # `verified_keys`/`submitted_keys` (computed from the SAME kept_rows) are consistent with them.
     return {

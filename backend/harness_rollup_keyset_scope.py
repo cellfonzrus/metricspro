@@ -1,4 +1,4 @@
-"""Offline proof harness for retail-ops-23 (OWNER BUG REPORT 2026-08-03, PACKAGE A): `/closing/rollup`'s
+"""Offline proof harness for retail-ops-24 (OWNER BUG REPORT 2026-08-03, PACKAGE A): `/closing/rollup`'s
 manager-span keyset used to be applied ONLY to `by_store`/`by_rep` AFTER `grand` (the tiles) had already
 been accumulated over every kept row — a span-restricted viewer (e.g. a DM) saw ORG-WIDE money in the top
 tiles while the table beneath showed only their stores. Fixed by resolving the keyset BEFORE the
