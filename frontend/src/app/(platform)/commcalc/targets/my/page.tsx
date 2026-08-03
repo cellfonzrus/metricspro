@@ -4,6 +4,9 @@ import { api, ORG_ID, fmt, fmtN, localToday } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import AreaTargets from './_components/AreaTargets'
 
 const CATS = [
   { key: 'activations', label: 'Activations', unit: 'count', hint: 'premium + BYOD' },
@@ -25,17 +28,36 @@ export default function MyTargetsPage() {
   const [detail, setDetail] = useState<any>(null)
   const [actionItems, setActionItems] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
+  // AREA (DM) roll-up — additive keys on the SAME summary payload. `scope.is_multi_store` is the
+  // server's answer to "does this viewer manage more than one store", derived from the RBAC span
+  // keyset (scope_keyset), never guessed here from the length of a list.
+  const [collective, setCollective] = useState<any>(null)
+  const [scope, setScope] = useState<any>(null)
+  const [filterOpts, setFilterOpts] = useState<any>({ stores: [], markets: [], reps: [] })
+  const [sel, setSel] = useState<StandardFilterValue>(emptyStandardFilter())
+  const [reload, setReload] = useState(0)
+
+  // RULE FIVE: the core filters are applied SERVER-side, so the collective total, the drill-down and
+  // the exports are one set of numbers by construction.
+  const filterQS = [
+    ...sel.stores.map(s => `&stores=${encodeURIComponent(s)}`),
+    ...sel.markets.map(m => `&markets=${encodeURIComponent(m)}`),
+    ...sel.reps.map(r => `&reps=${encodeURIComponent(r)}`),
+  ].join('')
 
   // Load store list once per period (reused from the summary endpoint).
   useEffect(() => {
     // include_untargeted=1 so a rep's OWN store shows even before a monthly target is set; the endpoint
     // now substitutes a self-scoped rep's own store(s) for the empty manager keyset (My Targets visibility).
-    api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/summary?org_id=${ORG_ID}&include_untargeted=1`)
+    api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}/summary?org_id=${ORG_ID}&include_untargeted=1${filterQS}`)
       .then(d => {
         setStores(d.stores || [])
+        setCollective(d.collective || null)
+        setScope(d.scope || null)
+        if (d.filters) setFilterOpts(d.filters)
         if (d.stores?.length && !storeCode) setStoreCode(d.stores[0].store_code)
       }).catch(console.error)
-  }, [period])
+  }, [period, filterQS, reload])
 
   // When a store is picked, pull its rep list (store-scope call returns reps[]).
   useEffect(() => {
@@ -116,6 +138,30 @@ export default function MyTargetsPage() {
           {period} · Your daily goal, pace to finish, and what's left for the month.
         </p>
       </div>
+
+      {/* AREA / DM VIEW — a collective target across every store assigned to this viewer, with the
+          per-store drill-down (and, for whoever already holds the 'Target Settings' permission, the
+          per-store assignment inputs). Shown only when the server says this viewer spans >1 store, so
+          a single-store rep's page is byte-identical to before. */}
+      {scope?.is_multi_store && collective && (
+        <AreaTargets
+          period={period}
+          stores={stores}
+          collective={collective}
+          scope={scope}
+          onSaved={() => setReload(n => n + 1)}
+          filterBar={
+            <div style={{ marginBottom: 12 }}>
+              <StandardFilterBar
+                value={sel} onChange={setSel} show={{ period: false }}
+                storeOptions={(filterOpts.stores || []).map((s: any) => ({ id: s.value, label: s.label }))}
+                marketOptions={(filterOpts.markets || []).map((m: string) => ({ id: m, label: m }))}
+                repOptions={(filterOpts.reps || []).map((r: string) => ({ id: r, label: r }))}
+              />
+            </div>
+          }
+        />
+      )}
 
       <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '8px 14px', marginBottom: 18, fontSize: 12, color: '#92400e' }}>
         ⓘ Until logins are enabled, pick your store and name below. This view will be locked to you automatically once sign-in is live.

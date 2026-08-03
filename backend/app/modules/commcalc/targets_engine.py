@@ -426,3 +426,89 @@ def build_action_items(scope_result: dict, conversion: dict | None,
 
     items.sort(key=lambda it: SEV_RANK.get(it['severity'], 9))
     return items
+
+
+# ── AREA / SPAN ROLL-UP (owner directive 2026-08-03) ──────────────────────────
+# "under my targets the dm should have a collective target for all the stores assigned to them with a
+# drill down for each area assigning them per store."
+#
+# A district manager's number is the SUM of the stores in their span — nothing new is derived, nothing
+# is re-weighted, and no per-store target is changed. `aggregate_stores` is deliberately a plain sum of
+# the SAME per-store rows the drill-down renders, so the invariant the harness asserts —
+# collective[cat][metric] == Σ store[cat][metric] — holds BY CONSTRUCTION rather than by luck. That
+# matters because the alternative (recomputing the aggregate from the raw shifts/actuals with the span
+# as one big scope) would legitimately disagree with the store rows it sits above, and a DM cannot act
+# on a total that does not reconcile to its own drill-down.
+#
+# PURE (no I/O). The caller decides WHICH stores are in scope (the scope_keyset span) — this function
+# never sees a permission, a token or an org.
+def aggregate_stores(store_rows: list[dict]) -> dict:
+    """Collective (area-level) target roll-up over already-computed per-store summary rows.
+
+    `store_rows` = the `stores` list `/targets/{period}/summary` returns: each row carries
+    `categories[cat] = {unit, monthly, achieved_mtd, need, today_target, pace, base_today, ...}`.
+
+    Returns {stores, store_codes, categories, conversion, trending} where every category metric is the
+    straight SUM across the input rows. `attainment_pct` is the only derived number (achieved ÷
+    monthly), and `need_net` is reported ALONGSIDE the summed `need` — not instead of it — because the
+    two answer different questions: Σneed is "what my stores collectively still owe" (a store already
+    over target contributes 0), while need_net nets an over-performing store against a short one. Both
+    are shown so nobody has to guess which definition a total used.
+    """
+    rows = list(store_rows or [])
+    cats: dict = {}
+    for cat in CATEGORIES:
+        acc = {'unit': UNITS[cat], 'monthly': 0.0, 'achieved_mtd': 0.0, 'need': 0.0,
+               'today_target': 0.0, 'pace': 0.0, 'base_today': 0.0, 'setup_fee_mtd': 0.0,
+               'stores_with_target': 0, 'stores_on_track': 0}
+        for r in rows:
+            m = ((r.get('categories') or {}).get(cat) or {})
+            if not m:
+                continue
+            monthly = safe_float(m.get('monthly'))
+            achieved = safe_float(m.get('achieved_mtd'))
+            acc['monthly'] += monthly
+            acc['achieved_mtd'] += achieved
+            acc['need'] += safe_float(m.get('need'))
+            acc['today_target'] += safe_float(m.get('today_target'))
+            acc['pace'] += safe_float(m.get('pace'))
+            acc['base_today'] += safe_float(m.get('base_today'))
+            acc['setup_fee_mtd'] += safe_float(m.get('setup_fee_mtd'))
+            if monthly > 0:
+                acc['stores_with_target'] += 1
+                if achieved >= monthly:
+                    acc['stores_on_track'] += 1
+        dec = 1 if UNITS[cat] == 'count' else 2
+        for k in ('monthly', 'achieved_mtd', 'need', 'today_target', 'pace', 'base_today'):
+            acc[k] = round(acc[k], dec)
+        acc['setup_fee_mtd'] = round(acc['setup_fee_mtd'], 2)
+        acc['need_net'] = round(max(0.0, acc['monthly'] - acc['achieved_mtd']), dec)
+        acc['attainment_pct'] = (round(100.0 * acc['achieved_mtd'] / acc['monthly'], 1)
+                                 if acc['monthly'] > 0 else None)
+        cats[cat] = acc
+
+    # Area conversion = Σboxes ÷ Σbill-pays across the span (a ratio of sums, never a mean of ratios —
+    # averaging store percentages would let a 2-transaction store outvote a 400-transaction one).
+    boxes = sum(safe_float(((r.get('conversion') or {}).get('store') or {}).get('boxes')) for r in rows)
+    billpays = sum(safe_float(((r.get('conversion') or {}).get('store') or {}).get('billpays')) for r in rows)
+    target = CONVERSION_TARGET
+    for r in rows:
+        t = ((r.get('conversion') or {}).get('store') or {}).get('target')
+        if t is not None:
+            target = safe_float(t)
+            break
+    conv = {'boxes': int(boxes), 'billpays': int(billpays), 'target': target,
+            'rate': round(100.0 * boxes / billpays, 1) if billpays > 0 else 0.0}
+
+    return {
+        'stores': len(rows),
+        'store_codes': [str(r.get('store_code') or '') for r in rows if r.get('store_code')],
+        'categories': cats,
+        'conversion': conv,
+        'trending': {
+            'acc_sales': round(sum(safe_float(r.get('trending_acc_sales')) for r in rows), 2),
+            'acc_target': round(sum(safe_float(r.get('trending_acc_target')) for r in rows), 2),
+            'box': int(sum(safe_float(r.get('trending_box')) for r in rows)),
+        },
+        'scheduled_hours_total': round(sum(safe_float(r.get('scheduled_hours_total')) for r in rows), 2),
+    }

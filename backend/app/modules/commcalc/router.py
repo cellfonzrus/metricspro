@@ -15994,6 +15994,59 @@ def _carry_forward_map(client, org_id, period, stores):
     return {'prior_period': prior, 'by_code': out}
 
 
+# ── TARGET-SETTING PERMISSION (owner directive 2026-08-03, the DM collective-target package) ─────
+# Target Settings has ALWAYS had a permission: core's SETTING_AREAS key 'targets' ("Target Settings"),
+# which the Roles UI already renders and `_can_edit_setting` already evaluates. What it did NOT have
+# was an enforcement point — `PUT /targets/{period}` took no Authorization header at all, so the rule
+# existed only as a nav-level `scopes: ['all']` hint on the settings page. Adding the check here
+# NARROWS the write to exactly the people the existing rule already named; it widens nothing, and the
+# owner's instruction for the DM drill-down was explicitly "respect the existing Target Settings
+# editability rules; do not widen who may edit".
+#
+# DEGRADE-OPEN ON RESOLUTION, FAIL-CLOSED ON DECISION — the same posture as
+# `_require_commission_plans_edit`: an unresolvable caller (RBAC off / no token / core unavailable)
+# passes, so the house org and existing automation are never locked out, but an error inside the
+# permission check itself propagates rather than silently allowing the write.
+def _can_edit_targets(authorization: str, org_id: str):
+    """(allowed, caller). Resolution failures → (True, None) per the house posture above."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller, _can_edit_setting
+    except Exception:
+        return True, None                     # core unavailable — module-wide posture (require_org only)
+    try:
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid, org_id) if uid else None
+    except Exception:
+        caller = None
+    if caller is None:
+        return True, None
+    return bool(_can_edit_setting(caller, "targets")), caller
+
+
+def _require_target_edit(authorization: str, org_id: str, store_code: str = ""):
+    """Raise 403 unless the caller may edit Target Settings AND — when RBAC span enforcement is on —
+    the store is inside their own span.
+
+    The SPAN half is what makes the DM per-store drill-down safe: a district manager who is granted
+    'targets' may set targets for the stores they manage and ONLY those. An unrestricted caller
+    (scope_keyset → None: admin, or enforcement off) is unaffected, exactly as today."""
+    ok, _caller = _can_edit_targets(authorization, org_id)
+    if not ok:
+        raise HTTPException(403, "You need the 'Target Settings' permission to set targets. "
+                                 "Ask an administrator to grant it on your role.")
+    code = str(store_code or "").strip()
+    if not code:
+        return
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)
+    except Exception:
+        return                                # scope resolution unavailable → today's behaviour
+    if ks is not None and not in_keyset(ks, code):
+        raise HTTPException(403, f"'{code}' is not one of your stores — you can only set targets for "
+                                 f"the stores assigned to you.")
+
+
 @router.get("/targets/{period}")
 async def get_targets(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """List per-store monthly target config. Stores without a row are SEEDED from the prior month —
@@ -16050,12 +16103,18 @@ async def get_targets(period: str, authorization: str = Header(default=""), org_
 
 
 @router.put("/targets/{period}")
-async def save_target(period: str, body: dict, org_id: str = ORG_ID):
-    """Upsert one store's monthly target config (Settings page save)."""
+async def save_target(period: str, body: dict, authorization: str = Header(default=""),
+                      org_id: str = ORG_ID):
+    """Upsert one store's monthly target config (Target Settings save, and the DM per-store
+    drill-down under My Targets).
+
+    GATED (2026-08-03) on the EXISTING 'targets' settings area + the caller's own store span — see
+    `_require_target_edit`. This endpoint previously took no Authorization header at all."""
     client = sb()
     code = str(body.get('store_code', '') or '').strip()
     if not code:
         raise HTTPException(400, "store_code required")
+    _require_target_edit(authorization, org_id, code)
     pm = parse_period(period)
     row = {
         'org_id': org_id, 'store_code': code, 'period': period,
@@ -16076,12 +16135,18 @@ async def save_target(period: str, body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/targets/{period}/roll-forward")
-async def roll_forward_targets(period: str, body: dict = None, org_id: str = ORG_ID):
+async def roll_forward_targets(period: str, body: dict = None,
+                               authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Persist the month-over-month carry-forward into `period`: each store's prior-month target
     carried forward, or +10% where last month's target was met (see _carry_forward_map). By default
     only stores WITHOUT a target row for this period are written (never overwrites a hand-set target);
-    pass {overwrite:true} to refresh them all. Stores with nothing to carry (all-zero) are skipped."""
+    pass {overwrite:true} to refresh them all. Stores with nothing to carry (all-zero) are skipped.
+
+    GATED (2026-08-03) on the same EXISTING 'targets' settings area as the single-store save — this is
+    a bulk write of the same rows and had no permission check at all. No store code is passed, so only
+    the settings-area half applies; the per-store span half is enforced on the row loop below."""
     client = sb()
+    _require_target_edit(authorization, org_id)
     pm = parse_period(period)
     overwrite = bool((body or {}).get('overwrite'))
     existing = {str(r.get('store_code', '')).upper()
@@ -16094,12 +16159,22 @@ async def roll_forward_targets(period: str, body: dict = None, org_id: str = ORG
     cf = _carry_forward_map(client, org_id, period, stores)
     prior = cf['prior_period']
     written, skipped = [], 0
+    try:
+        from app.modules.storeops.router import scope_keyset as _rf_scope, in_keyset as _rf_in
+        _rf_ks = _rf_scope(authorization, org_id)   # None = unrestricted (admin / enforcement off)
+    except Exception:
+        _rf_ks, _rf_in = None, (lambda *a, **k: True)
     for s in stores:
         code = str(s.get('store_code', '') or '').strip()
         if not code:
             continue
         cu = code.upper()
         if cu in existing and not overwrite:
+            skipped += 1
+            continue
+        # A span-restricted caller rolls forward only their OWN stores; an unrestricted admin (ks None)
+        # rolls the whole org exactly as before.
+        if _rf_ks is not None and not _rf_in(_rf_ks, code):
             skipped += 1
             continue
         cfrow = cf['by_code'].get(cu, {})
@@ -16529,8 +16604,36 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     elif setup_hint_unmapped:
         # PARTIAL mismatch — the loud "nothing matched" hint above never fires, so this was silent.
         setup_hint.append(setup_hint_unmapped)
+    # ── AREA / SPAN ROLL-UP (owner 2026-08-03) ────────────────────────────────────────────────────
+    # "the dm should have a collective target for all the stores assigned to them with a drill down for
+    # each area assigning them per store."
+    #
+    # `out` is ALREADY exactly the caller's stores: the RULE FIVE filters and the RBAC span keyset have
+    # both been applied above. So the collective total is a straight sum of the very rows the
+    # drill-down renders — aggregate == Σ per-store BY CONSTRUCTION, and a span-restricted viewer's
+    # total can only ever cover their own stores. An unrestricted admin gets the whole org's roll-up,
+    # unchanged from what the store rows already said.
+    #
+    # PURELY ADDITIVE: `stores` / `filters` / `applied` / `trending` / `setup_hint` are untouched, so
+    # every existing consumer of this endpoint is byte-identical.
+    #
+    # SCOPE SOURCE: `scope_keyset` — the SAME span mechanism every other reporting surface here uses.
+    # mod-platform-core is splitting reporting-vs-scheduling scope in a parallel package; this surface
+    # consumes whatever `scope_keyset` resolves to, so that change composes automatically with no edit
+    # here.
+    collective = targets_engine.aggregate_stores(out)
+    can_edit_targets, _caller = _can_edit_targets(authorization, org_id)
+    scope_block = {
+        'restricted': ks is not None,          # False = unrestricted admin / RBAC off
+        'self_scoped': bool(is_self),
+        'stores_in_scope': len(out),
+        'is_multi_store': len(out) > 1,        # the DM/area case the collective view is for
+        'can_edit_targets': bool(can_edit_targets),
+        'editable_store_codes': ([s.get('store_code') for s in out] if can_edit_targets else []),
+    }
     return {'period': period, 'today': today.isoformat(), 'stores': out,
-            'filters': filters, 'applied': applied, 'trending': trend_meta, 'setup_hint': setup_hint}
+            'filters': filters, 'applied': applied, 'trending': trend_meta,
+            'setup_hint': setup_hint, 'collective': collective, 'scope': scope_block}
 
 
 # KPI → commission tier inputs (mirrors calculator.py KPI defaults).
