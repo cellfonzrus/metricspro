@@ -42,6 +42,32 @@ const EMP_WIDGETS = [
   { k: 'chargebacks', label: 'Chargebacks' }, { k: 'device_history', label: 'Device history' },
 ]
 
+// ── Access state: role-assigned vs login-exists, at a glance (auth-ux hardening 2026-08-03) ───────
+// Creating a login and assigning a role are TWO separate steps on this page, and the grid used to
+// show only the login half. A person with a login but no role signs in successfully and then hits
+// the Guard's "Account not set up" wall — which is exactly what happened to the TEST DM on
+// 2026-08-03 and looked to everyone like a broken app. Both halves are now one chip.
+// Reads NOTHING new: app_role / login_status / has_login all already come from /core/employees
+// (own-tenant only — no cross-tenant signal is introduced here).
+type Access = { key: 'login_no_role' | 'active' | 'invited' | 'role_only' | 'none'
+                label: string; bg: string; fg: string; title: string }
+function accessState(e: Emp): Access {
+  const hasRole = !!(e.app_role || '').trim()
+  const activeLogin = e.login_status === 'active'
+  const invited = e.login_status === 'invited' || (!e.login_status && !!e.has_login)
+  const hasLogin = activeLogin || invited || !!e.has_login
+  if (hasLogin && !hasRole) return { key: 'login_no_role', label: '⚠ login · NO ROLE', bg: '#fee2e2', fg: '#991b1b',
+    title: 'This login exists but no role is assigned — when they sign in they see "Account not set up". Pick a role in the Role column, then press Save.' }
+  if (activeLogin) return { key: 'active', label: '✓ active', bg: '#dbeafe', fg: '#1e40af',
+    title: 'Role assigned and this person has signed in.' }
+  if (invited) return { key: 'invited', label: '⏳ invited', bg: '#fef3c7', fg: '#92400e',
+    title: 'Role assigned and an access code was issued — waiting for their first sign-in.' }
+  if (hasRole) return { key: 'role_only', label: '● role · no login', bg: 'var(--surface2)', fg: 'var(--text2)',
+    title: 'Role assigned, but no login has been created yet — press "Create login".' }
+  return { key: 'none', label: '— not set up', bg: 'transparent', fg: 'var(--text3)',
+    title: 'No role assigned and no login created yet.' }
+}
+
 type Role = { id: number; name: string; display_name: string; permissions: any }
 type Emp = {
   id: number; employee_id: string | null; name: string; home_store: string | null
@@ -167,7 +193,23 @@ export default function RolesAdminPage() {
   function setEmp(id: number, patch: Partial<Emp>) {
     setEmps(es => es.map(e => e.id === id ? { ...e, ...patch } : e))
   }
-  async function assign(e: Emp) {
+  // "— none —" in the Role column does NOT mean "no role": /users/assign falls back to the default
+  // sales_rep role, silently. Make that explicit before it happens — a login created in the
+  // no-role-picked state is the direct cause of the "Account not set up" wall.
+  function confirmNoRole(e: Emp, what: 'save' | 'login'): boolean {
+    if ((e.app_role || '').trim()) return true
+    return confirm(
+      `${e.name} has no role selected.\n\n` +
+      (what === 'login'
+        ? 'Creating a login now assigns the default "Sales Rep" role. If that role is wrong, the '
+          + 'person can sign in but will land on an empty menu — or, if the role assignment does not '
+          + 'stick, on the "Account not set up" screen.\n\n'
+        : 'Saving now assigns the default "Sales Rep" role.\n\n') +
+      'Pick the right role in the Role column first if that is not what you want.\n\nContinue anyway?')
+  }
+
+  async function assign(e: Emp, opts: { skipRoleConfirm?: boolean } = {}) {
+    if (!opts.skipRoleConfirm && !confirmNoRole(e, 'save')) return
     setMsg('')
     try {
       // Persist an inline email edit to the StoreOps roster. Real employees only
@@ -193,6 +235,9 @@ export default function RolesAdminPage() {
         store_codes: codes,                             // full set for floaters
         employee_id: e.employee_id,
       }) })
+      // Reflect the server-side default back into the grid so the Role column and the access chip
+      // stop saying "none" for someone who now genuinely has the sales_rep role.
+      if (!(e.app_role || '').trim()) setEmp(e.id, { app_role: 'sales_rep' })
       setMsg(`Saved ${e.name} → ${e.app_role || 'sales_rep'}`)
     } catch (err: any) { setMsg('Save failed: ' + (err?.message || err)) }
   }
@@ -259,9 +304,11 @@ export default function RolesAdminPage() {
 
   async function createLogin(e: Emp) {
     if (!e.email) return
+    const hadNoRole = !(e.app_role || '').trim()
+    if (!confirmNoRole(e, 'login')) return    // asked ONCE here; assign() below skips its own prompt
     setMsg('')
     try {
-      await assign(e)
+      await assign(e, { skipRoleConfirm: true })
       const res = await api('/api/v1/core/users/create-login', { method: 'POST', body: JSON.stringify({ email: e.email }) })
       setTempPw(p => ({ ...p, [e.email!]: res.access_code ?? res.temp_password }))
       // Optimistic UNIFORM state — "invited" until the user completes access, identical for a fresh
@@ -270,7 +317,13 @@ export default function RolesAdminPage() {
       const deliv = res.delivery_status === 'sent'
         ? ' — the access code was emailed to them.'
         : (res.delivery_status === 'failed' ? ' — ⚠️ we could NOT email the code (hand it over below).' : '')
-      setMsg(`Access set up for ${e.name}${deliv}`)
+      // Creation-time warning: a login made with no role picked is exactly how a user lands on
+      // "Account not set up". Say so here, while the admin is still on the row.
+      const roleWarn = hadNoRole
+        ? ' ⚠️ No role was picked — the default "Sales Rep" role was applied. Set the correct role in the'
+          + ' Role column and press Save, or this person will sign in to the wrong menu.'
+        : ''
+      setMsg(`Access set up for ${e.name}${deliv}${roleWarn}`)
     } catch (err: any) { setMsg('Create-login failed: ' + (err?.message || err)) }
   }
 
@@ -391,6 +444,9 @@ export default function RolesAdminPage() {
   const filtered = emps.filter(e => !search ||
     `${e.name} ${e.home_store || ''} ${e.email || ''} ${e.app_role || ''}`.toLowerCase().includes(search.toLowerCase()))
   const tempList = Object.entries(tempPw)
+  // People who CAN sign in but have no role — they hit the Guard's "Account not set up" wall.
+  // Counted over the whole roster (not `filtered`), so a search box can't hide the problem.
+  const loginNoRole = emps.filter(e => accessState(e).key === 'login_no_role')
 
   return (
     <div>
@@ -618,6 +674,8 @@ export default function RolesAdminPage() {
                 { header: 'Market', get: (e: Emp) => e.app_market || '' },
                 { header: 'Store(s)', get: (e: Emp) => (e.app_store_codes && e.app_store_codes.length ? e.app_store_codes.join(', ') : (e.app_store || '')) },
                 { header: 'Login', get: (e: Emp) => e.login_status === 'active' ? 'Active' : ((e.login_status === 'invited' || e.has_login) ? 'Invited' : 'No') },
+                // RULE FOUR — what you see exports: the same access chip the grid shows.
+                { header: 'Access', get: (e: Emp) => accessState(e).label.replace(/^[^A-Za-z]+/, '').trim() || 'not set up' },
                 { header: 'Active', get: (e: Emp) => e.is_active ? 'Yes' : 'No' },
               ] }],
             })} />
@@ -656,6 +714,24 @@ export default function RolesAdminPage() {
             </div>
           </div>
 
+          {/* Login-without-role warning (auth-ux hardening 2026-08-03). These people sign in fine and
+              then hit "Account not set up" — from their side it looks like the whole app is broken.
+              Own-tenant data only; no names are exposed beyond this admin's own roster. */}
+          {loginNoRole.length > 0 && (
+            <div className="card" style={{ padding: 14, marginBottom: 16, background: '#fef2f2',
+              border: '1px solid #fecaca', borderLeft: '5px solid #dc2626' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#991b1b', marginBottom: 4 }}>
+                ⚠️ {loginNoRole.length} {loginNoRole.length === 1 ? 'person has' : 'people have'} a login but NO role assigned
+              </div>
+              <div style={{ fontSize: 12.5, color: '#7f1d1d' }}>
+                They can sign in, but the app shows them <b>&ldquo;Account not set up&rdquo;</b> until a role is
+                assigned — it looks to them like every module is broken. Pick a role in the <b>Role</b>
+                column for each, then press <b>Save</b>:{' '}
+                <span style={{ fontWeight: 600 }}>{loginNoRole.map(e => e.name).join(', ')}</span>
+              </div>
+            </div>
+          )}
+
           {tempList.length > 0 && (
             <div className="card" style={{ padding: 14, marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>
@@ -674,7 +750,7 @@ export default function RolesAdminPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880 }}>
                 <thead>
                   <tr style={{ background: 'var(--surface2)' }}>
-                    {['Employee', 'Email', 'Role', 'Market', 'Store', 'Login', ''].map(h => (
+                    {['Employee', 'Email', 'Role', 'Market', 'Store', 'Access', ''].map(h => (
                       <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600,
                         color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
@@ -713,14 +789,15 @@ export default function RolesAdminPage() {
                           onChange={codes => setEmp(e.id, { app_store_codes: codes, app_store: codes[0] || null })} />
                       </td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>
-                        {/* Uniform status (platform-core-11): a pending invite and a just-created
-                            login that hasn't signed in both show "invited" — the roster never reveals
-                            whether an email already exists in another tenant. */}
-                        {e.login_status === 'active'
-                          ? <span className="badge badge-blue" style={{ fontSize: 11 }}>✓ active</span>
-                          : (e.login_status === 'invited' || e.has_login)
-                            ? <span className="badge" style={{ fontSize: 11, background: '#fef3c7', color: '#92400e' }}>⏳ invited</span>
-                            : <span style={{ color: 'var(--text3)' }}>—</span>}
+                        {/* Access = role-assigned AND login-exists in ONE chip (auth-ux hardening).
+                            Uniform status (platform-core-11) is preserved: a pending invite and a
+                            just-created login that hasn't signed in both still read "invited" — the
+                            roster never reveals whether an email exists in another tenant. */}
+                        {(() => { const a = accessState(e); return (
+                          <span className="badge" title={a.title}
+                            style={{ fontSize: 11, background: a.bg, color: a.fg, whiteSpace: 'nowrap',
+                              fontWeight: a.key === 'login_no_role' ? 700 : 600 }}>{a.label}</span>
+                        ) })()}
                       </td>
                       <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
                         <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => assign(e)}>Save</button>{' '}

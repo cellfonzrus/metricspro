@@ -263,7 +263,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
 
 function Guard({ children }: { children: React.ReactNode }) {
   const { loading, session, user, permissions, provisioned, active, signOut, needsTenantChoice,
-          rbacEnabled, sessionInvalid } = useAuth()
+          rbacEnabled, sessionInvalid, refresh } = useAuth()
   const pathname = usePathname()
   const router = useRouter()
   // Master switch: until the admin turns enforcement ON, the app stays fully open (today's
@@ -315,8 +315,15 @@ function Guard({ children }: { children: React.ReactNode }) {
   if (loading) return <Splash text="Loading…" />
   if (!session) return <Splash text="Redirecting to sign-in…" />
   if (needsTenantChoice) return <Splash text="Choose a company…" />
+  // ZERO-DISCLOSURE (account-linking privacy doctrine): an unprovisioned visitor must learn NOTHING
+  // about which companies exist, who administers them, or whether this email is known anywhere else.
+  // So: no org name, no admin email, no "we couldn't find you in <tenant>". What it CAN do is tell
+  // the person the one action that resolves it — ask whoever invited them — and let them re-check
+  // without signing out and back in (the 2026-08-03 incident's second wall).
   if (!provisioned) return <Notice title="Account not set up"
-    body="Your login exists but no role has been assigned yet. Please contact your administrator."
+    body="Your sign-in worked, but no role has been assigned to this account yet, so there is nothing to show you."
+    hint="Ask the administrator who invited you to assign your role, then use “Check again”. You do not need a new password."
+    secondary={{ label: '↻ Check again', onClick: () => { refresh() } }}
     onSignOut={() => signOut().then(() => router.replace('/login'))} />
   if (!active) return <Notice title="Access disabled"
     body="Your access has been turned off. Please contact your administrator."
