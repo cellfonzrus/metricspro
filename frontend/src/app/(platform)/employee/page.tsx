@@ -6,6 +6,7 @@ import EmployeeWidgets from '@/components/EmployeeWidgets'
 import PortalReports from '@/components/PortalReports'
 import MyChargebacks from '@/components/MyChargebacks'
 import GoogleReviewsCard from '@/components/GoogleReviewsCard'
+import PaySimulatorWidget from '../commcalc/pay-simulator/_components/PaySimulatorWidget'
 
 const sel: React.CSSProperties = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, background: 'var(--surface)' }
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -87,6 +88,7 @@ export default function EmployeeDashboardPage() {
               record, so it never reads like it belongs to whichever employee is being viewed. */}
           {eid && eid === (user?.employee_id || '') && <MyChargebacks />}
           {eid && eid === (user?.employee_id || '') && <GoogleReviewsCard />}
+          {eid && eid === (user?.employee_id || '') && <PaySimulatorWidget period={period} />}
         </>
       )}
 

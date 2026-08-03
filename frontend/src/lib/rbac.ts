@@ -77,6 +77,14 @@ export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
     help: 'Access to /commcalc/ma-handsets — the whole report (lines, quantities and handset costs), not just the totals (backend commcalc `_can_view_ma_handset_cogs`). DEFAULT-CLOSED — admin-only until granted.' },
   { key: 'device_cost_recon', label: 'Device cost reconciliation',
     help: 'Access to /commcalc/device-cost-recon — every device-cost row from all four sources at once (marketplace purchase price, consignment/VIP billing, POS-derived cost, inventory unit cost) plus the policy delta preview (backend commcalc `_can_view_device_cost_recon`). DEFAULT-CLOSED — admin-only until granted. Strictly MORE sensitive than the per-source reports it reconciles.' },
+  { key: 'whatif_employee_payout', label: 'What-If — Employee Payout scenario',
+    help: 'The 🎯 Employee Payout tab of /commcalc/whatif: the per-carrier payout template (Boost components or the carrier\'s Commission-Plan rules/tiers) and the projector. DEFAULT-CLOSED — admin-only until granted.' },
+  { key: 'whatif_byod_residual', label: 'What-If — BYOD → Residuals',
+    help: 'The 📶 BYOD → Residuals tab of /commcalc/whatif. DEFAULT-CLOSED — admin-only until granted; the raw carrier-residual money additionally rides "carrier_residual" when the tenant sets residual visibility to "permissioned".' },
+  { key: 'whatif_accessory_corr', label: 'What-If — Accessories ↔ BYOD ↔ Revenue',
+    help: 'The 🔗 correlation tab of /commcalc/whatif (per store/period BYOD activations vs accessory revenue vs total revenue). DEFAULT-CLOSED — admin-only until granted.' },
+  { key: 'whatif_carrier_income', label: 'What-If — Company Payout / Carrier Income',
+    help: 'The 💵 Company Payout / Carrier Income tab of /commcalc/whatif — what the carrier / master-agent pays the COMPANY. DEFAULT-CLOSED — admin-only until granted; also rides "carrier_residual" when the tenant sets residual visibility to "permissioned".' },
 ]
 // Frontend mirror of backend commcalc `_can_view_carrier_residual` — KEEP IN SYNC. Super-admins /
 // company-wide ('all') roles / admins always pass; otherwise the grant is honored under either the
@@ -108,6 +116,7 @@ export const NAV: NavGroup[] = [
     { href: '/reports', label: 'Report Center', icon: '📊', module: 'targets' },
   ]},
   { group: 'Commissions', module: 'commissions', items: [
+      { href: '/commcalc/pay-simulator', label: 'What Would I Make?', icon: '🎚️', module: 'commissions' },
     { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions' },
     { href: '/commcalc/sales-report', label: 'Sales Report', icon: '🧾', module: 'commissions' },
     { href: '/commcalc/custom-report', label: 'Custom Report', icon: '🧩', module: 'commissions' },
