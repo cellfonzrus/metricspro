@@ -1771,23 +1771,84 @@ def _sales_tenders_by_store(client, org_id: str, date: str, tresolve=None, keys=
 
 
 @router.get("/tender-recon-3way")
-def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
-    """One day, per store: the SAME tenders captured three independent ways — (1) DAILY CLOSING (what the
-    rep entered), (2) POS X-REPORT (pos_tender_summary), (3) SALES TRANSACTIONS (raw_sales / feed). All
-    bucketed to cash / credit / external CC / gift card / store account / zelle. The X-report is generated
-    from the sales transactions, so those two should agree; the closing is the human cross-check."""
+def tender_recon_3way(date: str = "", date_from: str = "", date_to: str = "", store: str = None,
+                       org_id: str = ORG_ID):
+    """The SAME tenders captured three independent ways, per store — (1) DAILY CLOSING (what the rep
+    entered), (2) POS X-REPORT (pos_tender_summary), (3) SALES TRANSACTIONS (raw_sales / feed), plus a
+    4th BANK DEPOSIT leg. All bucketed to cash / credit / external CC / gift card / store account /
+    zelle. The X-report is generated from the sales transactions, so those two should agree; the
+    closing is the human cross-check.
+
+    `date=YYYY-MM-DD` — the historical single-day call, response shape UNCHANGED (retail-ops-22, OWNER
+    DIRECTIVE 2026-08-03 backward-compat requirement: existing callers must see the exact same shape).
+    OR `date_from`/`date_to` for an ADDITIVE date-RANGE mode (owner: "3-Way Tender Recon should also
+    have our standard filters with date range") — returns one day-block per calendar date (bounded to
+    _TENDER_3WAY_MAX_RANGE_DATES, most-recent-first when capped — mirrors /closing/summary's range
+    mode), NOT a single days-summed total: netting variances across days/stores can hide offsetting
+    errors (a +$50 day and a -$50 day summing to a clean-looking $0), so the caller gets the individual
+    per-store-per-day rows and does its own (client-side, filter-aware) aggregation on top."""
     require_org(org_id)
     client = sb()
-    d = _date(date)
-    if not d:
-        raise HTTPException(400, "valid date required (YYYY-MM-DD)")
-    # Tenant tender config (mig 111): the axis (keys+labels) and per-report raw→tender resolvers.
-    # No config → the hardcoded CANON_TENDERS + _canon_tender, so an un-opted tenant is byte-identical.
+    # Tenant tender config (mig 111) + store roster + deposit config — date-INDEPENDENT, loaded ONCE
+    # per request (perf pattern from _closing_summary_org_ctx / retail-ops-16) whether this call is a
+    # single day or a multi-day range, instead of re-querying them once per date in the range loop.
     from .tender_config import load_tender_config, tender_axis, make_resolver
     _defs, _maps = load_tender_config(client, org_id)
     keys, tlabel, _rclass, _intotal = tender_axis(_defs, CANON_TENDERS, CANON_TENDER_LABEL)
     resolve_x = make_resolver(_maps, "x_report", _canon_tender, keys)
     resolve_s = make_resolver(_maps, "sales", _canon_tender, keys)
+    resolve_addr = _addr_resolver(client, org_id)
+    sm = (client.schema("commcalc").table("store_mapping").select("store_code,store_address")
+          .eq("org_id", org_id).execute().data) or []
+    name_by_code = {s.get("store_code"): s.get("store_address") for s in sm if s.get("store_code")}
+    resolved_codes = set(name_by_code)
+    dep_cfg = _deposit_config(client, org_id)
+    tenders_axis = [{"key": t, "label": tlabel.get(t, t)} for t in keys]
+
+    if date:
+        d = _date(date)
+        if not d:
+            raise HTTPException(400, "valid date required (YYYY-MM-DD)")
+        day = _tender_recon_3way_day(client, org_id, d, store, keys, tlabel, resolve_x, resolve_s,
+                                      resolve_addr, name_by_code, resolved_codes, dep_cfg)
+        # Exact original single-date response shape — same keys, same order.
+        return {"date": day["date"], "tenders": tenders_axis, "stores": day["stores"],
+                "sources_present": day["sources_present"], "x_report_ever": day["x_report_ever"],
+                "x_report_unmapped_total": day["x_report_unmapped_total"],
+                "sales_unmapped_total": day["sales_unmapped_total"], "note": day["note"]}
+
+    if date_from or date_to:
+        d_from = _date(date_from or date_to)
+        d_to = _date(date_to or date_from)
+        if not d_from or not d_to:
+            raise HTTPException(400, "valid date_from/date_to required (YYYY-MM-DD)")
+        all_dates = _date_range_list(d_from, d_to)
+        range_capped = len(all_dates) > _TENDER_3WAY_MAX_RANGE_DATES
+        dates = all_dates[-_TENDER_3WAY_MAX_RANGE_DATES:] if range_capped else all_dates
+        days_out = [_tender_recon_3way_day(client, org_id, dd, store, keys, tlabel, resolve_x, resolve_s,
+                                            resolve_addr, name_by_code, resolved_codes, dep_cfg)
+                    for dd in dates]
+        return {"date_from": d_from, "date_to": d_to, "tenders": tenders_axis, "days": days_out,
+                "dates_total": len(all_dates), "range_capped": range_capped}
+
+    raise HTTPException(400, "date or date_from/date_to required (YYYY-MM-DD)")
+
+
+_TENDER_3WAY_MAX_RANGE_DATES = 14   # mirrors _SUMMARY_MAX_RANGE_DATES's bound + rationale — this
+                                    # endpoint does similarly heavy per-day work (3 report legs + the
+                                    # bank-deposit 4th leg), replayed once per date in range mode.
+
+
+def _tender_recon_3way_day(client, org_id, d, store, keys, tlabel, resolve_x, resolve_s, resolve_addr,
+                            name_by_code, resolved_codes, dep_cfg):
+    """One day's worth of the 3-way (+bank-deposit 4th leg) tender recon, per store — the exact
+    original single-day body of tender_recon_3way, factored out (retail-ops-22) so a date-RANGE call
+    can replay it once per date without re-loading the date-INDEPENDENT lookups (tender axis, store
+    roster, deposit config — those are now the caller's job, passed in). Every line of actual recon
+    logic below is byte-identical to the pre-retail-ops-22 route body; only the two now-hoisted lookups
+    (`sm`/`name_by_code`/`resolved_codes` and `resolve = _addr_resolver(...)`) were removed from here
+    since the caller already computed them once. Returns the per-day shape (minus the top-level
+    `tenders` axis list, which the caller attaches once — it's date-independent)."""
     # (1) closing — rep t_* (+ custom tenders JSONB) per store_code. Resilient to columns not existing
     # yet (mig 104/111 not run): fall back so the recon never 500s on a not-yet-run migration.
     closing = {}
@@ -1814,13 +1875,6 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
         agg = closing.setdefault(code, {t: 0.0 for t in keys})
         for t in keys:
             agg[t] += _closing_amt(r, t)
-    # store names / resolved-code set — fetched BEFORE the X-report/sales legs so both can tell a
-    # genuinely-resolved store_code apart from a raw/unmatched store string (needed for the "never drop
-    # an unresolved store under a filter" rule below — same value-space class fixed in retail-ops-14 B1).
-    sm = (client.schema("commcalc").table("store_mapping").select("store_code,store_address")
-          .eq("org_id", org_id).execute().data) or []
-    name_by_code = {s.get("store_code"): s.get("store_address") for s in sm if s.get("store_code")}
-    resolved_codes = set(name_by_code)
     # (2) X-report — pos_tender_summary raw tender_type → tenant tender (fallback _canon_tender). A raw
     # label that resolves to NO tender (no tenant-map rule matched AND the hardcoded fallback either
     # doesn't recognize it or isn't on this tenant's axis) is NEVER dropped — its dollars land in
@@ -1831,12 +1885,11 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
     # disappear from this leg while the dashboard's `_xreport_tenders_by_store` (which reads the
     # pre-classified tender_class column, never a resolver) kept showing them, exactly the asymmetry that
     # made this page look broken while pos_tender_summary actually had rows.
-    resolve = _addr_resolver(client, org_id)
     xrep, xrep_unmapped = {}, {}
     xrows = (client.schema("commcalc").table("pos_tender_summary")
              .select("store,tender_type,amount").eq("org_id", org_id).eq("close_date", d).execute().data) or []
     for r in xrows:
-        code = resolve(r.get("store")) or (r.get("store") or "?")
+        code = resolve_addr(r.get("store")) or (r.get("store") or "?")
         amt = _f(r.get("amount"))
         canon = resolve_x(r.get("tender_type"))
         # 2026-07-28 Gate-1 N1: `canon` can be truthy-but-not-on-axis — an explicit tenant map rule
@@ -1917,7 +1970,6 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
     # ── 4TH LEG (mig 502, retail-ops-7 item 4): BANK DEPOSIT, additive-only. The 3 legs above
     #    (closing/x_report/sales — `tenders`, `totals`) are computed EXACTLY as before this change;
     #    this block only APPENDS a new `bank_deposit` key per store, nothing upstream is re-touched. ──
-    dep_cfg = _deposit_config(client, org_id)
     bank_by_store = {}
     def _bank_rows_3way(cols):
         bq = client.schema("commcalc").table("bank_deposit").select(cols).eq("org_id", org_id).eq("close_date", d)
@@ -1969,18 +2021,13 @@ def tender_recon_3way(date: str, store: str = None, org_id: str = ORG_ID):
     if sales_unmapped_total:
         note += (f" ⚠ ${sales_unmapped_total:,.2f} of sales-transaction tenders used a raw label this "
                  "tenant's mapping doesn't recognize.")
-    return {"date": d, "tenders": [{"key": t, "label": tlabel.get(t, t)} for t in keys],
-            "stores": stores_out,
-            # x_report here is RAW presence (any pos_tender_summary row today), not "every row mapped" —
-            # a resolver drop must never flip this badge to "not loaded" when the X-report import itself
-            # actually succeeded (see x_report_unmapped for the drop signal instead).
+    return {"date": d, "stores": stores_out,
             "sources_present": {"closing": bool(closing), "x_report": bool(xrows), "sales": bool(sales),
                                 "bank_deposit": bool(bank_by_store)},
             "x_report_ever": x_report_ever,
             "x_report_unmapped_total": x_report_unmapped_total,
             "sales_unmapped_total": sales_unmapped_total,
             "note": note}
-
 
 @router.get("/tender-drilldown")
 def tender_drilldown(date: str, store: str = None, tender: str = None, org_id: str = ORG_ID):
