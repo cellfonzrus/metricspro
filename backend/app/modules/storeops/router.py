@@ -1877,32 +1877,12 @@ def _collect_markets(org_id: str):
     """Distinct markets for the org's pick-don't-type dropdown (RULE THREE), sourced from BOTH
     storeops.stores.market AND commcalc.store_mapping.market — the two vocabularies this page's
     data flows to/from (stores propagate into store_mapping via _sync_store_mapping /
-    _sync_store_mapping_update) — so they can't silently diverge. Deduped case-insensitively;
-    canonical casing = the most-common variant seen (ties → alphabetically-first). Blanks
-    excluded. Best-effort per source: a read failure on one source never blanks the other."""
-    from collections import Counter
-    raw = []
-    try:
-        raw += [row.get("market") for row in
-                (sb().table("stores").select("market").eq("org_id", org_id).execute().data or [])]
-    except Exception as e:
-        print(f"WARN _collect_markets stores read failed: {e}")
-    try:
-        raw += [row.get("market") for row in
-                (get_supabase().schema("commcalc").table("store_mapping").select("market")
-                 .eq("org_id", org_id).execute().data or [])]
-    except Exception as e:
-        print(f"WARN _collect_markets store_mapping read failed: {e}")
-    variants = {}
-    for v in raw:
-        s = str(v or "").strip()
-        if not s:
-            continue
-        variants.setdefault(s.lower(), Counter())[s] += 1
-    canonical = [sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
-                 for counts in variants.values()]
-    canonical.sort(key=lambda s: s.lower())
-    return canonical
+    _sync_store_mapping_update) — so they can't silently diverge. Delegates to
+    app.core.scope.canonical_markets, which folds the IDENTICAL union + most-common/alphabetical-tie
+    canonicalisation rule through ONE cached (30s TTL, org-keyed) index — the same index
+    `_market_store_codes` now resolves grants against, so the picker and the resolver can never
+    disagree again (this was the root cause of "3 markets selected but sees nothing")."""
+    return _cscope.canonical_markets(get_supabase(), org_id)
 
 
 def _canonicalize_market(value, canonical_markets):
