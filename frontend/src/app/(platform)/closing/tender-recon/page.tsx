@@ -1,11 +1,23 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 
 // X-Tender Recon — the POS "X report" tenders (commcalc.pos_tender_summary) vs the daily closing sheet
 // employees submit (commcalc.daily_closing), per store, cash vs card. Reads GET /commcalc/x-tender-recon.
+//
+// RULE FIVE (§3d) retrofit (2026-08-03): standard core filter bar — store(s)/market(s) narrow the loaded
+// rows client-side (pick-don't-type over the data actually present, per optionsFromRows); the existing
+// Day/Month toggle + date/period input IS this page's period control (appended via `right`, periodMode
+// 'none' so the bar doesn't render a second, competing period picker) and keeps driving the server query
+// exactly as before. Tolerance stays module-specific, also appended. There is NO rep dimension in this
+// per-store recon dataset — the picker renders nothing (StandardFilterBar hides an empty option list) per
+// the dispatch note; it is not invented from another table. Market has no column on these rows either, so
+// it's joined client-side from the same org-scoped `/closing/stores` roster this module already calls
+// elsewhere (closing/page.tsx), matched against the recon row's `store` string.
 
 export default function XTenderReconPage() {
   const [mode, setMode] = useState<'date' | 'period'>('date')
@@ -14,8 +26,8 @@ export default function XTenderReconPage() {
   const [tolerance, setTolerance] = useState(1)
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
-  const [storeFilter, setStoreFilter] = useState('')
   const [onlyMismatch, setOnlyMismatch] = useState(false)
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
 
   function load() {
     setLoading(true)
@@ -25,10 +37,34 @@ export default function XTenderReconPage() {
   }
   useEffect(() => { load() }, [mode, date, period, tolerance])
 
+  // Canonical, org-scoped store→market lookup (pick-don't-type §3b) — the same endpoint this module
+  // already calls elsewhere (closing/page.tsx), not a new backend read.
+  const [pStores, setPStores] = useState<any[]>([])
+  useEffect(() => { api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {}) }, [])
+  const marketByKey = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const s of pStores) {
+      const mkt = s.market || ''
+      if (!mkt) continue
+      for (const k of [s.store_address, s.store_code, s.sfid]) {
+        const key = (k || '').trim().toLowerCase()
+        if (key && !m[key]) m[key] = mkt
+      }
+    }
+    return m
+  }, [pStores])
+  const marketFor = (store: string) => marketByKey[(store || '').trim().toLowerCase()] || ''
+
   const allRows: any[] = data?.rows || []
-  const rows = allRows.filter(r =>
-    (!storeFilter || (r.store || '').toLowerCase().includes(storeFilter.toLowerCase())) &&
-    (!onlyMismatch || !r.match))
+  // Join market onto each row for filtering/options — the row's own `store` string is the only key this
+  // recon has (POS X-report name or closing address/name/code, whichever matched — see the backend note),
+  // so options for the store filter itself come straight from that field (data actually present).
+  const joinedRows = useMemo(() => allRows.map(r => ({ ...r, market: marketFor(r.store) })), [allRows, marketByKey])
+  const acc = useMemo(() => ({ store: (r: any) => r.store, market: (r: any) => r.market }), [])
+  const opts = useMemo(() => optionsFromRows(joinedRows, acc), [joinedRows, acc])
+  const filtered = useMemo(() => filterRows(joinedRows, filt, acc), [joinedRows, filt, acc])
+  const rows = filtered.filter(r => !onlyMismatch || !r.match)
+
   const t = data?.totals || {}
   const scope = mode === 'date' ? date : (period || 'period')
 
@@ -38,6 +74,7 @@ export default function XTenderReconPage() {
       filename: `x-tender-recon_${scope}`.replace(/\s+/g, '-'),
       sheets: [{ name: 'By store', rows, columns: [
         { header: 'Store', get: (r: any) => r.store },
+        { header: 'Market', get: (r: any) => r.market },
         { header: 'POS cash', get: (r: any) => r.pos_cash, money: true },
         { header: 'Closing cash', get: (r: any) => r.closing_cash, money: true },
         { header: 'Cash Δ', get: (r: any) => r.cash_variance, money: true },
@@ -63,20 +100,34 @@ export default function XTenderReconPage() {
             cash/card discrepancy to chase.
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-            <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'date' ? 'var(--accent)' : 'transparent', color: mode === 'date' ? 'white' : 'var(--text2)' }} onClick={() => setMode('date')}>Day</button>
-            <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'period' ? 'var(--accent)' : 'transparent', color: mode === 'period' ? 'white' : 'var(--text2)' }} onClick={() => setMode('period')}>Month</button>
-          </div>
-          {mode === 'date'
-            ? <input className="select" type="date" value={date} onChange={e => setDate(e.target.value)} />
-            : <input className="select" placeholder="June 2026" value={period} onChange={e => setPeriod(e.target.value)} style={{ width: 130 }} />}
-          <label style={{ fontSize: 12, color: 'var(--text2)' }}>± $
-            <input className="select" type="number" value={tolerance} onChange={e => setTolerance(Number(e.target.value) || 0)} style={{ width: 64, marginLeft: 4 }} />
-          </label>
-          {allRows.length > 0 && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
-        </div>
+        {allRows.length > 0 && <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></div>}
       </div>
+
+      {/* RULE FIVE core set (store(s)/market(s) — no rep dimension in this dataset, see header note) +
+          the module's own period control (Day/Month + date/period input) and tolerance, appended. */}
+      <StandardFilterBar
+        value={filt} onChange={setFilt} periodMode="none"
+        show={{ period: false, stores: true, markets: true, reps: true }}
+        storeOptions={opts.stores} marketOptions={opts.markets} repOptions={opts.reps}
+        storeLabel="Stores…" marketLabel="Markets…"
+        right={
+          <>
+            <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+              <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'date' ? 'var(--accent)' : 'transparent', color: mode === 'date' ? 'white' : 'var(--text2)' }} onClick={() => setMode('date')}>Day</button>
+              <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'period' ? 'var(--accent)' : 'transparent', color: mode === 'period' ? 'white' : 'var(--text2)' }} onClick={() => setMode('period')}>Month</button>
+            </div>
+            {mode === 'date'
+              ? <input className="select" type="date" value={date} onChange={e => setDate(e.target.value)} />
+              : <input className="select" placeholder="June 2026" value={period} onChange={e => setPeriod(e.target.value)} style={{ width: 130 }} />}
+            <label style={{ fontSize: 12, color: 'var(--text2)' }}>± $
+              <input className="select" type="number" value={tolerance} onChange={e => setTolerance(Number(e.target.value) || 0)} style={{ width: 64, marginLeft: 4 }} />
+            </label>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input type="checkbox" checked={onlyMismatch} onChange={e => setOnlyMismatch(e.target.checked)} /> Mismatches only
+            </label>
+          </>
+        }
+      />
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
@@ -98,10 +149,6 @@ export default function XTenderReconPage() {
           <div className="card" style={{ padding: 0, overflow: 'auto' }}>
             <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 700, fontSize: 13 }}>By store — {scope}</span>
-              <input className="select" placeholder="filter store…" value={storeFilter} onChange={e => setStoreFilter(e.target.value)} style={{ width: 180 }} />
-              <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <input type="checkbox" checked={onlyMismatch} onChange={e => setOnlyMismatch(e.target.checked)} /> Mismatches only
-              </label>
               <span style={{ fontSize: 12, color: 'var(--text3)' }}>{rows.length} shown</span>
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880 }}>
