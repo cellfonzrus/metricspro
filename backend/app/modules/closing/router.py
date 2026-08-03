@@ -388,6 +388,22 @@ def closing_submissions(date_from: str = None, date_to: str = None,
             .order("close_date", desc=True).limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
     truncated = len(rows) >= _SUBMISSIONS_MAX_ROWS
 
+    # retail-ops-26 (cross-endpoint audit, OWNER BUG REPORT 2026-08-03 PACKAGE C): the Daily Closing
+    # dashboard's detail table (<SubmissionsTable>, powered by this endpoint) had ZERO manager-span
+    # keyset enforcement while /closing/rollup's TILES sitting directly above it on the SAME PAGE were
+    # just fixed (retail-ops-24) -- a scoped viewer would see correctly-scoped tiles above an org-wide
+    # detail table, the identical "tiles != table" bug class in a different pair of surfaces. Gated
+    # HERE, right after the raw fetch (truncated is computed from the RAW org-wide fetch on purpose --
+    # it reflects whether the query's own cap was hit, independent of scope) and BEFORE any downstream
+    # computation (market resolution, DM-verification join, gate-status re-derivation) touches `rows`,
+    # so every one of those stays consistent with the visible row set -- same "gate at admission" rule
+    # as closing_rollup/tender-recon-3way. An identity-less row (no store_code/store_address at all) is
+    # excluded for a scoped viewer, kept for an unscoped one -- same precedent.
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"), r.get("store_address"))]
+
     # Market resolution (store_code -> market), same union source as GET /closing/stores.
     try:
         store_rows = (client.schema("storeops").table("stores").select("store_code,market")
@@ -1677,6 +1693,15 @@ def closing_duplicates(period: str = None, date: str = None, store: str = None,
     if store:
         q = q.eq("store_code", store)
     rows = q.limit(50000).execute().data or []
+    # retail-ops-26 (cross-endpoint audit, PACKAGE C): gated the same as every other report endpoint in
+    # this package, even though this one is already permission-restricted to management (never a plain
+    # DM) -- an explicit per-role `pages["/closing/management"]` grant (see `_can_mgmt_review`) can still
+    # let a market/store-scope role through without their scope being "all", so the keyset boundary
+    # still matters here.
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"), r.get("store_address"))]
     groups = {}
     for r in rows:
         k = (r.get("store_code") or "", (r.get("employee_name") or "").strip().lower(), str(r.get("close_date") or ""))
@@ -1721,6 +1746,13 @@ def closing_attempts(period: str = None, date: str = None, store: str = None, on
     if store:
         q = q.eq("store_code", store)
     rows = q.limit(50000).execute().data or []
+    # retail-ops-26 (cross-endpoint audit, PACKAGE C): same gate as /closing/duplicates just above -- an
+    # explicit per-role `pages["/closing/management"]` grant can let a market/store-scope role reach this
+    # endpoint without company-wide scope, so the keyset boundary still applies.
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"), r.get("store_address"))]
     groups = {}
     for r in rows:
         k = (r.get("close_date"), r.get("store_code"), r.get("employee_name"))
@@ -1820,7 +1852,7 @@ def _sales_tenders_by_store(client, org_id: str, date: str, tresolve=None, keys=
 
 @router.get("/tender-recon-3way")
 def tender_recon_3way(date: str = "", date_from: str = "", date_to: str = "", store: str = None,
-                       org_id: str = ORG_ID):
+                       authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The SAME tenders captured three independent ways, per store — (1) DAILY CLOSING (what the rep
     entered), (2) POS X-REPORT (pos_tender_summary), (3) SALES TRANSACTIONS (raw_sales / feed), plus a
     4th BANK DEPOSIT leg. All bucketed to cash / credit / external CC / gift card / store account /
@@ -1853,12 +1885,24 @@ def tender_recon_3way(date: str = "", date_from: str = "", date_to: str = "", st
     dep_cfg = _deposit_config(client, org_id)
     tenders_axis = [{"key": t, "label": tlabel.get(t, t)} for t in keys]
 
+    # retail-ops-26 (OWNER BUG REPORT 2026-08-03, PACKAGE C: "3 way recon for dm shows all stores it
+    # should only show the stores selected and assigned to the dm"): this endpoint had ZERO manager-span
+    # keyset enforcement -- a DM saw the 3-way per-store blocks (closing/x_report/sales/bank-deposit) for
+    # EVERY store in the org, and the frontend's client-side "selection totals" tile (derived from these
+    # same rows) inherited the leak. Same fix class/precedent as closing_rollup (retail-ops-24, e94ed07):
+    # resolve the keyset ONCE here, gate row admission in `_tender_recon_3way_day` (below) BEFORE
+    # `stores_out`/the unmapped totals are built, so the per-store blocks AND anything the frontend
+    # totals from them are computed over the identical, already-scoped row set -- never filtered
+    # client-side. Byte-identical for an unscoped caller (`ks is None`).
+    from app.modules.storeops.router import scope_keyset
+    ks = scope_keyset(authorization, org_id)
+
     if date:
         d = _date(date)
         if not d:
             raise HTTPException(400, "valid date required (YYYY-MM-DD)")
         day = _tender_recon_3way_day(client, org_id, d, store, keys, tlabel, resolve_x, resolve_s,
-                                      resolve_addr, name_by_code, resolved_codes, dep_cfg)
+                                      resolve_addr, name_by_code, resolved_codes, dep_cfg, ks=ks)
         # Exact original single-date response shape — same keys, same order.
         return {"date": day["date"], "tenders": tenders_axis, "stores": day["stores"],
                 "sources_present": day["sources_present"], "x_report_ever": day["x_report_ever"],
@@ -1874,7 +1918,7 @@ def tender_recon_3way(date: str = "", date_from: str = "", date_to: str = "", st
         range_capped = len(all_dates) > _TENDER_3WAY_MAX_RANGE_DATES
         dates = all_dates[-_TENDER_3WAY_MAX_RANGE_DATES:] if range_capped else all_dates
         days_out = [_tender_recon_3way_day(client, org_id, dd, store, keys, tlabel, resolve_x, resolve_s,
-                                            resolve_addr, name_by_code, resolved_codes, dep_cfg)
+                                            resolve_addr, name_by_code, resolved_codes, dep_cfg, ks=ks)
                     for dd in dates]
         return {"date_from": d_from, "date_to": d_to, "tenders": tenders_axis, "days": days_out,
                 "dates_total": len(all_dates), "range_capped": range_capped}
@@ -1888,7 +1932,7 @@ _TENDER_3WAY_MAX_RANGE_DATES = 14   # mirrors _SUMMARY_MAX_RANGE_DATES's bound +
 
 
 def _tender_recon_3way_day(client, org_id, d, store, keys, tlabel, resolve_x, resolve_s, resolve_addr,
-                            name_by_code, resolved_codes, dep_cfg):
+                            name_by_code, resolved_codes, dep_cfg, ks=None):
     """One day's worth of the 3-way (+bank-deposit 4th leg) tender recon, per store — the exact
     original single-day body of tender_recon_3way, factored out (retail-ops-22) so a date-RANGE call
     can replay it once per date without re-loading the date-INDEPENDENT lookups (tender axis, store
@@ -1978,6 +2022,22 @@ def _tender_recon_3way_day(client, org_id, d, store, keys, tlabel, resolve_x, re
         xrep_unmapped = {k: v for k, v in xrep_unmapped.items() if _keep(k)}
         sales = {k: v for k, v in sales.items() if _keep(k)}
         sales_unmapped = {k: v for k, v in sales_unmapped.items() if _keep(k)}
+
+    # retail-ops-26: manager-span keyset gate, applied to the SAME 5 per-store dicts the `store=` filter
+    # above narrows -- so a scoped viewer's blocks/unmapped-totals never include an out-of-span store no
+    # matter which of the 3 legs it appeared in. Mirrors closing_rollup's rule (retail-ops-24): a key
+    # that never resolved to a REAL store_code (still the raw address/"?" placeholder here, i.e. NOT in
+    # `resolved_codes`) can't be proven inside a DM's span, so it's EXCLUDED for a scoped viewer --
+    # unaffected for an unscoped one (`ks is None` -> keep everything, byte-identical to before).
+    if ks is not None:
+        from app.modules.storeops.router import in_keyset
+        def _in_span(k):
+            return k in resolved_codes and in_keyset(ks, k, name_by_code.get(k))
+        closing = {k: v for k, v in closing.items() if _in_span(k)}
+        xrep = {k: v for k, v in xrep.items() if _in_span(k)}
+        xrep_unmapped = {k: v for k, v in xrep_unmapped.items() if _in_span(k)}
+        sales = {k: v for k, v in sales.items() if _in_span(k)}
+        sales_unmapped = {k: v for k, v in sales_unmapped.items() if _in_span(k)}
     codes = sorted(set(closing) | set(xrep) | set(sales) | set(xrep_unmapped) | set(sales_unmapped))
     stores_out = []
     for code in codes:
@@ -2078,7 +2138,8 @@ def _tender_recon_3way_day(client, org_id, d, store, keys, tlabel, resolve_x, re
             "note": note}
 
 @router.get("/tender-drilldown")
-def tender_drilldown(date: str, store: str = None, tender: str = None, org_id: str = ORG_ID):
+def tender_drilldown(date: str, store: str = None, tender: str = None,
+                     authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Every sales-transaction line for a day (optionally one store / one canonical tender) — so a manager
     can see exactly which transactions fell under External CC / Gift Card / Store Account / Zelle / etc."""
     require_org(org_id)
@@ -2087,6 +2148,12 @@ def tender_drilldown(date: str, store: str = None, tender: str = None, org_id: s
     if not d:
         raise HTTPException(400, "valid date required (YYYY-MM-DD)")
     resolve = _addr_resolver(client, org_id)
+    # retail-ops-26 (cross-endpoint audit, PACKAGE C): this per-transaction drill (reached from
+    # /closing/tender-recon-3way's per-store cells) had ZERO manager-span keyset enforcement -- a scoped
+    # viewer who only ever sees in-span stores on the 3-way recon page itself could still hit this
+    # endpoint directly with any store code and see that store's transaction-level detail.
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
     rows = _b2b_sales_rows(client, org_id, d,
                            "store,trans_id,salesperson,tender_type,product_desc,ext_price,mdn,voided,trans_type")
     out = []
@@ -2094,8 +2161,14 @@ def tender_drilldown(date: str, store: str = None, tender: str = None, org_id: s
         if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
             continue
         canon = _canon_tender(r.get("tender_type"))
-        code = resolve(r.get("store")) or (r.get("store") or "?")
+        _resolved_code = resolve(r.get("store"))
+        code = _resolved_code or (r.get("store") or "?")
         if store and code != store:
+            continue
+        # An UNRESOLVED row (`_resolved_code` is None, the raw store string never matched
+        # store_mapping) can't be proven inside a DM's span either way, so it's excluded for a scoped
+        # viewer -- unaffected for an unscoped one, same rule as tender-recon-3way's own gate.
+        if ks is not None and not (_resolved_code and in_keyset(ks, _resolved_code)):
             continue
         if tender and canon != tender:
             continue
@@ -2596,7 +2669,8 @@ async def bank_deposit(body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/epay-recon")
-def epay_recon(date: str, store: str = None, tolerance: float = 1.0, org_id: str = ORG_ID):
+def epay_recon(date: str, store: str = None, tolerance: float = 1.0,
+               authorization: str = Header(default=""), org_id: str = ORG_ID):
     """ePay bill-payment reconciliation for a day, per store: DECLARED ePay (closing epay_on_* fields) vs
     ACTUAL bill-payments from sales (by tender) vs BANK-DEPOSITED (bank_deposit receipts). The headline
     variance is declared ePay CASH vs what was deposited in the bank."""
@@ -2605,6 +2679,11 @@ def epay_recon(date: str, store: str = None, tolerance: float = 1.0, org_id: str
     d = _date(date)
     if not d:
         raise HTTPException(400, "valid date required (YYYY-MM-DD)")
+    # retail-ops-26 (cross-endpoint audit, PACKAGE C): this endpoint had ZERO manager-span keyset
+    # enforcement -- gated below on `codes` (covers BOTH the org-wide listing case AND a scoped viewer
+    # passing an explicit out-of-span `store=` directly).
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
 
     def _dc(cols):
         q = client.schema("commcalc").table("daily_closing").select(cols).eq("org_id", org_id).eq("close_date", d)
@@ -2649,6 +2728,8 @@ def epay_recon(date: str, store: str = None, tolerance: float = 1.0, org_id: str
 
     sales = _epay_sales_by_store(client, org_id, d, store)
     codes = [store] if store else sorted(set(declared) | set(bank) | set(sales))
+    if ks is not None:
+        codes = [c for c in codes if in_keyset(ks, c, (declared.get(c) or {}).get("store_address"))]
     out = []
     for code in codes:
         dec = declared.get(code, {"store_address": None, "cash": 0.0, "credit": 0.0, "acima": 0.0, "reps": []})
@@ -2673,7 +2754,8 @@ def epay_recon(date: str, store: str = None, tolerance: float = 1.0, org_id: str
 
 
 @router.get("/accessory-recon")
-def accessory_recon(date: str, store: str = None, tolerance: float = 1.0, org_id: str = ORG_ID):
+def accessory_recon(date: str, store: str = None, tolerance: float = 1.0,
+                    authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Accessory DECLARED (daily-closing acc_sale, per rep) vs ACTUAL accessory sales (B2B ext_price on
     accessory lines, per store) for a day — so management catches reps entering wrong accessory numbers.
     Accessory is NOT a tender, so this is its own tally (the tender total excludes it)."""
@@ -2682,6 +2764,9 @@ def accessory_recon(date: str, store: str = None, tolerance: float = 1.0, org_id
     d = _date(date)
     if not d:
         raise HTTPException(400, "valid date required (YYYY-MM-DD)")
+    # retail-ops-26 (cross-endpoint audit, PACKAGE C): same missing-keyset class, same fix.
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
     cq = (client.schema("commcalc").table("daily_closing")
           .select("store_code,store_address,employee_name,acc_sale")
           .eq("org_id", org_id).eq("close_date", d))
@@ -2696,6 +2781,8 @@ def accessory_recon(date: str, store: str = None, tolerance: float = 1.0, org_id
         s["reps"].append({"employee_name": r.get("employee_name"), "acc_sale": round(v, 2)})
     b2b = _b2b_money_by_store(client, org_id, d)
     codes = [store] if store else sorted(set(declared) | set(b2b))
+    if ks is not None:
+        codes = [c for c in codes if in_keyset(ks, c, (declared.get(c) or {}).get("store_address"))]
     out = []
     for code in codes:
         dec = declared.get(code, {"store_address": None, "declared": 0.0, "reps": []})
@@ -3298,7 +3385,8 @@ async def cash_alerts_run_now(org_id: str = ORG_ID):
 @router.get("/pickups")
 def closing_pickups(date: str = "", start: str = "", end: str = "", market: str = None,
                     store: str = "", employee: str = "", dm: str = "",
-                    stores: str = "", employees: str = "", org_id: str = ORG_ID):
+                    stores: str = "", employees: str = "",
+                    authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Cash envelopes + their pickup/deposit status, FILTERABLE by date (or start..end range), store(s),
     sales rep/employee(s), and the DM who collected. An envelope = a rep's closing row with cash to
     collect (store_cash + epay_cash > 0) or an envelope photo. `stores`/`employees` (mig-502-era,
@@ -3310,6 +3398,12 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     if not (date or (start and end)):
         raise HTTPException(400, "date, or start+end, required (YYYY-MM-DD)")
     client = sb()
+    # retail-ops-26 (cross-endpoint audit, PACKAGE C, explicitly named in the owner's list): the cash
+    # envelope pickup list had ZERO manager-span keyset enforcement -- gated below on the same per-row
+    # loop that already filters market/store/employee/dm (the envelope list) AND on `not_closed` (the
+    # straggler list further down), same "gate at admission" rule as the rest of this package.
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
     q = client.schema("commcalc").table("daily_closing").select("*").eq("org_id", org_id)
     q = q.eq("close_date", date) if date else q.gte("close_date", start).lte("close_date", end)
     rows = q.execute().data or []
@@ -3363,6 +3457,11 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             continue
         code = r.get("store_code") or ""
         meta = smeta.get(code, {})
+        # retail-ops-26: an unresolved envelope (`code` blank) is excluded for a scoped viewer (can't be
+        # proven inside a DM's span), unaffected for an unscoped one -- same rule as the rest of this
+        # package.
+        if ks is not None and not in_keyset(ks, code, meta.get("address")):
+            continue
         mk = (meta.get("market") or "").strip() or sm_market.get(code, "")
         if market_cf and mk and mk.casefold() != market_cf:
             continue
@@ -3410,6 +3509,8 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             code = s.get("store_code") or ""
             if not code or code in closed or s.get("is_active") is False:
                 continue
+            if ks is not None and not in_keyset(ks, code, s.get("address")):
+                continue
             mk = (s.get("market") or "").strip() or sm_market.get(code, "")
             if market_cf and mk and mk.casefold() != market_cf:
                 continue
@@ -3433,7 +3534,8 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
 #    (cash_pickup, picked_up=true) values every other closing surface already uses. ──
 @router.get("/cash-position")
 def cash_position(date: str = "", start: str = "", end: str = "",
-                  stores: str = "", employees: str = "", org_id: str = ORG_ID):
+                  stores: str = "", employees: str = "",
+                  authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Per store: cash on hand AS OF a chosen day (all declared cash to date minus all cash actually
     picked up to date — a store not swept in a few days shows its TRUE uncollected balance, not just
     today's own figure), last pickup at, last deposited at (cash_pickup.deposited_at ∪
@@ -3446,6 +3548,11 @@ def cash_position(date: str = "", start: str = "", end: str = "",
     if not date and not (start and end):
         raise HTTPException(400, "date, or start+end, required (YYYY-MM-DD)")
     client = sb()
+    # retail-ops-26 (cross-endpoint audit, PACKAGE C, explicitly named in the owner's list): the cash
+    # position report had ZERO manager-span keyset enforcement -- gated below on `codes` (covers BOTH
+    # the org-wide listing case AND a scoped viewer passing an explicit out-of-span `stores=` directly).
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
     store_list = [s.strip().upper() for s in stores.split(",") if s.strip()]
     emp_list = [e.strip().lower() for e in employees.split(",") if e.strip()]
     as_of = _date(date) if date else _date(end)
@@ -3517,6 +3624,8 @@ def cash_position(date: str = "", start: str = "", end: str = "",
             last_deposited_at[code] = c
 
     codes = sorted({c for c in (set(decl_by_store_day) | set(pick_by_store_day) | set(store_list)) if c and c != "?"})
+    if ks is not None:
+        codes = [c for c in codes if in_keyset(ks, c, smeta.get(c, {}).get("address"))]
 
     def _label(code):
         m = smeta.get(code, {})
