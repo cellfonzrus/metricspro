@@ -377,6 +377,98 @@ unresolved_out = next(s for s in resp11["stores"] if s["store_code"] == "?")
 check("K4. N3: the unresolved closing row keeps its own $ (3.0), not merged/lost", unresolved_out["totals"]["closing"] == 3.0,
       unresolved_out["totals"])
 
+# ═══════════════ L. retail-ops-22 — date-RANGE mode (owner: "should also have our standard filters
+#                    with date range"), additive to the byte-identical single-day path proven above ═══
+DATE2 = "2026-07-16"
+st12 = fresh_store(); fake12 = wire(st12)
+st12["store_mapping"] = [sm_row()]
+st12["daily_closing"] = [
+    {"org_id": HOUSE, "close_date": DATE, "store_code": "S1", "store_address": "1 Main St", "t_cash": 100.0},
+    {"org_id": HOUSE, "close_date": DATE2, "store_code": "S1", "store_address": "1 Main St", "t_cash": 40.0},
+]
+st12["pos_tender_summary"] = [
+    xr_row(date=DATE, tender_type="Cash", amount=105.0, tender_class="cash"),   # day 1: +5 over
+    xr_row(date=DATE2, tender_type="Cash", amount=35.0, tender_class="cash"),   # day 2: -5 under
+]
+resp12 = cr.tender_recon_3way(date_from=DATE, date_to=DATE2, org_id=HOUSE)
+check("L1. range mode returns a `days` list, one block per calendar date, NOT a single summed block",
+      "days" in resp12 and len(resp12["days"]) == 2, resp12.get("days"))
+check("L2. range mode carries date_from/date_to echoed back", resp12["date_from"] == DATE and resp12["date_to"] == DATE2,
+      (resp12.get("date_from"), resp12.get("date_to")))
+check("L3. range mode's `tenders` axis is present at the top level (date-independent, computed once)",
+      resp12["tenders"] and isinstance(resp12["tenders"], list), resp12.get("tenders"))
+d1 = next(d for d in resp12["days"] if d["date"] == DATE)
+d2 = next(d for d in resp12["days"] if d["date"] == DATE2)
+s1_d1 = next(s for s in d1["stores"] if s["store_code"] == "S1")
+s1_d2 = next(s for s in d2["stores"] if s["store_code"] == "S1")
+check("L4. day 1 block: closing=100, x_report=105 (per-day, not netted against day 2)",
+      s1_d1["totals"]["closing"] == 100.0 and s1_d1["totals"]["x_report"] == 105.0, s1_d1["totals"])
+check("L5. day 2 block: closing=40, x_report=35 (per-day, not netted against day 1)",
+      s1_d2["totals"]["closing"] == 40.0 and s1_d2["totals"]["x_report"] == 35.0, s1_d2["totals"])
+# The whole point of choosing per-store-per-day rows over a single summed total: a naive sum across the
+# range would net day1's +5 against day2's -5 to a deceptive "$0 variance" — proving that trap exists
+# here (independently recomputed, not read off the endpoint) motivates why days are NOT pre-summed.
+naive_net = (s1_d1["totals"]["x_report"] - s1_d1["totals"]["closing"]) + (s1_d2["totals"]["x_report"] - s1_d2["totals"]["closing"])
+check("L6. netting proof: naive net-across-days variance is 0 even though BOTH days individually mismatch "
+      "(the exact trap per-day rows avoid — net=0, but day1=+5 and day2=-5 are each real discrepancies)",
+      naive_net == 0.0 and s1_d1["totals"]["x_report"] != s1_d1["totals"]["closing"]
+      and s1_d2["totals"]["x_report"] != s1_d2["totals"]["closing"], naive_net)
+
+# Single-date call against the SAME fixture data must stay byte-identical to a standalone single-day call
+# (proves the hoisted date-independent lookups don't leak state across a range vs single-day code path).
+resp12_single = cr.tender_recon_3way(date=DATE, org_id=HOUSE)
+check("L7. single-day call against range-mode fixture data is unaffected by date_from/date_to being unset",
+      resp12_single["stores"] == d1["stores"], (resp12_single["stores"], d1["stores"]))
+
+# range_capped / dates_total bookkeeping + the cap keeps the MOST RECENT dates (mirrors /closing/summary)
+st13 = fresh_store(); fake13 = wire(st13)
+st13["store_mapping"] = [sm_row()]
+import datetime as _dt
+_start = _dt.date(2026, 1, 1)
+for i in range(20):   # 20 calendar days > _TENDER_3WAY_MAX_RANGE_DATES (14)
+    dd = (_start + _dt.timedelta(days=i)).isoformat()
+    st13["daily_closing"].append({"org_id": HOUSE, "close_date": dd, "store_code": "S1",
+                                  "store_address": "1 Main St", "t_cash": float(i)})
+resp13 = cr.tender_recon_3way(date_from="2026-01-01", date_to="2026-01-20", org_id=HOUSE)
+check("L8. a 20-day range is capped to _TENDER_3WAY_MAX_RANGE_DATES (14) days returned",
+      len(resp13["days"]) == cr._TENDER_3WAY_MAX_RANGE_DATES, len(resp13["days"]))
+check("L9. range_capped flag is set + dates_total reports the UNCAPPED count (20)",
+      resp13["range_capped"] is True and resp13["dates_total"] == 20,
+      (resp13["range_capped"], resp13["dates_total"]))
+returned_dates = sorted(d["date"] for d in resp13["days"])
+check("L10. capping keeps the MOST RECENT 14 dates (2026-01-07..2026-01-20), matching /closing/summary's precedent",
+      returned_dates[0] == "2026-01-07" and returned_dates[-1] == "2026-01-20", returned_dates)
+
+# validation: neither date nor date_from/date_to -> a clean 400, not an unhandled crash
+try:
+    cr.tender_recon_3way(org_id=HOUSE)
+    check("L11. no date at all -> raises (400)", False)
+except Exception as e:
+    from fastapi import HTTPException as _HTTPException
+    check("L11. no date at all -> HTTPException(400)",
+          isinstance(e, _HTTPException) and e.status_code == 400, repr(e))
+try:
+    cr.tender_recon_3way(date_from="not-a-date", org_id=HOUSE)
+    check("L12. garbage date_from -> raises (400)", False)
+except Exception as e:
+    from fastapi import HTTPException as _HTTPException
+    check("L12. garbage date_from -> HTTPException(400)",
+          isinstance(e, _HTTPException) and e.status_code == 400, repr(e))
+
+# store filter still applies uniformly inside each day of a range (same _keep rule per day)
+st14 = fresh_store(); fake14 = wire(st14)
+st14["store_mapping"] = [sm_row(code="S1", addr="1 Main St"), sm_row(code="S2", addr="2 Oak Ave")]
+st14["daily_closing"] = [
+    {"org_id": HOUSE, "close_date": DATE, "store_code": "S1", "store_address": "1 Main St", "t_cash": 1.0},
+    {"org_id": HOUSE, "close_date": DATE, "store_code": "S2", "store_address": "2 Oak Ave", "t_cash": 2.0},
+    {"org_id": HOUSE, "close_date": DATE2, "store_code": "S1", "store_address": "1 Main St", "t_cash": 3.0},
+    {"org_id": HOUSE, "close_date": DATE2, "store_code": "S2", "store_address": "2 Oak Ave", "t_cash": 4.0},
+]
+resp14 = cr.tender_recon_3way(date_from=DATE, date_to=DATE2, store="S1", org_id=HOUSE)
+for dblock in resp14["days"]:
+    codes14 = {s["store_code"] for s in dblock["stores"]}
+    check(f"L13. store=S1 filter excludes S2 on {dblock['date']} within range mode too", "S2" not in codes14, codes14)
+
 # ── summary ──
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:
