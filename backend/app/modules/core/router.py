@@ -33,6 +33,9 @@ from app.modules.core.membership import (
     list_memberships as _memberships,
     pick_membership as _pick_membership,
 )
+# Canonical ACCESS-SCOPE primitives (REPORTING span vs SCHEDULING reach + the ONE market
+# universe that both the grant PICKER and the grant RESOLVER read). See app/core/scope.py.
+from app.core import scope as _scope
 
 router = APIRouter(prefix="/core", tags=["Core / RBAC"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -1935,6 +1938,108 @@ async def filter_options(org_id: str = ORG_ID):
         for nm, em in sorted(reps.items(), key=lambda kv: kv[0].lower())
     ]
     return {"stores": store_list, "markets": sorted(markets), "reps": rep_list}
+
+
+# ── Grant universe + scope diagnostic (2026-08-03 reporting-vs-scheduling scope split) ───────────
+# WHY these live in core and not in a module: they are the option source for a GRANT, and a grant is
+# an identity/RBAC concept. The /admin/roles market+store pickers used to source from
+# GET /storeops/stores, which is (a) itself SPAN-SCOPED — so the person handing out grants could only
+# offer the markets they personally cover — and (b) sourced from storeops.stores.market ALONE, while
+# the tenant's real market vocabulary is the UNION of storeops.stores.market and
+# commcalc.store_mapping.market. Result reported by the owner on 2026-08-03: "the option to select PA
+# from the roles and config is not there" — PA existed only in commcalc.store_mapping.
+# app/core/scope.market_index() is the ONE canonical union, and it is the SAME function that RESOLVES
+# a market grant to its member stores, so the picker can never offer a market the resolver cannot bind.
+@router.get("/markets")
+async def grant_universe(org_id: str = ORG_ID):
+    """Canonical org-scoped GRANT universe for the roles/config market + store pickers (RULE THREE:
+    pick-don't-type). Deliberately NOT span-scoped — you cannot delegate a market you are forbidden
+    to see, and an admin assigning a DM to 3 markets must be able to see all of the tenant's markets.
+    Org isolation (the real boundary) is enforced by tenant_middleware rewriting org_id.
+
+    Returns {"markets": [canonical names], "stores": [{store_code, address, market}]}. Best-effort
+    per source — a missing table degrades that half to empty, never a 500."""
+    idx = _scope.market_index(sb(), org_id)
+    return {"markets": idx.get("markets") or [], "stores": idx.get("stores") or []}
+
+
+@router.get("/scope-preview")
+async def scope_preview(role: str = "", email: str = "", org_id: str = ORG_ID,
+                        authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """DIAGNOSTIC: show what a role and/or a specific login actually resolves to, split into the two
+    independent questions. Read-only; changes nothing.
+
+      reporting.stores  — whose NUMBERS they may see (the store grant, market grants RESOLVED)
+      scheduling.reach  — whom they may put on a shift ('org' = any employee in the tenant)
+
+    This is the surface that answers "I gave the DM 3 markets, why do they see everything?" without
+    anyone having to log in as them. Un-granted markets are listed under `unresolved_markets` — that
+    is the tell for a market spelled one way on the app_user and another way on the stores.
+
+    GATED: it reports another person's grants, so it is admin-only (super_admin, the 'admin' role, or
+    any full-scope role) — the same bar as the /admin/roles page it is built for. Unlike
+    /core/markets (a grant OPTION list) this is a grant DISCLOSURE, so it never runs anonymously."""
+    client = sb()
+    uid = _uid_from_token(authorization)
+    caller = _resolve_caller(client, uid, x_active_org) if uid else None
+    if not caller:
+        raise HTTPException(401, "not authenticated")
+    _cp = caller.get("perms") or {}
+    if not (caller.get("super_admin") or _cp.get("scope") == "all"
+            or (_cp.get("modules") or {}).get("admin")
+            or (caller.get("role") or "").lower() == "admin"):
+        raise HTTPException(403, "admin only")
+    role = (role or "").strip()
+    email = (email or "").strip().lower()
+    perms, app_user = {}, None
+    if email:
+        rows = (client.schema("storeops").table("app_users")
+                .select("email,full_name,role,employee_id,market,store_code,store_codes")
+                .eq("org_id", org_id).eq("email", email).limit(1).execute().data) or []
+        app_user = rows[0] if rows else None
+        if app_user and not role:
+            role = (app_user.get("role") or "").strip()
+    if role:
+        rr = (client.schema("storeops").table("roles").select("permissions")
+              .eq("org_id", org_id).eq("name", role).limit(1).execute().data) or []
+        if rr:
+            perms = rr[0].get("permissions") or {}
+    scope = (perms.get("scope") or "all")
+    unit_codes = []
+    eid = ((app_user or {}).get("employee_id") or "").strip()
+    if eid:
+        try:
+            unit_codes = sorted({(r.get("store_code") or "").strip() for r in
+                                 (client.rpc("org_span_for_manager",
+                                             {"p_org_id": org_id, "p_employee_id": eid}).execute().data or [])
+                                 if (r.get("store_code") or "").strip()})
+        except Exception:
+            unit_codes = []
+    idx = _scope.market_index(client, org_id)
+    granted = [m.strip() for m in str((app_user or {}).get("market") or "").split(",") if m.strip()]
+    unresolved = [m for m in granted if not (idx.get("by_market") or {}).get(m.lower())]
+    if scope == "all":
+        reporting = {"unrestricted": True, "stores": [], "why": "role scope = all stores (company-wide)"}
+    else:
+        codes = _scope.reporting_span_codes(client, org_id, app_user, scope, org_unit_codes=unit_codes)
+        reporting = {"unrestricted": False, "stores": sorted(codes),
+                     "why": f"role scope = {scope}"}
+    return {
+        "role": role or None, "email": email or None, "scope": scope,
+        "granted_markets": granted, "unresolved_markets": unresolved,
+        "org_unit_stores": unit_codes,
+        "pinned_stores": sorted({c for c in ([(app_user or {}).get("store_code")] +
+                                             list((app_user or {}).get("store_codes") or []))
+                                 if c and str(c).strip()}),
+        "reporting": reporting,
+        "scheduling": {"reach": _scope.scheduling_reach(perms),
+                       "roster_span_exempt": _scope.roster_span_exempt(perms),
+                       "why": ("'org' — may pick ANY employee in the tenant when scheduling "
+                               "(reporting stays limited to the stores above)"
+                               if _scope.roster_span_exempt(perms)
+                               else "'span' — roster limited to the reporting stores above")},
+        "org_markets": idx.get("markets") or [],
+    }
 
 
 @router.post("/users/assign")
