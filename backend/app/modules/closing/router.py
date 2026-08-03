@@ -448,6 +448,13 @@ def closing_submissions(date_from: str = None, date_to: str = None,
         declared_credit = round(tenders["credit"] + tenders["ext_cc"], 2)
 
         gate_status, reasons, b2b_cash, b2b_card = "not_computed", [], None, None
+        # retail-ops-25 (PACKAGE B, OWNER DIRECTIVE 2026-08-03 "one tile for cash short and one for
+        # cash over"): structured $ amounts for the two new dashboard tiles — captured from the SAME
+        # `_money_issues` call already made here (never a second/different computation). `cash_short`
+        # is the "cash" issue's BLOCK amount (declared < B2B, i.e. short); `cash_over` is the "cash"
+        # issue's FLAG amount (declared > B2B). Never netted against each other — a row can only ever
+        # produce one or the other (or neither), so summing both across rows on the frontend is safe.
+        cash_short_amount, cash_over_amount = 0.0, 0.0
         day = day_cache.get(d)
         if day is not None:
             if not day.get("has_data"):
@@ -463,6 +470,13 @@ def closing_submissions(date_from: str = None, date_to: str = None,
                     gate_status = "blocked" if blocks else ("flagged" if flags else "ok")
                     reasons = blocks + flags
                     b2b_cash, b2b_card = repb["cash"], repb["card"]
+                    for i in issues:
+                        if i["metric"] != "cash":
+                            continue
+                        if i["severity"] == "block":       # cash short (declared < B2B)
+                            cash_short_amount = round(-i["variance"], 2)
+                        elif i["severity"] == "flag":       # cash over (declared > B2B)
+                            cash_over_amount = round(i["variance"], 2)
 
         custom_t = r.get("tenders") if isinstance(r.get("tenders"), dict) else {}
         custom_tenders_display = ", ".join(f"{tlabels.get(k, k)}: {_usd(_f(v))}" for k, v in custom_t.items() if _f(v))
@@ -490,6 +504,8 @@ def closing_submissions(date_from: str = None, date_to: str = None,
             "gate_status": gate_status,
             "gate_reasons": (reasons if can_review else []),
             "b2b_cash": (b2b_cash if can_review else None), "b2b_card": (b2b_card if can_review else None),
+            "cash_short_amount": (cash_short_amount if can_review else 0.0),
+            "cash_over_amount": (cash_over_amount if can_review else 0.0),
             "attempts": _int(r.get("attempts")) or 1, "auto_accepted": bool(r.get("auto_accepted")),
             "mgmt_flag": bool(r.get("mgmt_flag")),
             "released_at": r.get("released_at"), "released_by": r.get("released_by"),
