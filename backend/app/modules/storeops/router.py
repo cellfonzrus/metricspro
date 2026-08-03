@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta, date as _date
 from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Response
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core import scope as _cscope
 from app.modules.storeops import google_reviews as _gr
 from app.modules.storeops.pto_accrual import (
     DEFAULT_CONFIG as PTO_DEFAULT_CONFIG,
@@ -3749,29 +3750,22 @@ def _span_codes(rows) -> list:
 
 
 def _market_store_codes(org_id: str, market: str) -> set:
-    """store_codes in a market — org-tree-INDEPENDENT (straight off the store list)."""
-    m = (market or "").strip().upper()
-    if not m:
-        return set()
-    rows = sb().table("stores").select("store_code,market").eq("org_id", org_id).execute().data or []
-    return {str(s.get("store_code")).strip() for s in rows
-            if s.get("store_code") and str(s.get("market") or "").strip().upper() == m}
+    """store_codes in a market — resolved off the CANONICAL union of storeops.stores.market AND
+    commcalc.store_mapping.market (app.core.scope.market_store_codes). Was: storeops.stores.market
+    ALONE, which made any market that lives — or is only spelled — in store_mapping resolve to the
+    EMPTY set (the "3 markets selected, sees nothing" bug: GET /storeops/markets already offered the
+    union for the picker, so the picker could offer a market this resolver could not bind). Same
+    signature/contract, org-tree-independent."""
+    return _cscope.market_store_codes(get_supabase(), org_id, market)
 
 
 def _login_extra_codes(au: dict, org_id: str) -> set:
     """store_codes implied by an app_user's market + pinned store(s) — the org-tree-independent span,
-    so a market/store manager scopes correctly even before the org units/managers are wired."""
-    codes: set = set()
-    if not au:
-        return codes
-    for mkt in str(au.get("market") or "").split(","):
-        codes |= _market_store_codes(org_id, mkt)
-    if au.get("store_code"):
-        codes.add(str(au["store_code"]).strip())
-    for sc in (au.get("store_codes") or []):
-        if sc and str(sc).strip():
-            codes.add(str(sc).strip())
-    return {c for c in codes if c}
+    so a market/store manager scopes correctly even before the org units/managers are wired.
+    Delegates to app.core.scope.login_grant_codes — same comma-split-markets + store_code +
+    store_codes contract, one table read total instead of one per market, and markets resolve
+    through the canonical union (see _market_store_codes)."""
+    return _cscope.login_grant_codes(get_supabase(), org_id, au)
 
 
 def _caller_app_user(authorization: str, org_id: str = ORG_ID) -> dict:
