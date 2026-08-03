@@ -1959,6 +1959,8 @@ def bulk_create_stores(body: dict, org_id: str = ORG_ID):
         r = sb().table("stores").insert(to_insert[i:i + 500]).execute()
         inserted += len(r.data or to_insert[i:i + 500])
     _sync_store_mapping(org_id, to_insert)   # propagate new stores to commcalc.store_mapping
+    if to_insert:
+        _cscope.invalidate_market_index(org_id)   # new store/market visible in the picker instantly
     return {"inserted": inserted, "skipped": skipped}
 
 
@@ -1975,6 +1977,7 @@ def create_store(store: dict, org_id: str = ORG_ID):
         row["is_active"] = True
     r = sb().table("stores").insert(row).execute()
     _sync_store_mapping(org_id, [row])   # propagate the new store to commcalc.store_mapping
+    _cscope.invalidate_market_index(org_id)   # new store/market visible in the picker instantly
     return r.data[0] if r.data else row
 
 
@@ -2022,6 +2025,7 @@ def update_store(store_id: int, updates: dict, org_id: str = ORG_ID):
     if not r.data:
         raise HTTPException(404, "store not found")
     _sync_store_mapping_update(org_id, r.data[0].get("store_code"), row)
+    _cscope.invalidate_market_index(org_id)   # new store/market visible in the picker instantly
     return r.data[0]
 
 
