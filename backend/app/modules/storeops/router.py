@@ -319,7 +319,8 @@ def get_time_off(employee_id: str = None, authorization: str = Header(default=""
     q = sb().table("time_off_requests").select("*").eq("org_id", org_id)
     if employee_id: q = q.eq("employee_id", employee_id)
     rows = q.order("start_date", desc=True).execute().data or []
-    eids = scope_emp_ids(authorization, org_id)   # None = unrestricted
+    since, until = _emp_ids_window_from_rows(rows, "start_date", "end_date")
+    eids = scope_emp_ids(authorization, org_id, since=since, until=until)   # None = unrestricted
     if eids is not None:
         rows = [r for r in rows if str(r.get("employee_id")) in eids]
     return rows
@@ -2161,7 +2162,8 @@ def get_shift_swaps(status: str = None, authorization: str = Header(default=""),
     if status:
         q = q.eq("status", status)
     reqs = q.order("created_at", desc=True).execute().data or []
-    eids = scope_emp_ids(authorization, org_id)   # None = unrestricted
+    since, until = _emp_ids_window_from_rows(reqs, "created_at")
+    eids = scope_emp_ids(authorization, org_id, since=since, until=until)   # None = unrestricted
     if eids is not None:
         reqs = [r for r in reqs if str(r.get("requester_id")) in eids
                 or (r.get("target_id") and str(r.get("target_id")) in eids)]
@@ -2820,7 +2822,7 @@ def timeclock_list(start: str = "", end: str = "", employee_id: str = "", author
     if end:
         q = q.lte("work_date", end)
     rows = q.order("clock_in", desc=True).limit(5000).execute().data or []
-    eids = scope_emp_ids(authorization, org_id)   # None = unrestricted
+    eids = scope_emp_ids(authorization, org_id, since=start or None, until=end or None)   # None = unrestricted
     if eids is not None:
         rows = [e for e in rows if str(e.get("employee_id")) in eids]
     for e in rows:
@@ -3595,7 +3597,7 @@ def list_manual_hours(employee_id: str = "", start: str = "", end: str = "", aut
     if end:
         q = q.lte("work_date", end)
     rows = q.order("work_date", desc=True).limit(2000).execute().data or []
-    eids = scope_emp_ids(authorization, org_id)   # None = unrestricted
+    eids = scope_emp_ids(authorization, org_id, since=start or None, until=end or None)   # None = unrestricted
     if eids is not None:
         rows = [r for r in rows if str(r.get("employee_id")) in eids]
     return rows
@@ -4265,16 +4267,36 @@ def in_keyset(keyset, *vals) -> bool:
     return any(str(v or "").strip().upper() in keyset for v in vals)
 
 
-def scope_emp_ids(authorization: str, org_id: str = ORG_ID):
+def _emp_ids_window_from_rows(rows, start_key, end_key=None):
+    """Derive a bounded (since, until) date window for scope_emp_ids' 'worked at' resolution from
+    ROWS THE CALLER ALREADY FETCHED — for the call sites that take no start/end query params of
+    their own (time-off, shift-swaps). Falls back to a single-day window anchored on today when
+    there's nothing to bound from; that's safe because an empty rows list stays empty after the
+    eids filter regardless — this only exists to keep reporting_employee_ids from scanning full
+    shift/timelog history on every call."""
+    end_key = end_key or start_key
+    dates = [str(r.get(start_key))[:10] for r in (rows or []) if r.get(start_key)]
+    dates += [str(r.get(end_key))[:10] for r in (rows or []) if r.get(end_key)]
+    if not dates:
+        today = _date.today().isoformat()
+        return today, today
+    return min(dates), max(dates)
+
+
+def scope_emp_ids(authorization: str, org_id: str = ORG_ID, *, since: str = None, until: str = None):
     """employee_ids in the caller's span (None = UNRESTRICTED). For employee-keyed tables
-    (time-off, swaps, manual-hours, timeclock) that carry no store column — resolves each
-    employee to their home_store and keeps those inside the manager's span keyset."""
+    (time-off, swaps, manual-hours, timeclock) that carry no store column — resolves by HOME STORE
+    **union WHERE THEY ACTUALLY WORKED** (a non-deleted shift or a time-log at a store inside the
+    span), via app.core.scope.reporting_employee_ids. This is the "employees move around" fix: a
+    borrowed rep working a manager's store used to be invisible to that manager on these surfaces
+    (home_store-only resolution). It WIDENS visibility versus before — see docs/handoffs/people.md
+    for the before/after proof. `since`/`until` bound the "worked at" half so this never turns into
+    a full shifts/timelog history scan; every call site passes a window derived from its own query
+    (its own start/end params, or _emp_ids_window_from_rows over what it already fetched)."""
     ks = scope_keyset(authorization, org_id)
     if ks is None:
         return None
-    emps = sb().table("employees").select("employee_id,home_store").eq("org_id", org_id).execute().data or []
-    return {str(e.get("employee_id")) for e in emps
-            if e.get("employee_id") and in_keyset(ks, e.get("home_store"))}
+    return _cscope.reporting_employee_ids(get_supabase(), org_id, ks, since=since, until=until)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
